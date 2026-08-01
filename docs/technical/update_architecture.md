@@ -10,8 +10,7 @@ description: "The shared release manifest and the update ownership of the Sanad 
 `release/release-contract.json` defines the marketing version, build, Stable tag, accepted RC channel files, repository, canonical filename templates, platform, architecture, and expected signature type. RC artifact filenames include the full `-rc.N` release identity while pubspec marketing versions remain `1.0.0`. Tags are either `v<version>` or `v<version>-rc.N`; every other prerelease form is rejected. The shared Dart package under `release/contract/` parses and
 validates that contract and the generated release manifest.
 
-The public release manifest is generated only after every public and private
-handoff artifact required by the contract exists. Its public entries include
+The candidate manifest is generated only after every public and private handoff artifact required by the contract exists, including the signed private iOS IPA. Validation-only manifests describe the intended immutable release identity but remain private workflow artifacts and never imply that the tag or Release exists. Its public entries include
 the immutable download URL, byte size, SHA-256 digest, platform, architecture,
 component, version, and signature metadata. Private AAB and Web handoffs remain
 protected workflow artifacts and are verified by their build attestations. The

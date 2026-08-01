@@ -53,8 +53,8 @@ jobs:
           cat "$RUNNER_TEMP/changed"
           agent=false; client=false; docs=false; release=false; security=false
           while IFS= read -r path; do
-            case "$path" in agent/*|release/contract/*) agent=true ;; esac
-            case "$path" in client/*|release/contract/*) client=true ;; esac
+            case "$path" in agent/*|release/contract/*|release/release-contract.json) agent=true ;; esac
+            case "$path" in client/*|release/contract/*|release/release-contract.json) client=true ;; esac
             case "$path" in *.md|docs/*|.vscode/*|.agents/*|.github/ISSUE_TEMPLATE/*|.github/DISCUSSION_TEMPLATE/*|.github/labels.yml|.github/CODEOWNERS|.github/PULL_REQUEST_TEMPLATE.md|scripts/community/*) docs=true ;; esac
             case "$path" in .github/workflows/*|release/*|client/release/*|agent/tool/release_tool.dart|scripts/install.sh|scripts/install.ps1) release=true ;; esac
             case "$path" in SECURITY.md|docs/operations/code_signing_policy.md|agent/lib/core/auth/*|agent/lib/core/auth/**/*|agent/lib/capabilities/permissions/*|agent/lib/capabilities/permissions/**/*) security=true ;; esac
@@ -222,10 +222,15 @@ jobs:
           ! grep -E 'WINDOWS_SIGNING_PFX|Prepared Authenticode|Authenticode verification' \
             .github/workflows/release.yml scripts/install.ps1 client/release/windows/release.ps1
           grep -F 'environment: release-publication' .github/workflows/release.yml
-          grep -F 'Create immutable Draft release candidate' .github/workflows/release.yml
+          grep -F 'validation_only:' .github/workflows/release.yml
+          grep -F "if: needs.validate.outputs.validation_only != 'true'" .github/workflows/release.yml
+          grep -F 'name: Create immutable Draft candidate' .github/workflows/release.yml
+          grep -F 'name: Build and verify signed private IPA' .github/workflows/release.yml
           grep -F -- '--draft' .github/workflows/release.yml
           grep -F 'release-manifest-rc.json' release/release-contract.json
           grep -F 'appcast-rc.xml' release/release-contract.json
+          jq -e '.artifacts[] | select(.platform == "ios" and .public == false)' \
+            release/release-contract.json >/dev/null
       - name: Scan committed content for credentials
         shell: bash
         run: |
