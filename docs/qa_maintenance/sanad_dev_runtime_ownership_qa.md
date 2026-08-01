@@ -55,7 +55,8 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 |---|---|
 | Fresh POSIX or Windows user environment | FVM verification precedes Flutter, Agent dependencies, Client dependencies, and shim installation; `run all` begins only after every stage succeeds. |
 | Windows bootstrap starts outside a Git checkout but beside its copied project scripts | The non-repository Git probe is handled without a raw PowerShell native-command error, and bootstrap continues from the script-owned project root. |
-| Journal crash fixture launches through FVM on Windows | The test resolves the activated `fvm.bat` command wrapper and captures stdout, stderr, and the uncaught stack after exit. |
+| Journal crash fixture exits nonzero on every host | A hermetic platform-native fixture avoids package-runner exit-code differences and captures stdout, stderr, and crash-like stack output after exit. |
+| Windows bootstrap uses an isolated user root in CI | Its fake command surface includes deterministic file hashing, so redirected user paths cannot depend on ambient PowerShell module discovery. |
 | Unchanged second setup | Pinned Flutter and dependency stages are skipped when SDK, lockfile fingerprint, and package configs agree. |
 | Flutter pin or either lockfile changes | The stamp invalidates and the affected setup sequence runs before runtime launch. |
 | Existing shim belongs to another checkout | Setup fails without replacing it; `setup --force` performs the explicit replacement. |

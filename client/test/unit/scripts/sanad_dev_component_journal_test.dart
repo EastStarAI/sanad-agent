@@ -123,17 +123,31 @@ void main() {
   });
 
   test('process crash output remains readable after process exit', () async {
-    final fixture = File('${home.path}${Platform.pathSeparator}fixture.dart');
-    await fixture.writeAsString("""
-import 'dart:io';
-void main() {
-  print('fixture print');
-  stderr.writeln('fixture stderr');
-  throw StateError('fixture uncaught');
-}
-""");
-    final fvmExecutable = Platform.isWindows ? 'fvm.bat' : 'fvm';
-    final process = await Process.start(fvmExecutable, ['dart', fixture.path]);
+    late String executable;
+    late List<String> arguments;
+    if (Platform.isWindows) {
+      final fixture = File('${home.path}${Platform.pathSeparator}fixture.cmd');
+      await fixture.writeAsString('''@echo off
+echo fixture print
+echo fixture stderr 1>&2
+echo fixture uncaught 1>&2
+echo #0 1>&2
+exit /b 7
+''');
+      executable = 'cmd.exe';
+      arguments = ['/d', '/c', fixture.path];
+    } else {
+      final fixture = File('${home.path}${Platform.pathSeparator}fixture.sh');
+      await fixture.writeAsString('''#!/bin/sh
+printf 'fixture print\\n'
+printf 'fixture stderr\\nfixture uncaught\\n#0\\n' >&2
+exit 7
+''');
+      await Process.run('chmod', ['+x', fixture.path]);
+      executable = fixture.path;
+      arguments = const [];
+    }
+    final process = await Process.start(executable, arguments);
     final journal = await ComponentProcessJournal.attach(
       process: process,
       writer: writer(),

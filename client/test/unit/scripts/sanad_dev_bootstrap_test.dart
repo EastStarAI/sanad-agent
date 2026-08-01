@@ -51,6 +51,10 @@ void main() {
    echo {}> .dart_tool\\package_config.json
  )
 ''');
+      await File('${fakeBin.path}${Platform.pathSeparator}Get-FileHash.ps1').writeAsString(r'''
+param([string] $Algorithm, [string] $Path)
+[pscustomobject]@{ Hash = 'fixture-hash' }
+''');
       await File('${fixture.path}${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad-dev.ps1')
           .writeAsString(await File('../scripts/sanad-dev.ps1').readAsString());
     } else {
