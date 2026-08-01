@@ -54,7 +54,7 @@ limits, grant bots least
 privilege, test the project-owned permanent invite in a logged-out
 browser session, and keep moderation/audit channels private.
 
-The GitHub feed in `#github` is read-only. Its channel-scoped webhook is stored only as the `DISCORD_WEBHOOK_URL` repository secret and is exposed only to the final send step. The tracked notification workflow runs on pushes to protected `main` and published Releases: a main push is posted only when GitHub associates it with a merged pull request, while a published Release is posted directly. Payloads disable mentions and contain only the public title, link, and public actor identities. Raw Issues, CI runs, security events, fork activity, and direct or emergency pushes are intentionally excluded. Contributor opportunities may be selected manually for `#contributors`.
+The GitHub feed in `#github` is read-only. Its channel-scoped webhook is stored only as the `DISCORD_WEBHOOK_URL` repository secret and is exposed only to the final send step. The tracked notification workflow runs on pushes to protected `main` and published Releases: a main push is posted only when GitHub associates it with a merged pull request, while a published Release is posted directly. Payloads disable mentions and contain only the public title, link, and actor identities hydrated from the complete public pull-request or Release record. Raw Issues, CI runs, security events, fork activity, and direct or emergency pushes are intentionally excluded. Contributor opportunities may be selected manually for `#contributors`.
 
 ## Deferred Maintainer Skills
 
