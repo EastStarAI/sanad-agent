@@ -7,7 +7,7 @@ description: "The shared release manifest and the update ownership of the Sanad 
 
 ## Shared release contract
 
-`release/release-contract.json` defines the marketing version, build, Stable tag, accepted RC channel files, repository, canonical filenames, platform, architecture, and expected signature type. Tags are either `v<version>` or `v<version>-rc.N`; every other prerelease form is rejected. The shared Dart package under `release/contract/` parses and
+`release/release-contract.json` defines the marketing version, build, Stable tag, accepted RC channel files, repository, canonical filename templates, platform, architecture, and expected signature type. RC artifact filenames include the full `-rc.N` release identity while pubspec marketing versions remain `1.0.0`. Tags are either `v<version>` or `v<version>-rc.N`; every other prerelease form is rejected. The shared Dart package under `release/contract/` parses and
 validates that contract and the generated release manifest.
 
 The public release manifest is generated only after every public and private

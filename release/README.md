@@ -18,6 +18,8 @@ The checked-in contract contains no generated hashes, signatures, timestamps, or
 
 Public assets use:
 
-`<component>-<marketing-version>-<platform>-<architecture>.<extension>`
+`<component>-<release-version>-<platform>-<architecture>.<extension>`
+
+For RCs, `<release-version>` includes `-rc.N`; therefore RC1, RC2, and Stable downloads never collide on disk even though all share marketing version `1.0.0`.
 
 Windows `1.0.0` Agent artifacts use `unsigned+github-attestation`; Client artifacts use `unsigned+winsparkle-dsa`. The release notes disclose the missing Authenticode publisher and retain official-origin, manifest, size, SHA-256, SBOM, and GitHub-provenance verification.

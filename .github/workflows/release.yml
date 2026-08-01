@@ -31,6 +31,8 @@ jobs:
     timeout-minutes: 15
     outputs:
       version: ${{ steps.contract.outputs.version }}
+      artifact_version: ${{ steps.contract.outputs.artifact_version }}
+      build: ${{ steps.contract.outputs.build }}
       tag: ${{ steps.contract.outputs.tag }}
       channel: ${{ steps.contract.outputs.channel }}
       manifest: ${{ steps.contract.outputs.manifest }}
@@ -48,6 +50,7 @@ jobs:
           set -euo pipefail
           fvm dart pub get
           version="$(jq -r '.version' ../release/release-contract.json)"
+          build="$(jq -r '.build_number' ../release/release-contract.json)"
           tag="${GITHUB_REF_NAME}"
           if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
             tag="${{ inputs.release_tag }}"
@@ -68,6 +71,8 @@ jobs:
           test "$(git rev-parse "$tag^{commit}")" = "$GITHUB_SHA"
           {
             echo "version=$version"
+            echo "artifact_version=${tag#v}"
+            echo "build=$build"
             echo "tag=$tag"
             echo "channel=$channel"
             echo "manifest=$manifest"
@@ -128,7 +133,7 @@ jobs:
         run: |
           mkdir -p ../dist
           fvm dart compile exe bin/sanad_agent.dart \
-            -o "../dist/sanad-agent-${{ needs.validate.outputs.version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
+            -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
       - name: Import Apple Developer ID
         if: matrix.platform == 'macos'
         shell: bash
@@ -157,9 +162,9 @@ jobs:
             head -n 1)"
           test -n "$identity"
           codesign --force --options runtime --timestamp --sign "$identity" \
-            "dist/sanad-agent-${{ needs.validate.outputs.version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
+            "dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
           codesign --verify --strict --verbose=2 \
-            "dist/sanad-agent-${{ needs.validate.outputs.version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
+            "dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
       - name: Notarize macOS agent
         if: matrix.platform == 'macos'
         shell: bash
@@ -167,7 +172,7 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
-          agent="dist/sanad-agent-${{ needs.validate.outputs.version }}-${{ matrix.platform }}-${{ matrix.architecture }}"
+          agent="dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}"
           archive="$RUNNER_TEMP/sanad-agent-notarization.zip"
           ditto -c -k --keepParent "$agent" "$archive"
           xcrun notarytool submit "$archive" \
@@ -200,13 +205,13 @@ jobs:
           fvm flutter pub get
           fvm flutter build linux --release --dart-define-from-file=config/prod.json
           fvm flutter build web --release --dart-define-from-file=config/prod.json
-          printf '%s\n' '{"version":"${{ needs.validate.outputs.version }}","build":1}' \
+          printf '%s\n' '{"version":"${{ needs.validate.outputs.artifact_version }}","build":${{ needs.validate.outputs.build }}}' \
             > build/web/version.json
           mkdir -p ../dist
           tar -C build/linux/x64/release -czf \
-            "../dist/sanad-client-${{ needs.validate.outputs.version }}-linux-x64.tar.gz" bundle
+            "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-linux-x64.tar.gz" bundle
           tar -C build/web -czf \
-            "../dist/sanad-client-${{ needs.validate.outputs.version }}-web-universal.tar.gz" .
+            "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-web-universal.tar.gz" .
       - uses: actions/upload-artifact@v4
         with:
           name: client-linux-web
@@ -248,11 +253,11 @@ jobs:
           fvm flutter build appbundle --release --dart-define-from-file=config/prod.json
           mkdir -p ../dist
           cp build/app/outputs/flutter-apk/app-release.apk \
-            "../dist/sanad-client-${{ needs.validate.outputs.version }}-android-universal.apk"
+            "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-android-universal.apk"
           cp build/app/outputs/bundle/release/app-release.aab \
-            "../dist/sanad-client-${{ needs.validate.outputs.version }}-android-universal.aab"
+            "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-android-universal.aab"
           "$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)/apksigner" \
-            verify --verbose "../dist/sanad-client-${{ needs.validate.outputs.version }}-android-universal.apk"
+            verify --verbose "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-android-universal.apk"
       - uses: actions/upload-artifact@v4
         with:
           name: client-android
@@ -303,7 +308,12 @@ jobs:
           macos/Pods/Sparkle/bin/generate_keys -f "$RUNNER_TEMP/sparkle-private-key"
           release/macos/release_macos.sh
           mkdir -p ../dist
-          cp "build/sanad-client-${{ needs.validate.outputs.version }}-macos-universal.dmg"* ../dist/
+          source_prefix="build/sanad-client-${{ needs.validate.outputs.version }}-macos-universal.dmg"
+          target_prefix="../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-macos-universal.dmg"
+          for source in "$source_prefix"*; do
+            suffix="${source#$source_prefix}"
+            cp "$source" "$target_prefix$suffix"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: client-macos
@@ -340,7 +350,12 @@ jobs:
           fvm flutter pub get
           ./release/windows/release.ps1
           New-Item -ItemType Directory -Path ../dist -Force | Out-Null
-          Copy-Item "build/sanad-client-${{ needs.validate.outputs.version }}-windows-x64.exe*" ../dist/
+          $sourcePrefix = "sanad-client-${{ needs.validate.outputs.version }}-windows-x64.exe"
+          $targetPrefix = "sanad-client-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
+          Get-ChildItem build -Filter "$sourcePrefix*" | ForEach-Object {
+            $suffix = $_.Name.Substring($sourcePrefix.Length)
+            Copy-Item $_.FullName (Join-Path ../dist "$targetPrefix$suffix")
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: client-windows
@@ -387,7 +402,7 @@ jobs:
         with:
           path: dist
           format: spdx-json
-          output-file: dist/sanad-${{ needs.validate.outputs.version }}.spdx.json
+          output-file: dist/sanad-${{ needs.validate.outputs.artifact_version }}.spdx.json
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@v3
         with:
@@ -408,14 +423,14 @@ jobs:
         run: |
           set -euo pipefail
           mapfile -t public_assets < <(
-            jq -r '.artifacts[] | select(.public == true) | "dist/" + .filename' \
-              release/release-contract.json
+            jq -r '.artifacts[] | "dist/" + .filename' \
+              "dist/${{ needs.validate.outputs.manifest }}"
           )
           metadata=(
             "dist/${{ needs.validate.outputs.manifest }}"
             dist/SHA256SUMS
             "dist/${{ needs.validate.outputs.appcast }}"
-            dist/sanad-${{ needs.validate.outputs.version }}.spdx.json
+            dist/sanad-${{ needs.validate.outputs.artifact_version }}.spdx.json
           )
           prerelease=()
           if [[ "${{ needs.validate.outputs.prerelease }}" == true ]]; then

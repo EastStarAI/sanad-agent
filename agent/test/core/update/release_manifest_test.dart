@@ -9,6 +9,17 @@ import 'package:test/test.dart';
 
 void main() {
   group('ReleaseManifest', () {
+    test('resolves immutable RC artifact filenames from marketing names', () {
+      expect(
+        releaseArtifactFilename(
+          'sanad-agent-1.0.0-windows-x64.exe',
+          marketingVersion: '1.0.0',
+          releaseVersion: ReleaseVersion.parse('1.0.0-rc.2'),
+        ),
+        'sanad-agent-1.0.0-rc.2-windows-x64.exe',
+      );
+    });
+
     test('accepts a canonical stable manifest', () {
       final manifest = ReleaseManifest.fromJson(
         _manifestJson(bytes: [1, 2, 3]),

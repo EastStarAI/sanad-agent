@@ -162,10 +162,15 @@ Future<void> _generateManifest(
   final artifactsRoot = Directory(artifactsDirectory).absolute;
   final repository = contract['repository']!.toString();
   final releaseTag = identity.tag;
+  final marketingVersion = contract['version']!.toString();
   final generated = <Map<String, dynamic>>[];
   for (final raw in contract['artifacts'] as List) {
     final item = Map<String, dynamic>.from(raw as Map);
-    final filename = item['filename']!.toString();
+    final filename = releaseArtifactFilename(
+      item['filename']!.toString(),
+      marketingVersion: marketingVersion,
+      releaseVersion: ReleaseVersion.parse(identity.version),
+    );
     final file = File('${artifactsRoot.path}/$filename');
     if (!file.existsSync()) {
       throw FormatException('Missing required artifact: $filename');
@@ -176,6 +181,7 @@ Future<void> _generateManifest(
     final signatureFile = File('${file.path}.update-signature');
     generated.add({
       ...item,
+      'filename': filename,
       'url':
           'https://github.com/$repository/releases/download/$releaseTag/$filename',
       'sha256': await sha256OfFile(file),

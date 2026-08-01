@@ -84,6 +84,23 @@ class ReleaseVersion implements Comparable<ReleaseVersion> {
       [marketingVersion, if (isPrerelease) prerelease.join('.')].join('-');
 }
 
+String releaseArtifactFilename(
+  String contractFilename, {
+  required String marketingVersion,
+  required ReleaseVersion releaseVersion,
+}) {
+  if (releaseVersion.marketingVersion != marketingVersion ||
+      !contractFilename.contains(marketingVersion)) {
+    throw const FormatException(
+      'Artifact filename, marketing version, and release version must agree.',
+    );
+  }
+  return contractFilename.replaceFirst(
+    marketingVersion,
+    releaseVersion.toString(),
+  );
+}
+
 class ReleaseArtifact {
   const ReleaseArtifact({
     required this.component,

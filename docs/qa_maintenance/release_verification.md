@@ -7,7 +7,7 @@ description: "Required local and hosted evidence for Sanad release, signing, ins
 
 ## Candidate invariants
 
-Every candidate must match the release contract for marketing version, increasing build, Stable or numbered RC tag, derived channel, tagged commit, component, platform, architecture, filename, size, and SHA-256. A candidate is
+Every candidate must match the release contract for marketing version, increasing build, Stable or numbered RC tag, derived channel, tagged commit, component, platform, architecture, filename, size, and SHA-256. RC filenames must include the full `-rc.N` identity and must not collide with another RC or Stable download. A candidate is
 rejected when its source commit differs from the release tag, required outputs
 are missing, or generated metadata is not deterministic.
 
