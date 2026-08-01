@@ -132,7 +132,8 @@ void main() {
   throw StateError('fixture uncaught');
 }
 """);
-    final process = await Process.start('fvm', ['dart', fixture.path]);
+    final fvmExecutable = Platform.isWindows ? 'fvm.bat' : 'fvm';
+    final process = await Process.start(fvmExecutable, ['dart', fixture.path]);
     final journal = await ComponentProcessJournal.attach(
       process: process,
       writer: writer(),

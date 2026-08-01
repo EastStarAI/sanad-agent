@@ -54,6 +54,8 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Scenario | Expected result |
 |---|---|
 | Fresh POSIX or Windows user environment | FVM verification precedes Flutter, Agent dependencies, Client dependencies, and shim installation; `run all` begins only after every stage succeeds. |
+| Windows bootstrap starts outside a Git checkout but beside its copied project scripts | The non-repository Git probe is handled without a raw PowerShell native-command error, and bootstrap continues from the script-owned project root. |
+| Journal crash fixture launches through FVM on Windows | The test resolves the activated `fvm.bat` command wrapper and captures stdout, stderr, and the uncaught stack after exit. |
 | Unchanged second setup | Pinned Flutter and dependency stages are skipped when SDK, lockfile fingerprint, and package configs agree. |
 | Flutter pin or either lockfile changes | The stamp invalidates and the affected setup sequence runs before runtime launch. |
 | Existing shim belongs to another checkout | Setup fails without replacing it; `setup --force` performs the explicit replacement. |

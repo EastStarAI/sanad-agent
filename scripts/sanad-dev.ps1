@@ -14,8 +14,15 @@ $FvmChecksums = @{
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Split-Path -Parent $ScriptDir
 $CallerDir = (Get-Location).Path
-$gitRoot = (& git -C $CallerDir rev-parse --show-toplevel 2>$null)
-if ($LASTEXITCODE -eq 0 -and $gitRoot) {
+$gitRoot = $null
+$gitRootResolved = $false
+try {
+  $gitRoot = (& git -C $CallerDir rev-parse --show-toplevel 2>$null)
+  $gitRootResolved = $LASTEXITCODE -eq 0 -and $gitRoot
+} catch {
+  $gitRoot = $null
+}
+if ($gitRootResolved) {
   if (Test-Path (Join-Path $gitRoot 'sanad-agent/scripts/sanad_dev.dart')) {
     $ProjectDir = Join-Path $gitRoot 'sanad-agent'
   } elseif (Test-Path (Join-Path $gitRoot 'scripts/sanad_dev.dart')) {
