@@ -53,8 +53,8 @@ jobs:
           cat "$RUNNER_TEMP/changed"
           agent=false; client=false; docs=false; release=false; security=false
           while IFS= read -r path; do
-            case "$path" in agent/*|release/contract/*) agent=true ;; esac
-            case "$path" in client/*|release/contract/*) client=true ;; esac
+            case "$path" in agent/*|release/contract/*|release/release-contract.json) agent=true ;; esac
+            case "$path" in client/*|release/contract/*|release/release-contract.json) client=true ;; esac
             case "$path" in *.md|docs/*|.vscode/*|.agents/*|.github/ISSUE_TEMPLATE/*|.github/DISCUSSION_TEMPLATE/*|.github/labels.yml|.github/CODEOWNERS|.github/PULL_REQUEST_TEMPLATE.md|scripts/community/*) docs=true ;; esac
             case "$path" in .github/workflows/*|release/*|client/release/*|agent/tool/release_tool.dart|scripts/install.sh|scripts/install.ps1) release=true ;; esac
             case "$path" in SECURITY.md|docs/operations/code_signing_policy.md|agent/lib/core/auth/*|agent/lib/core/auth/**/*|agent/lib/capabilities/permissions/*|agent/lib/capabilities/permissions/**/*) security=true ;; esac
