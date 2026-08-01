@@ -1,4 +1,4 @@
-# Sanad release candidate
+# Sanad release
 
 This release was built from the tagged public source by the protected Sanad release workflow. Verify downloads against `SHA256SUMS`, the channel-specific release manifest, and GitHub build provenance before installation.
 
