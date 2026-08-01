@@ -11,10 +11,7 @@ The public `EastStarAI/sanad-agent` repository owns CI, artifact construction,
 signing orchestration, the release manifest, update-feed generation, and the
 canonical installer sources. The first release line uses marketing version `1.0.0` for both Sanad Agent and Sanad Client. RC tags use `v1.0.0-rc.N`; Stable uses `v1.0.0`. Each candidate records its increasing build number in the checked-in contract.
 
-Pull-request CI is read-only and never receives signing or deployment
-credentials. Signing and deployment jobs use protected GitHub Environments,
-least-privilege permissions, immutable release assets, and explicit manual
-deployment inputs.
+Pull-request CI is read-only and never receives signing or deployment credentials. A protected validation-only dispatch from `main` can build the complete signed Agent/Client matrix, including a private IPA, as retained private artifacts without a tag, Draft, Release, TestFlight upload, or deployment. Signing jobs use protected GitHub Environments. Assembly remains contents-read; only the separate Draft and publication jobs receive contents-write.
 
 ## Artifact channels
 
@@ -54,7 +51,7 @@ unsigned APK or AAB can be produced.
 | `updates-production` | Atomic Appcast deployment |
 | `installers-production` | Publishing canonical installer sources |
 
-Signing environments and `release-publication` require the repository owner as reviewer and accept deployments only from protected refs. `release-build` has no signing responsibility. Repository secret scanning and push protection are enabled. No signing or deployment secret was added while establishing these boundaries; fork, pull-request, and Dependabot workflows remain read-only and cannot trigger the tag/manual release workflow or enter protected environments.
+Signing environments and `release-publication` require the repository owner as reviewer and accept deployments only from protected refs. `release-build` has no signing responsibility. Repository secret scanning and push protection are enabled. Signing secrets were transferred directly from the validated local signing store to their owning Environments without exposing values in Git, logs, or durable temporary files. Publication and production-deployment Environments contain no deployment secret. Fork, pull-request, and Dependabot workflows remain read-only and cannot trigger the tag/manual release workflow or enter protected environments.
 
 ## Secret inventory
 

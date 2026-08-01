@@ -49,10 +49,7 @@ Automated tests cover contract parsing, invalid tag rejection, deterministic
 Appcast output, source-managed no-mutation behavior, checksum rejection, client
 bootstrap selection, and existing daemon-controller behavior.
 
-Hosted validation additionally exercises interrupted downloads, wrong
-architecture, corrupted size and checksum, replacement failure, service restart,
-retained Sanad Home, repeated update requests, and rollback to the prior signed
-version.
+Hosted validation begins with a `validation_only` full-matrix run from protected `main`. It requires no tag and must leave zero Drafts and Releases while retaining private Agent/Client artifacts, the signed IPA, manifest, checksums, SBOM, Appcast, and attestations. Later lifecycle validation additionally exercises interrupted downloads, wrong architecture, corrupted size and checksum, replacement failure, service restart, retained Sanad Home, repeated update requests, and rollback to the prior signed version.
 
 ## Installer coverage
 

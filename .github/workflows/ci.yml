@@ -222,10 +222,15 @@ jobs:
           ! grep -E 'WINDOWS_SIGNING_PFX|Prepared Authenticode|Authenticode verification' \
             .github/workflows/release.yml scripts/install.ps1 client/release/windows/release.ps1
           grep -F 'environment: release-publication' .github/workflows/release.yml
-          grep -F 'Create immutable Draft release candidate' .github/workflows/release.yml
+          grep -F 'validation_only:' .github/workflows/release.yml
+          grep -F "if: needs.validate.outputs.validation_only != 'true'" .github/workflows/release.yml
+          grep -F 'name: Create immutable Draft candidate' .github/workflows/release.yml
+          grep -F 'name: Build and verify signed private IPA' .github/workflows/release.yml
           grep -F -- '--draft' .github/workflows/release.yml
           grep -F 'release-manifest-rc.json' release/release-contract.json
           grep -F 'appcast-rc.xml' release/release-contract.json
+          jq -e '.artifacts[] | select(.platform == "ios" and .public == false)' \
+            release/release-contract.json >/dev/null
       - name: Scan committed content for credentials
         shell: bash
         run: |

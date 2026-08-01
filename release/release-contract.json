@@ -95,6 +95,15 @@
     },
     {
       "component": "client",
+      "platform": "ios",
+      "architecture": "universal",
+      "format": "ipa",
+      "filename": "sanad-client-1.0.0-ios-universal.ipa",
+      "public": false,
+      "signature_type": "apple-distribution"
+    },
+    {
+      "component": "client",
       "platform": "web",
       "architecture": "universal",
       "format": "tar.gz",

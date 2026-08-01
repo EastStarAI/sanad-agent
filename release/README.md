@@ -8,7 +8,7 @@ The shared Dart models and validators live beside the data contract in `release/
 
 The accepted tags are exactly the stable tag `v<marketing-version>` or an RC tag `v<marketing-version>-rc.<positive-number>`. Stable uses `release-manifest.json` and `appcast.xml`. RC uses the separate `release-manifest-rc.json` and `appcast-rc.xml`; stable clients never consume the RC feed.
 
-A tag or manual candidate dispatch validates the tag, channel, build, and tagged commit, builds the matrix, creates attestations, uploads a retained workflow artifact, and creates a GitHub **Draft**. It cannot publish from the build/assembly path. Publication is a separate least-privilege job guarded by the `release-publication` Environment and its required owner approval. Rejection or cancellation leaves only the private Draft.
+A protected `validation_only` dispatch from `main` validates an intended RC or Stable identity and builds the complete Agent and Client matrix—including a private signed IPA—without requiring a tag and without creating any Draft or Release. It produces only retained private workflow artifacts and attestations. A tag or non-validation candidate dispatch additionally requires the tagged commit and creates a GitHub **Draft** only in a separate contents-write job. The build/assembly path remains contents-read. Publication is a separate least-privilege job guarded by the `release-publication` Environment and its required owner approval. Rejection or cancellation leaves only the private Draft.
 
 The workflow refuses any existing Draft or published Release for the tag. Once created, a candidate is not replaced in place. A correction uses a new RC or patch tag and a fresh protected run.
 

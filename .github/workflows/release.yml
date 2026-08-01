@@ -6,9 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Existing v1.0.0 or v1.0.0-rc.N tag to build
+        description: Intended v1.0.0 or v1.0.0-rc.N identity
         type: string
         required: true
+      validation_only:
+        description: Build the complete private matrix without requiring a tag or creating a Draft
+        type: boolean
+        default: true
       request_publication:
         description: Queue protected publication after the Draft is ready
         type: boolean
@@ -38,6 +42,7 @@ jobs:
       manifest: ${{ steps.contract.outputs.manifest }}
       appcast: ${{ steps.contract.outputs.appcast }}
       prerelease: ${{ steps.contract.outputs.prerelease }}
+      validation_only: ${{ steps.contract.outputs.validation_only }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -52,8 +57,14 @@ jobs:
           version="$(jq -r '.version' ../release/release-contract.json)"
           build="$(jq -r '.build_number' ../release/release-contract.json)"
           tag="${GITHUB_REF_NAME}"
-          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+          validation_only=false
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
             tag="${{ inputs.release_tag }}"
+            if [[ "${{ inputs.validation_only }}" == true ]]; then
+              test "$GITHUB_REF" = refs/heads/main
+              test "${{ inputs.request_publication }}" != true
+              validation_only=true
+            fi
           fi
           if [[ "$tag" == "v$version" ]]; then
             channel=stable
@@ -68,7 +79,9 @@ jobs:
           fi
           fvm dart run tool/release_tool.dart validate-contract \
             --repo-root .. --tag "$tag" --channel "$channel"
-          test "$(git rev-parse "$tag^{commit}")" = "$GITHUB_SHA"
+          if [[ "$validation_only" != true ]]; then
+            test "$(git rev-parse "$tag^{commit}")" = "$GITHUB_SHA"
+          fi
           {
             echo "version=$version"
             echo "artifact_version=${tag#v}"
@@ -78,8 +91,10 @@ jobs:
             echo "manifest=$manifest"
             echo "appcast=$appcast"
             echo "prerelease=$prerelease"
+            echo "validation_only=$validation_only"
           } >> "$GITHUB_OUTPUT"
       - name: Refuse an existing immutable or Draft release
+        if: steps.contract.outputs.validation_only != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -363,12 +378,73 @@ jobs:
           retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
           if-no-files-found: error
 
+  client-ios:
+    needs: validate
+    runs-on: macos-15
+    timeout-minutes: 60
+    environment: apple-testflight
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      - name: Restore Apple Distribution identity and profile
+        env:
+          CERTIFICATE_BASE64: ${{ secrets.APPLE_DISTRIBUTION_P12_BASE64 }}
+          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_DISTRIBUTION_P12_PASSWORD }}
+          PROFILE_BASE64: ${{ secrets.IOS_APP_STORE_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$CERTIFICATE_BASE64"
+          test -n "$PROFILE_BASE64"
+          keychain="$RUNNER_TEMP/sanad-ios.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+          printf '%s' "$CERTIFICATE_BASE64" | base64 -D > "$RUNNER_TEMP/distribution.p12"
+          printf '%s' "$PROFILE_BASE64" | base64 -D > "$RUNNER_TEMP/sanad.mobileprovision"
+          chmod 600 "$RUNNER_TEMP/distribution.p12" "$RUNNER_TEMP/sanad.mobileprovision"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security default-keychain -s "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security import "$RUNNER_TEMP/distribution.p12" -k "$keychain" \
+            -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security list-keychains -d user -s "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: \
+            -s -k "$keychain_password" "$keychain"
+          uuid="$(security cms -D -i "$RUNNER_TEMP/sanad.mobileprovision" | \
+            plutil -extract UUID raw -o - -)"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          cp "$RUNNER_TEMP/sanad.mobileprovision" \
+            "$HOME/Library/MobileDevice/Provisioning Profiles/$uuid.mobileprovision"
+      - name: Build and verify signed private IPA
+        working-directory: client
+        run: |
+          set -euo pipefail
+          fvm flutter pub get
+          fvm flutter build ipa --release \
+            --build-name="${{ needs.validate.outputs.version }}" \
+            --build-number="${{ needs.validate.outputs.build }}" \
+            --dart-define-from-file=config/prod.json \
+            --export-options-plist=release/ios/ExportOptions.plist
+          ipa="$(find build/ios/ipa -maxdepth 1 -name '*.ipa' -print -quit)"
+          test -n "$ipa"
+          unzip -q "$ipa" -d "$RUNNER_TEMP/ipa-check"
+          app="$(find "$RUNNER_TEMP/ipa-check/Payload" -maxdepth 1 -type d -name '*.app' -print -quit)"
+          test -n "$app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          mkdir -p ../dist
+          cp "$ipa" \
+            "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-ios-universal.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: client-ios-private
+          path: dist/*
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
+          if-no-files-found: error
+
   assemble:
-    needs: [validate, agent, client-linux-web, client-android, client-macos, client-windows]
+    needs: [validate, agent, client-linux-web, client-android, client-macos, client-windows, client-ios]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
-      contents: write
+      contents: read
       id-token: write
       attestations: write
     steps:
@@ -417,7 +493,22 @@ jobs:
           path: dist/*
           retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
           if-no-files-found: error
-      - name: Create immutable Draft release candidate
+
+  draft:
+    name: Create immutable Draft candidate
+    needs: [validate, assemble]
+    if: needs.validate.outputs.validation_only != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.validate.outputs.channel }}-release-candidate
+          path: dist
+      - name: Create private Draft
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -446,8 +537,8 @@ jobs:
 
   publish:
     name: Publish approved immutable release
-    needs: [validate, assemble]
-    if: github.ref_type == 'tag' || inputs.request_publication == true
+    needs: [validate, draft]
+    if: needs.validate.outputs.validation_only != 'true' && (github.ref_type == 'tag' || inputs.request_publication == true)
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: release-publication
