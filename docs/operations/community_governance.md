@@ -56,6 +56,8 @@ browser session, and keep moderation/audit channels private.
 
 The GitHub feed in `#github` is read-only. Its channel-scoped webhook is stored only as the `DISCORD_WEBHOOK_URL` repository secret and is exposed only to the final send step. The tracked notification workflow runs on pushes to protected `main` and published Releases: a main push is posted only when GitHub associates it with a merged pull request, while a published Release is posted directly. Payloads disable mentions and contain only the public title, link, and actor identities hydrated from the complete public pull-request or Release record. Raw Issues, CI runs, security events, fork activity, and direct or emergency pushes are intentionally excluded. Contributor opportunities may be selected manually for `#contributors`.
 
-## Deferred Maintainer Skills
+## Repository Maintainer Skill Boundary
 
-`sanad-repository-maintainer` belongs to SANAD-11 after live GitHub APIs, category IDs, rule behavior, and permission boundaries are proven. `sanad-release-maintainer` belongs to SANAD-12 after releases, checksums, Appcast publication, and protected environments work on the public repository. Neither deferral blocks the three local contribution and pull-request skills.
+`sanad-repository-maintainer` is a public procedure for human maintainers and development agents working on this repository. It describes role-based access rather than assuming authority from a username: public/read access supports inspection, triage access supports ordinary work classification, write or maintain access supports review-branch and eligible merge operations, and administrative surfaces require the corresponding live repository permission.
+
+Read-only inspection is the default. An agent requires explicit action-specific human authorization before every mutation, and every maintainer must preserve tracked governance, protected checks, fork safety, and secret boundaries. Mutable IDs are discovered from GitHub rather than stored. Release publication, signing, distribution, and production operations use separately reviewed procedures and are not defined by this skill.

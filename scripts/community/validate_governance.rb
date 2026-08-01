@@ -109,6 +109,17 @@ skills.each do |skill|
   fail_validation("#{skill} lacks an explicit no-unauthorized-mutation boundary") unless text.downcase.include?('explicit authorization')
 end
 
+repository_maintainer_path = File.join(ROOT, '.agents/skills/sanad-repository-maintainer/SKILL.md')
+fail_validation('missing sanad-repository-maintainer skill') unless File.file?(repository_maintainer_path)
+repository_maintainer = File.read(repository_maintainer_path)
+fail_validation('invalid frontmatter for sanad-repository-maintainer') unless repository_maintainer.match?(/\A---\nname: .+\ndescription: .+\n---\n/)
+%w[EastStarAI/sanad-agent explicit\ authorization All\ required\ checks\ pass release\ publication production\ deployment].each do |boundary|
+  fail_validation("sanad-repository-maintainer is missing boundary #{boundary}") unless repository_maintainer.include?(boundary)
+end
+%w[AhmedAttia3 viewerPermission SANAD-11 SANAD-12 SANAD-13].each do |private_detail|
+  fail_validation("sanad-repository-maintainer exposes non-public operational detail #{private_detail}") if repository_maintainer.include?(private_detail)
+end
+
 active_skills = Dir.glob(File.join(ROOT, '.agents/skills/**/SKILL.md')).map { |path| File.read(path) }.join("\n")
 fail_validation('ClickUp remains in active public skills') if active_skills.match?(/clickup/i)
 
@@ -156,4 +167,4 @@ fail_validation('Discord notifications must suppress mentions') unless discord_w
   fail_validation("Discord notifications must not subscribe to #{event}") if discord_workflow.match?(/^  #{Regexp.escape(event)}:/)
 end
 
-puts "Governance artifacts valid: #{labels.length} labels, #{yaml_paths.length} YAML files, #{skills.length} contribution skills."
+puts "Governance artifacts valid: #{labels.length} labels, #{yaml_paths.length} YAML files, #{skills.length} contribution skills, 1 repository maintainer skill."
