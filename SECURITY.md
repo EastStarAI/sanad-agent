@@ -24,3 +24,5 @@ Third-party model providers, MCP servers, operating systems, and package depende
 - Tool execution remains constrained by workspace policy, user approval, and operating-system permissions.
 - Release downloads must not be treated as trusted until the release task publishes signatures or checksums and documents verification.
 - Fork pull requests do not receive signing or deployment secrets.
+
+<!-- Temporary SANAD-11 fork CI probe; not for merge. -->
