@@ -21,6 +21,10 @@ try {
 Push-Location $ClientRoot
 try {
     & "$PSScriptRoot\build_installer.ps1" -EnvConfig $EnvConfig
+    if ($LASTEXITCODE -ne 0) { throw "Windows installer build failed." }
+    if (-not (Test-Path -LiteralPath $Installer)) {
+        throw "Windows installer output is missing."
+    }
     if (-not $PrivateKeyPath -or -not (Test-Path -LiteralPath $PrivateKeyPath)) {
         throw "WINSPARKLE_PRIVATE_KEY_PATH is required."
     }

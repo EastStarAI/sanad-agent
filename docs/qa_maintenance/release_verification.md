@@ -61,6 +61,18 @@ service. Release validation must cover clean install, pairing-token replay,
 lost-success retry, durable reconnect, reinstall, upgrade, failed verification,
 interrupted replacement, and uninstall on each supported desktop host.
 
+## First hosted validation-only probe
+
+Run `30723337563` validated the no-tag safety boundary and signing-Environment approvals. It created no tag, Draft, or Release. Agent Linux, Client Linux/Web, and signed Android APK/AAB completed successfully. The remaining jobs exposed workflow defects rather than invalid signing material:
+
+- Windows Agent invoked FVM from Git Bash, where the Windows pub-cache executable was not on PATH; Windows Agent commands now use PowerShell.
+- Both signed and notarized macOS Agent binaries reached the final check, where Gatekeeper rejected raw CLI executables as non-app bundles; raw CLIs retain codesign and notary acceptance checks without the inapplicable `spctl` app assessment.
+- Client macOS recursively changed all runner-temporary permissions, including GitHub command files; permission hardening is now limited to the three restored signing files.
+- Client iOS attempted automatic Development signing during archive; it now creates an unsigned archive and performs the manual App Store Distribution export with the installed profile.
+- Client Windows encountered a transient Chocolatey `504` for NSIS and continued into update signing without an installer; NSIS installation now has bounded retries and the packaging helper fails immediately when the build or output is missing.
+
+A rerun must close these hosted defects before the validation-only matrix is accepted.
+
 ## SANAD-08 local evidence
 
 The preparation worktree passed both analyzers, the complete Backend suite
