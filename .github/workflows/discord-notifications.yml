@@ -1,0 +1,75 @@
+name: Discord community notifications
+
+on:
+  push:
+    branches: [main]
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    name: Notify Discord
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Build approved community notification
+        id: message
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
+            title="Release $(jq -r '.release.name // .release.tag_name' "$GITHUB_EVENT_PATH")"
+            url="$(jq -r '.release.html_url' "$GITHUB_EVENT_PATH")"
+            description="Published by @$(jq -r '.release.author.login' "$GITHUB_EVENT_PATH")."
+          else
+            pull_request="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+              --jq 'map(select(.merged_at != null and .base.ref == "main")) | first')"
+            if [[ "$pull_request" == "null" ]]; then
+              echo "No merged pull request is associated with this main push."
+              echo "send=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            number="$(jq -r '.number' <<<"$pull_request")"
+            title="Merged PR #${number}: $(jq -r '.title' <<<"$pull_request")"
+            url="$(jq -r '.html_url' <<<"$pull_request")"
+            description="Merged by @$(jq -r '.merged_by.login' <<<"$pull_request") from @$(jq -r '.user.login' <<<"$pull_request")."
+          fi
+          payload="$(jq -n \
+            --arg title "${title:0:240}" \
+            --arg url "$url" \
+            --arg description "${description:0:1000}" \
+            '{
+              username: "Sanad GitHub",
+              allowed_mentions: {parse: []},
+              embeds: [{
+                title: $title,
+                url: $url,
+                description: $description,
+                color: 8141549
+              }]
+            }')"
+          {
+            echo "send=true"
+            echo "payload<<SANAD_DISCORD_PAYLOAD"
+            echo "$payload"
+            echo "SANAD_DISCORD_PAYLOAD"
+          } >> "$GITHUB_OUTPUT"
+      - name: Send approved notification
+        if: steps.message.outputs.send == 'true'
+        shell: bash
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          PAYLOAD: ${{ steps.message.outputs.payload }}
+        run: |
+          set -euo pipefail
+          test -n "$DISCORD_WEBHOOK_URL"
+          curl --fail --silent --show-error --retry 3 \
+            --header 'Content-Type: application/json' \
+            --data "$PAYLOAD" \
+            --output /dev/null \
+            "$DISCORD_WEBHOOK_URL"

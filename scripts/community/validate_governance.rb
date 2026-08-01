@@ -139,4 +139,20 @@ fail_validation('Gitleaks fixture allowlist must be limited to generic API-key f
   fail_validation("Gitleaks config is missing reviewed fixture #{fixture}") unless gitleaks_config.include?(fixture)
 end
 
+discord_path = File.join(ROOT, '.github/workflows/discord-notifications.yml')
+discord_workflow = File.read(discord_path)
+discord_steps = load_yaml(discord_path).dig('jobs', 'notify', 'steps')
+build_notification = discord_steps&.find { |step| step['id'] == 'message' }
+send_notification = discord_steps&.find { |step| step['name'] == 'Send approved notification' }
+fail_validation('Discord workflow must keep build and send steps separate') unless build_notification && send_notification
+fail_validation('Discord webhook secret must not be exposed to the payload build step') if build_notification.fetch('env', {}).key?('DISCORD_WEBHOOK_URL')
+fail_validation('Discord webhook secret must be scoped to the final send step') unless send_notification.fetch('env', {})['DISCORD_WEBHOOK_URL'].to_s.include?('secrets.DISCORD_WEBHOOK_URL')
+fail_validation('Discord notifications must use the repository webhook secret') unless discord_workflow.include?('secrets.DISCORD_WEBHOOK_URL')
+fail_validation('Discord notifications must resolve merged pull requests from protected main pushes') unless discord_workflow.include?('commits/${GITHUB_SHA}/pulls') && discord_workflow.include?('.merged_at != null') && discord_workflow.include?('.base.ref == "main"')
+fail_validation('Discord notifications must include published Releases') unless discord_workflow.include?('types: [published]')
+fail_validation('Discord notifications must suppress mentions') unless discord_workflow.include?('allowed_mentions: {parse: []}')
+%w[pull_request pull_request_target issues workflow_run workflow_dispatch].each do |event|
+  fail_validation("Discord notifications must not subscribe to #{event}") if discord_workflow.match?(/^  #{Regexp.escape(event)}:/)
+end
+
 puts "Governance artifacts valid: #{labels.length} labels, #{yaml_paths.length} YAML files, #{skills.length} contribution skills."
