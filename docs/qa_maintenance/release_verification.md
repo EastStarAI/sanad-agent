@@ -7,8 +7,7 @@ description: "Required local and hosted evidence for Sanad release, signing, ins
 
 ## Candidate invariants
 
-Every candidate must match the release contract for version, build, tag,
-component, platform, architecture, filename, size, and SHA-256. A candidate is
+Every candidate must match the release contract for marketing version, increasing build, Stable or numbered RC tag, derived channel, tagged commit, component, platform, architecture, filename, size, and SHA-256. RC filenames must include the full `-rc.N` identity and must not collide with another RC or Stable download. A candidate is
 rejected when its source commit differs from the release tag, required outputs
 are missing, or generated metadata is not deterministic.
 
@@ -97,10 +96,4 @@ The local Android release produced signed APK and AAB files for
 `com.eaststarai.sanad` version `1.0.0`; the APK certificate fingerprint matched
 the external `sanad-release` keystore and the AAB JAR signature verified.
 
-Hosted Linux/Windows/Android builds, the SANAD-12 Windows unsigned-policy
-workflow adaptation, Appcast publication, clean-machine lifecycle tests, and
-Internal TestFlight remain hosted/live evidence and must not be represented as
-locally completed. The current Windows workflow remains fail-closed until
-SANAD-12 replaces the signing requirement with explicit `Unsigned Windows
-build` disclosure plus checksum, manifest, provenance, Defender, and
-SmartScreen gates. Authenticode/SignPath is post-v1 work.
+The Windows workflow and installer now produce the approved unsigned `1.0.0` artifacts without a PFX requirement, retain WinSparkle DSA for client updates, and require explicit disclosure plus checksum, manifest, SBOM, and provenance metadata. Hosted Linux/Windows/Android builds, Appcast publication, clean-machine lifecycle tests, Windows 10/11 Defender and SmartScreen observations, and Internal TestFlight remain hosted/live evidence and must not be represented as completed. Authenticode/SignPath is post-v1 work.

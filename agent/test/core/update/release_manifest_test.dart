@@ -9,6 +9,17 @@ import 'package:test/test.dart';
 
 void main() {
   group('ReleaseManifest', () {
+    test('resolves immutable RC artifact filenames from marketing names', () {
+      expect(
+        releaseArtifactFilename(
+          'sanad-agent-1.0.0-windows-x64.exe',
+          marketingVersion: '1.0.0',
+          releaseVersion: ReleaseVersion.parse('1.0.0-rc.2'),
+        ),
+        'sanad-agent-1.0.0-rc.2-windows-x64.exe',
+      );
+    });
+
     test('accepts a canonical stable manifest', () {
       final manifest = ReleaseManifest.fromJson(
         _manifestJson(bytes: [1, 2, 3]),
@@ -22,6 +33,44 @@ void main() {
           architecture: 'x64',
         ),
         isNotNull,
+      );
+    });
+
+    test('accepts a canonical RC manifest and orders it before stable', () {
+      final json = _manifestJson(bytes: [1, 2, 3]);
+      json['version'] = '1.1.0-rc.2';
+      json['tag'] = 'v1.1.0-rc.2';
+      json['channel'] = 'rc';
+      final artifacts = json['artifacts']! as List<dynamic>;
+      (artifacts.single as Map<String, dynamic>)['url'] =
+          'https://github.com/EastStarAI/sanad-agent/releases/download/v1.1.0-rc.2/sanad-agent-1.1.0-linux-x64';
+
+      final manifest = ReleaseManifest.fromJson(json);
+
+      expect(manifest.channel, ReleaseChannel.rc);
+      expect(
+        manifest.version.compareTo(ReleaseVersion.parse('1.1.0')),
+        lessThan(0),
+      );
+      expect(
+        ReleaseVersion.parse(
+          '1.1.0-rc.2',
+        ).compareTo(ReleaseVersion.parse('1.1.0-rc.1')),
+        greaterThan(0),
+      );
+    });
+
+    test('rejects RC version on the stable channel', () {
+      final json = _manifestJson(bytes: [1, 2, 3]);
+      json['version'] = '1.1.0-rc.1';
+      json['tag'] = 'v1.1.0-rc.1';
+      final artifacts = json['artifacts']! as List<dynamic>;
+      (artifacts.single as Map<String, dynamic>)['url'] =
+          'https://github.com/EastStarAI/sanad-agent/releases/download/v1.1.0-rc.1/sanad-agent-1.1.0-linux-x64';
+
+      expect(
+        () => ReleaseManifest.fromJson(json),
+        throwsA(isA<FormatException>()),
       );
     });
 
@@ -61,7 +110,7 @@ void main() {
           platform: 'windows',
           architecture: 'x64',
           extension: 'exe',
-          signatureType: 'authenticode+winsparkle-dsa',
+          signatureType: 'unsigned+winsparkle-dsa',
           updateSignature: 'windows-signature',
         ),
       ];

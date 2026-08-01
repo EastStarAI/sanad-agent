@@ -43,7 +43,7 @@ The updater must select the correct target, verify release metadata, and use a
 safe replacement path appropriate to the operating system.
 
 The release manifest and updater implementation are shared through
-`shared/release_contract/`; the CLI and local daemon both delegate replacement
+`release/contract/`; the CLI and local daemon both delegate replacement
 to `AgentUpdateService`. Source/FVM execution returns `source_managed` and never
 modifies Git.
 

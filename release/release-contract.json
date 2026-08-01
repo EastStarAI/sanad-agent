@@ -4,6 +4,12 @@
   "build_number": 1,
   "tag": "v1.0.0",
   "channel": "stable",
+  "channels": {
+    "stable_manifest": "release-manifest.json",
+    "stable_appcast": "appcast.xml",
+    "rc_manifest": "release-manifest-rc.json",
+    "rc_appcast": "appcast-rc.xml"
+  },
   "repository": "EastStarAI/sanad-agent",
   "artifacts": [
     {
@@ -40,7 +46,7 @@
       "format": "executable",
       "filename": "sanad-agent-1.0.0-windows-x64.exe",
       "public": true,
-      "signature_type": "authenticode+github-attestation"
+      "signature_type": "unsigned+github-attestation"
     },
     {
       "component": "client",
@@ -58,7 +64,7 @@
       "format": "exe",
       "filename": "sanad-client-1.0.0-windows-x64.exe",
       "public": true,
-      "signature_type": "authenticode+winsparkle-dsa"
+      "signature_type": "unsigned+winsparkle-dsa"
     },
     {
       "component": "client",

@@ -5,27 +5,48 @@ import 'package:crypto/crypto.dart';
 
 const sanadReleaseRepository = 'EastStarAI/sanad-agent';
 
-enum ReleaseChannel { stable }
+enum ReleaseChannel { rc, stable }
 
 class ReleaseVersion implements Comparable<ReleaseVersion> {
-  const ReleaseVersion(this.major, this.minor, this.patch);
+  const ReleaseVersion(
+    this.major,
+    this.minor,
+    this.patch, [
+    this.prerelease = const [],
+  ]);
 
   factory ReleaseVersion.parse(String value) {
     final normalized = value.startsWith('v') ? value.substring(1) : value;
-    final match = RegExp(r'^(\d+)\.(\d+)\.(\d+)$').firstMatch(normalized);
+    final match = RegExp(
+      r'^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$',
+    ).firstMatch(normalized);
     if (match == null) {
+      throw FormatException('Invalid semantic version: $value');
+    }
+    final prerelease = match.group(4)?.split('.') ?? const <String>[];
+    if (prerelease.any(
+      (identifier) =>
+          RegExp(r'^\d+$').hasMatch(identifier) &&
+          identifier.length > 1 &&
+          identifier.startsWith('0'),
+    )) {
       throw FormatException('Invalid semantic version: $value');
     }
     return ReleaseVersion(
       int.parse(match.group(1)!),
       int.parse(match.group(2)!),
       int.parse(match.group(3)!),
+      List.unmodifiable(prerelease),
     );
   }
 
   final int major;
   final int minor;
   final int patch;
+  final List<String> prerelease;
+
+  bool get isPrerelease => prerelease.isNotEmpty;
+  String get marketingVersion => '$major.$minor.$patch';
 
   @override
   int compareTo(ReleaseVersion other) {
@@ -33,11 +54,51 @@ class ReleaseVersion implements Comparable<ReleaseVersion> {
     if (majorResult != 0) return majorResult;
     final minorResult = minor.compareTo(other.minor);
     if (minorResult != 0) return minorResult;
-    return patch.compareTo(other.patch);
+    final patchResult = patch.compareTo(other.patch);
+    if (patchResult != 0) return patchResult;
+    if (!isPrerelease || !other.isPrerelease) {
+      return isPrerelease == other.isPrerelease ? 0 : (isPrerelease ? -1 : 1);
+    }
+    for (
+      var index = 0;
+      index < prerelease.length && index < other.prerelease.length;
+      index++
+    ) {
+      final left = prerelease[index];
+      final right = other.prerelease[index];
+      if (left == right) continue;
+      final leftNumber = int.tryParse(left);
+      final rightNumber = int.tryParse(right);
+      if (leftNumber != null && rightNumber != null) {
+        return leftNumber.compareTo(rightNumber);
+      }
+      if (leftNumber != null) return -1;
+      if (rightNumber != null) return 1;
+      return left.compareTo(right);
+    }
+    return prerelease.length.compareTo(other.prerelease.length);
   }
 
   @override
-  String toString() => '$major.$minor.$patch';
+  String toString() =>
+      [marketingVersion, if (isPrerelease) prerelease.join('.')].join('-');
+}
+
+String releaseArtifactFilename(
+  String contractFilename, {
+  required String marketingVersion,
+  required ReleaseVersion releaseVersion,
+}) {
+  if (releaseVersion.marketingVersion != marketingVersion ||
+      !contractFilename.contains(marketingVersion)) {
+    throw const FormatException(
+      'Artifact filename, marketing version, and release version must agree.',
+    );
+  }
+  return contractFilename.replaceFirst(
+    marketingVersion,
+    releaseVersion.toString(),
+  );
 }
 
 class ReleaseArtifact {
@@ -125,16 +186,18 @@ class ReleaseManifest {
       throw const FormatException('Release manifest artifacts must be a list.');
     }
     final channelName = _requiredString(json, 'channel');
-    if (channelName != ReleaseChannel.stable.name) {
-      throw FormatException('Unsupported release channel: $channelName');
-    }
+    final channel = switch (channelName) {
+      'rc' => ReleaseChannel.rc,
+      'stable' => ReleaseChannel.stable,
+      _ => throw FormatException('Unsupported release channel: $channelName'),
+    };
     final manifest = ReleaseManifest(
       schemaVersion: json['schema_version'] as int? ?? 0,
       version: ReleaseVersion.parse(_requiredString(json, 'version')),
       buildNumber: json['build_number'] as int? ?? 0,
       tag: _requiredString(json, 'tag'),
       commit: _requiredString(json, 'commit'),
-      channel: ReleaseChannel.stable,
+      channel: channel,
       repository: _requiredString(json, 'repository'),
       artifacts: artifacts
           .map(
@@ -167,6 +230,17 @@ class ReleaseManifest {
     if (tag != 'v$version') {
       throw FormatException('Tag $tag does not match version $version.');
     }
+    final isRcVersion =
+        version.prerelease.length == 2 &&
+        version.prerelease.first == 'rc' &&
+        int.tryParse(version.prerelease.last) != null &&
+        int.parse(version.prerelease.last) > 0;
+    if ((channel == ReleaseChannel.stable && version.isPrerelease) ||
+        (channel == ReleaseChannel.rc && !isRcVersion)) {
+      throw FormatException(
+        'Channel ${channel.name} does not match release version $version.',
+      );
+    }
     if (!RegExp(r'^[0-9a-f]{7,40}$').hasMatch(commit)) {
       throw const FormatException('Commit must be a Git hexadecimal id.');
     }
@@ -187,9 +261,9 @@ class ReleaseManifest {
       if (!artifact.url.isScheme('https')) {
         throw FormatException('Artifact URL must use HTTPS.');
       }
-      if (!artifact.filename.contains(version.toString())) {
+      if (!artifact.filename.contains(version.marketingVersion)) {
         throw FormatException(
-          'Artifact filename must contain version: ${artifact.filename}',
+          'Artifact filename must contain marketing version: ${artifact.filename}',
         );
       }
       final expectedUrl = Uri.parse(
@@ -305,10 +379,11 @@ String generateAppcastXml(ReleaseManifest manifest, DateTime publishedAt) {
   final pubDate = HttpDate.format(publishedAt.toUtc());
   final notes =
       'https://github.com/${manifest.repository}/releases/tag/${manifest.tag}';
+  final channelTitle = manifest.channel == ReleaseChannel.rc ? 'RC' : 'stable';
   return '''<?xml version="1.0" encoding="utf-8"?>
 <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
   <channel>
-    <title>Sanad stable updates</title>
+    <title>Sanad $channelTitle updates</title>
     <link>https://github.com/${manifest.repository}</link>
     <description>Signed Sanad client updates.</description>
     <language>en</language>

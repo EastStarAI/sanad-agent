@@ -962,7 +962,7 @@ packages:
   sanad_release_contract:
     dependency: "direct main"
     description:
-      path: "../shared/release_contract"
+      path: "../release/contract"
       relative: true
     source: path
     version: "1.0.0"

@@ -53,8 +53,8 @@ jobs:
           cat "$RUNNER_TEMP/changed"
           agent=false; client=false; docs=false; release=false; security=false
           while IFS= read -r path; do
-            case "$path" in agent/*|shared/*) agent=true ;; esac
-            case "$path" in client/*|shared/*) client=true ;; esac
+            case "$path" in agent/*|release/contract/*) agent=true ;; esac
+            case "$path" in client/*|release/contract/*) client=true ;; esac
             case "$path" in *.md|docs/*|.vscode/*|.agents/*|.github/ISSUE_TEMPLATE/*|.github/DISCUSSION_TEMPLATE/*|.github/labels.yml|.github/CODEOWNERS|.github/PULL_REQUEST_TEMPLATE.md|scripts/community/*) docs=true ;; esac
             case "$path" in .github/workflows/*|release/*|client/release/*|agent/tool/release_tool.dart|scripts/install.sh|scripts/install.ps1) release=true ;; esac
             case "$path" in SECURITY.md|docs/operations/code_signing_policy.md|agent/lib/core/auth/*|agent/lib/core/auth/**/*|agent/lib/capabilities/permissions/*|agent/lib/capabilities/permissions/**/*) security=true ;; esac
@@ -98,6 +98,30 @@ jobs:
         run: |
           fvm dart pub get
           fvm dart run tool/release_tool.dart validate-contract --repo-root ..
+          fvm dart run tool/release_tool.dart validate-contract \
+            --repo-root .. --tag v1.0.0-rc.1 --channel rc
+      - name: Reject mismatched release identities
+        working-directory: agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          reject() {
+            if fvm dart run tool/release_tool.dart validate-contract \
+              --repo-root .. "$@" >/dev/null 2>&1; then
+              echo "::error::Invalid release identity was accepted: $*"
+              exit 1
+            fi
+          }
+          reject --tag v1.0.0-beta.1 --channel rc
+          reject --tag v1.0.0-rc.1 --channel stable
+          contract=../release/release-contract.json
+          backup="$RUNNER_TEMP/release-contract.json"
+          cp "$contract" "$backup"
+          trap 'cp "$backup" "$contract"' EXIT
+          jq '.build_number = 2' "$backup" > "$contract"
+          reject --tag v1.0.0 --channel stable
+          jq '.version = "1.0.1" | .tag = "v1.0.1"' "$backup" > "$contract"
+          reject --tag v1.0.1 --channel stable
       - name: Analyze agent
         working-directory: agent
         run: fvm dart analyze
@@ -148,6 +172,13 @@ jobs:
           test/unit/scripts/sanad_dev_terminal_launcher_test.dart
           test/unit/scripts/sanad_dev_command_options_test.dart
           test/unit/scripts/sanad_dev_cloud_endpoints_test.dart
+      - name: Parse Windows release scripts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          [void][scriptblock]::Create((Get-Content -Raw scripts/install.ps1))
+          [void][scriptblock]::Create((Get-Content -Raw client/release/windows/build_installer.ps1))
+          [void][scriptblock]::Create((Get-Content -Raw client/release/windows/release.ps1))
 
   docs-governance:
     name: Validate docs and governance
@@ -187,7 +218,14 @@ jobs:
           ! grep -R "[p]ull_request_target" .github/workflows
           ! grep -R -E '[f]irebase|[g]oogle-services|[G]oogleService-Info' .github/workflows
           ! git ls-files | grep -E '\.(p12|p8|jks|keystore|mobileprovision|provisionprofile)$'
-          ! git ls-files | grep -E '(^|/)dsa_priv\.pem$|(^|/)appcast\.xml$'
+          ! git ls-files | grep -E '(^|/)dsa_priv\.pem$|(^|/)appcast(-rc)?\.xml$'
+          ! grep -E 'WINDOWS_SIGNING_PFX|Prepared Authenticode|Authenticode verification' \
+            .github/workflows/release.yml scripts/install.ps1 client/release/windows/release.ps1
+          grep -F 'environment: release-publication' .github/workflows/release.yml
+          grep -F 'Create immutable Draft release candidate' .github/workflows/release.yml
+          grep -F -- '--draft' .github/workflows/release.yml
+          grep -F 'release-manifest-rc.json' release/release-contract.json
+          grep -F 'appcast-rc.xml' release/release-contract.json
       - name: Scan committed content for credentials
         shell: bash
         run: |

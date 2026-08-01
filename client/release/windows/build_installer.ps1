@@ -13,6 +13,7 @@ function Invoke-Flutter {
 # Variables
 $APP_NAME = "Sanad"
 $VersionName = ((Get-Content "pubspec.yaml" | Select-String "^version:") -split ": ")[1].Trim().Split("+")[0]
+$UnsignedRelease = $VersionName -eq "1.0.0"
 $INSTALLER_NAME = "sanad-client-$VersionName-windows-x64.exe"
 $UNVERSIONED_INSTALLER_NAME = "sanad-client-setup.exe"
 $OUTPUT_DIR = "build"
@@ -63,11 +64,11 @@ if (-not (Test-Path $BUILD_PRODUCT_DIR)) {
 
 Write-Host "Build completed successfully" -ForegroundColor Green
 
-# Official packages must contain Authenticode-signed executables. Local
-# packaging can opt out explicitly, but release automation never does.
+# The approved 1.0.0 policy is intentionally unsigned. The Authenticode helper
+# remains available for a later version after a certificate policy is approved.
 $signingTargets = @(Get-ChildItem $BUILD_PRODUCT_DIR -Filter "*.exe" -File | ForEach-Object FullName)
-if ($env:SANAD_ALLOW_UNSIGNED_WINDOWS_BUILD -eq "1") {
-    Write-Host "WARNING: Creating an explicitly unsigned local test package." -ForegroundColor Yellow
+if ($UnsignedRelease) {
+    Write-Host "NOTICE: Creating the approved unsigned Windows 1.0.0 package." -ForegroundColor Yellow
 } else {
     & "$PSScriptRoot\sign_windows.ps1" -Paths $signingTargets
 }
@@ -122,7 +123,7 @@ if (Test-Path $unversionedInstallerPath) {
     Move-Item $unversionedInstallerPath $installerPath -Force
 }
 
-if ((Test-Path $installerPath) -and $env:SANAD_ALLOW_UNSIGNED_WINDOWS_BUILD -ne "1") {
+if ((Test-Path $installerPath) -and -not $UnsignedRelease) {
     & "$PSScriptRoot\sign_windows.ps1" -Paths @($installerPath)
 }
 

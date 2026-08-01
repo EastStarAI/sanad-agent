@@ -7,9 +7,7 @@ description: "The shared release manifest and the update ownership of the Sanad 
 
 ## Shared release contract
 
-`release/release-contract.json` defines the stable version, build, tag, channel,
-repository, canonical filenames, platform, architecture, and expected signature
-type. The shared Dart package under `shared/release_contract/` parses and
+`release/release-contract.json` defines the marketing version, build, Stable tag, accepted RC channel files, repository, canonical filename templates, platform, architecture, and expected signature type. RC artifact filenames include the full `-rc.N` release identity while pubspec marketing versions remain `1.0.0`. Tags are either `v<version>` or `v<version>-rc.N`; every other prerelease form is rejected. The shared Dart package under `release/contract/` parses and
 validates that contract and the generated release manifest.
 
 The public release manifest is generated only after every public and private
@@ -71,16 +69,12 @@ Client application updates remain separate from `sanad update`:
 
 ## Appcast
 
-The Appcast is derived deterministically from the verified release manifest
-after the signed macOS and Windows client packages exist. It contains separate
-platform entries and update signatures. The file is never tracked in Git and
-is published atomically to
-`https://updates.sanad.eaststarai.com/appcast.xml`.
+The Appcast is derived deterministically from the verified channel manifest after the macOS and Windows client packages and their update signatures exist. Stable uses `appcast.xml`; RC uses isolated `appcast-rc.xml` and `release-manifest-rc.json` staging surfaces, so Stable clients cannot discover an RC. Generated feeds are never tracked in Git. Stable production publication remains the SANAD-13 handoff.
 
 ## Trust boundaries
 
 Runtime replacement always requires a matching manifest entry and checksum.
-Platform code signing adds publisher identity on Apple, Windows, and Android.
+Platform code signing adds publisher identity on Apple and Android. Windows `1.0.0` intentionally has no Authenticode publisher identity; its Agent uses GitHub provenance and its Client additionally uses WinSparkle DSA for update integrity.
 GitHub artifact attestations bind release outputs to the public workflow and
 commit; Linux users and distributors can verify that provenance independently.
 No updater accepts tokens, provider credentials, or deployment secrets.
