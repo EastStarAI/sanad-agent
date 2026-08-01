@@ -62,7 +62,7 @@ dependencies:
   archive: ^4.0.7
   package_info_plus: ^9.0.0
   sanad_release_contract:
-    path: ../shared/release_contract
+    path: ../release/contract
 
   flutter_highlight: ^0.7.0
   highlight: ^0.7.0

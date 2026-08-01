@@ -41,4 +41,4 @@ try {
     Pop-Location
 }
 
-Write-Host "Prepared Authenticode and update-signed Windows artifact." -ForegroundColor Green
+Write-Host "Prepared unsigned Windows artifact with WinSparkle update signature." -ForegroundColor Green

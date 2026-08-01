@@ -5,8 +5,12 @@ on:
     tags: ['v*']
   workflow_dispatch:
     inputs:
-      publish:
-        description: Publish the immutable GitHub Release after all gates pass
+      release_tag:
+        description: Existing v1.0.0 or v1.0.0-rc.N tag to build
+        type: string
+        required: true
+      request_publication:
+        description: Queue protected publication after the Draft is ready
         type: boolean
         default: false
 
@@ -14,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: stable-release-${{ github.ref }}
+  group: release-candidate-${{ github.ref }}
   cancel-in-progress: false
 
 env:
@@ -28,6 +32,10 @@ jobs:
     outputs:
       version: ${{ steps.contract.outputs.version }}
       tag: ${{ steps.contract.outputs.tag }}
+      channel: ${{ steps.contract.outputs.channel }}
+      manifest: ${{ steps.contract.outputs.manifest }}
+      appcast: ${{ steps.contract.outputs.appcast }}
+      prerelease: ${{ steps.contract.outputs.prerelease }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -37,25 +45,41 @@ jobs:
         working-directory: agent
         shell: bash
         run: |
+          set -euo pipefail
           fvm dart pub get
           version="$(jq -r '.version' ../release/release-contract.json)"
-          contract_tag="$(jq -r '.tag' ../release/release-contract.json)"
           tag="${GITHUB_REF_NAME}"
-          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then tag="$contract_tag"; fi
-          fvm dart run tool/release_tool.dart validate-contract \
-            --repo-root .. --tag "$tag"
-          if [[ "$GITHUB_REF_TYPE" == "tag" || "${{ inputs.publish }}" == "true" ]]; then
-            test "$(git rev-parse "$tag^{commit}")" = "$GITHUB_SHA"
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            tag="${{ inputs.release_tag }}"
           fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=$contract_tag" >> "$GITHUB_OUTPUT"
-      - name: Refuse a mutable existing release
-        if: github.ref_type == 'tag' || inputs.publish == true
+          if [[ "$tag" == "v$version" ]]; then
+            channel=stable
+            manifest=release-manifest.json
+            appcast=appcast.xml
+            prerelease=false
+          else
+            channel=rc
+            manifest=release-manifest-rc.json
+            appcast=appcast-rc.xml
+            prerelease=true
+          fi
+          fvm dart run tool/release_tool.dart validate-contract \
+            --repo-root .. --tag "$tag" --channel "$channel"
+          test "$(git rev-parse "$tag^{commit}")" = "$GITHUB_SHA"
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "channel=$channel"
+            echo "manifest=$manifest"
+            echo "appcast=$appcast"
+            echo "prerelease=$prerelease"
+          } >> "$GITHUB_OUTPUT"
+      - name: Refuse an existing immutable or Draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view "${{ steps.contract.outputs.tag }}" >/dev/null 2>&1; then
-            echo "Release already exists and is immutable." >&2
+            echo "Release already exists; published and Draft releases are immutable candidates." >&2
             exit 1
           fi
 
@@ -84,7 +108,7 @@ jobs:
             platform: windows
             architecture: x64
             extension: .exe
-            environment: windows-signing
+            environment: release-build
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     environment: ${{ matrix.environment }}
@@ -152,20 +176,6 @@ jobs:
             --issuer "$APPLE_API_ISSUER_ID" \
             --wait
           spctl --assess --type execute --verbose=2 "$agent"
-      - name: Sign Windows agent
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
-          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
-        run: |
-          if (-not $env:CERTIFICATE_BASE64) { throw "Windows signing certificate is required." }
-          $certificate = Join-Path $env:RUNNER_TEMP "windows-signing.pfx"
-          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
-          $env:WINDOWS_SIGNING_CERTIFICATE_PATH = $certificate
-          ./client/release/windows/sign_windows.ps1 -Paths @(
-            "dist/sanad-agent-${{ needs.validate.outputs.version }}-windows-x64.exe"
-          )
       - uses: actions/upload-artifact@v4
         with:
           name: agent-${{ matrix.platform }}-${{ matrix.architecture }}
@@ -305,33 +315,27 @@ jobs:
     needs: validate
     runs-on: windows-2025
     timeout-minutes: 60
-    environment: windows-signing
+    environment: windows-update-signing
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
       - name: Install NSIS
         shell: pwsh
         run: choco install nsis -y --no-progress
-      - name: Restore Windows signing material
+      - name: Restore WinSparkle update-signing material
         shell: pwsh
         env:
-          CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
           DSA_KEY_BASE64: ${{ secrets.WINSPARKLE_DSA_PRIVATE_KEY_BASE64 }}
         run: |
-          if (-not $env:CERTIFICATE_BASE64 -or -not $env:DSA_KEY_BASE64) {
-            throw "Windows signing and WinSparkle keys are required."
+          if (-not $env:DSA_KEY_BASE64) {
+            throw "WinSparkle DSA update-signing key is required."
           }
-          $certificate = Join-Path $env:RUNNER_TEMP "windows-signing.pfx"
           $dsaKey = Join-Path $env:RUNNER_TEMP "dsa_priv.pem"
-          [IO.File]::WriteAllBytes($certificate, [Convert]::FromBase64String($env:CERTIFICATE_BASE64))
           [IO.File]::WriteAllBytes($dsaKey, [Convert]::FromBase64String($env:DSA_KEY_BASE64))
-          "WINDOWS_SIGNING_CERTIFICATE_PATH=$certificate" >> $env:GITHUB_ENV
           "WINSPARKLE_PRIVATE_KEY_PATH=$dsaKey" >> $env:GITHUB_ENV
-      - name: Build signed Windows installer
+      - name: Build unsigned Windows installer with signed updates
         working-directory: client
         shell: pwsh
-        env:
-          WINDOWS_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
         run: |
           fvm flutter pub get
           ./release/windows/release.ps1
@@ -367,15 +371,17 @@ jobs:
             --repo-root .. \
             --artifacts ../dist \
             --commit "$GITHUB_SHA" \
-            --output ../dist/release-manifest.json
+            --tag "${{ needs.validate.outputs.tag }}" \
+            --channel "${{ needs.validate.outputs.channel }}" \
+            --output "../dist/${{ needs.validate.outputs.manifest }}"
           fvm dart run tool/release_tool.dart verify-manifest \
-            --manifest ../dist/release-manifest.json \
+            --manifest "../dist/${{ needs.validate.outputs.manifest }}" \
             --artifacts ../dist
           fvm dart run tool/release_tool.dart generate-appcast \
-            --manifest ../dist/release-manifest.json \
-            --output ../dist/appcast.xml \
+            --manifest "../dist/${{ needs.validate.outputs.manifest }}" \
+            --output "../dist/${{ needs.validate.outputs.appcast }}" \
             --published-at "$(git show -s --format=%cI "$GITHUB_SHA")"
-          (cd ../dist && sha256sum appcast.xml >> SHA256SUMS)
+          (cd ../dist && sha256sum "${{ needs.validate.outputs.appcast }}" >> SHA256SUMS)
       - name: Generate SBOM
         uses: anchore/sbom-action@v0
         with:
@@ -387,31 +393,65 @@ jobs:
         with:
           subject-path: |
             dist/sanad-*
-            dist/release-manifest.json
+            dist/release-manifest*.json
+            dist/appcast*.xml
             dist/SHA256SUMS
       - uses: actions/upload-artifact@v4
         with:
-          name: stable-release-candidate
+          name: ${{ needs.validate.outputs.channel }}-release-candidate
           path: dist/*
           retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
           if-no-files-found: error
-      - name: Publish immutable GitHub Release
-        if: github.ref_type == 'tag' || inputs.publish == true
+      - name: Create immutable Draft release candidate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           mapfile -t public_assets < <(
             jq -r '.artifacts[] | select(.public == true) | "dist/" + .filename' \
               release/release-contract.json
           )
           metadata=(
-            dist/release-manifest.json
+            "dist/${{ needs.validate.outputs.manifest }}"
             dist/SHA256SUMS
-            dist/appcast.xml
+            "dist/${{ needs.validate.outputs.appcast }}"
             dist/sanad-${{ needs.validate.outputs.version }}.spdx.json
           )
+          prerelease=()
+          if [[ "${{ needs.validate.outputs.prerelease }}" == true ]]; then
+            prerelease=(--prerelease)
+          fi
           gh release create "${{ needs.validate.outputs.tag }}" \
             "${public_assets[@]}" "${metadata[@]}" \
             --verify-tag \
-            --title "Sanad ${{ needs.validate.outputs.version }}" \
-            --generate-notes
+            --draft \
+            "${prerelease[@]}" \
+            --title "Sanad ${{ needs.validate.outputs.tag }}" \
+            --notes-file release/release-notes.md
+
+  publish:
+    name: Publish approved immutable release
+    needs: [validate, assemble]
+    if: github.ref_type == 'tag' || inputs.request_publication == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release-publication
+    permissions:
+      contents: write
+    steps:
+      - name: Atomically publish the reviewed Draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          EXPECTED_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_TAG")"
+          test "$(jq -r '.draft' <<< "$release")" = true
+          test "$(jq -r '.prerelease' <<< "$release")" = "$EXPECTED_PRERELEASE"
+          release_id="$(jq -r '.id' <<< "$release")"
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/releases/$release_id" \
+            -F draft=false \
+            -F prerelease="$EXPECTED_PRERELEASE" \
+            --silent

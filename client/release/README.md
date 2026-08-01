@@ -21,7 +21,7 @@ apply.
 - `windows/` builds and verifies the Windows x64 installer. Its automated
   installer path uses NSIS.
 - `ios/` owns the Internal TestFlight export policy.
-- `release/release-contract.json` and `shared/release_contract/` at repository
+- `release/release-contract.json` and `release/contract/` at repository
   root own version validation, manifest parsing, Appcast generation, and
   checksum verification shared with the agent.
 

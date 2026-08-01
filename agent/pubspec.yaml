@@ -25,7 +25,7 @@ dependencies:
   ffi: ^2.1.2
   intl: ^0.20.0
   sanad_release_contract:
-    path: ../shared/release_contract
+    path: ../release/contract
 
 
 

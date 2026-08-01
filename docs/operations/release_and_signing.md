@@ -9,9 +9,7 @@ description: "The stable release pipeline, protected signing boundaries, artifac
 
 The public `EastStarAI/sanad-agent` repository owns CI, artifact construction,
 signing orchestration, the release manifest, update-feed generation, and the
-canonical installer sources. The first stable release uses marketing version
-`1.0.0`, build number `1`, and tag `v1.0.0` for both Sanad Agent and Sanad
-Client.
+canonical installer sources. The first release line uses marketing version `1.0.0` for both Sanad Agent and Sanad Client. RC tags use `v1.0.0-rc.N`; Stable uses `v1.0.0`. Each candidate records its increasing build number in the checked-in contract.
 
 Pull-request CI is read-only and never receives signing or deployment
 credentials. Signing and deployment jobs use protected GitHub Environments,
@@ -49,14 +47,14 @@ unsigned APK or AAB can be produced.
 | `release-build` | Non-secret release builds and candidate retention |
 | `apple-signing` | Developer ID signing, notarization, and Sparkle signing |
 | `apple-testflight` | Apple Distribution export and optional Internal TestFlight upload |
-| `windows-signing` | Reserved for post-v1 Authenticode/SignPath adoption; not required by the approved unsigned `1.0.0` policy |
+| `windows-update-signing` | WinSparkle DSA update signing only; it does not provide Authenticode publisher identity |
 | `android-signing` | Android APK/AAB release signing |
+| `release-publication` | Atomic publication of an already reviewed Draft RC or Stable Release |
 | `web-production` | Atomic Web deployment |
 | `updates-production` | Atomic Appcast deployment |
 | `installers-production` | Publishing canonical installer sources |
 
-Production environments require owner review. Forks and pull requests cannot
-enter them.
+Signing environments and `release-publication` require the repository owner as reviewer and accept deployments only from protected refs. `release-build` has no signing responsibility. Repository secret scanning and push protection are enabled. No signing or deployment secret was added while establishing these boundaries; fork, pull-request, and Dependabot workflows remain read-only and cannot trigger the tag/manual release workflow or enter protected environments.
 
 ## Secret inventory
 
@@ -90,8 +88,7 @@ separate future decision.
 
 ## Atomic publication and rollback
 
-The GitHub Release is immutable: a rerun must fail if the tag already owns a
-release. Public release files use published checksums. The private Web handoff
+The candidate workflow creates a private Draft and fails if the tag already owns any Draft or published Release. A separate least-privilege publication job can make that reviewed Draft public only after the required owner approval on `release-publication`. Rejected or cancelled approval leaves no partial public Release. Public release files use published checksums. The private Web handoff
 is downloaded from the explicitly selected successful release-workflow run and
 verified against its GitHub build attestation. Server deployment then writes a
 versioned directory and changes a `current` symlink only after the transfer
@@ -111,14 +108,11 @@ Sparkle signatures, Web packaging, analyzers, and updater tests.
 
 The following remain live-release gates:
 
-- SANAD-12 must adapt the currently fail-closed Windows signing steps to publish
-  the approved `Unsigned Windows build` for `1.0.0`, retain manifest/checksum/
-  provenance verification, add the disclosure to release surfaces, and test
-  Defender and SmartScreen on Windows 10 and 11;
+- the workflow and installer now implement the approved unsigned Windows `1.0.0` policy while retaining WinSparkle DSA, manifest, checksum, SBOM, provenance, and disclosure checks; hosted Windows 10/11 Defender and SmartScreen evidence remains required before publication;
 - use the completed App Store Connect API key and application record for
   Internal TestFlight upload; local notarization, staple, and Gatekeeper
   verification have already passed;
-- populate protected GitHub Environments after the public repository exists;
+- protected signing and `release-publication` Environments exist with required owner review; signing material still must be transferred separately without exposing values;
 - run hosted Actions, publish the immutable release, deploy Web/Appcast/
   installers, and exercise real upgrade and rollback paths.
 
