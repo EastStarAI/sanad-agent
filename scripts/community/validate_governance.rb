@@ -112,6 +112,10 @@ end
 active_skills = Dir.glob(File.join(ROOT, '.agents/skills/**/SKILL.md')).map { |path| File.read(path) }.join("\n")
 fail_validation('ClickUp remains in active public skills') if active_skills.match?(/clickup/i)
 
+setup_fvm = File.read(File.join(ROOT, '.github/actions/setup-fvm/action.yml'))
+fail_validation('FVM setup must invoke the activated executable directly') unless setup_fvm.include?('"$PUB_CACHE/bin/fvm" install')
+fail_validation('FVM setup uses the removed implicit package entrypoint') if setup_fvm.include?('dart pub global run fvm install')
+
 workflow = File.read(File.join(ROOT, '.github/workflows/ci.yml'))
 %w[classify history sensitive-review all-required].each do |job|
   fail_validation("CI is missing #{job} job") unless workflow.match?(/^  #{Regexp.escape(job)}:/)

@@ -13,4 +13,4 @@ runs:
         echo "PUB_CACHE=$PUB_CACHE" >> "$GITHUB_ENV"
         dart pub global activate fvm
         echo "$PUB_CACHE/bin" >> "$GITHUB_PATH"
-        dart pub global run fvm install
+        "$PUB_CACHE/bin/fvm" install
