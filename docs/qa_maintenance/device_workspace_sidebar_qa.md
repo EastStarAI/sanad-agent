@@ -87,7 +87,7 @@ description: "Focused QA coverage for the Plan 32c device-scoped sidebar, includ
 ### 9. Responsive layout
 1. Validate on wide desktop width.
 2. Validate on narrow tablet/mobile width.
-3. **Expected desktop:** Fixed/resizable sidebar layout renders without overflow.
+3. **Expected desktop:** Fixed/resizable sidebar layout and its toggle, Back, and Forward header controls render without overflow on macOS, Linux, and Windows.
 4. **Expected mobile/drawer:** Sidebar actions have comfortable touch targets and the drawer closes after selecting a conversation.
 5. **Expected macOS:** Traffic-light spacing remains visually clear in the fixed sidebar shell.
 

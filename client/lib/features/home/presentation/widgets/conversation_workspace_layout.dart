@@ -143,7 +143,7 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
           return Container(
             // height: buttonRowHeight,
             padding: EdgeInsets.only(
-              left: isMacOS ? 88 : 12,
+              left: isMacOS ? 88 : 8,
               top: isMacOS ? 12 : 8,
               bottom: 4,
             ),
