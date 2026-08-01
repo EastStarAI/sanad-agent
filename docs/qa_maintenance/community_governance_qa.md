@@ -48,7 +48,7 @@ A vulnerability diverges at step 1 to Private Vulnerability Reporting and must n
 ## Discord Live Matrix
 
 - Confirm `DISCORD_WEBHOOK_URL` exists as a repository secret while its value is absent from source, logs, and evidence.
-- Merge one approved pull request and confirm exactly one public-title/link notification appears in `#github`; a direct push without an associated merged pull request produces no message.
+- Merge one approved pull request and confirm exactly one public-title/link notification appears in `#github` with non-null contributor and merger identities; a direct push without an associated merged pull request produces no message.
 - Publish a controlled Release only under SANAD-12 and confirm exactly one release notification; workflow dispatches, Issues, CI runs, security events, and fork activity produce none.
 - Confirm notification payloads suppress all mentions even when a public title contains mention syntax.
 - Verify role permissions with a non-owner test account. Owner-account 2FA

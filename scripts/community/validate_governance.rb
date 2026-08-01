@@ -149,6 +149,7 @@ fail_validation('Discord webhook secret must not be exposed to the payload build
 fail_validation('Discord webhook secret must be scoped to the final send step') unless send_notification.fetch('env', {})['DISCORD_WEBHOOK_URL'].to_s.include?('secrets.DISCORD_WEBHOOK_URL')
 fail_validation('Discord notifications must use the repository webhook secret') unless discord_workflow.include?('secrets.DISCORD_WEBHOOK_URL')
 fail_validation('Discord notifications must resolve merged pull requests from protected main pushes') unless discord_workflow.include?('commits/${GITHUB_SHA}/pulls') && discord_workflow.include?('.merged_at != null') && discord_workflow.include?('.base.ref == "main"')
+fail_validation('Discord notifications must hydrate complete pull-request actor data') unless discord_workflow.include?('pulls/${number}') && discord_workflow.include?('.merged_by.login')
 fail_validation('Discord notifications must include published Releases') unless discord_workflow.include?('types: [published]')
 fail_validation('Discord notifications must suppress mentions') unless discord_workflow.include?('allowed_mentions: {parse: []}')
 %w[pull_request pull_request_target issues workflow_run workflow_dispatch].each do |event|

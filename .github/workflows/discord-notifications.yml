@@ -27,14 +27,15 @@ jobs:
             url="$(jq -r '.release.html_url' "$GITHUB_EVENT_PATH")"
             description="Published by @$(jq -r '.release.author.login' "$GITHUB_EVENT_PATH")."
           else
-            pull_request="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
+            associated_pull_request="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/pulls" \
               --jq 'map(select(.merged_at != null and .base.ref == "main")) | first')"
-            if [[ "$pull_request" == "null" ]]; then
+            if [[ "$associated_pull_request" == "null" ]]; then
               echo "No merged pull request is associated with this main push."
               echo "send=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            number="$(jq -r '.number' <<<"$pull_request")"
+            number="$(jq -r '.number' <<<"$associated_pull_request")"
+            pull_request="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${number}")"
             title="Merged PR #${number}: $(jq -r '.title' <<<"$pull_request")"
             url="$(jq -r '.html_url' <<<"$pull_request")"
             description="Merged by @$(jq -r '.merged_by.login' <<<"$pull_request") from @$(jq -r '.user.login' <<<"$pull_request")."
