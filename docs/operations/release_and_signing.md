@@ -119,7 +119,9 @@ The protected validation-only run at public `main` commit `c2bd6b3b` passed the
 complete hosted Agent and Client matrix. It exercised the protected signing
 Environments, generated the assembled manifest, checksums, Appcast, SBOM, and
 attestations as private retained artifacts, and created no tag, Draft, or
-Release.
+Release. Read-only guard probe `30730348167` was then rejected by the repository
+owner at `release-publication`; the protected step did not run and post-run
+inventory remained at zero `v1` tags and zero Releases or Drafts.
 
 The following remain live-release gates:
 

@@ -57,6 +57,14 @@ run must end without executing the guarded step, and a separate read-only API
 inventory must prove the `v1` tag and Release counts remain unchanged. Approval
 of this probe is not approval to publish an RC or Stable Release.
 
+Live probe run `30730348167` pinned public `main` commit `ff22d991` and recorded
+zero `v1` tags and zero `v1` Releases before entering the Environment. The
+repository owner rejected `release-publication`; the guarded job ended as
+rejected without executing its read-only step. A separate post-run API
+inventory again found zero `v1` tags and zero `v1` Releases or Drafts. This
+closes the rejection/no-partial-publication evidence only; it grants no
+approval for RC1 or any later publication.
+
 ## Update failure coverage
 
 Automated tests cover contract parsing, invalid tag rejection, deterministic
