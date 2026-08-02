@@ -43,6 +43,13 @@ rules remain fail-closed.
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
 | Client Web | release build and version marker | protected atomic deployment, cache/SPA checks, rollback |
 
+Windows 10/11 evidence follows the dedicated
+[Windows Release Clean-Machine Validation](windows_release_clean_machine.md)
+procedure. Its harness downloads the private validation-only candidate, pins
+its source run and commit, verifies manifest/hash/attestation/Authenticode
+state, keeps Defender enabled, and records lifecycle checkpoints without
+collecting credentials.
+
 ## Protected publication rejection probe
 
 The dedicated `Probe release publication guard` workflow validates the
