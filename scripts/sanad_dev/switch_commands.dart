@@ -485,6 +485,7 @@ class _SwitchableRuntimeController {
         arguments,
         workingDirectory: _clientDirectory,
         environment: _clientEnvironment,
+        runInShell: Platform.isWindows,
       );
       if (_client == null) {
         _client = process;
@@ -948,6 +949,7 @@ class _SwitchableRuntimeController {
       _agentArguments,
       workingDirectory: directory,
       environment: _agentEnvironment,
+      runInShell: Platform.isWindows,
     );
     _agent = process;
     _agentJournal = await ComponentProcessJournal.attach(
@@ -982,6 +984,7 @@ class _SwitchableRuntimeController {
           Platform.environment,
           sanadHome: profile.define('SANAD_HOME') ?? runtime.sanadHome,
         ),
+        runInShell: Platform.isWindows,
       );
       if (index == 0) {
         _client = process;
