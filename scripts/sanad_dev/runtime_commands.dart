@@ -557,6 +557,7 @@ Future<void> handleRun({
             const ['dart', 'run', 'bin/sanad_agent.dart', 'daemon'],
             workingDirectory: agentDirectory,
             environment: agentEnvironment,
+            runInShell: Platform.isWindows,
           )
         : null;
     final clientStart = startsClient
@@ -565,6 +566,7 @@ Future<void> handleRun({
             flutterArguments,
             workingDirectory: clientDirectory,
             environment: clientEnvironment,
+            runInShell: Platform.isWindows,
           )
         : null;
     Object? startError;
@@ -1445,6 +1447,7 @@ Future<bool> _restoreManualRuntime({
       workingDirectory:
           '${runtime.repositoryRoot}${Platform.pathSeparator}agent',
       environment: agentEnvironment,
+      runInShell: Platform.isWindows,
     );
     unawaited(agent.stdout.drain<void>());
     unawaited(agent.stderr.drain<void>());
@@ -1475,6 +1478,7 @@ Future<bool> _restoreManualRuntime({
           sanadHome: sanadHome,
         ),
         mode: ProcessStartMode.inheritStdio,
+        runInShell: Platform.isWindows,
       );
       unawaited(restoredClient.exitCode);
       final deadline = DateTime.now().add(const Duration(seconds: 90));

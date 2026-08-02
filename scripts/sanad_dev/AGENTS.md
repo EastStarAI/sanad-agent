@@ -7,6 +7,7 @@ This contract governs all modifications, additions, and debugging tasks performe
 ## 1. Environment & Pathing Laws
 * **No Absolute Paths**: Never hardcode or write absolute paths anywhere in the `sanad_dev` scripts, state managers, or logs. Always use relative paths starting from the workspace root.
 * **FVM Command Constraint**: Every spawned process invoking `dart` or `flutter` must be executed through `fvm` (Flutter Version Management) (e.g., `fvm dart run...`, `fvm flutter run...`). Direct global calls to `dart` or `flutter` are strictly prohibited.
+* **Windows Shell Execution Constraint**: On Windows OS, spawning `Process.start` for scripts/executables such as `fvm` (`fvm.bat`/`fvm.cmd`) must set `runInShell: Platform.isWindows` so Windows correctly resolves batch/cmd wrappers without throwing `ProcessException`.
 
 ---
 
