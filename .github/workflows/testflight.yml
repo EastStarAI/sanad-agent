@@ -63,12 +63,19 @@ jobs:
       - name: Build signed IPA
         working-directory: client
         run: |
+          set -euo pipefail
           fvm flutter pub get
-          fvm flutter build ipa --release \
+          fvm flutter build ipa --release --no-codesign \
             --build-name="${{ steps.contract.outputs.version }}" \
             --build-number="${{ inputs.build_number }}" \
-            --dart-define-from-file=config/prod.json \
-            --export-options-plist=release/ios/ExportOptions.plist
+            --dart-define-from-file=config/prod.json
+          archive=build/ios/archive/Runner.xcarchive
+          test -d "$archive"
+          rm -rf build/ios/ipa
+          xcodebuild -exportArchive \
+            -archivePath "$archive" \
+            -exportPath build/ios/ipa \
+            -exportOptionsPlist release/ios/ExportOptions.plist
           ipa="$(find build/ios/ipa -maxdepth 1 -name '*.ipa' -print -quit)"
           test -n "$ipa"
           unzip -q "$ipa" -d "$RUNNER_TEMP/ipa-check"
