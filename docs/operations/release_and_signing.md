@@ -37,6 +37,12 @@ requires the external `android/key.properties` file when the requested task is
 a release task; a missing file must fail release configuration before an
 unsigned APK or AAB can be produced.
 
+The hosted macOS Client job restores the exported Sparkle Ed25519 key to a
+runner-temporary file and passes that file directly to Sparkle `sign_update`.
+It does not import the key through `generate_keys` or depend on interactive
+Keychain authorization. Local operator builds may continue using the existing
+Keychain when no explicit Sparkle key-file path is supplied.
+
 ## Protected environments
 
 | Environment | Responsibility |

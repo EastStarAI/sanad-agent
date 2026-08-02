@@ -75,6 +75,18 @@ Run `30724542547` confirmed the first fixes: both macOS Agent architectures, sig
 
 Run `30725502085` then passed the complete Agent matrix plus Linux/Web, iOS, and Android Clients. Client macOS exposed a secret-encoding mismatch, corrected by storing the base64-encoded Sparkle key file as required by the workflow. Client Windows showed that PowerShell's web cmdlet received non-canonical SourceForge redirect bytes; the download now uses bounded `curl.exe` HTTPS redirects and verifies both the exact reviewed byte size and SHA-256. A further validation-only rerun must close these final two hosted defects before the matrix is accepted.
 
+Run `30726573652` confirmed every Agent target and the Linux/Web, iOS, Android,
+and Windows Clients. The macOS Client completed Developer ID signing,
+notarization, stapling, and Gatekeeper assessment, then remained inside the
+same build step before producing its Sparkle update signature. The workflow had
+imported the restored Sparkle key with `generate_keys -f` and invoked
+`sign_update` indirectly without a key-file argument; Sparkle documents that
+this Keychain path may request interactive authorization. Hosted macOS signing
+now passes the runner-temporary exported key directly to `sign_update` through
+`--ed-key-file`, while preserving the Keychain fallback for operator builds.
+A replacement validation-only run must complete the macOS Client, assembly,
+manifest, SBOM, and attestations before the hosted matrix is accepted.
+
 ## SANAD-08 local evidence
 
 The preparation worktree passed both analyzers, the complete Backend suite
