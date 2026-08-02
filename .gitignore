@@ -68,6 +68,7 @@ release/release-manifest.json
 release/SHA256SUMS
 release/artifacts/
 release/sbom/
+sanad-12-windows-evidence/
 *.p12
 *.p8
 *.jks
