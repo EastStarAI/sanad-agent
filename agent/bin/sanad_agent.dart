@@ -128,7 +128,9 @@ void _printHelp() {
   print(
     '  setup             Configure your AI provider and API keys (subcommands: list, status, remove)',
   );
-  print('  login             Authenticate using Web Login or Device Token');
+  print(
+    '  login             Authenticate using Web Login or Device Token (--portal skips the token prompt)',
+  );
   print('  logout            Remove session tokens and de-authenticate device');
   print(
     '  service           Manage background system daemon service (install/uninstall/status/restart)',

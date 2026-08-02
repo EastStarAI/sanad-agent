@@ -7,6 +7,8 @@ description: "Set up the public repository, run the Dart agent and Flutter clien
 
 This guide is for contributors building Sanad from source. Users installing a
 release should follow [Install and Use Sanad Agent](user_guide.md).
+Source development uses `sanad-dev`; it does not require a release-installer
+pairing token.
 
 ## Repository structure
 

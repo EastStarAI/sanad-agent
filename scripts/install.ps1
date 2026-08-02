@@ -2,10 +2,23 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
-    [string]$PairingToken
+    [string]$PairingToken,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$Login,
+
+    [Parameter(Mandatory = $false)]
+    [switch]$NoLogin
 )
 
 $ErrorActionPreference = "Stop"
+if ($Login -and $NoLogin) {
+    throw "Choose either -Login or -NoLogin, not both."
+}
+if (-not [string]::IsNullOrWhiteSpace($PairingToken) -and ($Login -or $NoLogin)) {
+    throw "-PairingToken cannot be combined with -Login or -NoLogin."
+}
+
 $Repository = "EastStarAI/sanad-agent"
 $ManifestUrl = if ($env:SANAD_RELEASE_MANIFEST_URL) {
     $env:SANAD_RELEASE_MANIFEST_URL
@@ -22,6 +35,9 @@ $SanadHome = if ($env:SANAD_HOME) { $env:SANAD_HOME } else { Join-Path $HOME ".s
 $BinDir = Join-Path $SanadHome "bin"
 $Target = Join-Path $BinDir "sanad.exe"
 $Backup = "$Target.rollback"
+$ExistingService = Get-ScheduledTask -TaskName "SanadAgent" -ErrorAction SilentlyContinue
+$ServiceWasInstalled = $null -ne $ExistingService
+$ServiceWasRunning = $ServiceWasInstalled -and $ExistingService.State -eq "Running"
 $TempDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("sanad-install-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $TempDirectory | Out-Null
 
@@ -73,12 +89,28 @@ try {
     }
     try {
         Move-Item -LiteralPath $Staged -Destination $Target -Force
+        $PortalLogin = $Login.IsPresent
         if (-not [string]::IsNullOrWhiteSpace($PairingToken)) {
             & $Target login --token $PairingToken
             if ($LASTEXITCODE -ne 0) { throw "Device pairing setup failed." }
+        } elseif (-not $Login -and -not $NoLogin) {
+            if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected) {
+                $Response = Read-Host "Connect this device to your Sanad account now? [Y/n]"
+                $PortalLogin = [string]::IsNullOrWhiteSpace($Response) -or $Response -match '^(?i:y|yes)$'
+            } else {
+                Write-Host "No interactive terminal detected; continuing in local-only mode."
+            }
+        }
+        if ($PortalLogin) {
+            & $Target login --portal
+            if ($LASTEXITCODE -ne 0) { throw "Account sign-in failed." }
         }
         & $Target service install
         if ($LASTEXITCODE -ne 0) { throw "Service installation failed." }
+        if ($ServiceWasRunning) {
+            & $Target service restart
+            if ($LASTEXITCODE -ne 0) { throw "Existing service refresh failed." }
+        }
     } catch {
         if (Test-Path -LiteralPath $Target) { Remove-Item -LiteralPath $Target -Force }
         if (Test-Path -LiteralPath $Backup) {
@@ -90,8 +122,13 @@ try {
     Write-Host "Sanad Agent installed successfully." -ForegroundColor Green
     if (-not [string]::IsNullOrWhiteSpace($PairingToken)) {
         Write-Host "Device pairing started. Sanad will appear online automatically."
+    } elseif ($PortalLogin) {
+        Write-Host "Account connected. Sanad Agent is running in the background."
     } else {
-        Write-Host "Run 'sanad login' to connect your account."
+        Write-Host "Sanad Agent is running in local-only mode."
+        Write-Host "Connect it later with:"
+        Write-Host "  $Target login"
+        Write-Host "  $Target service restart"
     }
 } finally {
     if (Test-Path -LiteralPath $TempDirectory) {
