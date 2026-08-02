@@ -1,16 +1,18 @@
 ---
 title: "Windows Release Clean-Machine Validation"
-description: "Windows 10 and Windows 11 evidence procedure for the unsigned Sanad 1.0.0 Agent and Client candidate."
+description: "Windows 11 release-gate evidence and reusable Windows clean-machine procedure for the unsigned Sanad 1.0.0 candidate."
 ---
 
 # Windows Release Clean-Machine Validation
 
 ## Scope
 
-Run this procedure separately on clean Windows 10 x64 and Windows 11 x64
-workstations or clean VM snapshots. Windows Server and hosted Actions runners do
-not satisfy this gate. Keep Microsoft Defender, SmartScreen, Smart App Control,
-and real-time protection enabled throughout the test.
+The `1.0.0` release gate runs this procedure on a clean Windows 11 x64
+workstation or clean VM snapshot. Windows Server and hosted Actions runners do
+not satisfy the gate. The harness remains reusable for later Windows 10
+coverage, but Windows 10 is untested and non-gating for `1.0.0`. Keep Microsoft
+Defender, SmartScreen, Smart App Control, and real-time protection enabled
+throughout every test.
 
 The validation branch uses private candidate artifacts from successful
 validation-only run `30728515333`, sourced from public commit `c2bd6b3b`. The
@@ -29,7 +31,8 @@ extend retention.
   credential, email address, or unrelated machine information.
 - A SmartScreen warning is expected for the approved unsigned `1.0.0` policy;
   record the exact UI and displayed publisher rather than claiming trust.
-- Run Windows 10 and Windows 11 from independent clean snapshots.
+- Any later Windows 10 evidence must use a snapshot independent from the
+  validated Windows 11 environment.
 
 ## Prepare and verify the candidate
 
@@ -111,9 +114,10 @@ The Windows target passes only when:
 - the isolated test Sanad Home survives lifecycle operations;
 - evidence contains no credentials and clearly identifies its clean snapshot.
 
-A failure on either Windows version keeps SANAD-12 Gate 3 open. Record the
-failure before changing source; any fix must use a protected PR and a new
-validation-only candidate run before retesting both platforms.
+A Windows 11 failure keeps SANAD-12 Gate 3 open. Record the failure before
+changing source; any fix must use a protected PR and a new validation-only
+candidate run before retesting Windows 11. Later Windows 10 testing is useful
+compatibility evidence but is outside the `1.0.0` release gate.
 
 ## Validation Log
 
@@ -136,15 +140,16 @@ validation-only candidate run before retesting both platforms.
 - **Checkpoint Evidence Captures**: Recorded in `BeforeInstall.json`, `AfterInstall.json`, `AfterReboot.json`, `AfterUninstall.json`, and `verified-windows-artifacts.json`.
 - **Result**: PASSED for Windows 11 x64 workstation coverage.
 
-### Windows 10 x64 Deferred
+### Windows 10 x64 Excluded from the `1.0.0` Gate
 
 - **Status**: Not executed; no Windows 10 workstation or clean VM is currently
   available.
-- **Decision**: The owner deferred this target on 2026-08-02. Deferral is not a
-  pass and does not provide Windows 10 Defender, SmartScreen, installation,
-  reboot, or uninstall evidence.
-- **Current contract impact**: Gate 3 remains open while SANAD-12 requires both
-  Windows 10 and Windows 11. A separate owner-approved scope change is required
-  before RC1 can proceed without Windows 10 evidence.
+- **Decision**: On 2026-08-02 the owner removed Windows 10 clean-machine
+  validation from the `1.0.0` release requirements. This is not a pass and does
+  not provide Windows 10 Defender, SmartScreen, installation, reboot, or
+  uninstall evidence.
+- **Current contract impact**: Windows 11 closes the v1 Windows clean-machine
+  gate. Documentation and release notes must not claim Windows 10 was validated;
+  later Windows 10 coverage is post-v1 compatibility evidence.
 
 

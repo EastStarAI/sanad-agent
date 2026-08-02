@@ -35,20 +35,22 @@ rules remain fail-closed.
 |---|---|---|
 | Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification | both hosted runners, clean install, real upgrade and rollback |
 | Agent Linux x64 | contract and workflow path | hosted build, provenance, clean install, service/update/rollback |
-| Agent Windows x64 | contract and workflow path | Unsigned Windows build disclosure, SHA-256/manifest/provenance, Defender/SmartScreen on Windows 10/11, service/update/rollback |
+| Agent Windows x64 | contract and workflow path | Unsigned Windows build disclosure, SHA-256/manifest/provenance, Defender/SmartScreen and lifecycle on Windows 11, service/update/rollback |
 | Client macOS universal | universal Mach-O inspection, Developer ID-signed and notarized DMG, staple, Gatekeeper, Sparkle signature | clean update and rollback |
 | Client Linux x64 | Web/Linux workflow definition | hosted package, dependency audit, clean install/update/uninstall |
-| Client Windows x64 | installer and current fail-closed signing workflow definition | SANAD-12 unsigned-policy workflow adaptation, disclosure, SHA-256/manifest/provenance, clean installer/update/rollback, Defender/SmartScreen |
+| Client Windows x64 | installer and current fail-closed signing workflow definition | SANAD-12 unsigned-policy workflow adaptation, disclosure, SHA-256/manifest/provenance, Windows 11 clean installer/update/rollback and Defender/SmartScreen |
 | Client Android APK/AAB | signed local APK/AAB, package identity and keystore fingerprint | signed hosted build, clean install/upgrade |
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
 | Client Web | release build and version marker | protected atomic deployment, cache/SPA checks, rollback |
 
-Windows 10/11 evidence follows the dedicated
+Windows 11 evidence follows the dedicated
 [Windows Release Clean-Machine Validation](windows_release_clean_machine.md)
 procedure. Its harness downloads the private validation-only candidate, pins
 its source run and commit, verifies manifest/hash/attestation/Authenticode
 state, keeps Defender enabled, and records lifecycle checkpoints without
-collecting credentials.
+collecting credentials. Windows 10 was not tested and is explicitly excluded
+from the `1.0.0` release gate by owner scope decision; no Windows 10 validation
+claim may be inferred from the shared x64 artifacts.
 
 ## Protected publication rejection probe
 
@@ -156,4 +158,10 @@ The local Android release produced signed APK and AAB files for
 `com.eaststarai.sanad` version `1.0.0`; the APK certificate fingerprint matched
 the external `sanad-release` keystore and the AAB JAR signature verified.
 
-The Windows workflow and installer now produce the approved unsigned `1.0.0` artifacts without a PFX requirement, retain WinSparkle DSA for client updates, and require explicit disclosure plus checksum, manifest, SBOM, and provenance metadata. Hosted Linux/Windows/Android builds, Appcast publication, clean-machine lifecycle tests, Windows 10/11 Defender and SmartScreen observations, and Internal TestFlight remain hosted/live evidence and must not be represented as completed. Authenticode/SignPath is post-v1 work.
+The Windows workflow and installer produce the approved unsigned `1.0.0`
+artifacts without a PFX requirement, retain WinSparkle DSA for client updates,
+and require explicit disclosure plus checksum, manifest, SBOM, and provenance
+metadata. Hosted build and Windows 11 clean-machine Defender, SmartScreen,
+service, reboot, and uninstall evidence passed. Windows 10 remains untested and
+is non-gating for `1.0.0`; Internal TestFlight and the later release lifecycle
+remain live evidence. Authenticode/SignPath is post-v1 work.
