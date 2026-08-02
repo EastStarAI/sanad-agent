@@ -13,15 +13,23 @@
 </p>
 
 <p align="center">
-  <a href="https://sanad.eaststarai.com"><img src="https://img.shields.io/badge/الموقع-Sanad-2563EB?style=for-the-badge" alt="موقع Sanad Agent"></a>
-  <a href="https://app.sanad.eaststarai.com"><img src="https://img.shields.io/badge/تطبيق%20الويب-افتح-0F766E?style=for-the-badge" alt="افتح Sanad Client على الويب"></a>
-  <a href="docs/product/features.md"><img src="https://img.shields.io/badge/المميزات-استكشف-2563EB?style=for-the-badge" alt="استكشف مميزات Sanad Agent"></a>
-  <a href="docs/operations/user_guide.md"><img src="https://img.shields.io/badge/التوثيق-دليل%20المستخدم-0F766E?style=for-the-badge" alt="توثيق Sanad Agent"></a>
-  <a href="https://github.com/EastStarAI/sanad-agent/releases/latest"><img src="https://img.shields.io/github/v/release/EastStarAI/sanad-agent?display_name=tag&style=for-the-badge" alt="أحدث إصدار من Sanad Agent"></a>
-  <a href="https://github.com/EastStarAI/sanad-agent/actions/workflows/ci.yml"><img src="https://github.com/EastStarAI/sanad-agent/actions/workflows/ci.yml/badge.svg" alt="حالة بناء Sanad Agent"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/الترخيص-MIT-16A34A?style=for-the-badge" alt="ترخيص MIT"></a>
-  <a href="https://github.com/EastStarAI/sanad-agent/discussions"><img src="https://img.shields.io/badge/المجتمع-Discussions-8250DF?style=for-the-badge" alt="نقاشات مجتمع Sanad Agent"></a>
-  <a href="README.md"><img src="https://img.shields.io/badge/Language-English-lightgrey?style=for-the-badge" alt="Read in English"></a>
+  <a href="https://sanad.eaststarai.com"><strong>الموقع</strong></a>
+  &nbsp;•&nbsp;
+  <a href="https://app.sanad.eaststarai.com"><strong>تطبيق الويب</strong></a>
+  &nbsp;•&nbsp;
+  <a href="docs/product/features.md"><strong>المميزات</strong></a>
+  &nbsp;•&nbsp;
+  <a href="docs/operations/user_guide.md"><strong>دليل المستخدم</strong></a>
+  &nbsp;•&nbsp;
+  <a href="https://github.com/EastStarAI/sanad-agent/releases/latest"><strong>أحدث إصدار</strong></a>
+  &nbsp;•&nbsp;
+  <a href="https://github.com/EastStarAI/sanad-agent/actions/workflows/ci.yml"><strong>حالة البناء</strong></a>
+  &nbsp;•&nbsp;
+  <a href="LICENSE"><strong>الترخيص</strong></a>
+  &nbsp;•&nbsp;
+  <a href="https://github.com/EastStarAI/sanad-agent/discussions"><strong>المجتمع</strong></a>
+  &nbsp;•&nbsp;
+  <a href="README.md"><strong>English</strong></a>
 </p>
 
 يشغّل Sanad Agent وكيل Dart أصليًا بالقرب من ملفاتك وأدواتك. استخدمه محليًا
@@ -35,6 +43,10 @@
   <img src="docs/assets/screenshots/sanad-desktop-and-ios-simulator.png" alt="Sanad يعمل على macOS بجانب محاكي iPhone" width="100%">
   <br>
   <em>تجربة Sanad واحدة على سطح المكتب والهاتف.</em>
+</p>
+
+<p align="center">
+  <img src="docs/assets/readme/sanad-cross-platform-connectivity-ar.png" alt="يمكن لأي منصة من منصات Sanad Client الاتصال بوكيل Sanad Agent يعمل على macOS أو Windows أو Linux" width="100%">
 </p>
 
 ## لماذا Sanad؟
@@ -55,39 +67,58 @@
 
 ## البدء السريع
 
+هل تستخدم وكيل ذكاء اصطناعي؟ أعطه رابط
+[مهارة تثبيت Sanad](.agents/skills/install-sanad/SKILL.md) ليفحص جهازك، ويشرح
+لك مساري المستخدم والمطور، وينفذ المسار الذي تختاره بأمان. بعد ذلك، دع Sanad
+يتولى الباقي.
+
 ### للمستخدمين
 
-#### استخدم Sanad على جهازك
+#### ثبّت الواجهة والوكيل على هذا الجهاز
 
 1. نزّل Sanad Client لمنصة متاحة للتوزيع العام من
    [أحدث إصدار](https://github.com/EastStarAI/sanad-agent/releases/latest).
    يتوفر إصدار iOS الأول عبر Internal TestFlight فقط، وليس كتنزيل عام داخل
    GitHub Releases.
-2. افتح العميل واختر مسار الجهاز المحلي.
-3. اضبط مزودًا محليًا مثل Ollama أوLM Studio أوllama.cpp، أوأضف مزودًا مستضافًا.
-4. اختر مساحة عمل وابدأ محادثة.
+2. افتح واجهة سطح المكتب واختر **Run Locally**. ستنزّل الواجهة نسخة Sanad Agent
+   المطابقة وتتحقق منها وتثبتها وتشغلها على الجهاز نفسه.
+3. أضف مزودًا محليًا مثل Ollama أو LM Studio أو llama.cpp، أو أضف مزودًا
+   مستضافًا.
+4. اختر مساحة عمل وابدأ العمل.
 
-لا يلزم حساب Sanad للمسار المحلي فقط.
+لا يلزم حساب Sanad أو pairing token لهذا المسار المحلي.
 
-#### أضف جهازًا أوخادمًا بعيدًا
+#### صِل جهازًا آخر أو خادمًا بعيدًا
 
-1. افتح Sanad Client على سطح المكتب أوالهاتف أوالويب.
-2. أنشئ جهازًا وسمّه.
-3. انسخ الأمر المولّد وشغّله مرة واحدة على الجهاز أوالخادم الهدف؛ سيثبت
-   Sanad Agent ويربطه ويشغله.
-4. اختر الجهاز من العميل نفسه وابدأ العمل مع مساحات عمله ومحادثاته.
+يحتاج الجهاز البعيد إلى Sanad Agent فقط؛ استمر في استخدام Sanad Client على
+سطح المكتب أو الهاتف أو الويب.
 
-على macOS أوLinux:
+1. افتح Sanad Client على سطح المكتب أو الهاتف أو الويب.
+2. افتح **Device Management**، واختر **Add device**، ثم سمِّ الجهاز.
+3. انسخ الأمر الكامل الذي تولده الواجهة وشغّله مرة واحدة على الجهاز أو الخادم
+   الهدف.
+4. ارجع إلى الواجهة، واختر الجهاز المتصل، وابدأ العمل مع مساحات عمله
+   ومحادثاته.
+
+يتضمن الأمر المولّد اعتماد pairing مؤقتًا وصالحًا لإنشاء الجهاز مرة واحدة.
+لا تنشئ هذا الاعتماد أو تلصقه أو تشاركه بصورة منفصلة. عند أول اتصال ناجح
+يستبدله الوكيل باعتماد دائم للجهاز يولَّد محليًا.
+
+أو يمكنك تثبيت الوكيل مباشرة، ثم اختيار تسجيل الدخول إلى الحساب أو التشغيل
+المحلي. على macOS أو Linux:
 
 ```bash
-curl -fsSL https://sanad.eaststarai.com/install.sh | bash -s -- --pairing-token '<pairing-token>'
+curl -fsSL https://sanad.eaststarai.com/install.sh | bash
 ```
 
 على Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://sanad.eaststarai.com/install.ps1))) -PairingToken '<pairing-token>'
+& ([scriptblock]::Create((irm https://sanad.eaststarai.com/install.ps1)))
 ```
+
+اختر تسجيل الدخول لربط الجهاز من خلال Portal، أو تخطَّه لتشغيل الوكيل محليًا
+وربطه لاحقًا. لا ينتظر المُثبّت إجابة عند تشغيله في طرفية غير تفاعلية.
 
 > **بناء Windows غير موقّع:** مثبّت Windows في الإصدار `1.0.0` غير موقّع
 > عمدًا. تحقق أنه من الإصدار الرسمي وأن SHA-256 يطابق release manifest المنشور
@@ -95,13 +126,9 @@ curl -fsSL https://sanad.eaststarai.com/install.sh | bash -s -- --pairing-token 
 > clean-machine للإصدار `1.0.0` على Windows 11؛ لم يُتحقق من Windows 10 لهذا
 > الإصدار.
 
-يضع Sanad Client pairing token صالحًا للإنشاء فقط داخل الأمر المنسوخ. يتحقق
-المثبّت من artifact الإصدار، ويجهز الربط، ويبدأ خدمة الخلفية. بعد أول اتصال
-ناجح يستبدل الوكيل ذلك token المرئي باعتماد دائم يولده محليًا، ولا يمكن إعادة
-استخدام token الأولي.
-
 راجع [دليل تثبيت واستخدام Sanad Agent](docs/operations/user_guide.md) لحزم
-العميل، وتثبيت الوكيل يدويًا، وإدارة الخدمة، والمزودين، والتحديث، والإزالة.
+العميل، وخيارات المُثبّت الصريحة، والتثبيت اليدوي، وإدارة الخدمة، والمزودين،
+والتحديث، والإزالة.
 
 ### للمطورين
 
@@ -133,6 +160,9 @@ sanad-dev run
 يثبّت `run` الأدوات المعتمدة الناقصة، ويحل اعتماديات Release Contract والوكيل
 والواجهة عند تقادمها، ثم يشغّل الزوج المُدار كاملًا. تعرض مرحلتا التثبيت
 والتجهيز المخرجات الحقيقية للعمليات ولا تحتاجان إلى صلاحيات المسؤول.
+
+مسار التطوير من المصدر مستقل عن مُثبّت الإصدار الموضح أعلاه ولا يحتاج إلى
+pairing token.
 
 لاختيار جهاز Flutter أوالتشغيل محليًا دون اتصال سحابي أوالاطلاع على أوامر
 التطوير والاختبار، راجع [دليل المطور](docs/operations/developer_guide.md).
@@ -190,6 +220,18 @@ Dart Agent
 أنشئ عدة instances من المزود نفسه، مثل حساب شخصي وآخر للعمل. لكل instance
 اعتماداته ونموذجه وجاهزيته وحدوده وسياسة failover مستقلة. ويمكن لـChatGPT
 Subscription عرض نافذتي الاستهلاك Session وWeekly المعتمدتين.
+
+### موارد مستقلة للمزودين
+
+يمكنك استخدام Sanad مع مزودين محليين أو مستضافين، وإضافة عدة حسابات للمزود
+نفسه.
+
+- [Free LLM API Resources](https://github.com/cheahjs/free-llm-api-resources) —
+  دليل مجتمعي لخدمات LLM التي توفر خططًا مجانية أو أرصدة تجريبية.
+
+هذا مورد خارجي مستقل وغير تابع لـSanad. قد تتغير النماذج والحصص والأسعار
+وسياسات الخصوصية وشروط الاستخدام؛ راجع شروط كل مزود قبل إرسال بيانات مساحة
+العمل.
 
 ### وسّعه عبر MCP والمهارات
 

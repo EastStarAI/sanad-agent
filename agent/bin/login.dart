@@ -31,6 +31,12 @@ Future<void> main(List<String> args) async {
     }
   }
 
+  final portalOnly = args.contains('--portal');
+  if (portalOnly && tokenArg != null) {
+    stderr.writeln('Choose either --portal or --token, not both.');
+    exit(64);
+  }
+
   if (tokenArg != null && tokenArg.isNotEmpty) {
     print('Preparing device pairing...');
     await authManager.prepareDevicePairing(tokenArg);
@@ -46,8 +52,11 @@ Future<void> main(List<String> args) async {
   print('└─────────────────────────────────────────────────────────┘');
   print('');
 
-  stdout.write('Do you want to use a Device Token from the UI? [y/N]: ');
-  final response = stdin.readLineSync()?.trim().toLowerCase();
+  String? response;
+  if (!portalOnly) {
+    stdout.write('Do you want to use a Device Token from the UI? [y/N]: ');
+    response = stdin.readLineSync()?.trim().toLowerCase();
+  }
 
   if (response == 'y' || response == 'yes') {
     stdout.write('Paste your Device Token here: ');

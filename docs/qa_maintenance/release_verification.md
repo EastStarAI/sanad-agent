@@ -84,13 +84,18 @@ Hosted validation begins with a `validation_only` full-matrix run from protected
 
 ## Installer coverage
 
-The canonical installer sources accept only the creation-time pairing token;
-they never accept or expose the durable device credential. They select the
-release through the manifest, validate repository URLs, architecture, size,
-and SHA-256, preserve Sanad Home, prepare pairing, and register the background
-service. Release validation must cover clean install, pairing-token replay,
-lost-success retry, durable reconnect, reinstall, upgrade, failed verification,
-interrupted replacement, and uninstall on each supported desktop host.
+The canonical installer sources accept a creation-time pairing token, Portal
+sign-in, or local-only installation; they never accept or expose the durable
+device credential. Interactive tokenless installs offer sign-in, while
+unattended tokenless installs must not block and default to local-only mode.
+The installers select the release through the manifest, validate repository
+URLs, architecture, size, and SHA-256, preserve Sanad Home, authenticate before
+a clean service start, and refresh an existing service after replacement.
+Release validation must cover clean pairing, clean Portal sign-in, clean
+local-only and unattended installation, pairing-token replay, lost-success
+retry, durable reconnect, reinstall, upgrade, failed or cancelled login, failed
+verification, interrupted replacement, service refresh, and uninstall on each
+supported desktop host.
 
 ## First hosted validation-only probe
 

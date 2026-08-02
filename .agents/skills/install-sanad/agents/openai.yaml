@@ -1,0 +1,4 @@
+interface:
+  display_name: "Install Sanad"
+  short_description: "Install or update Sanad safely"
+  default_prompt: "Use $install-sanad to inspect this machine and guide me through installing or updating Sanad."
