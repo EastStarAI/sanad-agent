@@ -33,7 +33,27 @@ void main() {
     expect(restored?.deviceId, 'macos');
     expect(restored?.clientPid, 42);
     expect(restored?.vmServicePort, 51042);
+    expect(restored?.openClientTerminal, isTrue);
     expect(restored?.isTerminal, isFalse);
+  });
+
+  test('client developer action can retain the invoking terminal', () {
+    final request = RuntimeComponentControlRequest(
+      requestId: 'request-keys',
+      launcherId: 'launcher-1',
+      runtimeNonce: 'nonce-1',
+      action: RuntimeComponentAction.restart,
+      target: RuntimeComponentTarget.client,
+      status: 'requested',
+      requestedAt: DateTime.utc(2026, 8, 2),
+      vmServicePort: 51042,
+      openClientTerminal: false,
+    );
+
+    final restored = RuntimeComponentControlRequest.fromJson(request.toJson());
+
+    expect(restored.action, RuntimeComponentAction.restart);
+    expect(restored.openClientTerminal, isFalse);
   });
 
   test('terminal result preserves request identity', () {

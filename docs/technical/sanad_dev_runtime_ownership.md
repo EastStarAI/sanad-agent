@@ -23,16 +23,20 @@ Client consistency alone does not make a group managed. A mutable group also
 requires one live launcher lease containing a random launcher id and runtime
 nonce, the launcher PID plus process-start/command identity, workspace/source,
 Agent port, Home, preferences namespace, and the exact client PID/VM-port set.
-Every available Agent health response and Client launch profile must present the
-same launcher id and nonce. The lease's exact active Client PID/VM inventory
-makes Agent-only and Client-only groups verifiable while rejecting stale
-records, PID reuse, copied flags, and unrecorded partial groups.
+Every lease-owned Agent health response and Client launch profile must present
+the same launcher id and nonce. The lease's exact managed Client PID/VM
+inventory makes Agent-only and Client-only groups verifiable while rejecting
+stale records, PID reuse, copied flags, and unrecorded partial managed groups.
+Additional manual or foreign Clients are outside that inventory: discovery may
+report them, but ordinary commands continue against the exact proven managed
+group and never mutate the extras.
 
 The resulting classes are managed, manual, orphaned, cross-owned,
 unverifiable, ambiguous, and stopped. Only managed groups accept ordinary
-mutation or source handoff. One conflicting member blocks the complete
-operation. Source-path equality, `SANAD_DEV_SWITCH_CAPABLE`, a workspace hash,
-or an explicit port never grants mutation authority.
+mutation or source handoff. A conflict inside the lease-owned inventory blocks
+the complete operation; an unrelated unmanaged process does not. Source-path
+equality, `SANAD_DEV_SWITCH_CAPABLE`, a workspace hash, or an explicit port
+never grants mutation authority.
 
 Primary IDE clients remain discoverable when they omit gateway, Home, and
 preferences defines only under the existing narrow fallback: primary source,
@@ -49,8 +53,10 @@ in one healthy managed group. Missing components are started through a
 nonce-bound component request consumed by the existing launcher. `run all`
 spawns Agent and Client concurrently and verifies each identity independently.
 `stop [all|agent|client]` uses the same control boundary; the helper CLI never
-independently kills discovered children. Client targeting requires an exact
-owned device match, optionally disambiguated by VM-service port.
+independently kills discovered children. Client targeting considers only
+lease-owned Clients and requires an exact managed device match, optionally
+disambiguated by VM-service port. An unmanaged Client with the same device does
+not make that managed selection ambiguous.
 `doctor` is read-only, and `doctor --fix` removes only an invalid/stale record
 when its launcher, Agent endpoint, and clients are all absent.
 `cleanup-target-orphans` is the only target cleanup operation. It requires a
@@ -119,13 +125,24 @@ Agent and never changes Client-only shutdown semantics.
 ## Bootstrap and source profile
 
 Bootstrap is owned by the platform wrappers because Dart cannot run before FVM
-and the pinned Flutter SDK exist. POSIX and PowerShell wrappers expose identical
-no-argument and `setup [--force]` behavior. Missing FVM is installed from pinned
-official release archives after per-platform SHA-256 verification. Flutter and
-package stages are idempotent; their stamp binds `.fvmrc`, both lockfiles, and
-both package configs. Failure is terminal for dependent stages and runtime
-launch. The user command records checkout ownership and refuses silent
-replacement.
+and the pinned Flutter SDK exist. POSIX and PowerShell expose the same layered
+command contract. No arguments render static help without mutation. `install`
+owns verified FVM, pinned Flutter, and the checkout-owned user shim, then stops.
+`setup` ensures install, resolves the Release Contract followed by Agent and
+Client packages, then stops. `run` ensures only missing or stale install/setup
+stages before entering the runtime CLI. Other runtime commands never bootstrap
+implicitly and fail with the exact prerequisite command when the Dart CLI is not
+ready.
+
+Missing FVM is installed from pinned official release archives after
+per-platform SHA-256 verification; detecting ready FVM, Flutter, shim, or package
+state is intentionally silent. Work-performing stages stream the child process's
+stdout/stderr without buffering, then report elapsed duration and success or
+failure. The idempotent setup stamp binds `.fvmrc` plus the Release Contract,
+Agent, and Client lockfiles and package configs. Failure is terminal for every
+dependent stage and runtime launch. Explicit install/setup refuse silent shim
+replacement; run accepts an existing functional dispatcher so linked worktrees
+do not contend for the user command.
 
 The Runtime CLI remains `scripts/sanad_dev.dart`. Its client profile default is
 `client/config/prod.json`, with local and Cloud enabled for every checkout type.
@@ -163,10 +180,14 @@ fallbacks state that boot/build/process output may be unavailable.
 ## Terminal ownership
 
 For `run all`, Agent output remains in the launcher terminal and every Client
-gets an independent read-only journal watcher. Starting another Client opens one
-additional watcher; closing a Client closes only that watcher. `run agent` and
-`run client` mirror their sole component in the current terminal. Watchers never
-own or attach to the Flutter process.
+gets an independent journal terminal. `run client` never opens a second terminal;
+its output and controls stay in the invoking terminal even when an existing
+Agent launcher creates the Client. Starting another Client as part of an
+all-component request opens one additional Client terminal; closing a Client
+closes only that surface. Client terminals route `r` as hot reload and `R` as hot
+restart through the owning launcher. Agent terminals route either `r` or `R` to
+the supervised daemon restart endpoint. These terminals never acquire process
+ownership: the launcher remains the sole stdin/process owner.
 
 Terminal capability is platform-adapted: macOS Terminal via AppleScript, a
 detected supported Linux terminal, and Windows Terminal or PowerShell with

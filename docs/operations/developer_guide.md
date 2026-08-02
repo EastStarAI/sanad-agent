@@ -38,44 +38,45 @@ To run the bootstrap and build components successfully, ensure your platform mee
 
 ---
 
-From a fresh checkout on macOS or Linux, run:
+From a fresh checkout, install the user command once. On macOS or Linux:
 
 ```bash
-scripts/sanad-dev
-```
-
-On Windows PowerShell, run:
-
-```powershell
-.\scripts\sanad-dev.ps1
-```
-
-With no arguments, the launcher completes setup and continues to `run all`.
-To prepare the environment without starting a runtime, use the platform
-bootstrap directly.
-
-On macOS or Linux:
-
-```bash
-scripts/sanad-dev setup
+scripts/sanad-dev install
 ```
 
 On Windows PowerShell:
 
 ```powershell
-.\scripts\sanad-dev.ps1 setup
+.\scripts\sanad-dev.ps1 install
 ```
 
-Add `--force` to the matching command only when replacing a user command owned
-by another checkout.
+After installation, the official source command is:
 
-Bootstrap installs FVM `4.1.2` from its official GitHub Release into the user
-account when FVM is absent. Every supported archive has a pinned SHA-256 digest.
-It then installs Flutter from `.fvmrc`, resolves Agent and Client dependencies,
-and installs a `sanad-dev` shim in the user bin directory. It never requests
-`sudo` or administrator access. The setup stamp includes the Flutter pin and
-both `pubspec.lock` digests; valid package configs allow unchanged stages to be
-skipped. A failed stage blocks all dependent stages and runtime launch.
+```bash
+sanad-dev run
+```
+
+The command contract is layered and explicit:
+
+- `sanad-dev` with no arguments displays help and performs no mutation.
+- `sanad-dev install` installs or verifies FVM `4.1.2`, the Flutter version from
+  `.fvmrc`, and the checkout-owned user shim, then stops.
+- `sanad-dev setup` ensures the install layer, resolves the shared Release
+  Contract before Agent and Client packages, then stops without a runtime.
+- `sanad-dev run` ensures only missing or stale install/setup stages, then starts
+  the requested runtime target.
+
+Add `--force` to explicit `install` or `setup` only when replacing a user
+command owned by another checkout. `run` accepts an already-functional shim
+owned by the checkout that dispatched it, so linked worktrees do not fight over
+the user command. FVM archives come from the official GitHub Release
+and use pinned per-platform SHA-256 digests. No stage requests `sudo` or
+administrator access. Every stage that performs work streams the child process's
+real stdout/stderr, then prints its elapsed time and final result. Already-valid
+stages remain silent, including the ready FVM check. The setup stamp binds the
+Flutter pin and all three `pubspec.lock` digests; valid package configs allow
+unchanged stages to be skipped. A failed stage blocks every dependent stage and
+runtime launch.
 
 The POSIX user bin is `${XDG_BIN_HOME:-$HOME/.local/bin}` and the Windows user
 bin is `%LOCALAPPDATA%\SanadDev\bin`. PATH changes affect new terminals; follow
@@ -338,9 +339,10 @@ The launcher supports:
 ```text
 sanad-dev [command] [target] [options]
 
-(no arguments)             Setup, then launch `run all`.
-setup [--force]            Prepare SDK/dependencies and install the user command.
-run [all|agent|client]    Launch all components (default) or one component.
+(no arguments)             Show help without changing the environment.
+install [--force]          Install FVM, pinned Flutter, and the user command.
+setup [--force]            Ensure install and resolve all package dependencies.
+run [all|agent|client]     Ensure setup, then launch all (default) or one component.
 status                    Show this worktree runtime and component status.
 stop [all|agent|client]   Stop all components (default) or one component.
 doctor [--fix]            Diagnose ownership; remove only proven stale records.
@@ -391,12 +393,15 @@ sanad-dev run --dry-run
 
 `run all` spawns Agent and Client concurrently and verifies their health and VM
 identities independently. The current launcher terminal owns and prints complete
-Agent stdout/stderr. A separate watcher terminal follows each Client journal,
-including Flutter tool/build output before VM readiness. macOS uses Terminal;
-Linux selects a declared supported terminal; Windows uses Windows Terminal or
-PowerShell with quoted arguments. Headless/CI execution never opens a GUI and
-prints a bounded copyable `logs` command instead. `run agent` and `run client`
-print their single component in the current terminal.
+Agent stdout/stderr. A separate Client terminal follows each Client journal,
+including Flutter tool/build output before VM readiness. In that Client terminal,
+`r` requests hot reload and `R` requests hot restart through the owning launcher;
+in the Agent terminal either key requests a supervised Agent restart. macOS uses
+Terminal; Linux selects a declared supported terminal; Windows uses Windows
+Terminal or PowerShell with quoted arguments. Headless/CI execution never opens
+a GUI and prints a bounded copyable `logs` command instead. `run agent` and
+`run client` keep their single component and controls in the invoking terminal;
+`run client` never opens an additional terminal.
 
 Managed component journals begin at `Process.start`, preserve stdout/stderr
 ordering and ANSI bytes, mark process generations, rotate through four 2 MiB

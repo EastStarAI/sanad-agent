@@ -112,21 +112,27 @@ git clone https://github.com/EastStarAI/sanad-agent.git sanad-agent
 cd sanad-agent
 ```
 
-على macOS أوLinux، جهّز وشغّل الزوج المُدار كاملًا باستخدام:
+ثبّت أمر التطوير ضمن حساب المستخدم مرة واحدة. على macOS أوLinux:
 
 ```bash
-scripts/sanad-dev
+scripts/sanad-dev install
 ```
 
-على Windows PowerShell، شغّل:
+وعلى Windows PowerShell:
 
 ```powershell
-.\scripts\sanad-dev.ps1
+.\scripts\sanad-dev.ps1 install
 ```
 
-تتولى أداة الإعداد تثبيت FVM ونسخة Flutter المعتمدة واعتماديات المشروع، ثم
-تضيف الأمر متعدد المنصات `sanad-dev` إلى حساب المستخدم دون الحاجة إلى صلاحيات
-المسؤول.
+بعد ذلك استخدم أمر التشغيل الرسمي للمصدر على جميع المنصات:
+
+```bash
+sanad-dev run
+```
+
+يثبّت `run` الأدوات المعتمدة الناقصة، ويحل اعتماديات Release Contract والوكيل
+والواجهة عند تقادمها، ثم يشغّل الزوج المُدار كاملًا. تعرض مرحلتا التثبيت
+والتجهيز المخرجات الحقيقية للعمليات ولا تحتاجان إلى صلاحيات المسؤول.
 
 لاختيار جهاز Flutter أوالتشغيل محليًا دون اتصال سحابي أوالاطلاع على أوامر
 التطوير والاختبار، راجع [دليل المطور](docs/operations/developer_guide.md).

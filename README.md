@@ -116,22 +116,28 @@ git clone https://github.com/EastStarAI/sanad-agent.git sanad-agent
 cd sanad-agent
 ```
 
-On macOS or Linux, bootstrap and run the complete managed pair with:
+Install the user-scoped development command once. On macOS or Linux:
 
 ```bash
-scripts/sanad-dev
+scripts/sanad-dev install
 ```
 
-On Windows PowerShell, run:
+On Windows PowerShell:
 
 ```powershell
-.\scripts\sanad-dev.ps1
+.\scripts\sanad-dev.ps1 install
 ```
 
-The bootstrap installs the verified user-scoped FVM release when needed,
-installs the repository-pinned Flutter SDK, resolves Agent and Client
-dependencies, and installs the cross-platform `sanad-dev` user command. No
-administrator access is required.
+Then use the official source run command on every platform:
+
+```bash
+sanad-dev run
+```
+
+`run` installs any missing pinned tools, resolves the shared Release Contract,
+Agent, and Client dependencies when stale, then starts the complete managed
+pair. Installation and setup stream their real process output and require no
+administrator access.
 
 For Flutter device selection, local-only operation, development commands, and
 testing workflows, follow the

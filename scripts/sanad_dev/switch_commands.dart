@@ -11,12 +11,15 @@ Future<void> handleRuntimeSwitch({
   }
 
   final targetRuntime = await _currentRuntime();
-  final targetClientDirectory = '${targetRuntime.repositoryRoot}${Platform.pathSeparator}client';
+  final targetClientDirectory =
+      '${targetRuntime.repositoryRoot}${Platform.pathSeparator}client';
   final agents = await discoverAgentInstances();
   final clients = await discoverClientInstances();
   final requestedPort = portOverride ?? _requestingAgentPort();
 
-  final matchingAgents = agents.where((agent) => requestedPort == null || agent.port == requestedPort).toList();
+  final matchingAgents = agents
+      .where((agent) => requestedPort == null || agent.port == requestedPort)
+      .toList();
   if (matchingAgents.length != 1) {
     stderr.writeln(
       matchingAgents.isEmpty
@@ -82,7 +85,9 @@ Future<void> handleRuntimeSwitch({
     sanadHome: sanadHome,
     workspaceHash: agent.workspaceHash,
     launcherRunning: await isProcessRunning(launcherRecord?.launcherPid),
-    launcherProcessIdentity: launcherRecord == null ? null : await readProcessIdentity(launcherRecord.launcherPid),
+    launcherProcessIdentity: launcherRecord == null
+        ? null
+        : await readProcessIdentity(launcherRecord.launcherPid),
     clientDefines: runtimeClients.map(
       (client) => client.launchProfile!.defines,
     ),
@@ -143,7 +148,8 @@ Future<void> handleRuntimeSwitch({
   final manifestPath = runtimeSwitchManifestPath(sanadHome, agent.port);
   try {
     final existing = await readRuntimeSwitchRequest(manifestPath);
-    if (existing != null && const {'requested', 'draining', 'starting'}.contains(existing.status)) {
+    if (existing != null &&
+        const {'requested', 'draining', 'starting'}.contains(existing.status)) {
       stderr.writeln('Switch aborted: another runtime handoff is active.');
       exitCode = 1;
       return;
@@ -157,7 +163,8 @@ Future<void> handleRuntimeSwitch({
   await writeRuntimeSwitchRequest(manifestPath, request);
   final requesterSessionId = request.requesterSessionId?.trim();
   final requesterToolCallId = request.requesterToolCallId?.trim();
-  if (requesterSessionId?.isNotEmpty == true && requesterToolCallId?.isNotEmpty == true) {
+  if (requesterSessionId?.isNotEmpty == true &&
+      requesterToolCallId?.isNotEmpty == true) {
     print(
       jsonEncode({
         'sanad_deferred_tool_result': {
@@ -195,7 +202,9 @@ Future<void> terminateSanadDevProcessTree(int processId) async {
     return;
   }
   final result = await Process.run('ps', ['-axo', 'pid=,ppid=']);
-  final processIds = result.exitCode == 0 ? orderUnixProcessTree(result.stdout.toString(), processId) : [processId];
+  final processIds = result.exitCode == 0
+      ? orderUnixProcessTree(result.stdout.toString(), processId)
+      : [processId];
   for (final childPid in processIds.reversed) {
     try {
       Process.killPid(childPid, ProcessSignal.sigterm);
@@ -257,6 +266,7 @@ class _SwitchableRuntimeController {
     required ComponentProcessJournal? agentJournal,
     required ComponentProcessJournal? initialClientJournal,
     required RuntimeLauncherRecord launcherRecord,
+    required SanadDevComponentTarget interactiveComponent,
   }) : _agent = agent,
        _client = client,
        _agentEnvironment = Map.unmodifiable(agentEnvironment),
@@ -267,6 +277,7 @@ class _SwitchableRuntimeController {
        _clientDirectory = clientDirectory,
        _agentJournal = agentJournal,
        _launcherRecord = launcherRecord,
+       _interactiveComponent = interactiveComponent,
        _currentWorkspaceHash = runtime.worktreeId.split('-').last {
     if (client != null && launcherRecord.vmServicePorts.isNotEmpty) {
       final port = launcherRecord.vmServicePorts.first;
@@ -287,28 +298,61 @@ class _SwitchableRuntimeController {
   final List<String> _agentArguments;
   final List<String> _clientArguments;
   final Map<String, String> _clientEnvironment;
+  final SanadDevComponentTarget _interactiveComponent;
   String _agentDirectory;
   String _clientDirectory;
   String _currentWorkspaceHash;
   ComponentProcessJournal? _agentJournal;
   RuntimeLauncherRecord _launcherRecord;
   final Completer<void> _controllerStopped = Completer<void>();
-  final RuntimeSwitchManifestWarningGate _manifestWarningGate = RuntimeSwitchManifestWarningGate();
+  final RuntimeSwitchManifestWarningGate _manifestWarningGate =
+      RuntimeSwitchManifestWarningGate();
   bool _stopping = false;
 
-  String get _manifestPath => runtimeSwitchManifestPath(runtime.sanadHome, runtime.agentPort);
-  String get _componentControlPath => runtimeComponentControlPath(runtime.sanadHome, runtime.agentPort);
+  String get _manifestPath =>
+      runtimeSwitchManifestPath(runtime.sanadHome, runtime.agentPort);
+  String get _componentControlPath =>
+      runtimeComponentControlPath(runtime.sanadHome, runtime.agentPort);
 
   Future<int> run() async {
     final shutdown = Completer<_ShutdownRequested>();
     StreamSubscription<ProcessSignal>? sigint;
     StreamSubscription<ProcessSignal>? sigterm;
+    StreamSubscription<List<int>>? stdinKeys;
+    if (stdin.hasTerminal) {
+      try {
+        stdin.lineMode = false;
+        stdin.echoMode = false;
+      } on Object {
+        // Continue with terminal defaults when raw input is unavailable.
+      }
+      stdinKeys = stdin.listen((bytes) {
+        for (final byte in bytes) {
+          final key = String.fromCharCode(byte);
+          if (key != 'r' && key != 'R') continue;
+          if (_interactiveComponent == SanadDevComponentTarget.client) {
+            final port = _clientProcessesByVmPort.keys.firstOrNull;
+            final process = port == null
+                ? null
+                : _clientProcessesByVmPort[port];
+            if (process != null) {
+              process.stdin.write(key);
+              unawaited(process.stdin.flush());
+            }
+          } else if (_agent != null) {
+            unawaited(handleAgentRestart(runtime.agentPort));
+          }
+        }
+      });
+    }
     if (!Platform.isWindows) {
       sigint = ProcessSignal.sigint.watch().listen((_) {
-        if (!shutdown.isCompleted) shutdown.complete(const _ShutdownRequested());
+        if (!shutdown.isCompleted)
+          shutdown.complete(const _ShutdownRequested());
       });
       sigterm = ProcessSignal.sigterm.watch().listen((_) {
-        if (!shutdown.isCompleted) shutdown.complete(const _ShutdownRequested());
+        if (!shutdown.isCompleted)
+          shutdown.complete(const _ShutdownRequested());
       });
     }
 
@@ -375,6 +419,15 @@ class _SwitchableRuntimeController {
       if (await stopRequest.exists()) await stopRequest.delete();
       await sigint?.cancel();
       await sigterm?.cancel();
+      await stdinKeys?.cancel();
+      if (stdin.hasTerminal) {
+        try {
+          stdin.lineMode = true;
+          stdin.echoMode = true;
+        } on Object {
+          // The host terminal may not expose mutable modes.
+        }
+      }
     }
     return clientExitCode;
   }
@@ -388,7 +441,8 @@ class _SwitchableRuntimeController {
         final componentRequest = await readRuntimeComponentControl(
           _componentControlPath,
         );
-        if (componentRequest != null && componentRequest.status == 'requested') {
+        if (componentRequest != null &&
+            componentRequest.status == 'requested') {
           return componentRequest;
         }
       } on Object catch (error) {
@@ -414,7 +468,8 @@ class _SwitchableRuntimeController {
   Future<void> _performComponentControl(
     RuntimeComponentControlRequest request,
   ) async {
-    if (request.launcherId != _launcherRecord.launcherId || request.runtimeNonce != _launcherRecord.runtimeNonce) {
+    if (request.launcherId != _launcherRecord.launcherId ||
+        request.runtimeNonce != _launcherRecord.runtimeNonce) {
       await writeRuntimeComponentControl(
         _componentControlPath,
         request.copyWith(
@@ -427,8 +482,10 @@ class _SwitchableRuntimeController {
     try {
       if (request.action == RuntimeComponentAction.start) {
         await _startRequestedComponents(request);
-      } else {
+      } else if (request.action == RuntimeComponentAction.stop) {
         await _stopRequestedComponents(request);
+      } else {
+        await _sendClientDeveloperKey(request);
       }
       await _writeCurrentComponentRecord();
       await writeRuntimeComponentControl(
@@ -449,9 +506,12 @@ class _SwitchableRuntimeController {
   Future<void> _startRequestedComponents(
     RuntimeComponentControlRequest request,
   ) async {
-    final startsAgent = request.target == RuntimeComponentTarget.agent || request.target == RuntimeComponentTarget.all;
+    final startsAgent =
+        request.target == RuntimeComponentTarget.agent ||
+        request.target == RuntimeComponentTarget.all;
     final startsClient =
-        request.target == RuntimeComponentTarget.client || request.target == RuntimeComponentTarget.all;
+        request.target == RuntimeComponentTarget.client ||
+        request.target == RuntimeComponentTarget.all;
     if (startsAgent && _agent == null) {
       await _startAgent(_agentDirectory);
       if (!await _waitForAgentHash(
@@ -464,7 +524,9 @@ class _SwitchableRuntimeController {
     if (startsClient) {
       final discovered = await discoverClientInstances();
       final sameDevice = discovered.where(
-        (client) => _clientProcessesByVmPort.containsKey(client.port) && client.deviceId == request.deviceId,
+        (client) =>
+            _clientProcessesByVmPort.containsKey(client.port) &&
+            client.deviceId == request.deviceId,
       );
       if (sameDevice.isNotEmpty) return;
       final port = request.vmServicePort ?? runtime.vmServicePort;
@@ -474,7 +536,8 @@ class _SwitchableRuntimeController {
       final arguments = _clientArguments.toList();
       final deviceIndex = arguments.indexOf('-d');
       if (deviceIndex >= 0 && deviceIndex + 1 < arguments.length) {
-        arguments[deviceIndex + 1] = request.deviceId ?? _defaultDesktopDevice();
+        arguments[deviceIndex + 1] =
+            request.deviceId ?? _defaultDesktopDevice();
       }
       final vmIndex = arguments.indexWhere(
         (argument) => argument.startsWith('--host-vmservice-port='),
@@ -503,14 +566,16 @@ class _SwitchableRuntimeController {
           runtimeNonce: _launcherRecord.runtimeNonce,
         ),
       );
-      final opened = await openClientLogTerminal(
-        repositoryRoot: Directory(_clientDirectory).parent.path,
-        agentPort: runtime.agentPort,
-        vmServicePort: port,
-        sanadHome: runtime.sanadHome,
-      );
-      if (!opened) {
-        print('Client logs: sanad-dev logs client -n 50 -p $port');
+      if (request.openClientTerminal) {
+        final opened = await openClientLogTerminal(
+          repositoryRoot: Directory(_clientDirectory).parent.path,
+          agentPort: runtime.agentPort,
+          vmServicePort: port,
+          sanadHome: runtime.sanadHome,
+        );
+        if (!opened) {
+          print('Client logs: sanad-dev logs client -n 50 -p $port');
+        }
       }
       final identity = await _waitForManagedClientIdentity(
         vmServicePort: port,
@@ -532,16 +597,40 @@ class _SwitchableRuntimeController {
     }
   }
 
+  Future<void> _sendClientDeveloperKey(
+    RuntimeComponentControlRequest request,
+  ) async {
+    if (request.target != RuntimeComponentTarget.client ||
+        request.vmServicePort == null) {
+      throw StateError('Client reload/restart requires one VM-service port.');
+    }
+    final process = _clientProcessesByVmPort[request.vmServicePort];
+    if (process == null ||
+        !_launcherRecord.vmServicePorts.contains(request.vmServicePort)) {
+      throw StateError('Selected Client is not owned by this launcher.');
+    }
+    process.stdin.write(
+      request.action == RuntimeComponentAction.reload ? 'r' : 'R',
+    );
+    await process.stdin.flush();
+  }
+
   Future<void> _stopRequestedComponents(
     RuntimeComponentControlRequest request,
   ) async {
-    final stopsAgent = request.target == RuntimeComponentTarget.agent || request.target == RuntimeComponentTarget.all;
-    final stopsClient = request.target == RuntimeComponentTarget.client || request.target == RuntimeComponentTarget.all;
+    final stopsAgent =
+        request.target == RuntimeComponentTarget.agent ||
+        request.target == RuntimeComponentTarget.all;
+    final stopsClient =
+        request.target == RuntimeComponentTarget.client ||
+        request.target == RuntimeComponentTarget.all;
     if (stopsAgent && _agent != null) {
       final accepted = await _requestAgentShutdown(force: request.force);
       if (!accepted) {
         throw StateError(
-          request.force ? 'Agent cancellation shutdown was rejected.' : 'Agent has not reached a resumable checkpoint.',
+          request.force
+              ? 'Agent cancellation shutdown was rejected.'
+              : 'Agent has not reached a resumable checkpoint.',
         );
       }
       final process = _agent!;
@@ -675,12 +764,15 @@ class _SwitchableRuntimeController {
             currentProfile: profile,
             targetWorktreeName: profile.define('SANAD_DEV_WORKTREE_NAME') ?? '',
             targetBranch: profile.define('SANAD_DEV_WORKTREE_BRANCH') ?? '',
-            targetIsLinkedWorktree: profile.define('SANAD_DEV_WORKTREE_NAME')?.isNotEmpty == true,
+            targetIsLinkedWorktree:
+                profile.define('SANAD_DEV_WORKTREE_NAME')?.isNotEmpty == true,
             vmServicePort: client.port,
-            deviceId: profile.deviceId ?? client.deviceId ?? _defaultDesktopDevice(),
+            deviceId:
+                profile.deviceId ?? client.deviceId ?? _defaultDesktopDevice(),
           ),
           vmServicePort: client.port,
-          deviceId: profile.deviceId ?? client.deviceId ?? _defaultDesktopDevice(),
+          deviceId:
+              profile.deviceId ?? client.deviceId ?? _defaultDesktopDevice(),
           pid: client.pid,
         ),
       );
@@ -748,8 +840,10 @@ class _SwitchableRuntimeController {
     if (_agent != null) await _terminateProcessTree(_agent!);
     await _cancelAgentOutput();
 
-    final targetAgentDirectory = '${request.targetRepositoryRoot}${Platform.pathSeparator}agent';
-    final targetClientDirectory = '${request.targetRepositoryRoot}${Platform.pathSeparator}client';
+    final targetAgentDirectory =
+        '${request.targetRepositoryRoot}${Platform.pathSeparator}agent';
+    final targetClientDirectory =
+        '${request.targetRepositoryRoot}${Platform.pathSeparator}client';
     final targetClients = previousClients
         .map(
           (client) => _RuntimeClientLaunch(
@@ -798,7 +892,9 @@ class _SwitchableRuntimeController {
         workspaceHash: request.targetWorkspaceHash,
         sourceRoot: request.targetRepositoryRoot,
         clientPids: managedClientPids,
-        vmServicePorts: targetClients.map((item) => item.vmServicePort).toList(),
+        vmServicePorts: targetClients
+            .map((item) => item.vmServicePort)
+            .toList(),
         status: 'running',
       );
       await writeRuntimeLauncherRecord(_launcherRecord);
@@ -835,7 +931,9 @@ class _SwitchableRuntimeController {
           workspaceHash: previousWorkspaceHash,
           sourceRoot: Directory(previousAgentDirectory).parent.path,
           clientPids: restoredClientPids,
-          vmServicePorts: previousClients.map((item) => item.vmServicePort).toList(),
+          vmServicePorts: previousClients
+              .map((item) => item.vmServicePort)
+              .toList(),
           status: 'running',
         );
         await writeRuntimeLauncherRecord(_launcherRecord);
@@ -898,10 +996,15 @@ class _SwitchableRuntimeController {
           ).where(
             (client) =>
                 expectedPorts.contains(client.port) &&
-                client.launchProfile?.define('SANAD_DEV_LAUNCHER_ID') == _launcherRecord.launcherId &&
-                client.launchProfile?.define('SANAD_DEV_RUNTIME_NONCE') == _launcherRecord.runtimeNonce,
+                client.launchProfile?.define('SANAD_DEV_LAUNCHER_ID') ==
+                    _launcherRecord.launcherId &&
+                client.launchProfile?.define('SANAD_DEV_RUNTIME_NONCE') ==
+                    _launcherRecord.runtimeNonce,
           );
-      final pids = discovered.map((client) => client.pid).whereType<int>().toList();
+      final pids = discovered
+          .map((client) => client.pid)
+          .whereType<int>()
+          .toList();
       if (pids.length == expected.length) return pids;
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
@@ -991,16 +1094,16 @@ class _SwitchableRuntimeController {
       _clientProcessesByVmPort[client.vmServicePort] = process;
       _clientJournalsByVmPort[client.vmServicePort] =
           await ComponentProcessJournal.attach(
-        process: process,
-        writer: ComponentJournalWriter(
-          sanadHome: runtime.sanadHome,
-          agentPort: runtime.agentPort,
-          component: 'client',
-          vmServicePort: client.vmServicePort,
-          launcherId: _launcherRecord.launcherId,
-          runtimeNonce: _launcherRecord.runtimeNonce,
-        ),
-      );
+            process: process,
+            writer: ComponentJournalWriter(
+              sanadHome: runtime.sanadHome,
+              agentPort: runtime.agentPort,
+              component: 'client',
+              vmServicePort: client.vmServicePort,
+              launcherId: _launcherRecord.launcherId,
+              runtimeNonce: _launcherRecord.runtimeNonce,
+            ),
+          );
     }
   }
 
@@ -1107,5 +1210,6 @@ class _SwitchableRuntimeController {
     } on TimeoutException {}
   }
 
-  Future<void> _terminatePidTree(int processId) => terminateSanadDevProcessTree(processId);
+  Future<void> _terminatePidTree(int processId) =>
+      terminateSanadDevProcessTree(processId);
 }

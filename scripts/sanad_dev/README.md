@@ -4,21 +4,21 @@
 
 ## Running and bootstrapping
 
-From a fresh macOS/Linux checkout, setup and launch the complete pair with:
+From a fresh macOS/Linux checkout, install the user command once:
 
 ```bash
-scripts/sanad-dev
+scripts/sanad-dev install
 ```
 
-Use `scripts/sanad-dev.ps1` in Windows PowerShell. No arguments run setup then
-`run all`; `setup` prepares only; `setup --force` may replace a user shim owned
-by another checkout. Setup installs verified FVM `4.1.2` artifacts within the
-user account when needed, the Flutter SDK pinned by `.fvmrc`, both package
-dependency sets, and the `sanad-dev` user command. Subsequent terminals can use:
+Use `scripts/sanad-dev.ps1 install` in Windows PowerShell. No arguments display
+help without mutation. `install` owns verified FVM `4.1.2`, pinned Flutter, and
+the user shim; `setup` ensures install and resolves Release Contract, Agent, and
+Client packages without launching; `run` ensures stale or missing stages and
+then launches. Work-performing stages stream real stdout/stderr and finish with
+duration plus outcome. The official source command is:
 
 ```bash
 sanad-dev run
-sanad-dev status
 ```
 
 The launcher resolves the invoking Git worktree. Outside Git, the installed shim
@@ -57,6 +57,17 @@ To distinguish between concurrent running instances of different Git worktrees w
 ---
 
 ## Command Reference
+
+### `install` and `setup`
+
+```bash
+sanad-dev install [--force]
+sanad-dev setup [--force]
+```
+
+`install` stops after tools and the user shim. `setup` stops after all package
+graphs are ready. `--force` permits explicit replacement of another checkout's
+user shim.
 
 ### 1. `run`
 Launches the background Dart agent daemon and the Flutter client simultaneously.

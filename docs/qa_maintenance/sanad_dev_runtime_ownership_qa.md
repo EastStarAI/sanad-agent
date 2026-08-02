@@ -19,7 +19,8 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Client launch profile is missing | Client is unverifiable and stop refuses before signaling anything. |
 | Client Home, preferences, workspace hash, gateway, or source is contradictory | Client is unverifiable or cross-owned and the complete stop preflight fails. |
 | Client/Agent fields agree but no live launcher lease exists | Group remains manual and ordinary mutation is refused. |
-| Healthy launcher lease, available Agent identity, and exact active Client nonce/PID/VM set agree | Complete, Agent-only, and Client-only runtimes remain managed; repeated component run is idempotent. |
+| Healthy launcher lease, available Agent identity, and exact lease-owned Client nonce/PID/VM set agree | Complete, Agent-only, and Client-only runtimes remain managed; repeated component run is idempotent. |
+| Exact managed runtime plus additional manual, IDE-owned, foreign, or incomplete Client processes | Status remains managed; run/stop/reload/restart target only the lease-owned inventory and leave every extra process untouched. |
 | `run all -d macos` from a stopped runtime | Agent and Client spawns begin without readiness ordering; both identities must verify before the lease reports running. |
 | Client exits while Agent remains active | Launcher removes only that Client from the lease and continues supervising the Agent. |
 | Agent exits or is paused while Clients remain active | Launcher keeps Clients and the lease alive; status reports Client-only and a later `run agent` rejoins the same group. |
@@ -29,8 +30,8 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Resumable Agent shutdown reaches a safe checkpoint | The response is flushed, the source supervisor exits permanently, `requestStopAll()` is not called, and startup recovery retains non-terminal work. |
 | Resumable Agent shutdown times out on an unsafe blocker | The drain is cancelled, the daemon remains running, and no Client or durable work is mutated. |
 | Forced Agent-owning shutdown | Active and queued work receive bounded terminal cancellation before permanent exit and cannot resume on the next start. |
-| `stop client -d macos` with one exact owned match | Only that Client exits; Agent work and sibling Clients remain active. |
-| `stop client -d macos` with zero or multiple matches | Selection fails closed and lists diagnostic device/VM selectors without signaling a process. |
+| `stop client -d macos` with one exact managed match, plus any unmanaged matches | Only the lease-owned Client exits; Agent work, sibling managed Clients, and unmanaged Clients remain active. |
+| `stop client -d macos` with zero or multiple managed matches | Selection fails closed and lists diagnostic device/VM selectors without signaling a process. |
 | `stop client --force` | CLI rejects the misleading combination as a usage error. |
 | `doctor` | Reports class and ownership evidence without mutation. |
 | `doctor --fix` with no launcher, Agent, or client | Removes only the stale/invalid record and signals no process. |
@@ -53,14 +54,16 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 
 | Scenario | Expected result |
 |---|---|
-| Fresh POSIX or Windows user environment | FVM verification precedes Flutter, Agent dependencies, Client dependencies, and shim installation; `run all` begins only after every stage succeeds. |
+| Fresh POSIX or Windows user environment, `run` | Install ensures verified FVM, pinned Flutter, and the user shim; setup resolves Release Contract, Agent, then Client; runtime begins only after every stage succeeds. |
+| `install`, `setup`, and `run` stage boundaries | Install stops before packages; setup ensures install and stops before runtime; run ensures both layers and enters the runtime CLI. Every work-performing child streams real stdout/stderr and receives a duration/result footer. |
+| Explicit `status`, logs, or another non-run runtime command with missing prerequisites | No bootstrap mutation occurs; the wrapper fails with the exact `install` or `setup` recovery command. |
 | Windows bootstrap starts outside a Git checkout but beside its copied project scripts | The non-repository Git probe is handled without a raw PowerShell native-command error, and bootstrap continues from the script-owned project root. |
 | Journal crash fixture exits nonzero on every host | A hermetic platform-native fixture avoids package-runner exit-code differences and captures stdout, stderr, and crash-like stack output after exit. |
 | Windows bootstrap uses an isolated user root in CI | Its fake command surface includes deterministic file hashing, so redirected user paths cannot depend on ambient PowerShell module discovery. |
-| Unchanged second setup | Pinned Flutter and dependency stages are skipped when SDK, lockfile fingerprint, and package configs agree. |
-| Flutter pin or either lockfile changes | The stamp invalidates and the affected setup sequence runs before runtime launch. |
-| Existing shim belongs to another checkout | Setup fails without replacing it; `setup --force` performs the explicit replacement. |
-| No arguments | Setup completes, then the wrapper invokes `run all`; explicit `setup` exits after preparation. |
+| Unchanged second setup | Ready FVM, Flutter, shim, and dependency stages remain silent when SDK, lockfile fingerprint, and package configs agree. |
+| Flutter pin or any of the three lockfiles changes | The appropriate install/setup stage runs before runtime launch. |
+| Existing shim belongs to another checkout | Explicit install/setup fail without replacement unless `--force`; run accepts the functional dispatcher without replacing it, preserving linked-worktree use. |
+| No arguments or help | Static help is displayed, including `sanad-dev run` as the official source command, with no SDK, package, shim, or runtime mutation. |
 | Default or overridden source profile | Default is Production with Cloud enabled; `--no-cloud` disables hosted routing; `--config config/dev.json` remains explicit. Tests use constants/fakes and perform no hosted request. |
 | Agent emits logger, print, stderr, or an uncaught stack before health | All bytes remain in bounded history after process exit and are available to follow readers. |
 | Client emits Flutter build output, logger/debug output, print, stderr, or uncaught stack before VM readiness | One Client journal preserves the output in arrival order and its watcher can start before VM discovery. |
@@ -69,8 +72,9 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Journal exceeds segment limit | Monotonic rotation retains at most four 2 MiB segments; stale journal cleanup and owner-only permissions apply. |
 | Agent restart or source handoff | A generation marker separates output while the same Agent log surface continues. |
 | Manual runtime logs | Existing HTTP/VM fallback works and explicitly disclaims unavailable process/build history. |
-| Interactive `run all` | Current terminal mirrors Agent; one independent watcher opens for each Client. |
-| Add or close a second Client | A second watcher opens; closing that Client closes only its watcher and does not affect Agent or siblings. |
+| Interactive `run all` | Current terminal mirrors Agent and accepts `r`/`R` for supervised restart; one independent terminal opens for each Client and accepts Flutter-style `r` reload / `R` restart. |
+| Interactive `run client`, including adding Client to an Agent-only managed runtime | Client output remains in the invoking terminal; no second terminal opens, and `r`/`R` are routed to the exact launcher-owned Flutter process. |
+| Add or close a second Client through an all-component request | A second Client terminal opens; closing that Client closes only its terminal and does not affect Agent or siblings. |
 | macOS, Linux, and Windows terminal quoting | Adapter arguments preserve paths with spaces/quotes and never transfer child ownership. |
 | Headless execution or terminal launch failure | Runtime success/ownership is unchanged and a bounded copyable log command is printed. |
 
