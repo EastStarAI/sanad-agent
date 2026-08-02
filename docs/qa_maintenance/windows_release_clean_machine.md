@@ -114,3 +114,19 @@ The Windows target passes only when:
 A failure on either Windows version keeps SANAD-12 Gate 3 open. Record the
 failure before changing source; any fix must use a protected PR and a new
 validation-only candidate run before retesting both platforms.
+
+## Validation Log
+
+### Windows 11 x64 Workstation Pass (Run 30728515333)
+
+- **Date**: 2026-08-02
+- **OS**: Microsoft Windows 11 Pro 64-bit (Build 26200, Version 10.0.26200)
+- **Candidate Run**: `30728515333` (Source commit `c2bd6b3b81b3f7e75f1211798446870d98a867ff`)
+- **Agent SHA-256**: `4d19d39bfdae430b11b74cb6abec6d9472d086cfbeebb9a308bd903c512d85ac`
+- **Client SHA-256**: `82a6345fc17b4ef69ca82980bda4dd298438de2204614a189f878585124e252c`
+- **Authenticode Status**: `NotSigned` (v1 policy verified)
+- **GitHub Attestations**: Verified via `gh attestation verify`
+- **MOTW Mark**: Applied and verified (`ZoneId=3`)
+- **Defender Scan**: Custom scan passed with 0 threats; Real-time protection enabled throughout
+- **Result**: PASSED for Windows 11 x64 workstation gate
+
