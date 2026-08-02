@@ -20,21 +20,41 @@ elif [ -n "$WORKSPACE_ROOT" ] && [ -f "$WORKSPACE_ROOT/scripts/sanad_dev.dart" ]
 fi
 SCRIPT_DIR="$PROJECT_DIR/scripts"
 
-VERBOSE=false
 stage() { printf '%-38s %s\n' "$1" "$2"; }
-run_setup_command() {
-  if [ "$VERBOSE" = true ]; then "$@"; return; fi
-  local output
-  output="$(mktemp "${TMPDIR:-/tmp}/sanad-setup.XXXXXX")"
-  if "$@" > "$output" 2>&1; then rm -f "$output"; return; fi
-  cat "$output" >&2
-  rm -f "$output"
-  return 1
+run_stage() {
+  local name="$1" started status
+  shift
+  started=$SECONDS
+  printf '\n==> %s\n' "$name"
+  if "$@"; then
+    stage "$name" "ready ($((SECONDS - started))s)"
+    return 0
+  else
+    status=$?
+    stage "$name" "failed ($((SECONDS - started))s)"
+    return "$status"
+  fi
 }
 sha256_file() {
   if command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}';
   elif command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}';
   else echo 'A SHA-256 utility (shasum or sha256sum) is required.' >&2; return 1; fi
+}
+
+print_help() {
+  cat <<'EOF'
+Sanad development launcher
+
+Usage:
+  sanad-dev                         Show this help without changing the environment.
+  sanad-dev install [--force]       Install/verify FVM, pinned Flutter, and the user command.
+  sanad-dev setup [--force]         Ensure install, then resolve Contract, Agent, and Client packages.
+  sanad-dev run [all|agent|client]  Ensure install/setup, then launch the requested runtime.
+  sanad-dev <runtime-command>       Run status, logs, restart, reload, stop, doctor, or switch.
+
+Official source run:
+  sanad-dev run
+EOF
 }
 
 ensure_posix_user_path() {
@@ -60,12 +80,7 @@ ensure_posix_user_path() {
   echo "PATH configured for new terminals; open a new terminal or source $config."
 }
 
-ensure_fvm() {
-  if command -v fvm >/dev/null 2>&1; then
-    FVM_BIN="$(command -v fvm)"
-    stage 'Checking FVM' 'ready'
-    return
-  fi
+_install_fvm() {
   command -v curl >/dev/null 2>&1 || { echo 'curl is required to install FVM.' >&2; return 1; }
   command -v tar >/dev/null 2>&1 || { echo 'tar is required to install FVM.' >&2; return 1; }
   local os arch platform checksum archive url install_root bin_root
@@ -84,8 +99,7 @@ ensure_fvm() {
   bin_root="${XDG_BIN_HOME:-$HOME/.local/bin}"
   archive="$(mktemp "${TMPDIR:-/tmp}/sanad-fvm.XXXXXX.tar.gz")"
   url="https://github.com/leoafarias/fvm/releases/download/$FVM_VERSION/fvm-$FVM_VERSION-$platform.tar.gz"
-  stage 'Installing verified FVM' "downloading $FVM_VERSION"
-  curl -fsSL "$url" -o "$archive"
+  curl -fL --progress-bar "$url" -o "$archive"
   [ "$(sha256_file "$archive")" = "$checksum" ] || { echo 'FVM archive checksum verification failed.' >&2; return 1; }
   rm -rf "$install_root"
   mkdir -p "$install_root" "$bin_root"
@@ -98,72 +112,119 @@ ensure_fvm() {
   FVM_BIN="$bin_root/fvm"
   ensure_posix_user_path "$bin_root"
   export PATH="$bin_root:$PATH"
-  stage 'Installing verified FVM' 'ready'
+}
+
+ensure_fvm() {
+  if command -v fvm >/dev/null 2>&1; then
+    FVM_BIN="$(command -v fvm)"
+    return
+  fi
+  run_stage "Installing verified FVM $FVM_VERSION" _install_fvm
+}
+
+_install_flutter() {
+  "$FVM_BIN" install "$1"
+}
+
+ensure_flutter() {
+  local flutter_pin
+  flutter_pin="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PROJECT_DIR/.fvmrc")"
+  [ -n "$flutter_pin" ] || { echo 'Could not read the pinned Flutter version.' >&2; return 1; }
+  [ -x "$PROJECT_DIR/.fvm/flutter_sdk/bin/flutter" ] && return
+  run_stage "Installing Flutter $flutter_pin" _install_flutter "$flutter_pin"
+}
+
+_write_shim() {
+  local shim="$1" expected="$2"
+  ln -sfn "$expected" "$shim"
+  ensure_posix_user_path "$(dirname "$shim")"
 }
 
 install_shim() {
-  local force="$1" bin_root shim existing expected
+  local force="$1" allow_existing="$2" bin_root shim existing expected
   bin_root="${XDG_BIN_HOME:-$HOME/.local/bin}"
   shim="$bin_root/sanad-dev"
   mkdir -p "$bin_root"
   expected="$PROJECT_DIR/scripts/sanad-dev"
   if [ -e "$shim" ] || [ -L "$shim" ]; then
     existing="$(readlink "$shim" 2>/dev/null || printf 'non-symlink')"
-    if [ "$existing" != "$expected" ] && [ "$force" != true ]; then
+    if [ "$existing" = "$expected" ]; then return; fi
+    if [ "$allow_existing" = true ]; then return; fi
+    if [ "$force" != true ]; then
       echo "sanad-dev already belongs to another checkout: $existing" >&2
-      echo 'Re-run setup --force to replace it.' >&2
+      echo 'Re-run install --force to replace it.' >&2
       return 1
     fi
   fi
-  ln -sfn "$expected" "$shim"
-  ensure_posix_user_path "$bin_root"
-  stage 'Installing sanad-dev command' 'ready'
+  run_stage 'Installing sanad-dev command' _write_shim "$shim" "$expected"
+}
+
+resolve_contract_dependencies() { cd "$PROJECT_DIR/release/contract" && "$FVM_BIN" dart pub get; }
+resolve_agent_dependencies() { cd "$PROJECT_DIR/agent" && "$FVM_BIN" dart pub get; }
+resolve_client_dependencies() { cd "$PROJECT_DIR/client" && "$FVM_BIN" flutter pub get; }
+
+ensure_dependencies() {
+  local flutter_pin stamp_root fingerprint stamp packages_ready=false
+  flutter_pin="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PROJECT_DIR/.fvmrc")"
+  stamp_root="$PROJECT_DIR/.dart_tool/sanad-dev"
+  mkdir -p "$stamp_root"
+  fingerprint="$(printf '%s:%s:%s:%s' "$flutter_pin" "$(sha256_file "$PROJECT_DIR/release/contract/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/agent/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/client/pubspec.lock")" | { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; } | awk '{print $1}')"
+  stamp="$stamp_root/setup.stamp"
+  [ -f "$PROJECT_DIR/release/contract/.dart_tool/package_config.json" ] && [ -f "$PROJECT_DIR/agent/.dart_tool/package_config.json" ] && [ -f "$PROJECT_DIR/client/.dart_tool/package_config.json" ] && packages_ready=true
+  if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$fingerprint" ] && [ "$packages_ready" = true ]; then return; fi
+  run_stage 'Resolving Release Contract dependencies' resolve_contract_dependencies
+  run_stage 'Resolving Agent dependencies' resolve_agent_dependencies
+  run_stage 'Resolving Client dependencies' resolve_client_dependencies
+  printf '%s' "$fingerprint" > "$stamp"
+}
+
+run_install() {
+  local force="$1" allow_existing_shim="$2"
+  ensure_fvm
+  ensure_flutter
+  install_shim "$force" "$allow_existing_shim"
 }
 
 run_setup() {
-  local force="$1" flutter_pin stamp_root fingerprint stamp packages_ready
-  flutter_pin="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PROJECT_DIR/.fvmrc")"
-  [ -n "$flutter_pin" ] || { echo 'Could not read the pinned Flutter version.' >&2; return 1; }
-  if [ -x "$PROJECT_DIR/.fvm/flutter_sdk/bin/flutter" ]; then
-    stage "Installing Flutter $flutter_pin" 'skipped'
-  else
-    stage "Installing Flutter $flutter_pin" 'running'
-    run_setup_command "$FVM_BIN" install "$flutter_pin"
-  fi
-  stamp_root="$PROJECT_DIR/.dart_tool/sanad-dev"
-  mkdir -p "$stamp_root"
-  fingerprint="$(printf '%s:%s:%s' "$flutter_pin" "$(sha256_file "$PROJECT_DIR/agent/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/client/pubspec.lock")" | { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; } | awk '{print $1}')"
-  stamp="$stamp_root/setup.stamp"
-  packages_ready=false
-  [ -f "$PROJECT_DIR/agent/.dart_tool/package_config.json" ] && [ -f "$PROJECT_DIR/client/.dart_tool/package_config.json" ] && packages_ready=true
-  if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$fingerprint" ] && [ "$packages_ready" = true ]; then
-    stage 'Resolving package dependencies' 'skipped'
-  else
-    stage 'Resolving Agent dependencies' 'running'
-    (cd "$PROJECT_DIR/agent" && run_setup_command "$FVM_BIN" dart pub get)
-    stage 'Resolving Client dependencies' 'running'
-    (cd "$PROJECT_DIR/client" && run_setup_command "$FVM_BIN" flutter pub get)
-    printf '%s' "$fingerprint" > "$stamp"
-  fi
-  install_shim "$force"
+  local force="$1" allow_existing_shim="$2"
+  run_install "$force" "$allow_existing_shim"
+  ensure_dependencies
+}
+
+require_runtime_cli() {
+  command -v fvm >/dev/null 2>&1 || { echo 'FVM is not installed. Run: sanad-dev install' >&2; return 1; }
+  FVM_BIN="$(command -v fvm)"
+  [ -x "$PROJECT_DIR/.fvm/flutter_sdk/bin/flutter" ] || { echo 'Pinned Flutter is not installed. Run: sanad-dev install' >&2; return 1; }
+  [ -f "$PROJECT_DIR/client/.dart_tool/package_config.json" ] || { echo 'Project packages are not ready. Run: sanad-dev setup' >&2; return 1; }
 }
 
 main() {
-  local command="${1:-}" force=false needs_setup=false
-  [ "$command" = setup ] || [ -z "$command" ] || needs_setup=false
-  if [ "$command" = setup ] || [ -z "$command" ]; then needs_setup=true; fi
-  for arg in "$@"; do
-    [ "$arg" = --force ] && force=true
-    [ "$arg" = --verbose ] && VERBOSE=true
-  done
-  ensure_fvm
-  if [ "$needs_setup" = true ]; then
-    run_setup "$force"
-    [ "$command" = setup ] && return 0
-    set -- run all
+  local command="${1:-}" force=false
+  case "$command" in ''|help|-h|--help) print_help; return 0 ;; esac
+  for arg in "$@"; do [ "$arg" = --force ] && force=true; done
+  case "$command" in
+    install)
+      run_install "$force" false
+      return 0
+      ;;
+    setup)
+      run_setup "$force" false
+      return 0
+      ;;
+    run)
+      run_setup "$force" true
+      ;;
+    *)
+      require_runtime_cli
+      ;;
+  esac
+  local runtime_args=("$@")
+  if [ "$command" = run ] && [ "$force" = true ]; then
+    runtime_args=()
+    for arg in "$@"; do [ "$arg" != --force ] && runtime_args+=("$arg"); done
   fi
   cd "$PROJECT_DIR/client"
-  SANAD_DEV_CALLER_DIR="$CALLER_DIR" "$FVM_BIN" dart "$SCRIPT_DIR/sanad_dev.dart" "$@"
+  SANAD_DEV_CALLER_DIR="$CALLER_DIR" "$FVM_BIN" dart "$SCRIPT_DIR/sanad_dev.dart" "${runtime_args[@]}"
 }
 
 main "$@"

@@ -34,7 +34,8 @@ class ClientSelectionResult {
   final ClientSelectionKind kind;
   final List<ClientInstance> matches;
 
-  ClientInstance? get selected => kind == ClientSelectionKind.exact ? matches.single : null;
+  ClientInstance? get selected =>
+      kind == ClientSelectionKind.exact ? matches.single : null;
 }
 
 ClientSelectionResult selectClientByDevice({
@@ -68,7 +69,9 @@ List<ClientInstance> clientsForAgentPort(
   Iterable<ClientInstance> clients,
   int agentPort,
 ) {
-  final matches = clients.where((client) => clientAgentPort(client) == agentPort).toList();
+  final matches = clients
+      .where((client) => clientAgentPort(client) == agentPort)
+      .toList();
   matches.sort((left, right) {
     final byDevice = (left.deviceId ?? '').compareTo(right.deviceId ?? '');
     return byDevice != 0 ? byDevice : left.port.compareTo(right.port);
@@ -99,18 +102,25 @@ Future<List<ClientInstance>> discoverClientInstances() async {
           final devToolsMatch = RegExp(
             r'--devtools-server-address=http://127.0.0.1:(\d+)/?',
           ).firstMatch(line);
-          final devToolsPort = devToolsMatch != null ? int.tryParse(devToolsMatch.group(1)!) : null;
+          final devToolsPort = devToolsMatch != null
+              ? int.tryParse(devToolsMatch.group(1)!)
+              : null;
 
           // Check if there is a non-zero --bind-port in the command line
           final bindPortMatch = RegExp(r'--bind-port=(\d+)').firstMatch(line);
-          final bindPort = bindPortMatch != null ? int.tryParse(bindPortMatch.group(1)!) : null;
+          final bindPort = bindPortMatch != null
+              ? int.tryParse(bindPortMatch.group(1)!)
+              : null;
 
-          final port = (bindPort != null && bindPort != 0) ? bindPort : originalPort;
+          final port = (bindPort != null && bindPort != 0)
+              ? bindPort
+              : originalPort;
           final existingIndex = devServices.indexWhere(
             (ds) => ds['port'] == port,
           );
           if (existingIndex != -1) {
-            if (devToolsPort != null && devServices[existingIndex]['devToolsPort'] == null) {
+            if (devToolsPort != null &&
+                devServices[existingIndex]['devToolsPort'] == null) {
               devServices[existingIndex]['devToolsPort'] = devToolsPort;
             }
             continue;
@@ -191,7 +201,9 @@ bool matchesFlutterRunnerToDevelopmentService(
 }) {
   final command = arguments.join(' ');
   if (devToolsPort != null && command.contains(':$devToolsPort')) return true;
-  if (bindPort != null && bindPort != 0 && arguments.contains('--host-vmservice-port=$bindPort')) {
+  if (bindPort != null &&
+      bindPort != 0 &&
+      arguments.contains('--host-vmservice-port=$bindPort')) {
     return true;
   }
   return arguments.contains('--host-vmservice-port=$originalPort');
@@ -360,7 +372,8 @@ Future<List<AgentInstance>> discoverAgentInstances() async {
           final body = await response.transform(utf8.decoder).join();
           final data = json.decode(body);
           if (data['status'] == 'ok') {
-            final workspaceHash = data['workspace_hash'] as String? ?? 'unknown';
+            final workspaceHash =
+                data['workspace_hash'] as String? ?? 'unknown';
             final stateMode = data['state_mode'] as String? ?? 'default';
             final gatewayEnabled = data['gateway_enabled'] == true;
             instances.add(
@@ -417,6 +430,21 @@ Future<ClientInstance?> selectClientInstance(int? portOverride) async {
     runtime: runtime,
   );
   final matchingInstances = state.ownedClients;
+  final launcherMatchedInstances = matchingInstances
+      .where((client) {
+        final profile = client.launchProfile;
+        return state.agent?.launcherId != null &&
+            state.agent?.runtimeNonce != null &&
+            profile?.define('SANAD_DEV_LAUNCHER_ID') ==
+                state.agent!.launcherId &&
+            profile?.define('SANAD_DEV_RUNTIME_NONCE') ==
+                state.agent!.runtimeNonce;
+      })
+      .toList(growable: false);
+
+  if (launcherMatchedInstances.length == 1) {
+    return launcherMatchedInstances.single;
+  }
 
   if (matchingInstances.length == 1) {
     return matchingInstances.first;
@@ -446,7 +474,8 @@ Future<ClientInstance?> _recordedClientInstance(int port) async {
   try {
     final runtime = await _currentRuntime();
     final record = await readRuntimeRecord(runtime);
-    if (record?.vmServicePort != port || !await isProcessRunning(record?.clientPid)) {
+    if (record?.vmServicePort != port ||
+        !await isProcessRunning(record?.clientPid)) {
       return null;
     }
 
@@ -491,7 +520,9 @@ Future<AgentInstance?> selectAgentInstance(int? portOverride) async {
   // Filter instances matching the current worktree's workspace root hash
   final runtime = await _currentRuntime();
   final currentWorkspaceHash = runtime.worktreeId.split('-').last;
-  final matchingInstances = instances.where((inst) => inst.workspaceHash == currentWorkspaceHash).toList();
+  final matchingInstances = instances
+      .where((inst) => inst.workspaceHash == currentWorkspaceHash)
+      .toList();
 
   if (matchingInstances.length == 1) {
     return matchingInstances.first;

@@ -3,7 +3,7 @@ import 'dart:io';
 
 const runtimeComponentControlVersion = 1;
 
-enum RuntimeComponentAction { start, stop }
+enum RuntimeComponentAction { start, stop, reload, restart }
 
 enum RuntimeComponentTarget { agent, client, all }
 
@@ -20,6 +20,7 @@ class RuntimeComponentControlRequest {
     this.clientPid,
     this.vmServicePort,
     this.force = false,
+    this.openClientTerminal = true,
     this.message,
   });
 
@@ -34,6 +35,7 @@ class RuntimeComponentControlRequest {
   final int? clientPid;
   final int? vmServicePort;
   final bool force;
+  final bool openClientTerminal;
   final String? message;
 
   bool get isTerminal => const {'complete', 'failed'}.contains(status);
@@ -51,6 +53,7 @@ class RuntimeComponentControlRequest {
       clientPid: clientPid,
       vmServicePort: vmServicePort,
       force: force,
+      openClientTerminal: openClientTerminal,
       message: message ?? this.message,
     );
   }
@@ -68,6 +71,7 @@ class RuntimeComponentControlRequest {
     if (clientPid != null) 'client_pid': clientPid,
     if (vmServicePort != null) 'vm_service_port': vmServicePort,
     'force': force,
+    'open_client_terminal': openClientTerminal,
     if (message != null) 'message': message,
   };
 
@@ -97,6 +101,7 @@ class RuntimeComponentControlRequest {
       clientPid: _optionalControlInt(json['client_pid']),
       vmServicePort: _optionalControlInt(json['vm_service_port']),
       force: json['force'] == true,
+      openClientTerminal: json['open_client_terminal'] != false,
       message: json['message']?.toString(),
     );
   }

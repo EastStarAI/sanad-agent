@@ -444,6 +444,91 @@ void main() {
     expect(assessment.classification, runtime_ownership.RuntimeOwnershipClass.managed);
   });
 
+  test(
+    'managed lease remains authoritative beside an unmanaged Client',
+    () async {
+      final home = await Directory.systemTemp.createTemp(
+        'sanad-managed-with-manual-',
+      );
+      addTearDown(() => home.delete(recursive: true));
+      final runtime = runtime_context.SanadDevRuntime(
+        workspaceRoot: '/repo',
+        repositoryRoot: '/repo',
+        worktreeId: 'task-$workspaceHash',
+        isLinkedWorktree: true,
+        usesPrimaryResources: false,
+        agentPort: 58092,
+        vmServicePort: 51084,
+        sanadHome: home.path,
+        runtimeDirectory: '${home.path}/runtime',
+        branch: 'codex/task',
+      );
+      final managed = sanad_dev.ClientInstance(
+        51084,
+        'token',
+        clientDirectory,
+        'macos',
+        pid: 101,
+        launchProfile: ownedProfile(sanadHome: home.path),
+      );
+      final unmanaged = sanad_dev.ClientInstance(
+        51085,
+        'token',
+        clientDirectory,
+        'macos',
+        pid: 102,
+      );
+      final state = sanad_dev.selectRuntimeProcessState(
+        activeAgents: [
+          sanad_dev.AgentInstance(
+            58092,
+            workspaceHash,
+            'worktree',
+            launcherId: 'launcher-1',
+            runtimeNonce: 'nonce-1',
+          ),
+        ],
+        activeClients: [managed, unmanaged],
+        runtime: runtime,
+        pathMatches: (first, second) => first == second,
+      );
+      expect(state.mutationAllowed, isFalse);
+      await runtime_ownership.writeRuntimeLauncherRecord(
+        runtime_ownership.RuntimeLauncherRecord(
+          launcherId: 'launcher-1',
+          runtimeNonce: 'nonce-1',
+          launcherPid: 999,
+          launcherProcessIdentity: 'process-999',
+          workspaceHash: workspaceHash,
+          sourceRoot: '/repo',
+          agentPort: 58092,
+          sanadHome: home.path,
+          preferencesPrefix: runtime_context.deriveSanadDevPreferencesPrefix(
+            home.path,
+          ),
+          clientPids: const [101],
+          vmServicePorts: const [51084],
+          status: 'running',
+          updatedAt: DateTime.utc(2026, 8, 2),
+        ),
+      );
+
+      final assessment = await sanad_dev.assessRuntimeOwnership(
+        runtime: runtime,
+        state: state,
+        processRunning: (_) async => true,
+        processIdentity: (_) async => 'process-999',
+      );
+
+      expect(
+        assessment.classification,
+        runtime_ownership.RuntimeOwnershipClass.managed,
+      );
+      expect(assessment.state.ownedClients, [managed]);
+      expect(assessment.state.blockedClients, isEmpty);
+    },
+  );
+
   test('multiple matching agents are ambiguous and never mutable', () {
     final state = sanad_dev.selectRuntimeProcessState(
       activeAgents: [
