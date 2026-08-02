@@ -362,6 +362,7 @@ Future<void> handleClientAttachAction(String action, int? portOverride) async {
     args,
     workingDirectory: clientDir,
     environment: attachEnvironment,
+    runInShell: Platform.isWindows,
   );
 
   final completer = Completer<void>();
