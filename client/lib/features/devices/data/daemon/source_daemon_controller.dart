@@ -114,12 +114,17 @@ class SourceDaemonController implements LocalDaemonController {
     _logger.info('Spawning source-based agent daemon in: ${agentDir.path}');
 
     try {
-      final process = await Process.start('fvm', [
-        'dart',
-        'run',
-        'bin/sanad_agent.dart',
-        'daemon',
-      ], workingDirectory: agentDir.path);
+      final process = await Process.start(
+        'fvm',
+        [
+          'dart',
+          'run',
+          'bin/sanad_agent.dart',
+          'daemon',
+        ],
+        workingDirectory: agentDir.path,
+        runInShell: Platform.isWindows,
+      );
 
       _spawnedProcess = process;
 

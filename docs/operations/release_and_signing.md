@@ -127,8 +127,9 @@ The following remain live-release gates:
 
 - the workflow and installer implement the approved unsigned Windows `1.0.0`
   policy while retaining WinSparkle DSA, manifest, checksum, SBOM, provenance,
-  and disclosure checks; Windows 10/11 Defender and SmartScreen evidence remains
-  required before publication;
+  and disclosure checks; Windows 11 Defender, SmartScreen, and lifecycle evidence
+  passed. Windows 10 clean-machine validation is not part of the `1.0.0` release
+  gate and must not be represented as tested;
 - use the completed App Store Connect API key and application record for
   Internal TestFlight upload; hosted notarization, staple, and Gatekeeper
   verification have passed;

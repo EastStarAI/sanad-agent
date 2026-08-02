@@ -30,6 +30,8 @@ Future<void> _handleComponentJournalLogs({
   required int? tailCount,
   required Future<bool> Function() componentIsActive,
   bool allowStartupGrace = false,
+  String? interactiveHint,
+  Future<void> Function(String key)? onInteractiveKey,
 }) async {
   final snapshot = await readComponentJournalSnapshot(
     sanadHome: sanadHome,
@@ -46,22 +48,93 @@ Future<void> _handleComponentJournalLogs({
   }
   if (!follow) return;
 
-  print('--- Streaming managed process journal (Press Ctrl+C to exit) ---');
+  print(
+    interactiveHint ??
+        '--- Streaming managed process journal (Press Ctrl+C to exit) ---',
+  );
+  StreamSubscription<List<int>>? stdinSubscription;
+  var interactiveActionInProgress = false;
+  if (onInteractiveKey != null && stdin.hasTerminal) {
+    try {
+      stdin.lineMode = false;
+      stdin.echoMode = false;
+    } on Object {
+      // Continue with terminal defaults when raw input is unavailable.
+    }
+    stdinSubscription = stdin.listen((bytes) {
+      for (final byte in bytes) {
+        final key = String.fromCharCode(byte);
+        if ((key != 'r' && key != 'R') || interactiveActionInProgress) {
+          continue;
+        }
+        interactiveActionInProgress = true;
+        unawaited(
+          onInteractiveKey(key).whenComplete(() {
+            interactiveActionInProgress = false;
+          }),
+        );
+      }
+    });
+  }
+
   var seenActive = false;
   final graceDeadline = DateTime.now().add(const Duration(seconds: 100));
-  await for (final bytes in followComponentJournal(
-    sanadHome: sanadHome,
-    agentPort: agentPort,
-    key: key,
-    initialOffsets: snapshot.offsets,
-    shouldContinue: () async {
-      final active = await componentIsActive();
-      if (active) seenActive = true;
-      return active || (allowStartupGrace && !seenActive && DateTime.now().isBefore(graceDeadline));
-    },
-  )) {
-    stdout.add(bytes);
+  try {
+    await for (final bytes in followComponentJournal(
+      sanadHome: sanadHome,
+      agentPort: agentPort,
+      key: key,
+      initialOffsets: snapshot.offsets,
+      shouldContinue: () async {
+        final active = await componentIsActive();
+        if (active) seenActive = true;
+        return active ||
+            (allowStartupGrace &&
+                !seenActive &&
+                DateTime.now().isBefore(graceDeadline));
+      },
+    )) {
+      stdout.add(bytes);
+    }
+  } finally {
+    await stdinSubscription?.cancel();
+    if (stdin.hasTerminal) {
+      try {
+        stdin.lineMode = true;
+        stdin.echoMode = true;
+      } on Object {
+        // The host terminal may not expose mutable modes.
+      }
+    }
   }
+}
+
+Future<void> _sendManagedClientDeveloperKey({
+  required String sanadHome,
+  required int agentPort,
+  required int vmServicePort,
+  required String key,
+}) async {
+  final record = await _readRuntimeLauncherRecordSafely(sanadHome, agentPort);
+  if (record == null || !record.vmServicePorts.contains(vmServicePort)) {
+    stderr.writeln(
+      'Client reload/restart refused: managed ownership is unavailable.',
+    );
+    return;
+  }
+  final action = key == 'r'
+      ? RuntimeComponentAction.reload
+      : RuntimeComponentAction.restart;
+  print('\n[sanad-dev] Client ${action.name} requested.');
+  final succeeded = await requestManagedComponentAction(
+    record,
+    action: action,
+    target: RuntimeComponentTarget.client,
+    vmServicePort: vmServicePort,
+    openClientTerminal: false,
+    timeout: const Duration(seconds: 10),
+  );
+  if (!succeeded) exitCode = 1;
 }
 
 int resolveManagedClientJournalAgentPort({
@@ -86,7 +159,9 @@ Future<void> handleClientLogs(
     sanadHomeOverride: sanadHomePath,
   );
   final vmServicePort = portOverride ?? runtime.vmServicePort;
-  final matchingClient = (await discoverClientInstances()).where((client) => client.port == vmServicePort).firstOrNull;
+  final matchingClient = (await discoverClientInstances())
+      .where((client) => client.port == vmServicePort)
+      .firstOrNull;
   final journalHome = sanadHomePath == null
       ? matchingClient?.launchProfile?.define('SANAD_HOME') ?? runtime.sanadHome
       : runtime.sanadHome;
@@ -112,6 +187,14 @@ Future<void> handleClientLogs(
       follow: follow,
       tailCount: tailCount,
       allowStartupGrace: waitForJournal,
+      interactiveHint:
+          '--- Client logs (r: hot reload, R: hot restart, Ctrl+C: exit) ---',
+      onInteractiveKey: (key) => _sendManagedClientDeveloperKey(
+        sanadHome: journalHome,
+        agentPort: agentPort,
+        vmServicePort: vmServicePort,
+        key: key,
+      ),
       componentIsActive: () async {
         final record = await _readRuntimeLauncherRecordSafely(
           journalHome,
@@ -264,7 +347,8 @@ Future<void> handleClientAttachAction(String action, int? portOverride) async {
       ? 'http://127.0.0.1:${instance.port}/'
       : 'http://127.0.0.1:${instance.port}/${instance.token}/';
   final runtime = await _currentRuntime();
-  final expectedClientDirectory = '${runtime.repositoryRoot}${Platform.pathSeparator}client';
+  final expectedClientDirectory =
+      '${runtime.repositoryRoot}${Platform.pathSeparator}client';
   if (!_samePath(instance.path, expectedClientDirectory)) {
     stderr.writeln(
       'Client ${action == 'R' ? 'restart' : 'reload'} aborted: the selected '
@@ -285,7 +369,9 @@ Future<void> handleClientAttachAction(String action, int? portOverride) async {
   }
   final activeAgents = await discoverAgentInstances();
   final workspaceHash = runtime.worktreeId.split('-').last;
-  final matchingAgents = activeAgents.where((agent) => agent.workspaceHash == workspaceHash).toList(growable: false);
+  final matchingAgents = activeAgents
+      .where((agent) => agent.workspaceHash == workspaceHash)
+      .toList(growable: false);
   if (matchingAgents.length != 1) {
     stderr.writeln(
       'Client ${action == 'R' ? 'restart' : 'reload'} aborted: expected one '
@@ -330,10 +416,15 @@ Future<void> handleClientAttachAction(String action, int? portOverride) async {
     ),
     sanadHome: profile.define('SANAD_HOME'),
   );
-  if (!ownership.isManaged) {
+  final selectedClientIsManaged =
+      ownership.isManaged &&
+      ownership.state.ownedClients.any(
+        (client) => client.port == instance.port && client.pid == instance.pid,
+      );
+  if (!selectedClientIsManaged) {
     stderr.writeln(
       'Client ${action == 'R' ? 'restart' : 'reload'} aborted: the selected '
-      'client is ${ownership.classification.name}, not owned by a live '
+      'client is ${ownership.isManaged ? 'unmanaged' : ownership.classification.name}, not owned by the live '
       'sanad-dev launcher.',
     );
     exitCode = 1;
@@ -344,7 +435,8 @@ Future<void> handleClientAttachAction(String action, int? portOverride) async {
     'Attaching to Flutter app at $vmUrl to perform Hot ${action == 'R' ? 'Restart' : 'Reload'}...',
   );
   final clientDir = instance.path;
-  final targetDevice = instance.deviceId ?? profile.deviceId ?? _defaultDesktopDevice();
+  final targetDevice =
+      instance.deviceId ?? profile.deviceId ?? _defaultDesktopDevice();
   final attachArguments = buildClientAttachArguments(
     profile: profile,
     vmUrl: vmUrl,
@@ -362,6 +454,7 @@ Future<void> handleClientAttachAction(String action, int? portOverride) async {
     args,
     workingDirectory: clientDir,
     environment: attachEnvironment,
+    runInShell: Platform.isWindows,
   );
 
   final completer = Completer<void>();
@@ -402,7 +495,9 @@ Future<void> handleClientAttachAction(String action, int? portOverride) async {
           }
 
           // Trigger action when the terminal is ready
-          if (!commandSent && (trimmed.contains('r Hot reload') || trimmed.contains('Flutter run key commands'))) {
+          if (!commandSent &&
+              (trimmed.contains('r Hot reload') ||
+                  trimmed.contains('Flutter run key commands'))) {
             commandSent = true;
 
             final now = DateTime.now();
@@ -438,7 +533,8 @@ Future<void> handleClientAttachAction(String action, int? portOverride) async {
             if (action == 'r' && trimmed.contains('Reloaded ')) {
               actionCompleted = true;
               process.stdin.write('q');
-            } else if (action == 'R' && trimmed.contains('Restarted application')) {
+            } else if (action == 'R' &&
+                trimmed.contains('Restarted application')) {
               actionCompleted = true;
               process.stdin.write('q');
             }
@@ -506,6 +602,8 @@ Future<void> handleAgentLogs(
       follow: follow,
       tailCount: tailCount,
       allowStartupGrace: waitForInstance,
+      interactiveHint: '--- Agent logs (r/R: restart, Ctrl+C: exit) ---',
+      onInteractiveKey: (_) => handleAgentRestart(agentPort),
       componentIsActive: () async {
         final record = await _readRuntimeLauncherRecordSafely(
           runtime.sanadHome,
@@ -526,7 +624,9 @@ Future<void> handleAgentLogs(
       final agents = await discoverAgentInstances();
       instance = agents
           .where(
-            (candidate) => candidate.port == portOverride && candidate.workspaceHash == workspaceHash,
+            (candidate) =>
+                candidate.port == portOverride &&
+                candidate.workspaceHash == workspaceHash,
           )
           .firstOrNull;
       if (instance != null) break;
@@ -734,15 +834,18 @@ Future<void> handleAgentRestart(
   );
   final client = HttpClient();
   try {
-    final restartUri = Uri.parse('http://localhost:${instance.port}/restart').replace(
-      queryParameters: {
-        'force': force.toString(),
-        'timeout_seconds': timeoutSeconds.toString(),
-      },
-    );
+    final restartUri = Uri.parse('http://localhost:${instance.port}/restart')
+        .replace(
+          queryParameters: {
+            'force': force.toString(),
+            'timeout_seconds': timeoutSeconds.toString(),
+          },
+        );
     final request = await client.postUrl(restartUri);
-    final requesterSessionId = Platform.environment['SANAD_REQUESTER_SESSION_ID'];
-    final requesterToolCallId = Platform.environment['SANAD_REQUESTER_TOOL_CALL_ID'];
+    final requesterSessionId =
+        Platform.environment['SANAD_REQUESTER_SESSION_ID'];
+    final requesterToolCallId =
+        Platform.environment['SANAD_REQUESTER_TOOL_CALL_ID'];
     if (requesterSessionId?.isNotEmpty == true) {
       request.headers.set('x-sanad-requester-session-id', requesterSessionId!);
     }

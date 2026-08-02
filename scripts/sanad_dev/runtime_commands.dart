@@ -16,8 +16,10 @@ class RuntimeProcessState {
   final bool agentAmbiguous;
 
   List<ClientInstance> get pairedClients => ownedClients;
-  List<ClientInstance> get blockedClients => List.unmodifiable([...crossOwnedClients, ...ambiguousClients]);
-  List<ClientInstance> get relevantClients => List.unmodifiable([...ownedClients, ...blockedClients]);
+  List<ClientInstance> get blockedClients =>
+      List.unmodifiable([...crossOwnedClients, ...ambiguousClients]);
+  List<ClientInstance> get relevantClients =>
+      List.unmodifiable([...ownedClients, ...blockedClients]);
   bool get mutationAllowed => blockedClients.isEmpty && !agentAmbiguous;
 }
 
@@ -57,21 +59,6 @@ Future<RuntimeOwnershipAssessment> assessRuntimeOwnership({
       state: state,
     );
   }
-  if (state.crossOwnedClients.isNotEmpty) {
-    return RuntimeOwnershipAssessment(
-      classification: RuntimeOwnershipClass.crossOwned,
-      state: state,
-      reason: 'one or more clients belong to another runtime group',
-    );
-  }
-  if (state.ambiguousClients.isNotEmpty) {
-    return RuntimeOwnershipAssessment(
-      classification: RuntimeOwnershipClass.unverifiable,
-      state: state,
-      reason: 'one or more client launch profiles are incomplete',
-    );
-  }
-
   final activeHome = sanadHome ?? runtime.sanadHome;
   RuntimeLauncherRecord? record;
   try {
@@ -87,12 +74,39 @@ Future<RuntimeOwnershipAssessment> assessRuntimeOwnership({
     );
   }
   if (record == null) {
+    if (state.crossOwnedClients.isNotEmpty) {
+      return RuntimeOwnershipAssessment(
+        classification: RuntimeOwnershipClass.crossOwned,
+        state: state,
+        reason: 'one or more clients belong to another runtime group',
+      );
+    }
+    if (state.ambiguousClients.isNotEmpty) {
+      return RuntimeOwnershipAssessment(
+        classification: RuntimeOwnershipClass.unverifiable,
+        state: state,
+        reason: 'one or more client launch profiles are incomplete',
+      );
+    }
     return RuntimeOwnershipAssessment(
       classification: RuntimeOwnershipClass.manual,
       state: state,
       reason: 'no live sanad-dev launcher lease exists',
     );
   }
+  final activeRecord = record;
+  final managedClients = state.ownedClients
+      .where((client) {
+        final profile = client.launchProfile;
+        return client.pid != null &&
+            activeRecord.clientPids.contains(client.pid) &&
+            activeRecord.vmServicePorts.contains(client.port) &&
+            profile?.define('SANAD_DEV_LAUNCHER_ID') ==
+                activeRecord.launcherId &&
+            profile?.define('SANAD_DEV_RUNTIME_NONCE') ==
+                activeRecord.runtimeNonce;
+      })
+      .toList(growable: false);
   final recordError = validateManagedRuntimeRecord(
     record: record,
     agentPort: state.agent?.port ?? runtime.agentPort,
@@ -100,27 +114,36 @@ Future<RuntimeOwnershipAssessment> assessRuntimeOwnership({
     workspaceHash: state.agent?.workspaceHash ?? record.workspaceHash,
     launcherRunning: await processRunning(record.launcherPid),
     launcherProcessIdentity: await processIdentity(record.launcherPid),
-    clientDefines: state.ownedClients.map(
+    clientDefines: managedClients.map(
       (client) => client.launchProfile?.defines ?? const {},
     ),
-    clientPids: state.ownedClients.map((client) => client.pid),
-    vmServicePorts: state.ownedClients.map((client) => client.port),
+    clientPids: managedClients.map((client) => client.pid),
+    vmServicePorts: managedClients.map((client) => client.port),
   );
   final agentIdentityMatches =
       state.agent == null ||
-      (state.agent!.launcherId == record.launcherId && state.agent!.runtimeNonce == record.runtimeNonce);
+      (state.agent!.launcherId == activeRecord.launcherId &&
+          state.agent!.runtimeNonce == activeRecord.runtimeNonce);
   if (recordError != null || !agentIdentityMatches) {
     return RuntimeOwnershipAssessment(
       classification: RuntimeOwnershipClass.orphaned,
       state: state,
       record: record,
-      reason: recordError ?? 'Agent launcher identity or nonce does not match the lease',
+      reason:
+          recordError ??
+          'Agent launcher identity or nonce does not match the lease',
     );
   }
   return RuntimeOwnershipAssessment(
     classification: RuntimeOwnershipClass.managed,
-    state: state,
-    record: record,
+    state: RuntimeProcessState(
+      agent: state.agent,
+      ownedClients: List.unmodifiable(managedClients),
+      crossOwnedClients: const [],
+      ambiguousClients: const [],
+      agentAmbiguous: state.agentAmbiguous,
+    ),
+    record: activeRecord,
   );
 }
 
@@ -133,14 +156,17 @@ RuntimeProcessState selectRuntimeProcessState({
 }) {
   final matchesPath = pathMatches ?? _samePath;
   final workspaceHash = runtime.worktreeId.split('-').last;
-  final clientDirectory = '${runtime.repositoryRoot}${Platform.pathSeparator}client';
+  final clientDirectory =
+      '${runtime.repositoryRoot}${Platform.pathSeparator}client';
   final matchingAgents = activeAgents.where(
     (agent) =>
         (requestedAgentPort != null && agent.port == requestedAgentPort) ||
         (requestedAgentPort == null && agent.workspaceHash == workspaceHash),
   );
   final agentAmbiguous = matchingAgents.length > 1;
-  final matchingAgent = matchingAgents.length == 1 ? matchingAgents.single : null;
+  final matchingAgent = matchingAgents.length == 1
+      ? matchingAgents.single
+      : null;
 
   final agentsByPort = {for (final agent in activeAgents) agent.port: agent};
   final primaryHome = resolveDefaultUserSanadHome(Platform.environment);
@@ -165,29 +191,38 @@ RuntimeProcessState selectRuntimeProcessState({
       effectiveProfile?.define('LOCAL_GATEWAY_URL') ?? '',
     );
     final gatewayPort = gateway?.hasPort == true ? gateway!.port : null;
-    final attachedToSelected = matchingAgent != null && gatewayPort == matchingAgent.port;
+    final attachedToSelected =
+        matchingAgent != null && gatewayPort == matchingAgent.port;
     if (!sourceMatches && !attachedToSelected) continue;
 
-    if (!sourceMatches || (attachedToSelected && matchingAgent.workspaceHash != workspaceHash)) {
+    if (!sourceMatches ||
+        (attachedToSelected && matchingAgent.workspaceHash != workspaceHash)) {
       crossOwned.add(client);
       continue;
     }
     if (matchingAgent == null) {
-      final gatewayAgent = gatewayPort == null ? null : agentsByPort[gatewayPort];
+      final gatewayAgent = gatewayPort == null
+          ? null
+          : agentsByPort[gatewayPort];
       if (gatewayAgent != null && gatewayAgent.workspaceHash != workspaceHash) {
         crossOwned.add(client);
         continue;
       }
-      if (gatewayAgent == null && gatewayPort == runtime.agentPort && effectiveProfile != null) {
+      if (gatewayAgent == null &&
+          gatewayPort == runtime.agentPort &&
+          effectiveProfile != null) {
         final profileError = validateClientLaunchProfile(
           effectiveProfile,
           isLinkedWorktree: runtime.isLinkedWorktree,
           expectedWorktreeName: runtime.worktreeDisplayName,
           expectedBranch: runtime.branch,
           expectedWorkspaceHash: workspaceHash,
-          workspaceHashRequired: !runtime.isLinkedWorktree && !runtime.usesPrimaryResources,
+          workspaceHashRequired:
+              !runtime.isLinkedWorktree && !runtime.usesPrimaryResources,
           expectedAgentPort: runtime.agentPort,
-          emptyPreferencesSanadHome: runtime.usesPrimaryResources ? runtime.sanadHome : primaryHome,
+          emptyPreferencesSanadHome: runtime.usesPrimaryResources
+              ? runtime.sanadHome
+              : primaryHome,
           derivePreferencesPrefix: deriveSanadDevPreferencesPrefix,
         );
         (profileError == null ? owned : ambiguous).add(client);
@@ -197,7 +232,10 @@ RuntimeProcessState selectRuntimeProcessState({
       continue;
     }
     if (!attachedToSelected) {
-      (gatewayPort != null && agentsByPort[gatewayPort] != null ? crossOwned : ambiguous).add(client);
+      (gatewayPort != null && agentsByPort[gatewayPort] != null
+              ? crossOwned
+              : ambiguous)
+          .add(client);
       continue;
     }
 
@@ -211,15 +249,19 @@ RuntimeProcessState selectRuntimeProcessState({
       expectedWorktreeName: runtime.worktreeDisplayName,
       expectedBranch: runtime.branch,
       expectedWorkspaceHash: workspaceHash,
-      workspaceHashRequired: !runtime.isLinkedWorktree && !runtime.usesPrimaryResources,
+      workspaceHashRequired:
+          !runtime.isLinkedWorktree && !runtime.usesPrimaryResources,
       expectedAgentPort: matchingAgent.port,
-      emptyPreferencesSanadHome: runtime.usesPrimaryResources ? runtime.sanadHome : primaryHome,
+      emptyPreferencesSanadHome: runtime.usesPrimaryResources
+          ? runtime.sanadHome
+          : primaryHome,
       derivePreferencesPrefix: deriveSanadDevPreferencesPrefix,
     );
     (profileError == null ? owned : ambiguous).add(client);
   }
 
-  int byPort(ClientInstance left, ClientInstance right) => left.port.compareTo(right.port);
+  int byPort(ClientInstance left, ClientInstance right) =>
+      left.port.compareTo(right.port);
   owned.sort(byPort);
   crossOwned.sort(byPort);
   ambiguous.sort(byPort);
@@ -266,13 +308,18 @@ String? primaryResourceOwnershipConflict(
 }) {
   if (!runtime.usesPrimaryResources) return null;
   final workspaceHash = runtime.worktreeId.split('-').last;
-  final clientDirectory = '${runtime.repositoryRoot}${Platform.pathSeparator}client';
+  final clientDirectory =
+      '${runtime.repositoryRoot}${Platform.pathSeparator}client';
   final agentConflict = activeAgents.any(
-    (agent) => agent.port == canonicalPrimaryAgentPort && agent.workspaceHash != workspaceHash,
+    (agent) =>
+        agent.port == canonicalPrimaryAgentPort &&
+        agent.workspaceHash != workspaceHash,
   );
   final clientConflict = activeClients.any((client) {
     final clientHome = client.launchProfile?.define('SANAD_HOME');
-    return clientHome != null && _samePath(clientHome, runtime.sanadHome) && !_samePath(client.path, clientDirectory);
+    return clientHome != null &&
+        _samePath(clientHome, runtime.sanadHome) &&
+        !_samePath(client.path, clientDirectory);
   });
   if (agentConflict || clientConflict) {
     return 'The primary sanad-dev runtime is owned by another Git workspace. '
@@ -301,8 +348,10 @@ Future<void> handleRun({
   final activeAgents = await discoverAgentInstances();
   final activeClients = await discoverClientInstances();
 
-  final agentDirectory = '${runtime.repositoryRoot}${Platform.pathSeparator}agent';
-  final clientDirectory = '${runtime.repositoryRoot}${Platform.pathSeparator}client';
+  final agentDirectory =
+      '${runtime.repositoryRoot}${Platform.pathSeparator}agent';
+  final clientDirectory =
+      '${runtime.repositoryRoot}${Platform.pathSeparator}client';
 
   final primaryConflict = primaryResourceOwnershipConflict(
     runtime,
@@ -320,7 +369,9 @@ Future<void> handleRun({
     runtime: runtime,
   );
 
-  if (processState.agent != null || processState.relevantClients.isNotEmpty || processState.agentAmbiguous) {
+  if (processState.agent != null ||
+      processState.relevantClients.isNotEmpty ||
+      processState.agentAmbiguous) {
     final activeHome =
         processState.relevantClients
             .map((client) => client.launchProfile?.define('SANAD_HOME'))
@@ -333,12 +384,11 @@ Future<void> handleRun({
       sanadHome: activeHome,
     );
     if (ownership.isManaged) {
-      final hasRequestedAgent = !startsAgent || processState.agent != null;
+      final managedState = ownership.state;
+      final hasRequestedAgent = !startsAgent || managedState.agent != null;
       final hasRequestedClient =
           !startsClient ||
-          processState.ownedClients.any(
-            (client) => client.deviceId == device,
-          );
+          managedState.ownedClients.any((client) => client.deviceId == device);
       if (hasRequestedAgent && hasRequestedClient) {
         print(
           'Requested sanad-dev components are already running for '
@@ -346,17 +396,30 @@ Future<void> handleRun({
         );
         return;
       }
-      final requestedVmPort = startsClient ? await _nextAvailableVmServicePort(runtime.vmServicePort) : null;
+      final requestedVmPort = startsClient
+          ? await _nextAvailableVmServicePort(runtime.vmServicePort)
+          : null;
       final succeeded = await requestManagedComponentAction(
         ownership.record!,
         action: RuntimeComponentAction.start,
         target: _componentControlTarget(target),
         deviceId: startsClient ? device : null,
         vmServicePort: requestedVmPort,
+        openClientTerminal: target == SanadDevComponentTarget.all,
       );
       if (!succeeded) {
         exitCode = 1;
         return;
+      }
+      if (target == SanadDevComponentTarget.client && requestedVmPort != null) {
+        await handleClientLogs(
+          true,
+          null,
+          requestedVmPort,
+          waitForJournal: true,
+          sanadHomePath: ownership.record!.sanadHome,
+          journalAgentPort: ownership.record!.agentPort,
+        );
       }
       return;
     }
@@ -391,7 +454,9 @@ Future<void> handleRun({
   if (dryRun) return;
 
   final configFile = File(
-    configPath.startsWith('/') ? configPath : '$clientDirectory${Platform.pathSeparator}$configPath',
+    configPath.startsWith('/')
+        ? configPath
+        : '$clientDirectory${Platform.pathSeparator}$configPath',
   );
   if (!configFile.existsSync()) {
     stderr.writeln('Client configuration not found: ${configFile.path}');
@@ -466,8 +531,10 @@ Future<void> handleRun({
     '--dart-define=SANAD_DEV_LAUNCHER_ID=$launcherId',
     '--dart-define=SANAD_DEV_RUNTIME_NONCE=$runtimeNonce',
     '--dart-define=SANAD_DEV_WORKSPACE_HASH=${runtime.worktreeId.split('-').last}',
-    if (runtime.isLinkedWorktree) '--dart-define=SANAD_DEV_WORKTREE_NAME=${runtime.worktreeDisplayName}',
-    if (runtime.isLinkedWorktree) '--dart-define=SANAD_DEV_WORKTREE_BRANCH=${runtime.branch}',
+    if (runtime.isLinkedWorktree)
+      '--dart-define=SANAD_DEV_WORKTREE_NAME=${runtime.worktreeDisplayName}',
+    if (runtime.isLinkedWorktree)
+      '--dart-define=SANAD_DEV_WORKTREE_BRANCH=${runtime.branch}',
     '--host-vmservice-port=${runtime.vmServicePort}',
     '--disable-service-auth-codes',
     if (driverMode) '--print-dtd',
@@ -490,6 +557,7 @@ Future<void> handleRun({
             const ['dart', 'run', 'bin/sanad_agent.dart', 'daemon'],
             workingDirectory: agentDirectory,
             environment: agentEnvironment,
+            runInShell: Platform.isWindows,
           )
         : null;
     final clientStart = startsClient
@@ -498,6 +566,7 @@ Future<void> handleRun({
             flutterArguments,
             workingDirectory: clientDirectory,
             environment: clientEnvironment,
+            runInShell: Platform.isWindows,
           )
         : null;
     Object? startError;
@@ -535,7 +604,9 @@ Future<void> handleRun({
       mirrorStderr: true,
       onBytes: (_, bytes) {
         bootLogs.addAll(
-          const LineSplitter().convert(utf8.decode(bytes, allowMalformed: true)),
+          const LineSplitter().convert(
+            utf8.decode(bytes, allowMalformed: true),
+          ),
         );
         while (bootLogs.length > 200) {
           bootLogs.removeAt(0);
@@ -638,6 +709,14 @@ Future<void> handleRun({
     agentJournal: agentJournal,
     initialClientJournal: clientJournal,
     launcherRecord: launcherRecord,
+    interactiveComponent: startsAgent
+        ? SanadDevComponentTarget.agent
+        : SanadDevComponentTarget.client,
+  );
+  print(
+    startsAgent
+        ? 'Controls: r/R restart Agent; Ctrl+C stops this managed runtime.'
+        : 'Controls: r hot reload; R hot restart; Ctrl+C stops this managed runtime.',
   );
   final clientExitCode = await controller.run();
   if (clientExitCode != 0) exitCode = clientExitCode;
@@ -654,7 +733,8 @@ Future<ClientInstance?> _waitForManagedClientIdentity({
     for (final client in clients) {
       if (client.port == vmServicePort &&
           client.launchProfile?.define('SANAD_DEV_LAUNCHER_ID') == launcherId &&
-          client.launchProfile?.define('SANAD_DEV_RUNTIME_NONCE') == runtimeNonce) {
+          client.launchProfile?.define('SANAD_DEV_RUNTIME_NONCE') ==
+              runtimeNonce) {
         return client;
       }
     }
@@ -683,7 +763,10 @@ Future<void> handleRuntimeStatus({int? portOverride}) async {
   final runtimeClients = processState.pairedClients;
   final visibleClients = processState.relevantClients;
   final activeSanadHome =
-      visibleClients.map((client) => client.launchProfile?.define('SANAD_HOME')).whereType<String>().firstOrNull ??
+      visibleClients
+          .map((client) => client.launchProfile?.define('SANAD_HOME'))
+          .whereType<String>()
+          .firstOrNull ??
       runtime.sanadHome;
   final ownership = await assessRuntimeOwnership(
     runtime: runtime,
@@ -701,7 +784,9 @@ Future<void> handleRuntimeStatus({int? portOverride}) async {
   final runtimeBranches =
       visibleClients
           .map(
-            (client) => client.launchProfile?.define('SANAD_DEV_WORKTREE_BRANCH') ?? 'main',
+            (client) =>
+                client.launchProfile?.define('SANAD_DEV_WORKTREE_BRANCH') ??
+                'main',
           )
           .toSet()
           .toList()
@@ -725,7 +810,9 @@ Future<void> handleRuntimeStatus({int? portOverride}) async {
     'Agent gateway: ${matchingAgent == null ? '-' : 'http://127.0.0.1:${matchingAgent.port}'}',
   );
   print('Sanad home: $activeSanadHome');
-  print('Status: ${runtimeStatusLabel(processState)}');
+  print(
+    'Status: ${runtimeStatusLabel(ownership.isManaged ? ownership.state : processState)}',
+  );
   print('Runtime class: ${ownership.classification.name}');
   if (ownership.reason != null) {
     print('Ownership detail: ${ownership.reason}');
@@ -780,7 +867,8 @@ Future<void> handleRuntimeStatus({int? portOverride}) async {
 }
 
 typedef ProcessTerminator = bool Function(int pid, ProcessSignal signal);
-typedef LauncherStopRequester = Future<void> Function(RuntimeLauncherRecord record);
+typedef LauncherStopRequester =
+    Future<void> Function(RuntimeLauncherRecord record);
 
 Future<bool> stopManagedRuntimeLauncher(
   RuntimeOwnershipAssessment ownership, {
@@ -820,6 +908,7 @@ Future<bool> requestManagedComponentAction(
   int? clientPid,
   int? vmServicePort,
   bool force = false,
+  bool openClientTerminal = true,
   Duration timeout = const Duration(seconds: 120),
 }) async {
   final path = runtimeComponentControlPath(record.sanadHome, record.agentPort);
@@ -840,6 +929,7 @@ Future<bool> requestManagedComponentAction(
     clientPid: clientPid,
     vmServicePort: vmServicePort,
     force: force,
+    openClientTerminal: openClientTerminal,
   );
   await writeRuntimeComponentControl(path, request);
   final deadline = DateTime.now().add(timeout);
@@ -879,22 +969,12 @@ Future<void> handleRuntimeStop({
     runtime: runtime,
   );
 
-  if (processState.agent == null && processState.relevantClients.isEmpty && !processState.agentAmbiguous) {
+  if (processState.agent == null &&
+      processState.relevantClients.isEmpty &&
+      !processState.agentAmbiguous) {
     print(noActiveRuntimeMessage(runtime));
     return;
   }
-  if (!processState.mutationAllowed) {
-    stderr.writeln(
-      'Refusing to stop ${runtime.worktreeId}: one or more clients are '
-      'cross-owned or have incomplete/contradictory runtime identity.',
-    );
-    for (final client in processState.blockedClients) {
-      stderr.writeln('  - ${runtimeClientSummary(client)}');
-    }
-    exitCode = 1;
-    return;
-  }
-
   final ownership = await assessRuntimeOwnership(
     runtime: runtime,
     state: processState,
@@ -919,7 +999,7 @@ Future<void> handleRuntimeStop({
   ClientInstance? selectedClient;
   if (target == SanadDevComponentTarget.client) {
     final selection = selectClientByDevice(
-      clients: processState.ownedClients,
+      clients: ownership.state.ownedClients,
       deviceId: device,
       vmServicePort: vmServicePort,
     );
@@ -929,7 +1009,10 @@ Future<void> handleRuntimeStop({
             ? 'No owned Client matches the requested device/VM selector.'
             : 'Client selector is ambiguous; add -p <vm-port>.',
       );
-      for (final client in selection.matches.isEmpty ? processState.ownedClients : selection.matches) {
+      for (final client
+          in selection.matches.isEmpty
+              ? ownership.state.ownedClients
+              : selection.matches) {
         stderr.writeln('  - ${runtimeClientSummary(client)}');
       }
       exitCode = 1;
@@ -1005,7 +1088,8 @@ Future<void> handleRuntimeDoctor({
       final clientLive = clients.any(
         (client) =>
             clientAgentPort(client) == record.agentPort ||
-            client.launchProfile?.define('SANAD_DEV_LAUNCHER_ID') == record.launcherId,
+            client.launchProfile?.define('SANAD_DEV_LAUNCHER_ID') ==
+                record.launcherId,
       );
       if (!launcherLive && !endpointLive && !clientLive) {
         await deleteRuntimeLauncherRecord(record.sanadHome, record.agentPort);
@@ -1026,7 +1110,8 @@ Future<void> handleRuntimeDoctor({
       state.agent?.port ?? runtime.agentPort,
     );
     final candidate = File(candidatePath);
-    if (ownership.classification == RuntimeOwnershipClass.stopped && await candidate.exists()) {
+    if (ownership.classification == RuntimeOwnershipClass.stopped &&
+        await candidate.exists()) {
       await candidate.delete();
       print(
         'Fixed: removed one invalid stale launcher record; no process was '
@@ -1040,7 +1125,8 @@ Future<void> handleRuntimeDoctor({
 
   final nextAction = switch (ownership.classification) {
     RuntimeOwnershipClass.managed => 'Use sanad-dev status/stop/switch.',
-    RuntimeOwnershipClass.manual => 'Use sanad-dev takeover after confirming the manual pair.',
+    RuntimeOwnershipClass.manual =>
+      'Use sanad-dev takeover after confirming the manual pair.',
     RuntimeOwnershipClass.orphaned =>
       'Inspect the listed ownership evidence; use target cleanup only for a '
           'non-source stale target.',
@@ -1069,13 +1155,19 @@ Future<void> handleTargetOrphanCleanup({
   final sourcePort = _requestingAgentPort();
   final agents = await discoverAgentInstances();
   final clients = await discoverClientInstances();
-  final targetDirectory = '${runtime.repositoryRoot}${Platform.pathSeparator}client';
-  final targetClients = clients.where((client) => _samePath(client.path, targetDirectory)).toList(growable: false);
+  final targetDirectory =
+      '${runtime.repositoryRoot}${Platform.pathSeparator}client';
+  final targetClients = clients
+      .where((client) => _samePath(client.path, targetDirectory))
+      .toList(growable: false);
   if (targetClients.isEmpty) {
     print('No target orphan clients found for ${runtime.worktreeId}.');
     return;
   }
-  final targetPorts = targetClients.map(clientAgentPort).whereType<int>().toSet();
+  final targetPorts = targetClients
+      .map(clientAgentPort)
+      .whereType<int>()
+      .toSet();
   if (sourcePort != null && targetPorts.contains(sourcePort)) {
     stderr.writeln(
       'Cleanup refused: a target client is attached to the requester/source '
@@ -1149,7 +1241,8 @@ Future<void> handleRuntimeTakeover({
   Future<bool> Function(int? pid) processRunning = isProcessRunning,
 }) async {
   if (Platform.environment['SANAD_REQUESTER_SESSION_ID']?.isNotEmpty == true ||
-      Platform.environment['SANAD_REQUESTER_TOOL_CALL_ID']?.isNotEmpty == true) {
+      Platform.environment['SANAD_REQUESTER_TOOL_CALL_ID']?.isNotEmpty ==
+          true) {
     stderr.writeln(
       'Takeover refused from an active Agent tool call. Run it directly in a '
       'human-owned terminal after reviewing "sanad-dev doctor".',
@@ -1166,7 +1259,10 @@ Future<void> handleRuntimeTakeover({
     runtime: runtime,
   );
   final activeHome =
-      state.ownedClients.map((client) => client.launchProfile?.define('SANAD_HOME')).whereType<String>().firstOrNull ??
+      state.ownedClients
+          .map((client) => client.launchProfile?.define('SANAD_HOME'))
+          .whereType<String>()
+          .firstOrNull ??
       runtime.sanadHome;
   final ownership = await assessRuntimeOwnership(
     runtime: runtime,
@@ -1203,7 +1299,8 @@ Future<void> handleRuntimeTakeover({
   final configPath = configArgument.substring(
     '--dart-define-from-file='.length,
   );
-  final cloudEnabled = profile.define('ENABLE_CLOUD_GATEWAY')?.toLowerCase() != 'false';
+  final cloudEnabled =
+      profile.define('ENABLE_CLOUD_GATEWAY')?.toLowerCase() != 'false';
   final driverMode = profile.target?.endsWith('driver_main.dart') == true;
   final homeSelector =
       !runtime.isLinkedWorktree &&
@@ -1252,7 +1349,8 @@ Future<void> handleRuntimeTakeover({
     return;
   }
   final deadline = DateTime.now().add(const Duration(seconds: 10));
-  while (await processRunning(client.pid) && DateTime.now().isBefore(deadline)) {
+  while (await processRunning(client.pid) &&
+      DateTime.now().isBefore(deadline)) {
     await Future<void>.delayed(const Duration(milliseconds: 100));
   }
   if (await processRunning(client.pid)) {
@@ -1274,7 +1372,8 @@ Future<void> handleRuntimeTakeover({
     return;
   }
   final vmDeadline = DateTime.now().add(const Duration(seconds: 10));
-  while (await _vmServiceIsAvailable(client.port) && DateTime.now().isBefore(vmDeadline)) {
+  while (await _vmServiceIsAvailable(client.port) &&
+      DateTime.now().isBefore(vmDeadline)) {
     await Future<void>.delayed(const Duration(milliseconds: 100));
   }
   if (await _vmServiceIsAvailable(client.port)) {
@@ -1345,8 +1444,10 @@ Future<bool> _restoreManualRuntime({
     final agent = await Process.start(
       'fvm',
       const ['dart', 'run', 'bin/sanad_agent.dart', 'daemon'],
-      workingDirectory: '${runtime.repositoryRoot}${Platform.pathSeparator}agent',
+      workingDirectory:
+          '${runtime.repositoryRoot}${Platform.pathSeparator}agent',
       environment: agentEnvironment,
+      runInShell: Platform.isWindows,
     );
     unawaited(agent.stdout.drain<void>());
     unawaited(agent.stderr.drain<void>());
@@ -1370,12 +1471,14 @@ Future<bool> _restoreManualRuntime({
       final restoredClient = await Process.start(
         'fvm',
         arguments,
-        workingDirectory: '${runtime.repositoryRoot}${Platform.pathSeparator}client',
+        workingDirectory:
+            '${runtime.repositoryRoot}${Platform.pathSeparator}client',
         environment: buildUnifiedSanadHomeEnvironment(
           Platform.environment,
           sanadHome: sanadHome,
         ),
         mode: ProcessStartMode.inheritStdio,
+        runInShell: Platform.isWindows,
       );
       unawaited(restoredClient.exitCode);
       final deadline = DateTime.now().add(const Duration(seconds: 90));
@@ -1404,7 +1507,9 @@ Future<bool> _waitForAgentHealthPort(int port, String workspaceHash) async {
       );
       final body = await response.transform(utf8.decoder).join();
       final decoded = jsonDecode(body);
-      if (response.statusCode == HttpStatus.ok && decoded is Map && decoded['workspace_hash'] == workspaceHash) {
+      if (response.statusCode == HttpStatus.ok &&
+          decoded is Map &&
+          decoded['workspace_hash'] == workspaceHash) {
         return true;
       }
     } on Object {
@@ -1538,7 +1643,8 @@ Future<bool> _waitForAgent(
 bool _samePath(String? first, String second) {
   if (first == null) return false;
   try {
-    return Directory(first).resolveSymbolicLinksSync() == Directory(second).resolveSymbolicLinksSync();
+    return Directory(first).resolveSymbolicLinksSync() ==
+        Directory(second).resolveSymbolicLinksSync();
   } catch (_) {
     return Directory(first).absolute.path == Directory(second).absolute.path;
   }

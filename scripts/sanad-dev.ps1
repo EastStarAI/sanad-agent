@@ -32,26 +32,48 @@ if ($gitRootResolved) {
 
 $command = if ($SanadArgs.Count -gt 0) { $SanadArgs[0].ToLowerInvariant() } else { '' }
 $force = $SanadArgs -contains '--force'
-$verboseSetup = $SanadArgs -contains '--verbose'
-$needsSetup = $SanadArgs.Count -eq 0 -or $command -eq 'setup'
 
 function Write-Stage([string] $Name, [string] $Status) {
   Write-Host ("{0,-38} {1}" -f $Name, $Status)
 }
 
-function Invoke-SetupProcess([string] $Executable, [string[]] $Arguments, [string] $WorkingDirectory) {
+function Show-SanadHelp {
+  Write-Host @'
+Sanad development launcher
+
+Usage:
+  sanad-dev                         Show this help without changing the environment.
+  sanad-dev install [--force]       Install/verify FVM, pinned Flutter, and the user command.
+  sanad-dev setup [--force]         Ensure install, then resolve Contract, Agent, and Client packages.
+  sanad-dev run [all|agent|client]  Ensure install/setup, then launch the requested runtime.
+  sanad-dev <runtime-command>       Run status, logs, restart, reload, stop, doctor, or switch.
+
+Official source run:
+  sanad-dev run
+'@
+}
+
+function Invoke-LiveProcessStage(
+  [string] $Name,
+  [string] $Executable,
+  [string[]] $Arguments,
+  [string] $WorkingDirectory
+) {
+  Write-Host "`n==> $Name"
+  $watch = [Diagnostics.Stopwatch]::StartNew()
   Push-Location $WorkingDirectory
   try {
-    if ($verboseSetup) {
-      & $Executable @Arguments | Out-Host
-    } else {
-      $output = & $Executable @Arguments 2>&1
-      if ($LASTEXITCODE -ne 0) { $output | Write-Error }
-    }
-    return [int]$LASTEXITCODE
+    & $Executable @Arguments | Out-Host
+    $code = [int]$LASTEXITCODE
   } finally {
     Pop-Location
+    $watch.Stop()
   }
+  if ($code -ne 0) {
+    Write-Stage $Name "failed ($([int]$watch.Elapsed.TotalSeconds)s)"
+    throw "$Name failed with exit code $code."
+  }
+  Write-Stage $Name "ready ($([int]$watch.Elapsed.TotalSeconds)s)"
 }
 
 function Ensure-UserBinPath([string] $BinRoot) {
@@ -68,10 +90,7 @@ function Ensure-UserBinPath([string] $BinRoot) {
 
 function Ensure-Fvm {
   $existing = Get-Command fvm -ErrorAction SilentlyContinue
-  if ($existing) {
-    Write-Stage 'Checking FVM' 'ready'
-    return $existing.Source
-  }
+  if ($existing) { return $existing.Source }
 
   $arch = if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64') { 'arm64' } else { 'x64' }
   $platform = "windows-$arch"
@@ -82,52 +101,69 @@ function Ensure-Fvm {
   $binRoot = Join-Path $env:LOCALAPPDATA 'SanadDev/bin'
   $archive = Join-Path ([System.IO.Path]::GetTempPath()) "fvm-$FvmVersion-$platform.zip"
   $url = "https://github.com/leoafarias/fvm/releases/download/$FvmVersion/fvm-$FvmVersion-$platform.zip"
-  Write-Stage 'Installing verified FVM' "downloading $FvmVersion"
-  Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $archive
-  $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
-  if ($actual -ne $checksum) { throw 'FVM archive checksum verification failed.' }
-  if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
-  New-Item -ItemType Directory -Force -Path $installRoot, $binRoot | Out-Null
-  Expand-Archive -Force -Path $archive -DestinationPath $installRoot
-  Remove-Item -Force $archive
-  $fvmExe = Get-ChildItem -Recurse -File $installRoot -Filter 'fvm.exe' | Select-Object -First 1
-  if (-not $fvmExe) { throw 'The verified FVM archive did not contain fvm.exe.' }
-  Copy-Item -Force $fvmExe.FullName (Join-Path $binRoot 'fvm.exe')
-  Ensure-UserBinPath $binRoot
-  Write-Stage 'Installing verified FVM' 'ready'
+  $name = "Installing verified FVM $FvmVersion"
+  Write-Host "`n==> $name"
+  $watch = [Diagnostics.Stopwatch]::StartNew()
+  try {
+    Invoke-WebRequest -UseBasicParsing -Uri $url -OutFile $archive
+    $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+    if ($actual -ne $checksum) { throw 'FVM archive checksum verification failed.' }
+    if (Test-Path $installRoot) { Remove-Item -Recurse -Force $installRoot }
+    New-Item -ItemType Directory -Force -Path $installRoot, $binRoot | Out-Null
+    Expand-Archive -Force -Path $archive -DestinationPath $installRoot
+    Remove-Item -Force $archive
+    $fvmExe = Get-ChildItem -Recurse -File $installRoot -Filter 'fvm.exe' | Select-Object -First 1
+    if (-not $fvmExe) { throw 'The verified FVM archive did not contain fvm.exe.' }
+    Copy-Item -Force $fvmExe.FullName (Join-Path $binRoot 'fvm.exe')
+    Ensure-UserBinPath $binRoot
+  } catch {
+    $watch.Stop()
+    Write-Stage $name "failed ($([int]$watch.Elapsed.TotalSeconds)s)"
+    throw
+  }
+  $watch.Stop()
+  Write-Stage $name "ready ($([int]$watch.Elapsed.TotalSeconds)s)"
   return (Join-Path $binRoot 'fvm.exe')
 }
 
-function Install-Shim([string] $FvmPath) {
+function Ensure-Flutter([string] $FvmPath) {
+  $flutterPin = (Get-Content -Raw (Join-Path $ProjectDir '.fvmrc') | ConvertFrom-Json).flutter
+  $flutterExecutable = Join-Path $ProjectDir '.fvm/flutter_sdk/bin/flutter.bat'
+  if (Test-Path $flutterExecutable) { return }
+  Invoke-LiveProcessStage "Installing Flutter $flutterPin" $FvmPath @('install', $flutterPin) $ProjectDir
+}
+
+function Install-Shim([bool] $AllowExisting) {
   $binRoot = Join-Path $env:LOCALAPPDATA 'SanadDev/bin'
   New-Item -ItemType Directory -Force -Path $binRoot | Out-Null
-  Ensure-UserBinPath $binRoot
   $shim = Join-Path $binRoot 'sanad-dev.cmd'
   $expected = "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$ProjectDir\scripts\sanad-dev.ps1`" %*`r`n"
   if (Test-Path $shim) {
     $current = Get-Content -Raw $shim
-    if ($current -ne $expected -and -not $force) {
-      throw "sanad-dev already belongs to another checkout: $shim. Re-run setup --force to replace it."
+    if ($current -eq $expected) { return }
+    if ($AllowExisting) { return }
+    if (-not $force) {
+      throw "sanad-dev already belongs to another checkout: $shim. Re-run install --force to replace it."
     }
   }
+  $name = 'Installing sanad-dev command'
+  Write-Host "`n==> $name"
+  $watch = [Diagnostics.Stopwatch]::StartNew()
+  Ensure-UserBinPath $binRoot
   Set-Content -NoNewline -Encoding Ascii -Path $shim -Value $expected
-  Write-Stage 'Installing sanad-dev command' 'ready'
+  $watch.Stop()
+  Write-Stage $name "ready ($([int]$watch.Elapsed.TotalSeconds)s)"
 }
 
-function Invoke-Setup([string] $FvmPath) {
+function Ensure-Dependencies([string] $FvmPath) {
   $flutterPin = (Get-Content -Raw (Join-Path $ProjectDir '.fvmrc') | ConvertFrom-Json).flutter
-  $flutterExecutable = Join-Path $ProjectDir '.fvm/flutter_sdk/bin/flutter.bat'
-  if (Test-Path $flutterExecutable) {
-    Write-Stage "Installing Flutter $flutterPin" 'skipped'
-  } else {
-    Write-Stage "Installing Flutter $flutterPin" 'running'
-    $code = Invoke-SetupProcess $FvmPath @('install', $flutterPin) $ProjectDir
-    if ($code -ne 0) { throw 'Pinned Flutter SDK installation failed.' }
-  }
-
   $stampRoot = Join-Path $ProjectDir '.dart_tool/sanad-dev'
   New-Item -ItemType Directory -Force -Path $stampRoot | Out-Null
-  $lockFiles = @((Join-Path $ProjectDir 'agent/pubspec.lock'), (Join-Path $ProjectDir 'client/pubspec.lock'))
+  $lockFiles = @(
+    (Join-Path $ProjectDir 'release/contract/pubspec.lock'),
+    (Join-Path $ProjectDir 'agent/pubspec.lock'),
+    (Join-Path $ProjectDir 'client/pubspec.lock')
+  )
   $fingerprintText = ($flutterPin + ':' + (($lockFiles | ForEach-Object { (Get-FileHash -Algorithm SHA256 $_).Hash }) -join ':'))
   $sha = [Security.Cryptography.SHA256]::Create()
   try {
@@ -136,33 +172,66 @@ function Invoke-Setup([string] $FvmPath) {
     $sha.Dispose()
   }
   $stamp = Join-Path $stampRoot 'setup.stamp'
-  $packagesReady = (Test-Path (Join-Path $ProjectDir 'agent/.dart_tool/package_config.json')) -and (Test-Path (Join-Path $ProjectDir 'client/.dart_tool/package_config.json'))
-  if ((Test-Path $stamp) -and (Get-Content -Raw $stamp) -eq $fingerprint -and $packagesReady) {
-    Write-Stage 'Resolving package dependencies' 'skipped'
-  } else {
-    Write-Stage 'Resolving Agent dependencies' 'running'
-    $code = Invoke-SetupProcess $FvmPath @('dart', 'pub', 'get') (Join-Path $ProjectDir 'agent')
-    if ($code -ne 0) { throw 'Agent dependency setup failed.' }
-    Write-Stage 'Resolving Client dependencies' 'running'
-    $code = Invoke-SetupProcess $FvmPath @('flutter', 'pub', 'get') (Join-Path $ProjectDir 'client')
-    if ($code -ne 0) { throw 'Client dependency setup failed.' }
-    Set-Content -NoNewline -Path $stamp -Value $fingerprint
+  $packagesReady = (Test-Path (Join-Path $ProjectDir 'release/contract/.dart_tool/package_config.json')) -and
+    (Test-Path (Join-Path $ProjectDir 'agent/.dart_tool/package_config.json')) -and
+    (Test-Path (Join-Path $ProjectDir 'client/.dart_tool/package_config.json'))
+  if ((Test-Path $stamp) -and (Get-Content -Raw $stamp) -eq $fingerprint -and $packagesReady) { return }
+
+  Invoke-LiveProcessStage 'Resolving Release Contract dependencies' $FvmPath @('dart', 'pub', 'get') (Join-Path $ProjectDir 'release/contract')
+  Invoke-LiveProcessStage 'Resolving Agent dependencies' $FvmPath @('dart', 'pub', 'get') (Join-Path $ProjectDir 'agent')
+  Invoke-LiveProcessStage 'Resolving Client dependencies' $FvmPath @('flutter', 'pub', 'get') (Join-Path $ProjectDir 'client')
+  Set-Content -NoNewline -Path $stamp -Value $fingerprint
+}
+
+function Invoke-Install([bool] $AllowExistingShim) {
+  $fvm = Ensure-Fvm
+  Ensure-Flutter $fvm
+  Install-Shim $AllowExistingShim
+  return $fvm
+}
+
+function Invoke-Setup([bool] $AllowExistingShim) {
+  $fvm = Invoke-Install $AllowExistingShim
+  Ensure-Dependencies $fvm
+  return $fvm
+}
+
+function Require-RuntimeCli {
+  $existing = Get-Command fvm -ErrorAction SilentlyContinue
+  if (-not $existing) { throw 'FVM is not installed. Run: sanad-dev install' }
+  if (-not (Test-Path (Join-Path $ProjectDir '.fvm/flutter_sdk/bin/flutter.bat'))) {
+    throw 'Pinned Flutter is not installed. Run: sanad-dev install'
   }
-  Install-Shim $FvmPath
+  if (-not (Test-Path (Join-Path $ProjectDir 'client/.dart_tool/package_config.json'))) {
+    throw 'Project packages are not ready. Run: sanad-dev setup'
+  }
+  return $existing.Source
 }
 
 try {
-  $fvm = Ensure-Fvm
-  if ($needsSetup) {
-    Invoke-Setup $fvm
-    if ($command -eq 'setup') { exit 0 }
-    $SanadArgs = @('run', 'all')
+  if ($command -in @('', 'help', '-h', '--help')) {
+    Show-SanadHelp
+    exit 0
+  }
+  if ($command -eq 'install') {
+    Invoke-Install $false | Out-Null
+    exit 0
+  }
+  if ($command -eq 'setup') {
+    Invoke-Setup $false | Out-Null
+    exit 0
+  }
+  $fvm = if ($command -eq 'run') { Invoke-Setup $true } else { Require-RuntimeCli }
+  $runtimeArgs = if ($command -eq 'run') {
+    @($SanadArgs | Where-Object { $_ -ne '--force' })
+  } else {
+    $SanadArgs
   }
   $env:SANAD_DEV_CALLER_DIR = $CallerDir
   Push-Location (Join-Path $ProjectDir 'client')
-  try { & $fvm dart (Join-Path $ProjectDir 'scripts/sanad_dev.dart') @SanadArgs; exit $LASTEXITCODE }
+  try { & $fvm dart (Join-Path $ProjectDir 'scripts/sanad_dev.dart') @runtimeArgs; exit $LASTEXITCODE }
   finally { Pop-Location }
 } catch {
-  Write-Error "sanad-dev bootstrap failed: $($_.Exception.Message)"
+  Write-Error "sanad-dev failed: $($_.Exception.Message)"
   exit 1
 }
