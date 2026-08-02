@@ -336,12 +336,12 @@ jobs:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
           APPLE_API_PRIVATE_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
+          SPARKLE_ED25519_PRIVATE_KEY_PATH: ${{ runner.temp }}/sparkle-private-key
         run: |
           brew install create-dmg
           fvm flutter pub get
           fvm flutter precache --macos
           (cd macos && pod install)
-          macos/Pods/Sparkle/bin/generate_keys -f "$RUNNER_TEMP/sparkle-private-key"
           release/macos/release_macos.sh
           mkdir -p ../dist
           source_prefix="build/sanad-client-${{ needs.validate.outputs.version }}-macos-universal.dmg"

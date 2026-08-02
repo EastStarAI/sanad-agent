@@ -15,7 +15,19 @@ cd "$CLIENT_ROOT"
 "$SCRIPT_DIR/build_macos_dmg.sh"
 "$SCRIPT_DIR/notarize_macos.sh" "$DMG_PATH"
 
-SIGN_OUTPUT="$(fvm dart run auto_updater:sign_update "$DMG_PATH")"
+if [ -n "${SPARKLE_ED25519_PRIVATE_KEY_PATH:-}" ]; then
+  if [ ! -f "$SPARKLE_ED25519_PRIVATE_KEY_PATH" ]; then
+    echo "Sparkle EdDSA private key file is missing." >&2
+    exit 1
+  fi
+  SIGN_OUTPUT="$(
+    macos/Pods/Sparkle/bin/sign_update \
+      --ed-key-file "$SPARKLE_ED25519_PRIVATE_KEY_PATH" \
+      "$DMG_PATH"
+  )"
+else
+  SIGN_OUTPUT="$(fvm dart run auto_updater:sign_update "$DMG_PATH")"
+fi
 SIGNATURE="$(printf '%s\n' "$SIGN_OUTPUT" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')"
 if [ -z "$SIGNATURE" ]; then
   echo "Sparkle EdDSA signing failed." >&2
