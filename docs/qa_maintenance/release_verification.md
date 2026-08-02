@@ -84,8 +84,16 @@ imported the restored Sparkle key with `generate_keys -f` and invoked
 this Keychain path may request interactive authorization. Hosted macOS signing
 now passes the runner-temporary exported key directly to `sign_update` through
 `--ed-key-file`, while preserving the Keychain fallback for operator builds.
-A replacement validation-only run must complete the macOS Client, assembly,
-manifest, SBOM, and attestations before the hosted matrix is accepted.
+
+Replacement validation-only run `30728515333` at public `main` commit
+`c2bd6b3b` passed the complete Agent and Client matrix, including macOS Client
+Developer ID signing, notarization, stapling, Gatekeeper assessment, and direct
+Sparkle update signing. Assembly generated and attested the manifest,
+checksums, Appcast, SBOM, and candidate assets; all 11 retained artifacts remain
+private. The Draft and publication jobs were skipped, and the run left no tag,
+Draft, or Release. This closes the hosted full-matrix build probe; clean-machine
+installation, update, rollback, Windows Defender/SmartScreen, and Internal
+TestFlight upload remain separate live gates.
 
 ## SANAD-08 local evidence
 

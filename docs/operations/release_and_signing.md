@@ -109,15 +109,24 @@ Local verification proves the release contract, manifest/checksum generation,
 macOS universal packaging and Developer ID signatures, iOS signed export,
 Sparkle signatures, Web packaging, analyzers, and updater tests.
 
+The protected validation-only run at public `main` commit `c2bd6b3b` passed the
+complete hosted Agent and Client matrix. It exercised the protected signing
+Environments, generated the assembled manifest, checksums, Appcast, SBOM, and
+attestations as private retained artifacts, and created no tag, Draft, or
+Release.
+
 The following remain live-release gates:
 
-- the workflow and installer now implement the approved unsigned Windows `1.0.0` policy while retaining WinSparkle DSA, manifest, checksum, SBOM, provenance, and disclosure checks; hosted Windows 10/11 Defender and SmartScreen evidence remains required before publication;
+- the workflow and installer implement the approved unsigned Windows `1.0.0`
+  policy while retaining WinSparkle DSA, manifest, checksum, SBOM, provenance,
+  and disclosure checks; Windows 10/11 Defender and SmartScreen evidence remains
+  required before publication;
 - use the completed App Store Connect API key and application record for
-  Internal TestFlight upload; local notarization, staple, and Gatekeeper
-  verification have already passed;
-- protected signing and `release-publication` Environments exist with required owner review; signing material still must be transferred separately without exposing values;
-- run hosted Actions, publish the immutable release, deploy Web/Appcast/
-  installers, and exercise real upgrade and rollback paths.
+  Internal TestFlight upload; hosted notarization, staple, and Gatekeeper
+  verification have passed;
+- build and review tagged RC candidates, publish each immutable Release only
+  after its separate owner approval, stage Web/Appcast/installers, and exercise
+  clean installation, real upgrade, failure recovery, and rollback paths.
 
 Those actions are owned by the later public-release task and do not weaken the
 prepared workflows.
