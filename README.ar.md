@@ -91,7 +91,9 @@ curl -fsSL https://sanad.eaststarai.com/install.sh | bash -s -- --pairing-token 
 
 > **بناء Windows غير موقّع:** مثبّت Windows في الإصدار `1.0.0` غير موقّع
 > عمدًا. تحقق أنه من الإصدار الرسمي وأن SHA-256 يطابق release manifest المنشور
-> قبل المتابعة. لا تعطّل Microsoft Defender أوSmart App Control.
+> قبل المتابعة. لا تعطّل Microsoft Defender أوSmart App Control. تحقق مسار
+> clean-machine للإصدار `1.0.0` على Windows 11؛ لم يُتحقق من Windows 10 لهذا
+> الإصدار.
 
 يضع Sanad Client pairing token صالحًا للإنشاء فقط داخل الأمر المنسوخ. يتحقق
 المثبّت من artifact الإصدار، ويجهز الربط، ويبدأ خدمة الخلفية. بعد أول اتصال
