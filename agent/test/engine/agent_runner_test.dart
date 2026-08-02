@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 import 'package:test/test.dart';
 import 'package:get_it/get_it.dart';
 import 'package:sanad_agent/core/models/message.dart';
@@ -412,6 +413,52 @@ class _ProviderSwitchingRuntimeService extends AgentRuntimeService {
   }
 }
 
+class _MultiProviderRuntimeService extends AgentRuntimeService {
+  _MultiProviderRuntimeService(
+    this._repo, {
+    required this.adapters,
+    required this.requestedProviders,
+  }) : super(
+         Config(),
+         _repo,
+         rateLimiter: ProviderRateLimiter(),
+         recoveryService: RuntimeRecoveryService(
+           _repo,
+           ProviderRateLimiter(),
+           autoFailoverEnabled: true,
+         ),
+       );
+
+  final ProviderInstanceRepository _repo;
+  final Map<String, LLMAdapter> adapters;
+  final List<String> requestedProviders;
+
+  @override
+  RouteSignature resolveSignature({String? providerId, String? modelId}) {
+    final instance = _repo.findById(providerId!)!;
+    return RouteSignature(
+      providerInstanceId: instance.id,
+      templateId: instance.templateId,
+      protocol: instance.protocol,
+      normalizedBaseUrl: 'http://localhost:9000/v1',
+      modelId: modelId ?? instance.defaultModel ?? 'model-a',
+      configRevision: instance.configRevision,
+      credentialRevision: instance.credentialRevision,
+    );
+  }
+
+  @override
+  LLMAdapter adapterForTurn(
+    RouteSignature signature, {
+    required String sessionId,
+    String? requestId,
+    String? runId,
+  }) {
+    requestedProviders.add(signature.providerInstanceId);
+    return adapters[signature.providerInstanceId]!;
+  }
+}
+
 class _AutoFailoverAdapter implements LLMAdapter {
   _AutoFailoverAdapter();
 
@@ -450,6 +497,55 @@ class _AutoFailoverAdapter implements LLMAdapter {
       history,
       tools: tools,
       modelOverride: modelOverride,
+    );
+  }
+}
+
+class _RateLimitOnceAdapter implements LLMAdapter {
+  int callCount = 0;
+
+  @override
+  Future<int> getContextLimit([String? modelOverride]) async => 4096;
+
+  @override
+  Future<List<ModelOption>> getAvailableModels() async => const [];
+
+  @override
+  Future<AgentResponse> generateResponse(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    callCount += 1;
+    if (callCount == 1) {
+      throw const LlmHttpException(
+        statusCode: 429,
+        body: '{"error":{"message":"rate limit"}}',
+        headers: {'retry-after-ms': '1'},
+        operation: 'chat.completions',
+      );
+    }
+    return AgentResponse(
+      message: Message(
+        role: MessageRole.assistant,
+        content: 'Recovered after the reset window',
+      ),
+    );
+  }
+
+  @override
+  Stream<AgentResponse> generateStream(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async* {
+    yield await generateResponse(
+      history,
+      tools: tools,
+      modelOverride: modelOverride,
+      options: options,
     );
   }
 }
@@ -1484,6 +1580,162 @@ void main() {
           equals('provider-new'),
         );
         expect(runner.lastSuccessfulLlmRoute?.modelOverride, equals('model-a'));
+      },
+    );
+
+    test(
+      'auto failover visits each failed provider once and reaches a third provider',
+      () async {
+        final state = AgentStateDatabase.inMemory();
+        addTearDown(state.dispose);
+        final repo = ProviderInstanceRepository.fromDatabase(state.db);
+        final now = DateTime.parse('2026-08-02T12:00:00Z');
+        for (final id in ['provider-a', 'provider-b', 'provider-c']) {
+          repo.createInstance(
+            ProviderInstance(
+              id: id,
+              templateId: 'openai',
+              displayName: id,
+              protocol: ProviderProtocol.openaiCompatible,
+              authMethod: ProviderAuthMethod.apiKey,
+              defaultModel: 'model-a',
+              status: InstanceStatus.ready,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+        }
+
+        final providerA = _AutoFailoverAdapter();
+        final providerB = _AutoFailoverAdapter();
+        final providerC = MockAdapter([
+          AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: 'Recovered on provider C',
+            ),
+          ),
+        ]);
+        final requestedProviders = <String>[];
+        final runtime = _MultiProviderRuntimeService(
+          repo,
+          adapters: {
+            'provider-a': providerA,
+            'provider-b': providerB,
+            'provider-c': providerC,
+          },
+          requestedProviders: requestedProviders,
+        );
+        GetIt.I.registerSingleton<AgentRuntimeService>(runtime);
+        GetIt.I.registerSingleton<ProviderInstanceRepository>(repo);
+        GetIt.I.registerSingleton<RuntimeRecoveryService>(
+          RuntimeRecoveryService(
+            repo,
+            ProviderRateLimiter(),
+            autoFailoverEnabled: true,
+          ),
+        );
+
+        final session = sessionManager.createSession('model-a');
+        sessionManager.updateSessionProviderId(session.sessionId, 'provider-a');
+        final runner = AgentRunner(
+          MockAdapter(const []),
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+
+        final response = await runner
+            .streamMessage('Use the available provider')
+            .join();
+
+        expect(response, 'Recovered on provider C');
+        expect(providerA.callCount, 1);
+        expect(providerB.callCount, 1);
+        expect(providerC._callCount, 1);
+        expect(
+          sessionManager.getSession(session.sessionId)?.providerId,
+          'provider-c',
+        );
+        expect(
+          requestedProviders,
+          containsAllInOrder(['provider-a', 'provider-b', 'provider-c']),
+        );
+      },
+    );
+
+    test(
+      'failover hops do not consume the reset wait budget when every provider is limited',
+      () async {
+        final state = AgentStateDatabase.inMemory();
+        addTearDown(state.dispose);
+        final repo = ProviderInstanceRepository.fromDatabase(state.db);
+        final now = DateTime.parse('2026-08-02T12:00:00Z');
+        final providerIds = [
+          'provider-a',
+          'provider-b',
+          'provider-c',
+          'provider-d',
+          'provider-e',
+        ];
+        for (final id in providerIds) {
+          repo.createInstance(
+            ProviderInstance(
+              id: id,
+              templateId: 'openai',
+              displayName: id,
+              protocol: ProviderProtocol.openaiCompatible,
+              authMethod: ProviderAuthMethod.apiKey,
+              defaultModel: 'model-a',
+              status: InstanceStatus.ready,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+        }
+
+        final exhaustedAdapters = {
+          for (final id in providerIds.take(4)) id: _AutoFailoverAdapter(),
+        };
+        final resetProvider = _RateLimitOnceAdapter();
+        final runtime = _MultiProviderRuntimeService(
+          repo,
+          adapters: {...exhaustedAdapters, 'provider-e': resetProvider},
+          requestedProviders: <String>[],
+        );
+        GetIt.I.registerSingleton<AgentRuntimeService>(runtime);
+        GetIt.I.registerSingleton<ProviderInstanceRepository>(repo);
+        GetIt.I.registerSingleton<RuntimeRecoveryService>(
+          RuntimeRecoveryService(
+            repo,
+            ProviderRateLimiter(),
+            autoFailoverEnabled: true,
+            random: Random(1),
+          ),
+        );
+
+        final session = sessionManager.createSession('model-a');
+        sessionManager.updateSessionProviderId(session.sessionId, 'provider-a');
+        final runner = AgentRunner(
+          MockAdapter(const []),
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+
+        final response = await runner
+            .streamMessage('Wait for an available provider')
+            .join();
+
+        expect(response, 'Recovered after the reset window');
+        for (final adapter in exhaustedAdapters.values) {
+          expect(adapter.callCount, 1);
+        }
+        expect(resetProvider.callCount, 2);
+        expect(
+          sessionManager.getSession(session.sessionId)?.providerId,
+          'provider-e',
+        );
       },
     );
 
