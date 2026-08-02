@@ -91,6 +91,12 @@ separate future decision.
 
 ## Atomic publication and rollback
 
+A separate read-only publication-guard probe may enter the protected
+`release-publication` Environment only to verify approval or rejection behavior.
+It requires an exact public `main` commit, inventories existing `v1` tags and
+Releases before the gate, has no write permission, and never creates a candidate.
+Probe approval is not Release publication approval.
+
 The candidate workflow creates a private Draft and fails if the tag already owns any Draft or published Release. A separate least-privilege publication job can make that reviewed Draft public only after the required owner approval on `release-publication`. Rejected or cancelled approval leaves no partial public Release. Public release files use published checksums. The private Web handoff
 is downloaded from the explicitly selected successful release-workflow run and
 verified against its GitHub build attestation. Server deployment then writes a

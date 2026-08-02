@@ -43,6 +43,20 @@ rules remain fail-closed.
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
 | Client Web | release build and version marker | protected atomic deployment, cache/SPA checks, rollback |
 
+## Protected publication rejection probe
+
+The dedicated `Probe release publication guard` workflow validates the
+`release-publication` Environment without creating a tag, Draft, candidate, or
+Release. Its preflight job is restricted to `contents: read`, requires an exact
+40-character public `main` commit, and records the expected counts of `v1` tags
+and Releases. The only dependent job enters `release-publication` with the same
+read-only permission and can only compare those counts.
+
+For the rejection case, an owner rejects the pending protected deployment. The
+run must end without executing the guarded step, and a separate read-only API
+inventory must prove the `v1` tag and Release counts remain unchanged. Approval
+of this probe is not approval to publish an RC or Stable Release.
+
 ## Update failure coverage
 
 Automated tests cover contract parsing, invalid tag rejection, deterministic
