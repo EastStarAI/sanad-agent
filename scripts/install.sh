@@ -10,6 +10,7 @@ BIN_DIR="$SANAD_USER_HOME/bin"
 TARGET="$BIN_DIR/sanad"
 BACKUP="$TARGET.rollback"
 PAIRING_TOKEN=""
+AUTH_MODE="prompt"
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -21,12 +22,33 @@ while [ "$#" -gt 0 ]; do
       PAIRING_TOKEN="$2"
       shift 2
       ;;
+    --login)
+      if [ "$AUTH_MODE" = "skip" ]; then
+        echo "Choose either --login or --no-login, not both." >&2
+        exit 64
+      fi
+      AUTH_MODE="login"
+      shift
+      ;;
+    --no-login)
+      if [ "$AUTH_MODE" = "login" ]; then
+        echo "Choose either --login or --no-login, not both." >&2
+        exit 64
+      fi
+      AUTH_MODE="skip"
+      shift
+      ;;
     *)
       echo "Unknown installer argument." >&2
       exit 64
       ;;
   esac
 done
+
+if [ -n "$PAIRING_TOKEN" ] && [ "$AUTH_MODE" != "prompt" ]; then
+  echo "--pairing-token cannot be combined with --login or --no-login." >&2
+  exit 64
+fi
 
 case "$MANIFEST_URL" in
   https://github.com/EastStarAI/sanad-agent/*) ;;
@@ -47,6 +69,24 @@ case "$OS_NAME" in
     exit 69
     ;;
 esac
+
+SERVICE_WAS_INSTALLED=0
+SERVICE_WAS_RUNNING=0
+if [ "$PLATFORM" = "macos" ]; then
+  [ -f "$HOME/Library/LaunchAgents/com.eaststarai.sanad.agent.plist" ] &&
+    SERVICE_WAS_INSTALLED=1
+  if [ "$SERVICE_WAS_INSTALLED" -eq 1 ] &&
+    launchctl list 2>/dev/null | grep -Fq 'com.eaststarai.sanad.agent'; then
+    SERVICE_WAS_RUNNING=1
+  fi
+else
+  [ -f "$HOME/.config/systemd/user/sanad-agent.service" ] &&
+    SERVICE_WAS_INSTALLED=1
+  if [ "$SERVICE_WAS_INSTALLED" -eq 1 ] &&
+    systemctl --user is-active --quiet sanad-agent.service 2>/dev/null; then
+    SERVICE_WAS_RUNNING=1
+  fi
+fi
 
 case "$(uname -m)" in
   arm64|aarch64) ARCHITECTURE="arm64" ;;
@@ -198,11 +238,45 @@ if ! mv "$STAGED" "$TARGET"; then
   exit 74
 fi
 
+PORTAL_LOGIN=0
 if [ -n "$PAIRING_TOKEN" ]; then
   if ! "$TARGET" login --token "$PAIRING_TOKEN"; then
     rm -f "$TARGET"
     [ -f "$BACKUP" ] && mv "$BACKUP" "$TARGET"
     echo "Device pairing setup failed; installation rollback completed." >&2
+    exit 70
+  fi
+elif [ "$AUTH_MODE" = "login" ]; then
+  PORTAL_LOGIN=1
+elif [ "$AUTH_MODE" = "prompt" ] && [ -r /dev/tty ] && [ -w /dev/tty ] &&
+  (exec 3<>/dev/tty) 2>/dev/null; then
+  while :; do
+    printf 'Connect this device to your Sanad account now? [Y/n]: ' >/dev/tty
+    if ! IFS= read -r LOGIN_RESPONSE </dev/tty; then
+      LOGIN_RESPONSE="n"
+    fi
+    case "$LOGIN_RESPONSE" in
+      ""|y|Y|yes|YES|Yes)
+        PORTAL_LOGIN=1
+        break
+        ;;
+      n|N|no|NO|No)
+        break
+        ;;
+      *)
+        echo "Please answer yes or no." >/dev/tty
+        ;;
+    esac
+  done
+elif [ "$AUTH_MODE" = "prompt" ]; then
+  echo "No interactive terminal detected; continuing in local-only mode."
+fi
+
+if [ "$PORTAL_LOGIN" -eq 1 ]; then
+  if ! "$TARGET" login --portal; then
+    rm -f "$TARGET"
+    [ -f "$BACKUP" ] && mv "$BACKUP" "$TARGET"
+    echo "Account sign-in failed; installation rollback completed." >&2
     exit 70
   fi
 fi
@@ -214,9 +288,21 @@ if ! "$TARGET" service install; then
   exit 70
 fi
 
+if [ "$SERVICE_WAS_RUNNING" -eq 1 ]; then
+  if ! "$TARGET" service restart; then
+    echo "The agent was installed, but the existing service could not be refreshed." >&2
+    exit 70
+  fi
+fi
+
 echo "Sanad Agent installed successfully."
 if [ -n "$PAIRING_TOKEN" ]; then
   echo "Device pairing started. Sanad will appear online automatically."
+elif [ "$PORTAL_LOGIN" -eq 1 ]; then
+  echo "Account connected. Sanad Agent is running in the background."
 else
-  echo "Run 'sanad login' to connect your account."
+  echo "Sanad Agent is running in local-only mode."
+  echo "Connect it later with:"
+  echo "  $TARGET login"
+  echo "  $TARGET service restart"
 fi
