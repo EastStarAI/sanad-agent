@@ -117,7 +117,7 @@ validation-only candidate run before retesting both platforms.
 
 ## Validation Log
 
-### Windows 11 x64 Workstation Pass (Run 30728515333)
+### Windows 11 x64 Preflight Pass (Run 30728515333)
 
 - **Date**: 2026-08-02
 - **OS**: Microsoft Windows 11 Pro 64-bit (Build 26200, Version 10.0.26200)
@@ -128,5 +128,6 @@ validation-only candidate run before retesting both platforms.
 - **GitHub Attestations**: Verified via `gh attestation verify`
 - **MOTW Mark**: Applied and verified (`ZoneId=3`)
 - **Defender Scan**: Custom scan passed with 0 threats; Real-time protection enabled throughout
-- **Result**: PASSED for Windows 11 x64 workstation gate
+- **Result**: Automated preflight passed. The Windows 11 gate remains open until SmartScreen UI, Agent service install/reboot/uninstall, and Client install/reboot/uninstall evidence is recorded.
+- **Still required**: `AfterInstall`, `AfterReboot`, and `AfterUninstall` snapshots plus sanitized manual observations; then repeat the complete procedure on a separate clean Windows 10 x64 snapshot.
 
