@@ -134,6 +134,17 @@ validation-only candidate run before retesting both platforms.
 - **Client Lifecycle**: Verified installer launch, application launch, and clean uninstallation.
 - **Sanad Home Protection**: Isolated test Sanad Home (`.sanad`) retained intact across lifecycle operations (`sanad_home_exists: true`).
 - **Checkpoint Evidence Captures**: Recorded in `BeforeInstall.json`, `AfterInstall.json`, `AfterReboot.json`, `AfterUninstall.json`, and `verified-windows-artifacts.json`.
-- **Result**: PASSED for Windows 11 x64 workstation gate.
+- **Result**: PASSED for Windows 11 x64 workstation coverage.
+
+### Windows 10 x64 Deferred
+
+- **Status**: Not executed; no Windows 10 workstation or clean VM is currently
+  available.
+- **Decision**: The owner deferred this target on 2026-08-02. Deferral is not a
+  pass and does not provide Windows 10 Defender, SmartScreen, installation,
+  reboot, or uninstall evidence.
+- **Current contract impact**: Gate 3 remains open while SANAD-12 requires both
+  Windows 10 and Windows 11. A separate owner-approved scope change is required
+  before RC1 can proceed without Windows 10 evidence.
 
 
