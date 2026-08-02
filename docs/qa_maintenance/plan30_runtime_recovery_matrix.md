@@ -107,6 +107,8 @@ This matrix owns verification for:
 66. **Responsive restart transport**: while a restart waits on an unsafe tool, `/health` and unrelated WebSocket upgrades remain responsive, a concurrent restart receives `already_in_progress`, and permanent `/stop` cancels the pending restart before taking exit ownership.
 67. **Restart CLI failure status**: timeout, connection loss, non-JSON response, or any response that does not explicitly confirm `success=true` returns a nonzero `sanad-dev restart agent` status.
 68. **Resumable component shutdown**: `sanad-dev stop agent` closes admission, waits for the global safe checkpoint, exits the source supervisor without `requestStopAll()`, and leaves the launcher plus Clients active. `sanad-dev run agent` reclaims checkpoint-safe work exactly once and preserves queued FIFO input. A timeout leaves all components running; `stop agent --force` uses terminal cancellation and produces no later resume.
+69. **Bounded multi-provider failover**: one model invocation records every provider instance that fails before streaming. With three qualified same-model instances, failures on A and B route exactly once to C; no failed instance becomes eligible again within that invocation. If every candidate fails, the session reaches its normal controllable recovery state instead of producing an unbounded route-transition cycle.
+70. **Staged route label coherence**: when the composer stages a provider/model pair that differs from the selected session route, the chip resolves the staged provider through daemon-owned instance metadata and never pairs the staged model with stale session provider display metadata. An unknown UUID remains hidden.
 
 ## Current Status
 

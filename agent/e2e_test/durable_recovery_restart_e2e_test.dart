@@ -41,14 +41,15 @@ const _protocol = 'openai_compatible';
 
 void main() {
   test(
-    'F.2.1 waiting notice survives restart, then real retry resumes a real turn',
+    'F.2.1 waiting notice survives forced restart and auto-resumes at resume_at',
     () async {
       final h = await _RecoveryHarness.create();
       try {
         // Pre-script the fake LLM: first request returns a 429 so the
-        // orchestrator emits a real waiting notice; the post-retry request
-        // returns the recovered answer text.
-        h.fakeLlm.enqueueRateLimit(retryAfterSeconds: 60);
+        // orchestrator emits a real waiting notice. After a forced process
+        // restart, the restored resume_at timer must issue the second request
+        // without a manual Retry command.
+        h.fakeLlm.enqueueRateLimit(retryAfterSeconds: 5);
         h.fakeLlm.enqueueText('gate-f-recovered');
 
         final client1 = await h.startFirstDaemon();
@@ -70,7 +71,7 @@ void main() {
           reason: 'first daemon must emit a real waiting notice',
         );
 
-        await h.stopFirstDaemon();
+        await h.killFirstDaemon();
 
         final fake = h.fakeLlm;
         // The durable work item + notice MUST survive the restart; assert
@@ -88,7 +89,7 @@ void main() {
         );
         expect(beforeRestart.noticeStatus, equals('waiting'));
 
-        final requestsBeforeRetry = fake.requestCount;
+        final requestsBeforeAutoResume = fake.requestCount;
         final client2 = await h.startSecondDaemon();
         try {
           // Give restore a moment to promote the work item and rehydrate
@@ -117,11 +118,6 @@ void main() {
           expect(hydratedNotice, isNotNull);
           expect(hydratedNotice?['status'], equals('waiting'));
 
-          await client2.sendRetry(
-            sessionId: sessionId,
-            requestId: 'f21-retry-${_unique()}',
-          );
-
           final answer = await client2.waitForFinalAnswer(
             sessionId: sessionId,
             timeout: const Duration(seconds: 30),
@@ -133,8 +129,9 @@ void main() {
           );
           expect(
             fake.requestCount,
-            greaterThan(requestsBeforeRetry),
-            reason: 'real retry must call the fake LLM (no magic shortcut)',
+            greaterThan(requestsBeforeAutoResume),
+            reason:
+                'resume_at expiry must call the fake LLM without a manual retry',
           );
         } finally {
           await client2.close();
@@ -753,6 +750,18 @@ class _RecoveryHarness {
     } catch (_) {
       proc.kill(ProcessSignal.sigkill);
     }
+  }
+
+  Future<void> killFirstDaemon() async {
+    final proc = _firstDaemon;
+    _firstDaemon = null;
+    if (proc == null) return;
+    proc.kill(ProcessSignal.sigkill);
+    try {
+      await proc.exitCode.timeout(
+        const Duration(seconds: 6),
+      );
+    } catch (_) {}
   }
 
   Future<void> dispose() async {

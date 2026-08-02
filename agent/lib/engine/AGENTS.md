@@ -28,4 +28,5 @@ This contract applies to `agent/lib/engine/`.
 - Actual tool-call presence determines tool execution; adapter finish reason is a compatibility/terminal classification.
 - Persist terminal classification, including state-only responses, so restart preserves continuation intent.
 - Missing providers degrade to the lazy missing-provider adapter.
+- Automatic failover within one model invocation must exclude every provider instance that already failed before streaming; it must never revisit an exhausted route in the same chain.
 - Internal accumulated usage remains separate from the latest immutable context-usage projection exposed to clients.

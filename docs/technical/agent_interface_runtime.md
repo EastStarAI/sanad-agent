@@ -33,9 +33,12 @@ route helpers remain stateless so collaborators do not depend back on the
 orchestrator.
 
 Final delivery follows a successful idempotent terminal commit for the exact
-owner. Stop invalidates the active owner before awaiting cancellation, clears
-runtime recovery and durable work, then allows later input to enter a new
-generation. Interrupted tools resume automatically only when their persisted checkpoint marks
+owner. Automatic failover is bounded to one model invocation: every instance
+that fails before streaming is excluded from the remainder of that invocation,
+so multi-provider routing advances without revisiting an exhausted route and
+falls back to controllable recovery when no qualified candidate remains. Stop
+invalidates the active owner before awaiting cancellation, clears runtime
+recovery and durable work, then allows later input to enter a new generation. Interrupted tools resume automatically only when their persisted checkpoint marks
 every executing operation replay-safe. An explicit user Retry or Change Provider
 may instead close each ambiguous non-idempotent tool with a neutral
 unknown-outcome result and continue the model loop; it never re-executes the

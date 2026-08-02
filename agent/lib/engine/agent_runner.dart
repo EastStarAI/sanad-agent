@@ -761,6 +761,7 @@ class AgentRunner {
     required String? modelId,
     required int attempt,
     required bool streamStarted,
+    required Set<String> failedProviderInstanceIds,
   }) async {
     if (error is RateLimitCancelled) {
       throw RuntimeRecoveryCancelled(sessionId);
@@ -795,10 +796,11 @@ class AgentRunner {
     }
 
     if (!streamStarted && decision.allowAutoFailover) {
+      failedProviderInstanceIds.add(providerInstanceId);
       final candidate = recovery.selectFailoverCandidate(
         failedInstanceId: providerInstanceId,
         requestedModelId: modelId ?? '',
-        excludedInstanceIds: {providerInstanceId},
+        excludedInstanceIds: failedProviderInstanceIds,
       );
       if (candidate != null) {
         recovery.reportFailure(
@@ -1005,7 +1007,8 @@ class AgentRunner {
     }
 
     AgentResponse response;
-    var attempt = 0;
+    final attemptsByProviderInstanceId = <String, int>{};
+    final failedProviderInstanceIds = <String>{};
     while (true) {
       try {
         final route = _turnRoute.routeForTurn();
@@ -1036,17 +1039,23 @@ class AgentRunner {
           effectiveHistory = sanitizedHistory;
           continue;
         }
+        final providerAttempt = provider == null
+            ? 0
+            : attemptsByProviderInstanceId[provider] ?? 0;
         final handled = await _handleRuntimeFailure(
           e,
           providerInstanceId: provider,
           modelId: model,
-          attempt: attempt,
+          attempt: providerAttempt,
           streamStarted: false,
+          failedProviderInstanceIds: failedProviderInstanceIds,
         );
         if (!handled) {
           rethrow;
         }
-        attempt += 1;
+        if (provider != null) {
+          attemptsByProviderInstanceId[provider] = providerAttempt + 1;
+        }
         final refreshedRouting = _turnRoute.resolveTurnRouting();
         model = refreshedRouting.model;
         provider = refreshedRouting.providerId;
@@ -1345,7 +1354,8 @@ class AgentRunner {
       );
     }
 
-    var attempt = 0;
+    final attemptsByProviderInstanceId = <String, int>{};
+    final failedProviderInstanceIds = <String>{};
     while (true) {
       if (_stopRequested) return;
       try {
@@ -1421,17 +1431,23 @@ class AgentRunner {
           effectiveHistory = sanitizedHistory;
           continue;
         }
+        final providerAttempt = provider == null
+            ? 0
+            : attemptsByProviderInstanceId[provider] ?? 0;
         final handled = await _handleRuntimeFailure(
           e,
           providerInstanceId: provider,
           modelId: model,
-          attempt: attempt,
+          attempt: providerAttempt,
           streamStarted: streamStarted,
+          failedProviderInstanceIds: failedProviderInstanceIds,
         );
         if (!handled) {
           rethrow;
         }
-        attempt += 1;
+        if (provider != null) {
+          attemptsByProviderInstanceId[provider] = providerAttempt + 1;
+        }
         final refreshedRouting = _turnRoute.resolveTurnRouting();
         model = refreshedRouting.model;
         provider = refreshedRouting.providerId;
