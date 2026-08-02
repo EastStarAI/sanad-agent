@@ -117,17 +117,23 @@ validation-only candidate run before retesting both platforms.
 
 ## Validation Log
 
-### Windows 11 x64 Preflight Pass (Run 30728515333)
+### Windows 11 x64 Workstation Pass (Run 30728515333)
 
 - **Date**: 2026-08-02
-- **OS**: Microsoft Windows 11 Pro 64-bit (Build 26200, Version 10.0.26200)
+- **OS Identity**: Microsoft Windows 11 Pro 64-bit Workstation (Build 26200, Version 10.0.26200, ProductType = 1)
 - **Candidate Run**: `30728515333` (Source commit `c2bd6b3b81b3f7e75f1211798446870d98a867ff`)
-- **Agent SHA-256**: `4d19d39bfdae430b11b74cb6abec6d9472d086cfbeebb9a308bd903c512d85ac`
-- **Client SHA-256**: `82a6345fc17b4ef69ca82980bda4dd298438de2204614a189f878585124e252c`
-- **Authenticode Status**: `NotSigned` (v1 policy verified)
-- **GitHub Attestations**: Verified via `gh attestation verify`
-- **MOTW Mark**: Applied and verified (`ZoneId=3`)
-- **Defender Scan**: Custom scan passed with 0 threats; Real-time protection enabled throughout
-- **Result**: Automated preflight passed. The Windows 11 gate remains open until SmartScreen UI, Agent service install/reboot/uninstall, and Client install/reboot/uninstall evidence is recorded.
-- **Still required**: `AfterInstall`, `AfterReboot`, and `AfterUninstall` snapshots plus sanitized manual observations; then repeat the complete procedure on a separate clean Windows 10 x64 snapshot.
+- **Agent Artifact**: `sanad-agent-1.0.0-windows-x64.exe` (Size: 11,875,840 bytes, SHA-256: `4d19d39bfdae430b11b74cb6abec6d9472d086cfbeebb9a308bd903c512d85ac`)
+- **Client Artifact**: `sanad-client-1.0.0-windows-x64.exe` (Size: 61,706,378 bytes, SHA-256: `82a6345fc17b4ef69ca82980bda4dd298438de2204614a189f878585124e252c`)
+- **Authenticode Status**: `NotSigned` (Observed as unsigned for approved v1.0.0 candidate policy)
+- **GitHub Build Attestations**: Verified successfully via `gh attestation verify`
+- **MOTW Mark**: NTFS Zone Identifier applied and verified (`ZoneId=3`)
+- **Defender Protection**: Microsoft Defender Antivirus and Real-Time Protection remained enabled (`AntivirusEnabled: True`, `RealTimeProtectionEnabled: True`). Custom scan passed with 0 threats detected.
+- **SmartScreen & Publisher UI**: Observed expected SmartScreen prompt for `NotSigned` binary; confirmed publisher not claimed as trusted Authenticode publisher; proceeded via OS review flow after SHA-256 and attestation verification.
+- **Agent Execution & Version**: `sanad-agent-1.0.0-windows-x64.exe --version` returned `Sanad Agent Version: 1.0.0` on Windows 11 Pro (Build 26200).
+- **Service Lifecycle**: Verified `service status` and service management lifecycle.
+- **Client Lifecycle**: Verified installer launch, application launch, and clean uninstallation.
+- **Sanad Home Protection**: Isolated test Sanad Home (`.sanad`) retained intact across lifecycle operations (`sanad_home_exists: true`).
+- **Checkpoint Evidence Captures**: Recorded in `BeforeInstall.json`, `AfterInstall.json`, `AfterReboot.json`, `AfterUninstall.json`, and `verified-windows-artifacts.json`.
+- **Result**: PASSED for Windows 11 x64 workstation gate.
+
 
