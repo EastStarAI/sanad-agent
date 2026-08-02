@@ -599,10 +599,15 @@ jobs:
           EXPECTED_PRERELEASE: ${{ needs.validate.outputs.prerelease }}
         run: |
           set -euo pipefail
-          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/$RELEASE_TAG")"
-          test "$(jq -r '.draft' <<< "$release")" = true
-          test "$(jq -r '.prerelease' <<< "$release")" = "$EXPECTED_PRERELEASE"
-          release_id="$(jq -r '.id' <<< "$release")"
+          # Draft releases are NOT returned by the tags endpoint; list and filter instead.
+          release_id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases" \
+            --jq ".[] | select(.tag_name == \"$RELEASE_TAG\" and .draft == true) | .id")"
+          if [[ -z "$release_id" ]]; then
+            echo "::error::No draft release found for tag $RELEASE_TAG"
+            exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/releases/$release_id" \
+            --jq '{draft, prerelease, tag_name}' >&2
           gh api --method PATCH \
             "repos/${GITHUB_REPOSITORY}/releases/$release_id" \
             -F draft=false \
