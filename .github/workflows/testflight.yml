@@ -21,7 +21,10 @@ concurrency:
 
 jobs:
   build:
-    runs-on: macos-15
+    # macos-26 ships the iOS 26 SDK / Xcode 26 required by App Store Connect
+    # for new Internal TestFlight uploads. macos-15 only has the iOS 18.5 SDK
+    # and is rejected at upload time. See SANAD-12 Gate 7.
+    runs-on: macos-26
     timeout-minutes: 60
     environment: apple-testflight
     steps:
