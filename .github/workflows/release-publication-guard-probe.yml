@@ -1,0 +1,80 @@
+name: Probe release publication guard
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_commit:
+        description: Full public main commit expected to enter the protected gate
+        type: string
+        required: true
+      expected_v1_tag_count:
+        description: Expected count of v1 tags before and after the probe
+        type: number
+        required: true
+        default: 0
+      expected_v1_release_count:
+        description: Expected count of v1 Releases and Drafts before and after the probe
+        type: number
+        required: true
+        default: 0
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag_count: ${{ steps.inventory.outputs.tag_count }}
+      release_count: ${{ steps.inventory.outputs.release_count }}
+    steps:
+      - name: Verify immutable probe identity
+        env:
+          EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_SHA" = "$EXPECTED_COMMIT"
+          test "${#EXPECTED_COMMIT}" = 40
+      - id: inventory
+        name: Record the read-only publication baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_TAG_COUNT: ${{ inputs.expected_v1_tag_count }}
+          EXPECTED_RELEASE_COUNT: ${{ inputs.expected_v1_release_count }}
+        run: |
+          set -euo pipefail
+          tags="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/v1" --jq 'length' | awk '{sum += $1} END {print sum + 0}')"
+          releases="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '[.[] | select(.tag_name | startswith("v1"))] | length' | awk '{sum += $1} END {print sum + 0}')"
+          test "$tags" = "$EXPECTED_TAG_COUNT"
+          test "$releases" = "$EXPECTED_RELEASE_COUNT"
+          {
+            echo "tag_count=$tags"
+            echo "release_count=$releases"
+          } >> "$GITHUB_OUTPUT"
+
+  publication-guard:
+    name: Enter release-publication without write permission
+    needs: preflight
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    environment: release-publication
+    permissions:
+      contents: read
+    steps:
+      - name: Prove approval cannot publish or mutate a Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_TAG_COUNT: ${{ needs.preflight.outputs.tag_count }}
+          BASELINE_RELEASE_COUNT: ${{ needs.preflight.outputs.release_count }}
+        run: |
+          set -euo pipefail
+          tags="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/v1" --jq 'length' | awk '{sum += $1} END {print sum + 0}')"
+          releases="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '[.[] | select(.tag_name | startswith("v1"))] | length' | awk '{sum += $1} END {print sum + 0}')"
+          test "$tags" = "$BASELINE_TAG_COUNT"
+          test "$releases" = "$BASELINE_RELEASE_COUNT"
+          echo "Protected publication gate entered with contents:read; no release mutation is possible."
