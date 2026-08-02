@@ -93,7 +93,9 @@ For Windows PowerShell:
 > **Unsigned Windows build:** The `1.0.0` Windows installer is intentionally
 > unsigned. Verify that it came from the official release and that its SHA-256
 > matches the published release manifest before proceeding. Do not disable
-> Microsoft Defender or Smart App Control.
+> Microsoft Defender or Smart App Control. The `1.0.0` clean-machine release
+> gate was validated on Windows 11; Windows 10 was not validated for this
+> release.
 
 Sanad Client inserts a creation-only pairing token into the copied command.
 The installer verifies the selected release artifact, prepares pairing, and

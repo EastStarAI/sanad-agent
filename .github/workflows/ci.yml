@@ -231,6 +231,20 @@ jobs:
           grep -F 'appcast-rc.xml' release/release-contract.json
           jq -e '.artifacts[] | select(.platform == "ios" and .public == false)' \
             release/release-contract.json >/dev/null
+      - name: Parse PowerShell release helpers
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/release/validate_windows_clean_machine.ps1),
+            [ref]$tokens,
+            [ref]$errors
+          )
+          if ($errors.Count -ne 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw "PowerShell release helper parsing failed."
+          }
       - name: Scan committed content for credentials
         shell: bash
         run: |
