@@ -370,8 +370,15 @@ jobs:
         run: |
           $url = "https://downloads.sourceforge.net/project/nsis/NSIS%203/3.12/nsis-3.12-setup.exe"
           $expectedSha256 = "3bc2b06253a7e4957111be152ac6a536e0c7478a706e19da814038db5d706495"
+          $expectedSize = 1566914
           $installer = Join-Path $env:RUNNER_TEMP "nsis-installer.exe"
-          Invoke-WebRequest -Uri $url -OutFile $installer
+          curl.exe --fail --location --retry 3 --proto "=https" --tlsv1.2 `
+            --output $installer $url
+          if ($LASTEXITCODE -ne 0) { throw "Pinned NSIS download failed." }
+          $actualSize = (Get-Item -LiteralPath $installer).Length
+          if ($actualSize -ne $expectedSize) {
+            throw "Pinned NSIS installer size verification failed."
+          }
           $actualSha256 = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actualSha256 -ne $expectedSha256) {
             throw "Pinned NSIS installer SHA-256 verification failed."
