@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -11,6 +10,7 @@ import 'package:sanad_client/core/presentation/state/app_state.dart';
 import 'package:sanad_client/core/presentation/utils/external_paste_manager.dart';
 import 'package:sanad_client/features/conversations/data/persistence/conversation_cache_persistor.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 
 AppState get appCtrl => getIt<AppState>();
 final appNavigatorKey = GlobalKey<NavigatorState>();
@@ -32,7 +32,7 @@ class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserv
     super.initState();
     _conversationCachePersistor = getIt<ConversationCachePersistor>();
     WidgetsBinding.instance.addObserver(this);
-    if (Platform.isMacOS) {
+    if (AppPlatform.isMacOS) {
       _listenToExternalPaste();
     }
   }

@@ -5,6 +5,12 @@ description: "Portal-owned login, polling, refresh, credential persistence, and 
 
 # Client Portal Authentication
 
+The Web client loads its `AuthPopup` JavaScript bridge from the same-origin
+`web/auth_popup.js` file before the asynchronous Flutter bootstrap. The bridge
+must not be embedded inline: deployment CSP keeps script `unsafe-inline`
+disabled, and the external source avoids a release-specific CSP hash while
+ensuring the Dart JS-interop target exists before the user can start login.
+
 ## Ownership
 
 `sanad-portal` is the public authentication broker for open-source Sanad clients.
