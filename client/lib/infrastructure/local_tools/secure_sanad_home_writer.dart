@@ -75,11 +75,14 @@ class SecureSanadHomeWriter {
       return;
     }
     const script = r'''
+& {
+param($source, $destination)
 $ErrorActionPreference = 'Stop'
-if ([IO.File]::Exists($args[1])) {
-  [IO.File]::Replace($args[0], $args[1], $null, $true)
+if ([IO.File]::Exists($destination)) {
+  [IO.File]::Replace($source, $destination, $null, $true)
 } else {
-  [IO.File]::Move($args[0], $args[1])
+  [IO.File]::Move($source, $destination)
+}
 }
 ''';
     final result = await Process.run('powershell.exe', [
@@ -139,16 +142,19 @@ if ([IO.File]::Exists($args[1])) {
     }
 
     const script = r'''
+& {
+param($path, $kind)
 $ErrorActionPreference = 'Stop'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$ace = if ($args[1] -eq 'directory') { "(A;OICI;FA;;;$sid)" } else { "(A;;FA;;;$sid)" }
+$ace = if ($kind -eq 'directory') { "(A;OICI;FA;;;$sid)" } else { "(A;;FA;;;$sid)" }
 $sddl = "D:P${ace}"
-$acl = Get-Acl -LiteralPath $args[0]
+$acl = Get-Acl -LiteralPath $path
 $acl.SetSecurityDescriptorSddlForm(
   $sddl,
   [System.Security.AccessControl.AccessControlSections]::Access
 )
-Set-Acl -LiteralPath $args[0] -AclObject $acl
+Set-Acl -LiteralPath $path -AclObject $acl
+}
 ''';
     final result = await Process.run('powershell.exe', [
       '-NoProfile',
