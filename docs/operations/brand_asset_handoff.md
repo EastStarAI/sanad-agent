@@ -50,7 +50,7 @@ The standard app icon uses the approved 80% width proportion. Adaptive and maska
 | Windows installer | `client/release/windows/sanad_client_installer.iss` | `SetupIconFile` consumes the canonical generated ICO, not a PNG | Installer smoke in SANAD-12 |
 | Linux package | `client/linux/assets/icons/hicolor/` and `client/linux/com.eaststarai.sanad.desktop` | `16`, `24`, `32`, `48`, `64`, `128`, `256`, `512`; CMake installs the desktop entry and icon tree | Linux package smoke in SANAD-12 |
 | Flutter Web / PWA | `client/web/icons/` and `client/web/manifest.json` | Standard `192/512`, separately padded maskable `192/512`, near-black background, blue theme | Browser install smoke in SANAD-12 |
-| Web favicons | `client/web/favicon-16.png`, `favicon-32.png`, `favicon.png`, `favicon.ico` | Explicit small-size links in `client/web/index.html` | Browser/cache smoke in SANAD-12 |
+| Web favicon | `client/web/favicon.svg` | The approved blue SVG mark is the only favicon linked by `client/web/index.html`; its content-derived query key invalidates previously cached legacy PNG/ICO selections | Browser/cache smoke in SANAD-12 |
 
 ## Community and Product Deliverables
 
