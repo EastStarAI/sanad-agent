@@ -101,8 +101,12 @@ The candidate workflow creates a private Draft and fails if the tag already owns
 is downloaded from the explicitly selected successful release-workflow run and
 verified against its GitHub build attestation. Server deployment then writes a
 versioned directory and changes a `current` symlink only after the transfer
-succeeds. Rollback switches that symlink to the last known good version; it
-does not rebuild or mutate a published release.
+succeeds. The Web handoff records its exact public commit, validates the Flutter
+shell, bootstrap, favicon, version marker, and hosted readability before
+activation, then verifies the public Production URL. A failed public probe
+restores the preceding selector automatically. Rollback switches that symlink
+to the last known good version; it does not rebuild or mutate a published
+release.
 
 Web assets use content-hashed Flutter output plus a small no-cache
 `version.json`. The server must route unknown application paths to

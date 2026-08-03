@@ -226,6 +226,10 @@ jobs:
           grep -F "if: needs.validate.outputs.validation_only != 'true'" .github/workflows/release.yml
           grep -F 'name: Create immutable Draft candidate' .github/workflows/release.yml
           grep -F 'name: Build and verify signed private IPA' .github/workflows/release.yml
+          grep -F 'fvm flutter test test/tool/app_web_startup_contract_test.dart' .github/workflows/release.yml
+          grep -F 'build/web/sanad-public-sha.txt' .github/workflows/release.yml
+          grep -F 'name: Activate, verify, and roll back Production Web on failure' .github/workflows/deploy.yml
+          grep -F 'https://app.sanad.eaststarai.com/sanad-public-sha.txt' .github/workflows/deploy.yml
           grep -F -- '--draft' .github/workflows/release.yml
           grep -F 'release-manifest-rc.json' release/release-contract.json
           grep -F 'appcast-rc.xml' release/release-contract.json
