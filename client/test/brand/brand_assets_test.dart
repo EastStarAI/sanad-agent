@@ -140,9 +140,19 @@ void main() {
     expect(_readPng('web/icons/Icon-maskable-512.png').getPixel(0, 0).r.toInt(), 10);
 
     final index = File('web/index.html').readAsStringSync();
-    expect(index, contains('favicon-16.png'));
-    expect(index, contains('favicon-32.png'));
-    expect(index, contains('favicon.ico'));
+    final favicon = File('web/favicon.svg').readAsStringSync().toLowerCase();
+    expect(
+      index,
+      contains(
+        '<link rel="icon" type="image/svg+xml" '
+        'href="favicon.svg?v=438686e5e0b0">',
+      ),
+    );
+    expect(favicon, contains('viewbox="0 0 256.15 166.43"'));
+    expect(favicon, contains('fill: #60a5fa'));
+    expect(index, isNot(contains('href="favicon-16.png"')));
+    expect(index, isNot(contains('href="favicon-32.png"')));
+    expect(index, isNot(contains('href="favicon.ico"')));
   });
 
   test('legacy splash asset name is absent from active client source', () {

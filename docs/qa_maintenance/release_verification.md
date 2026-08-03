@@ -41,7 +41,7 @@ rules remain fail-closed.
 | Client Windows x64 | installer and current fail-closed signing workflow definition | SANAD-12 unsigned-policy workflow adaptation, disclosure, SHA-256/manifest/provenance, Windows 11 clean installer/update/rollback and Defender/SmartScreen |
 | Client Android APK/AAB | signed local APK/AAB, package identity and keystore fingerprint | signed hosted build, clean install/upgrade |
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
-| Client Web | release build and version marker | protected atomic deployment, cache/SPA checks, rollback |
+| Client Web | release build, version marker, and native-platform startup guard | protected atomic deployment, cache/SPA checks, clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error, rollback |
 
 Windows 11 evidence follows the dedicated
 [Windows Release Clean-Machine Validation](windows_release_clean_machine.md)
@@ -81,6 +81,13 @@ Appcast output, source-managed no-mutation behavior, checksum rejection, client
 bootstrap selection, and existing daemon-controller behavior.
 
 Hosted validation begins with a `validation_only` full-matrix run from protected `main`. It requires no tag and must leave zero Drafts and Releases while retaining private Agent/Client artifacts, the signed IPA, manifest, checksums, SBOM, Appcast, and attestations. Later lifecycle validation additionally exercises interrupted downloads, wrong architecture, corrupted size and checksum, replacement failure, service restart, retained Sanad Home, repeated update requests, and rollback to the prior signed version.
+
+Flutter Web acceptance is runtime evidence, not compilation or HTTP evidence.
+The release build must start in a clean browser, create a non-empty Flutter
+view, and expose the expected application shell. Any uncaught `dart:io`
+platform operation, CSP refusal, CanvasKit/WebAssembly bootstrap failure, or
+blank view rejects the candidate even when the build, version marker, health
+endpoint, and root document all succeed.
 
 ## Installer coverage
 

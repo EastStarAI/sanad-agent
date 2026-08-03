@@ -28,59 +28,15 @@
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicons -->
-  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
-  <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
-  <link rel="icon" href="favicon.ico" sizes="any">
+  <link rel="icon" type="image/svg+xml" href="favicon.svg?v=438686e5e0b0">
 
   <title>Sanad</title>
   <link rel="manifest" href="manifest.json">
 </head>
 
 <body>
+  <script src="auth_popup.js"></script>
   <script src="flutter_bootstrap.js" async></script>
-
-  <!-- Auth Popup JavaScript Bridge -->
-  <script>
-    window.AuthPopup = (function() {
-      let popupWindow = null;
-
-      function openPopup(url, windowName, windowFeatures) {
-        const width = 500;
-        const height = 600;
-        const left = Math.max(0, (window.screen.width - width) / 2);
-        const top = Math.max(0, (window.screen.height - height) / 2);
-        const centeredFeatures = `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,status=no,location=no,resizable=yes,scrollbars=yes`;
-
-        popupWindow = window.open(url, windowName, centeredFeatures);
-        if (popupWindow) {
-          popupWindow.focus();
-        }
-        return popupWindow;
-      }
-
-      function isPopupClosed() {
-        try {
-          if (!popupWindow) return true;
-          return popupWindow.closed;
-        } catch (e) {
-          console.warn('Error checking popupWindow.closed (likely due to cross-origin redirect):', e);
-          return false;
-        }
-      }
-
-      function closePopup() {
-        if (popupWindow && !popupWindow.closed) {
-          popupWindow.close();
-        }
-      }
-
-      return {
-        openPopup: openPopup,
-        isPopupClosed: isPopupClosed,
-        closePopup: closePopup
-      };
-    })();
-  </script>
 </body>
 
 </html>
