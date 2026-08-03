@@ -174,16 +174,17 @@ Future<void> _restrictRuntimePath(String path, {bool directory = false}) async {
   if (whoami.exitCode != 0 || owner.isEmpty) {
     throw const SecureRuntimeFileException('owner_unavailable');
   }
-  final securityType = directory ? 'DirectorySecurity' : 'FileSecurity';
   final inheritance = directory ? 'ContainerInherit,ObjectInherit' : 'None';
   const script = r'''
 $ErrorActionPreference = 'Stop'
 $owner = New-Object System.Security.Principal.NTAccount($args[1])
-$acl = New-Object ("System.Security.AccessControl." + $args[2])
-$acl.SetOwner($owner)
+$acl = Get-Acl -LiteralPath $args[0]
 $acl.SetAccessRuleProtection($true, $false)
-$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($owner, 'FullControl', $args[3], 'None', 'Allow')
-$acl.AddAccessRule($rule)
+foreach ($existing in @($acl.Access)) {
+  $acl.RemoveAccessRuleSpecific($existing)
+}
+$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($owner, 'FullControl', $args[2], 'None', 'Allow')
+$acl.SetAccessRule($rule)
 Set-Acl -LiteralPath $args[0] -AclObject $acl
 ''';
   final result = await Process.run('powershell.exe', [
@@ -193,7 +194,6 @@ Set-Acl -LiteralPath $args[0] -AclObject $acl
     script,
     path,
     owner,
-    securityType,
     inheritance,
   ]);
   if (result.exitCode != 0) {

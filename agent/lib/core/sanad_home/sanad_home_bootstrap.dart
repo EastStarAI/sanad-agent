@@ -468,10 +468,8 @@ if ([IO.File]::Exists($args[1])) {
   static void _enforceOwnerOnlyProcessUmaskSync() {
     if (Platform.isWindows || _ownerOnlyUmaskInstalled) return;
     try {
-      final umask = DynamicLibrary.process().lookupFunction<
-        Uint32 Function(Uint32),
-        int Function(int)
-      >('umask');
+      final umask = DynamicLibrary.process()
+          .lookupFunction<Uint32 Function(Uint32), int Function(int)>('umask');
       umask(0x3f); // 0077: new files <= 0600 and directories <= 0700.
       _ownerOnlyUmaskInstalled = true;
     } on Object {
@@ -491,17 +489,18 @@ if ([IO.File]::Exists($args[1])) {
         'The current Windows identity could not be resolved.',
       );
     }
-    final securityType = isDirectory ? 'DirectorySecurity' : 'FileSecurity';
     final inheritance = isDirectory ? 'ContainerInherit,ObjectInherit' : 'None';
     const script = r'''
 $ErrorActionPreference = 'Stop'
 $path = $args[0]
 $owner = New-Object System.Security.Principal.NTAccount($args[1])
-$acl = New-Object ("System.Security.AccessControl." + $args[2])
-$acl.SetOwner($owner)
+$acl = Get-Acl -LiteralPath $path
 $acl.SetAccessRuleProtection($true, $false)
-$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($owner, 'FullControl', $args[3], 'None', 'Allow')
-$acl.AddAccessRule($rule)
+foreach ($existing in @($acl.Access)) {
+  $acl.RemoveAccessRuleSpecific($existing)
+}
+$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($owner, 'FullControl', $args[2], 'None', 'Allow')
+$acl.SetAccessRule($rule)
 Set-Acl -LiteralPath $path -AclObject $acl
 ''';
     final result = Process.runSync('powershell.exe', [
@@ -511,7 +510,6 @@ Set-Acl -LiteralPath $path -AclObject $acl
       script,
       path,
       owner,
-      securityType,
       inheritance,
     ]);
     if (result.exitCode != 0) {
