@@ -64,7 +64,7 @@ jobs:
           rsync -az --delete --delay-updates client/build/web/ \
             "$DEPLOY_USER@$DEPLOY_HOST:$incoming/"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; test -s '$incoming/index.html'; mv '$incoming' '$release'; ln -sfn '$release' /srv/sanad-dev/app/current"
+            "set -eu; find '$incoming' -type d -exec chmod a+rx {} +; find '$incoming' -type f -exec chmod a+r {} +; test -s '$incoming/index.html'; mv '$incoming' '$release'; ln -sfn '$release' /srv/sanad-dev/app/current"
 
       - name: Verify Development Web surface
         run: |
