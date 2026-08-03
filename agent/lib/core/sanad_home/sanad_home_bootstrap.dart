@@ -499,7 +499,14 @@ $acl.SetAccessRuleProtection($true, $false)
 foreach ($existing in @($acl.Access)) {
   $acl.RemoveAccessRuleSpecific($existing)
 }
-$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($owner, 'FullControl', $args[2], 'None', 'Allow')
+$inheritance = [System.Enum]::Parse([System.Security.AccessControl.InheritanceFlags], $args[2])
+$rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+  $owner,
+  [System.Security.AccessControl.FileSystemRights]::FullControl,
+  $inheritance,
+  [System.Security.AccessControl.PropagationFlags]::None,
+  [System.Security.AccessControl.AccessControlType]::Allow
+)
 $acl.SetAccessRule($rule)
 Set-Acl -LiteralPath $path -AclObject $acl
 ''';
