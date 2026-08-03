@@ -173,9 +173,12 @@ Future<void> _restrictRuntimePath(String path, {bool directory = false}) async {
 $ErrorActionPreference = 'Stop'
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $ace = if ($args[1] -eq 'directory') { "(A;OICI;FA;;;$sid)" } else { "(A;;FA;;;$sid)" }
-$sddl = "O:${sid}G:BUD:P${ace}"
+$sddl = "D:P${ace}"
 $acl = Get-Acl -LiteralPath $args[0]
-$acl.SetSecurityDescriptorSddlForm($sddl)
+$acl.SetSecurityDescriptorSddlForm(
+  $sddl,
+  [System.Security.AccessControl.AccessControlSections]::Access
+)
 Set-Acl -LiteralPath $args[0] -AclObject $acl
 ''';
   final result = await Process.run('powershell.exe', [
