@@ -516,7 +516,7 @@ class _SwitchableRuntimeController {
       await _startAgent(_agentDirectory);
       if (!await _waitForAgentHash(
         _currentWorkspaceHash,
-        timeout: const Duration(seconds: 30),
+        timeout: sanadDevAgentStartupTimeout,
       )) {
         throw StateError('Agent did not become healthy.');
       }

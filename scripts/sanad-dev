@@ -18,6 +18,10 @@ if [ -n "$WORKSPACE_ROOT" ] && [ -f "$WORKSPACE_ROOT/sanad-agent/scripts/sanad_d
 elif [ -n "$WORKSPACE_ROOT" ] && [ -f "$WORKSPACE_ROOT/scripts/sanad_dev.dart" ]; then
   PROJECT_DIR="$WORKSPACE_ROOT"
 fi
+RESOLVED_WRAPPER="$PROJECT_DIR/scripts/sanad-dev"
+if [ "$TARGET_FILE" != "$RESOLVED_WRAPPER" ] && [ -x "$RESOLVED_WRAPPER" ]; then
+  exec "$RESOLVED_WRAPPER" "$@"
+fi
 SCRIPT_DIR="$PROJECT_DIR/scripts"
 
 stage() { printf '%-38s %s\n' "$1" "$2"; }
@@ -126,12 +130,18 @@ _install_flutter() {
   "$FVM_BIN" install "$1"
 }
 
+_flutter_ready() {
+  cd "$PROJECT_DIR"
+  "$FVM_BIN" spawn "$1" --version >/dev/null 2>&1
+}
+
 ensure_flutter() {
   local flutter_pin
   flutter_pin="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PROJECT_DIR/.fvmrc")"
   [ -n "$flutter_pin" ] || { echo 'Could not read the pinned Flutter version.' >&2; return 1; }
-  [ -x "$PROJECT_DIR/.fvm/flutter_sdk/bin/flutter" ] && return
+  _flutter_ready "$flutter_pin" && return
   run_stage "Installing Flutter $flutter_pin" _install_flutter "$flutter_pin"
+  _flutter_ready "$flutter_pin" || { echo "Flutter $flutter_pin is unavailable after installation." >&2; return 1; }
 }
 
 _write_shim() {
@@ -194,7 +204,9 @@ run_setup() {
 require_runtime_cli() {
   command -v fvm >/dev/null 2>&1 || { echo 'FVM is not installed. Run: sanad-dev install' >&2; return 1; }
   FVM_BIN="$(command -v fvm)"
-  [ -x "$PROJECT_DIR/.fvm/flutter_sdk/bin/flutter" ] || { echo 'Pinned Flutter is not installed. Run: sanad-dev install' >&2; return 1; }
+  local flutter_pin
+  flutter_pin="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PROJECT_DIR/.fvmrc")"
+  [ -n "$flutter_pin" ] && _flutter_ready "$flutter_pin" || { echo 'Pinned Flutter is not installed. Run: sanad-dev install' >&2; return 1; }
   [ -f "$PROJECT_DIR/client/.dart_tool/package_config.json" ] || { echo 'Project packages are not ready. Run: sanad-dev setup' >&2; return 1; }
 }
 

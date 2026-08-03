@@ -36,7 +36,12 @@ Future<void> secureRuntimeAtomicWrite(
     await handle.close();
     handle = null;
     await _replaceRuntimeFile(temporary, destination);
-    await _restrictRuntimePath(destination.path);
+    // POSIX rename preserves the already-restricted temporary inode. Avoid a
+    // second chmod after publication because a waiting consumer may delete the
+    // completed request immediately after the atomic rename.
+    if (Platform.isWindows) {
+      await _restrictRuntimePath(destination.path);
+    }
   } on SecureRuntimeFileException {
     rethrow;
   } on Object {

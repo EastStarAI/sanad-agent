@@ -2,7 +2,7 @@
 title: "Task 63: sanad-dev Component Runtime Controls"
 description: "تشغيل الوكيل والواجهات بالتوازي والتحكم المستقل حسب المكوّن والجهاز مع إيقاف وكيل قابل للاستكمال وإلغاء صريح عبر --force."
 status: "in_progress"
-current_gate: "C4 — live component and resume validation pending"
+current_gate: "C3 — live resumable-work and force-cancellation validation pending"
 priority: "high"
 depends_on: "Plan 30 durable runtime recovery; Task 50 run cancellation; sanad-dev managed runtime ownership"
 file_budget: 38
@@ -77,8 +77,8 @@ sanad-dev stop [all|agent|client] [-d|--device <id>] [--force]
 
 ### C1 Exit
 
-- [ ] Agent وClient يبدآن بالتوازي وتبقى ملكية واحدة قابلة للتحقق.
-- [ ] كل transition مستقل لا يمس process غير مستهدف.
+- [x] Agent وClient يبدآن بالتوازي وتبقى ملكية واحدة قابلة للتحقق.
+- [x] كل transition مستقل لا يمس process غير مستهدف.
 
 ## Gate C2 — Device-targeted clients and terminal log surfaces
 
@@ -95,8 +95,8 @@ sanad-dev stop [all|agent|client] [-d|--device <id>] [--force]
 
 ### C2 Exit
 
-- [ ] تشغيل وإيقاف macOS Client محددة لا يؤثر في Agent أو Client أخرى.
-- [ ] سجلا Agent وClient مرئيان بالتزامن دون تسلسل startup مصطنع.
+- [x] تشغيل وإيقاف macOS Client محددة لا يؤثر في Agent أو Client أخرى.
+- [x] سجلا Agent وClient مرئيان بالتزامن دون تسلسل startup مصطنع.
 
 ## Gate C3 — Resumable Agent pause and explicit force cancellation
 
@@ -135,7 +135,7 @@ sanad-dev stop [all|agent|client] [-d|--device <id>] [--force]
 
 - [ ] أوامر run/stop المستقلة تعمل من primary checkout وlinked worktree.
 - [x] device targeting exact وfail-closed عند ambiguity.
-- [ ] لا component exit يقتل sibling بلا طلب صريح — يحتاج smoke حي بعد تحميل launcher الجديدة.
+- [x] لا component exit يقتل sibling بلا طلب صريح.
 - [ ] normal Agent stop قابل للاستكمال وforce cancellation نهائية — يحتاج اختبار الاستكمال الحي عبر جلسة جديدة.
 - [x] runtime ownership، source switch، restart/reload، status، وlogs لم تنتكس في الاختبارات الآلية.
 - [x] التغيير داخل file budget أو توثيق سبب الزيادة قبل تجاوزها.
@@ -197,4 +197,13 @@ Files changed: component parser/control/supervisor/log terminal, daemon pause/ca
 Verification: script analyzer passed; client analyzer passed; Agent analyzer passed; 77 script tests passed; 73 focused Agent interface/recovery tests passed; full client suite passed (783); full Agent suite passed with runtime gateway variables removed (950, 2 skipped); temporary isolated daemon `/shutdown?mode=pause` returned safe and its supervisor exited; Graphify updated
 Findings: live `stop client -d macos` against the pre-change launcher timed out without mutation; the stale request was removed and timeout cleanup was added/tested. Loading the new component supervisor requires ending that old launcher, which would interrupt the current Agent session. Concurrent unrelated worktree edits were preserved.
 Next gate: from a fresh session, start the launcher from this source and run the live matrix: stop/run client, stop/run Agent with a resumable active turn, then force-cancellation smoke.
+```
+
+```text
+Date: 2026-08-03
+Gate/status: C1/C2 live component matrix complete; C3 resumable-work and force-cancellation validation remains
+Files changed: wrapper worktree redispatch, silent Flutter readiness, active-Home ownership resolution, cold-start polling/control timeout, POSIX atomic control publication, bounded interactive Client history, focused regressions and docs
+Verification: `sanad-dev run --home user` started one managed Agent/Client group; bounded Agent and Client logs succeeded; `stop client` retained Agent and `run client` rejoined it; `stop agent` retained Client and `run agent --home user` succeeded after a roughly two-minute cold start; Client `r`/`R` performed reload/restart; Agent `r`/`R` each performed supervised restart; script and Client analyzers passed; all 111 script tests passed with one platform skip; full Client fast suite passed with 898 tests and one platform skip; Graphify updated
+Findings: the previous 30-second missing-Agent start timeout raced the requester's cleanup, and a redundant POSIX chmod after atomic rename could fail after immediate consumer deletion, terminating the supervisor and its Client. Both boundaries are now time-aligned and race-safe without relaxing owner-only permissions.
+Next gate: run the remaining active-work pause/resume and `--force` cancellation scenarios before marking Task 63 complete.
 ```

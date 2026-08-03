@@ -61,6 +61,7 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Journal crash fixture exits nonzero on every host | A hermetic platform-native fixture avoids package-runner exit-code differences and captures stdout, stderr, and crash-like stack output after exit. |
 | Windows bootstrap uses an isolated user root in CI | Its fake command surface includes deterministic file hashing, so redirected user paths cannot depend on ambient PowerShell module discovery. |
 | Unchanged second setup | Ready FVM, Flutter, shim, and dependency stages remain silent when SDK, lockfile fingerprint, and package configs agree. |
+| A wrapper from another checkout is invoked inside the target Git worktree | It redispatches to the target worktree wrapper before bootstrap or Dart execution; wrapper and Runtime CLI sources never split across checkouts. |
 | Flutter pin or any of the three lockfiles changes | The appropriate install/setup stage runs before runtime launch. |
 | Existing shim belongs to another checkout | Explicit install/setup fail without replacement unless `--force`; run accepts the functional dispatcher without replacing it, preserving linked-worktree use. |
 | No arguments or help | Static help is displayed, including `sanad-dev run` as the official source command, with no SDK, package, shim, or runtime mutation. |
@@ -74,6 +75,10 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Manual runtime logs | Existing HTTP/VM fallback works and explicitly disclaims unavailable process/build history. |
 | Interactive `run all` | Current terminal mirrors Agent and accepts `r`/`R` for supervised restart; one independent terminal opens for each Client and accepts Flutter-style `r` reload / `R` restart. |
 | Interactive `run client`, including adding Client to an Agent-only managed runtime | Client output remains in the invoking terminal; no second terminal opens, and `r`/`R` are routed to the exact launcher-owned Flutter process. |
+| `run client` opens a retained journal | The interactive surface prints at most the latest 50 historical lines before following new output; explicit `logs -n` remains caller-controlled. |
+| Agent-only or Client-only managed runtime uses `--home user` | Status, logs, stop, and the missing-component run resolve the active Home from Agent/Client launch identity and retain the same launcher lease. |
+| Agent cold start exceeds 30 seconds while a Client remains active | Component start waits through the bounded three-minute startup window; the request succeeds and the Client reconnects without launcher exit. |
+| A component requester deletes a completed POSIX control file immediately after atomic publication | The write remains successful because the published inode was already restricted to `0600`; the runtime supervisor remains active. |
 | Add or close a second Client through an all-component request | A second Client terminal opens; closing that Client closes only its terminal and does not affect Agent or siblings. |
 | macOS, Linux, and Windows terminal quoting | Adapter arguments preserve paths with spaces/quotes and never transfer child ownership. |
 | Headless execution or terminal launch failure | Runtime success/ownership is unchanged and a bounded copyable log command is printed. |

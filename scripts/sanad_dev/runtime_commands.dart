@@ -39,6 +39,17 @@ class RuntimeOwnershipAssessment {
   bool get isManaged => classification == RuntimeOwnershipClass.managed;
 }
 
+String resolveActiveSanadHome(
+  SanadDevRuntime runtime,
+  RuntimeProcessState state,
+) =>
+    state.relevantClients
+        .map((client) => client.launchProfile?.define('SANAD_HOME'))
+        .whereType<String>()
+        .firstOrNull ??
+    state.agent?.sanadHome ??
+    runtime.sanadHome;
+
 Future<RuntimeOwnershipAssessment> assessRuntimeOwnership({
   required SanadDevRuntime runtime,
   required RuntimeProcessState state,
@@ -59,7 +70,7 @@ Future<RuntimeOwnershipAssessment> assessRuntimeOwnership({
       state: state,
     );
   }
-  final activeHome = sanadHome ?? runtime.sanadHome;
+  final activeHome = sanadHome ?? resolveActiveSanadHome(runtime, state);
   RuntimeLauncherRecord? record;
   try {
     record = await readRuntimeLauncherRecord(
@@ -372,12 +383,7 @@ Future<void> handleRun({
   if (processState.agent != null ||
       processState.relevantClients.isNotEmpty ||
       processState.agentAmbiguous) {
-    final activeHome =
-        processState.relevantClients
-            .map((client) => client.launchProfile?.define('SANAD_HOME'))
-            .whereType<String>()
-            .firstOrNull ??
-        runtime.sanadHome;
+    final activeHome = resolveActiveSanadHome(runtime, processState);
     final ownership = await assessRuntimeOwnership(
       runtime: runtime,
       state: processState,
@@ -414,7 +420,7 @@ Future<void> handleRun({
       if (target == SanadDevComponentTarget.client && requestedVmPort != null) {
         await handleClientLogs(
           true,
-          null,
+          _defaultInteractiveLogTailLines,
           requestedVmPort,
           waitForJournal: true,
           sanadHomePath: ownership.record!.sanadHome,
@@ -762,12 +768,7 @@ Future<void> handleRuntimeStatus({int? portOverride}) async {
   final matchingAgent = processState.agent;
   final runtimeClients = processState.pairedClients;
   final visibleClients = processState.relevantClients;
-  final activeSanadHome =
-      visibleClients
-          .map((client) => client.launchProfile?.define('SANAD_HOME'))
-          .whereType<String>()
-          .firstOrNull ??
-      runtime.sanadHome;
+  final activeSanadHome = resolveActiveSanadHome(runtime, processState);
   final ownership = await assessRuntimeOwnership(
     runtime: runtime,
     state: processState,
@@ -909,7 +910,7 @@ Future<bool> requestManagedComponentAction(
   int? vmServicePort,
   bool force = false,
   bool openClientTerminal = true,
-  Duration timeout = const Duration(seconds: 120),
+  Duration timeout = sanadDevComponentControlTimeout,
 }) async {
   final path = runtimeComponentControlPath(record.sanadHome, record.agentPort);
   final existing = await readRuntimeComponentControl(path);
@@ -978,12 +979,7 @@ Future<void> handleRuntimeStop({
   final ownership = await assessRuntimeOwnership(
     runtime: runtime,
     state: processState,
-    sanadHome:
-        processState.ownedClients
-            .map((client) => client.launchProfile?.define('SANAD_HOME'))
-            .whereType<String>()
-            .firstOrNull ??
-        runtime.sanadHome,
+    sanadHome: resolveActiveSanadHome(runtime, processState),
     processRunning: processRunning,
   );
   if (!ownership.isManaged) {
@@ -1048,12 +1044,7 @@ Future<void> handleRuntimeDoctor({
     activeClients: clients,
     runtime: runtime,
   );
-  final activeHome =
-      state.relevantClients
-          .map((client) => client.launchProfile?.define('SANAD_HOME'))
-          .whereType<String>()
-          .firstOrNull ??
-      runtime.sanadHome;
+  final activeHome = resolveActiveSanadHome(runtime, state);
   final ownership = await assessRuntimeOwnership(
     runtime: runtime,
     state: state,
@@ -1258,12 +1249,7 @@ Future<void> handleRuntimeTakeover({
     activeClients: clients,
     runtime: runtime,
   );
-  final activeHome =
-      state.ownedClients
-          .map((client) => client.launchProfile?.define('SANAD_HOME'))
-          .whereType<String>()
-          .firstOrNull ??
-      runtime.sanadHome;
+  final activeHome = resolveActiveSanadHome(runtime, state);
   final ownership = await assessRuntimeOwnership(
     runtime: runtime,
     state: state,
@@ -1621,29 +1607,30 @@ Future<bool> _waitForAgent(
 ) async {
   final client = HttpClient();
   try {
-    for (var attempt = 0; attempt < 120; attempt++) {
-      try {
-        final request = await client.getUrl(
-          Uri.parse('http://127.0.0.1:${runtime.agentPort}/health'),
-        );
-        await authorizeLocalGatewayRequest(request, runtime.sanadHome);
-        final response = await request.close().timeout(
-          const Duration(milliseconds: 500),
-        );
-        final body = await response.transform(utf8.decoder).join();
-        if (response.statusCode == 200) {
-          final data = jsonDecode(body);
-          if (data is Map && data['status'] == 'ok') {
-            final currentWorkspaceHash = runtime.worktreeId.split('-').last;
-            if (data['workspace_hash'] == currentWorkspaceHash) {
-              return true;
+    return await waitForSanadDevStartupProbe(
+      probe: () async {
+        try {
+          final request = await client.getUrl(
+            Uri.parse('http://127.0.0.1:${runtime.agentPort}/health'),
+          );
+          await authorizeLocalGatewayRequest(request, runtime.sanadHome);
+          final response = await request.close().timeout(
+            const Duration(milliseconds: 500),
+          );
+          final body = await response.transform(utf8.decoder).join();
+          if (response.statusCode == 200) {
+            final data = jsonDecode(body);
+            if (data is Map && data['status'] == 'ok') {
+              final currentWorkspaceHash = runtime.worktreeId.split('-').last;
+              if (data['workspace_hash'] == currentWorkspaceHash) {
+                return true;
+              }
             }
           }
-        }
-      } catch (_) {}
-      await Future<void>.delayed(const Duration(milliseconds: 250));
-    }
-    return false;
+        } catch (_) {}
+        return false;
+      },
+    );
   } finally {
     client.close(force: true);
   }

@@ -113,6 +113,26 @@ void main() {
     expect(state.agent, same(workspaceAgent));
   });
 
+  test('Agent-only runtime keeps its discovered Sanad Home', () {
+    const userHome = '/users/developer/.sanad';
+    final state = sanad_dev.RuntimeProcessState(
+      agent: sanad_dev.AgentInstance(
+        58092,
+        workspaceHash,
+        'default',
+        sanadHome: userHome,
+      ),
+      ownedClients: const [],
+      crossOwnedClients: const [],
+      ambiguousClients: const [],
+    );
+
+    expect(
+      sanad_dev.resolveActiveSanadHome(linkedRuntime, state),
+      userHome,
+    );
+  });
+
   test('explicit diagnostic port remains an explicit selector', () {
     final workspaceAgent = sanad_dev.AgentInstance(
       58092,

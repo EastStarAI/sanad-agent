@@ -144,6 +144,12 @@ dependent stage and runtime launch. Explicit install/setup refuse silent shim
 replacement; run accepts an existing functional dispatcher so linked worktrees
 do not contend for the user command.
 
+The wrapper resolves the invoking Git worktree before entering Dart. If a
+user-scoped shim or wrapper from another checkout receives the command, it
+redispatches once to the invoking worktree's wrapper. This keeps both bootstrap
+and runtime CLI source on one checkout instead of combining a foreign wrapper
+with the caller's Dart files.
+
 The Runtime CLI remains `scripts/sanad_dev.dart`. Its client profile default is
 `client/config/prod.json`, with local and Cloud enabled for every checkout type.
 The development profile and endpoint overrides are explicit internal integration
@@ -177,6 +183,10 @@ Client launch profile rather than assuming the caller's candidate runtime port. 
 runtime has no complete process journal; its Agent HTTP and Client VM logger
 fallbacks state that boot/build/process output may be unavailable.
 
+When `run client` joins an Agent-only runtime, its interactive surface begins
+with the last 50 retained lines and then follows new output. Explicit `logs`
+continues to honor the caller's `-n` choice or full retained history.
+
 ## Terminal ownership
 
 For `run all`, Agent output remains in the launcher terminal and every Client
@@ -188,6 +198,13 @@ closes only that surface. Client terminals route `r` as hot reload and `R` as ho
 restart through the owning launcher. Agent terminals route either `r` or `R` to
 the supervised daemon restart endpoint. These terminals never acquire process
 ownership: the launcher remains the sole stdin/process owner.
+
+Component control waits longer than the bounded three-minute Agent cold-start
+window. A slow Agent start therefore cannot time out the requesting command and
+cannot terminate an already-running Client. Completed control files are
+published atomically with owner-only permissions; on POSIX the restricted
+temporary inode's mode survives rename, so an immediate consumer delete cannot
+race a redundant post-publication permission change.
 
 Terminal capability is platform-adapted: macOS Terminal via AppleScript, a
 detected supported Linux terminal, and Windows Terminal or PowerShell with

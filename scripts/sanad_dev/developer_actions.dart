@@ -1,5 +1,7 @@
 part of '../sanad_dev.dart';
 
+const _defaultInteractiveLogTailLines = 50;
+
 Future<bool> _componentJournalAvailable({
   required String sanadHome,
   required int agentPort,
@@ -587,16 +589,20 @@ Future<void> handleAgentLogs(
     callerDirectory: _callerDirectory,
     sanadHomeOverride: sanadHomePath,
   );
-  final agentPort = portOverride ?? runtime.agentPort;
+  final selectedInstance = sanadHomePath == null
+      ? await selectAgentInstance(portOverride)
+      : null;
+  final activeHome = selectedInstance?.sanadHome ?? runtime.sanadHome;
+  final agentPort = portOverride ?? selectedInstance?.port ?? runtime.agentPort;
   const key = 'agent';
   if (await _componentJournalAvailable(
-    sanadHome: runtime.sanadHome,
+    sanadHome: activeHome,
     agentPort: agentPort,
     key: key,
     wait: waitForInstance,
   )) {
     await _handleComponentJournalLogs(
-      sanadHome: runtime.sanadHome,
+      sanadHome: activeHome,
       agentPort: agentPort,
       key: key,
       follow: follow,
@@ -606,7 +612,7 @@ Future<void> handleAgentLogs(
       onInteractiveKey: (_) => handleAgentRestart(agentPort),
       componentIsActive: () async {
         final record = await _readRuntimeLauncherRecordSafely(
-          runtime.sanadHome,
+          activeHome,
           agentPort,
         );
         return record != null && record.status != 'client-only';
@@ -615,7 +621,7 @@ Future<void> handleAgentLogs(
     return;
   }
 
-  AgentInstance? instance;
+  AgentInstance? instance = selectedInstance;
   if (waitForInstance && portOverride != null) {
     final workspaceHash = runtime.worktreeId.split('-').last;
     final deadline = DateTime.now().add(const Duration(seconds: 100));
@@ -630,14 +636,11 @@ Future<void> handleAgentLogs(
           )
           .firstOrNull;
       if (instance != null) break;
-      final record = await readRuntimeLauncherRecord(
-        runtime.sanadHome,
-        portOverride,
-      );
+      final record = await readRuntimeLauncherRecord(activeHome, portOverride);
       if (record == null || record.status == 'client-only') break;
       await Future<void>.delayed(const Duration(milliseconds: 250));
     }
-  } else {
+  } else if (instance == null) {
     instance = await selectAgentInstance(portOverride);
   }
   if (instance == null) {
@@ -692,7 +695,7 @@ Future<void> handleAgentLogs(
     RuntimeLauncherRecord? initialRecord;
     try {
       initialRecord = await readRuntimeLauncherRecord(
-        runtime.sanadHome,
+        instance.sanadHome ?? activeHome,
         instance.port,
       );
     } on Object {}
@@ -815,12 +818,7 @@ Future<void> handleAgentRestart(
     runtime: runtime,
     requestedAgentPort: instance.port,
   );
-  final activeHome =
-      processState.ownedClients
-          .map((client) => client.launchProfile?.define('SANAD_HOME'))
-          .whereType<String>()
-          .firstOrNull ??
-      runtime.sanadHome;
+  final activeHome = resolveActiveSanadHome(runtime, processState);
   final ownership = await assessRuntimeOwnership(
     runtime: runtime,
     state: processState,

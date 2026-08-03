@@ -47,11 +47,12 @@ void main() {
 
     if (Platform.isWindows) {
       await File('${fakeBin.path}${Platform.pathSeparator}fvm.cmd').writeAsString('''@echo off
- echo %CD%^|%*>>"${calls.path}"
- if "%1"=="install" (
-   mkdir .fvm\\flutter_sdk\\bin 2>nul
-   type nul > .fvm\\flutter_sdk\\bin\\flutter.bat
+ if "%1"=="spawn" (
+   if exist .fake-fvm-installed exit /b 0
+   exit /b 1
  )
+ echo %CD%^|%*>>"${calls.path}"
+ if "%1"=="install" type nul > .fake-fvm-installed
  if "%1"=="dart" if "%2"=="pub" (
    mkdir .dart_tool 2>nul
    echo {}> .dart_tool\\package_config.json
@@ -72,11 +73,15 @@ param([string] $Algorithm, [string] $Path)
       final fakeFvm = File('${fakeBin.path}${Platform.pathSeparator}fvm');
       await fakeFvm.writeAsString('''#!/usr/bin/env bash
 set -e
+if [ "\${1:-}" = spawn ]; then
+  [ -f .fake-fvm-installed ]
+  exit
+fi
 printf '%s|%s\\n' "\$PWD" "\$*" >> '${calls.path}'
 printf 'live:%s:%s\\n' "\$PWD" "\$*"
 if [ "\${FAIL_STAGE:-}" = "\${1:-}-\${2:-}" ]; then exit 42; fi
 if [ "\${1:-}" = install ]; then
-  mkdir -p .fvm/flutter_sdk/bin && printf '#!/bin/sh' > .fvm/flutter_sdk/bin/flutter && chmod +x .fvm/flutter_sdk/bin/flutter
+  touch .fake-fvm-installed
 elif [ "\${1:-}" = dart ] && [ "\${2:-}" = pub ]; then
   mkdir -p .dart_tool && printf '{}' > .dart_tool/package_config.json
 elif [ "\${1:-}" = flutter ] && [ "\${2:-}" = pub ]; then
@@ -140,6 +145,7 @@ fi
       final result = await runBootstrap(['setup']);
 
       expect(result.exitCode, 0);
+      expect(result.stdout, isNot(contains('Installing Flutter')));
       expect(result.stdout, isNot(contains('Resolving package dependencies')));
       final invocations = await calls.readAsLines();
       expect(invocations, isEmpty);
@@ -175,6 +181,44 @@ fi
       expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
       expect(await shim.target(), foreign);
       expect((await calls.readAsLines()).last, contains('sanad_dev.dart run'));
+    });
+
+    test('foreign wrapper redispatches to the caller Git worktree', () async {
+      final gitInit = await Process.run('git', ['init', '--quiet'], workingDirectory: fixture.path);
+      expect(gitInit.exitCode, 0, reason: '${gitInit.stderr}');
+      final foreign = await Directory.systemTemp.createTemp(
+        'sanad-bootstrap-foreign-',
+      );
+      addTearDown(() => foreign.delete(recursive: true));
+      final foreignScripts = Directory(
+        '${foreign.path}${Platform.pathSeparator}scripts',
+      );
+      await foreignScripts.create(recursive: true);
+      final foreignWrapper = File(
+        '${foreignScripts.path}${Platform.pathSeparator}sanad-dev',
+      );
+      await foreignWrapper.writeAsString(await File('../scripts/sanad-dev').readAsString());
+      await File(
+        '${foreignScripts.path}${Platform.pathSeparator}sanad_dev.dart',
+      ).writeAsString('');
+      await Process.run('chmod', ['+x', foreignWrapper.path]);
+
+      final result = await Process.run(
+        foreignWrapper.path,
+        const ['run'],
+        workingDirectory: fixture.path,
+        environment: {
+          'PATH': '${fakeBin.path}:${Platform.environment['PATH']}',
+          'HOME': fixture.path,
+          'XDG_BIN_HOME': userBin.path,
+        },
+      );
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      expect(
+        (await calls.readAsLines()).last,
+        contains('${fixture.path}${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad_dev.dart run'),
+      );
     });
 
     test('checkout collision fails unless force is explicit', () async {
