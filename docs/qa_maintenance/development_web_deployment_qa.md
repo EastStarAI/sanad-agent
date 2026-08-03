@@ -8,6 +8,7 @@
 | Build profile | Flutter Web uses `client/config/dev.json` |
 | Analysis | Flutter analyzer completes without errors before build |
 | Build output | `build/web/index.html` exists and references `flutter_bootstrap.js` |
+| Hosted permissions | Build directories are world-readable/executable and files are world-readable before transfer |
 | Deployment Environment | GitHub Environment is `web-development` |
 | Release identity | Server release directory is addressed by the exact public repository commit SHA |
 | Production isolation | Workflow contains no Production Web path or selector |

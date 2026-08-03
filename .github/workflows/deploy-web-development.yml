@@ -38,6 +38,8 @@ jobs:
             --dart-define-from-file=config/dev.json
           test -s build/web/index.html
           grep -Fq 'flutter_bootstrap.js' build/web/index.html
+          find build/web -type d -exec chmod 755 {} +
+          find build/web -type f -exec chmod 644 {} +
 
       - name: Configure pinned SSH host
         env:
