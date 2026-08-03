@@ -350,6 +350,9 @@ All user-facing restart entry points share this checkpoint-preserving path. `dae
 
 ### 5.2. Startup Recovery Flow
 When the daemon restarts, `SessionRunOrchestrator.restorePersistedState()`:
+0. Selects only `queued`, `running`, `waiting`, `blocked`, and `resuming`
+   durable work. Historical `completed` and `cancelled` payload/checkpoint JSON
+   remains queryable but is never read or decoded by startup recovery.
 1. Re-hydrates any active `waiting` or `blocked` notices into the `RuntimeRecoveryService`.
 2. Restores waiting timers using remaining time from `resume_at` to avoid resetting cooldown duration.
 3. Reconnects restored `waiting` notices to a real auto-resume callback. When the timer expires (or when `resume_at` is already in the past), the runtime first claims the suspended work item, then emits the transient `resuming` → `cleared` transition and routes control back through `SessionRunOrchestrator.resumeSuspended()` exactly once. If the owner is missing or resume validation fails, the runtime must restore a controllable `blocked` notice instead of leaving the session silent.
