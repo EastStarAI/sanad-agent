@@ -13,11 +13,16 @@ git_common_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/n
   exit 2
 }
 primary_root="$(dirname "$git_common_dir")"
+if [[ "$(git -C "$primary_root" rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ]]; then
+  primary_root="$(git rev-parse --show-toplevel)"
+fi
 
 if [[ -d "$primary_root/sanad-agent/.agents/skills" ]]; then
   sanad_root="$primary_root/sanad-agent"
 elif [[ -d "$primary_root/.agents/skills" ]]; then
   sanad_root="$primary_root"
+elif [[ -d "$(git rev-parse --show-toplevel 2>/dev/null)/.agents/skills" ]]; then
+  sanad_root="$(git rev-parse --show-toplevel)"
 else
   echo "status=blocked"
   echo "reason=sanad_root_not_found"
