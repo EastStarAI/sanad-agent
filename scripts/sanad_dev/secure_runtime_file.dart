@@ -175,20 +175,23 @@ Future<void> _restrictRuntimePath(String path, {bool directory = false}) async {
 $ErrorActionPreference = 'Stop'
 $path = $env:SANAD_SECURE_PATH
 $kind = $env:SANAD_SECURE_KIND
-if ([String]::IsNullOrWhiteSpace($path)) { exit 40 }
-try { $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { exit 41 }
-try {
-  $ace = if ($kind -eq 'directory') { "(A;OICI;FA;;;$sid)" } else { "(A;;FA;;;$sid)" }
-  $sddl = "D:P${ace}"
-} catch { exit 42 }
-try { $acl = Get-Acl -LiteralPath $path } catch { exit 43 }
-try {
-  $acl.SetSecurityDescriptorSddlForm(
-    $sddl,
-    [System.Security.AccessControl.AccessControlSections]::Access
-  )
-} catch { exit 44 }
-try { Set-Acl -LiteralPath $path -AclObject $acl } catch { exit 45 }
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$ace = if ($kind -eq 'directory') { "(A;OICI;FA;;;$sid)" } else { "(A;;FA;;;$sid)" }
+$sddl = "D:P${ace}"
+$acl = if ($kind -eq 'directory') {
+  [IO.Directory]::GetAccessControl($path)
+} else {
+  [IO.File]::GetAccessControl($path)
+}
+$acl.SetSecurityDescriptorSddlForm(
+  $sddl,
+  [System.Security.AccessControl.AccessControlSections]::Access
+)
+if ($kind -eq 'directory') {
+  [IO.Directory]::SetAccessControl($path, $acl)
+} else {
+  [IO.File]::SetAccessControl($path, $acl)
+}
 ''';
   final result = await Process.run(
     'powershell.exe',
@@ -199,6 +202,6 @@ try { Set-Acl -LiteralPath $path -AclObject $acl } catch { exit 45 }
     },
   );
   if (result.exitCode != 0) {
-    throw SecureRuntimeFileException('ownership_failed_${result.exitCode}');
+    throw const SecureRuntimeFileException('ownership_failed');
   }
 }

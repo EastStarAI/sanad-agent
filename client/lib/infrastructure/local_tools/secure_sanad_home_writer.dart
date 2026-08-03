@@ -152,12 +152,20 @@ $kind = $env:SANAD_SECURE_KIND
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $ace = if ($kind -eq 'directory') { "(A;OICI;FA;;;$sid)" } else { "(A;;FA;;;$sid)" }
 $sddl = "D:P${ace}"
-$acl = Get-Acl -LiteralPath $path
+$acl = if ($kind -eq 'directory') {
+  [IO.Directory]::GetAccessControl($path)
+} else {
+  [IO.File]::GetAccessControl($path)
+}
 $acl.SetSecurityDescriptorSddlForm(
   $sddl,
   [System.Security.AccessControl.AccessControlSections]::Access
 )
-Set-Acl -LiteralPath $path -AclObject $acl
+if ($kind -eq 'directory') {
+  [IO.Directory]::SetAccessControl($path, $acl)
+} else {
+  [IO.File]::SetAccessControl($path, $acl)
+}
 ''';
     final result = await Process.run(
       'powershell.exe',
