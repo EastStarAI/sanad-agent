@@ -381,9 +381,17 @@ class PersistedRuntimeStateRepository {
   List<SessionWorkItem> findAllWorkItems(String sessionId) =>
       _workItems.findAllWorkItems(sessionId);
 
+  /// Finds only queued and active work relevant to startup reconstruction.
+  List<SessionWorkItem> findRestorableWorkItems(String sessionId) =>
+      _workItems.findRestorableWorkItems(sessionId);
+
   /// Finds all distinct session IDs that have work items.
   List<String> findAllSessionIdsWithWorkItems() =>
       _workItems.findAllSessionIdsWithWorkItems();
+
+  /// Finds sessions with queued or active work relevant to startup recovery.
+  List<String> findSessionIdsWithRestorableWorkItems() =>
+      _workItems.findSessionIdsWithRestorableWorkItems();
 
   /// Cancels all active and queued work items for a session.
   void cancelAllActiveAndQueuedWorkItems(String sessionId) =>

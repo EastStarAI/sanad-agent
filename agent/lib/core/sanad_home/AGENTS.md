@@ -41,8 +41,8 @@ no writer outside this helper reaches the filesystem.
 
 ## Tests
 - `agent/test/core/sanad_home/sanad_home_bootstrap_test.dart` — atomic
-  write, `0600` re-assertion, `..`/symlink rejection, migration
-  idempotency, overlapping roots, and SQLite sidecar permissions. Native
+  write, `0600` re-assertion, `..`/symlink rejection, root preparation
+  without recursive scans, overlapping roots, and SQLite sidecar permissions. Native
   Windows ACL execution remains platform-specific release evidence.
 - `agent/test/core/sanad_home/loopback_policy_test.dart` — `0.0.0.0`
   rejection, `127.0.0.1` and `::1` acceptance, `localhost` acceptance,

@@ -84,6 +84,23 @@ void main() {
       );
     });
 
+    test('supervisor parent defers Home preparation to its child', () {
+      expect(
+        shouldDeferSanadHomeBootstrapToChild(arguments: const ['daemon']),
+        isTrue,
+      );
+      expect(
+        shouldDeferSanadHomeBootstrapToChild(
+          arguments: const ['daemon', '--child-process'],
+        ),
+        isFalse,
+      );
+      expect(
+        shouldDeferSanadHomeBootstrapToChild(arguments: const ['setup']),
+        isFalse,
+      );
+    });
+
     test('builds source and compiled child commands', () {
       final source = supervisedChildCommand(
         const ['daemon'],

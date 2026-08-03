@@ -1,6 +1,6 @@
 ---
 title: "Local Gateway and Sanad Home Security QA"
-description: "Regression matrix for authenticated loopback transport, secure local files, migration, and isolated runtimes."
+description: "Regression matrix for authenticated loopback transport, secure local files, startup preparation, and isolated runtimes."
 ---
 
 # Local Gateway and Sanad Home Security QA
@@ -29,19 +29,26 @@ proves an empty expected credential cannot become a fail-open mode.
 | New Home and nested directory | Owner-only root and directories before use |
 | New secret/config write | Exclusive secure temp before payload, atomic activation, owner-only destination |
 | Simulated write failure | Original destination unchanged and no temporary artifact remains |
-| Legacy permissive files and directories | Content preserved, permissions tightened, second migration unchanged |
+| Existing permissive file that is read | Content preserved and that target's permissions tightened before bytes are returned |
+| Existing unrelated development file | Root preparation does not enumerate or mutate the unrelated child |
+| Already-correct Unix mode | Permission enforcement performs no redundant `chmod` process invocation |
 | Root or child symbolic link | Typed failure without touching the link target |
 | Traversal, absolute child, null byte, or overlapping roots | Typed failure without creating a file |
 | Existing SQLite database and sidecars | Secured before/after open without replacing SQLite-owned bytes |
 | Windows legacy ACL | Inheritance and prior rules removed; only the current user retains access |
 
-The inventory covers identity, provider auth/secrets, environment configuration,
-state database sidecars, memories, request dumps, logs, backups, model caches,
-MCP user configuration, and developer-launcher runtime files.
+The ownership boundary covers identity, provider auth/secrets, environment
+configuration, state database sidecars, memories, request dumps, logs, backups,
+model caches, MCP user configuration, and developer-launcher runtime files when
+each owner creates, reads, or updates its target.
+
+Source-daemon startup coverage also verifies that the supervisor parent does
+not prepare the Home redundantly, while the child prepares the roots before
+daemon composition without recursively enumerating their contents.
 
 ## Restart and Isolation Matrix
 
-1. Start with a legacy Home, connect the native client, restart the daemon, and
+1. Start with an existing Home, connect the native client, restart the daemon, and
    reconnect using the same Home credential without content or identity loss.
 2. Run primary and linked-worktree instances concurrently and prove that each
    client uses its matched port, Home credential, database, memories, dumps,
@@ -56,6 +63,6 @@ MCP user configuration, and developer-launcher runtime files.
 ## Release Evidence
 
 The release record includes focused unit tests, real daemon/client transport
-tests, legacy restart coverage, worktree isolation coverage, agent and Flutter
+tests, existing-Home restart coverage, worktree isolation coverage, agent and Flutter
 analysis, and a Windows ACL run on Windows. Platform-specific evidence may be
 recorded separately, but an unverified platform claim is not marked complete.

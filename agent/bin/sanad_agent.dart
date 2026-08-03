@@ -15,9 +15,19 @@ import 'service.dart' as service_cmd;
 final String version = loadAgentVersion();
 
 void main(List<String> arguments) async {
-  // SEC-02: no configuration read or write may precede the owner-only runtime
-  // boundary migration.
-  await SanadHomeBootstrap.migrateLegacy();
+  // A supervised daemon parent must remain a lightweight process owner. Its
+  // child prepares the secure Home roots before any daemon dependency is
+  // composed, avoiding duplicate full-tree work on every source start.
+  final isChild = arguments.contains('--child-process');
+  if (shouldDeferSanadHomeBootstrapToChild(arguments: arguments)) {
+    await HotRestartManager.run(arguments);
+    return;
+  }
+
+  // SEC-02: prepare the owner-only roots before configuration access. Files
+  // are secured individually by their read/write owners; startup never walks
+  // the complete Home tree.
+  await SanadHomeBootstrap.prepareAll();
   if (!SanadHomeBootstrap.identity().fileExists('.env')) {
     try {
       await SanadHomeBootstrap.identity().writeConfigText(
@@ -31,20 +41,10 @@ void main(List<String> arguments) async {
     }
   }
 
-  // 1. Check if the --child-process flag is present in the arguments
-  final isChild = arguments.contains('--child-process');
-
   if (isChild) {
     // Strip out the internal child process flag and execute normally
     final cleanArgs = List<String>.from(arguments)..remove('--child-process');
     await _executeCommand(cleanArgs);
-    return;
-  }
-
-  // 2. Source daemons always run under the restart supervisor. The internal
-  // child flag above is the only bypass and prevents nested supervisors.
-  if (shouldUseHotRestartSupervisor(arguments: arguments)) {
-    await HotRestartManager.run(arguments);
     return;
   }
 

@@ -11,6 +11,11 @@ bool shouldUseHotRestartSupervisor({required List<String> arguments}) {
   return command == 'daemon' || command == 'start';
 }
 
+bool shouldDeferSanadHomeBootstrapToChild({required List<String> arguments}) {
+  return !arguments.contains('--child-process') &&
+      shouldUseHotRestartSupervisor(arguments: arguments);
+}
+
 ({String executable, List<String> arguments}) supervisedChildCommand(
   List<String> originalArgs, {
   String? resolvedExecutable,

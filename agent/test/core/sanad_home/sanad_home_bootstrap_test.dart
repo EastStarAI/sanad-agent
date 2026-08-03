@@ -148,20 +148,18 @@ void main() {
     });
 
     test(
-      'migrateLegacy tightens mode on auth.json and is idempotent',
+      'prepareAll secures roots without walking existing children',
       () async {
-        final authFile = File(p.join(tempHome.path, 'auth.json'))
-          ..writeAsStringSync('{"hardware_id":"abc"}');
-        if (!Platform.isWindows) {
-          Process.runSync('chmod', ['644', authFile.path]);
-        }
-        await SanadHomeBootstrap.migrateLegacy();
-        if (!Platform.isWindows) {
-          final mode = authFile.statSync().mode & 0x1ff;
-          expect(mode, equals(0x180));
-        }
-        await SanadHomeBootstrap.migrateLegacy();
-        expect(authFile.readAsStringSync(), '{"hardware_id":"abc"}');
+        if (Platform.isWindows) return;
+        final untouched = File(p.join(tempHome.path, 'untouched-development'))
+          ..writeAsStringSync('existing');
+        Process.runSync('chmod', ['755', tempHome.path]);
+        Process.runSync('chmod', ['644', untouched.path]);
+
+        await SanadHomeBootstrap.prepareAll();
+
+        expect(tempHome.statSync().mode & 0x1ff, equals(0x1c0));
+        expect(untouched.statSync().mode & 0x1ff, equals(0x1a4));
       },
     );
 
@@ -207,28 +205,6 @@ void main() {
       },
     );
 
-    test(
-      'recursive migration secures directories, files, and SQLite sidecars',
-      () async {
-        if (Platform.isWindows) return;
-        final memories = Directory(p.join(tempHome.path, 'memories'))
-          ..createSync();
-        final memory = File(p.join(memories.path, 'MEMORY.md'))
-          ..writeAsStringSync('legacy');
-        final wal = File(p.join(tempHome.path, 'state.db-wal'))
-          ..writeAsBytesSync([1, 2, 3]);
-        Process.runSync('chmod', ['755', memories.path]);
-        Process.runSync('chmod', ['644', memory.path]);
-        Process.runSync('chmod', ['644', wal.path]);
-
-        await SanadHomeBootstrap.migrateLegacy();
-
-        expect(memories.statSync().mode & 0x1ff, 0x1c0);
-        expect(memory.statSync().mode & 0x1ff, 0x180);
-        expect(wal.statSync().mode & 0x1ff, 0x180);
-      },
-    );
-
     test('readSecret tightens owner-only mode before reading', () {
       if (Platform.isWindows) return;
       final legacy = File(p.join(tempHome.path, 'legacy-secret'))
@@ -257,14 +233,17 @@ void main() {
       expect(shm.statSync().mode & 0x1ff, 0x180);
     });
 
-    test('process umask secures SQLite sidecars created after bootstrap', () async {
-      if (Platform.isWindows) return;
-      await SanadHomeBootstrap.prepareAll();
-      final lateSidecar = File(p.join(tempHome.path, 'state.db-journal'))
-        ..writeAsBytesSync([1, 2, 3]);
+    test(
+      'process umask secures SQLite sidecars created after bootstrap',
+      () async {
+        if (Platform.isWindows) return;
+        await SanadHomeBootstrap.prepareAll();
+        final lateSidecar = File(p.join(tempHome.path, 'state.db-journal'))
+          ..writeAsBytesSync([1, 2, 3]);
 
-      expect(lateSidecar.statSync().mode & 0x1ff, 0x180);
-    });
+        expect(lateSidecar.statSync().mode & 0x1ff, 0x180);
+      },
+    );
 
     test(
       'exists returns false for missing and true for present files',

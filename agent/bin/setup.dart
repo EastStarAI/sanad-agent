@@ -18,7 +18,7 @@ Future<void> main(List<String> args) async {
   print('└─────────────────────────────────────────────────────────┘');
   print('');
 
-  await SanadHomeBootstrap.migrateLegacy();
+  await SanadHomeBootstrap.prepareAll();
   if (!SanadHomeBootstrap.identity().fileExists('.env')) {
     await SanadHomeBootstrap.identity().writeConfigText(
       '.env',

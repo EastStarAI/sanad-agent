@@ -242,6 +242,36 @@ void main() {
       expect(ids, containsAll(['s-1', 's-2']));
     });
 
+    test('restart queries exclude terminal work history', () {
+      seedSession('s-terminal');
+      seedSession('s-restorable');
+      workItems.enqueueWorkItem(
+        workItemId: 'w-terminal',
+        sessionId: 's-terminal',
+        requestId: 'req-terminal',
+        state: SessionWorkState.completed,
+        continuationMetadata: const {'large_terminal_history': true},
+      );
+      workItems.enqueueWorkItem(
+        workItemId: 'w-restorable',
+        sessionId: 's-restorable',
+        requestId: 'req-restorable',
+        state: SessionWorkState.waiting,
+      );
+
+      expect(workItems.findSessionIdsWithRestorableWorkItems(), [
+        's-restorable',
+      ]);
+      expect(
+        workItems
+            .findRestorableWorkItems('s-restorable')
+            .map((item) => item.workItemId),
+        ['w-restorable'],
+      );
+      expect(workItems.findRestorableWorkItems('s-terminal'), isEmpty);
+      expect(workItems.findAllWorkItems('s-terminal'), hasLength(1));
+    });
+
     test('cancelAllActiveAndQueuedWorkItems moves items to cancelled', () {
       seedSession('s-cancel');
       workItems.enqueueWorkItem(

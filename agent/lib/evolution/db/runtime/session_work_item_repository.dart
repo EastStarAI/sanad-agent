@@ -15,6 +15,9 @@ import '../agent_state_database.dart';
 class SessionWorkItemRepository {
   final AgentStateDatabase _state;
 
+  static const String _restorableStatesSql =
+      "('queued', 'running', 'waiting', 'blocked', 'resuming')";
+
   Database get _db => _state.db;
 
   static const Map<SessionWorkState, Set<SessionWorkState>>
@@ -331,12 +334,34 @@ class SessionWorkItemRepository {
     return rows.map(SessionWorkItem.fromRow).toList();
   }
 
+  /// Finds only work that startup recovery can reconstruct or reclassify.
+  /// Terminal history remains queryable through [findAllWorkItems] but is not
+  /// decoded during daemon bootstrap.
+  List<SessionWorkItem> findRestorableWorkItems(String sessionId) {
+    final rows = _db.select(
+      '''SELECT * FROM session_work_items
+         WHERE session_id = ? AND state IN $_restorableStatesSql
+         ORDER BY sequence ASC''',
+      [sessionId],
+    );
+    return rows.map(SessionWorkItem.fromRow).toList();
+  }
+
   /// Finds all distinct session IDs that have work items.
   List<String> findAllSessionIdsWithWorkItems() {
     final rows = _db.select(
       'SELECT DISTINCT session_id FROM session_work_items',
     );
     return rows.map((r) => r['session_id'] as String).toList();
+  }
+
+  /// Finds sessions that have queued or active work relevant to restart.
+  List<String> findSessionIdsWithRestorableWorkItems() {
+    final rows = _db.select(
+      '''SELECT DISTINCT session_id FROM session_work_items
+         WHERE state IN $_restorableStatesSql''',
+    );
+    return rows.map((row) => row['session_id'] as String).toList();
   }
 
   /// Performs an atomic state transition with validation.

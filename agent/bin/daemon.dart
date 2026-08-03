@@ -21,7 +21,7 @@ Future<void> main(List<String> args) async {
   // Must run before DI/config/auth can read or open anything under either
   // configured runtime root. The outer CLI also performs this for supervised
   // launches; keeping it here protects direct daemon entry points and tests.
-  await SanadHomeBootstrap.migrateLegacy();
+  await SanadHomeBootstrap.prepareAll();
   setupDI();
 
   final config = getIt<Config>();

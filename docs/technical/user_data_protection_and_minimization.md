@@ -1,6 +1,6 @@
 ---
 title: "Local Gateway and Sanad Home Protection"
-description: "Authentication, origin enforcement, filesystem ownership, migration, and runtime isolation for local Sanad data."
+description: "Authentication, origin enforcement, filesystem ownership, secure startup, and runtime isolation for local Sanad data."
 ---
 
 # Local Gateway and Sanad Home Protection
@@ -61,7 +61,7 @@ non-overlapping real directories.
 
 The configured root itself cannot be a symbolic link. A child operation rejects
 absolute paths, traversal, null bytes, symbolic-link components, and targets
-outside its selected root. Directory creation and migration do not follow
+outside its selected root. Directory creation and startup preparation do not follow
 symbolic links.
 
 Directories are owner-only (`0700`) and sensitive files are owner-only (`0600`)
@@ -83,18 +83,22 @@ opening SQLite, then validates and tightens `state.db`, WAL, SHM, and journal
 sidecars after opening and schema initialization. SQLite remains the only
 writer of its transactional files.
 
-## Startup and Legacy Migration
+## Startup Preparation
 
 Bootstrap runs before dependency composition, authentication reads, provider
-secret reads, or database open. It creates a missing root securely, rejects
-symlinked or overlapping roots, then recursively repairs the known identity,
-provider, database, memory, dump, log, backup, and launcher-runtime surfaces.
-Unknown regular files retain their content and receive the conservative
-owner-only file policy. A symlink causes a typed failure and is never followed.
+secret reads, or database open. It creates missing roots securely and rejects
+symlinked or overlapping roots, but never walks the complete Sanad Home tree.
+Sanad has no installed-user legacy population, so startup carries no recursive
+migration framework or version marker.
 
-Migration is idempotent and content preserving. Diagnostics expose only a
-bounded category and outcome; they omit the root, child names, credentials,
-payloads, and operating-system usernames.
+Every daemon-owned file is secured at its actual ownership boundary: new paths
+inherit the owner-only process mask, atomic writers secure destinations before
+payload publication, reads reassert the target mode before returning bytes,
+and SQLite secures its database plus sidecars around connection initialization.
+On Unix, permission enforcement checks the existing mode before spawning
+`chmod`, so already-correct targets incur metadata validation only. A
+supervised source daemon leaves root preparation to its child; direct daemon
+entry points still prepare the roots before dependency composition.
 
 ## Isolation
 

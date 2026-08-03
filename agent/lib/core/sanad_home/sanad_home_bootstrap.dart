@@ -207,25 +207,6 @@ class SanadHomeBootstrap {
     file.deleteSync();
   }
 
-  /// Repairs every existing file/directory recursively without following links.
-  Future<void> migrateLegacyTree() async {
-    final root = Directory(await prepare());
-    await for (final entity in root.list(recursive: true, followLinks: false)) {
-      final type = FileSystemEntity.typeSync(entity.path, followLinks: false);
-      if (type == FileSystemEntityType.link) {
-        throw const SanadHomeBoundaryViolation(
-          'legacy_symlink',
-          'A symbolic link exists inside a Sanad runtime root.',
-        );
-      }
-      if (type == FileSystemEntityType.directory) {
-        await _enforceDirectoryOwnership(Directory(entity.path));
-      } else if (type == FileSystemEntityType.file) {
-        await _enforceSecretOwnership(File(entity.path));
-      }
-    }
-  }
-
   /// SQLite exception boundary: call before opening `state.db`.
   Future<String> prepareDatabase() async {
     await prepare();
@@ -457,6 +438,7 @@ if ([IO.File]::Exists($destination)) {
   }
 
   static void _chmodSync(String path, String mode, int expected) {
+    if ((FileStat.statSync(path).mode & 0x1ff) == expected) return;
     final result = Process.runSync('chmod', [mode, path]);
     if (result.exitCode != 0 ||
         (FileStat.statSync(path).mode & 0x1ff) != expected) {
@@ -549,11 +531,4 @@ if ($kind -eq 'directory') {
   static List<int> readSecret(String relative) =>
       identity().readSecretBytes(relative);
   static bool exists(String relative) => identity().fileExists(relative);
-  static Future<void> migrateLegacy() async {
-    await prepareAll();
-    await identity().migrateLegacyTree();
-    if (!p.equals(identity().canonicalRoot(), state().canonicalRoot())) {
-      await state().migrateLegacyTree();
-    }
-  }
 }

@@ -73,12 +73,12 @@ class SessionRecoveryRestorer {
       getIt<RuntimeRecoveryService>().restoreActiveNotices();
     }
 
-    final sessionIds = store.findAllSessionIdsWithWorkItems();
+    final sessionIds = store.findSessionIdsWithRestorableWorkItems();
     int restoredSuspendedCount = 0;
     int restoredQueuedCount = 0;
 
     for (final sessionId in sessionIds) {
-      final allItems = store.findAllWorkItems(sessionId);
+      final allItems = store.findRestorableWorkItems(sessionId);
       if (allItems.isEmpty) continue;
       final resumableWorkItemIds = <String>{};
       final autoResumeWorkItemIds = <String>{};
@@ -213,7 +213,7 @@ class SessionRecoveryRestorer {
       }
 
       // Re-fetch all items for the session after crash recovery.
-      var updatedItems = store.findAllWorkItems(sessionId);
+      var updatedItems = store.findRestorableWorkItems(sessionId);
 
       // Repair state written by older startup logic that incorrectly blocked
       // an interactive wait as an interrupted non-idempotent tool. Both hops
@@ -248,7 +248,7 @@ class SessionRecoveryRestorer {
         );
         store.deleteNotice(sessionId);
       }
-      updatedItems = store.findAllWorkItems(sessionId);
+      updatedItems = store.findRestorableWorkItems(sessionId);
 
       for (final item in updatedItems.where(
         (candidate) => candidate.state == SessionWorkState.resuming,
@@ -296,7 +296,7 @@ class SessionRecoveryRestorer {
         }
       }
 
-      final normalizedItems = store.findAllWorkItems(sessionId);
+      final normalizedItems = store.findRestorableWorkItems(sessionId);
       store.executionState.normalizeAfterRestart(sessionId);
 
       // 2. Restore active/blocked run into _suspendedEvents (E.2.2)
@@ -532,9 +532,9 @@ class SessionRecoveryRestorer {
       return;
     }
     final recovery = getIt<RuntimeRecoveryService>();
-    final sessionIds = store.findAllSessionIdsWithWorkItems();
+    final sessionIds = store.findSessionIdsWithRestorableWorkItems();
     for (final sessionId in sessionIds) {
-      final items = store.findAllWorkItems(sessionId);
+      final items = store.findRestorableWorkItems(sessionId);
       if (items.isEmpty) continue;
       SessionWorkItem? activeItem;
       for (final item in items) {
