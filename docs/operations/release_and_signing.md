@@ -53,7 +53,8 @@ Keychain when no explicit Sparkle key-file path is supplied.
 | `windows-update-signing` | WinSparkle DSA update signing only; it does not provide Authenticode publisher identity |
 | `android-signing` | Android APK/AAB release signing |
 | `release-publication` | Atomic publication of an already reviewed Draft RC or Stable Release |
-| `web-production` | Atomic Web deployment |
+| `web-development` | Automatic immutable Flutter Web deployment from public branch `dev` |
+| `web-production` | Atomic reviewed Production Web deployment |
 | `updates-production` | Atomic Appcast deployment |
 | `installers-production` | Publishing canonical installer sources |
 
@@ -88,6 +89,24 @@ because the shorter product names were unavailable; this does not change the
 installed display name. Internal TestFlight is the only iOS distribution
 channel for the first release; external testing and App Store review are a
 separate future decision.
+
+## Development Web channel
+
+The public `dev` branch owns Development Flutter Web. Its workflow analyzes and
+builds the client with `client/config/dev.json`, publishes the output under a
+commit-addressed Development release directory, and atomically advances the
+Development Web selector. The private hosted-services repository owns the
+read-only Nginx mount and public `dev.app.sanad.eaststarai.com` route; it must
+not rebuild Flutter Web.
+
+The Development build resolves only the Development Gateway and Portal. Its
+post-deployment verification requires the Flutter bootstrap marker, successful
+TLS response, and CSP entries for the Development API and Portal. A failed
+public verification fails the workflow and blocks promotion to Staging.
+
+Production Web remains release-artifact driven and manually approved. A
+Development branch deployment cannot modify the Production Web root or
+selector.
 
 ## Atomic publication and rollback
 

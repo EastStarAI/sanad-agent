@@ -93,6 +93,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Provider Account Usage Limits QA Matrix](docs/qa_maintenance/provider_account_usage_limits_qa.md): Regression coverage for provider-instance usage parsing, protocol isolation, freshness, stale responses, and card presentation.
 - [Plan 29 Provider Setup Regression Matrix](docs/qa_maintenance/provider_setup_plan29_regression_matrix.md): Regression coverage targets for the instance-first provider setup runtime.
 - [Release Verification Matrix](docs/qa_maintenance/release_verification.md): Required local and hosted evidence for Sanad release, signing, installation, update, and rollback.
+- [Development Flutter Web Deployment QA](docs/qa_maintenance/development_web_deployment_qa.md): Branch, build-profile, atomic publication, CSP, browser-render, and rollback checks for `dev.app.sanad.eaststarai.com`.
 - [Runtime Source Switch QA](docs/qa_maintenance/runtime_source_switch_qa.md): Regression matrix for moving one active sanad-dev pair between source worktrees without changing its durable runtime identity.
 - [sanad-dev Runtime Ownership QA](docs/qa_maintenance/sanad_dev_runtime_ownership_qa.md): Regression matrix for managed launcher ownership, reconciliation, clone isolation, and continuous source handoff.
 - [Session Title Generation QA](docs/qa_maintenance/session_title_generation_qa.md): Regression coverage for first-exchange background title generation, stale-result rejection, and client synchronization.

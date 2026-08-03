@@ -1,0 +1,79 @@
+name: Deploy Flutter Web to Development
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - client/**
+      - .fvmrc
+      - .github/actions/setup-fvm/**
+      - .github/workflows/deploy-web-development.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-web-development
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    name: Build and deploy Development Web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: web-development
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: ./.github/actions/setup-fvm
+
+      - name: Analyze and build Development Web
+        working-directory: client
+        run: |
+          fvm flutter pub get
+          fvm flutter analyze
+          fvm flutter build web --release \
+            --dart-define-from-file=config/dev.json
+          test -s build/web/index.html
+          grep -Fq 'flutter_bootstrap.js' build/web/index.html
+
+      - name: Configure pinned SSH host
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+
+      - name: Publish immutable Development Web release
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
+        run: |
+          revision="${{ github.sha }}"
+          incoming="/srv/sanad-dev/app/incoming-$revision"
+          release="/srv/sanad-dev/app/releases/$revision"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -eu; test ! -e '$incoming'; test ! -e '$release'; mkdir -p '$incoming' /srv/sanad-dev/app/releases"
+          rsync -az --delete --delay-updates client/build/web/ \
+            "$DEPLOY_USER@$DEPLOY_HOST:$incoming/"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -eu; test -s '$incoming/index.html'; mv '$incoming' '$release'; ln -sfn '$release' /srv/sanad-dev/app/current"
+
+      - name: Verify Development Web surface
+        run: |
+          headers="$(mktemp)"
+          body="$(mktemp)"
+          trap 'rm -f "$headers" "$body"' EXIT
+          status="$(curl --silent --show-error --location --max-time 20 \
+            --dump-header "$headers" --output "$body" --write-out '%{http_code}' \
+            https://dev.app.sanad.eaststarai.com/)"
+          test "$status" = 200
+          grep -Fq 'flutter_bootstrap.js' "$body"
+          grep -Eiq '^strict-transport-security:' "$headers"
+          grep -Eiq '^content-security-policy:.*https://dev\.api\.sanad\.eaststarai\.com' "$headers"
+          grep -Eiq '^content-security-policy:.*https://dev\.portal\.sanad\.eaststarai\.com' "$headers"
