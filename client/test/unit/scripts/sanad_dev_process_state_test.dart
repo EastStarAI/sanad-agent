@@ -23,6 +23,45 @@ void main() {
     runtimeDirectory: '/isolated/runtime',
     branch: 'codex/task',
   );
+
+  test('gateway discovery includes homes recorded by sibling runtimes', () async {
+    final temp = await Directory.systemTemp.createTemp(
+      'sanad-candidate-homes-',
+    );
+    addTearDown(() => temp.delete(recursive: true));
+    final siblingHome = '${temp.path}${Platform.pathSeparator}sibling-home';
+    final runtimeRoot = '${temp.path}${Platform.pathSeparator}runtimes';
+    final current = runtime_context.SanadDevRuntime(
+      workspaceRoot: '/repo/current',
+      repositoryRoot: '/repo/current',
+      worktreeId: 'current',
+      isLinkedWorktree: true,
+      usesPrimaryResources: false,
+      agentPort: 58092,
+      vmServicePort: 51092,
+      sanadHome: '${temp.path}${Platform.pathSeparator}current-home',
+      runtimeDirectory: '$runtimeRoot${Platform.pathSeparator}current',
+      branch: 'codex/current',
+    );
+    final sibling = runtime_context.SanadDevRuntime(
+      workspaceRoot: '/repo/sibling',
+      repositoryRoot: '/repo/sibling',
+      worktreeId: 'sibling',
+      isLinkedWorktree: true,
+      usesPrimaryResources: false,
+      agentPort: 58093,
+      vmServicePort: 51093,
+      sanadHome: siblingHome,
+      runtimeDirectory: '$runtimeRoot${Platform.pathSeparator}sibling',
+      branch: 'codex/sibling',
+    );
+    await runtime_context.writeRuntimeRecord(sibling, sibling.toJson());
+
+    final homes = await sanad_dev.discoverLocalGatewayCandidateHomes(current);
+
+    expect(homes, contains(current.sanadHome));
+    expect(homes, contains(siblingHome));
+  });
   const primaryRuntime = runtime_context.SanadDevRuntime(
     workspaceRoot: '/primary',
     repositoryRoot: '/primary',
@@ -72,6 +111,26 @@ void main() {
     );
 
     expect(state.agent, same(workspaceAgent));
+  });
+
+  test('Agent-only runtime keeps its discovered Sanad Home', () {
+    const userHome = '/users/developer/.sanad';
+    final state = sanad_dev.RuntimeProcessState(
+      agent: sanad_dev.AgentInstance(
+        58092,
+        workspaceHash,
+        'default',
+        sanadHome: userHome,
+      ),
+      ownedClients: const [],
+      crossOwnedClients: const [],
+      ambiguousClients: const [],
+    );
+
+    expect(
+      sanad_dev.resolveActiveSanadHome(linkedRuntime, state),
+      userHome,
+    );
   });
 
   test('explicit diagnostic port remains an explicit selector', () {

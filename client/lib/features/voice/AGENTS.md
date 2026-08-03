@@ -7,6 +7,7 @@ This contract applies to `client/lib/features/voice/`.
 - `VoiceStreamCubit` owns voice-session lifecycle, mute state, interruption, transport resolution, and error projection.
 - Resolve local versus cloud voice routing through `DeviceConnectionCoordinator`; presentation must not open or select sockets directly.
 - Keep local voice endpoints derived from `AppConfig.localGatewayUrl`.
+- Local voice is desktop-only and uses the same active-Home Local Gateway credential as command and lifecycle transports; never place the credential in the voice URL.
 - Validate runtime/device capability and credit readiness before starting a voice session.
 
 ## Audio and Interruption

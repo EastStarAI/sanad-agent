@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'secure_runtime_file.dart';
+
 const runtimeComponentControlVersion = 1;
 
 enum RuntimeComponentAction { start, stop, reload, restart }
@@ -117,12 +119,12 @@ Future<void> writeRuntimeComponentControl(
   String path,
   RuntimeComponentControlRequest request,
 ) async {
-  final file = File(path);
-  await file.parent.create(recursive: true);
-  final temporary = File('$path.tmp');
-  await temporary.writeAsString('${jsonEncode(request.toJson())}\n');
-  if (await file.exists()) await file.delete();
-  await temporary.rename(path);
+  final sanadHome = File(path).parent.parent.path;
+  await secureRuntimeAtomicWrite(
+    sanadHome,
+    path,
+    '${jsonEncode(request.toJson())}\n',
+  );
 }
 
 Future<RuntimeComponentControlRequest?> readRuntimeComponentControl(

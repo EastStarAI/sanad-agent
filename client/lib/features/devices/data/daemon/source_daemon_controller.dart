@@ -1,9 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
+import 'package:sanad_client/infrastructure/local_gateway/local_gateway_http_client.dart';
 import 'local_daemon_controller.dart';
 
 class SourceDaemonController implements LocalDaemonController {
@@ -12,6 +12,8 @@ class SourceDaemonController implements LocalDaemonController {
   static Process? _spawnedProcess;
 
   const SourceDaemonController();
+
+  LocalGatewayHttpClient get _gatewayClient => const LocalGatewayHttpClient();
 
   Directory? _findAgentSourceDir() {
     var dir = Directory.current;
@@ -46,7 +48,7 @@ class SourceDaemonController implements LocalDaemonController {
       return false;
     }
     try {
-      final response = await http
+      final response = await _gatewayClient
           .get(Uri.parse('${LocalDaemonController.defaultUrl}/health'))
           .timeout(const Duration(milliseconds: 800));
       return response.statusCode == 200;
@@ -61,7 +63,7 @@ class SourceDaemonController implements LocalDaemonController {
       return null;
     }
     try {
-      final response = await http
+      final response = await _gatewayClient
           .get(Uri.parse('${LocalDaemonController.defaultUrl}/health'))
           .timeout(const Duration(milliseconds: 800));
       if (response.statusCode == 200) {
@@ -80,7 +82,7 @@ class SourceDaemonController implements LocalDaemonController {
       return null;
     }
     try {
-      final response = await http
+      final response = await _gatewayClient
           .get(Uri.parse('${LocalDaemonController.defaultUrl}/health'))
           .timeout(const Duration(milliseconds: 800));
       if (response.statusCode == 200) {
@@ -161,7 +163,7 @@ class SourceDaemonController implements LocalDaemonController {
       try {
         _logger.info('Requesting source shutdown via HTTP POST /stop...');
         final uri = Uri.parse('${LocalDaemonController.defaultUrl}/stop');
-        final response = await http.post(uri).timeout(const Duration(seconds: 2));
+        final response = await _gatewayClient.post(uri).timeout(const Duration(seconds: 2));
         if (response.statusCode == 200) {
           await Future<void>.delayed(const Duration(milliseconds: 500));
           processToKill?.kill();
@@ -196,7 +198,7 @@ class SourceDaemonController implements LocalDaemonController {
             'timeout_seconds': LocalDaemonController.restartSafetyTimeout.inSeconds.toString(),
           },
         );
-        final response = await http.post(uri).timeout(LocalDaemonController.restartRequestTimeout);
+        final response = await _gatewayClient.post(uri).timeout(LocalDaemonController.restartRequestTimeout);
         if (response.statusCode == 200) {
           // Wait for supervisor or manual runner to restart it
           await Future<void>.delayed(const Duration(milliseconds: 1500));
@@ -221,7 +223,7 @@ class SourceDaemonController implements LocalDaemonController {
       try {
         _logger.info('Requesting the daemon-owned update status...');
         final uri = Uri.parse('${LocalDaemonController.defaultUrl}/update');
-        final response = await http.post(uri).timeout(const Duration(seconds: 15));
+        final response = await _gatewayClient.post(uri).timeout(const Duration(seconds: 15));
         if (response.statusCode == 200) {
           final body = jsonDecode(response.body);
           return body is Map && body['status'] == 'source_managed';

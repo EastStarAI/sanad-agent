@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_server_config.dart';
+import 'package:sanad_client/infrastructure/local_tools/secure_sanad_home_writer.dart';
 
 class SanadSettingsStore {
   const SanadSettingsStore({
@@ -41,8 +42,10 @@ class SanadSettingsStore {
   }
 
   Future<void> saveUserMcpServers(List<McpServerConfig> servers) async {
-    final file = _userMcpConfigFile();
-    await _writeSettingsMap(file, encodeMcpServersDocument(servers));
+    await _writeSecureHomeSettings(
+      'mcp_config.json',
+      encodeMcpServersDocument(servers),
+    );
   }
 
   Future<void> saveWorkspaceMcpServers(
@@ -76,7 +79,9 @@ class SanadSettingsStore {
   }
 
   Future<Map<String, dynamic>> readUserMcpConfigDocument() async {
-    return _readSettingsMap(_userMcpConfigFile());
+    return _readSettingsMap(
+      await _secureHomeWriter().resolveFile('mcp_config.json'),
+    );
   }
 
   Future<Map<String, dynamic>> readWorkspaceMcpConfigDocument(String workspacePath) async {
@@ -94,17 +99,16 @@ class SanadSettingsStore {
     await file.writeAsString(
       const JsonEncoder.withIndent('  ').convert(settings),
     );
-    await _secureFileIfSensitive(file);
   }
 
-  Future<void> _secureFileIfSensitive(File file) async {
-    if (Platform.isWindows || file.path != _authFile().path) return;
-    await Process.run('chmod', ['600', file.path]);
-  }
-
-  File _userMcpConfigFile() {
-    final sanadHome = _resolveSanadHomeDirectory();
-    return File('$sanadHome${Platform.pathSeparator}mcp_config.json');
+  Future<void> _writeSecureHomeSettings(
+    String relativeName,
+    Map<String, dynamic> settings,
+  ) async {
+    await _secureHomeWriter().writeText(
+      relativeName,
+      const JsonEncoder.withIndent('  ').convert(settings),
+    );
   }
 
   File _workspaceMcpConfigFile(String workspacePath) {
@@ -112,23 +116,21 @@ class SanadSettingsStore {
   }
 
   Future<Map<String, dynamic>> readAuthDocument() async {
-    return _readSettingsMap(_authFile());
+    return _readSettingsMap(
+      await _secureHomeWriter().resolveFile('auth.json'),
+    );
   }
 
   Future<void> saveAuthDocument(Map<String, dynamic> authData) async {
-    await _writeSettingsMap(_authFile(), authData);
+    await _writeSecureHomeSettings('auth.json', authData);
   }
 
   Future<void> deleteAuthDocument() async {
-    final file = _authFile();
-    if (await file.exists()) {
-      await file.delete();
-    }
+    await _secureHomeWriter().delete('auth.json');
   }
 
-  File _authFile() {
-    final sanadHome = _resolveSanadHomeDirectory();
-    return File('$sanadHome${Platform.pathSeparator}auth.json');
+  SecureSanadHomeWriter _secureHomeWriter() {
+    return SecureSanadHomeWriter(_resolveSanadHomeDirectory());
   }
 
   String _resolveSanadHomeDirectory() {

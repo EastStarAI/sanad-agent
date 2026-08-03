@@ -4,6 +4,7 @@ import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'package:sanad_client/infrastructure/local_gateway/local_gateway_credential_provider.dart';
 
 class SocketModule {
   static const _hardwareIdKey = 'hardware_id';
@@ -61,6 +62,8 @@ class SocketModule {
     return SanadSocketService.local(
       url: AppConfig.localGatewayUrl,
       hardwareId: hardwareId,
+      credentialProvider: const LocalGatewayCredentialProvider(),
+      enabled: AppPlatform.isDesktop,
     );
   }
 }

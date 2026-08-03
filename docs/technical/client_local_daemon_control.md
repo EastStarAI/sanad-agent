@@ -42,6 +42,13 @@ Health, lifecycle, update, socket, and voice endpoints derive from
 production default port because linked worktrees receive isolated daemon and VM
 service ports.
 
+Desktop health, lifecycle, update, socket, and voice requests authenticate with
+the Local Gateway credential stored under the active Sanad Home. The client
+loads it at request time and transmits it only as a header, so daemon and client
+restarts do not require a credential in launch arguments or preferences.
+Flutter Web and mobile are remote-only and never attempt this lookup or local
+connection.
+
 ## Worktree Client Restart and Reload
 
 `sanad-dev` discovers the live Flutter VM service and the matching `flutter run`

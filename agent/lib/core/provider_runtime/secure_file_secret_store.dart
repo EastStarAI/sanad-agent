@@ -6,6 +6,7 @@ import 'package:logging/logging.dart';
 
 import '../../engine/adapters/provider_registry.dart';
 import '../constants.dart';
+import '../sanad_home/sanad_home_bootstrap.dart';
 import 'provider_protocol_constants.dart';
 import 'secret_record.dart';
 import 'secret_store.dart';
@@ -34,8 +35,10 @@ class SecureFileSecretStore implements SecretStore {
 
   late final String _storePath;
   late final String _lockPath;
+  late final bool _usesSanadHome;
 
   SecureFileSecretStore({String? storePath}) {
+    _usesSanadHome = storePath == null;
     _storePath = storePath ?? p.join(getSanadHome(), 'provider_secrets.json');
     _lockPath = '$_storePath.lock';
   }
@@ -43,10 +46,17 @@ class SecureFileSecretStore implements SecretStore {
   String get storePath => _storePath;
 
   Map<String, dynamic> _readRaw({bool backupIfCorrupted = false}) {
+    final boundary = SanadHomeBootstrap.identity();
     final file = File(_storePath);
-    if (!file.existsSync()) return <String, dynamic>{};
+    if (_usesSanadHome
+        ? !boundary.fileExists('provider_secrets.json')
+        : !file.existsSync()) {
+      return <String, dynamic>{};
+    }
     try {
-      final content = file.readAsStringSync();
+      final content = _usesSanadHome
+          ? utf8.decode(boundary.readSecretBytes('provider_secrets.json'))
+          : file.readAsStringSync();
       if (content.trim().isEmpty) return <String, dynamic>{};
       final decoded = jsonDecode(content);
       if (decoded is Map<String, dynamic>) return decoded;
@@ -68,11 +78,22 @@ class SecureFileSecretStore implements SecretStore {
   /// recover the data.
   void _backupCorrupted(File file) {
     try {
-      final backup = File(
-        '$_storePath.corrupted.${DateTime.now().millisecondsSinceEpoch}',
-      );
-      file.renameSync(backup.path);
-      _logger.warning('Corrupted store backed up to ${backup.path}');
+      if (_usesSanadHome) {
+        final boundary = SanadHomeBootstrap.identity();
+        final backupName =
+            'provider_secrets.json.corrupted.${DateTime.now().millisecondsSinceEpoch}';
+        boundary.writeSecretBytesSync(
+          backupName,
+          boundary.readSecretBytes('provider_secrets.json'),
+        );
+        boundary.deleteFileSync('provider_secrets.json');
+      } else {
+        final backup = File(
+          '$_storePath.corrupted.${DateTime.now().millisecondsSinceEpoch}',
+        );
+        file.renameSync(backup.path);
+      }
+      _logger.warning('Corrupted secret store backed up.');
     } catch (e) {
       _logger.warning('Failed to backup corrupted store: $e');
     }
@@ -83,6 +104,13 @@ class SecureFileSecretStore implements SecretStore {
   /// owner-only permissions BEFORE writing any secret bytes, so the secret is
   /// never world-readable at any point (Plan 29 §7.4, §19 risk table).
   Future<void> _replaceStoreDataLocked(Map<String, dynamic> data) async {
+    if (_usesSanadHome) {
+      await SanadHomeBootstrap.identity().writeSecretBytes(
+        'provider_secrets.json',
+        utf8.encode(jsonEncode(data)),
+      );
+      return;
+    }
     final file = File(_storePath);
     if (!file.parent.existsSync()) {
       file.parent.createSync(recursive: true);
@@ -152,7 +180,18 @@ class SecureFileSecretStore implements SecretStore {
   Future<T> _withLock<T>(Future<T> Function() action) async {
     final lockFile = File(_lockPath);
     if (!lockFile.existsSync()) {
-      lockFile.createSync(recursive: true);
+      if (_usesSanadHome) {
+        SanadHomeBootstrap.identity().writeSecretBytesSync(
+          'provider_secrets.json.lock',
+          const [],
+        );
+      } else {
+        lockFile.createSync(recursive: true);
+      }
+    } else if (_usesSanadHome) {
+      SanadHomeBootstrap.identity().readSecretBytes(
+        'provider_secrets.json.lock',
+      );
     }
     final raf = lockFile.openSync(mode: FileMode.write);
     try {

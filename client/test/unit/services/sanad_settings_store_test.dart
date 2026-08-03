@@ -164,6 +164,14 @@ void main() {
     expect(remoteServer['url'], 'https://example.com/mcp');
     expect(remoteServer.containsKey('createdAt'), isFalse);
     expect(remoteServer.containsKey('lastUsedAt'), isFalse);
+    expect(
+      savedFile.parent.listSync().where((entry) => entry.path.contains('.tmp.')),
+      isEmpty,
+    );
+    if (!Platform.isWindows) {
+      expect((await savedFile.stat()).mode & 0x1ff, 0x180);
+      expect((await savedFile.parent.stat()).mode & 0x1ff, 0x1c0);
+    }
   });
 
   test('saveUserMcpServers writes disabled instead of enabled', () async {
@@ -290,6 +298,10 @@ void main() {
         final mode = (await authFile.stat()).mode & 0x1ff;
         expect(mode, equals(0x180)); // 0600
       }
+      expect(
+        authFile.parent.listSync().where((entry) => entry.path.contains('.tmp.')),
+        isEmpty,
+      );
     });
 
     test('readAuthDocument returns empty map if file missing', () async {
@@ -303,6 +315,25 @@ void main() {
 
       final authFile = File('${fakeHome.path}${Platform.pathSeparator}.sanad${Platform.pathSeparator}auth.json');
       expect(await authFile.exists(), isFalse);
+    });
+
+    test('refuses a symlink target without touching its contents', () async {
+      if (Platform.isWindows) return;
+      final sanadHome = Directory(
+        '${fakeHome.path}${Platform.pathSeparator}.sanad',
+      )..createSync(recursive: true);
+      final outside = File(
+        '${tempRoot.path}${Platform.pathSeparator}outside-auth.json',
+      )..writeAsStringSync('{"preserved":true}');
+      await Link(
+        '${sanadHome.path}${Platform.pathSeparator}auth.json',
+      ).create(outside.path);
+
+      await expectLater(
+        store.saveAuthDocument({'hardware_id': 'must-not-write'}),
+        throwsA(isA<Exception>()),
+      );
+      expect(await outside.readAsString(), '{"preserved":true}');
     });
   });
 }

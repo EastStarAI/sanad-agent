@@ -29,6 +29,15 @@ if ($gitRootResolved) {
     $ProjectDir = $gitRoot
   }
 }
+$resolvedWrapper = Join-Path $ProjectDir 'scripts/sanad-dev.ps1'
+if (-not [string]::Equals(
+    [IO.Path]::GetFullPath($MyInvocation.MyCommand.Path),
+    [IO.Path]::GetFullPath($resolvedWrapper),
+    [StringComparison]::OrdinalIgnoreCase
+  ) -and (Test-Path $resolvedWrapper)) {
+  & $resolvedWrapper @SanadArgs
+  exit $LASTEXITCODE
+}
 
 $command = if ($SanadArgs.Count -gt 0) { $SanadArgs[0].ToLowerInvariant() } else { '' }
 $force = $SanadArgs -contains '--force'
@@ -128,8 +137,14 @@ function Ensure-Fvm {
 
 function Ensure-Flutter([string] $FvmPath) {
   $flutterPin = (Get-Content -Raw (Join-Path $ProjectDir '.fvmrc') | ConvertFrom-Json).flutter
-  $flutterExecutable = Join-Path $ProjectDir '.fvm/flutter_sdk/bin/flutter.bat'
-  if (Test-Path $flutterExecutable) { return }
+  Push-Location $ProjectDir
+  try {
+    & $FvmPath spawn $flutterPin --version *> $null
+    $ready = $LASTEXITCODE -eq 0
+  } finally {
+    Pop-Location
+  }
+  if ($ready) { return }
   Invoke-LiveProcessStage "Installing Flutter $flutterPin" $FvmPath @('install', $flutterPin) $ProjectDir
 }
 
@@ -199,7 +214,15 @@ function Invoke-Setup([bool] $AllowExistingShim) {
 function Require-RuntimeCli {
   $existing = Get-Command fvm -ErrorAction SilentlyContinue
   if (-not $existing) { throw 'FVM is not installed. Run: sanad-dev install' }
-  if (-not (Test-Path (Join-Path $ProjectDir '.fvm/flutter_sdk/bin/flutter.bat'))) {
+  $flutterPin = (Get-Content -Raw (Join-Path $ProjectDir '.fvmrc') | ConvertFrom-Json).flutter
+  Push-Location $ProjectDir
+  try {
+    & $existing.Source spawn $flutterPin --version *> $null
+    $flutterReady = $LASTEXITCODE -eq 0
+  } finally {
+    Pop-Location
+  }
+  if (-not $flutterReady) {
     throw 'Pinned Flutter is not installed. Run: sanad-dev install'
   }
   if (-not (Test-Path (Join-Path $ProjectDir 'client/.dart_tool/package_config.json'))) {

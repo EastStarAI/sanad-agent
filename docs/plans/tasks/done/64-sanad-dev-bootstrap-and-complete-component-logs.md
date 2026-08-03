@@ -308,7 +308,8 @@ scripts/sanad-dev
 ```text
 fresh checkout
   scripts/sanad-dev
-    Checking FVM... installed/ready
+    [only missing work is shown]
+    Installing verified FVM... ready
     Installing pinned Flutter SDK... ready
     Resolving Agent dependencies... ready
     Resolving Client dependencies... ready
@@ -361,3 +362,6 @@ new terminal
   لم تُرفع بعد. بعد الإقلاع أثبتت `status` managed ownership، وأعادت القراءات
   المحدودة Agent journal وClient journal بما فيها `Launching` و`Building macOS`
   و`Syncing files` وDart VM Service دون هبوط إلى manual fallback.
+- تحقق regression حي في 2026-08-03 من أن Flutter 3.41.9 الجاهزة لا تطبع
+  `Installing Flutter 3.41.9`، وأن wrapper أجنبية تعيد التوجيه إلى worktree
+  المستدعية، وأن `run client` يبدأ بآخر 50 سطرًا بدل إعادة كل journal المحتفظة.

@@ -308,7 +308,11 @@ class Config {
   String get localGatewayHost =>
       _readString('LOCAL_GATEWAY_HOST', defaultValue: '127.0.0.1').trim();
 
-  String get localGatewayUrl => 'http://$localGatewayHost:$localGatewayPort';
+  String get localGatewayUrl {
+    final host = localGatewayHost;
+    final authority = host.contains(':') ? '[$host]' : host;
+    return 'http://$authority:$localGatewayPort';
+  }
 
   bool get hasConfiguredLlmBaseUrl =>
       _readString('LLM_BASE_URL').trim().isNotEmpty;

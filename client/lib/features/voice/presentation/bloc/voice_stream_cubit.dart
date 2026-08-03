@@ -11,6 +11,9 @@ import 'package:sanad_client/features/devices/data/device_connection_coordinator
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/voice/domain/services/voice_stream_service.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/infrastructure/local_gateway/local_gateway_credential_provider.dart';
+import 'package:sanad_client/infrastructure/local_gateway/local_gateway_uri_policy.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 
 import 'voice_stream_state.dart';
 
@@ -19,6 +22,7 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
 
   final VoiceStreamService _voiceStreamService;
   final DeviceConnectionCoordinator _connectionCoordinator;
+  final LocalGatewayCredentialProvider _localCredentialProvider;
 
   WebSocket? _localWs;
   StreamSubscription? _localWsSubscription;
@@ -36,8 +40,10 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
   VoiceStreamCubit({
     required VoiceStreamService voiceStreamService,
     required DeviceConnectionCoordinator connectionCoordinator,
+    LocalGatewayCredentialProvider localCredentialProvider = const LocalGatewayCredentialProvider(),
   }) : _voiceStreamService = voiceStreamService,
        _connectionCoordinator = connectionCoordinator,
+       _localCredentialProvider = localCredentialProvider,
        super(const VoiceStreamState());
 
   Future<void> startVoiceSession({
@@ -69,6 +75,9 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
       _logger.info('[VoiceStreamCubit] Resolving connection endpoint for agent: ${agent.id}');
       final endpoint = _connectionCoordinator.resolve(agent);
       _logger.info('[VoiceStreamCubit] Connection scope resolved: ${endpoint.scope}');
+      if (endpoint.scope == ConnectionScope.local && !AppPlatform.isDesktop) {
+        throw const LocalGatewayCredentialException('remote_only_platform');
+      }
 
       // 2. Start audio services
       _logger.info('[VoiceStreamCubit] Starting audio playback...');
@@ -79,14 +88,19 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
 
       if (endpoint.scope == ConnectionScope.local) {
         // --- LOCAL CONNECTION SCOPE ---
-        final wsUri = _toLocalWebSocketUri(
-          AppConfig.localGatewayUrl,
-          sessionId: sessionId,
-          deviceId: agent.id,
+        final wsUri = LocalGatewayUriPolicy.requireWebSocket(
+          _toLocalWebSocketUri(
+            AppConfig.localGatewayUrl,
+            sessionId: sessionId,
+            deviceId: agent.id,
+          ),
         );
 
         _logger.info('[VoiceStreamCubit] Connecting local WebSocket to: $wsUri');
-        _localWs = await WebSocket.connect(wsUri.toString());
+        _localWs = await WebSocket.connect(
+          wsUri.toString(),
+          headers: await _localCredentialProvider.headers(),
+        );
         _logger.info('[VoiceStreamCubit] Local WebSocket connected successfully');
 
         // Route local WS incoming messages to player

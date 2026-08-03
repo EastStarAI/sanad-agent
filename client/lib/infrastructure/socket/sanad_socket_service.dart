@@ -10,6 +10,8 @@ import 'package:sanad_client/infrastructure/socket/event_router.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as socket_io;
+import 'package:sanad_client/infrastructure/local_gateway/local_gateway_credential_provider.dart';
+import 'package:sanad_client/infrastructure/local_gateway/local_gateway_uri_policy.dart';
 
 enum SocketLifecycleState {
   disconnected,
@@ -35,6 +37,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   String get hardwareId => _hardwareId;
   String? _authToken;
   final SocketTransportMode _transportMode;
+  final LocalGatewayCredentialProvider? _localCredentialProvider;
+  final bool _localTransportEnabled;
 
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
@@ -89,19 +93,29 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     required String hardwareId,
     String? startToken,
     SocketTransportMode transportMode = SocketTransportMode.cloudSocketIo,
+    LocalGatewayCredentialProvider? localCredentialProvider,
+    bool localTransportEnabled = true,
   }) : _url = url,
        _hardwareId = hardwareId,
        _authToken = startToken,
-       _transportMode = transportMode;
+       _transportMode = transportMode,
+       _localCredentialProvider =
+           localCredentialProvider ??
+           (transportMode == SocketTransportMode.localWebSocket ? const LocalGatewayCredentialProvider() : null),
+       _localTransportEnabled = localTransportEnabled;
 
   factory SanadSocketService.local({
     required String url,
     required String hardwareId,
+    LocalGatewayCredentialProvider credentialProvider = const LocalGatewayCredentialProvider(),
+    bool enabled = true,
   }) {
     return SanadSocketService(
       url: url,
       hardwareId: hardwareId,
       transportMode: SocketTransportMode.localWebSocket,
+      localCredentialProvider: credentialProvider,
+      localTransportEnabled: enabled,
     );
   }
 
@@ -143,6 +157,10 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     _lastIncomingEventName = null;
     if (!isLocalTransport && _authToken == null) {
       _logger.warning('[${hashCode}]: ⚠️ No auth token provided. Waiting...');
+      _setLifecycleState(SocketLifecycleState.disconnected);
+      return;
+    }
+    if (isLocalTransport && !_localTransportEnabled) {
       _setLifecycleState(SocketLifecycleState.disconnected);
       return;
     }
@@ -294,10 +312,16 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       _localSocket = null;
     }
 
-    final wsUri = _toLocalWebSocketUri(_url);
+    final wsUri = LocalGatewayUriPolicy.requireWebSocket(
+      _toLocalWebSocketUri(_url),
+    );
     _logger.info('[${hashCode}]: Connecting locally to $wsUri');
     try {
-      _localSocket = await WebSocket.connect(wsUri.toString());
+      final headers = await _localCredentialProvider!.headers();
+      _localSocket = await WebSocket.connect(
+        wsUri.toString(),
+        headers: headers,
+      );
       _setSocketConnected(true);
 
       _localSocket!.listen(

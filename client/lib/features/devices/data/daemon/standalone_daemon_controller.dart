@@ -1,16 +1,18 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import 'local_daemon_controller.dart';
 import 'verified_agent_bootstrap_installer.dart';
+import 'package:sanad_client/infrastructure/local_gateway/local_gateway_http_client.dart';
 
 class StandaloneDaemonController implements LocalDaemonController {
   static final _logger = Logger('StandaloneDaemonController');
 
   const StandaloneDaemonController();
+
+  LocalGatewayHttpClient get _gatewayClient => const LocalGatewayHttpClient();
 
   VerifiedAgentBootstrapInstaller createBootstrapInstaller() {
     return VerifiedAgentBootstrapInstaller(targetPath: getExecutablePath());
@@ -57,7 +59,7 @@ class StandaloneDaemonController implements LocalDaemonController {
       return false;
     }
     try {
-      final response = await http
+      final response = await _gatewayClient
           .get(Uri.parse('${LocalDaemonController.defaultUrl}/health'))
           .timeout(const Duration(milliseconds: 800));
       return response.statusCode == 200;
@@ -72,7 +74,7 @@ class StandaloneDaemonController implements LocalDaemonController {
       return null;
     }
     try {
-      final response = await http
+      final response = await _gatewayClient
           .get(Uri.parse('${LocalDaemonController.defaultUrl}/health'))
           .timeout(const Duration(milliseconds: 800));
       if (response.statusCode == 200) {
@@ -91,7 +93,7 @@ class StandaloneDaemonController implements LocalDaemonController {
       return null;
     }
     try {
-      final response = await http
+      final response = await _gatewayClient
           .get(Uri.parse('${LocalDaemonController.defaultUrl}/health'))
           .timeout(const Duration(milliseconds: 800));
       if (response.statusCode == 200) {
@@ -140,7 +142,7 @@ class StandaloneDaemonController implements LocalDaemonController {
             'timeout_seconds': LocalDaemonController.restartSafetyTimeout.inSeconds.toString(),
           },
         );
-        final response = await http.post(uri).timeout(LocalDaemonController.restartRequestTimeout);
+        final response = await _gatewayClient.post(uri).timeout(LocalDaemonController.restartRequestTimeout);
         if (response.statusCode == 200) {
           // Wait for service to auto-restart via launchd/systemd KeepAlive
           await Future<void>.delayed(const Duration(milliseconds: 1500));
@@ -174,7 +176,7 @@ class StandaloneDaemonController implements LocalDaemonController {
       }
     }
     try {
-      final response = await http
+      final response = await _gatewayClient
           .post(Uri.parse('${LocalDaemonController.defaultUrl}/update'))
           .timeout(const Duration(minutes: 2));
       if (response.statusCode != 200) return false;

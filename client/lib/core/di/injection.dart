@@ -30,6 +30,7 @@ import 'package:sanad_client/infrastructure/platform/auto_update_service.dart';
 import 'package:sanad_client/infrastructure/local_tools/local_tool_execution_coordinator.dart';
 import 'package:sanad_client/infrastructure/mcp/mcp_service.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/features/conversations/data/repositories/socket_conversation_repository.dart';
 import 'package:sanad_client/features/conversations/domain/conversation_client.dart';
@@ -129,7 +130,9 @@ Future<void> configureDependencies() async {
   if (!getIt.isRegistered<SanadSocketService>()) {
     getIt.registerLazySingleton<SanadSocketService>(
       () => getIt<SanadSocketService>(
-        instanceName: AppConfig.enableCloudGateway ? 'cloudSocketService' : 'localSocketService',
+        instanceName: !AppPlatform.isDesktop || AppConfig.enableCloudGateway
+            ? 'cloudSocketService'
+            : 'localSocketService',
       ),
     );
   }

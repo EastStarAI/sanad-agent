@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import '../../core/constants.dart';
+import '../../core/sanad_home/sanad_home_bootstrap.dart';
 import '../../core/models/model_metadata.dart';
 
 class ModelsDevService {
@@ -191,7 +192,13 @@ class ModelsDevService {
         final stat = diskFile.statSync();
         final ageSeconds = DateTime.now().difference(stat.modified).inSeconds;
         if (ageSeconds >= 0 && ageSeconds < cacheTtlSeconds) {
-          final content = diskFile.readAsStringSync();
+          final content = cacheFilePathOverride == null
+              ? utf8.decode(
+                  SanadHomeBootstrap.identity().readSecretBytes(
+                    'models_dev_cache.json',
+                  ),
+                )
+              : diskFile.readAsStringSync();
           final decoded = jsonDecode(content);
           if (decoded is Map<String, dynamic>) {
             _cache = decoded;
@@ -220,8 +227,15 @@ class ModelsDevService {
           _lastFetchTime = DateTime.now();
           // Write to disk cache atomically
           try {
-            diskFile.parent.createSync(recursive: true);
-            diskFile.writeAsStringSync(response.body, flush: true);
+            if (cacheFilePathOverride == null) {
+              await SanadHomeBootstrap.identity().writeConfigText(
+                'models_dev_cache.json',
+                response.body,
+              );
+            } else {
+              diskFile.parent.createSync(recursive: true);
+              diskFile.writeAsStringSync(response.body, flush: true);
+            }
           } catch (e) {
             _logger.warning('Failed to write disk cache: $e');
           }
@@ -236,7 +250,13 @@ class ModelsDevService {
     // 4. Stale disk cache fallback
     if (_cache.isEmpty && diskFile.existsSync()) {
       try {
-        final content = diskFile.readAsStringSync();
+        final content = cacheFilePathOverride == null
+            ? utf8.decode(
+                SanadHomeBootstrap.identity().readSecretBytes(
+                  'models_dev_cache.json',
+                ),
+              )
+            : diskFile.readAsStringSync();
         final decoded = jsonDecode(content);
         if (decoded is Map<String, dynamic>) {
           _cache = decoded;

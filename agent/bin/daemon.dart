@@ -3,17 +3,25 @@ import 'dart:async';
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/sanad_home/loopback_policy.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/interfaces/gateway_manager.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
 import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 
 import 'package:sanad_agent/core/utils/logger.dart';
 
 Future<void> main(List<String> args) async {
+  // Must run before DI/config/auth can read or open anything under either
+  // configured runtime root. The outer CLI also performs this for supervised
+  // launches; keeping it here protects direct daemon entry points and tests.
+  await SanadHomeBootstrap.migrateLegacy();
   setupDI();
 
   final config = getIt<Config>();
@@ -32,7 +40,25 @@ Future<void> main(List<String> args) async {
   }
 
   if (config.enableLocalGateway) {
-    gatewayManager.registerPlatform(getIt<LocalDaemonServerPlatform>());
+    // SEC-02 / Gate B: load or create the local gateway credential,
+    // enforce loopback bind policy, and wire the security helper into
+    // the platform so every HTTP and WebSocket request is gated.
+    if (!LoopbackPolicy.isLoopbackHost(config.localGatewayHost)) {
+      final logger = Logger('DaemonStartup');
+      logger.severe(
+        'Refusing to start Local Gateway on a non-loopback host. '
+        'SEC-02 requires loopback-only.',
+      );
+      throw LocalGatewayBindViolation(config.localGatewayHost);
+    }
+    final credential = await LocalGatewayCredentials.loadOrCreate();
+    final security = LocalGatewaySecurity(
+      config: LocalGatewaySecurityConfig(allowedPort: config.localGatewayPort),
+      expectedToken: credential,
+    );
+    gatewayManager.registerPlatform(
+      LocalDaemonServerPlatform(security: security),
+    );
   } else {
     print('Local Gateway Platform is disabled via configuration.');
   }

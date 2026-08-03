@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 
 class ServiceManager {
   static const String label = 'com.eaststarai.sanad.agent';
@@ -41,6 +42,7 @@ class ServiceManager {
 
   static Future<bool> install() async {
     final sanadHome = getSanadHome();
+    await SanadHomeBootstrap.identity().ensureDirectoryPath('logs');
     final execPath = Platform.resolvedExecutable;
     final isDartVM =
         execPath.contains('dart-sdk') ||
@@ -82,6 +84,8 @@ class ServiceManager {
         <key>SuccessfulExit</key>
         <false/>
     </dict>
+    <key>Umask</key>
+    <integer>63</integer>
     <key>StandardOutPath</key>
     <string>$sanadHome/logs/daemon.log</string>
     <key>StandardErrorPath</key>
@@ -119,6 +123,7 @@ ExecStart=$finalExec ${args.join(' ')}
 WorkingDirectory=$sanadHome
 Restart=on-failure
 RestartSec=10
+UMask=0077
 StandardOutput=append:$sanadHome/logs/daemon.log
 StandardError=append:$sanadHome/logs/daemon.error.log
 Environment=SANAD_HOME=$sanadHome

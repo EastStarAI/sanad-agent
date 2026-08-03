@@ -9,6 +9,7 @@ import 'package:sanad_client/features/conversations/data/conversation_client_reg
 import 'package:sanad_client/features/conversations/domain/conversation_client.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client_impl.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
+import 'package:sanad_client/infrastructure/local_gateway/local_gateway_credential_provider.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -33,7 +34,11 @@ void main() {
       addTearDown(daemon.stop);
 
       final cloudSocket = SanadSocketService(url: 'http://127.0.0.1:65535', hardwareId: currentDeviceId);
-      final localSocket = SanadSocketService.local(url: localGatewayUrl, hardwareId: currentDeviceId);
+      final localSocket = _localSocket(
+        daemon,
+        url: localGatewayUrl,
+        hardwareId: currentDeviceId,
+      );
       addTearDown(() {
         localSocket.dispose();
         cloudSocket.dispose();
@@ -122,7 +127,8 @@ void main() {
         port: port,
       );
       addTearDown(daemon.stop);
-      final socket = SanadSocketService.local(
+      final socket = _localSocket(
+        daemon,
         url: 'http://127.0.0.1:$port',
         hardwareId: 'workspace-folder-e2e',
       );
@@ -183,7 +189,11 @@ void main() {
       final daemon = await _startDaemon(sanadagentLocalDir: sanadagentLocalDir, port: port);
       addTearDown(daemon.stop);
 
-      final localSocket = SanadSocketService.local(url: 'http://127.0.0.1:$port', hardwareId: currentDeviceId);
+      final localSocket = _localSocket(
+        daemon,
+        url: 'http://127.0.0.1:$port',
+        hardwareId: currentDeviceId,
+      );
       addTearDown(localSocket.dispose);
 
       await _waitForLocalSocket(localSocket);
@@ -296,7 +306,8 @@ void main() {
         url: 'http://127.0.0.1:65535',
         hardwareId: currentDeviceId,
       );
-      final firstLocalSocket = SanadSocketService.local(
+      final firstLocalSocket = _localSocket(
+        daemon,
         url: localGatewayUrl,
         hardwareId: currentDeviceId,
       );
@@ -363,7 +374,8 @@ void main() {
         url: 'http://127.0.0.1:65535',
         hardwareId: currentDeviceId,
       );
-      final reconnectLocalSocket = SanadSocketService.local(
+      final reconnectLocalSocket = _localSocket(
+        daemon,
         url: localGatewayUrl,
         hardwareId: currentDeviceId,
       );
@@ -462,6 +474,136 @@ void main() {
     timeout: const Timeout(Duration(minutes: 3)),
   );
   test(
+    'migrates a legacy Home and reconnects after daemon restart without touching workspace files',
+    () async {
+      final agentDir = Directory(
+        '${Directory.current.parent.path}${Platform.pathSeparator}agent',
+      );
+      final home = await Directory.systemTemp.createTemp(
+        'sanad-legacy-home-e2e-',
+      );
+      final stateHome = await Directory.systemTemp.createTemp(
+        'sanad-legacy-state-e2e-',
+      );
+      final workspace = await Directory.systemTemp.createTemp(
+        'sanad-workspace-marker-e2e-',
+      );
+      addTearDown(() async {
+        for (final directory in [home, stateHome, workspace]) {
+          if (directory.existsSync()) await directory.delete(recursive: true);
+        }
+      });
+      final legacyAuth = File(
+        '${home.path}${Platform.pathSeparator}auth.json',
+      )..writeAsStringSync('{"hardware_id":"legacy-e2e"}');
+      final marker = File(
+        '${workspace.path}${Platform.pathSeparator}unchanged.txt',
+      )..writeAsStringSync('workspace-untouched');
+      if (!Platform.isWindows) {
+        Process.runSync('chmod', ['644', legacyAuth.path]);
+      }
+
+      final firstPort = _pickPort();
+      final first = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: firstPort,
+        existingStateHome: stateHome,
+        existingSanadHome: home,
+      );
+      addTearDown(first.stop);
+      final firstSocket = _localSocket(
+        first,
+        url: 'http://127.0.0.1:$firstPort',
+        hardwareId: 'legacy-restart-e2e',
+      );
+      await _waitForLocalSocket(firstSocket);
+      final firstToken = await LocalGatewayCredentialProvider(
+        sanadHomePath: home.path,
+      ).read();
+      firstSocket.dispose();
+      await first.stop();
+
+      if (!Platform.isWindows) {
+        expect(legacyAuth.statSync().mode & 0x1ff, 0x180);
+        expect(home.statSync().mode & 0x1ff, 0x1c0);
+        expect(stateHome.statSync().mode & 0x1ff, 0x1c0);
+      }
+      expect(marker.readAsStringSync(), 'workspace-untouched');
+
+      final secondPort = firstPort == 58185 ? 58184 : firstPort + 1;
+      final second = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: secondPort,
+        existingStateHome: stateHome,
+        existingSanadHome: home,
+      );
+      addTearDown(second.stop);
+      final secondSocket = _localSocket(
+        second,
+        url: 'http://127.0.0.1:$secondPort',
+        hardwareId: 'legacy-restart-e2e',
+      );
+      addTearDown(secondSocket.dispose);
+      await _waitForLocalSocket(secondSocket);
+      final secondToken = await LocalGatewayCredentialProvider(
+        sanadHomePath: home.path,
+      ).read();
+
+      expect(secondToken, firstToken);
+      expect(marker.readAsStringSync(), 'workspace-untouched');
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+  test(
+    'connects two isolated daemon and client pairs on distinct Homes and ports',
+    () async {
+      final agentDir = Directory(
+        '${Directory.current.parent.path}${Platform.pathSeparator}agent',
+      );
+      final firstPort = _pickPort();
+      final secondPort = firstPort + 1;
+      final first = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: firstPort,
+      );
+      final second = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: secondPort,
+      );
+      addTearDown(first.stop);
+      addTearDown(second.stop);
+      final firstSocket = _localSocket(
+        first,
+        url: 'http://127.0.0.1:$firstPort',
+        hardwareId: 'isolated-pair-one',
+      );
+      final secondSocket = _localSocket(
+        second,
+        url: 'http://127.0.0.1:$secondPort',
+        hardwareId: 'isolated-pair-two',
+      );
+      addTearDown(firstSocket.dispose);
+      addTearDown(secondSocket.dispose);
+
+      await Future.wait([
+        _waitForLocalSocket(firstSocket),
+        _waitForLocalSocket(secondSocket),
+      ]);
+      final firstToken = await LocalGatewayCredentialProvider(
+        sanadHomePath: first.isolatedSanadHome.path,
+      ).read();
+      final secondToken = await LocalGatewayCredentialProvider(
+        sanadHomePath: second.isolatedSanadHome.path,
+      ).read();
+
+      expect(firstSocket.isConnected, isTrue);
+      expect(secondSocket.isConnected, isTrue);
+      expect(first.isolatedSanadHome.path, isNot(second.isolatedSanadHome.path));
+      expect(firstToken, isNot(secondToken));
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+  test(
     'queries and resets provider usage through a spawned daemon and local HTTP fixture',
     () async {
       final fixture = await _ProviderUsageFixture.start();
@@ -482,7 +624,8 @@ void main() {
         url: 'http://127.0.0.1:65535',
         hardwareId: hardwareId,
       );
-      final localSocket = SanadSocketService.local(
+      final localSocket = _localSocket(
+        daemon,
         url: 'http://127.0.0.1:$port',
         hardwareId: hardwareId,
       );
@@ -583,11 +726,19 @@ String _getDartExecutablePath() {
 }
 
 class _E2eDaemon {
-  _E2eDaemon(this.process, this.stateHome, this.isolatedSanadHome);
+  _E2eDaemon(
+    this.process,
+    this.stateHome,
+    this.isolatedSanadHome, {
+    required this.deleteStateHome,
+    required this.deleteSanadHome,
+  });
 
   final Process process;
   final Directory stateHome;
-  final Directory? isolatedSanadHome;
+  final Directory isolatedSanadHome;
+  final bool deleteStateHome;
+  final bool deleteSanadHome;
   bool _stopped = false;
 
   Future<void> stop() async {
@@ -602,11 +753,11 @@ class _E2eDaemon {
         },
       );
     }
-    if (stateHome.existsSync()) {
+    if (deleteStateHome && stateHome.existsSync()) {
       await stateHome.delete(recursive: true);
     }
-    if (isolatedSanadHome?.existsSync() ?? false) {
-      await isolatedSanadHome!.delete(recursive: true);
+    if (deleteSanadHome && isolatedSanadHome.existsSync()) {
+      await isolatedSanadHome.delete(recursive: true);
     }
   }
 }
@@ -615,23 +766,27 @@ Future<_E2eDaemon> _startDaemon({
   required Directory sanadagentLocalDir,
   required int port,
   bool isolateSanadHome = false,
+  Directory? existingStateHome,
+  Directory? existingSanadHome,
 }) async {
-  final stateHome = await Directory.systemTemp.createTemp(
-    'sanad-local-daemon-e2e-',
-  );
+  final stateHome = existingStateHome ?? await Directory.systemTemp.createTemp('sanad-local-daemon-e2e-');
+  final ownsStateHome = existingStateHome == null;
   final liveStateHome = Platform.environment['SANAD_STATE_HOME']?.trim().isNotEmpty == true
       ? Platform.environment['SANAD_STATE_HOME']!.trim()
       : Platform.environment['SANAD_HOME']?.trim().isNotEmpty == true
       ? Platform.environment['SANAD_HOME']!.trim()
       : '${Platform.environment['HOME']}${Platform.pathSeparator}.sanad';
   if (stateHome.absolute.path == Directory(liveStateHome).absolute.path) {
-    await stateHome.delete(recursive: true);
+    if (ownsStateHome) await stateHome.delete(recursive: true);
     throw StateError('E2E state must not use the live Sanad state directory.');
   }
 
-  final isolatedSanadHome = isolateSanadHome
-      ? await Directory.systemTemp.createTemp('sanad-provider-usage-home-e2e-')
-      : null;
+  final isolatedSanadHome =
+      existingSanadHome ??
+      await Directory.systemTemp.createTemp(
+        isolateSanadHome ? 'sanad-provider-usage-home-e2e-' : 'sanad-local-home-e2e-',
+      );
+  final ownsSanadHome = existingSanadHome == null;
   final environment = <String, String>{
     ...Platform.environment,
     'ENABLE_GATEWAY': 'false',
@@ -639,8 +794,8 @@ Future<_E2eDaemon> _startDaemon({
     'LOCAL_GATEWAY_PORT': '$port',
     'SANAD_E2E_TEST_MODE': 'true',
     'SANAD_STATE_HOME': stateHome.path,
-    if (isolatedSanadHome != null) ...{
-      'SANAD_HOME': isolatedSanadHome.path,
+    'SANAD_HOME': isolatedSanadHome.path,
+    if (isolateSanadHome) ...{
       'LLM_MODEL': 'sanad-e2e-model',
       'LLM_BASE_URL': 'http://127.0.0.1:1/e2e',
     },
@@ -656,9 +811,9 @@ Future<_E2eDaemon> _startDaemon({
       environment: environment,
     );
   } catch (_) {
-    await stateHome.delete(recursive: true);
-    if (isolatedSanadHome?.existsSync() ?? false) {
-      await isolatedSanadHome!.delete(recursive: true);
+    if (ownsStateHome) await stateHome.delete(recursive: true);
+    if (ownsSanadHome && isolatedSanadHome.existsSync()) {
+      await isolatedSanadHome.delete(recursive: true);
     }
     rethrow;
   }
@@ -678,7 +833,27 @@ Future<_E2eDaemon> _startDaemon({
         .asFuture<void>(),
   );
 
-  return _E2eDaemon(process, stateHome, isolatedSanadHome);
+  return _E2eDaemon(
+    process,
+    stateHome,
+    isolatedSanadHome,
+    deleteStateHome: ownsStateHome,
+    deleteSanadHome: ownsSanadHome,
+  );
+}
+
+SanadSocketService _localSocket(
+  _E2eDaemon daemon, {
+  required String url,
+  required String hardwareId,
+}) {
+  return SanadSocketService.local(
+    url: url,
+    hardwareId: hardwareId,
+    credentialProvider: LocalGatewayCredentialProvider(
+      sanadHomePath: daemon.isolatedSanadHome.path,
+    ),
+  );
 }
 
 class _ProviderUsageFixture {

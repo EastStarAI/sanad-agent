@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'secure_runtime_file.dart';
+
 class SanadDevRuntime {
   final String workspaceRoot;
   final String repositoryRoot;
@@ -28,8 +30,11 @@ class SanadDevRuntime {
 
   String get metadataPath => _join(runtimeDirectory, 'runtime.json');
   String get agentLogPath => _join(runtimeDirectory, 'agent.log');
-  String get worktreeDisplayName =>
-      workspaceRoot.replaceAll('\\', '/').split('/').where((part) => part.isNotEmpty).last;
+  String get worktreeDisplayName => workspaceRoot
+      .replaceAll('\\', '/')
+      .split('/')
+      .where((part) => part.isNotEmpty)
+      .last;
 
   Map<String, dynamic> toJson({
     int? agentPid,
@@ -99,7 +104,8 @@ Future<SanadDevRuntime> discoverSanadDevRuntime({
     '--git-common-dir',
   ]);
   final commonDirectory = _absolutePath(commonDirectoryRaw, workspaceRoot);
-  final isLinkedWorktree = _canonicalPath(gitDirectory) != _canonicalPath(commonDirectory);
+  final isLinkedWorktree =
+      _canonicalPath(gitDirectory) != _canonicalPath(commonDirectory);
 
   final repositoryRoot = resolveRepositoryRoot(workspaceRoot);
   final worktreeId = deriveWorktreeId(workspaceRoot, branch);
@@ -160,7 +166,9 @@ int resolveSanadDevAgentPortStart({
   required String workspaceRoot,
   required bool usesPrimaryResources,
 }) {
-  return usesPrimaryResources ? canonicalPrimaryAgentPort : 58086 + stableHash(workspaceRoot) % 100;
+  return usesPrimaryResources
+      ? canonicalPrimaryAgentPort
+      : 58086 + stableHash(workspaceRoot) % 100;
 }
 
 const int canonicalPrimaryAgentPort = 58085;
@@ -181,7 +189,11 @@ String resolveRepositoryRoot(String workspaceRoot) {
 }
 
 String deriveWorktreeId(String workspaceRoot, String branch) {
-  final leaf = workspaceRoot.replaceAll('\\', '/').split('/').where((part) => part.isNotEmpty).last;
+  final leaf = workspaceRoot
+      .replaceAll('\\', '/')
+      .split('/')
+      .where((part) => part.isNotEmpty)
+      .last;
   final readable = sanitizeRuntimeId(branch == 'HEAD' ? leaf : branch);
   final suffix = stableHash(
     _canonicalPath(workspaceRoot),
@@ -190,7 +202,10 @@ String deriveWorktreeId(String workspaceRoot, String branch) {
 }
 
 String sanitizeRuntimeId(String value) {
-  final normalized = value.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]+'), '-').replaceAll(RegExp(r'^-+|-+$'), '');
+  final normalized = value
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
   if (normalized.isEmpty) return 'worktree';
   return normalized.length <= 48 ? normalized : normalized.substring(0, 48);
 }
@@ -213,8 +228,12 @@ String resolveSanadDevPreferencesPrefix({
   required String sanadHome,
   String? sanadHomeSelector,
 }) {
-  final usesPrimaryUserPreferences = sanadHomeSelector == 'user' || (!isLinkedWorktree && sanadHomeSelector == null);
-  return usesPrimaryUserPreferences ? '' : deriveSanadDevPreferencesPrefix(sanadHome);
+  final usesPrimaryUserPreferences =
+      sanadHomeSelector == 'user' ||
+      (!isLinkedWorktree && sanadHomeSelector == null);
+  return usesPrimaryUserPreferences
+      ? ''
+      : deriveSanadDevPreferencesPrefix(sanadHome);
 }
 
 String resolveDefaultUserSanadHome(Map<String, String> environment) {
@@ -248,7 +267,9 @@ String resolveSanadDevHome({
   if (explicitSanadHome != null && explicitSanadHome.isNotEmpty) {
     final configured = configuredSanadHome?.trim();
     if (explicitSanadHome == 'user') {
-      return configured != null && configured.isNotEmpty ? configured : _join(userHome, '.sanad');
+      return configured != null && configured.isNotEmpty
+          ? configured
+          : _join(userHome, '.sanad');
     }
     if (!isAbsoluteFileSystemPath(explicitSanadHome)) {
       throw const FormatException(
@@ -261,7 +282,9 @@ String resolveSanadDevHome({
     return _join(_join(userHome, '.sanad', 'dev', 'homes'), worktreeId);
   }
   final configured = configuredSanadHome?.trim();
-  return configured != null && configured.isNotEmpty ? configured : _join(userHome, '.sanad');
+  return configured != null && configured.isNotEmpty
+      ? configured
+      : _join(userHome, '.sanad');
 }
 
 bool isAbsoluteFileSystemPath(String value) {
@@ -316,15 +339,11 @@ Future<void> writeRuntimeRecord(
   SanadDevRuntime runtime,
   Map<String, dynamic> data,
 ) async {
-  final directory = Directory(runtime.runtimeDirectory);
-  await directory.create(recursive: true);
-  final target = File(runtime.metadataPath);
-  final temporary = File('${runtime.metadataPath}.tmp');
-  await temporary.writeAsString(
+  await secureRuntimeAtomicWrite(
+    runtime.runtimeDirectory,
+    runtime.metadataPath,
     '${const JsonEncoder.withIndent('  ').convert(data)}\n',
   );
-  if (await target.exists()) await target.delete();
-  await temporary.rename(target.path);
 }
 
 Future<SanadDevRuntimeRecord?> readRuntimeRecord(
@@ -386,7 +405,9 @@ Future<String> _gitOutput(String workingDirectory, List<String> args) async {
 }
 
 String _userHome(Map<String, String> environment) {
-  final home = Platform.isWindows ? environment['USERPROFILE'] : environment['HOME'];
+  final home = Platform.isWindows
+      ? environment['USERPROFILE']
+      : environment['HOME'];
   if (home == null || home.trim().isEmpty) {
     throw StateError('Could not determine the user home directory.');
   }

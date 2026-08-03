@@ -403,7 +403,14 @@ Terminal; Linux selects a declared supported terminal; Windows uses Windows
 Terminal or PowerShell with quoted arguments. Headless/CI execution never opens
 a GUI and prints a bounded copyable `logs` command instead. `run agent` and
 `run client` keep their single component and controls in the invoking terminal;
-`run client` never opens an additional terminal.
+`run client` never opens an additional terminal and shows only the latest 50
+retained lines before following current output.
+
+Bootstrap readiness checks are silent. Output such as `Installing Flutter
+<version>` appears only when that SDK is actually unavailable and installation
+work begins; an already-ready SDK produces no verification or installation
+banner. A command received through another checkout's user shim is redispatched
+to the invoking Git worktree before bootstrap and runtime execution.
 
 Managed component journals begin at `Process.start`, preserve stdout/stderr
 ordering and ANSI bytes, mark process generations, rotate through four 2 MiB
