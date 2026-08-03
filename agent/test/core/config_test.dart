@@ -140,12 +140,12 @@ LOG_MAX_LENGTH=1000
 
     final overridden = Config(
       environment: const {
-        'GATEWAY_URL': 'https://dev.api.sanad.eaststarai.com',
-        'PORTAL_URL': 'https://dev.portal.sanad.eaststarai.com',
+        'GATEWAY_URL': 'https://gateway.internal.example',
+        'PORTAL_URL': 'https://portal.internal.example',
       },
     );
-    expect(overridden.gatewayUrl, 'https://dev.api.sanad.eaststarai.com');
-    expect(overridden.portalUrl, 'https://dev.portal.sanad.eaststarai.com');
+    expect(overridden.gatewayUrl, 'https://gateway.internal.example');
+    expect(overridden.portalUrl, 'https://portal.internal.example');
   });
 
   test(

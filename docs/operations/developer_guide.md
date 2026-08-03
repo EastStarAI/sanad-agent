@@ -260,14 +260,6 @@ cd agent
 fvm dart run bin/sanad_agent.dart login
 ```
 
-Environment overrides can target a compatible service without changing
-tracked profiles:
-
-```env
-GATEWAY_URL=https://dev.api.sanad.eaststarai.com
-PORTAL_URL=https://dev.portal.sanad.eaststarai.com
-```
-
 Authentication and provider credentials belong to the selected Sanad Home and
 must remain outside Git and logs.
 

@@ -79,5 +79,6 @@ Defined in `core/navigation/navigation_history_controller.dart`. The controller:
 
 ## Development Runtime Configuration
 
-- Public source launch profiles use Production hosted endpoints with Local+Cloud enabled by default; Dev endpoint profiles are explicit internal integration only, and automated tests must not contact Production.
+- Public source launch profiles use Production hosted endpoints with Local+Cloud enabled by default; automated tests must not contact Production.
+- Public source must not own hosted Development or Staging endpoint values. Non-local profiles default to Production, while private deployment owners inject `BACKEND_URL` and `PORTAL_URL` explicitly at build time.
 - Keep worktree identity compile-time and optional. `sanad-dev` may inject a readable linked-worktree name, branch, absolute Sanad Home, and home-derived SharedPreferences prefix through `AppConfig`; ordinary, primary-user, and packaged runs retain the default preference namespace.
