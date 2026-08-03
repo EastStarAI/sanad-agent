@@ -481,35 +481,14 @@ if ([IO.File]::Exists($args[1])) {
   }
 
   static void _enforceWindowsAclSync(String path, {required bool isDirectory}) {
-    final whoami = Process.runSync('whoami', const []);
-    final owner = whoami.stdout.toString().trim();
-    if (whoami.exitCode != 0 || owner.isEmpty) {
-      throw const SanadHomeWriteFailure(
-        'acl_identity_failed',
-        'The current Windows identity could not be resolved.',
-      );
-    }
-    final inheritance = isDirectory ? 'ContainerInherit,ObjectInherit' : 'None';
     const script = r'''
 $ErrorActionPreference = 'Stop'
 $path = $args[0]
-$owner = New-Object System.Security.Principal.NTAccount($args[1])
+$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+$ace = if ($args[1] -eq 'directory') { "(A;OICI;FA;;;$sid)" } else { "(A;;FA;;;$sid)" }
+$sddl = "O:${sid}G:BUD:P${ace}"
 $acl = Get-Acl -LiteralPath $path
-$acl.SetAccessRuleProtection($true, $false)
-foreach ($existing in @($acl.Access)) {
-  if (-not $existing.IsInherited) {
-    $acl.RemoveAccessRuleSpecific($existing)
-  }
-}
-$inheritance = [System.Enum]::Parse([System.Security.AccessControl.InheritanceFlags], $args[2])
-$rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
-  $owner,
-  [System.Security.AccessControl.FileSystemRights]::FullControl,
-  $inheritance,
-  [System.Security.AccessControl.PropagationFlags]::None,
-  [System.Security.AccessControl.AccessControlType]::Allow
-)
-$acl.SetAccessRule($rule)
+$acl.SetSecurityDescriptorSddlForm($sddl)
 Set-Acl -LiteralPath $path -AclObject $acl
 ''';
     final result = Process.runSync('powershell.exe', [
@@ -518,8 +497,7 @@ Set-Acl -LiteralPath $path -AclObject $acl
       '-Command',
       script,
       path,
-      owner,
-      inheritance,
+      isDirectory ? 'directory' : 'file',
     ]);
     if (result.exitCode != 0) {
       throw const SanadHomeWriteFailure(
