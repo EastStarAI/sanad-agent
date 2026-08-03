@@ -150,7 +150,9 @@ $owner = New-Object System.Security.Principal.NTAccount($args[1])
 $acl = Get-Acl -LiteralPath $args[0]
 $acl.SetAccessRuleProtection($true, $false)
 foreach ($existing in @($acl.Access)) {
-  $acl.RemoveAccessRuleSpecific($existing)
+  if (-not $existing.IsInherited) {
+    $acl.RemoveAccessRuleSpecific($existing)
+  }
 }
 $inheritance = [System.Enum]::Parse([System.Security.AccessControl.InheritanceFlags], $args[2])
 $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
