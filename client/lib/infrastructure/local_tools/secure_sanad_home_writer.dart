@@ -75,24 +75,28 @@ class SecureSanadHomeWriter {
       return;
     }
     const script = r'''
-& {
-param($source, $destination)
 $ErrorActionPreference = 'Stop'
+$source = $env:SANAD_ATOMIC_SOURCE
+$destination = $env:SANAD_ATOMIC_DESTINATION
 if ([IO.File]::Exists($destination)) {
   [IO.File]::Replace($source, $destination, $null, $true)
 } else {
   [IO.File]::Move($source, $destination)
 }
-}
 ''';
-    final result = await Process.run('powershell.exe', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      script,
-      source.path,
-      destination.path,
-    ]);
+    final result = await Process.run(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        script,
+      ],
+      environment: {
+        'SANAD_ATOMIC_SOURCE': source.path,
+        'SANAD_ATOMIC_DESTINATION': destination.path,
+      },
+    );
     if (result.exitCode != 0) {
       throw const SecureSanadHomeViolation('atomic_replace_failed');
     }
@@ -142,9 +146,9 @@ if ([IO.File]::Exists($destination)) {
     }
 
     const script = r'''
-& {
-param($path, $kind)
 $ErrorActionPreference = 'Stop'
+$path = $env:SANAD_SECURE_PATH
+$kind = $env:SANAD_SECURE_KIND
 $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $ace = if ($kind -eq 'directory') { "(A;OICI;FA;;;$sid)" } else { "(A;;FA;;;$sid)" }
 $sddl = "D:P${ace}"
@@ -154,16 +158,20 @@ $acl.SetSecurityDescriptorSddlForm(
   [System.Security.AccessControl.AccessControlSections]::Access
 )
 Set-Acl -LiteralPath $path -AclObject $acl
-}
 ''';
-    final result = await Process.run('powershell.exe', [
-      '-NoProfile',
-      '-NonInteractive',
-      '-Command',
-      script,
-      path,
-      unixMode == '700' ? 'directory' : 'file',
-    ]);
+    final result = await Process.run(
+      'powershell.exe',
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        script,
+      ],
+      environment: {
+        'SANAD_SECURE_PATH': path,
+        'SANAD_SECURE_KIND': unixMode == '700' ? 'directory' : 'file',
+      },
+    );
     if (result.exitCode != 0) {
       throw const SecureSanadHomeViolation('ownership_failed');
     }
