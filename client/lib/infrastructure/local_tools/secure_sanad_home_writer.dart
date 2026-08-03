@@ -1,0 +1,172 @@
+import 'dart:io';
+import 'dart:math';
+
+class SecureSanadHomeViolation implements Exception {
+  const SecureSanadHomeViolation(this.code);
+
+  final String code;
+
+  @override
+  String toString() => 'SecureSanadHomeViolation($code)';
+}
+
+class SecureSanadHomeWriter {
+  const SecureSanadHomeWriter(this.sanadHomePath);
+
+  final String sanadHomePath;
+
+  Future<File> resolveFile(String relativeName) async {
+    if (relativeName.isEmpty ||
+        relativeName.contains('\u0000') ||
+        relativeName == '..' ||
+        relativeName.contains('/') ||
+        relativeName.contains('\\')) {
+      throw const SecureSanadHomeViolation('invalid_relative_path');
+    }
+    final home = await _secureHome();
+    final file = File('${home.path}${Platform.pathSeparator}$relativeName');
+    final type = await FileSystemEntity.type(file.path, followLinks: false);
+    if (type == FileSystemEntityType.link ||
+        (type != FileSystemEntityType.notFound && type != FileSystemEntityType.file)) {
+      throw const SecureSanadHomeViolation('unsafe_target');
+    }
+    return file;
+  }
+
+  Future<void> writeText(String relativeName, String content) async {
+    final destination = await resolveFile(relativeName);
+    final suffix = List<int>.generate(
+      12,
+      (_) => Random.secure().nextInt(256),
+    ).map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+    final temporary = File('${destination.path}.tmp.$suffix');
+    RandomAccessFile? handle;
+    try {
+      await temporary.create(exclusive: true);
+      await _secureFile(temporary);
+      handle = await temporary.open(mode: FileMode.writeOnly);
+      await handle.writeString(content);
+      await handle.flush();
+      await handle.close();
+      handle = null;
+      await _replaceAtomically(temporary, destination);
+      await _secureFile(destination);
+    } on SecureSanadHomeViolation {
+      rethrow;
+    } on Object {
+      throw const SecureSanadHomeViolation('atomic_write_failed');
+    } finally {
+      try {
+        await handle?.close();
+      } on Object {
+        // Best-effort cleanup after a failed secure write.
+      }
+      try {
+        if (await temporary.exists()) await temporary.delete();
+      } on Object {
+        // Best-effort cleanup after a failed secure write.
+      }
+    }
+  }
+
+  Future<void> _replaceAtomically(File source, File destination) async {
+    if (!Platform.isWindows) {
+      await source.rename(destination.path);
+      return;
+    }
+    const script = r'''
+$ErrorActionPreference = 'Stop'
+if ([IO.File]::Exists($args[1])) {
+  [IO.File]::Replace($args[0], $args[1], $null, $true)
+} else {
+  [IO.File]::Move($args[0], $args[1])
+}
+''';
+    final result = await Process.run('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      script,
+      source.path,
+      destination.path,
+    ]);
+    if (result.exitCode != 0) {
+      throw const SecureSanadHomeViolation('atomic_replace_failed');
+    }
+  }
+
+  Future<void> delete(String relativeName) async {
+    final file = await resolveFile(relativeName);
+    if (await file.exists()) await file.delete();
+  }
+
+  Future<Directory> _secureHome() async {
+    final raw = Directory(sanadHomePath).absolute;
+    final existingType = await FileSystemEntity.type(
+      raw.path,
+      followLinks: false,
+    );
+    if (existingType == FileSystemEntityType.link ||
+        (existingType != FileSystemEntityType.notFound && existingType != FileSystemEntityType.directory)) {
+      throw const SecureSanadHomeViolation('unsafe_home');
+    }
+    if (existingType == FileSystemEntityType.notFound) {
+      await raw.create(recursive: true);
+    }
+    await _secureDirectory(raw);
+    final resolved = Directory(await raw.resolveSymbolicLinks());
+    return resolved;
+  }
+
+  Future<void> _secureDirectory(Directory directory) async {
+    await _applyOwnership(directory.path, unixMode: '700');
+  }
+
+  Future<void> _secureFile(File file) async {
+    await _applyOwnership(file.path, unixMode: '600');
+  }
+
+  Future<void> _applyOwnership(
+    String path, {
+    required String unixMode,
+  }) async {
+    if (!Platform.isWindows) {
+      final result = await Process.run('chmod', [unixMode, path]);
+      if (result.exitCode != 0) {
+        throw const SecureSanadHomeViolation('ownership_failed');
+      }
+      return;
+    }
+
+    final whoami = await Process.run('whoami', const []);
+    final owner = whoami.stdout.toString().trim();
+    if (whoami.exitCode != 0 || owner.isEmpty) {
+      throw const SecureSanadHomeViolation('owner_unavailable');
+    }
+    final securityType = unixMode == '700' ? 'DirectorySecurity' : 'FileSecurity';
+    final inheritance = unixMode == '700' ? 'ContainerInherit,ObjectInherit' : 'None';
+    const script = r'''
+$ErrorActionPreference = 'Stop'
+$owner = New-Object System.Security.Principal.NTAccount($args[1])
+$acl = New-Object ("System.Security.AccessControl." + $args[2])
+$acl.SetOwner($owner)
+$acl.SetAccessRuleProtection($true, $false)
+$rule = New-Object System.Security.AccessControl.FileSystemAccessRule($owner, 'FullControl', $args[3], 'None', 'Allow')
+$acl.AddAccessRule($rule)
+Set-Acl -LiteralPath $args[0] -AclObject $acl
+''';
+    final result = await Process.run('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      script,
+      path,
+      owner,
+      securityType,
+      inheritance,
+    ]);
+    if (result.exitCode != 0) {
+      throw const SecureSanadHomeViolation('ownership_failed');
+    }
+  }
+}

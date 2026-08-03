@@ -1,7 +1,6 @@
-import 'dart:io';
-import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/setup/env_template.dart';
 import 'package:sanad_agent/core/setup/cli_provider_setup.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 
 /// Entry point for `sanad setup`.
 ///
@@ -19,13 +18,12 @@ Future<void> main(List<String> args) async {
   print('└─────────────────────────────────────────────────────────┘');
   print('');
 
-  // Ensure target directory exists for .env
-  final envFile = File(getEnvPath());
-  if (!envFile.parent.existsSync()) {
-    envFile.parent.createSync(recursive: true);
-  }
-  if (!envFile.existsSync()) {
-    envFile.writeAsStringSync(defaultEnvContent);
+  await SanadHomeBootstrap.migrateLegacy();
+  if (!SanadHomeBootstrap.identity().fileExists('.env')) {
+    await SanadHomeBootstrap.identity().writeConfigText(
+      '.env',
+      defaultEnvContent,
+    );
   }
 
   final services = CliProviderServices();

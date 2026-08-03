@@ -4,6 +4,7 @@ import 'package:sanad_agent/core/app_config.dart';
 import 'package:sanad_agent/core/hot_restart_manager.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/setup/env_template.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/core/update/agent_update_service.dart';
 import 'cli.dart' as cli;
 import 'daemon.dart' as daemon;
@@ -14,13 +15,15 @@ import 'service.dart' as service_cmd;
 final String version = loadAgentVersion();
 
 void main(List<String> arguments) async {
-  // Ensure .env exists in the resolved configuration path
-  final envPath = getEnvPath();
-  if (!File(envPath).existsSync()) {
+  // SEC-02: no configuration read or write may precede the owner-only runtime
+  // boundary migration.
+  await SanadHomeBootstrap.migrateLegacy();
+  if (!SanadHomeBootstrap.identity().fileExists('.env')) {
     try {
-      final file = File(envPath);
-      file.parent.createSync(recursive: true);
-      file.writeAsStringSync(defaultEnvContent);
+      await SanadHomeBootstrap.identity().writeConfigText(
+        '.env',
+        defaultEnvContent,
+      );
     } catch (e) {
       stderr.writeln(
         'Warning: Failed to automatically initialize .env file: $e',

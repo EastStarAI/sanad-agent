@@ -66,6 +66,11 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Permission resolution is first-writer-wins and resumed execution reapplies the persisted decision before invoking the gated tool.
 
 ## Logging and Restart
+- Local Gateway binds only to loopback and authenticates every HTTP request and
+  WebSocket upgrade before route handling. The credential is owner-only in the
+  active Sanad Home and appears only in the dedicated header. Host must match
+  the configured loopback authority and port; any supplied Origin must be in
+  the explicit allowlist.
 - Source-development health responses expose the inherited launcher id and
   runtime nonce only as local ownership evidence; neither value is an
   authentication credential, and managed mutation still requires the complete

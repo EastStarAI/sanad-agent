@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'secure_runtime_file.dart';
+
 const runtimeLauncherRecordVersion = 1;
 
 enum RuntimeOwnershipClass {
@@ -128,12 +130,11 @@ String runtimeLauncherStopRequestPath(String sanadHome, int agentPort) {
 
 Future<void> writeRuntimeLauncherRecord(RuntimeLauncherRecord record) async {
   final path = runtimeLauncherRecordPath(record.sanadHome, record.agentPort);
-  final file = File(path);
-  await file.parent.create(recursive: true);
-  final temporary = File('$path.tmp');
-  await temporary.writeAsString('${jsonEncode(record.toJson())}\n');
-  if (await file.exists()) await file.delete();
-  await temporary.rename(path);
+  await secureRuntimeAtomicWrite(
+    record.sanadHome,
+    path,
+    '${jsonEncode(record.toJson())}\n',
+  );
 }
 
 Future<RuntimeLauncherRecord?> readRuntimeLauncherRecord(
@@ -164,14 +165,11 @@ Future<void> writeRuntimeLauncherStopRequest(
     record.sanadHome,
     record.agentPort,
   );
-  final file = File(path);
-  await file.parent.create(recursive: true);
-  final temporary = File('$path.tmp');
-  await temporary.writeAsString(
+  await secureRuntimeAtomicWrite(
+    record.sanadHome,
+    path,
     '${jsonEncode({'launcher_id': record.launcherId, 'runtime_nonce': record.runtimeNonce, 'requested_at': DateTime.now().toUtc().toIso8601String()})}\n',
   );
-  if (await file.exists()) await file.delete();
-  await temporary.rename(path);
 }
 
 Future<bool> consumeRuntimeLauncherStopRequest(
@@ -249,10 +247,12 @@ String? validateManagedRuntimeRecord({
     if (gateway?.hasPort != true || gateway!.port != record.agentPort) {
       return 'client gateway does not match lease';
     }
-    if (clientHome == null || !_sameOwnershipPath(clientHome, record.sanadHome)) {
+    if (clientHome == null ||
+        !_sameOwnershipPath(clientHome, record.sanadHome)) {
       return 'client Sanad Home does not match lease';
     }
-    if (defines['SANAD_SHARED_PREFERENCES_PREFIX'] != record.preferencesPrefix) {
+    if (defines['SANAD_SHARED_PREFERENCES_PREFIX'] !=
+        record.preferencesPrefix) {
       return 'client preferences namespace does not match lease';
     }
   }
@@ -295,7 +295,9 @@ bool _sameOwnershipPath(String first, String second) {
 
   final left = canonical(first);
   final right = canonical(second);
-  return Platform.isWindows ? left.toLowerCase() == right.toLowerCase() : left == right;
+  return Platform.isWindows
+      ? left.toLowerCase() == right.toLowerCase()
+      : left == right;
 }
 
 String _requiredString(Map<String, dynamic> json, String key) {
@@ -318,5 +320,8 @@ int _requiredInt(Map<String, dynamic> json, String key) {
 
 List<int> _intList(Object? raw) {
   if (raw is! List) return const [];
-  return raw.map((value) => value is int ? value : int.tryParse('$value')).whereType<int>().toList(growable: false);
+  return raw
+      .map((value) => value is int ? value : int.tryParse('$value'))
+      .whereType<int>()
+      .toList(growable: false);
 }

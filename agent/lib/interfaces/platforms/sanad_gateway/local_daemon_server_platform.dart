@@ -8,11 +8,14 @@ import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/core/sanad_home/loopback_policy.dart';
 import 'package:sanad_agent/core/update/agent_update_service.dart';
 import 'package:sanad_agent/core/utils/logger.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
@@ -28,6 +31,12 @@ import 'package:sanad_agent/infrastructure/voice/gemini_voice_provider.dart';
 
 class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   final _logger = Logger('LocalDaemonServerPlatform');
+
+  /// Local Gateway security policy. Dependency composition may inject it;
+  /// otherwise initialization loads the owner-only local credential before
+  /// the server binds. There is no tokenless fallback.
+  LocalGatewaySecurity? _security;
+  final Future<void> Function()? beforeUpgradeAuthentication;
 
   @override
   Logger get logger => _logger;
@@ -77,10 +86,31 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       Platform.environment['SANAD_E2E_TEST_MODE']?.trim().toLowerCase() ==
       'true';
 
+  LocalDaemonServerPlatform({
+    LocalGatewaySecurity? security,
+    this.beforeUpgradeAuthentication,
+  }) : _security = security;
+
   @override
   Future<void> initialize() async {
     final host = _config.localGatewayHost;
     final port = _config.localGatewayPort;
+
+    // SEC-02 / INV-1: refuse any non-loopback bind. We log one warning
+    // and rethrow so the daemon entry point can exit non-zero. We never
+    // silently fall back to loopback.
+    if (!LoopbackPolicy.isLoopbackHost(host)) {
+      _logger.warning(
+        'Refusing to bind local gateway to a non-loopback host. '
+        'SEC-02 requires loopback-only.',
+      );
+      throw LocalGatewayBindViolation(host);
+    }
+
+    _security ??= LocalGatewaySecurity(
+      config: LocalGatewaySecurityConfig(allowedPort: port),
+      expectedToken: await LocalGatewayCredentials.loadOrCreate(),
+    );
 
     try {
       _server = await HttpServer.bind(host, port, shared: true);
@@ -130,6 +160,40 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   }
 
   Future<void> _handleHttpRequest(HttpRequest request) async {
+    final isWebSocketUpgrade =
+        request.uri.path == '/ws' &&
+        WebSocketTransformer.isUpgradeRequest(request);
+    final peerKey = request.connectionInfo?.remoteAddress.address ?? 'unknown';
+    if (isWebSocketUpgrade && !_security!.tryReserveUpgrade(peerKey)) {
+      await _writeAuthFailure(
+        request.response,
+        LocalGatewayAuthResult.budgetExhausted('preauth_handshake_budget'),
+      );
+      return;
+    }
+    if (isWebSocketUpgrade) {
+      try {
+        await beforeUpgradeAuthentication?.call();
+      } on Object {
+        _security!.releaseUpgrade(peerKey);
+        rethrow;
+      }
+    }
+
+    // SEC-02 / INV-2, INV-3: gate every HTTP request through the
+    // LocalGatewaySecurity policy before any business logic runs.
+    final gate = _security!.verifyHttp(
+      headers: request.headers,
+      remoteAddress: request.connectionInfo?.remoteAddress,
+    );
+    if (!gate.isOk) {
+      if (isWebSocketUpgrade) {
+        _security!.releaseUpgrade(peerKey);
+      }
+      await _writeAuthFailure(request.response, gate);
+      return;
+    }
+
     if (request.uri.path == '/health') {
       final stateMode = (getSanadStateHome() != getSanadHome())
           ? 'isolated'
@@ -337,20 +401,25 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       return;
     }
 
-    if (request.uri.path == '/ws' &&
-        WebSocketTransformer.isUpgradeRequest(request)) {
-      final socket = await WebSocketTransformer.upgrade(request);
-      final type = request.uri.queryParameters['type'];
-      if (type == 'voice') {
-        final sessionId =
-            request.uri.queryParameters['session_id'] ?? 'default';
-        final deviceId = request.uri.queryParameters['device_id'] ?? '';
-        _acceptVoiceClient(socket, sessionId, deviceId);
-      } else if (type == 'logs') {
-        agentLogWebSockets.add(socket);
-        socket.done.then((_) => agentLogWebSockets.remove(socket));
-      } else {
-        _acceptClient(socket);
+    if (isWebSocketUpgrade) {
+      try {
+        final socket = await WebSocketTransformer.upgrade(request);
+        final type = request.uri.queryParameters['type'];
+        if (type == 'voice') {
+          final sessionId =
+              request.uri.queryParameters['session_id'] ?? 'default';
+          final deviceId = request.uri.queryParameters['device_id'] ?? '';
+          _acceptVoiceClient(socket, sessionId, deviceId);
+        } else if (type == 'logs') {
+          agentLogWebSockets.add(socket);
+          socket.done.then((_) => agentLogWebSockets.remove(socket));
+        } else {
+          _acceptClient(socket);
+        }
+      } finally {
+        // The budget protects only the unauthenticated HTTP upgrade
+        // handshake. Authenticated socket lifetime is not pre-auth work.
+        _security!.releaseUpgrade(peerKey);
       }
       return;
     }
@@ -622,6 +691,57 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     response.headers.contentType = ContentType.json;
     response.write(jsonEncode(data));
     await response.close();
+  }
+
+  Future<void> _writeAuthFailure(
+    HttpResponse response,
+    LocalGatewayAuthResult result,
+  ) async {
+    switch (result.outcome) {
+      case LocalGatewayAuthOutcome.missingCredential:
+        response.statusCode = HttpStatus.unauthorized;
+        response.headers.set('WWW-Authenticate', 'Sanad realm="local-gateway"');
+        await _writeJsonResponse(response, {
+          'status': 'unauthorized',
+          'reason': 'missing_credential',
+        }, statusCode: HttpStatus.unauthorized);
+        return;
+      case LocalGatewayAuthOutcome.invalidCredential:
+        await _writeJsonResponse(response, {
+          'status': 'unauthorized',
+          'reason': 'invalid_credential',
+        }, statusCode: HttpStatus.unauthorized);
+        return;
+      case LocalGatewayAuthOutcome.peerRejected:
+        await _writeJsonResponse(response, {
+          'status': 'forbidden',
+          'reason': 'peer_not_loopback',
+        }, statusCode: HttpStatus.forbidden);
+        return;
+      case LocalGatewayAuthOutcome.hostRejected:
+        await _writeJsonResponse(response, {
+          'status': 'forbidden',
+          'reason': 'host_not_allowed',
+        }, statusCode: HttpStatus.forbidden);
+        return;
+      case LocalGatewayAuthOutcome.originRejected:
+        await _writeJsonResponse(response, {
+          'status': 'forbidden',
+          'reason': 'origin_not_allowed',
+        }, statusCode: HttpStatus.forbidden);
+        return;
+      case LocalGatewayAuthOutcome.budgetExhausted:
+        response.statusCode = HttpStatus.tooManyRequests;
+        response.headers.set('Retry-After', '30');
+        await _writeJsonResponse(response, {
+          'status': 'rate_limited',
+          'reason': 'preauth_budget',
+        }, statusCode: HttpStatus.tooManyRequests);
+        return;
+      case LocalGatewayAuthOutcome.ok:
+        await _writeJsonResponse(response, {'status': 'ok'});
+        return;
+    }
   }
 
   @override

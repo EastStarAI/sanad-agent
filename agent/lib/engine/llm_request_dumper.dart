@@ -2,7 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
-import '../core/constants.dart';
+import '../core/sanad_home/sanad_home_bootstrap.dart';
 import '../core/models/message.dart';
 import '../core/di.dart';
 import '../core/config.dart';
@@ -90,14 +90,13 @@ class LLMRequestDumper {
           '${now.hour.toString().padLeft(2, '0')}${now.minute.toString().padLeft(2, '0')}${now.second.toString().padLeft(2, '0')}_'
           '${now.millisecond.toString().padLeft(2, '0')}';
 
-      final sanadHome = getSanadStateHome();
-      final dumpDir = Directory(p.join(sanadHome, 'request_dumps'));
-      if (!dumpDir.existsSync()) {
-        dumpDir.createSync(recursive: true);
-      }
-
-      final fileName = 'request_dump_${sessionId}_$timestamp.json';
-      final file = File(p.join(dumpDir.path, fileName));
+      final safeSessionId = sessionId.replaceAll(
+        RegExp(r'[^A-Za-z0-9_-]'),
+        '_',
+      );
+      final fileName = 'request_dump_${safeSessionId}_$timestamp.json';
+      final relativePath = p.join('request_dumps', fileName);
+      final boundary = SanadHomeBootstrap.state();
 
       // Build the raw payload map
       final rawPayload = {
@@ -140,9 +139,9 @@ class LLMRequestDumper {
       final jsonString = const JsonEncoder.withIndent(
         '  ',
       ).convert(sanitizedPayload);
-      await file.writeAsString(jsonString, flush: true);
+      await boundary.writeConfigText(relativePath, jsonString);
 
-      _logger.info('🧾 LLM request debug dump written to: ${file.path}');
+      _logger.info('LLM request debug dump written.');
 
       if (isStdoutEnabled) {
         // Print formatted json payload directly to stdout
@@ -151,8 +150,8 @@ class LLMRequestDumper {
         stdout.writeln('--- DUMP_REQUESTS END ---\n');
       }
 
-      lastDumpFilePath = file.path;
-      return file.path;
+      lastDumpFilePath = boundary.child(relativePath);
+      return lastDumpFilePath;
     } catch (e, stackTrace) {
       _logger.warning(
         'Failed to dump LLM request debug payload: $e',
@@ -175,12 +174,13 @@ class LLMRequestDumper {
     }
 
     try {
-      final file = File(path);
-      if (!file.existsSync()) {
+      final boundary = SanadHomeBootstrap.state();
+      final relativePath = p.join('request_dumps', p.basename(path));
+      if (!boundary.fileExists(relativePath)) {
         return;
       }
 
-      final content = await file.readAsString();
+      final content = utf8.decode(boundary.readSecretBytes(relativePath));
       final Map<String, dynamic> data = jsonDecode(content);
       final request =
           (data['request'] as Map?)?.cast<String, dynamic>() ??
@@ -193,7 +193,7 @@ class LLMRequestDumper {
       data['request'] = _sanitizePayload(request);
 
       final jsonString = const JsonEncoder.withIndent('  ').convert(data);
-      await file.writeAsString(jsonString, flush: true);
+      await boundary.writeConfigText(relativePath, jsonString);
     } catch (e, stackTrace) {
       _logger.warning(
         'Failed to update LLM request dump transport: $e',
@@ -211,16 +211,17 @@ class LLMRequestDumper {
     }
 
     try {
-      final file = File(path);
-      if (!file.existsSync()) {
+      final boundary = SanadHomeBootstrap.state();
+      final relativePath = p.join('request_dumps', p.basename(path));
+      if (!boundary.fileExists(relativePath)) {
         return;
       }
 
-      final content = await file.readAsString();
+      final content = utf8.decode(boundary.readSecretBytes(relativePath));
       final Map<String, dynamic> data = jsonDecode(content);
       data['error'] = _sanitizePayload(_serializeError(error));
       final jsonString = const JsonEncoder.withIndent('  ').convert(data);
-      await file.writeAsString(jsonString, flush: true);
+      await boundary.writeConfigText(relativePath, jsonString);
     } catch (e, stackTrace) {
       _logger.warning(
         'Failed to append LLM request error details: $e',
@@ -242,13 +243,14 @@ class LLMRequestDumper {
     }
 
     try {
-      final file = File(path);
-      if (!file.existsSync()) {
-        _logger.warning('Request dump file not found at: $path');
+      final boundary = SanadHomeBootstrap.state();
+      final relativePath = p.join('request_dumps', p.basename(path));
+      if (!boundary.fileExists(relativePath)) {
+        _logger.warning('Request dump file not found.');
         return;
       }
 
-      final content = await file.readAsString();
+      final content = utf8.decode(boundary.readSecretBytes(relativePath));
       final Map<String, dynamic> data = jsonDecode(content);
 
       // Add response key with parsed dynamic payload or decoded JSON
@@ -264,9 +266,9 @@ class LLMRequestDumper {
       data['response'] = _sanitizePayload(sanitizedResponse);
 
       final jsonString = const JsonEncoder.withIndent('  ').convert(data);
-      await file.writeAsString(jsonString, flush: true);
+      await boundary.writeConfigText(relativePath, jsonString);
 
-      _logger.info('🧾 LLM response added to dump: ${file.path}');
+      _logger.info('LLM response added to request dump.');
 
       if (isStdoutEnabled) {
         stdout.writeln('\n--- DUMP_RESPONSE START ---');

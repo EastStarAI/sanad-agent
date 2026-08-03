@@ -35,6 +35,8 @@ This contract governs all modifications, additions, and debugging tasks performe
 ## 5. Secure Network Discovery Laws
 * **No Path Leakage**: To prevent local information disclosure and protect developer privacy, the agent's `/health` endpoint and CLI port queries must never transmit absolute directory paths or system usernames over HTTP.
 * **Abstract Properties**: The tool and agent must exchange cryptographic one-way hashes (`workspace_hash`) and abstract state mode indicators (`state_mode`). The CLI is responsible for translating these indicators into absolute local paths locally on the host machine.
+* **Authenticated Gateway Calls**: Every Agent HTTP and WebSocket request reads the credential from the selected runtime Home and sends it only in the Local Gateway header. The credential must never enter a lease, journal, URL, query, process argument, stdout, or log. Flutter VM-service calls are a separate transport and do not use this credential.
+* **Owner-Only Runtime Files**: Every launcher record, control manifest, switch manifest, runtime metadata file, and journal uses the centralized secure runtime-file boundary rooted at its owning Sanad Home or runtime directory. Direct default-mode writes and duplicated permission logic are forbidden.
 
 ---
 

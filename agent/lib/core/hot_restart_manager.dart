@@ -2,6 +2,9 @@ import 'dart:async';
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+
+const _localGatewayCredentialHeader = 'x-sanad-local-token';
 
 bool shouldUseHotRestartSupervisor({required List<String> arguments}) {
   final command = arguments.isEmpty ? '' : arguments.first.toLowerCase();
@@ -34,6 +37,7 @@ bool shouldUseHotRestartSupervisor({required List<String> arguments}) {
 
 Future<bool> requestControlledDaemonRestart({
   required Uri baseUri,
+  required String credential,
   Duration timeout = const Duration(seconds: 60),
   bool force = false,
   HttpClient? httpClient,
@@ -50,6 +54,7 @@ Future<bool> requestControlledDaemonRestart({
           },
         );
     final request = await client.postUrl(restartUri).timeout(timeout);
+    request.headers.set(_localGatewayCredentialHeader, credential);
     final requesterSessionId =
         Platform.environment['SANAD_REQUESTER_SESSION_ID'];
     final requesterToolCallId =
@@ -200,6 +205,9 @@ class HotRestartManager {
             : configuredUri;
         final accepted = await requestControlledDaemonRestart(
           baseUri: restartUri,
+          credential: String.fromCharCodes(
+            SanadHomeBootstrap.identity().readSecretBytes('.local_token'),
+          ).trim(),
         );
         if (!accepted || processAtRequest == null) {
           print(

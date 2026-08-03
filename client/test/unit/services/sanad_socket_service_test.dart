@@ -15,10 +15,52 @@ import 'package:logging/logging.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/infrastructure/socket/event_router.dart';
+import 'package:sanad_client/infrastructure/local_gateway/local_gateway_credential_provider.dart';
+import 'package:sanad_client/infrastructure/local_gateway/local_gateway_uri_policy.dart';
 
 import '../../mocks/mock_socket_service.dart';
 
+class _CountingCredentialProvider extends LocalGatewayCredentialProvider {
+  var reads = 0;
+
+  @override
+  Future<Map<String, String>> headers() async {
+    reads++;
+    return const {LocalGatewayCredentialProvider.headerName: 'unused'};
+  }
+}
+
 void main() {
+  test('disabled local transport never reads credentials or connects', () async {
+    final provider = _CountingCredentialProvider();
+    final service = SanadSocketService.local(
+      url: 'http://127.0.0.1:58085',
+      hardwareId: 'remote-only-platform',
+      credentialProvider: provider,
+      enabled: false,
+    );
+    addTearDown(service.dispose);
+
+    await service.connect();
+
+    expect(provider.reads, 0);
+    expect(service.isConnected, isFalse);
+  });
+
+  test('local transport rejects non-loopback before reading credentials', () async {
+    final provider = _CountingCredentialProvider();
+    final service = SanadSocketService.local(
+      url: 'http://attacker.example:58085',
+      hardwareId: 'unsafe-local-url',
+      credentialProvider: provider,
+    );
+    addTearDown(service.dispose);
+
+    await expectLater(service.connect(), throwsA(isA<LocalGatewayUriViolation>()));
+
+    expect(provider.reads, 0);
+    expect(service.isConnected, isFalse);
+  });
   // ──────────────────────────────────────────────────────────────────────────
   // C1-1 / C1-2 — observable state & streams
   // ──────────────────────────────────────────────────────────────────────────

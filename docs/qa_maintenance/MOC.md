@@ -15,6 +15,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 
 ## Active Specifications
 
+- [Local Gateway and Sanad Home Security QA](local_gateway_and_sanad_home_security_qa.md): Authentication, Host/Origin rejection, secure writes, legacy migration, restart, Windows ACL, and worktree isolation coverage.
 - [Memory Tool Reliability QA](memory_tool_reliability.md): Regression coverage for compact results, atomic batches, drift recovery, bounded retries, content safety, and frozen snapshots.
 - [Runtime Source Switch QA](runtime_source_switch_qa.md): Regression coverage for requester-scoped pair selection, multi-runtime isolation, retained runtime identity, target conflicts, and full-pair rollback.
 - [Release Verification Matrix](release_verification.md): Local and hosted evidence required for release identity, signing, installation, update, rollback, and supply-chain safety.

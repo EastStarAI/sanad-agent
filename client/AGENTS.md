@@ -25,6 +25,7 @@ Do not introduce convenience code that weakens these boundaries.
 - Desktop local inventory survives cloud logout, refresh failure, and cloud socket failure; web and mobile remain cloud-only.
 - Cold start preserves a persisted cloud device while cloud inventory is pending, and a successful authoritative inventory clears a stale missing cloud id before fallback.
 - Local daemon health, lifecycle, update, socket, and voice endpoints derive from `AppConfig.localGatewayUrl`; never hardcode the production daemon port.
+- Local Gateway access is desktop-only. Web and mobile remain remote-only and must never read a Local Gateway credential or attempt a local connection.
 
 ### Conversation Ownership
 - `ConversationCacheStore` is the single client-side owner of conversation cache, device destinations, drafts, pagination resources, and workspace expansion.

@@ -218,7 +218,7 @@ void main() {
       },
     );
 
-    test('drift backup failure is explicit and leaves source unchanged', () {
+    test('legacy directory mode is repaired before creating drift backup', () {
       if (Platform.isWindows) {
         return;
       }
@@ -232,7 +232,9 @@ void main() {
       try {
         final result = store.remove('memory', 'Initial');
         expect(result['success'], isFalse);
-        expect(result['drift_backup'], 'backup_failed');
+        final backup = File(result['drift_backup'] as String);
+        expect(backup.existsSync(), isTrue);
+        expect(memories.statSync().mode & 0x1ff, 0x1c0);
         expect(file.readAsStringSync(), original);
       } finally {
         Process.runSync('chmod', ['700', memories.path]);
@@ -268,18 +270,23 @@ void main() {
         final memories = Directory('${tempDir.path}/memories');
         final file = File('${memories.path}/${FileMemoryStore.memoryFileName}');
         final original = file.readAsStringSync();
-        Process.runSync('chmod', ['500', memories.path]);
+        final outside = File('${tempDir.path}/outside-memory-target')
+          ..writeAsStringSync('outside-unchanged');
+        file.deleteSync();
+        Link(file.path).createSync(outside.path);
         try {
           final result = store.add('memory', 'Must not persist.');
           expect(result['success'], isFalse);
           expect(result['done'], isTrue);
-          expect(file.readAsStringSync(), original);
+          expect(result['error'], contains('failed safely'));
+          expect(outside.readAsStringSync(), 'outside-unchanged');
           expect(
             memories.listSync().where((entry) => entry.path.endsWith('.tmp')),
             isEmpty,
           );
         } finally {
-          Process.runSync('chmod', ['700', memories.path]);
+          if (file.existsSync()) file.deleteSync();
+          file.writeAsStringSync(original);
         }
       },
     );

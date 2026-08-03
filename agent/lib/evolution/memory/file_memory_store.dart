@@ -1,10 +1,10 @@
-import 'dart:ffi';
+import 'dart:convert';
 import 'dart:io';
 
-import 'package:ffi/ffi.dart';
 import 'package:path/path.dart' as p;
 
-import '../../core/constants.dart';
+import '../../core/sanad_home/sanad_home_bootstrap.dart';
+import '../../core/sanad_home/sanad_home_boundary.dart';
 import 'memory_content_scanner.dart';
 
 class FileMemoryStore {
@@ -26,7 +26,7 @@ class FileMemoryStore {
   void loadFromDisk() {
     final memoriesDir = _memoriesDirectory();
     if (!memoriesDir.existsSync()) {
-      memoriesDir.createSync(recursive: true);
+      SanadHomeBootstrap.state().ensureDirectoryPathSync('memories');
     }
 
     _memoryEntries = _dedupe(_readFile(_pathFor('memory')));
@@ -284,7 +284,7 @@ class FileMemoryStore {
   }
 
   Directory _memoriesDirectory() =>
-      Directory(p.join(getSanadStateHome(), 'memories'));
+      Directory(SanadHomeBootstrap.state().child('memories'));
 
   File _pathFor(String target) {
     final fileName = target == 'user' ? userFileName : memoryFileName;
@@ -329,10 +329,12 @@ class FileMemoryStore {
   }
 
   List<String> _readFile(File file) {
-    if (!file.existsSync()) {
+    final relative = p.join('memories', file.uri.pathSegments.last);
+    final boundary = SanadHomeBootstrap.state();
+    if (!boundary.fileExists(relative)) {
       return const [];
     }
-    final raw = file.readAsStringSync();
+    final raw = utf8.decode(boundary.readSecretBytes(relative));
     return _parseRaw(raw);
   }
 
@@ -353,73 +355,20 @@ class FileMemoryStore {
   }
 
   void _writeAtomically(File destination, String content) {
-    destination.parent.createSync(recursive: true);
-    final temp = File(
-      p.join(
-        destination.parent.path,
-        '.${destination.uri.pathSegments.last}.$pid.${DateTime.now().microsecondsSinceEpoch}.tmp',
-      ),
+    SanadHomeBootstrap.state().writeSecretBytesSync(
+      p.join('memories', destination.uri.pathSegments.last),
+      utf8.encode(content),
     );
-    RandomAccessFile? handle;
-    try {
-      handle = temp.openSync(mode: FileMode.write);
-      handle.writeStringSync(content);
-      handle.flushSync();
-      handle.closeSync();
-      handle = null;
-      _replaceAtomically(temp, destination);
-    } catch (_) {
-      try {
-        handle?.closeSync();
-      } catch (_) {}
-      if (temp.existsSync()) {
-        try {
-          temp.deleteSync();
-        } catch (_) {}
-      }
-      rethrow;
-    }
-  }
-
-  void _replaceAtomically(File source, File destination) {
-    if (!Platform.isWindows) {
-      source.renameSync(destination.path);
-      return;
-    }
-
-    const replaceExisting = 0x1;
-    const writeThrough = 0x8;
-    final moveFileEx = DynamicLibrary.open('kernel32.dll')
-        .lookupFunction<
-          Int32 Function(Pointer<Utf16>, Pointer<Utf16>, Uint32),
-          int Function(Pointer<Utf16>, Pointer<Utf16>, int)
-        >('MoveFileExW');
-    final sourcePath = source.path.toNativeUtf16();
-    final destinationPath = destination.path.toNativeUtf16();
-    try {
-      final moved = moveFileEx(
-        sourcePath,
-        destinationPath,
-        replaceExisting | writeThrough,
-      );
-      if (moved == 0) {
-        throw FileSystemException(
-          'Atomic memory file replacement failed.',
-          destination.path,
-        );
-      }
-    } finally {
-      calloc.free(sourcePath);
-      calloc.free(destinationPath);
-    }
   }
 
   Map<String, dynamic>? _detectExternalDrift(String target) {
     final file = _pathFor(target);
-    if (!file.existsSync()) {
+    final relative = p.join('memories', file.uri.pathSegments.last);
+    final boundary = SanadHomeBootstrap.state();
+    if (!boundary.fileExists(relative)) {
       return null;
     }
-    final raw = file.readAsStringSync();
+    final raw = utf8.decode(boundary.readSecretBytes(relative));
     if (raw.trim().isEmpty) {
       return null;
     }
@@ -437,7 +386,10 @@ class FileMemoryStore {
     );
     String backupStatus;
     try {
-      file.copySync(backup.path);
+      boundary.writeSecretBytesSync(
+        p.join('memories', backup.uri.pathSegments.last),
+        utf8.encode(raw),
+      );
       backupStatus = backup.path;
     } catch (_) {
       backupStatus = 'backup_failed';
@@ -580,7 +532,18 @@ class FileMemoryStore {
     RandomAccessFile? handle;
     try {
       final lockFile = File('${_pathFor(target).path}.lock');
-      lockFile.parent.createSync(recursive: true);
+      final boundary = SanadHomeBootstrap.state();
+      boundary.ensureDirectoryPathSync('memories');
+      if (!lockFile.existsSync()) {
+        boundary.writeSecretBytesSync(
+          p.join('memories', lockFile.uri.pathSegments.last),
+          const [],
+        );
+      } else {
+        boundary.readSecretBytes(
+          p.join('memories', lockFile.uri.pathSegments.last),
+        );
+      }
       handle = lockFile.openSync(mode: FileMode.append);
       handle.lockSync();
       return action();
@@ -590,6 +553,20 @@ class FileMemoryStore {
         'done': true,
         'target': target,
         'error': 'Memory file operation failed safely: ${error.message}',
+      };
+    } on SanadHomeBoundaryViolation catch (error) {
+      return {
+        'success': false,
+        'done': true,
+        'target': target,
+        'error': 'Memory file operation failed safely: ${error.code}',
+      };
+    } on SanadHomeWriteFailure catch (error) {
+      return {
+        'success': false,
+        'done': true,
+        'target': target,
+        'error': 'Memory file operation failed safely: ${error.code}',
       };
     } on FormatException {
       return {

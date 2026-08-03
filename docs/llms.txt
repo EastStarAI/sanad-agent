@@ -18,6 +18,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [AGENTS](./agent/lib/capabilities/runtime/AGENTS.md): Rules governing ./agent/lib/capabilities/runtime.
 - [AGENTS](./agent/lib/capabilities/tools/AGENTS.md): Rules governing ./agent/lib/capabilities/tools.
 - [AGENTS](./agent/lib/core/AGENTS.md): Rules governing ./agent/lib/core.
+- [AGENTS](./agent/lib/core/sanad_home/AGENTS.md): Rules governing the owner-only Sanad Home filesystem boundary.
 - [AGENTS](./agent/lib/engine/AGENTS.md): Rules governing ./agent/lib/engine.
 - [AGENTS](./agent/lib/engine/adapters/AGENTS.md): Rules governing ./agent/lib/engine/adapters.
 - [AGENTS](./agent/lib/engine/runtime/AGENTS.md): Rules governing ./agent/lib/engine/runtime.
@@ -54,6 +55,8 @@ These files are mandatory execution contracts governing subdirectories. Always r
 
 ## Functional Features & Architecture Guides
 
+- [Local Gateway and Sanad Home Protection](docs/technical/user_data_protection_and_minimization.md): Authenticated desktop-only loopback transport, local credential delivery, secure filesystem ownership, migration, and worktree isolation.
+- [Local Gateway and Sanad Home Security QA](docs/qa_maintenance/local_gateway_and_sanad_home_security_qa.md): Regression matrix for local admission, permissions, legacy restart, platform ACLs, and isolated runtimes.
 - [خارطة محرك ومنطق الوكلاء](docs/agent_engine/MOC.md): فهرس وخارطة وثائق منطق وهندسة الوكلاء، سجل الأوامر النظامية، ومواصفات أدوات الذكاء الاصطناعي.
 - [Capability Runtime Architecture](docs/agent_engine/capability_runtime.md): Architecture of tool specifications, runtime catalog assembly, permissions, MCP, workspace/web services, skills, and platform tools.
 - [Codex Responses Runtime Design](docs/agent_engine/codex_responses_runtime_design.md): تصميم codec وحالة الاستمرارية والبث والاستكمال لمحول Codex Responses في Sanad.

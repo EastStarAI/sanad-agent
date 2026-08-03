@@ -15,6 +15,7 @@ This contract applies strictly to the `sanad-client/lib/infrastructure/` directo
 
 ## Dual Connection Model
 - **Parallel Sockets:** Coexist `cloudSocketService` (cloud gateway) and `localSocketService` (local daemon at `AppConfig.localGatewayUrl`, defaulting to `127.0.0.1:58085`). `sanad-dev` enables both by default; explicit local-only mode may leave the cloud socket disconnected.
+- **Authenticated Local Transport:** Desktop Local Gateway HTTP and WebSocket consumers read the owner-only credential from the active Sanad Home and send it only as `x-sanad-local-token`. Never place it in a URL, query, process argument, compile-time define, preference, response, or log. Web and mobile never read it.
 - **Resilient Reconnections:**
   - Cloud transport relies on Socket.IO's native automatic reconnection logic.
   - Local transport must use a custom automatic reconnection mechanism with exponential backoff (from 2s to 10s) and explicit disconnect/dispose guards built into `SanadSocketService` to ensure local capability restores dynamically.

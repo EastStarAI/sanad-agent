@@ -122,6 +122,7 @@ void main() {
 
       final accepted = await requestControlledDaemonRestart(
         baseUri: Uri.parse('http://127.0.0.1:${server.port}'),
+        credential: 'restart-secret',
       );
 
       expect(accepted, isTrue);
@@ -130,6 +131,10 @@ void main() {
       expect(received.single.uri.path, '/restart');
       expect(received.single.uri.queryParameters['force'], 'false');
       expect(received.single.uri.queryParameters['timeout_seconds'], '60');
+      expect(
+        received.single.headers.value('x-sanad-local-token'),
+        'restart-secret',
+      );
     },
   );
 }

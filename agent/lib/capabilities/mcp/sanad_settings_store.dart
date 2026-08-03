@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
+import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 
 import 'mcp_server_config.dart';
 
@@ -120,11 +122,22 @@ class SanadSettingsStore {
   }
 
   Future<Map<String, dynamic>> _readSettingsMap(File file) async {
-    if (!await file.exists()) {
+    final isUserFile = file.path == _userMcpConfigFile().path;
+    final boundary = isUserFile
+        ? SanadHomeBootstrap.atRoot(
+            _resolveSanadHomeDirectory(),
+            scope: SanadHomeScope.identity,
+          )
+        : null;
+    if (isUserFile
+        ? !boundary!.fileExists('mcp_config.json')
+        : !await file.exists()) {
       return <String, dynamic>{};
     }
 
-    final raw = await file.readAsString();
+    final raw = isUserFile
+        ? utf8.decode(boundary!.readSecretBytes('mcp_config.json'))
+        : await file.readAsString();
     if (raw.trim().isEmpty) {
       return <String, dynamic>{};
     }
@@ -151,29 +164,7 @@ class SanadSettingsStore {
       return explicitPath;
     }
 
-    final environment = Platform.environment;
-    final home = environment['HOME']?.trim();
-    if (home != null && home.isNotEmpty) {
-      return '$home${Platform.pathSeparator}.sanad';
-    }
-
-    final userProfile = environment['USERPROFILE']?.trim();
-    if (userProfile != null && userProfile.isNotEmpty) {
-      return '$userProfile${Platform.pathSeparator}.sanad';
-    }
-
-    final homeDrive = environment['HOMEDRIVE']?.trim();
-    final homePath = environment['HOMEPATH']?.trim();
-    if (homeDrive != null &&
-        homeDrive.isNotEmpty &&
-        homePath != null &&
-        homePath.isNotEmpty) {
-      return '$homeDrive$homePath${Platform.pathSeparator}.sanad';
-    }
-
-    throw const FileSystemException(
-      'Unable to resolve the user home directory for ~/.sanad settings.',
-    );
+    return getSanadHome();
   }
 
   static String? _normalizeWorkspacePath(String? workspacePath) {
@@ -220,6 +211,16 @@ class SanadSettingsStore {
     File file,
     Map<String, dynamic> settings,
   ) async {
+    if (file.path == _userMcpConfigFile().path) {
+      await SanadHomeBootstrap.atRoot(
+        _resolveSanadHomeDirectory(),
+        scope: SanadHomeScope.identity,
+      ).writeConfigText(
+        'mcp_config.json',
+        const JsonEncoder.withIndent('  ').convert(settings),
+      );
+      return;
+    }
     await file.parent.create(recursive: true);
     await file.writeAsString(
       const JsonEncoder.withIndent('  ').convert(settings),

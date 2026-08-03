@@ -202,3 +202,8 @@ health exposes workspace hash, abstract state, and the development launcher
 id/nonce over loopback. The id and nonce are correlation evidence rather than
 credentials and grant no authority without the complete local lease and client
 agreement. No Home or source path crosses the health protocol.
+
+Agent discovery and lifecycle calls are authenticated with the credential read
+from the candidate runtime Home. It is added only to Agent HTTP and WebSocket
+headers; VM-service transports remain separate. The credential is excluded from
+leases, journals, URLs, queries, process arguments, and rendered diagnostics.

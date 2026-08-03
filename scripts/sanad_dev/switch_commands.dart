@@ -676,6 +676,7 @@ class _SwitchableRuntimeController {
           },
         ),
       );
+      await authorizeLocalGatewayRequest(request, runtime.sanadHome);
       final response = await request.close().timeout(
         const Duration(seconds: 65),
       );
@@ -1020,6 +1021,7 @@ class _SwitchableRuntimeController {
           queryParameters: const {'force': 'false', 'timeout_seconds': '60'},
         ),
       );
+      await authorizeLocalGatewayRequest(request, runtime.sanadHome);
       if (switchRequest.requesterSessionId != null) {
         request.headers.set(
           'x-sanad-requester-session-id',
@@ -1137,6 +1139,7 @@ class _SwitchableRuntimeController {
       final request = await client.getUrl(
         Uri.parse('http://127.0.0.1:${runtime.agentPort}/health'),
       );
+      await authorizeLocalGatewayRequest(request, runtime.sanadHome);
       final response = await request.close().timeout(
         const Duration(milliseconds: 150),
       );
@@ -1176,6 +1179,7 @@ class _SwitchableRuntimeController {
       final request = await client.postUrl(
         Uri.parse('http://127.0.0.1:${runtime.agentPort}/stop'),
       );
+      await authorizeLocalGatewayRequest(request, runtime.sanadHome);
       final response = await request.close().timeout(
         const Duration(seconds: 2),
       );

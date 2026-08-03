@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:logging/logging.dart';
 
 import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 
 /// Represents the persisted auth session for an OAuth-based LLM provider.
 ///
@@ -126,20 +127,27 @@ class ProviderCredentialStore {
   final _logger = Logger('ProviderCredentialStore');
 
   late final String _storePath;
+  late final bool _usesSanadHome;
 
   ProviderCredentialStore({String? storePath}) {
+    _usesSanadHome = storePath == null;
     _storePath = storePath ?? p.join(getSanadHome(), 'provider_auth.json');
   }
 
   String get storePath => _storePath;
 
   Map<String, dynamic> _readRaw() {
+    final boundary = SanadHomeBootstrap.identity();
     final file = File(_storePath);
-    if (!file.existsSync()) {
+    if (_usesSanadHome
+        ? !boundary.fileExists('provider_auth.json')
+        : !file.existsSync()) {
       return <String, dynamic>{};
     }
     try {
-      final content = file.readAsStringSync();
+      final content = _usesSanadHome
+          ? utf8.decode(boundary.readSecretBytes('provider_auth.json'))
+          : file.readAsStringSync();
       if (content.trim().isEmpty) return <String, dynamic>{};
       final decoded = jsonDecode(content);
       if (decoded is Map<String, dynamic>) return decoded;
@@ -150,6 +158,13 @@ class ProviderCredentialStore {
   }
 
   Future<void> _writeRaw(Map<String, dynamic> data) async {
+    if (_usesSanadHome) {
+      await SanadHomeBootstrap.identity().writeSecretBytes(
+        'provider_auth.json',
+        utf8.encode(jsonEncode(data)),
+      );
+      return;
+    }
     final file = File(_storePath);
     if (!file.parent.existsSync()) {
       file.parent.createSync(recursive: true);

@@ -1,6 +1,8 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 
 /// A thin helper that reads and updates the Sanad `.env` file while preserving
 /// comments and unknown keys. Only the targeted keys are mutated.
@@ -9,8 +11,10 @@ import 'package:sanad_agent/core/constants.dart';
 /// OAuth tokens live in `ProviderCredentialStore`.
 class EnvFileService {
   late final String _envPath;
+  late final bool _usesSanadHome;
 
   EnvFileService({String? envPath}) {
+    _usesSanadHome = envPath == null;
     _envPath = envPath ?? getEnvPath();
   }
 
@@ -19,9 +23,15 @@ class EnvFileService {
   /// Reads the current `.env` into a string-keyed map (comments stripped).
   Map<String, String> readAll() {
     final file = File(_envPath);
-    if (!file.existsSync()) return <String, String>{};
+    final boundary = SanadHomeBootstrap.identity();
+    if (_usesSanadHome ? !boundary.fileExists('.env') : !file.existsSync()) {
+      return <String, String>{};
+    }
     final map = <String, String>{};
-    for (final line in file.readAsLinesSync()) {
+    final lines = _usesSanadHome
+        ? utf8.decode(boundary.readSecretBytes('.env')).split('\n')
+        : file.readAsLinesSync();
+    for (final line in lines) {
       final trimmed = line.trim();
       if (trimmed.isEmpty || trimmed.startsWith('#')) continue;
       final idx = trimmed.indexOf('=');
@@ -42,7 +52,7 @@ class EnvFileService {
   /// not present in [updates]. Keys with empty values are removed.
   Future<void> upsert(Map<String, String> updates) async {
     final file = File(_envPath);
-    if (!file.parent.existsSync()) {
+    if (!_usesSanadHome && !file.parent.existsSync()) {
       file.parent.createSync(recursive: true);
     }
 
@@ -83,16 +93,26 @@ class EnvFileService {
       output.add('${entry.key}=${entry.value}');
     }
 
-    await file.writeAsString('${output.join('\n')}\n');
+    final content = '${output.join('\n')}\n';
+    if (_usesSanadHome) {
+      await SanadHomeBootstrap.identity().writeConfigText('.env', content);
+    } else {
+      await file.writeAsString(content);
+    }
   }
 
   /// Removes the given keys from the `.env` file.
   Future<void> removeKeys(Iterable<String> keys) async {
     final removeSet = keys.toSet();
     final file = File(_envPath);
-    if (!file.existsSync()) return;
+    final boundary = SanadHomeBootstrap.identity();
+    if (_usesSanadHome ? !boundary.fileExists('.env') : !file.existsSync()) {
+      return;
+    }
 
-    final existingLines = file.readAsLinesSync();
+    final existingLines = _usesSanadHome
+        ? utf8.decode(boundary.readSecretBytes('.env')).split('\n')
+        : file.readAsLinesSync();
     final output = <String>[];
 
     for (final line in existingLines) {
@@ -112,6 +132,11 @@ class EnvFileService {
       }
     }
 
-    await file.writeAsString('${output.join('\n')}\n');
+    final content = '${output.join('\n')}\n';
+    if (_usesSanadHome) {
+      await boundary.writeConfigText('.env', content);
+    } else {
+      await file.writeAsString(content);
+    }
   }
 }

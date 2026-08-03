@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'client_launch_profile.dart';
+import 'secure_runtime_file.dart';
 
 const runtimeSwitchManifestVersion = 2;
 
@@ -112,12 +113,12 @@ Future<void> writeRuntimeSwitchRequest(
   String path,
   RuntimeSwitchRequest request,
 ) async {
-  final file = File(path);
-  await file.parent.create(recursive: true);
-  final temporary = File('$path.tmp');
-  await temporary.writeAsString('${jsonEncode(request.toJson())}\n');
-  if (await file.exists()) await file.delete();
-  await temporary.rename(path);
+  final sanadHome = File(path).parent.parent.path;
+  await secureRuntimeAtomicWrite(
+    sanadHome,
+    path,
+    '${jsonEncode(request.toJson())}\n',
+  );
 }
 
 Future<RuntimeSwitchRequest?> readRuntimeSwitchRequest(String path) async {
@@ -172,7 +173,8 @@ List<List<String>> buildSwitchedClientGroupArguments({
   required String targetBranch,
   required bool targetIsLinkedWorktree,
 }) {
-  if (profiles.length != vmServicePorts.length || profiles.length != deviceIds.length) {
+  if (profiles.length != vmServicePorts.length ||
+      profiles.length != deviceIds.length) {
     throw const FormatException(
       'Runtime client profiles, VM ports, and devices must have equal lengths.',
     );
@@ -204,7 +206,8 @@ List<String> buildSwitchedClientRunArguments({
   for (final argument in currentProfile.compileArguments) {
     if (argument.startsWith('--dart-define=SANAD_DEV_WORKTREE_NAME=') ||
         argument.startsWith('--dart-define=SANAD_DEV_WORKTREE_BRANCH=') ||
-        (targetWorkspaceHash != null && argument.startsWith('--dart-define=SANAD_DEV_WORKSPACE_HASH='))) {
+        (targetWorkspaceHash != null &&
+            argument.startsWith('--dart-define=SANAD_DEV_WORKSPACE_HASH='))) {
       continue;
     }
     compileArguments.add(argument);
@@ -261,7 +264,8 @@ List<int> orderUnixProcessTree(String processListing, int rootPid) {
 
 bool isAbsoluteSwitchPath(String value) {
   if (Platform.isWindows) {
-    return RegExp(r'^[A-Za-z]:[\\/]').hasMatch(value) || value.startsWith(r'\\');
+    return RegExp(r'^[A-Za-z]:[\\/]').hasMatch(value) ||
+        value.startsWith(r'\\');
   }
   return value.startsWith('/');
 }
@@ -273,7 +277,8 @@ String? _optionalString(Object? value) {
 
 String _requiredString(Map<String, dynamic> json, String key) {
   final value = _optionalString(json[key]);
-  if (value == null) throw FormatException('Missing runtime switch field: $key');
+  if (value == null)
+    throw FormatException('Missing runtime switch field: $key');
   return value;
 }
 
@@ -281,7 +286,8 @@ int _requiredInt(Map<String, dynamic> json, String key) {
   final value = json[key];
   if (value is int) return value;
   final parsed = int.tryParse('$value');
-  if (parsed == null) throw FormatException('Invalid runtime switch field: $key');
+  if (parsed == null)
+    throw FormatException('Invalid runtime switch field: $key');
   return parsed;
 }
 
@@ -292,10 +298,8 @@ bool _requiredBool(Map<String, dynamic> json, String key) {
 }
 
 String _join(String first, String second, [String? third, String? fourth]) {
-  return [
-    first,
-    second,
-    third,
-    fourth,
-  ].whereType<String>().map((part) => part.replaceAll(RegExp(r'[\\/]+$'), '')).join(Platform.pathSeparator);
+  return [first, second, third, fourth]
+      .whereType<String>()
+      .map((part) => part.replaceAll(RegExp(r'[\\/]+$'), ''))
+      .join(Platform.pathSeparator);
 }

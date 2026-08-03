@@ -12,6 +12,8 @@ import 'sanad_dev/runtime_context.dart';
 import 'sanad_dev/runtime_ownership.dart';
 import 'sanad_dev/runtime_switch.dart';
 import 'sanad_dev/terminal_launcher.dart';
+import 'sanad_dev/local_gateway_credential.dart';
+import 'sanad_dev/secure_runtime_file.dart';
 
 part 'sanad_dev/cli.dart';
 part 'sanad_dev/developer_actions.dart';

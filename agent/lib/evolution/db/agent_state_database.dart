@@ -9,6 +9,7 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 import '../../core/constants.dart';
+import '../../core/sanad_home/sanad_home_bootstrap.dart';
 
 /// Single owner of the agent's local SQLite connection (`state.db`).
 ///
@@ -129,14 +130,16 @@ class AgentStateDatabase {
 
   void _openAtPath(String stateHomePath) {
     ensureSqliteOverride();
-    final dbDir = Directory(stateHomePath);
-    if (!dbDir.existsSync()) {
-      dbDir.createSync(recursive: true);
-    }
-    final dbPath = p.join(stateHomePath, 'state.db');
+    // SQLite owns page/WAL/SHM writes and therefore cannot use the generic
+    // atomic-file helper. SEC-02 brackets the native connection instead: root,
+    // target and legacy sidecars are secured before open; newly created files
+    // are secured immediately after open/schema initialization.
+    final boundary = SanadHomeBootstrap.atRoot(stateHomePath);
+    final dbPath = boundary.prepareDatabaseSync();
     _db = sqlite3.open(dbPath);
     _owned = true;
     _init();
+    boundary.secureDatabaseFilesSync();
   }
 
   void _init() {

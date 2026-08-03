@@ -4,6 +4,8 @@ import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
+import 'secure_runtime_file.dart';
+
 const componentJournalSegmentBytes = 2 * 1024 * 1024;
 const componentJournalRetainedSegments = 4;
 const componentJournalMaxRecordBytes = 64 * 1024;
@@ -15,7 +17,9 @@ String componentJournalDirectory(String sanadHome, int agentPort) =>
 
 String componentJournalKey({required String component, int? vmServicePort}) {
   final safeComponent = component.replaceAll(RegExp(r'[^a-zA-Z0-9_-]'), '_');
-  return vmServicePort == null ? safeComponent : '$safeComponent-$vmServicePort';
+  return vmServicePort == null
+      ? safeComponent
+      : '$safeComponent-$vmServicePort';
 }
 
 class ComponentJournalWriter {
@@ -45,10 +49,8 @@ class ComponentJournalWriter {
   Future<void> _pending = Future.value();
   bool _closed = false;
 
-  String get key => componentJournalKey(
-    component: component,
-    vmServicePort: vmServicePort,
-  );
+  String get key =>
+      componentJournalKey(component: component, vmServicePort: vmServicePort);
 
   Future<void> open({String reason = 'process started'}) => _enqueue(() async {
     await _openSegment();
@@ -64,7 +66,11 @@ class ComponentJournalWriter {
     if (bytes.isEmpty) return Future.value();
     return _enqueue(() async {
       if (_sink == null) await _openSegment();
-      for (var offset = 0; offset < bytes.length; offset += componentJournalMaxRecordBytes) {
+      for (
+        var offset = 0;
+        offset < bytes.length;
+        offset += componentJournalMaxRecordBytes
+      ) {
         final end = min(offset + componentJournalMaxRecordBytes, bytes.length);
         await _appendRecord(
           source,
@@ -88,16 +94,16 @@ class ComponentJournalWriter {
     _closed = true;
   });
 
-  Future<void> _appendRecord(ComponentOutputSource source, List<int> bytes) async {
+  Future<void> _appendRecord(
+    ComponentOutputSource source,
+    List<int> bytes,
+  ) async {
     if (_closed) return;
-    final encoded = '${jsonEncode({
-      'sequence': _sequence++,
-      'time': DateTime.now().toUtc().toIso8601String(),
-      'source': source.name,
-      'bytes': base64Encode(bytes),
-    })}\n';
+    final encoded =
+        '${jsonEncode({'sequence': _sequence++, 'time': DateTime.now().toUtc().toIso8601String(), 'source': source.name, 'bytes': base64Encode(bytes)})}\n';
     final encodedBytes = utf8.encode(encoded);
-    if (_segmentBytes > 0 && _segmentBytes + encodedBytes.length > maxSegmentBytes) {
+    if (_segmentBytes > 0 &&
+        _segmentBytes + encodedBytes.length > maxSegmentBytes) {
       await _sink?.flush();
       await _sink?.close();
       _sink = null;
@@ -109,9 +115,10 @@ class ComponentJournalWriter {
   }
 
   Future<void> _openSegment() async {
-    final directory = Directory(componentJournalDirectory(sanadHome, agentPort));
-    await directory.create(recursive: true);
-    await _restrictPermissions(directory.path, directory: true);
+    final directory = Directory(
+      componentJournalDirectory(sanadHome, agentPort),
+    );
+    await secureRuntimeDirectory(sanadHome, directory.path);
     final files = await componentJournalSegments(
       sanadHome: sanadHome,
       agentPort: agentPort,
@@ -121,10 +128,9 @@ class ComponentJournalWriter {
     final segment = File(
       '${directory.path}${Platform.pathSeparator}$key.${next.toString().padLeft(8, '0')}.journal',
     );
-    if (!await segment.exists()) await segment.create();
+    await secureRuntimeAppendFile(sanadHome, segment.path);
     _sink = segment.openWrite(mode: FileMode.writeOnlyAppend);
     _segmentBytes = await segment.length();
-    await _restrictPermissions(segment.path);
     final retained = [...files, segment];
     while (retained.length > retainedSegments) {
       final stale = retained.removeAt(0);
@@ -139,11 +145,7 @@ class ComponentJournalWriter {
 }
 
 class ComponentProcessJournal {
-  ComponentProcessJournal._(
-    this.writer,
-    this._subscriptions,
-    this._completion,
-  );
+  ComponentProcessJournal._(this.writer, this._subscriptions, this._completion);
 
   final ComponentJournalWriter writer;
   final List<StreamSubscription<List<int>>> _subscriptions;
@@ -173,9 +175,10 @@ class ComponentProcessJournal {
     final outputDone = Future.wait<void>(
       subscriptions.map((subscription) => subscription.asFuture<void>()),
     );
-    final completion = Future.wait<Object?>([exitCode, outputDone]).then(
-      (values) => writer.close(exitCode: values.first! as int),
-    );
+    final completion = Future.wait<Object?>([
+      exitCode,
+      outputDone,
+    ]).then((values) => writer.close(exitCode: values.first! as int));
     unawaited(completion);
     return ComponentProcessJournal._(writer, subscriptions, completion);
   }
@@ -194,10 +197,7 @@ class ComponentProcessJournal {
 List<int> redactComponentOutput(List<int> bytes) {
   var text = utf8.decode(bytes, allowMalformed: true);
   text = text.replaceAllMapped(
-    RegExp(
-      r'(authorization\s*[:=]\s*bearer\s+)[^\s]+',
-      caseSensitive: false,
-    ),
+    RegExp(r'(authorization\s*[:=]\s*bearer\s+)[^\s]+', caseSensitive: false),
     (match) => '${match.group(1)}[REDACTED]',
   );
   text = text.replaceAllMapped(
@@ -224,8 +224,14 @@ Future<void> cleanupStaleComponentJournals(
     if (entity is! File || !entity.path.endsWith('.journal')) continue;
     if ((await entity.lastModified()).isBefore(cutoff)) await entity.delete();
   }
-  final directories = await root.list(recursive: true).where((entity) => entity is Directory).cast<Directory>().toList();
-  directories.sort((left, right) => right.path.length.compareTo(left.path.length));
+  final directories = await root
+      .list(recursive: true)
+      .where((entity) => entity is Directory)
+      .cast<Directory>()
+      .toList();
+  directories.sort(
+    (left, right) => right.path.length.compareTo(left.path.length),
+  );
   for (final directory in directories) {
     if (await directory.list().isEmpty) await directory.delete();
   }
@@ -268,25 +274,30 @@ Future<ComponentJournalSnapshot> readComponentJournalSnapshot({
   )) {
     final length = await file.length();
     offsets[file.path] = length;
-    await for (final line in file.openRead(0, length).transform(utf8.decoder).transform(const LineSplitter())) {
+    await for (final line
+        in file
+            .openRead(0, length)
+            .transform(utf8.decoder)
+            .transform(const LineSplitter())) {
       final record = _decodeRecord(line);
       if (record != null) output.add(record.bytes);
     }
   }
-  return ComponentJournalSnapshot(output.takeBytes(), Map.unmodifiable(offsets));
+  return ComponentJournalSnapshot(
+    output.takeBytes(),
+    Map.unmodifiable(offsets),
+  );
 }
 
 Future<List<int>> readComponentJournalBytes({
   required String sanadHome,
   required int agentPort,
   required String key,
-}) async =>
-    (await readComponentJournalSnapshot(
-      sanadHome: sanadHome,
-      agentPort: agentPort,
-      key: key,
-    ))
-        .bytes;
+}) async => (await readComponentJournalSnapshot(
+  sanadHome: sanadHome,
+  agentPort: agentPort,
+  key: key,
+)).bytes;
 
 Future<List<String>> readComponentJournalTail({
   required String sanadHome,
@@ -327,10 +338,12 @@ Stream<List<int>> followComponentJournal({
       final length = await file.length();
       if (offset > length) offset = 0;
       if (length > offset) {
-        final chunk = await file.openRead(offset, length).fold<BytesBuilder>(
-          BytesBuilder(copy: false),
-          (builder, bytes) => builder..add(bytes),
-        );
+        final chunk = await file
+            .openRead(offset, length)
+            .fold<BytesBuilder>(
+              BytesBuilder(copy: false),
+              (builder, bytes) => builder..add(bytes),
+            );
         final raw = utf8.decode(chunk.takeBytes(), allowMalformed: true);
         var consumed = 0;
         for (final match in RegExp(r'.*\n').allMatches(raw)) {
@@ -357,7 +370,9 @@ _JournalRecord? _decodeRecord(String line) {
   try {
     final value = jsonDecode(line);
     if (value is! Map) return null;
-    final source = ComponentOutputSource.values.byName(value['source'] as String);
+    final source = ComponentOutputSource.values.byName(
+      value['source'] as String,
+    );
     return _JournalRecord(source, base64Decode(value['bytes'] as String));
   } on Object {
     return null;
@@ -368,28 +383,4 @@ int _segmentNumber(File file) {
   final name = file.uri.pathSegments.last;
   final pieces = name.split('.');
   return pieces.length >= 3 ? int.tryParse(pieces[pieces.length - 2]) ?? 0 : 0;
-}
-
-Future<void> _restrictPermissions(String path, {bool directory = false}) async {
-  if (Platform.isWindows) {
-    final user = Platform.environment['USERNAME'];
-    if (user == null || user.isEmpty) {
-      throw FileSystemException('Could not identify the journal owner.', path);
-    }
-    final grant = directory ? '$user:(OI)(CI)F' : '$user:F';
-    final result = await Process.run('icacls', [
-      path,
-      '/inheritance:r',
-      '/grant:r',
-      grant,
-    ]);
-    if (result.exitCode != 0) {
-      throw FileSystemException('Could not restrict journal permissions.', path);
-    }
-    return;
-  }
-  final result = await Process.run('chmod', [directory ? '700' : '600', path]);
-  if (result.exitCode != 0) {
-    throw FileSystemException('Could not restrict journal permissions.', path);
-  }
 }

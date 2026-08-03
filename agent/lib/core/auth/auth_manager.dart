@@ -1,11 +1,9 @@
 import 'dart:convert';
-import 'dart:io';
 import 'dart:math';
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
-import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
-import '../constants.dart';
+import '../sanad_home/sanad_home_bootstrap.dart';
 
 class AuthManager {
   final _logger = Logger('AuthManager');
@@ -26,12 +24,11 @@ class AuthManager {
       _pairingToken != null && _pendingDeviceToken != null;
 
   Future<void> initialize() async {
-    final sanadHome = getSanadHome();
-    final authFile = File(p.join(sanadHome, 'auth.json'));
+    final boundary = SanadHomeBootstrap.identity();
 
-    if (await authFile.exists()) {
+    if (boundary.fileExists('auth.json')) {
       try {
-        final content = await authFile.readAsString();
+        final content = utf8.decode(boundary.readSecretBytes('auth.json'));
         if (content.trim().isNotEmpty) {
           final data = jsonDecode(content) as Map<String, dynamic>;
           _accessToken = data['access_token'];
@@ -132,14 +129,12 @@ class AuthManager {
   }
 
   Future<void> _saveAuth() async {
-    final sanadHome = getSanadHome();
-    await Directory(sanadHome).create(recursive: true);
-    final authFile = File(p.join(sanadHome, 'auth.json'));
+    final boundary = SanadHomeBootstrap.identity();
 
     final data = <String, dynamic>{};
-    if (await authFile.exists()) {
+    if (boundary.fileExists('auth.json')) {
       try {
-        final content = await authFile.readAsString();
+        final content = utf8.decode(boundary.readSecretBytes('auth.json'));
         if (content.trim().isNotEmpty) {
           data.addAll(jsonDecode(content) as Map<String, dynamic>);
         }
@@ -162,17 +157,7 @@ class AuthManager {
       data['pending_device_token'] = _pendingDeviceToken;
     }
 
-    await authFile.writeAsString(jsonEncode(data));
-    await _secureAuthFile(authFile);
-  }
-
-  Future<void> _secureAuthFile(File authFile) async {
-    if (Platform.isWindows) return;
-    try {
-      await Process.run('chmod', ['600', authFile.path]);
-    } catch (e) {
-      _logger.warning('Failed to set auth.json permissions: $e');
-    }
+    await boundary.writeSecretBytes('auth.json', utf8.encode(jsonEncode(data)));
   }
 
   /// Clear session
@@ -182,11 +167,10 @@ class AuthManager {
     _deviceToken = null;
     _pairingToken = null;
     _pendingDeviceToken = null;
-    final sanadHome = getSanadHome();
-    final authFile = File(p.join(sanadHome, 'auth.json'));
-    if (await authFile.exists()) {
+    final boundary = SanadHomeBootstrap.identity();
+    if (boundary.fileExists('auth.json')) {
       try {
-        final content = await authFile.readAsString();
+        final content = utf8.decode(boundary.readSecretBytes('auth.json'));
         if (content.trim().isNotEmpty) {
           final data = jsonDecode(content) as Map<String, dynamic>;
           data.remove('access_token');
@@ -194,13 +178,15 @@ class AuthManager {
           data.remove('device_token');
           data.remove('pairing_token');
           data.remove('pending_device_token');
-          await authFile.writeAsString(jsonEncode(data));
-          await _secureAuthFile(authFile);
+          await boundary.writeSecretBytes(
+            'auth.json',
+            utf8.encode(jsonEncode(data)),
+          );
         } else {
-          await authFile.delete();
+          await boundary.deleteFile('auth.json');
         }
       } catch (_) {
-        await authFile.delete();
+        await boundary.deleteFile('auth.json');
       }
     }
   }

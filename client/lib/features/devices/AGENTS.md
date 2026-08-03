@@ -33,6 +33,7 @@ This contract applies to `client/lib/features/devices/`.
 - Retain clients only for devices still present in merged inventory and dispose registries with their owning cubit/service.
 - Device-targeted operations must resolve local versus cloud transport through `DeviceConnectionCoordinator`.
 - Desktop daemon health, lifecycle, update, socket, and voice endpoints must derive from `AppConfig.localGatewayUrl`.
+- Every desktop daemon HTTP/WebSocket request must use the credential belonging to the same active Sanad Home; non-desktop runtimes are remote-only.
 - `ENABLE_CLOUD_GATEWAY=false` is development isolation: make local transport primary without changing production defaults.
 
 ## Local Daemon Control

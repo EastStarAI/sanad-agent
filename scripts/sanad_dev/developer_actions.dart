@@ -655,6 +655,10 @@ Future<void> handleAgentLogs(
     final request = await client.getUrl(
       Uri.parse('http://localhost:${instance.port}/logs'),
     );
+    await authorizeLocalGatewayRequest(
+      request,
+      instance.sanadHome ?? runtime.sanadHome,
+    );
     final response = await request.close();
     if (response.statusCode == 200) {
       final body = await response.transform(utf8.decoder).join();
@@ -749,6 +753,9 @@ Future<void> handleAgentLogs(
       try {
         ws = await WebSocket.connect(
           'ws://localhost:${instance.port}/ws?type=logs',
+          headers: await localGatewayCredentialHeaders(
+            instance.sanadHome ?? runtime.sanadHome,
+          ),
         ).timeout(const Duration(seconds: 1));
       } catch (_) {
         await Future<void>.delayed(const Duration(milliseconds: 500));
@@ -842,6 +849,7 @@ Future<void> handleAgentRestart(
           },
         );
     final request = await client.postUrl(restartUri);
+    await authorizeLocalGatewayRequest(request, activeHome);
     final requesterSessionId =
         Platform.environment['SANAD_REQUESTER_SESSION_ID'];
     final requesterToolCallId =

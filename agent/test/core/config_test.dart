@@ -61,6 +61,15 @@ LLM_MODEL=gemma:2b
     expect(getSanadHome(), tempSanadHome.path);
   });
 
+  test('brackets an IPv6 local gateway authority', () {
+    File('${tempSanadHome.path}/.env').writeAsStringSync('''
+LOCAL_GATEWAY_HOST=::1
+LOCAL_GATEWAY_PORT=59123
+''');
+
+    expect(Config().localGatewayUrl, 'http://[::1]:59123');
+  });
+
   test(
     'source worktree always uses global env from SANAD_HOME even if local env exists',
     () {

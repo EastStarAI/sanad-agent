@@ -475,7 +475,7 @@ Future<void> handleRun({
     }
   }
 
-  await Directory(runtime.sanadHome).create(recursive: true);
+  await secureRuntimeDirectory(runtime.sanadHome, runtime.sanadHome);
   await cleanupStaleComponentJournals(runtime.sanadHome);
 
   final preferencesPrefix = resolveSanadDevPreferencesPrefix(
@@ -1314,7 +1314,7 @@ Future<void> handleRuntimeTakeover({
   print(
     'Draining manual Agent ${state.agent!.port} before controlled takeover...',
   );
-  if (!await _requestTakeoverRestart(state.agent!.port)) {
+  if (!await _requestTakeoverRestart(state.agent!.port, activeHome)) {
     stderr.writeln(
       'Takeover aborted: the manual Agent rejected safe restart; the client '
       'was not signaled.',
@@ -1322,7 +1322,7 @@ Future<void> handleRuntimeTakeover({
     exitCode = 1;
     return;
   }
-  if (!await _waitForAgentPortToStop(state.agent!.port)) {
+  if (!await _waitForAgentPortToStop(state.agent!.port, activeHome)) {
     stderr.writeln(
       'Takeover aborted: the drained Agent did not exit; the client was not '
       'signaled.',
@@ -1454,6 +1454,7 @@ Future<bool> _restoreManualRuntime({
     if (!await _waitForAgentHealthPort(
       agentPort,
       runtime.worktreeId.split('-').last,
+      runtime.sanadHome,
     )) {
       return false;
     }
@@ -1494,7 +1495,11 @@ Future<bool> _restoreManualRuntime({
   }
 }
 
-Future<bool> _waitForAgentHealthPort(int port, String workspaceHash) async {
+Future<bool> _waitForAgentHealthPort(
+  int port,
+  String workspaceHash,
+  String sanadHome,
+) async {
   final deadline = DateTime.now().add(const Duration(seconds: 30));
   while (DateTime.now().isBefore(deadline)) {
     final client = HttpClient();
@@ -1502,6 +1507,7 @@ Future<bool> _waitForAgentHealthPort(int port, String workspaceHash) async {
       final request = await client.getUrl(
         Uri.parse('http://127.0.0.1:$port/health'),
       );
+      await authorizeLocalGatewayRequest(request, sanadHome);
       final response = await request.close().timeout(
         const Duration(milliseconds: 250),
       );
@@ -1542,7 +1548,7 @@ Future<bool> _vmServiceIsAvailable(int port) async {
   }
 }
 
-Future<bool> _requestTakeoverRestart(int port) async {
+Future<bool> _requestTakeoverRestart(int port, String sanadHome) async {
   final client = HttpClient();
   try {
     final request = await client.postUrl(
@@ -1554,6 +1560,7 @@ Future<bool> _requestTakeoverRestart(int port) async {
         },
       ),
     );
+    await authorizeLocalGatewayRequest(request, sanadHome);
     final response = await request.close().timeout(const Duration(seconds: 65));
     final body = await response.transform(utf8.decoder).join();
     if (response.statusCode != HttpStatus.ok) return false;
@@ -1566,7 +1573,7 @@ Future<bool> _requestTakeoverRestart(int port) async {
   }
 }
 
-Future<bool> _waitForAgentPortToStop(int port) async {
+Future<bool> _waitForAgentPortToStop(int port, String sanadHome) async {
   final deadline = DateTime.now().add(const Duration(seconds: 20));
   while (DateTime.now().isBefore(deadline)) {
     final http = HttpClient();
@@ -1574,6 +1581,7 @@ Future<bool> _waitForAgentPortToStop(int port) async {
       final request = await http.getUrl(
         Uri.parse('http://127.0.0.1:$port/health'),
       );
+      await authorizeLocalGatewayRequest(request, sanadHome);
       final response = await request.close().timeout(
         const Duration(milliseconds: 150),
       );
@@ -1618,6 +1626,7 @@ Future<bool> _waitForAgent(
         final request = await client.getUrl(
           Uri.parse('http://127.0.0.1:${runtime.agentPort}/health'),
         );
+        await authorizeLocalGatewayRequest(request, runtime.sanadHome);
         final response = await request.close().timeout(
           const Duration(milliseconds: 500),
         );
