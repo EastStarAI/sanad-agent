@@ -32,6 +32,7 @@ jobs:
   web:
     if: inputs.deploy_web == true
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     environment: web-production
     steps:
       - uses: actions/checkout@v6
@@ -49,8 +50,19 @@ jobs:
       - name: Fetch attested Web artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          gh run download "${{ inputs.release_run_id }}" \
+          set -euo pipefail
+          [[ "$RELEASE_RUN_ID" =~ ^[0-9]+$ ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          expected_sha="$(git rev-parse HEAD)"
+          run_metadata="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID")"
+          test "$(jq -r '.conclusion' <<<"$run_metadata")" = success
+          test "$(jq -r '.path' <<<"$run_metadata")" = .github/workflows/release.yml
+          test "$(jq -r '.head_sha' <<<"$run_metadata")" = "$expected_sha"
+          gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft == false' | grep -Fxq true
+          gh run download "$RELEASE_RUN_ID" \
             --name stable-release-candidate \
             --dir download
           web_artifact="$(find download -maxdepth 1 \
@@ -60,16 +72,103 @@ jobs:
             --repo "${{ github.repository }}"
           mkdir web
           tar -xzf "$web_artifact" -C web
-      - name: Atomic Web deployment
+          test -s web/index.html
+          grep -Fq 'flutter_bootstrap.js' web/index.html
+          test -s web/flutter_bootstrap.js
+          test -s web/favicon.svg
+          test "$(cat web/sanad-public-sha.txt)" = "$expected_sha"
+          jq -e --arg version "${RELEASE_TAG#v}" \
+            '.version == $version and (.build | type == "number")' \
+            web/version.json >/dev/null
+          find web -type d -exec chmod 755 {} +
+          find web -type f -exec chmod 644 {} +
+          test -z "$(find web -type f ! -perm -004 -print -quit)"
+      - name: Publish immutable Production Web release
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
-          tag="${{ inputs.release_tag }}"
-          rsync -az --delete --delay-updates web/ \
-            "$DEPLOY_USER@$DEPLOY_HOST:/srv/sanad/web/incoming-$tag/"
+          set -euo pipefail
+          tag="$RELEASE_TAG"
+          expected_sha="$(git rev-parse HEAD)"
+          incoming="/srv/sanad/web/incoming-$tag-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          release="/srv/sanad/web/releases/$tag"
+          if ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -eu; test -s '$release/index.html'; test \"\$(cat '$release/sanad-public-sha.txt')\" = '$expected_sha'"; then
+            echo "Reusing the existing immutable Production Web release $release."
+            exit 0
+          fi
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; mkdir -p /srv/sanad/web/releases; mv /srv/sanad/web/incoming-$tag /srv/sanad/web/releases/$tag; ln -sfn /srv/sanad/web/releases/$tag /srv/sanad/web/current"
+            "set -eu; test ! -e '$incoming'; test ! -e '$release'; mkdir -p '$incoming' /srv/sanad/web/releases"
+          rsync -az --delete --delay-updates web/ \
+            "$DEPLOY_USER@$DEPLOY_HOST:$incoming/"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -eu; find '$incoming' -type d -exec chmod 755 {} +; find '$incoming' -type f -exec chmod 644 {} +; test -z \"\$(find '$incoming' -type f ! -perm -004 -print -quit)\"; test -s '$incoming/index.html'; grep -Fq flutter_bootstrap.js '$incoming/index.html'; test \"\$(cat '$incoming/sanad-public-sha.txt')\" = '$expected_sha'; test ! -e '$release'; mv '$incoming' '$release'"
+      - name: Activate, verify, and roll back Production Web on failure
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          release="/srv/sanad/web/releases/$RELEASE_TAG"
+          selector=/srv/sanad/web/current
+          expected_sha="$(git rev-parse HEAD)"
+          previous="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" "set -eu; readlink -f '$selector'")"
+          test -n "$previous"
+          previous_index_sha="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -eu; sha256sum '$previous/index.html' | cut -d ' ' -f 1")"
+          test -n "$previous_index_sha"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -eu; test -s '$release/index.html'; test \"\$(cat '$release/sanad-public-sha.txt')\" = '$expected_sha'; ln -sfn '$release' '$selector'"
+
+          verify_web() {
+            body="$(mktemp)"
+            trap 'rm -f "$body"' RETURN
+            curl --fail --silent --show-error --location --max-time 20 \
+              --output "$body" "https://app.sanad.eaststarai.com/?source=$expected_sha"
+            grep -Fq 'flutter_bootstrap.js' "$body"
+            curl --fail --silent --show-error --max-time 20 \
+              "https://app.sanad.eaststarai.com/flutter_bootstrap.js?source=$expected_sha" >/dev/null
+            curl --fail --silent --show-error --max-time 20 \
+              "https://app.sanad.eaststarai.com/favicon.svg?source=$expected_sha" >/dev/null
+            served_sha="$(curl --fail --silent --show-error --max-time 20 \
+              "https://app.sanad.eaststarai.com/sanad-public-sha.txt?source=$expected_sha")"
+            test "$served_sha" = "$expected_sha"
+          }
+
+          activated=false
+          for attempt in $(seq 1 12); do
+            if verify_web; then
+              activated=true
+              break
+            fi
+            sleep 5
+          done
+          if [[ "$activated" != true ]]; then
+            echo "Production Web verification failed; restoring the previous selector."
+            ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+              "set -eu; test -s '$previous/index.html'; ln -sfn '$previous' '$selector'"
+            rollback_verified=false
+            for attempt in $(seq 1 12); do
+              rolled_back_index="$(mktemp)"
+              if curl --fail --silent --show-error --location --max-time 20 \
+                --output "$rolled_back_index" \
+                "https://app.sanad.eaststarai.com/?rollback=$previous_index_sha" && \
+                [[ "$(sha256sum "$rolled_back_index" | cut -d ' ' -f 1)" == "$previous_index_sha" ]]; then
+                rollback_verified=true
+                rm -f "$rolled_back_index"
+                break
+              fi
+              rm -f "$rolled_back_index"
+              sleep 5
+            done
+            if [[ "$rollback_verified" != true ]]; then
+              echo "Production Web rollback verification failed." >&2
+            fi
+            exit 1
+          fi
 
   updates:
     if: inputs.deploy_updates == true

@@ -234,11 +234,28 @@ jobs:
       - name: Build Linux and Web
         working-directory: client
         run: |
+          set -euo pipefail
           fvm flutter pub get
+          fvm flutter analyze
+          fvm flutter test test/tool/app_web_startup_contract_test.dart
           fvm flutter build linux --release --dart-define-from-file=config/prod.json
           fvm flutter build web --release --dart-define-from-file=config/prod.json
           printf '%s\n' '{"version":"${{ needs.validate.outputs.artifact_version }}","build":${{ needs.validate.outputs.build }}}' \
             > build/web/version.json
+          git rev-parse HEAD > build/web/sanad-public-sha.txt
+          test -s build/web/index.html
+          grep -Fq 'flutter_bootstrap.js' build/web/index.html
+          test -s build/web/flutter_bootstrap.js
+          test -s build/web/favicon.svg
+          jq -e \
+            --arg version '${{ needs.validate.outputs.artifact_version }}' \
+            --argjson build '${{ needs.validate.outputs.build }}' \
+            '.version == $version and .build == $build' \
+            build/web/version.json >/dev/null
+          test "$(cat build/web/sanad-public-sha.txt)" = "$GITHUB_SHA"
+          find build/web -type d -exec chmod 755 {} +
+          find build/web -type f -exec chmod 644 {} +
+          test -z "$(find build/web -type f ! -perm -004 -print -quit)"
           mkdir -p ../dist
           tar -C build/linux/x64/release -czf \
             "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-linux-x64.tar.gz" bundle

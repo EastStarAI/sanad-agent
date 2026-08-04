@@ -24,8 +24,9 @@ Authenticated clients and daemons connect to the official Gateway for remote
 device inventory and event relay. Public source runs, including primary
 checkouts, independent clones, linked worktrees, and modified forks, select the
 Production profile by default and use the hosted service exactly as ordinary
-users. The development profile and process-level endpoint overrides are explicit
-internal Backend/Portal integration tools and are never selected implicitly.
+users. A private Backend/Portal integration build must inject its hosted
+endpoint overrides explicitly; selecting a non-local environment name alone
+continues to use the official Production endpoints.
 `--no-cloud` disables hosted communication while preserving direct local use.
 
 Source availability and service availability are separate guarantees: the
@@ -76,6 +77,12 @@ is manual, explicit, bounded, non-destructive, and never a required check.
 
 ## Configuration and Secrets
 
-Public client configuration may include official service URLs and platform application identifiers. Version `1.0.0` does not ship external telemetry or push configuration. Public configuration never includes OAuth client secrets, signing private keys, server environment values, deployment credentials, or user tokens.
+Public client configuration may include official service URLs and platform
+application identifiers. Privately operated Development and Staging endpoint
+values remain owned by private deployment automation and are injected when it
+builds an exact public commit. Version `1.0.0` does not ship external telemetry
+or push configuration. Public configuration never includes OAuth client
+secrets, signing private keys, server environment values, deployment
+credentials, or user tokens.
 
 Provider credentials and Sanad identity tokens are runtime user data stored outside Git. Diagnostics redact credential-shaped fields before serialization.

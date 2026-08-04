@@ -41,7 +41,7 @@ rules remain fail-closed.
 | Client Windows x64 | installer and current fail-closed signing workflow definition | SANAD-12 unsigned-policy workflow adaptation, disclosure, SHA-256/manifest/provenance, Windows 11 clean installer/update/rollback and Defender/SmartScreen |
 | Client Android APK/AAB | signed local APK/AAB, package identity and keystore fingerprint | signed hosted build, clean install/upgrade |
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
-| Client Web | release build, version marker, and native-platform startup guard | protected atomic deployment, cache/SPA checks, clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error, rollback |
+| Client Web | analyzer, startup contract test, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
 
 Windows 11 evidence follows the dedicated
 [Windows Release Clean-Machine Validation](windows_release_clean_machine.md)

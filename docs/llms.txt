@@ -114,6 +114,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [مواصفات نظام التصميم والمكونات المرئية للمشاريع](docs/technical/design_system.md): توثيق شامل للألوان، الخطوط، الهيكل البنائي والواجهات التفاعلية المشتركة لمشاريع Sanad (التطبيق الرئيسي، صفحة الهبوط، ولوحة التحكم).
 - [Device Runtime Settings Protocol](docs/technical/device_runtime_settings_protocol.md): Unified local/cloud protocol commands, validation, persistence, and secret-handling rules for device settings.
 - [Hosted Services Boundary](docs/technical/hosted_services_boundary.md): Ownership and compatibility boundary between the open-source Sanad Agent clients and EastStar AI hosted services.
+- [Public Client Endpoint Configuration](docs/technical/public_client_endpoint_configuration.md): Production/local public defaults and explicit private build-time injection for hosted Development or Staging services.
 - [Message Turn Replay Protocol](docs/technical/message_turn_replay_protocol.md): Technical specification and protocols governing historical message turn replay and recovery.
 - [بروتوكول مزودي نماذج اللغة](docs/technical/provider_protocol.md): بروتوكول إعداد مزودي LLM والمصادقة والتخزين واختيار النموذج في Sanad Agent.
 - [Reasoning, Thoughts, and Final Answer Separation](docs/technical/reasoning_thoughts_separation.md): Protocol, adapter normalization, history, and state for assistant surfaces. Streaming text shares the final-answer Markdown look; provider reasoning is a transient live-only row never rebuilt from history.
