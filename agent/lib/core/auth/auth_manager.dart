@@ -24,6 +24,15 @@ class AuthManager {
       _pairingToken != null && _pendingDeviceToken != null;
 
   Future<void> initialize() async {
+    await reload();
+
+    if (_hardwareId == null || _hardwareId!.isEmpty) {
+      _hardwareId = const Uuid().v4();
+      await _saveAuth();
+    }
+  }
+
+  Future<void> reload() async {
     final boundary = SanadHomeBootstrap.identity();
 
     if (boundary.fileExists('auth.json')) {
@@ -41,11 +50,6 @@ class AuthManager {
       } catch (e) {
         // Silently fail if file is malformed
       }
-    }
-
-    if (_hardwareId == null || _hardwareId!.isEmpty) {
-      _hardwareId = const Uuid().v4();
-      await _saveAuth();
     }
   }
 
@@ -91,6 +95,7 @@ class AuthManager {
   }
 
   Future<bool> refreshAccessToken(String portalUrl) async {
+    await reload();
     if (_refreshToken == null || _refreshToken!.isEmpty) {
       _logger.warning('Refresh token is null or empty');
       return false;

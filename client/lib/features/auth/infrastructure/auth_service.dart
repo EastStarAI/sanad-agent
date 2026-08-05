@@ -402,6 +402,30 @@ class AuthService {
 
   Future<bool> _refreshAccessTokenInternal() async {
     try {
+      if (AppPlatform.isDesktop) {
+        try {
+          final authDoc = await _settingsStore.readAuthDocument();
+          final fileAccessToken = authDoc['access_token'] as String?;
+          final fileRefreshToken = authDoc['refresh_token'] as String?;
+          if (fileAccessToken != null && fileAccessToken != _backendAccessToken) {
+            _logger.info('Detected updated access token in auth.json. Adopting it.');
+            _backendAccessToken = fileAccessToken;
+            if (fileRefreshToken != null && fileRefreshToken.isNotEmpty) {
+              _backendRefreshToken = fileRefreshToken;
+            }
+            final prefs = await _getPrefs();
+            await prefs.setString('backend_access_token', _backendAccessToken!);
+            if (_backendRefreshToken != null) {
+              await prefs.setString('backend_refresh_token', _backendRefreshToken!);
+            }
+            _emitAccessToken();
+            return true;
+          }
+        } catch (e) {
+          _logger.warning('Failed to sync with auth.json before refresh: $e');
+        }
+      }
+
       if (_backendRefreshToken == null || _backendRefreshToken!.isEmpty) {
         _logger.warning('No refresh token available.');
         return false;

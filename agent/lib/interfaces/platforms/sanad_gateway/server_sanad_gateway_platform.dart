@@ -260,6 +260,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   Future<void> _register() async {
     final authManager = getIt<AuthManager>();
+    await authManager.reload();
     final capabilities = await loadSanadCapabilities();
 
     final isPairing = authManager.hasPendingDevicePairing;
