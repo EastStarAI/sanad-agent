@@ -308,6 +308,7 @@ class _SwitchableRuntimeController {
   final RuntimeSwitchManifestWarningGate _manifestWarningGate =
       RuntimeSwitchManifestWarningGate();
   bool _stopping = false;
+  bool _agentTerminalActionInProgress = false;
 
   String get _manifestPath =>
       runtimeSwitchManifestPath(runtime.sanadHome, runtime.agentPort);
@@ -329,8 +330,8 @@ class _SwitchableRuntimeController {
       stdinKeys = stdin.listen((bytes) {
         for (final byte in bytes) {
           final key = String.fromCharCode(byte);
-          if (key != 'r' && key != 'R') continue;
           if (_interactiveComponent == SanadDevComponentTarget.client) {
+            if (runtimeClientActionForInteractiveKey(key) == null) continue;
             final port = _clientProcessesByVmPort.keys.firstOrNull;
             final process = port == null
                 ? null
@@ -339,8 +340,12 @@ class _SwitchableRuntimeController {
               process.stdin.write(key);
               unawaited(process.stdin.flush());
             }
-          } else if (_agent != null) {
+          } else if ((key == 'r' || key == 'R') && _agent != null) {
             unawaited(handleAgentRestart(runtime.agentPort));
+          } else if ((key == 's' || key == 'q') &&
+              _agent != null &&
+              !_agentTerminalActionInProgress) {
+            unawaited(_stopAgentFromTerminal());
           }
         }
       });
@@ -430,6 +435,25 @@ class _SwitchableRuntimeController {
       }
     }
     return clientExitCode;
+  }
+
+  Future<void> _stopAgentFromTerminal() async {
+    _agentTerminalActionInProgress = true;
+    try {
+      print('\n[sanad-dev] Safe Agent stop requested.');
+      final succeeded = await requestManagedComponentAction(
+        _launcherRecord,
+        action: RuntimeComponentAction.stop,
+        target: RuntimeComponentTarget.agent,
+      );
+      if (!succeeded) {
+        stderr.writeln(
+          'Agent stop failed; the managed runtime remains active.',
+        );
+      }
+    } finally {
+      _agentTerminalActionInProgress = false;
+    }
   }
 
   Future<Object> _waitForControllerCommand() async {
@@ -603,16 +627,18 @@ class _SwitchableRuntimeController {
   ) async {
     if (request.target != RuntimeComponentTarget.client ||
         request.vmServicePort == null) {
-      throw StateError('Client reload/restart requires one VM-service port.');
+      throw StateError('Client command requires one VM-service port.');
     }
     final process = _clientProcessesByVmPort[request.vmServicePort];
     if (process == null ||
         !_launcherRecord.vmServicePorts.contains(request.vmServicePort)) {
       throw StateError('Selected Client is not owned by this launcher.');
     }
-    process.stdin.write(
-      request.action == RuntimeComponentAction.reload ? 'r' : 'R',
-    );
+    final key = runtimeClientInteractiveKeyForAction(request.action);
+    if (key == null) {
+      throw StateError('Unsupported Client interactive command.');
+    }
+    process.stdin.write(key);
     await process.stdin.flush();
   }
 
@@ -878,7 +904,7 @@ class _SwitchableRuntimeController {
       for (final client in targetClients) {
         final clientHealthy = await _waitForVmService(
           client.vmServicePort,
-          timeout: const Duration(seconds: 90),
+          timeout: sanadDevClientStartupTimeout,
         );
         if (!clientHealthy) {
           throw StateError(
@@ -970,7 +996,7 @@ class _SwitchableRuntimeController {
       for (final client in clients) {
         if (!await _waitForVmService(
           client.vmServicePort,
-          timeout: const Duration(seconds: 90),
+          timeout: sanadDevClientStartupTimeout,
         )) {
           return false;
         }

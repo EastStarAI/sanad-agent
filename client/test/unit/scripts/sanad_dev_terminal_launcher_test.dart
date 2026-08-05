@@ -14,7 +14,7 @@ void main() {
     );
 
     expect(command, contains("cd '/repo with spaces'"));
-    expect(command, contains('logs client -f --wait -p 51091'));
+    expect(command, contains('logs client -f --wait -n 50 -p 51091'));
     expect(command, contains('--agent-port 58091'));
     expect(command, contains("--home '/home with spaces'"));
   });
@@ -31,6 +31,7 @@ void main() {
     expect(command, startsWith('Set-Location '));
     expect(command, contains("''quote''"));
     expect(command, contains('sanad-dev.ps1'));
+    expect(command, contains('logs client -f --wait -n 50'));
     expect(command, isNot(contains(' && ')));
   });
 
@@ -74,8 +75,7 @@ void main() {
         'echo ready',
         platform: SanadDevHostPlatform.unsupported,
         environment: const {},
-        runProcess: (executable, arguments) async =>
-            ProcessResult(1, 0, '', ''),
+        runProcess: (executable, arguments) async => ProcessResult(1, 0, '', ''),
       ),
       isFalse,
     );

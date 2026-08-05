@@ -5,9 +5,43 @@ import 'secure_runtime_file.dart';
 
 const runtimeComponentControlVersion = 1;
 
-enum RuntimeComponentAction { start, stop, reload, restart }
+enum RuntimeComponentAction {
+  start,
+  stop,
+  reload,
+  restart,
+  help,
+  detach,
+  clear,
+  quit,
+}
 
 enum RuntimeComponentTarget { agent, client, all }
+
+RuntimeComponentAction? runtimeClientActionForInteractiveKey(String key) =>
+    switch (key) {
+      'r' => RuntimeComponentAction.reload,
+      'R' => RuntimeComponentAction.restart,
+      'h' => RuntimeComponentAction.help,
+      'd' => RuntimeComponentAction.detach,
+      'c' => RuntimeComponentAction.clear,
+      'q' => RuntimeComponentAction.quit,
+      _ => null,
+    };
+
+String? runtimeClientInteractiveKeyForAction(RuntimeComponentAction action) =>
+    switch (action) {
+      RuntimeComponentAction.reload => 'r',
+      RuntimeComponentAction.restart => 'R',
+      RuntimeComponentAction.help => 'h',
+      RuntimeComponentAction.detach => 'd',
+      RuntimeComponentAction.clear => 'c',
+      RuntimeComponentAction.quit => 'q',
+      _ => null,
+    };
+
+bool isRuntimeAgentInteractiveKey(String key) =>
+    const {'r', 'R', 's', 'q'}.contains(key);
 
 class RuntimeComponentControlRequest {
   const RuntimeComponentControlRequest({

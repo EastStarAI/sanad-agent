@@ -56,6 +56,31 @@ void main() {
     expect(restored.openClientTerminal, isFalse);
   });
 
+  test('all Flutter interactive keys map to explicit Client actions', () {
+    const expected = {
+      'r': RuntimeComponentAction.reload,
+      'R': RuntimeComponentAction.restart,
+      'h': RuntimeComponentAction.help,
+      'd': RuntimeComponentAction.detach,
+      'c': RuntimeComponentAction.clear,
+      'q': RuntimeComponentAction.quit,
+    };
+
+    for (final entry in expected.entries) {
+      expect(runtimeClientActionForInteractiveKey(entry.key), entry.value);
+      expect(runtimeClientInteractiveKeyForAction(entry.value), entry.key);
+    }
+    expect(runtimeClientActionForInteractiveKey('s'), isNull);
+    expect(runtimeClientInteractiveKeyForAction(RuntimeComponentAction.stop), isNull);
+  });
+
+  test('Agent interactive keys distinguish restart and safe stop controls', () {
+    for (final key in const ['r', 'R', 's', 'q']) {
+      expect(isRuntimeAgentInteractiveKey(key), isTrue);
+    }
+    expect(isRuntimeAgentInteractiveKey('d'), isFalse);
+  });
+
   test('terminal result preserves request identity', () {
     final request = RuntimeComponentControlRequest(
       requestId: 'request-1',

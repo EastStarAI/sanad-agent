@@ -389,14 +389,17 @@ sanad-dev run --dry-run
 identities independently. The current launcher terminal owns and prints complete
 Agent stdout/stderr. A separate Client terminal follows each Client journal,
 including Flutter tool/build output before VM readiness. In that Client terminal,
-`r` requests hot reload and `R` requests hot restart through the owning launcher;
-in the Agent terminal either key requests a supervised Agent restart. macOS uses
-Terminal; Linux selects a declared supported terminal; Windows uses Windows
-Terminal or PowerShell with quoted arguments. Headless/CI execution never opens
-a GUI and prints a bounded copyable `logs` command instead. `run agent` and
-`run client` keep their single component and controls in the invoking terminal;
-`run client` never opens an additional terminal and shows only the latest 50
-retained lines before following current output.
+Flutter's complete interactive set is available: `r` reloads, `R` restarts, `h`
+shows help, `d` detaches, `c` clears, and `q` quits the Client. In the Agent
+terminal `r`/`R` request a supervised restart while `s`/`q` request a resumable
+Agent-only stop that leaves sibling Clients running. macOS uses Terminal; Linux
+selects a declared supported terminal; Windows uses Windows Terminal or
+PowerShell with quoted arguments. Headless/CI execution never opens a GUI and
+prints a bounded copyable `logs` command instead. `run agent` and `run client`
+keep their single component and controls in the invoking terminal; `run client`
+never opens an additional terminal. Automatically opened Client terminals show
+only the latest 50 retained lines and remain attached throughout the full cold-
+build startup window before following current output.
 
 Bootstrap readiness checks are silent. Output such as `Installing Flutter
 <version>` appears only when that SDK is actually unavailable and installation

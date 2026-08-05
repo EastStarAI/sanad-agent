@@ -11,6 +11,18 @@ void main() {
     );
   });
 
+  test('Client startup allows a five-minute cold-build window', () {
+    expect(sanadDevClientStartupTimeout, const Duration(minutes: 5));
+    expect(
+      sanadDevClientStartupTimeout,
+      greaterThan(const Duration(seconds: 90)),
+    );
+    expect(
+      sanadDevComponentControlTimeout,
+      greaterThan(sanadDevClientStartupTimeout),
+    );
+  });
+
   test('startup timeout follows elapsed time instead of probe speed', () async {
     var now = DateTime.utc(2026);
     var attempts = 0;

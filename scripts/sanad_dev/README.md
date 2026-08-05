@@ -105,6 +105,10 @@ sanad-dev logs [client|agent] [options]
 * `-n, --tail <lines>`: Outputs only the last `<lines>` log entries.
 * `-p, --port <port>`: Bypasses current worktree lookups to inspect logs for a specific instance port.
 
+Managed Client log terminals accept Flutter `r`, `R`, `h`, `d`, `c`, and `q`.
+Managed Agent terminals accept `r`/`R` for restart and `s`/`q` for resumable
+Agent-only stop.
+
 ### 5. `restart`
 Restarts the target component.
 ```bash

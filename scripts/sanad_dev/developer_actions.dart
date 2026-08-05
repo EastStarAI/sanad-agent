@@ -32,7 +32,9 @@ Future<void> _handleComponentJournalLogs({
   required int? tailCount,
   required Future<bool> Function() componentIsActive,
   bool allowStartupGrace = false,
+  Duration startupGrace = const Duration(seconds: 100),
   String? interactiveHint,
+  Set<String> interactiveKeys = const {'r', 'R'},
   Future<void> Function(String key)? onInteractiveKey,
 }) async {
   final snapshot = await readComponentJournalSnapshot(
@@ -66,7 +68,7 @@ Future<void> _handleComponentJournalLogs({
     stdinSubscription = stdin.listen((bytes) {
       for (final byte in bytes) {
         final key = String.fromCharCode(byte);
-        if ((key != 'r' && key != 'R') || interactiveActionInProgress) {
+        if (!interactiveKeys.contains(key) || interactiveActionInProgress) {
           continue;
         }
         interactiveActionInProgress = true;
@@ -80,7 +82,7 @@ Future<void> _handleComponentJournalLogs({
   }
 
   var seenActive = false;
-  final graceDeadline = DateTime.now().add(const Duration(seconds: 100));
+  final graceDeadline = DateTime.now().add(startupGrace);
   try {
     await for (final bytes in followComponentJournal(
       sanadHome: sanadHome,
@@ -119,14 +121,11 @@ Future<void> _sendManagedClientDeveloperKey({
 }) async {
   final record = await _readRuntimeLauncherRecordSafely(sanadHome, agentPort);
   if (record == null || !record.vmServicePorts.contains(vmServicePort)) {
-    stderr.writeln(
-      'Client reload/restart refused: managed ownership is unavailable.',
-    );
+    stderr.writeln('Client command refused: managed ownership is unavailable.');
     return;
   }
-  final action = key == 'r'
-      ? RuntimeComponentAction.reload
-      : RuntimeComponentAction.restart;
+  final action = runtimeClientActionForInteractiveKey(key);
+  if (action == null) return;
   print('\n[sanad-dev] Client ${action.name} requested.');
   final succeeded = await requestManagedComponentAction(
     record,
@@ -135,6 +134,32 @@ Future<void> _sendManagedClientDeveloperKey({
     vmServicePort: vmServicePort,
     openClientTerminal: false,
     timeout: const Duration(seconds: 10),
+  );
+  if (!succeeded) exitCode = 1;
+}
+
+Future<void> _sendManagedAgentInteractiveKey({
+  required String sanadHome,
+  required int agentPort,
+  required String key,
+}) async {
+  if (key == 'r' || key == 'R') {
+    await handleAgentRestart(agentPort);
+    return;
+  }
+  if (key != 's' && key != 'q') return;
+
+  final record = await _readRuntimeLauncherRecordSafely(sanadHome, agentPort);
+  if (record == null) {
+    stderr.writeln('Agent stop refused: managed ownership is unavailable.');
+    exitCode = 1;
+    return;
+  }
+  print('\n[sanad-dev] Safe Agent stop requested.');
+  final succeeded = await requestManagedComponentAction(
+    record,
+    action: RuntimeComponentAction.stop,
+    target: RuntimeComponentTarget.agent,
   );
   if (!succeeded) exitCode = 1;
 }
@@ -189,8 +214,10 @@ Future<void> handleClientLogs(
       follow: follow,
       tailCount: tailCount,
       allowStartupGrace: waitForJournal,
+      startupGrace: sanadDevComponentControlTimeout,
       interactiveHint:
-          '--- Client logs (r: hot reload, R: hot restart, Ctrl+C: exit) ---',
+          '--- Client logs (r: reload, R: restart, h: help, d: detach, c: clear, q: quit, Ctrl+C: close logs) ---',
+      interactiveKeys: const {'r', 'R', 'h', 'd', 'c', 'q'},
       onInteractiveKey: (key) => _sendManagedClientDeveloperKey(
         sanadHome: journalHome,
         agentPort: agentPort,
@@ -608,8 +635,15 @@ Future<void> handleAgentLogs(
       follow: follow,
       tailCount: tailCount,
       allowStartupGrace: waitForInstance,
-      interactiveHint: '--- Agent logs (r/R: restart, Ctrl+C: exit) ---',
-      onInteractiveKey: (_) => handleAgentRestart(agentPort),
+      startupGrace: sanadDevAgentStartupTimeout,
+      interactiveHint:
+          '--- Agent logs (r/R: restart, s/q: safe stop, Ctrl+C: close logs) ---',
+      interactiveKeys: const {'r', 'R', 's', 'q'},
+      onInteractiveKey: (key) => _sendManagedAgentInteractiveKey(
+        sanadHome: activeHome,
+        agentPort: agentPort,
+        key: key,
+      ),
       componentIsActive: () async {
         final record = await _readRuntimeLauncherRecordSafely(
           activeHome,
