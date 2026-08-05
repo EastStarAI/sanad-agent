@@ -17,7 +17,8 @@ Future<bool> openClientLogTerminal({
   bool? interactive,
   SanadDevHostPlatform? platform,
   Map<String, String>? environment,
-  Future<ProcessResult> Function(String executable, List<String> arguments)? runProcess,
+  Future<ProcessResult> Function(String executable, List<String> arguments)?
+  runProcess,
 }) async {
   if (!(interactive ?? stdin.hasTerminal)) return false;
   final hostPlatform = platform ?? currentSanadDevHostPlatform;
@@ -46,12 +47,12 @@ String buildClientLogTerminalCommand({
   if (platform == SanadDevHostPlatform.windows) {
     return 'Set-Location ${powerShellQuote(repositoryRoot)}; '
         '& ${powerShellQuote('$repositoryRoot${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad-dev.ps1')} '
-        'logs client -f --wait -p $vmServicePort --agent-port $agentPort '
+        'logs client -f --wait -n 50 -p $vmServicePort --agent-port $agentPort '
         '--home ${powerShellQuote(sanadHome)}';
   }
   return [
     'cd ${shellQuote(repositoryRoot)}',
-    '${shellQuote('$repositoryRoot/scripts/sanad-dev')} logs client -f --wait -p $vmServicePort --agent-port $agentPort --home ${shellQuote(sanadHome)}',
+    '${shellQuote('$repositoryRoot/scripts/sanad-dev')} logs client -f --wait -n 50 -p $vmServicePort --agent-port $agentPort --home ${shellQuote(sanadHome)}',
   ].join(' && ');
 }
 
@@ -59,7 +60,11 @@ Future<bool> openSanadDevTerminal(
   String command, {
   required SanadDevHostPlatform platform,
   required Map<String, String> environment,
-  required Future<ProcessResult> Function(String executable, List<String> arguments) runProcess,
+  required Future<ProcessResult> Function(
+    String executable,
+    List<String> arguments,
+  )
+  runProcess,
 }) async {
   try {
     final invocation = terminalInvocation(
@@ -68,7 +73,10 @@ Future<bool> openSanadDevTerminal(
       environment: environment,
     );
     if (invocation == null) return false;
-    final result = await runProcess(invocation.executable, invocation.arguments);
+    final result = await runProcess(
+      invocation.executable,
+      invocation.arguments,
+    );
     return result.exitCode == 0;
   } on Object {
     return false;
@@ -108,12 +116,7 @@ TerminalInvocation? terminalInvocation(
           '-lc',
           '$command; exec bash',
         ]),
-        'xterm' => TerminalInvocation(terminal, [
-          '-e',
-          'bash',
-          '-lc',
-          command,
-        ]),
+        'xterm' => TerminalInvocation(terminal, ['-e', 'bash', '-lc', command]),
         _ => null,
       };
     case SanadDevHostPlatform.windows:

@@ -1,7 +1,8 @@
 import 'dart:async';
 
 const sanadDevAgentStartupTimeout = Duration(minutes: 3);
-const sanadDevComponentControlTimeout = Duration(minutes: 4);
+const sanadDevClientStartupTimeout = Duration(minutes: 5);
+const sanadDevComponentControlTimeout = Duration(minutes: 6);
 const sanadDevStartupPollInterval = Duration(milliseconds: 250);
 
 Future<bool> waitForSanadDevStartupProbe({

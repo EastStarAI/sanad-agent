@@ -721,8 +721,8 @@ Future<void> handleRun({
   );
   print(
     startsAgent
-        ? 'Controls: r/R restart Agent; Ctrl+C stops this managed runtime.'
-        : 'Controls: r hot reload; R hot restart; Ctrl+C stops this managed runtime.',
+        ? 'Controls: r/R restart Agent; s/q safely stop Agent; Ctrl+C stops this managed runtime.'
+        : 'Controls: r reload; R restart; h help; d detach; c clear; q quit; Ctrl+C stops this managed runtime.',
   );
   final clientExitCode = await controller.run();
   if (clientExitCode != 0) exitCode = clientExitCode;
@@ -733,7 +733,7 @@ Future<ClientInstance?> _waitForManagedClientIdentity({
   required String launcherId,
   required String runtimeNonce,
 }) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 90));
+  final deadline = DateTime.now().add(sanadDevClientStartupTimeout);
   while (DateTime.now().isBefore(deadline)) {
     final clients = await discoverClientInstances();
     for (final client in clients) {
@@ -1468,7 +1468,7 @@ Future<bool> _restoreManualRuntime({
         runInShell: Platform.isWindows,
       );
       unawaited(restoredClient.exitCode);
-      final deadline = DateTime.now().add(const Duration(seconds: 90));
+      final deadline = DateTime.now().add(sanadDevClientStartupTimeout);
       while (DateTime.now().isBefore(deadline)) {
         if (await _vmServiceIsAvailable(client.port)) return true;
         await Future<void>.delayed(const Duration(milliseconds: 250));

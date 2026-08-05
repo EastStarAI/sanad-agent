@@ -194,17 +194,31 @@ gets an independent journal terminal. `run client` never opens a second terminal
 its output and controls stay in the invoking terminal even when an existing
 Agent launcher creates the Client. Starting another Client as part of an
 all-component request opens one additional Client terminal; closing a Client
-closes only that surface. Client terminals route `r` as hot reload and `R` as hot
-restart through the owning launcher. Agent terminals route either `r` or `R` to
-the supervised daemon restart endpoint. These terminals never acquire process
-ownership: the launcher remains the sole stdin/process owner.
+closes only that surface. Client terminals route Flutter's complete interactive
+set through the owning launcher: `r` reloads, `R` restarts, `h` lists help, `d`
+detaches, `c` clears, and `q` quits the Client. Agent terminals route `r`/`R` to
+the supervised daemon restart endpoint and `s`/`q` to the resumable managed
+Agent stop operation; stopping the Agent does not stop sibling Clients. These
+terminals never acquire process ownership: the launcher remains the sole
+stdin/process owner.
 
-Component control waits longer than the bounded three-minute Agent cold-start
-window. A slow Agent start therefore cannot time out the requesting command and
-cannot terminate an already-running Client. Completed control files are
+An automatically opened Client terminal renders only the latest 50 retained
+lines before following live output. Its pre-identity follow grace matches the
+six-minute component-control window, so it remains attached throughout the
+five-minute Client cold-build decision. Explicit `logs` invocations retain the
+caller's own history selection.
+
+Component control waits six minutes, longer than both bounded cold-start
+windows. A slow Agent or Client start therefore cannot time out the requesting
+command or terminate an already-running sibling. Completed control files are
 published atomically with owner-only permissions; on POSIX the restricted
 temporary inode's mode survives rename, so an immediate consumer delete cannot
 race a redundant post-publication permission change.
+
+Every managed Client launch, source switch, rollback, and manual restoration
+uses one bounded five-minute readiness window. This accommodates slow desktop
+cold builds without treating dependency resolution or native compilation that
+exceeds 90 seconds as a failed Client identity probe.
 
 Terminal capability is platform-adapted: macOS Terminal via AppleScript, a
 detected supported Linux terminal, and Windows Terminal or PowerShell with
