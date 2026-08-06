@@ -489,12 +489,9 @@ class WorkspaceCommandHandler {
   ) async {
     final requestId = event.payload['request_id'] as String?;
     final workspaceId = event.payload['workspace_id'] as String?;
-    final workspacePath = event.payload['workspace_path'] as String?;
     final permissionModeString = event.payload['permission_mode'] as String?;
 
-    if (workspacePath == null ||
-        workspacePath.isEmpty ||
-        workspaceId == null ||
+    if (workspaceId == null ||
         workspaceId.isEmpty ||
         permissionModeString == null) {
       return _bridge.buildAgentEventEnvelope(
@@ -502,8 +499,7 @@ class WorkspaceCommandHandler {
           type: 'error',
           payload: {
             'request_id': requestId,
-            'message':
-                'workspace_id, workspace_path and permission_mode are required',
+            'message': 'workspace_id and permission_mode are required',
           },
         ),
       );
@@ -511,6 +507,16 @@ class WorkspaceCommandHandler {
 
     final mode = WorkspacePermissionMode.fromValue(permissionModeString);
     try {
+      final workspace = await _runtimeService.describeWorkspaceById(
+        workspaceId,
+      );
+      if (workspace == null) {
+        throw StateError('Workspace not found.');
+      }
+      if (workspace['is_missing'] == true) {
+        throw StateError('Workspace folder is unavailable.');
+      }
+      final workspacePath = workspace['path'] as String;
       final current = await _policyStore!.readPolicy(workspacePath);
       final updated = current.copyWith(permissionMode: mode);
       await _policyStore.savePolicy(workspacePath, updated);

@@ -183,6 +183,7 @@ void main() {
           'workspace_id': '/tmp/workspace',
           'model': 'openai/gpt-5',
           'thinking_mode': 'deep',
+          'permission_mode': 'full_access',
         },
         'device_id': 'dev_456',
       };
@@ -196,6 +197,29 @@ void main() {
       expect(event.turnRequest?.workspaceId, equals('/tmp/workspace'));
       expect(event.turnRequest?.model, equals('openai/gpt-5'));
       expect(event.turnRequest?.thinkingMode, equals('deep'));
+      expect(
+        event.turnRequest?.metadata.containsKey('permission_mode'),
+        isFalse,
+      );
+    });
+
+    test('CanonicalToAgent discards permission_mode from steer', () {
+      final event = CanonicalToAgent.translate({
+        'command': 'steer',
+        'payload': {
+          'message': 'Adjust the active turn',
+          'session_id': 'session_steer',
+          'workspace_id': 'workspace-1',
+          'permission_mode': 'full_access',
+        },
+      }, 'sanad_gateway');
+
+      expect(event, isNotNull);
+      expect(event?.type, 'steer');
+      expect(
+        event?.turnRequest?.metadata.containsKey('permission_mode'),
+        isFalse,
+      );
     });
 
     test(
@@ -1441,57 +1465,128 @@ void main() {
       },
     );
 
-    test('workspace.set_permission_mode updates and broadcasts', () async {
-      final bridge = SanadProtocolBridge();
-      final policyStore = WorkspacePolicyStore();
-      getIt.registerSingleton<WorkspacePolicyStore>(policyStore);
+    test(
+      'workspace.set_permission_mode resolves the registered id and supports both modes',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final policyStore = WorkspacePolicyStore();
+        getIt.registerSingleton<WorkspacePolicyStore>(policyStore);
 
-      final workspacePath = '${tempDir.path}/test_workspace_2';
-      Directory(workspacePath).createSync();
+        final workspacePath = '${tempDir.path}/test_workspace_2';
+        Directory(workspacePath).createSync();
+        final workspace = await getIt<LocalWorkspaceRuntimeService>()
+            .createWorkspace(path: workspacePath);
+        final forgedPath = '${tempDir.path}/forged_workspace';
+        Directory(forgedPath).createSync();
 
-      final List<Map<String, dynamic>> emittedEnvelopes = [];
-      final handled = await bridge.handleCommand(
-        {
+        final List<Map<String, dynamic>> emittedEnvelopes = [];
+        final handled = await bridge.handleCommand(
+          {
+            'command': 'workspace.set_permission_mode',
+            'payload': {
+              'request_id': 'req-2',
+              'workspace_id': workspace['id'],
+              'workspace_path': forgedPath,
+              'permission_mode': 'full_access',
+            },
+          },
+          (envelope) async {
+            emittedEnvelopes.add(envelope);
+          },
+        );
+
+        expect(handled, isTrue);
+        expect(emittedEnvelopes, hasLength(2));
+
+        // Broadcast first
+        final broadcast = emittedEnvelopes[0];
+        expect(
+          broadcast['event'],
+          equals(CanonicalEventTypes.workspacePolicyChanged),
+        );
+        expect(broadcast['payload']['workspace_id'], equals(workspace['id']));
+        expect(
+          broadcast['payload']['policy']['permissionMode'],
+          equals('full_access'),
+        );
+
+        // Response second
+        final response = emittedEnvelopes[1];
+        expect(
+          response['event'],
+          equals(CanonicalEventTypes.workspaceSetPermissionMode),
+        );
+        expect(response['payload']['request_id'], equals('req-2'));
+        expect(response['payload']['permissionMode'], equals('full_access'));
+
+        // Verify stored on disk
+        final policy = await policyStore.readPolicy(workspacePath);
+        expect(
+          policy.permissionMode,
+          equals(WorkspacePermissionMode.fullAccess),
+        );
+        expect(
+          WorkspacePolicyStore.settingsFileForWorkspace(
+            forgedPath,
+          ).existsSync(),
+          isFalse,
+        );
+
+        emittedEnvelopes.clear();
+        await bridge.handleCommand({
           'command': 'workspace.set_permission_mode',
           'payload': {
-            'request_id': 'req-2',
-            'workspace_id': 'ws-123',
-            'workspace_path': workspacePath,
+            'request_id': 'req-3',
+            'workspace_id': workspace['id'],
+            'permission_mode': 'default',
+          },
+        }, (envelope) async => emittedEnvelopes.add(envelope));
+
+        expect(emittedEnvelopes, hasLength(2));
+        expect(
+          emittedEnvelopes.last['payload']['permissionMode'],
+          equals('default'),
+        );
+        expect(
+          (await policyStore.readPolicy(workspacePath)).permissionMode,
+          WorkspacePermissionMode.defaultMode,
+        );
+      },
+    );
+
+    test(
+      'workspace.set_permission_mode rejects an unknown workspace id',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final policyStore = WorkspacePolicyStore();
+        getIt.registerSingleton<WorkspacePolicyStore>(policyStore);
+        final forgedPath = '${tempDir.path}/unregistered_workspace';
+        Directory(forgedPath).createSync();
+
+        Map<String, dynamic>? emitted;
+        final handled = await bridge.handleCommand({
+          'command': 'workspace.set_permission_mode',
+          'payload': {
+            'request_id': 'req-unknown-workspace',
+            'workspace_id': 'unknown-workspace-id',
+            'workspace_path': forgedPath,
             'permission_mode': 'full_access',
           },
-        },
-        (envelope) async {
-          emittedEnvelopes.add(envelope);
-        },
-      );
+        }, (envelope) async => emitted = envelope);
 
-      expect(handled, isTrue);
-      expect(emittedEnvelopes, hasLength(2));
-
-      // Broadcast first
-      final broadcast = emittedEnvelopes[0];
-      expect(
-        broadcast['event'],
-        equals(CanonicalEventTypes.workspacePolicyChanged),
-      );
-      expect(broadcast['payload']['workspace_id'], equals('ws-123'));
-      expect(
-        broadcast['payload']['policy']['permissionMode'],
-        equals('full_access'),
-      );
-
-      // Response second
-      final response = emittedEnvelopes[1];
-      expect(
-        response['event'],
-        equals(CanonicalEventTypes.workspaceSetPermissionMode),
-      );
-      expect(response['payload']['request_id'], equals('req-2'));
-      expect(response['payload']['permissionMode'], equals('full_access'));
-
-      // Verify stored on disk
-      final policy = await policyStore.readPolicy(workspacePath);
-      expect(policy.permissionMode, equals(WorkspacePermissionMode.fullAccess));
-    });
+        expect(handled, isTrue);
+        expect(emitted?['event'], 'error');
+        expect(
+          emitted?['payload']['message'],
+          contains('Workspace not found.'),
+        );
+        expect(
+          WorkspacePolicyStore.settingsFileForWorkspace(
+            forgedPath,
+          ).existsSync(),
+          isFalse,
+        );
+      },
+    );
   });
 }

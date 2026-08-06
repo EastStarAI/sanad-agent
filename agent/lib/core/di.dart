@@ -327,7 +327,6 @@ void setupDI() {
       getIt<LocalWorkspaceRuntimeService>(),
       getIt<LocalRuntimeCatalog>(),
       runtimeContextBuilder: getIt<RuntimeContextBuilder>(),
-      permissionManager: getIt<PermissionManager>(),
     ),
   );
   getIt.registerLazySingleton<SuspendedResumeService>(

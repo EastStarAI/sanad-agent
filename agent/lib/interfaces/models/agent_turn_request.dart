@@ -41,8 +41,6 @@ class AgentTurnRequest {
         .toList(growable: false);
   }
 
-  String? get permissionMode => metadata['permission_mode']?.toString();
-
   Map<String, dynamic> toMetadata() => {
     if (workspaceId != null) 'workspace_id': workspaceId,
     if (providerInstanceId != null) 'provider_instance_id': providerInstanceId,
