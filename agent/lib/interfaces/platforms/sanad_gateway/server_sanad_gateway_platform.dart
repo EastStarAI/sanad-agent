@@ -36,6 +36,17 @@ class ServerSanadGatewayPlatform extends BasePlatform
       'remote_workspace_management_disabled';
   static const _remoteWorkspaceManagementDisabledMessage =
       'Remote workspace management is disabled for security reasons.';
+  static const _remoteMcpManagementCommands = <String>{
+    CanonicalEventTypes.listMcpServers,
+    CanonicalEventTypes.saveMcpServer,
+    CanonicalEventTypes.deleteMcpServer,
+    CanonicalEventTypes.replaceMcpConfig,
+    CanonicalEventTypes.inspectMcpServer,
+  };
+  static const _remoteMcpManagementDisabledCode =
+      'remote_mcp_management_disabled';
+  static const _remoteMcpManagementDisabledMessage =
+      'Remote MCP management is disabled for security reasons.';
 
   final _logger = Logger('ServerSanadGatewayPlatform');
 
@@ -193,6 +204,17 @@ class ServerSanadGatewayPlatform extends BasePlatform
         );
         return;
       }
+      if (_isRemoteMcpManagementCommand(command)) {
+        await _rejectRemoteMcpManagement(
+          command: command!,
+          requestId:
+              envelope['request_id']?.toString() ??
+              payload['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+        );
+        return;
+      }
 
       final bridge = getIt<PlatformRuntimeBridge>();
       bridge.registerSessionClient(
@@ -250,6 +272,17 @@ class ServerSanadGatewayPlatform extends BasePlatform
         );
         return;
       }
+      if (_isRemoteMcpManagementCommand(event.type)) {
+        await _rejectRemoteMcpManagement(
+          command: event.type,
+          requestId:
+              event.payload['request_id']?.toString() ??
+              envelope['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+        );
+        return;
+      }
 
       final bridge = getIt<PlatformRuntimeBridge>();
       await handleIncomingProtocolEvent(
@@ -281,6 +314,29 @@ class ServerSanadGatewayPlatform extends BasePlatform
         'request_id': requestId,
         'code': _remoteWorkspaceManagementDisabledCode,
         'message': _remoteWorkspaceManagementDisabledMessage,
+      },
+      'session_id': sessionId,
+    });
+  }
+
+  bool _isRemoteMcpManagementCommand(String? command) =>
+      command != null && _remoteMcpManagementCommands.contains(command);
+
+  Future<void> _rejectRemoteMcpManagement({
+    required String command,
+    required String? requestId,
+    required String sessionId,
+    required String deviceId,
+  }) async {
+    _logger.warning('Blocking remote MCP command: $command');
+    await _emitAgentEvent({
+      'device_id': _registeredDeviceId ?? deviceId,
+      'type': 'event',
+      'event': 'error',
+      'payload': {
+        'request_id': requestId,
+        'code': _remoteMcpManagementDisabledCode,
+        'message': _remoteMcpManagementDisabledMessage,
       },
       'session_id': sessionId,
     });

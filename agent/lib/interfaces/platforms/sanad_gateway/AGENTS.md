@@ -58,6 +58,12 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
   folder-rename, and folder-delete admission before session registration or
   bridge dispatch. Every rejection preserves request correlation and returns
   `remote_workspace_management_disabled`.
+- MCP handlers remain transport-neutral for local configuration, but the cloud
+  adapter rejects remote list, inspect, save, delete, and replace-config
+  admission before session registration or bridge dispatch. Every rejection
+  preserves request correlation and returns `remote_mcp_management_disabled`.
+  This boundary does not filter MCP tools from cloud-origin turns or prevent
+  execution of servers already configured by the local user.
 - Device settings expose a whitelist only, never secrets, validate the complete mutation before write, report process-environment overrides as externally managed, and acknowledge restart-requiring mutation before scheduling controlled restart.
 - Capabilities remain safe with zero configured providers and do not instantiate adapters or perform provider model discovery.
 - Provider templates hide unimplemented auth flows.

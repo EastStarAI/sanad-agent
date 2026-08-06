@@ -26,3 +26,6 @@ This contract applies to `agent/lib/interfaces/`.
 - Cloud filesystem navigation and workspace-path mutation are disabled at the
   cloud adapter boundary. Transport-neutral handlers may expose daemon-provided
   roots and parent metadata only to an admitted local caller.
+- MCP configuration listing, inspection, and mutation are disabled at the cloud
+  adapter boundary. MCP servers configured locally remain available to the
+  per-turn capability runtime for both local and cloud-origin turns.
