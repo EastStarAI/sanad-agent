@@ -22,6 +22,14 @@ const blockedWorkspaceCommands = <String>[
   CanonicalEventTypes.deleteFolder,
 ];
 
+const blockedMcpManagementCommands = <String>[
+  CanonicalEventTypes.listMcpServers,
+  CanonicalEventTypes.saveMcpServer,
+  CanonicalEventTypes.deleteMcpServer,
+  CanonicalEventTypes.replaceMcpConfig,
+  CanonicalEventTypes.inspectMcpServer,
+];
+
 class FakeManager implements Manager {
   @override
   Function() on(String event, Function fn) => () {};
@@ -169,6 +177,52 @@ class TrackingWorkspaceRuntimeService extends LocalWorkspaceRuntimeService {
     calls.add(CanonicalEventTypes.deleteFolder);
     return path;
   }
+
+  @override
+  Future<Map<String, dynamic>> readMcpSnapshot({String? workspaceId}) async {
+    calls.add(CanonicalEventTypes.listMcpServers);
+    return const {};
+  }
+
+  @override
+  Future<Map<String, dynamic>> saveMcpServer({
+    required String scope,
+    String? workspaceId,
+    required Map<String, dynamic> config,
+  }) async {
+    calls.add(CanonicalEventTypes.saveMcpServer);
+    return const {};
+  }
+
+  @override
+  Future<Map<String, dynamic>> deleteMcpServer({
+    required String scope,
+    String? workspaceId,
+    required String serverName,
+  }) async {
+    calls.add(CanonicalEventTypes.deleteMcpServer);
+    return const {};
+  }
+
+  @override
+  Future<Map<String, dynamic>> replaceMcpConfig({
+    required String scope,
+    String? workspaceId,
+    required Map<String, dynamic> document,
+  }) async {
+    calls.add(CanonicalEventTypes.replaceMcpConfig);
+    return const {};
+  }
+
+  @override
+  Future<Map<String, dynamic>> inspectMcpServer({
+    required String serverName,
+    String scope = 'effective',
+    String? workspaceId,
+  }) async {
+    calls.add(CanonicalEventTypes.inspectMcpServer);
+    return const {};
+  }
 }
 
 void main() {
@@ -231,7 +285,11 @@ void main() {
             },
           });
 
-          _expectDisabledError(socket.emittedEvents, requestId: 'req-$command');
+          _expectDisabledError(
+            socket.emittedEvents,
+            requestId: 'req-$command',
+            code: 'remote_workspace_management_disabled',
+          );
         }
 
         expect(runtimeBridge.registeredSessionCount, 0);
@@ -264,6 +322,7 @@ void main() {
           _expectDisabledError(
             socket.emittedEvents,
             requestId: 'req-$eventType',
+            code: 'remote_workspace_management_disabled',
           );
         }
 
@@ -291,11 +350,73 @@ void main() {
       expect(data['payload'], containsPair('request_id', 'req-list'));
     });
   });
+
+  group('cloud remote MCP management admission', () {
+    test(
+      'rejects every execute_command before session or MCP runtime access',
+      () async {
+        for (final command in blockedMcpManagementCommands) {
+          socket.emittedEvents.clear();
+
+          await socket.trigger('execute_command', {
+            'command': command,
+            'device_id': 'request-device',
+            'payload': {
+              'request_id': 'req-$command',
+              'session_id': 'sess-123',
+              'workspace_id': 'workspace-1',
+              'scope': 'global',
+              'server_name': 'blocked-server',
+              'config': <String, dynamic>{},
+              'document': <String, dynamic>{},
+            },
+          });
+
+          _expectDisabledError(
+            socket.emittedEvents,
+            requestId: 'req-$command',
+            code: 'remote_mcp_management_disabled',
+          );
+        }
+
+        expect(runtimeBridge.registeredSessionCount, 0);
+        expect(workspaceRuntime.calls, isEmpty);
+      },
+    );
+
+    test('rejects every protocol_event before MCP runtime access', () async {
+      for (final eventType in blockedMcpManagementCommands) {
+        socket.emittedEvents.clear();
+
+        await socket.trigger('protocol_event', {
+          'event': eventType,
+          'type': eventType,
+          'session_id': 'sess-123',
+          'payload': {
+            'request_id': 'req-$eventType',
+            'scope': 'global',
+            'server_name': 'blocked-server',
+            'config': <String, dynamic>{},
+            'document': <String, dynamic>{},
+          },
+        });
+
+        _expectDisabledError(
+          socket.emittedEvents,
+          requestId: 'req-$eventType',
+          code: 'remote_mcp_management_disabled',
+        );
+      }
+
+      expect(workspaceRuntime.calls, isEmpty);
+    });
+  });
 }
 
 void _expectDisabledError(
   List<Map<String, dynamic>> emittedEvents, {
   required String requestId,
+  required String code,
 }) {
   expect(emittedEvents, hasLength(1));
   final emitted = emittedEvents.single;
@@ -306,5 +427,5 @@ void _expectDisabledError(
   expect(data['session_id'], 'sess-123');
   final payload = data['payload'] as Map<String, dynamic>;
   expect(payload['request_id'], requestId);
-  expect(payload['code'], 'remote_workspace_management_disabled');
+  expect(payload['code'], code);
 }

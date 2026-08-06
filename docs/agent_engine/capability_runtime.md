@@ -83,6 +83,13 @@ fingerprints for tool-spec caching and reconnect/retry after connection loss.
 The daemon remains the source of truth for snapshots and mutations exposed to
 clients.
 
+MCP configuration management is local-only while the remote-management
+security review remains open. The cloud adapter rejects remote list, inspect,
+save, delete, and whole-config replacement requests before shared bridge
+dispatch. This admission boundary does not alter per-turn catalog assembly:
+servers configured by the local user remain available for tool discovery and
+execution in both local and cloud-origin turns.
+
 Skills are discovered and loaded by the runtime skill registry. The client does
 not inspect skill files to determine runtime availability.
 
