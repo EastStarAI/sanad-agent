@@ -19,8 +19,9 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Do not eagerly hydrate history for a session created locally for its first outgoing turn.
 - Block normal message dispatch before session creation when either the provider instance or model selection is absent.
 - Slash queries run only on explicit composer intent and use the daemon query surface, never local skill discovery or mount-time prefetch.
-- Use a native folder picker only for a confirmed same-desktop local device; otherwise use daemon-owned workspace browsing and parent-path metadata.
-- Remote workspace browsing may create, rename, or delete directories through repository intents; keep the current snapshot on failure, refresh after success, and require explicit confirmation before recursive delete.
+- Route every workspace-path picker entry through the shared picker helper. Use
+  the native folder picker only for a confirmed same-desktop local device;
+  remote selection shows the security notice and sends no filesystem command.
 
 ## Delivery Controls
 - Enter/send emits typed automatic intent; Command+Enter and Control+Enter emit typed queue intent.

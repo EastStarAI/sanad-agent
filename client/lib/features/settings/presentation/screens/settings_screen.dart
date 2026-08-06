@@ -1,15 +1,13 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:file_selector/file_selector.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_conversation_cache_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
-import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
-import 'package:sanad_client/features/conversations/presentation/widgets/workspace_browser_dialog.dart';
+import 'package:sanad_client/utils/workspace_picker_helper.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
@@ -31,7 +29,6 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _cache = getIt<ConversationCacheRepository>();
-  final _conversations = getIt<ConversationRepository>();
   SettingsDestination _destination = SettingsDestination.general;
   String? _selectedDeviceId;
   String? _selectedWorkspaceId;
@@ -149,25 +146,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
     DeviceConfig device,
     DeviceWorkspace workspace,
   ) async {
-    final path = AppPlatform.isDesktop && device.isLocalReachable
-        ? await getDirectoryPath(confirmButtonText: 'Change Path')
-        : await showDialog<String>(
-            context: context,
-            builder: (dialogContext) => WorkspaceBrowserDialog(
-              loader: ({path}) => _conversations.browseWorkspaceTree(device, path: path),
-              onCreateFolder: (parentPath, name) => _conversations.createFolder(
-                device,
-                parentPath: parentPath,
-                name: name,
-              ),
-              onRenameFolder: (path, newName) => _conversations.renameFolder(
-                device,
-                path: path,
-                newName: newName,
-              ),
-              onDeleteFolder: (path) => _conversations.deleteFolder(device, path: path),
-            ),
-          );
+    final path = await WorkspacePickerHelper.pickWorkspacePath(
+      context: context,
+      device: device,
+      confirmButtonText: 'Change Path',
+    );
     if (path == null || path.trim().isEmpty) return;
     try {
       await _cache.relocateWorkspace(

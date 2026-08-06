@@ -12,8 +12,6 @@ import 'package:sanad_client/features/conversations/domain/stores/conversation_c
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
-import 'package:sanad_client/features/conversations/domain/models/workspace_tree_entry.dart';
-import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
@@ -30,6 +28,7 @@ import 'package:sanad_client/features/provider_setup/data/models/provider_instan
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
+import 'package:sanad_client/utils/workspace_picker_helper.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -56,6 +55,7 @@ void main() {
   setUp(() async {
     await getIt.reset();
     ConversationInputPanel.debugPickDirectoryPath = null;
+    WorkspacePickerHelper.debugOnRemoteDisabled = null;
     socket = FakeSanadSocketService();
     socket.autoCapabilitiesPayload = const {
       'supports_workspaces': true,
@@ -97,6 +97,7 @@ void main() {
     ConversationInputPanel.debugOnBottomActionsBuild = null;
     ConversationInputPanel.debugPickDirectoryPath = null;
     ConversationInputPanel.debugOnValidationError = null;
+    WorkspacePickerHelper.debugOnRemoteDisabled = null;
     await sessionMessagesCubit.close();
     await sessionCubit.close();
     await agentCubit.close();
@@ -829,35 +830,16 @@ void main() {
     expect(conversationRepository.createdWorkspaces.single, containsPair('path', '/picked/local-workspace'));
   });
 
-  testWidgets('uses daemon workspace browser for remote agents when adding a workspace', (tester) async {
+  testWidgets('blocks remote workspace creation with a security notice', (tester) async {
     socket.setConnected(true);
-    conversationRepository.browseWorkspaceTreeHandler = ({agent, workspaceId, path}) async {
-      if (path == '/remote/workspace') {
-        return const WorkspaceTreeSnapshot(
-          workspaceId: '',
-          rootPath: '',
-          path: '/remote/workspace',
-          parentPath: '',
-          entries: [],
-          truncated: false,
-        );
-      }
-
-      return const WorkspaceTreeSnapshot(
-        workspaceId: '',
-        rootPath: '',
-        path: '',
-        parentPath: null,
-        entries: [
-          WorkspaceTreeEntry(
-            name: 'remote-workspace',
-            path: '/remote/workspace',
-            relativePath: '/remote/workspace',
-            isDirectory: true,
-          ),
-        ],
-        truncated: false,
-      );
+    var pickerCalled = false;
+    String? disabledMessage;
+    ConversationInputPanel.debugPickDirectoryPath = () async {
+      pickerCalled = true;
+      return '/remote/workspace';
+    };
+    WorkspacePickerHelper.debugOnRemoteDisabled = (message) {
+      disabledMessage = message;
     };
 
     await pumpTestApp(
@@ -873,20 +855,13 @@ void main() {
     await tester.tap(find.byKey(const Key('workspace_selector_btn')));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Add New Workspace'));
-    await tester.pump();
-    await tester.pump();
-
-    expect(find.text('Choose Workspace'), findsOneWidget);
-    expect(conversationRepository.browseWorkspaceTreeRequests, hasLength(1));
-
-    await tester.tap(find.text('remote-workspace'));
-    await tester.pump();
-    await tester.pump();
-    await tester.tap(find.text('Use This Folder'));
     await tester.pumpAndSettle();
 
-    expect(conversationRepository.createdWorkspaces.single, containsPair('path', '/remote/workspace'));
-    expect(conversationRepository.browseWorkspaceTreeRequests.last, containsPair('path', '/remote/workspace'));
+    expect(find.text('Choose Workspace'), findsNothing);
+    expect(disabledMessage, WorkspacePickerHelper.remoteDisabledMessage);
+    expect(pickerCalled, isFalse);
+    expect(conversationRepository.browseWorkspaceTreeRequests, isEmpty);
+    expect(conversationRepository.createdWorkspaces, isEmpty);
   });
 }
 

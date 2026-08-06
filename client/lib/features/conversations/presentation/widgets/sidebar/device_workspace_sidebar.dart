@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:go_router/go_router.dart';
-import 'package:file_selector/file_selector.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
 import '../../../../../core/navigation/app_routes.dart';
@@ -18,11 +17,10 @@ import '../../../domain/models/conversation_resource_state.dart';
 import '../../../domain/models/device_workspace.dart';
 import '../../../domain/models/session.dart';
 import '../../../domain/models/sidebar_conversation_group.dart';
-import '../../../domain/repositories/conversation_repository.dart';
+import '../../../../../utils/workspace_picker_helper.dart';
 import '../../bloc/session_cubit.dart';
 import '../../bloc/session_sidebar_cubit.dart';
 import '../../bloc/session_sidebar_state.dart';
-import '../workspace_browser_dialog.dart';
 import 'sidebar_composition.dart';
 import 'sidebar_device_header_bar.dart';
 import 'sidebar_sections.dart';
@@ -219,8 +217,6 @@ class _SidebarBody extends StatelessWidget {
     final sidebarCubit = context.read<SessionSidebarCubit>();
     final sessionCubit = context.read<SessionCubit>();
     final cacheRepository = context.read<ConversationCacheRepository>();
-    final conversationRepository = context.read<ConversationRepository>();
-
     void selectSession(SessionRef ref) {
       final sessions = cacheRepository.sessionsForDevice(device.id);
       Session? found;
@@ -236,21 +232,12 @@ class _SidebarBody extends StatelessWidget {
       if (isDrawerMode && onClose != null) onClose!();
     }
 
-    bool shouldUseNativeWorkspacePicker(DeviceConfig dev) {
-      return AppPlatform.isDesktop && dev.isLocalReachable;
-    }
-
-    Future<String?> pickWorkspacePathLocally() async {
-      if (DeviceWorkspaceSidebar.debugPickDirectoryPath != null) {
-        return DeviceWorkspaceSidebar.debugPickDirectoryPath!();
-      }
-      return getDirectoryPath(confirmButtonText: 'Select Workspace');
-    }
-
     Future<void> createWorkspace() async {
-      final path = shouldUseNativeWorkspacePicker(device)
-          ? await pickWorkspacePathLocally()
-          : await _pickWorkspacePath(context, device, conversationRepository);
+      final path = await WorkspacePickerHelper.pickWorkspacePath(
+        context: context,
+        device: device,
+        debugOverride: DeviceWorkspaceSidebar.debugPickDirectoryPath,
+      );
       if (path == null || path.trim().isEmpty) return;
       final workspace = await cacheRepository.createWorkspace(device, path: path);
       if (workspace != null && context.mounted) {
@@ -372,28 +359,6 @@ class _SidebarBody extends StatelessWidget {
     createdAt: DateTime.now(),
     updatedAt: DateTime.now(),
   );
-
-  static Future<String?> _pickWorkspacePath(
-    BuildContext context,
-    DeviceConfig device,
-    ConversationRepository conversationRepository,
-  ) async {
-    return showDialog<String>(
-      context: context,
-      builder: (dialogContext) => WorkspaceBrowserDialog(
-        loader: ({path}) {
-          return conversationRepository.browseWorkspaceTree(device, path: path);
-        },
-        onCreateFolder: (parentPath, name) => conversationRepository.createFolder(
-          device,
-          parentPath: parentPath,
-          name: name,
-        ),
-        onRenameFolder: (path, newName) => conversationRepository.renameFolder(device, path: path, newName: newName),
-        onDeleteFolder: (path) => conversationRepository.deleteFolder(device, path: path),
-      ),
-    );
-  }
 }
 
 class _WorkspaceShellSlice extends Equatable {

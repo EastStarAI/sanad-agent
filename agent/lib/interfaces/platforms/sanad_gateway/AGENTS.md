@@ -53,7 +53,11 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Provider account usage limits (Task 55) are read-only and instance-first: `provider.usage.get` fetches a `ProviderUsageResult` typed `available | unsupported | unavailable | auth_required | failed`; `provider.usage.support` returns per-instance capability flags so clients never hardcode a catalog. Result snapshots never carry credentials or raw provider payloads. Usage failure is fully contained — it must not change instance status, readiness, or the ability to execute model requests.
 - Keep workspace and MCP commands in the single workspace command owner unless architecture documentation explicitly replaces that ownership; do not fragment it by convenience.
 - Workspace browsing starts from real host roots and returns parent metadata; path-only workspace creation derives display name from the folder basename.
-- Remote folder create, rename, and delete remain in the workspace handler, preserve request correlation, return normalized paths, and emit canonical errors for validation or filesystem failures.
+- Workspace filesystem handlers remain transport-neutral for local runtime use,
+  but the cloud adapter rejects remote create, relocate, browse, folder-create,
+  folder-rename, and folder-delete admission before session registration or
+  bridge dispatch. Every rejection preserves request correlation and returns
+  `remote_workspace_management_disabled`.
 - Device settings expose a whitelist only, never secrets, validate the complete mutation before write, report process-environment overrides as externally managed, and acknowledge restart-requiring mutation before scheduling controlled restart.
 - Capabilities remain safe with zero configured providers and do not instantiate adapters or perform provider model discovery.
 - Provider templates hide unimplemented auth flows.
