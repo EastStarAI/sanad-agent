@@ -33,6 +33,7 @@ This contract applies to `client/lib/features/provider_setup/`.
 - Metadata-only edits must succeed without a stored or newly entered secret.
 - Send credential replacement only after explicit user choice with a non-empty key.
 - Adding or replacing an API key on an existing instance must complete canonical connection verification before the edit reports success; failed verification keeps the instance non-ready with accurate recovery feedback.
+- OAuth account identity is an optional daemon summary projection: render `account_label` and a distinct `account_name` when supplied, never decode tokens or infer identity in the client, and preserve a safe Connected fallback when claims are unavailable.
 - Custom providers must collect the canonical protocol before save.
 - Keep the legacy request-limit DTO/protocol field for compatibility, but do not expose or send it from provider forms while local rate limiting is dormant; continue forwarding auto-failover settings without provider-wide fallbacks.
 

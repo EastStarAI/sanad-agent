@@ -240,6 +240,28 @@ class _InstanceCard extends StatelessWidget {
                         ),
                       ),
                     ],
+                    if (isOAuth && instance.credential?.accountLabel != null) ...[
+                      const SizedBox(height: 2),
+                      SelectableText(
+                        'Account: ${instance.credential!.accountLabel}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                        ),
+                      ),
+                    ],
+                    if (isOAuth &&
+                        instance.credential?.accountName != null &&
+                        instance.credential!.accountName != instance.credential!.accountLabel) ...[
+                      const SizedBox(height: 2),
+                      SelectableText(
+                        'Name: ${instance.credential!.accountName}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),

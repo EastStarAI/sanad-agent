@@ -391,6 +391,8 @@ class ProviderAuthSessionService {
           errorMessage: 'Token exchange did not return an access_token.',
         );
       }
+      final idToken = tokens['id_token']?.toString();
+      final identity = extractOAuthAccountIdentity(idToken ?? accessToken);
       final expiresIn = tokens['expires_in'];
       final expiresAt = expiresIn is num
           ? DateTime.now()
@@ -401,11 +403,13 @@ class ProviderAuthSessionService {
         providerId: session.providerId,
         accessToken: accessToken,
         refreshToken: tokens['refresh_token']?.toString(),
-        idToken: tokens['id_token']?.toString(),
+        idToken: idToken,
         expiresAt: expiresAt,
         scope: tokens['scope']?.toString(),
         tokenType: tokens['token_type']?.toString() ?? 'Bearer',
         status: 'authenticated',
+        accountLabel: identity.accountLabel,
+        accountName: identity.accountName,
       );
       if (session.instanceId != null && _credService != null) {
         // Plan 29 instance-keyed path: write to the SecretStore keyed by
@@ -414,12 +418,14 @@ class ProviderAuthSessionService {
           instanceId: session.instanceId!,
           accessToken: accessToken,
           refreshToken: tokens['refresh_token']?.toString(),
-          idToken: tokens['id_token']?.toString(),
+          idToken: idToken,
           expiresAt: expiresAt,
           scope: tokens['scope']?.toString(),
           tokenType: tokens['token_type']?.toString() ?? 'Bearer',
           status: 'authenticated',
           authMethod: ProviderAuthMethod.deviceCode,
+          accountLabel: identity.accountLabel,
+          accountName: identity.accountName,
         );
         await _credService.writeOAuthBundle(session.instanceId!, secret);
         // Do NOT mark ready here — a model must still be selected and the

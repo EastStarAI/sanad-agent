@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'provider_protocol_constants.dart';
 
 /// A credential payload for a `ProviderInstance` (Plan 29 §7.4).
@@ -43,6 +45,9 @@ class SecretRecord {
   /// OAuth account label (e.g. email) for display only.
   final String? accountLabel;
 
+  /// OAuth account name (e.g. user's full name) for display only.
+  final String? accountName;
+
   /// The auth method this credential was obtained through (one of
   /// [ProviderAuthMethod]). Drives the `Account` vs `API Key` badge.
   final String authMethod;
@@ -59,6 +64,7 @@ class SecretRecord {
     this.lastRefreshAt,
     this.status = 'authenticated',
     this.accountLabel,
+    this.accountName,
     required this.authMethod,
   });
 
@@ -85,6 +91,7 @@ class SecretRecord {
     int? lastRefreshAt,
     String? status,
     String? accountLabel,
+    String? accountName,
     String? authMethod,
   }) {
     return SecretRecord(
@@ -99,6 +106,7 @@ class SecretRecord {
       lastRefreshAt: lastRefreshAt ?? this.lastRefreshAt,
       status: status ?? this.status,
       accountLabel: accountLabel ?? this.accountLabel,
+      accountName: accountName ?? this.accountName,
       authMethod: authMethod ?? this.authMethod,
     );
   }
@@ -115,10 +123,28 @@ class SecretRecord {
     if (lastRefreshAt != null) 'last_refresh_at': lastRefreshAt,
     'status': status,
     if (accountLabel != null) 'account_label': accountLabel,
+    if (accountName != null) 'account_name': accountName,
     'auth_method': authMethod,
   };
 
   factory SecretRecord.fromJson(Map<String, dynamic> json) {
+    var accountLabel = json['account_label'] as String?;
+    var accountName = json['account_name'] as String?;
+    final authMethod =
+        json['auth_method'] as String? ?? ProviderAuthMethod.apiKey;
+    final isOAuth =
+        authMethod == ProviderAuthMethod.deviceCode ||
+        authMethod == ProviderAuthMethod.loopback ||
+        authMethod == ProviderAuthMethod.external;
+    if ((accountLabel == null || accountName == null) && isOAuth) {
+      final token =
+          (json['id_token'] as String?) ?? (json['access_token'] as String?);
+      if (token != null) {
+        final identity = extractOAuthAccountIdentity(token);
+        accountLabel ??= identity.accountLabel;
+        accountName ??= identity.accountName;
+      }
+    }
     return SecretRecord(
       instanceId: json['instance_id'] as String,
       apiKey: json['api_key'] as String?,
@@ -130,8 +156,9 @@ class SecretRecord {
       tokenType: json['token_type'] as String? ?? 'Bearer',
       lastRefreshAt: _parseInt(json['last_refresh_at']),
       status: json['status'] as String? ?? 'authenticated',
-      accountLabel: json['account_label'] as String?,
-      authMethod: json['auth_method'] as String? ?? ProviderAuthMethod.apiKey,
+      accountLabel: accountLabel,
+      accountName: accountName,
+      authMethod: authMethod,
     );
   }
 
@@ -173,6 +200,9 @@ class SecretSummary {
   /// OAuth account label (e.g. email), or null.
   final String? accountLabel;
 
+  /// OAuth account name (e.g. user's full name), or null.
+  final String? accountName;
+
   /// Access token expiry (epoch ms) when applicable.
   final int? expiresAt;
 
@@ -186,6 +216,7 @@ class SecretSummary {
     required this.status,
     this.maskedKeyHint,
     this.accountLabel,
+    this.accountName,
     this.expiresAt,
     required this.reloginRequired,
   });
@@ -197,6 +228,7 @@ class SecretSummary {
     'status': status,
     if (maskedKeyHint != null) 'masked_key_hint': maskedKeyHint,
     if (accountLabel != null) 'account_label': accountLabel,
+    if (accountName != null) 'account_name': accountName,
     if (expiresAt != null) 'expires_at': expiresAt,
     'relogin_required': reloginRequired,
   };
@@ -224,6 +256,7 @@ class SecretSummary {
           : (expired ? 'expired' : record.status),
       maskedKeyHint: record.apiKey != null ? maskApiKey(record.apiKey!) : null,
       accountLabel: record.accountLabel,
+      accountName: record.accountName,
       expiresAt: record.expiresAt,
       reloginRequired: relogin,
     );
@@ -247,4 +280,59 @@ String maskApiKey(String key) {
   final prefix = key.substring(0, 4);
   final suffix = key.substring(key.length - 4);
   return '$prefix${'•' * 4}$suffix';
+}
+
+/// Decodes the payload of a JWT token without verifying its signature.
+/// Returns a map of claims, or an empty map if decoding fails.
+Map<String, dynamic> decodeJwtClaims(String token) {
+  final parts = token.split('.');
+  if (parts.length != 3) return const {};
+
+  var payload = parts[1];
+  final remainder = payload.length % 4;
+  if (remainder > 0) {
+    payload += '=' * (4 - remainder);
+  }
+
+  try {
+    final decodedBytes = base64Url.decode(payload);
+    final decodedString = utf8.decode(decodedBytes);
+    final dynamic json = jsonDecode(decodedString);
+    if (json is Map<String, dynamic>) {
+      return json;
+    }
+  } catch (_) {
+    // Display metadata is optional; malformed or opaque tokens are ignored.
+  }
+  return const {};
+}
+
+/// Extracts optional display-only account identity from unverified JWT claims.
+///
+/// Signature verification remains the OAuth flow's responsibility. This helper
+/// never treats claims as authorization state and ignores non-string or blank
+/// values. The label preference is email, username, UPN, then display name.
+({String? accountLabel, String? accountName}) extractOAuthAccountIdentity(
+  String token,
+) {
+  final claims = decodeJwtClaims(token);
+  String? firstNonEmpty(Iterable<String> keys) {
+    for (final key in keys) {
+      final value = claims[key];
+      if (value is String && value.trim().isNotEmpty) {
+        return value.trim();
+      }
+    }
+    return null;
+  }
+
+  return (
+    accountLabel: firstNonEmpty(const [
+      'email',
+      'preferred_username',
+      'upn',
+      'name',
+    ]),
+    accountName: firstNonEmpty(const ['name']),
+  );
 }
