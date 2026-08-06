@@ -104,12 +104,15 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
     ```
 
 - **Command: `workspace.set_permission_mode`**
-  - Sets/updates the permission mode of a workspace.
+  - Sets/updates the permission mode of a daemon-registered workspace. The
+    daemon resolves the current path from `workspace_id`; a legacy
+    `workspace_path` field may be sent for client compatibility but is ignored.
+    Both local and cloud clients may explicitly select `default` or
+    `full_access`. `think` and `steer` never change this policy implicitly.
   - Payload Schema:
     ```json
     {
       "workspace_id": "workspace-id",
-      "workspace_path": "/absolute/path/to/workspace",
       "permission_mode": "default" | "full_access"
     }
     ```

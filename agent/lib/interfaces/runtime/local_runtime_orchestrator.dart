@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:sanad_agent/engine/agent_runner.dart';
-import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
@@ -18,15 +17,12 @@ class LocalRuntimeOrchestrator {
     this._workspaceRuntimeService,
     this._runtimeCatalog, {
     RuntimeContextBuilder? runtimeContextBuilder,
-    PermissionManager? permissionManager,
   }) : _runtimeContextBuilder =
-           runtimeContextBuilder ?? const RuntimeContextBuilder(),
-       _permissionManager = permissionManager ?? PermissionManager();
+           runtimeContextBuilder ?? const RuntimeContextBuilder();
 
   final LocalWorkspaceRuntimeService _workspaceRuntimeService;
   final LocalRuntimeCatalog _runtimeCatalog;
   final RuntimeContextBuilder _runtimeContextBuilder;
-  final PermissionManager _permissionManager;
   String? _cachedWorkspacePath;
   String? _cachedWorkspaceName;
   String? _cachedRuntimeContext;
@@ -61,14 +57,6 @@ class LocalRuntimeOrchestrator {
       }
       if (workspacePath != null && workspacePath.isNotEmpty) {
         metadata['workspace_path'] = workspacePath;
-      }
-      if (workspacePath != null &&
-          workspacePath.isNotEmpty &&
-          request.permissionMode != null) {
-        await _permissionManager.syncWorkspacePermissionMode(
-          workspacePath: workspacePath,
-          permissionMode: request.permissionMode,
-        );
       }
     }
     return metadata;

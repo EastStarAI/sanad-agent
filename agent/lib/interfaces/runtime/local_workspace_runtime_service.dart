@@ -138,6 +138,15 @@ class LocalWorkspaceRuntimeService {
     return workspace == null ? null : _workspacePayload(workspace);
   }
 
+  Future<Map<String, dynamic>?> describeWorkspaceById(
+    String workspaceId,
+  ) async {
+    final normalizedId = workspaceId.trim();
+    if (normalizedId.isEmpty) return null;
+    final workspace = _db.getWorkspaceById(normalizedId);
+    return workspace == null ? null : _workspacePayload(workspace);
+  }
+
   Future<Map<String, dynamic>> renameWorkspace({
     required String workspaceId,
     required String displayName,

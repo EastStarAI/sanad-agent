@@ -51,8 +51,6 @@ class CanonicalToAgent {
             'session_metadata': payload['session_metadata'],
           if (payload['platform_tools'] != null)
             'platform_tools': payload['platform_tools'],
-          if (payload['permission_mode'] != null)
-            'permission_mode': payload['permission_mode'],
         },
       );
       return GatewayEvent(
@@ -83,8 +81,6 @@ class CanonicalToAgent {
             'session_metadata': payload['session_metadata'],
           if (payload['platform_tools'] != null)
             'platform_tools': payload['platform_tools'],
-          if (payload['permission_mode'] != null)
-            'permission_mode': payload['permission_mode'],
         },
       );
       return GatewayEvent(

@@ -382,7 +382,6 @@ _startResumeRuntime({
       getIt<LocalWorkspaceRuntimeService>(),
       getIt<LocalRuntimeCatalog>(),
       runtimeContextBuilder: getIt<RuntimeContextBuilder>(),
-      permissionManager: getIt<PermissionManager>(),
     ),
   );
   getIt.registerSingleton<SuspendedResumeService>(

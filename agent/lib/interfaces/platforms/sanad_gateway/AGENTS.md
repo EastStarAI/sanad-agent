@@ -62,6 +62,10 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 
 ## Permission and Platform Tools
 - Sensitive approval uses canonical permission request/response and persists enough state for restart recovery.
+- `think` and `steer` never mutate Workspace permission policy. Only the
+  explicit `workspace.set_permission_mode` command may select `default` or
+  `full_access`, and it resolves the daemon-owned path from a registered
+  `workspace_id` rather than trusting a client-supplied path.
 - Platform-provided tools use canonical platform call/result and remain distinct from daemon-local execution.
 - Permission resolution is first-writer-wins and resumed execution reapplies the persisted decision before invoking the gated tool.
 
