@@ -258,6 +258,10 @@ void main() {
     expect(cacheRepository.newConversationDraft(agent.id).text, 'send immediately');
 
     cacheRepository.markNewConversationDraftAwaitingAcceptance(agent.id, 'request-1');
+    await tester.pump();
+    expect(find.byKey(const Key('send_message_acceptance_indicator')), findsOneWidget);
+    expect(find.byKey(const Key('send_message_btn')), findsNothing);
+
     cacheRepository.applyUserMessageAccepted(
       agent.id,
       'session-1',
@@ -293,9 +297,11 @@ void main() {
       'request-old',
     );
     await tester.pump();
+    expect(find.byKey(const Key('send_message_acceptance_indicator')), findsOneWidget);
 
     await tester.enterText(find.byKey(const Key('chat_input')), 'newer draft');
     await tester.pump(const Duration(milliseconds: 500));
+    expect(find.byKey(const Key('send_message_acceptance_indicator')), findsNothing);
     cacheRepository.applyUserMessageAccepted(
       agent.id,
       'session-1',
