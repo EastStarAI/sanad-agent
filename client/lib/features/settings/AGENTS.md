@@ -6,7 +6,9 @@ This contract applies to `client/lib/features/settings/`.
 ## Destination Ownership
 - `/settings` is the only user-facing settings destination.
 - Workspace deep links carry explicit `device_id` and stable `workspace_id`; Settings selects that inspection scope without changing the active conversation device.
-- Workspace Settings owns display-name rename and Change Path; sidebar workspace rows only navigate to this destination.
+- Workspace Settings owns display-name rename and Change Path; sidebar workspace
+  rows only navigate to this destination. Change Path uses the shared picker
+  boundary and is available only for a confirmed same-desktop local device.
 - Settings mutation failures use the project `ToastUtils` surface with the actionable daemon-provided reason; do not use `SnackBar` or replace known reasons with generic copy.
 - Keep `/agents` as a redirect to the selected device Overview; do not recreate a separate Manage Devices surface.
 - Keep workspace destinations in primary Settings navigation. Show a bounded initial set with Show all / Show less rather than another navigation hierarchy.

@@ -18,15 +18,13 @@ import 'package:sanad_client/features/conversations/data/repositories/conversati
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/queued_messages_box.dart';
-import 'package:sanad_client/features/conversations/presentation/widgets/workspace_browser_dialog.dart';
+import 'package:sanad_client/utils/workspace_picker_helper.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_composition.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_state.dart';
 import 'package:sanad_client/features/voice/presentation/widgets/voice_stream_panel.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_context_chips.dart';
-import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
-import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
@@ -653,16 +651,11 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
   }
 
   Future<void> _pickAndCreateWorkspace(DeviceConfig? activeAgent) async {
-    final selectedPath = _shouldUseNativeWorkspacePicker(activeAgent)
-        ? await _pickWorkspacePathLocally()
-        : await showDialog<String>(
-            context: context,
-            builder: (dialogContext) => WorkspaceBrowserDialog(
-              loader: ({path}) {
-                return context.read<ConversationInputCubit>().browseWorkspaceTree(path: path);
-              },
-            ),
-          );
+    final selectedPath = await WorkspacePickerHelper.pickWorkspacePath(
+      context: context,
+      device: activeAgent,
+      debugOverride: ConversationInputPanel.debugPickDirectoryPath,
+    );
     if (!mounted || selectedPath == null || selectedPath.trim().isEmpty) {
       return;
     }
@@ -673,17 +666,6 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     }
 
     ToastUtils.showSuccess(context, 'Workspace selected: ${workspace.name}');
-  }
-
-  bool _shouldUseNativeWorkspacePicker(DeviceConfig? activeAgent) {
-    return AppPlatform.isDesktop && activeAgent?.isLocalReachable == true;
-  }
-
-  Future<String?> _pickWorkspacePathLocally() async {
-    if (ConversationInputPanel.debugPickDirectoryPath != null) {
-      return ConversationInputPanel.debugPickDirectoryPath!();
-    }
-    return getDirectoryPath(confirmButtonText: 'Select Workspace');
   }
 
   Future<bool> _confirmFullAccess() async {

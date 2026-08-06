@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:meta/meta.dart';
+
 import 'package:logging/logging.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:sanad_agent/core/auth/auth_manager.dart';
@@ -22,6 +24,19 @@ import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 
 class ServerSanadGatewayPlatform extends BasePlatform
     with SanadGatewayBehavior {
+  static const _remoteWorkspaceManagementCommands = <String>{
+    CanonicalEventTypes.createWorkspace,
+    CanonicalEventTypes.relocateWorkspace,
+    CanonicalEventTypes.browseWorkspaceTree,
+    CanonicalEventTypes.createFolder,
+    CanonicalEventTypes.renameFolder,
+    CanonicalEventTypes.deleteFolder,
+  };
+  static const _remoteWorkspaceManagementDisabledCode =
+      'remote_workspace_management_disabled';
+  static const _remoteWorkspaceManagementDisabledMessage =
+      'Remote workspace management is disabled for security reasons.';
+
   final _logger = Logger('ServerSanadGatewayPlatform');
 
   @override
@@ -39,6 +54,9 @@ class ServerSanadGatewayPlatform extends BasePlatform
   String? _registeredDeviceId;
 
   io.Socket? get socket => _socket;
+
+  @visibleForTesting
+  set socketForTesting(io.Socket? s) => _socket = s;
 
   @override
   String get platformId => 'sanad_gateway';
@@ -70,18 +88,20 @@ class ServerSanadGatewayPlatform extends BasePlatform
       return;
     }
 
-    final config = getIt<Config>();
-    final gatewayUrl = config.gatewayUrl;
+    if (_socket == null) {
+      final config = getIt<Config>();
+      final gatewayUrl = config.gatewayUrl;
 
-    _logger.info('Connecting to Sanad Gateway at $gatewayUrl...');
+      _logger.info('Connecting to Sanad Gateway at $gatewayUrl...');
 
-    _socket = io.io(
-      gatewayUrl,
-      io.OptionBuilder()
-          .setTransports(['websocket'])
-          .disableAutoConnect()
-          .build(),
-    );
+      _socket = io.io(
+        gatewayUrl,
+        io.OptionBuilder()
+            .setTransports(['websocket'])
+            .disableAutoConnect()
+            .build(),
+      );
+    }
 
     _socket!.onConnect((_) async {
       _logger.info('⚡ Connected to Sanad Gateway');
@@ -162,6 +182,18 @@ class ServerSanadGatewayPlatform extends BasePlatform
           (payload['device_id'] as String?) ??
           '';
 
+      if (_isRemoteWorkspaceManagementCommand(command)) {
+        await _rejectRemoteWorkspaceManagement(
+          command: command!,
+          requestId:
+              envelope['request_id']?.toString() ??
+              payload['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+        );
+        return;
+      }
+
       final bridge = getIt<PlatformRuntimeBridge>();
       bridge.registerSessionClient(
         sessionId,
@@ -203,6 +235,22 @@ class ServerSanadGatewayPlatform extends BasePlatform
     _socket!.on('protocol_event', (data) async {
       final envelope = toMap(data);
       final event = CanonicalEvent.fromJson(envelope);
+      final sessionId =
+          event.sessionId ?? envelope['session_id'] as String? ?? 'default';
+      final deviceId = envelope['device_id'] as String? ?? '';
+
+      if (_isRemoteWorkspaceManagementCommand(event.type)) {
+        await _rejectRemoteWorkspaceManagement(
+          command: event.type,
+          requestId:
+              event.payload['request_id']?.toString() ??
+              envelope['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+        );
+        return;
+      }
+
       final bridge = getIt<PlatformRuntimeBridge>();
       await handleIncomingProtocolEvent(
         event: event,
@@ -213,6 +261,29 @@ class ServerSanadGatewayPlatform extends BasePlatform
     });
 
     _socket!.connect();
+  }
+
+  bool _isRemoteWorkspaceManagementCommand(String? command) =>
+      command != null && _remoteWorkspaceManagementCommands.contains(command);
+
+  Future<void> _rejectRemoteWorkspaceManagement({
+    required String command,
+    required String? requestId,
+    required String sessionId,
+    required String deviceId,
+  }) async {
+    _logger.warning('Blocking remote workspace command: $command');
+    await _emitAgentEvent({
+      'device_id': _registeredDeviceId ?? deviceId,
+      'type': 'event',
+      'event': 'error',
+      'payload': {
+        'request_id': requestId,
+        'code': _remoteWorkspaceManagementDisabledCode,
+        'message': _remoteWorkspaceManagementDisabledMessage,
+      },
+      'session_id': sessionId,
+    });
   }
 
   Future<void> _startVoiceSession(String sessionId, String deviceId) async {
