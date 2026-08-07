@@ -332,11 +332,19 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
             label: 'Stored API Key',
             value: credential?.maskedSecret ?? (credential?.hasSecret == true ? 'Stored securely' : 'Not set'),
           )
-        else
+        else ...[
           _ReadOnlyConnectionValue(
             label: 'Connected Account',
             value: credential?.accountLabel ?? (credential?.hasSecret == true ? 'Connected' : 'Disconnected'),
           ),
+          if (credential?.accountName != null && credential!.accountName != credential.accountLabel) ...[
+            const SizedBox(height: 8),
+            _ReadOnlyConnectionValue(
+              label: 'Account Name',
+              value: credential.accountName!,
+            ),
+          ],
+        ],
         const SizedBox(height: 8),
         if (isApiKey && !_showCredentialActions)
           Align(
