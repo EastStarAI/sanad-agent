@@ -2,7 +2,7 @@
 title: "Task 67: Desktop Client–Agent Installation, Update, and Connection Lifecycle"
 description: "إغلاق دورة Windows وmacOS من اكتشاف تحديث الواجهة حتى تنزيل الوكيل والتحقق منه وتثبيته وتشغيله والاتصال به، مع مسار Linux يدوي محدود واختبارات منصة قبل النشر."
 status: "ready"
-current_gate: "Gate A — Complete macOS and Linux Platform Audit"
+current_gate: "Task 67A / Gate A — macOS and Linux Platform Audit"
 priority: "critical"
 depends_on: "Public Windows release and update architecture"
 file_budget: 24
@@ -208,11 +208,56 @@ service registrations مكررة، ولا تحذف Sanad Home أو الهوية 
   المحدد في 3.7.
 - تغيير Android/iOS أو cloud device update semantics أو تحديث Agent على أجهزة
   بعيدة من Client.
-- نشر Release قبل اكتمال بوابة جهاز Windows الحقيقي.
+- نشر Release قبل اكتمال بوابتي macOS وWindows وموافقة المستخدم.
 
 ---
 
-## Gate A — Complete Platform Audit and Approved Scope
+## 5. تقسيم التنفيذ الإلزامي بين الجهازين
+
+### Task 67A — الجهاز الحالي macOS
+
+تنفذ الجلسة الأولى على الجهاز الحالي فقط، وتشمل:
+
+1. Gate A: تدقيق macOS وLinux وتثبيت مصفوفة ملكية المنصات.
+2. Gate B: عقود trust/version المشتركة وسياسة Windows unsigned القابلة للاختبار
+   دون ادعاء تحقق runtime على Windows.
+3. Gate C: orchestration المشتركة، دورة macOS الفعلية، ومسار Linux اليدوي.
+4. Gate D: الاختبارات الآلية المشتركة وبوابة macOS الحقيقية.
+
+لا تنفذ Task 67A اختبارات WinSparkle/NSIS/Scheduled Task/PowerShell/Defender/
+SmartScreen الحقيقية، ولا تعتبر mocks بديلاً عنها. يجوز تعديل الكود المشترك أو
+Windows adapters عندما يلزم التصميم، لكن لا تُغلق نتائج Windows قبل Task 67B.
+
+### Human Handoff Gate — توقف إلزامي بعد 67A
+
+بعد إغلاق 67A يجب على الجلسة، بالترتيب:
+
+1. تشغيل تحقق macOS والمشترك وتسجيل النتائج.
+2. تحديث هذه الخطة والوثائق بنتيجة 67A والعناصر الباقية لـWindows.
+3. مراجعة diff، ثم commit وpush كل نتائج 67A إلى فرع التنفيذ.
+4. إثبات أن working tree نظيفة وتسجيل اسم الفرع وcommit SHA الكامل.
+5. تقديم ملخص عربي للمستخدم: الملفات، الاختبارات، دورة macOS، مسار Linux،
+   المخاطر المتبقية، وأعمال 67B الدقيقة.
+6. تقديم أوامر checkout/pull ونص استكمال قابل للنسخ لجهاز Windows.
+7. **التوقف وعدم بدء 67B أو النشر.** لا تكفي موافقة بدء 67A لتفويض Windows.
+
+لا تبدأ Task 67B إلا بعد مراجعة المستخدم لنتائج 67A وإصداره أمراً جديداً صريحاً
+على جهاز Windows يحدد الفرع/commit المطلوبين.
+
+### Task 67B — جهاز Windows جديد
+
+تبدأ الجلسة الثانية من commit 67A المرفوعة، وتشمل:
+
+1. إعادة قراءة هذه الخطة والعقود والتحقق أن checkout تطابق SHA المسلّمة.
+2. إكمال Windows adapters: WinSparkle quit handoff، NSIS، Scheduled Task،
+   PowerShell replacement، rollback وإعادة تشغيل النسخة القديمة.
+3. تشغيل analyzer/unit tests المتاحة على Windows ثم Gate E النظيفة كاملة.
+4. إصلاح أي خلل Windows فعلي يظهر، وإعادة كل الاختبارات المتأثرة.
+5. commit وpush نتائج 67B، ثم التوقف لمراجعة المستخدم قبل Gate F والنشر.
+
+---
+
+## Task 67A / Gate A — Complete Platform Audit and Approved Scope
 
 - [x] تحديد سبب فشل 100% في bootstrap.
 - [x] إثبات أن Agent updater يحمل التعارض نفسه.
@@ -241,7 +286,7 @@ service registrations مكررة، ولا تحذف Sanad Home أو الهوية 
 
 ---
 
-## Gate B — Shared Trust and Version Contract
+## Task 67A / Gate B — Shared Trust and Version Contract
 
 - [ ] تحويل تحقق platform artifact إلى API مركزية تعتمد artifact metadata
       وcomponent/platform، لا OS فقط.
@@ -270,7 +315,7 @@ service registrations مكررة، ولا تحذف Sanad Home أو الهوية 
 
 ---
 
-## Gate C — Client–Agent Lifecycle Implementation
+## Task 67A / Gate C — Shared, macOS, and Linux Implementation
 
 ### C1. أول تثبيت
 
@@ -281,26 +326,26 @@ service registrations مكررة، ولا تحذف Sanad Home أو الهوية 
 - [ ] السماح بإعادة محاولة كاملة بعد failure دون future محبوسة أو state قديمة.
 - [ ] عرض رسالة actionable خاصة بالمرحلة مع الاحتفاظ بتفاصيل آمنة في logs.
 
-### C2. تحديث Agent مثبت
+### C2. تحديث Agent مثبت — المشترك وmacOS
 
 - [ ] تمرير target version من Client إلى daemon.
 - [ ] رفض downgrade وlatest mismatch.
-- [ ] عدم إيقاف daemon إن فشلت جدولة replacement.
-- [ ] إعادة تشغيل backup عند rollback.
+- [ ] تنفيذ واستعادة atomic replacement على macOS مع إبقاء النسخة القديمة عند
+      download/verification/replacement failure.
 - [ ] انتظار Client لعودة health بالنسخة المطلوبة ثم إعادة WebSocket connection.
-- [ ] إبقاء Agent القديم عاملاً عند download/verification/scheduling failure.
+- [ ] إبقاء Windows replacement خلف adapter/نتيجة typed المتفق عليها، لكن تؤجل
+      semantics الفعلية لـPowerShell/Scheduled Task وإثباتها إلى Task 67B.
 
-### C3. تحديث Client على Windows وmacOS
+### C3. تحديث Client — المشترك وmacOS
 
 - [ ] تنفيذ startup update check مرة واحدة دون حجب startup.
 - [ ] منع RC feed من Stable Client.
-- [ ] على Windows إضافة listener لـ`before-quit-for-update` وshutdown handoff
-      آمنة؛ على macOS الحفاظ على Sparkle handoff الأصلية وإصلاحها فقط إذا أثبت
-      Gate A فجوة مماثلة.
+- [ ] الحفاظ على Sparkle handoff الأصلية على macOS وإصلاحها فقط إذا أثبت Gate A
+      فجوة فعلية.
 - [ ] إزالة listener/resources المضافة عند dispose.
 - [ ] إبقاء manual check صالحاً وعدم تكرار dialogs المتزامنة.
-- [ ] عدم توحيد WinSparkle DSA وSparkle EdDSA أو quit semantics قسراً؛ يشتركان
-      في orchestration فقط وتبقى platform adapter مالكة للتفاصيل.
+- [ ] إبقاء WinSparkle خلف platform adapter؛ إضافة Windows
+      `before-quit-for-update` وإثبات quit/install handoff ملك Task 67B.
 
 ### C4. مسار Linux اليدوي المحدود
 
@@ -313,14 +358,17 @@ service registrations مكررة، ولا تحذف Sanad Home أو الهوية 
 
 ### C Exit
 
-- [ ] كل نجاح منشور للواجهة يثبت النتيجة النهائية لا مجرد بدء عملية.
-- [ ] كل فشل يحدد المرحلة ويحافظ على آخر runtime صالحة متى أمكن.
-- [ ] Client الجديدة تنهي الدورة سواء كان Agent مفقوداً أو أقدم.
+- [ ] على macOS كل نجاح منشور للواجهة يثبت النتيجة النهائية لا مجرد بدء عملية.
+- [ ] كل فشل مشترك/macOS يحدد المرحلة ويحافظ على آخر runtime صالحة متى أمكن.
+- [ ] Client macOS الجديدة تنهي الدورة سواء كان Agent مفقوداً أو أقدم.
 - [ ] Client/Agent المتطابقتان لا تعيدان update أو install بلا داعٍ.
+- [ ] Linux manual check مكتملة دون auto-install.
+- [ ] Windows adapters تبني وتملك عقوداً typed، لكن نتائج Windows الحقيقية تبقى
+      مفتوحة بوضوح لـTask 67B.
 
 ---
 
-## Gate D — Automated Verification
+## Task 67A / Gate D — Automated and macOS Verification
 
 ### D1. Shared contract and trust tests
 
@@ -352,11 +400,12 @@ service registrations مكررة، ولا تحذف Sanad Home أو الهوية 
 
 ### D4. Client self-update and Linux manual-update tests
 
-- [ ] Windows وmacOS startup ينفذان check واحدة فقط بعد feed initialization.
+- [ ] macOS startup ينفذ check واحدة فقط بعد feed initialization.
+- [ ] shared/platform-adapter tests تثبت أن Windows startup سيطلب check واحدة؛
+      التحقق native الفعلي مؤجل لـ67B.
 - [ ] source run لا يفحص packaged update.
 - [ ] Appcast failure لا يمنع startup.
-- [ ] Windows `before-quit-for-update` ينفذ shutdown handoff مرة واحدة.
-- [ ] WinSparkle DSA/public key wiring يبقى موجوداً في Windows binary contract.
+- [ ] WinSparkle DSA/public key wiring يبقى موجوداً كعقد static على macOS/CI.
 - [ ] Sparkle EdDSA/feed contract يبقى صالحاً على macOS.
 - [ ] Linux لا تنفذ background check أو install، والفعل اليدوي لا يفتح رابطاً
       إلا لartifact رسمية أحدث مطابقة للمنصة.
@@ -380,19 +429,51 @@ set -o pipefail; fvm flutter analyze 2>&1 | tail -5
 set -o pipefail; fvm flutter test <focused-bootstrap-controller-updater-tests> 2>&1 | tail -5
 ```
 
-### D Exit
+### D6. macOS Real-Machine Gate
 
-- [ ] تمر كل حالات trust/version/install/replacement/rollback/start/connect.
+على الجهاز الحالي وبـSanad Home اختبارية لا بيانات المستخدم:
+
+1. تثبيت/تشغيل Client candidate الموقعة والمـnotarized.
+2. إثبات Sparkle update من candidate أقدم إلى أحدث أو feed معزولة مماثلة للإنتاج.
+3. إثبات missing-Agent bootstrap مع Developer ID/notarization verification.
+4. إثبات launchd registration/start وauthenticated health وWebSocket.
+5. إثبات Agent exact-target update وreconnect وبقاء Sanad Home.
+6. إثبات rollback أو بقاء Agent القديمة عند verification/replacement failure
+   دون إضعاف Gatekeeper.
+
+### D Exit — إغلاق 67A والتوقف
+
+- [ ] تمر حالات trust/version/install/replacement/rollback/start/connect المشتركة
+      ودورة macOS الفعلية.
 - [ ] تمر analyzers والاختبارات المركزة.
 - [ ] لا تتصل الاختبارات الآلية بـProduction ولا تستخدم Sanad Home للمستخدم.
+- [ ] يمر Linux manual check دون auto-install.
+- [ ] تبقى قائمة Windows native verification مفتوحة لـ67B ولا توصف بأنها ناجحة.
+- [ ] تنفذ Human Handoff Gate: تحديث الخطة، commit، push، clean status، SHA،
+      ملخص وأمر جهاز Windows.
+- [ ] **تتوقف الجلسة وتطلب مراجعة المستخدم؛ لا تبدأ Gate E.**
 
 ---
 
-## Gate E — Windows 11 Real-Machine Release Gate
+## Task 67B / Gate E — Windows Implementation and Real-Machine Gate
 
-هذه البوابة إلزامية ولا يمكن استبدالها بنجاح unit tests أو macOS development.
-تستخدم Windows 11 x64 workstation/VM نظيفة مع Defender وSmartScreen مفعّلين،
-وسجل أدلة لا يحتوي أسراراً.
+لا تبدأ هذه البوابة إلا على جهاز Windows وبعد Human Handoff Gate وأمر المستخدم
+الصريح. هذه البوابة إلزامية ولا يمكن استبدالها بنجاح unit tests أو macOS
+development. تستخدم Windows 11 x64 workstation/VM نظيفة مع Defender وSmartScreen
+مفعّلين، وسجل أدلة لا يحتوي أسراراً.
+
+### E0. Windows Native Implementation and Focused Verification
+
+- [ ] التحقق أن checkout تطابق branch وcommit SHA المسلّمتين من 67A.
+- [ ] تدقيق diff ونتائج 67A قبل تعديل Windows adapters.
+- [ ] إكمال WinSparkle startup check و`before-quit-for-update` handoff.
+- [ ] إكمال NSIS upgrade behavior دون معالجة موضوع auto-launch المؤجل.
+- [ ] إكمال Scheduled Task install/start/status idempotently.
+- [ ] إكمال PowerShell detached replacement وعدم إيقاف daemon قبل نجاح الجدولة.
+- [ ] عند فشل الجديد: استعادة Agent القديمة وتشغيلها وإثبات health.
+- [ ] polling محدود للنسخة المطلوبة وWebSocket reconnect دون fixed two-second
+      success assumption.
+- [ ] تشغيل analyzers والاختبارات المركزة على Windows وإصلاح أي platform failure.
 
 ### E1. ترقية مستخدم الإصدار الحالي
 
@@ -427,36 +508,23 @@ set -o pipefail; fvm flutter test <focused-bootstrap-controller-updater-tests> 2
 - network unavailable مع بقاء Client وAgent الحالية قابلتين للاستخدام.
 - تكرار المحاولة بعد عودة الشبكة.
 
-### E4. macOS Real-Machine Regression Gate
+### E Exit — إغلاق 67B والتوقف
 
-على جهاز macOS مدعوم، وبـSanad Home اختبارية لا بيانات المستخدم:
-
-1. تثبيت/تشغيل Client candidate الموقعة والمـnotarized.
-2. إثبات Sparkle update من candidate أقدم إلى أحدث أو استخدام feed معزولة
-   مماثلة للإنتاج.
-3. إثبات missing-Agent bootstrap مع Developer ID/notarization verification.
-4. إثبات launchd registration/start وauthenticated health وWebSocket.
-5. إثبات Agent exact-target update وreconnect، ثم logout/login أو reboot مناسب
-   يثبت بقاء الخدمة وSanad Home.
-6. إثبات rollback أو بقاء Agent القديمة عند verification/replacement failure
-   دون إضعاف Gatekeeper.
-
-### E Exit
-
-- [ ] تمر E1 وE2 وE3 على Windows 11 حقيقية/VM نظيفة.
-- [ ] تمر E4 على جهاز macOS مدعوم؛ يجوز استخدام الجهاز الحالي بعد اكتمال
-      التنفيذ على الفرع وقبل publication.
+- [ ] تمر E0 وE1 وE2 وE3 على Windows 11 حقيقية/VM نظيفة.
 - [ ] Defender وSmartScreen لم يُعطلا.
 - [ ] لا يبقى partial task أو staged file غير مملوك أو Agent متوقفة.
 - [ ] الأدلة تسجل النسخ والنتائج دون tokens أو مسارات/بيانات شخصية غير لازمة.
 - [ ] تحديث `docs/qa_maintenance/windows_release_clean_machine.md` بنتيجة
       candidate الجديدة دون تحريف دليل `1.0.0` التاريخي.
+- [ ] commit وpush نتائج 67B، وإثبات clean status وتقديم SHA ونتائج Windows.
+- [ ] **التوقف وطلب مراجعة المستخدم؛ لا تبدأ Gate F ولا تنشر تلقائياً.**
 
 ---
 
-## Gate F — Release Publication and Production Handoff
+## Final Gate F — Release Publication and Production Handoff
 
-لا تبدأ قبل E Exit.
+لا تبدأ قبل E Exit وموافقة جديدة صريحة من المستخدم على release candidate
+والنشر. إكمال 67A أو 67B ليس تفويضاً للنشر.
 
 - [ ] رفع marketing version وbuild number بشكل متسق في release contract وAgent
       وClient ومصادر Windows installer الفعلية.
@@ -483,7 +551,7 @@ set -o pipefail; fvm flutter test <focused-bootstrap-controller-updater-tests> 2
 
 ---
 
-## 5. معايير القبول النهائية
+## 6. معايير القبول النهائية
 
 تُغلق المهمة فقط عند تحقق جميع الشروط:
 
@@ -508,23 +576,43 @@ set -o pipefail; fvm flutter test <focused-bootstrap-controller-updater-tests> 2
 
 ---
 
-## 6. Handoff لجلسة التنفيذ
+## 7. Handoff لجلسات التنفيذ
 
-عند بدء جلسة جديدة، يقرأ المنفذ هذا الملف والعقود الأقرب لكل مساحة قبل التعديل،
-ثم يبدأ من Gate A لإكمال تدقيق macOS وLinux، وبعد A Exit ينتقل إلى Gate B.
-هذه مهمة واسعة وعالية المخاطر وتمس release/runtime؛ تُنفذ في
-worktree معزولة وفق SOP المشروع، ولا تُنفذ مباشرة كتعديل سريع على النسخة
-المنشورة.
+### 7.1 بدء Task 67A على جهاز macOS الحالي
 
-تقسيم التنفيذ الموصى به:
+نقطة الدخول الموثقة هي:
 
-1. إكمال macOS/Linux audit وتثبيت platform matrix؛
-2. shared trust/version contract؛
-3. Agent platform replacement/rollback؛
-4. Desktop Client bootstrap/connect orchestration؛
-5. WinSparkle/Sparkle startup/quit handoff ومسار Linux اليدوي؛
-6. automated verification؛
-7. Windows وmacOS real-machine gates؛
-8. release candidate ثم publication.
+- plan branch: `plan/67-desktop-client-agent-lifecycle`
+- plan file: `docs/plans/tasks/67-desktop-client-agent-release-lifecycle.md`
 
-لا يعتبر اكتمال أي جزء منفرد إذناً بالنشر أو دليلاً على اكتمال الدورة.
+بعد checkout للـplan branch، ينشئ المنفذ worktree/branch تنفيذ معزولة باسم واضح
+مثل `task/67-desktop-client-agent-lifecycle` من commit الخطة الحالية. يقرأ
+العقود الأقرب، يبدأ من Gate A، ثم ينفذ 67A فقط حتى D Exit.
+
+أمر المستخدم للجلسة يجب أن يصرح صراحة:
+
+> نفّذ Task 67A فقط من الخطة، على macOS الحالي. أكمل Gates A–D بما فيها دورة
+> macOS ومسار Linux اليدوي، ثم حدّث الخطة، اعمل commit وpush، وقدّم SHA وأمر
+> Windows، وتوقف لطلب مراجعتي. لا تبدأ Task 67B أو Gate E أو النشر.
+
+### 7.2 التسليم المطلوب من macOS إلى Windows
+
+يجب أن تتضمن إجابة 67A النهائية:
+
+- implementation branch المرفوعة؛
+- commit SHA الكامل الذي اجتاز 67A؛
+- نتائج analyzer/tests وmacOS real-machine gate؛
+- ملخص Linux manual update؛
+- قائمة Windows-only المتبقية؛
+- أوامر `git fetch` و`git checkout`/`switch` و`git pull --ff-only` لجهاز Windows؛
+- نص استكمال 67B قابل للنسخ يتضمن SHA؛
+- تأكيد أن الجلسة توقفت قبل Gate E.
+
+### 7.3 بدء Task 67B على Windows
+
+لا تستخدم plan branch القديمة إذا سلّمت 67A implementation branch أحدث. يبدأ
+Windows من branch وSHA اللتين قدمتهما جلسة macOS، ويتحقق منهما قبل التعديل، ثم
+ينفذ Gate E فقط. بعد E Exit يعمل commit/push ويتوقف للمراجعة. Gate F تحتاج
+موافقة ثالثة مستقلة.
+
+لا يعتبر اكتمال 67A أو 67B إذناً بالنشر أو دليلاً على اكتمال الدورة كلها.
