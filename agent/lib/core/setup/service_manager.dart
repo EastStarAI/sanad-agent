@@ -4,9 +4,23 @@ import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 
 class ServiceManager {
-  static const String label = 'com.eaststarai.sanad.agent';
-  static const String serviceName = 'sanad-agent.service';
-  static const String taskName = 'SanadAgent';
+  static String get _instance {
+    final value = Platform.environment['SANAD_SERVICE_INSTANCE']?.trim() ?? '';
+    if (value.isEmpty) return '';
+    if (!RegExp(r'^[A-Za-z0-9-]{1,32}$').hasMatch(value)) {
+      throw const FormatException('Invalid SANAD_SERVICE_INSTANCE.');
+    }
+    return value;
+  }
+
+  static String get label => _instance.isEmpty
+      ? 'com.eaststarai.sanad.agent'
+      : 'com.eaststarai.sanad.agent.$_instance';
+  static String get serviceName => _instance.isEmpty
+      ? 'sanad-agent.service'
+      : 'sanad-agent-$_instance.service';
+  static String get taskName =>
+      _instance.isEmpty ? 'SanadAgent' : 'SanadAgent-$_instance';
 
   static String getHomeDirectory() {
     if (Platform.isWindows) {
@@ -96,6 +110,7 @@ class ServiceManager {
         <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>SANAD_HOME</key>
         <string>$sanadHome</string>
+        ${_instance.isEmpty ? '' : '<key>SANAD_SERVICE_INSTANCE</key><string>$_instance</string>'}
     </dict>
 </dict>
 </plist>
@@ -127,6 +142,7 @@ UMask=0077
 StandardOutput=append:$sanadHome/logs/daemon.log
 StandardError=append:$sanadHome/logs/daemon.error.log
 Environment=SANAD_HOME=$sanadHome
+${_instance.isEmpty ? '' : 'Environment=SANAD_SERVICE_INSTANCE=$_instance'}
 
 [Install]
 WantedBy=default.target

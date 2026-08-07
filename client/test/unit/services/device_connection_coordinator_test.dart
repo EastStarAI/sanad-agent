@@ -1,8 +1,46 @@
+import 'package:sanad_client/features/devices/data/daemon/local_daemon_controller.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../helpers/fake_socket.dart';
+
+class _RetrySocket extends FakeSanadSocketService {
+  int attempts = 0;
+
+  @override
+  Future<void> connect() async {
+    attempts++;
+    if (attempts == 1) throw StateError('first attempt failed');
+    setConnected(true);
+  }
+}
+
+class _ReadyDaemonController implements LocalDaemonController {
+  @override
+  Future<Map<String, dynamic>?> getDaemonHealth() async => {'status': 'ok', 'version': '1.0.0'};
+  @override
+  Future<String?> getDaemonVersion() async => '1.0.0';
+  @override
+  Future<bool> install() async => true;
+  @override
+  bool isServiceInstalled() => true;
+  @override
+  Future<bool> isDaemonRunning() async => true;
+  @override
+  Future<bool> restartDaemon() async => true;
+  @override
+  bool get shouldAutoStart => true;
+  @override
+  Future<bool> startDaemon() async => true;
+  @override
+  Future<bool> stopDaemon() async => true;
+  @override
+  Future<AgentLifecycleResult> updateDaemon({
+    required String targetVersion,
+    void Function(double progress)? onProgress,
+  }) async => const AgentLifecycleResult(AgentLifecycleStatus.upToDate);
+}
 
 void main() {
   test('prefers local when sanadagent agent is on the same device and local socket is ready', () {
@@ -66,6 +104,28 @@ void main() {
 
     coordinator.dispose();
     socket.dispose();
+  });
+
+  test('failed local connection attempts can be retried in the same lifecycle', () async {
+    final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1');
+    final localSocket = _RetrySocket();
+    final coordinator = DeviceConnectionCoordinator(
+      cloudSocketService: cloudSocket,
+      localSocketService: localSocket,
+      currentDeviceId: 'device-1',
+      daemonController: _ReadyDaemonController(),
+    );
+
+    await coordinator.ensureLocalConnection();
+    expect(localSocket.isConnected, isFalse);
+    await coordinator.ensureLocalConnection();
+
+    expect(localSocket.isConnected, isTrue);
+    expect(localSocket.attempts, 2);
+
+    coordinator.dispose();
+    cloudSocket.dispose();
+    localSocket.dispose();
   });
 
   test('respects custom expectedVersion parameter', () {

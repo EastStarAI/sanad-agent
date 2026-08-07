@@ -7,73 +7,105 @@ description: "The shared release manifest and the update ownership of the Sanad 
 
 ## Shared release contract
 
-`release/release-contract.json` defines the marketing version, build, Stable tag, accepted RC channel files, repository, canonical filename templates, platform, architecture, and expected signature type. RC artifact filenames include the full `-rc.N` release identity while pubspec marketing versions remain `1.0.0`. Tags are either `v<version>` or `v<version>-rc.N`; every other prerelease form is rejected. The shared Dart package under `release/contract/` parses and
-validates that contract and the generated release manifest.
+`release/release-contract.json` defines the release identity, repository,
+canonical artifact names, supported platform/architecture pairs, and exact
+signature metadata. `release/contract/` parses both that contract and generated
+manifests. A manifest is accepted only when its schema, repository, tag,
+channel, version, commit, canonical URL, positive size, SHA-256, and exact
+component/platform signature type are valid.
 
-The candidate manifest is generated only after every public and private handoff artifact required by the contract exists, including the signed private iOS IPA. Validation-only manifests describe the intended immutable release identity but remain private workflow artifacts and never imply that the tag or Release exists. Its public entries include
-the immutable download URL, byte size, SHA-256 digest, platform, architecture,
-component, version, and signature metadata. Private AAB and Web handoffs remain
-protected workflow artifacts and are verified by their build attestations. The
-workflow refuses version/tag/commit mismatches, missing artifacts,
-non-canonical filenames, or checksum differences.
+`ReleaseArtifactTrustPolicy` is the shared metadata authority used by manifest
+validation, Client bootstrap, and Agent update. Unknown or empty signature
+metadata fails closed. Runtime checksum verification is distinct from protected
+release-pipeline provenance verification: a runtime never claims to validate a
+GitHub attestation locally.
 
-## Agent update ownership
+## Trust by platform
 
-`AgentUpdateService` is the only owner of native-agent replacement.
+| Component/platform | Required manifest trust metadata | Runtime proof |
+|---|---|---|
+| Agent macOS | `developer-id+notarization+github-attestation` | canonical URL, size, SHA-256, Developer ID identity, and the raw-CLI `codesign --test-requirement '=notarized'` ticket check |
+| Agent Windows | `unsigned+github-attestation` | canonical URL, size, and SHA-256; provenance is proved by protected release CI |
+| Agent Linux | `github-attestation` | canonical URL, size, and SHA-256 |
+| Client macOS | `developer-id+notarization+sparkle-ed25519` | Sparkle EdDSA plus Apple package trust |
+| Client Windows | `unsigned+winsparkle-dsa` | WinSparkle DSA plus manifest/checksum/provenance release gates |
+| Client Linux | `github-attestation` | manual discovery of a canonical release artifact |
 
-- `sanad update` calls the service directly.
-- The standalone desktop client requests the daemon's update endpoint; it does
-  not implement a competing downloader.
-- A source/FVM runtime returns `source_managed` immediately and never performs
-  Git operations or modifies the checkout.
-- A standalone runtime selects the exact operating-system and architecture
-  artifact, validates its size and SHA-256, stages it beside the installed
-  executable, acquires an update lock, preserves a backup, and performs an
-  atomic replacement.
-- Replacement failure restores the previous executable. Windows uses a
-  detached replacement process because the running executable cannot replace
-  itself in place.
+Windows remains intentionally unsigned for every release until an explicit
+signed-only migration changes this centralized policy. Signed and unsigned
+Windows types are not accepted together. Acquiring Authenticode requires a
+separate policy transition that rejects unsigned artifacts for subsequent
+releases.
 
-The public status vocabulary is `up_to_date`, `update_available`, `updating`,
-`restart_required`, `source_managed`, `unsupported_target`,
-`verification_failed`, `rollback_completed`, and `failed`.
+## Exact Client–Agent pairing
 
-## First-install exception
+Packaged Desktop releases pair Client and Agent with one exact release version.
+The Client sends `target_version` to the authenticated local `/update` endpoint.
+Both bootstrap and Agent update reject a latest manifest whose version differs
+from that target before downloading an artifact. An older Agent may move only
+to the exact target. A newer Agent is never downgraded automatically.
 
-When a packaged desktop client cannot find an installed local agent, it may use
-`VerifiedAgentBootstrapInstaller` once. This bootstrap consumes the same
-release manifest, platform selection, size check, SHA-256 validation, staging,
-backup, and atomic replacement rules as the agent updater. After installation,
-the operating-system service owns the daemon lifecycle and all later updates
-return to `AgentUpdateService`.
+A successful lifecycle result means authenticated health reports the target
+version and the local WebSocket reaches ready. Download, staging, replacement,
+or restart request alone are not success. Typed failures distinguish network,
+manifest, target, trust, checksum, replacement/rollback, service registration,
+start, health, version, authentication, and socket stages.
 
-Source-mode clients never bootstrap or replace a source daemon.
+## First install and retry
 
-## Client self-update ownership
+`VerifiedAgentBootstrapInstaller` is used only when the packaged Desktop Client
+cannot reach an installed Agent. It validates the exact manifest and artifact,
+stages beside the target, preserves the previous executable, performs an atomic
+move, and restores the previous executable when replacement fails.
+`StandaloneDaemonController` then registers the platform service idempotently,
+starts it, and polls authenticated health with bounded backoff.
 
-Client application updates remain separate from `sanad update`:
+The connection coordinator proves the authenticated local socket after health.
+A failed socket attempt is not cached permanently; a later retry creates a new
+attempt without deleting Sanad Home, identity, provider configuration, or a
+previous valid executable.
 
-- macOS and Windows use the generated Appcast and their native Sparkle/
-  WinSparkle signature mechanisms.
-- Linux exposes a user-approved release flow; it does not silently replace an
-  installed package.
-- Android delegates package installation and signature enforcement to the
-  operating system.
-- iOS is updated through Internal TestFlight for the first release.
-- Web compares the deployed `version.json` with its compiled version without
-  forcing a reload loop; the browser loads the newer deployment on the next
-  user-initiated reload.
-- Source/FVM clients disable packaged self-update and leave the checkout under
-  developer control.
+## Installed Agent update
 
-## Appcast
+`AgentUpdateService` is the sole native replacement owner. Source/FVM runtimes
+return `source_managed` and never mutate Git. Standalone runtimes select and
+verify the exact target artifact under an exclusive update lock.
 
-The Appcast is derived deterministically from the verified channel manifest after the macOS and Windows client packages and their update signatures exist. Stable uses `appcast.xml`; RC uses isolated `appcast-rc.xml` and `release-manifest-rc.json` staging surfaces, so Stable clients cannot discover an RC. Generated feeds are never tracked in Git. Stable production publication remains the SANAD-13 handoff.
+On macOS and Linux, replacement is atomic and preserves a rollback executable;
+replacement failure restores it before reporting failure. If macOS restart does
+not return target-version health, the Client restores the backup and starts the
+previous Agent before returning `rollback_completed`. launchd/systemd owns
+restart after the daemon returns the typed response. A bounded
+`SANAD_SERVICE_INSTANCE` suffix exists for isolated real-machine lifecycle tests
+so their launchd/systemd registration cannot replace the user's service.
 
-## Trust boundaries
+The macOS Dart AOT executable is signed with Hardened Runtime and only
+`com.apple.security.cs.allow-unsigned-executable-memory`, which Dart requires
+for runtime stubs. The release workflow supplies the contract version through
+`SANAD_AGENT_VERSION`; compiled releases do not retain a hardcoded `1.0.0`
+identity. On Windows, verified bytes
+are staged for a detached adapter. The daemon stops only after scheduling is
+accepted. Native Scheduled Task, PowerShell replacement, and rollback/start
+evidence remain Task 67B work and must not be inferred from shared tests.
 
-Runtime replacement always requires a matching manifest entry and checksum.
-Platform code signing adds publisher identity on Apple and Android. Windows `1.0.0` intentionally has no Authenticode publisher identity; its Agent uses GitHub provenance and its Client additionally uses WinSparkle DSA for update integrity.
-GitHub artifact attestations bind release outputs to the public workflow and
-commit; Linux users and distributors can verify that provenance independently.
-No updater accepts tokens, provider credentials, or deployment secrets.
+## Client self-update
+
+Packaged macOS and Windows clients initialize only the Stable Appcast and issue
+one non-blocking startup check. Feed failure never blocks application startup,
+and concurrent manual checks reuse one in-flight operation. Source clients do
+not initialize packaged update machinery. macOS retains Sparkle's native quit,
+installation, Developer ID, notarization, and EdDSA handoff. WinSparkle's native
+quit/install handoff remains a Windows Task 67B gate.
+
+Linux has no background poll, download, package replacement, privilege request,
+or rollback claim. **Settings → General → Check for Updates** performs a
+user-initiated manifest check. Only a newer canonical Linux x64 Client artifact
+is opened in the external browser; up-to-date and discovery failures remain
+non-blocking.
+
+## Publication boundary
+
+Stable uses `release-manifest.json` and `appcast.xml`; RC uses isolated RC
+surfaces. Stable clients cannot discover RC artifacts. Generated manifests,
+checksums, SBOMs, attestations, and Appcasts are release outputs, not tracked
+source. No Task 67A verification publishes a tag, Release, Appcast, or artifact.

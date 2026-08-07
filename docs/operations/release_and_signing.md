@@ -19,10 +19,10 @@ Pull-request CI is read-only and never receives signing or deployment credential
 |---|---|---|---|
 | Agent | macOS arm64/x64 | GitHub Release | Developer ID, notarization, and GitHub attestation |
 | Agent | Linux x64 | GitHub Release | SHA-256 plus GitHub attestation |
-| Agent | Windows x64 | GitHub Release | Unsigned Windows build; SHA-256, release manifest, and GitHub provenance |
+| Agent | Windows x64 | GitHub Release | Temporarily unsigned Windows build for every release; canonical manifest/URL/size/SHA-256 and protected GitHub provenance |
 | Client | macOS universal | GitHub Release | Developer ID, notarization, Sparkle EdDSA |
 | Client | Linux x64 | GitHub Release | SHA-256 plus GitHub attestation |
-| Client | Windows x64 | GitHub Release | Unsigned Windows build; SHA-256, release manifest, and GitHub provenance |
+| Client | Windows x64 | GitHub Release | Temporarily unsigned Windows build for every release; WinSparkle DSA plus canonical manifest/URL/size/SHA-256 and protected GitHub provenance |
 | Client | Android universal APK | GitHub Release | Android release signature |
 | Client | Android AAB | Private release handoff | Android release signature |
 | Client | iOS | Internal TestFlight only | Apple Distribution and provisioning profile |
@@ -32,10 +32,26 @@ The exact filenames are defined in `release/release-contract.json`. Generated
 manifests, checksums, SBOMs, attestations, and Appcast files are release outputs,
 not source files.
 
+The Windows exception is policy-based, not version-based. Empty, unknown, or
+signed metadata is rejected while `unsigned+github-attestation` for Agent and
+`unsigned+winsparkle-dsa` for Client are active. Runtime checksum checks do not
+claim to reproduce GitHub attestation verification. When Authenticode becomes
+available, a separately reviewed transition changes the centralized contract to
+signed-only and rejects newly produced unsigned artifacts; the two policies are
+never accepted concurrently by default.
+
 Android debug builds never require or consume the release keystore. Gradle only
 requires the external `android/key.properties` file when the requested task is
 a release task; a missing file must fail release configuration before an
 unsigned APK or AAB can be produced.
+
+The macOS Agent uses Hardened Runtime with the narrowly scoped
+`com.apple.security.cs.allow-unsigned-executable-memory` entitlement required by
+Dart AOT runtime stubs. The workflow injects the validated release-contract
+version at compilation, signs with that entitlement, executes the signed binary,
+and submits it for notarization. Raw CLI notarization is checked with
+`codesign --test-requirement '=notarized'`; `spctl --type execute` is not used
+because it rejects valid notarized non-bundle executables.
 
 The hosted macOS Client job restores the exported Sparkle Ed25519 key to a
 runner-temporary file and passes that file directly to Sparkle `sign_update`.
@@ -70,7 +86,7 @@ unprotected artifacts.
 | `APPLE_API_PRIVATE_KEY_P8_BASE64` / `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID` | notarization and App Store Connect uploads | NanoSoft LY LLC; scoped CI key, revoke and replace on compromise |
 | `APPLE_DISTRIBUTION_P12_BASE64` / `APPLE_DISTRIBUTION_P12_PASSWORD` | iOS distribution signing | NanoSoft LY LLC; rotate on expiry or compromise |
 | `IOS_APP_STORE_PROFILE_BASE64` | `com.eaststarai.sanad` App Store profile | NanoSoft LY LLC; regenerate when certificate, entitlement, or App ID changes |
-| `WINDOWS_SIGNING_PFX_BASE64` / `WINDOWS_SIGNING_PFX_PASSWORD` | Windows Authenticode signing | Release owner; not yet available for v1 |
+| `WINDOWS_SIGNING_PFX_BASE64` / `WINDOWS_SIGNING_PFX_PASSWORD` | Future Windows Authenticode signed-only transition | Release owner; not yet available and not required while the temporary unsigned policy is active |
 | `ANDROID_KEYSTORE_BASE64` / passwords / `ANDROID_KEY_ALIAS` | Android APK/AAB signing | Release owner; retain encrypted recovery copy for the lifetime of the package ID |
 | `SPARKLE_ED25519_PRIVATE_KEY_BASE64` | macOS update signatures | Release owner; rotate only with a documented public-key transition |
 | `WINSPARKLE_DSA_PRIVATE_KEY_BASE64` | Windows update signatures | Release owner; rotate only with a documented public-key transition |

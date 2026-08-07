@@ -118,12 +118,7 @@ class SourceDaemonController implements LocalDaemonController {
     try {
       final process = await Process.start(
         'fvm',
-        [
-          'dart',
-          'run',
-          'bin/sanad_agent.dart',
-          'daemon',
-        ],
+        ['dart', 'run', 'bin/sanad_agent.dart', 'daemon'],
         workingDirectory: agentDir.path,
         runInShell: Platform.isWindows,
       );
@@ -212,32 +207,39 @@ class SourceDaemonController implements LocalDaemonController {
   }
 
   @override
-  Future<bool> updateDaemon({
-    String? tag,
+  Future<AgentLifecycleResult> updateDaemon({
+    required String targetVersion,
     void Function(double progress)? onProgress,
   }) async {
-    // The daemon owns the update contract. Source runs return source_managed
-    // and never execute Git, FVM, or package-manager commands.
+    // Source runs never execute Git, FVM, or package-manager commands.
     final running = await isDaemonRunning();
     if (running) {
       try {
-        _logger.info('Requesting the daemon-owned update status...');
-        final uri = Uri.parse('${LocalDaemonController.defaultUrl}/update');
+        final uri = Uri.parse(
+          '${LocalDaemonController.defaultUrl}/update',
+        ).replace(queryParameters: {'target_version': targetVersion});
         final response = await _gatewayClient.post(uri).timeout(const Duration(seconds: 15));
         if (response.statusCode == 200) {
           final body = jsonDecode(response.body);
-          return body is Map && body['status'] == 'source_managed';
+          if (body is Map && body['status'] == 'source_managed') {
+            return const AgentLifecycleResult(
+              AgentLifecycleStatus.sourceManaged,
+            );
+          }
         }
-      } catch (e) {
-        _logger.severe('Failed to trigger source update: $e');
+      } catch (error) {
+        _logger.severe('Failed to query source update ownership: $error');
+        return AgentLifecycleResult(
+          AgentLifecycleStatus.networkFailed,
+          message: 'Could not query the source-managed agent: $error',
+        );
       }
-      return false;
     }
 
-    _logger.info(
-      'Source agent is not running; its checkout remains developer-managed.',
+    return const AgentLifecycleResult(
+      AgentLifecycleStatus.sourceManaged,
+      message: 'Source agent updates remain developer-managed.',
     );
-    return true;
   }
 
   @override

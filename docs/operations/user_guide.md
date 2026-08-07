@@ -200,12 +200,25 @@ Unsupported providers do not display invented usage values.
 
 ## Update Sanad
 
-Sanad Client checks the update channel supported by its platform and prompts
-before installing an application update. macOS uses its signed Appcast. The
-unsigned Windows `1.0.0` path must verify official release metadata and SHA-256
-before replacement; release notes state whether that client update is automatic
-or manual. Linux and Android use a user-approved system flow, iOS uses Internal
-TestFlight, and Web loads the newer deployment on the next browser refresh.
+Packaged macOS and Windows Clients check the Stable signed Appcast after startup
+and ask before installing a Client update. Windows releases remain temporarily
+unsigned under the documented release policy, while WinSparkle DSA, canonical
+release metadata, size, SHA-256, SBOM, and protected provenance remain required.
+iOS uses Internal TestFlight, Android uses its user-approved system flow, and Web
+loads the newer deployment on a later browser refresh.
+
+Linux Client updates are deliberately manual:
+
+1. Open **Settings → General** and select **Check for Updates**.
+2. If a newer canonical Linux x64 artifact exists, Sanad opens that exact
+   official GitHub Release artifact in the external browser. It does not
+   download, replace, elevate, or restart the application.
+3. Download and extract the newer bundle, close the current Client, replace the
+   Client bundle, and launch it again.
+4. Keep the existing Sanad Home (normally `~/.sanad`). Do not delete or replace
+   it; identity, provider configuration, and Agent state remain there.
+
+An up-to-date result or discovery failure does not prevent continued use.
 
 To update a standalone agent from GitHub Releases:
 

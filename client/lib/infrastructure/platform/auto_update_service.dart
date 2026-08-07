@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:auto_updater/auto_updater.dart';
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -8,114 +10,221 @@ import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_release_contract/release_contract.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'package:auto_updater/auto_updater.dart';
+enum ClientUpdateStatus {
+  checkStarted,
+  updateOpened,
+  upToDate,
+  sourceManaged,
+  unsupported,
+  networkFailed,
+  manifestInvalid,
+  artifactUnavailable,
+  launchFailed,
+}
+
+class ClientUpdateResult {
+  const ClientUpdateResult(this.status, {this.message});
+  final ClientUpdateStatus status;
+  final String? message;
+}
+
+abstract class NativeUpdateAdapter {
+  Future<void> setFeedUrl(String url);
+  Future<void> setScheduledCheckInterval(int seconds);
+  Future<void> checkForUpdates();
+}
+
+class AutoUpdaterAdapter implements NativeUpdateAdapter {
+  const AutoUpdaterAdapter();
+
+  @override
+  Future<void> setFeedUrl(String url) => autoUpdater.setFeedURL(url);
+
+  @override
+  Future<void> setScheduledCheckInterval(int seconds) => autoUpdater.setScheduledCheckInterval(seconds);
+
+  @override
+  Future<void> checkForUpdates() => autoUpdater.checkForUpdates();
+}
 
 class AutoUpdateService {
   static final _logger = Logger('AutoUpdateService');
-
   static final AutoUpdateService _instance = AutoUpdateService._internal();
 
-  factory AutoUpdateService() {
-    return _instance;
-  }
+  factory AutoUpdateService() => _instance;
 
-  AutoUpdateService._internal();
+  AutoUpdateService._internal()
+    : _native = const AutoUpdaterAdapter(),
+      _client = http.Client(),
+      _platform = AppPlatform.name,
+      _sourceRun = AppConfig.isSourceRun,
+      _currentVersion = _packageVersion,
+      _launch = _launchExternal,
+      _manifestUrl = _defaultManifestUrl,
+      _feedUrl = 'https://updates.sanad.eaststarai.com/appcast.xml';
 
-  bool _isInitialized = false;
+  AutoUpdateService.test({
+    required NativeUpdateAdapter native,
+    required http.Client client,
+    required String platform,
+    required bool sourceRun,
+    required Future<String> Function() currentVersion,
+    required Future<bool> Function(Uri uri) launch,
+    Uri? manifestUri,
+    String feedUrl = 'https://updates.sanad.eaststarai.com/appcast.xml',
+  }) : _native = native,
+       _client = client,
+       _platform = platform,
+       _sourceRun = sourceRun,
+       _currentVersion = currentVersion,
+       _launch = launch,
+       _manifestUrl = manifestUri ?? _defaultManifestUrl,
+       _feedUrl = feedUrl;
 
-  // EastStar AI-owned Appcast endpoint.
-  static const String _feedUrl = 'https://updates.sanad.eaststarai.com/appcast.xml';
-  static final Uri _manifestUrl = Uri.parse(
+  final String _feedUrl;
+  static final Uri _defaultManifestUrl = Uri.parse(
     'https://github.com/EastStarAI/sanad-agent/releases/latest/download/release-manifest.json',
   );
 
+  final NativeUpdateAdapter _native;
+  final http.Client _client;
+  final String _platform;
+  final bool _sourceRun;
+  final Future<String> Function() _currentVersion;
+  final Future<bool> Function(Uri uri) _launch;
+  final Uri _manifestUrl;
+  bool _isInitialized = false;
+  bool _startupCheckRequested = false;
+  Future<ClientUpdateResult>? _activeCheck;
+
   Future<void> initialize() async {
     if (_isInitialized) return;
-    if (AppConfig.isSourceRun) {
-      _logger.info('Client self-update is disabled for source-managed runs.');
-      _isInitialized = true;
-      return;
-    }
-
-    if (AppPlatform.isMacOS || AppPlatform.isWindows) {
-      await _initAutoUpdater();
-    } else if (AppPlatform.isIOS) {
-      _logger.info('iOS updates are owned by Internal TestFlight.');
-    } else if (AppPlatform.isWeb) {
-      await _checkWebVersion();
-    }
-
     _isInitialized = true;
-  }
-
-  Future<void> _initAutoUpdater() async {
-    // 1. Set the feed URL
-    await autoUpdater.setFeedURL(_feedUrl);
-
-    await autoUpdater.setScheduledCheckInterval(86400);
-  }
-
-  Future<void> checkForUpdates() async {
-    if (AppConfig.isSourceRun) {
-      _logger.info('Source-managed clients must be updated by the developer.');
+    if (_sourceRun) {
+      _logger.info('Client self-update is disabled for source-managed runs.');
       return;
     }
-    if (AppPlatform.isMacOS || AppPlatform.isWindows) {
-      await autoUpdater.checkForUpdates();
-    } else if (AppPlatform.isLinux || AppPlatform.isAndroid) {
-      final artifact = await _findManualUpdate();
-      if (artifact != null) {
-        await launchUrl(artifact.url, mode: LaunchMode.externalApplication);
+
+    if (_platform == 'macos' || _platform == 'windows') {
+      try {
+        await _native.setFeedUrl(_feedUrl);
+        await _native.setScheduledCheckInterval(86400);
+        if (!_startupCheckRequested) {
+          _startupCheckRequested = true;
+          unawaited(
+            _native.checkForUpdates().catchError((Object error) {
+              _logger.warning(
+                'Startup update check failed without blocking startup: $error',
+              );
+            }),
+          );
+        }
+      } catch (error) {
+        _logger.warning(
+          'Update feed initialization failed without blocking startup: $error',
+        );
       }
-    } else if (AppPlatform.isWeb) {
-      await _checkWebVersion();
-    } else if (AppPlatform.isIOS) {
-      _logger.info('Install iOS updates from Internal TestFlight.');
-    } else {
-      _logger.info('Manual update check not supported on this platform.');
+    } else if (_platform == 'web') {
+      unawaited(_checkWebVersion());
     }
   }
 
-  Future<ReleaseArtifact?> _findManualUpdate() async {
+  Future<ClientUpdateResult> checkForUpdates() {
+    final active = _activeCheck;
+    if (active != null) return active;
+    final check = _checkForUpdates();
+    _activeCheck = check;
+    return check.whenComplete(() => _activeCheck = null);
+  }
+
+  Future<ClientUpdateResult> _checkForUpdates() async {
+    if (_sourceRun) {
+      return const ClientUpdateResult(ClientUpdateStatus.sourceManaged);
+    }
+    if (_platform == 'macos' || _platform == 'windows') {
+      try {
+        await _native.checkForUpdates();
+        return const ClientUpdateResult(ClientUpdateStatus.checkStarted);
+      } catch (error) {
+        return ClientUpdateResult(
+          ClientUpdateStatus.networkFailed,
+          message: 'Could not check the signed update feed: $error',
+        );
+      }
+    }
+    if (_platform == 'linux') return _checkLinuxManualUpdate();
+    if (_platform == 'web') {
+      await _checkWebVersion();
+      return const ClientUpdateResult(ClientUpdateStatus.checkStarted);
+    }
+    return const ClientUpdateResult(ClientUpdateStatus.unsupported);
+  }
+
+  Future<ClientUpdateResult> _checkLinuxManualUpdate() async {
+    ReleaseManifest manifest;
     try {
-      final response = await http.get(
+      final response = await _client.get(
         _manifestUrl,
         headers: const {'User-Agent': 'sanad-client'},
       );
-      if (response.statusCode != 200) return null;
-      final manifest = ReleaseManifest.fromJsonString(response.body);
-      final package = await PackageInfo.fromPlatform();
-      if (manifest.version.compareTo(ReleaseVersion.parse(package.version)) <= 0) {
-        return null;
+      if (response.statusCode != 200) {
+        return ClientUpdateResult(
+          ClientUpdateStatus.networkFailed,
+          message: 'Release discovery failed with HTTP ${response.statusCode}.',
+        );
       }
-      return manifest.findArtifact(
-        component: 'client',
-        platform: AppPlatform.isAndroid ? 'android' : 'linux',
-        architecture: AppPlatform.isAndroid ? 'universal' : 'x64',
-        format: AppPlatform.isAndroid ? 'apk' : 'tar.gz',
-        publicOnly: true,
+      manifest = ReleaseManifest.fromJsonString(response.body);
+    } on FormatException catch (error) {
+      return ClientUpdateResult(
+        ClientUpdateStatus.manifestInvalid,
+        message: error.message,
       );
     } catch (error) {
-      _logger.warning('Unable to check the manual update channel: $error');
-      return null;
+      return ClientUpdateResult(
+        ClientUpdateStatus.networkFailed,
+        message: 'Could not reach the official release manifest: $error',
+      );
     }
+
+    final current = ReleaseVersion.parse(await _currentVersion());
+    if (manifest.version.compareTo(current) <= 0) {
+      return const ClientUpdateResult(ClientUpdateStatus.upToDate);
+    }
+    final artifact = manifest.findArtifact(
+      component: 'client',
+      platform: 'linux',
+      architecture: 'x64',
+      format: 'tar.gz',
+      publicOnly: true,
+    );
+    if (artifact == null) {
+      return const ClientUpdateResult(ClientUpdateStatus.artifactUnavailable);
+    }
+    if (!await _launch(artifact.url)) {
+      return const ClientUpdateResult(ClientUpdateStatus.launchFailed);
+    }
+    return const ClientUpdateResult(ClientUpdateStatus.updateOpened);
   }
 
   Future<void> _checkWebVersion() async {
     try {
-      final response = await http.get(
+      final response = await _client.get(
         Uri.base.resolve('version.json'),
         headers: const {'Cache-Control': 'no-cache'},
       );
       if (response.statusCode != 200) return;
       final payload = jsonDecode(response.body);
       final published = payload is Map ? payload['version']?.toString() : null;
-      final current = (await PackageInfo.fromPlatform()).version;
+      final current = await _currentVersion();
       if (published != null && published != current) {
         _logger.info('A newer Web client is available after the next reload.');
       }
     } catch (_) {
-      // Version discovery is best effort and must not block application startup.
+      // Best effort and never startup-blocking.
     }
   }
+
+  static Future<String> _packageVersion() async => (await PackageInfo.fromPlatform()).version.split('+').first;
+
+  static Future<bool> _launchExternal(Uri uri) => launchUrl(uri, mode: LaunchMode.externalApplication);
 }

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:sanad_client/features/devices/data/daemon/local_daemon_controller.dart';
+import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 
 class InstallationTerminalView extends StatefulWidget {
   final String versionTag;
@@ -21,6 +22,7 @@ class InstallationTerminalView extends StatefulWidget {
 
 class _InstallationTerminalViewState extends State<InstallationTerminalView> {
   late final LocalDaemonController _daemonController;
+  late final DeviceConnectionCoordinator _connectionCoordinator;
   final List<String> _logs = [];
   final ScrollController _scrollController = ScrollController();
 
@@ -40,6 +42,7 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
   void initState() {
     super.initState();
     _daemonController = GetIt.instance<LocalDaemonController>();
+    _connectionCoordinator = GetIt.instance<DeviceConnectionCoordinator>();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       unawaited(_startInstallation());
     });
@@ -64,90 +67,49 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
   }
 
   Future<void> _startInstallation() async {
-    _addLog('Starting initialization and installation of Sanad Agent...');
-    _addLog('Target release version: ${widget.versionTag}');
+    final targetVersion = widget.versionTag.startsWith('v') ? widget.versionTag.substring(1) : widget.versionTag;
+    _addLog('Starting Sanad Agent lifecycle for $targetVersion...');
 
-    // Step 1: Directories / Initialization
     setState(() => _currentStep = 'directories');
-    _addLog('Step 1: Setting up configurations...');
-    try {
-      final installSuccess = await _daemonController.install();
-      if (!installSuccess) {
-        _addLog('Failed configuration setup step.', isError: true);
-        setState(() => _currentStep = 'failed');
-        widget.onFailure('Failed configuration setup.');
-        return;
-      }
-      _addLog('Configuration setup successful.');
-    } catch (e) {
-      _addLog('Failed configuration setup step: $e', isError: true);
-      setState(() => _currentStep = 'failed');
-      widget.onFailure('Failed configuration setup: $e');
-      return;
-    }
+    _addLog('Preparing the owner-scoped Sanad Home...');
 
-    // Step 2: Download
     setState(() => _currentStep = 'download');
-    _addLog('Step 2: Preparing and downloading agent components...');
-    final downloadSuccess = await _daemonController.updateDaemon(
-      tag: widget.versionTag,
+    final result = await _daemonController.updateDaemon(
+      targetVersion: targetVersion,
       onProgress: (progress) {
-        setState(() {
-          _downloadProgress = progress;
-        });
+        if (mounted) setState(() => _downloadProgress = progress);
       },
     );
-
-    if (!downloadSuccess) {
-      _addLog('Failed to prepare agent components.', isError: true);
+    if (!result.isSuccess) {
+      _addLog(result.actionableMessage, isError: true);
       setState(() => _currentStep = 'failed');
-      widget.onFailure('Failed to prepare agent components. Please check your internet connection.');
+      widget.onFailure(result.actionableMessage);
       return;
     }
-    _addLog('Agent components prepared successfully.');
+    _addLog('The exact verified agent is installed.');
 
-    // Step 3: Permissions
     setState(() => _currentStep = 'permissions');
-    _addLog('Step 3: Setting executable permissions...');
-    _addLog('Execution permissions applied successfully.');
-
-    // Step 4: Service Configuration
+    _addLog('Platform execution trust and permissions passed.');
     setState(() => _currentStep = 'service');
-    _addLog('Step 4: Registering background system service...');
-    _addLog('Service registered and configured to run automatically in the background.');
+    _addLog('The background service is registered and started.');
 
-    // Step 5: Verify
     setState(() => _currentStep = 'verify');
-    _addLog('Step 5: Starting service and verifying response...');
-
-    // Try starting the service if not automatically started
-    await _daemonController.startDaemon();
-
-    int checkAttempts = 0;
-    bool isRunning = false;
-    while (checkAttempts < 10) {
-      checkAttempts++;
-      _addLog(
-        'Checking daemon health at ${LocalDaemonController.defaultUrl} '
-        '(attempt $checkAttempts)...',
-      );
-      isRunning = await _daemonController.isDaemonRunning();
-      if (isRunning) {
-        break;
-      }
-      await Future<void>.delayed(const Duration(milliseconds: 1500));
-    }
-
-    if (!isRunning) {
-      _addLog('Failed to connect to the local agent. Please try starting it manually.', isError: true);
+    _addLog(
+      'Health reports $targetVersion; authenticating the local socket...',
+    );
+    final socket = await _connectionCoordinator.ensureConnectedLocalRuntimeSocket();
+    if (socket == null || !socket.isReady) {
+      const message =
+          'The agent is healthy, but the authenticated local connection could not be established. Try again.';
+      _addLog(message, isError: true);
       setState(() => _currentStep = 'failed');
-      widget.onFailure(
-        'Failed to verify local agent connection at ${LocalDaemonController.defaultUrl}.',
-      );
+      widget.onFailure(message);
       return;
     }
 
-    _addLog('✓ Verification successful! The local agent is connected and running in the background.');
+    _addLog(
+      'Verification successful. The agent version and authenticated connection are ready.',
+    );
     setState(() => _currentStep = 'success');
     widget.onComplete();
   }
@@ -202,7 +164,9 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
                           height: 20,
                           child: CircularProgressIndicator(
                             strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(iconColor),
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              iconColor,
+                            ),
                           ),
                         )
                       : Icon(icon, color: iconColor, size: 20),
@@ -232,7 +196,9 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
               child: LinearProgressIndicator(
                 value: _downloadProgress,
                 backgroundColor: Colors.white10,
-                valueColor: const AlwaysStoppedAnimation<Color>(Colors.greenAccent),
+                valueColor: const AlwaysStoppedAnimation<Color>(
+                  Colors.greenAccent,
+                ),
                 minHeight: 6,
               ),
             ),
@@ -285,7 +251,13 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
   }
 
   bool _isStepDone(String stepId) {
-    const stepOrder = ['directories', 'download', 'permissions', 'service', 'verify'];
+    const stepOrder = [
+      'directories',
+      'download',
+      'permissions',
+      'service',
+      'verify',
+    ];
     final currentIndex = stepOrder.indexOf(_currentStep);
     if (currentIndex == -1) {
       if (_currentStep == 'success') return true;

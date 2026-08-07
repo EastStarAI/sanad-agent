@@ -14,6 +14,8 @@ import 'package:sanad_client/features/mcp/presentation/screens/mcp_server_manage
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_flow.dart';
 import 'package:sanad_client/features/settings/data/device_settings_client.dart';
 import 'package:sanad_client/features/settings/data/device_skills_client.dart';
+import 'package:sanad_client/infrastructure/platform/auto_update_service.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 
 import 'settings_widgets.dart';
 
@@ -31,10 +33,21 @@ class ProfilePage extends StatelessWidget {
             ? Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  CircleAvatar(radius: 28, child: Text(auth.username.characters.first.toUpperCase())),
+                  CircleAvatar(
+                    radius: 28,
+                    child: Text(auth.username.characters.first.toUpperCase()),
+                  ),
                   const SizedBox(height: 16),
-                  Text(auth.username, style: Theme.of(context).textTheme.titleLarge),
-                  Text(auth.email, style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                  Text(
+                    auth.username,
+                    style: Theme.of(context).textTheme.titleLarge,
+                  ),
+                  Text(
+                    auth.email,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
+                  ),
                   const SizedBox(height: 24),
                   OutlinedButton.icon(
                     onPressed: () => context.read<AuthCubit>().logout(),
@@ -67,8 +80,40 @@ class ProfilePage extends StatelessWidget {
   }
 }
 
-class GeneralPage extends StatelessWidget {
+class GeneralPage extends StatefulWidget {
   const GeneralPage({super.key});
+
+  @override
+  State<GeneralPage> createState() => _GeneralPageState();
+}
+
+class _GeneralPageState extends State<GeneralPage> {
+  bool _checking = false;
+  String? _updateMessage;
+
+  Future<void> _checkForUpdates() async {
+    setState(() {
+      _checking = true;
+      _updateMessage = null;
+    });
+    final result = await getIt<AutoUpdateService>().checkForUpdates();
+    if (!mounted) return;
+    setState(() {
+      _checking = false;
+      _updateMessage =
+          result.message ??
+          switch (result.status) {
+            ClientUpdateStatus.updateOpened =>
+              'The official Linux release was opened. Download, replace, and restart Sanad manually.',
+            ClientUpdateStatus.upToDate => 'Sanad Client is up to date.',
+            ClientUpdateStatus.sourceManaged => 'This source build is updated from its developer checkout.',
+            ClientUpdateStatus.artifactUnavailable =>
+              'A newer release exists, but no matching Linux package is available.',
+            ClientUpdateStatus.launchFailed => 'The official release was found, but the browser could not be opened.',
+            _ => 'The update check has started.',
+          };
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -80,11 +125,18 @@ class GeneralPage extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('Appearance', style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600)),
+            Text(
+              'Appearance',
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
             const SizedBox(height: 6),
             Text(
               'Choose how Sanad looks on this device.',
-              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 16),
             SegmentedButton<ThemeMode>(
@@ -94,12 +146,48 @@ class GeneralPage extends StatelessWidget {
                   label: Text('System'),
                   icon: Icon(Icons.settings_brightness_outlined),
                 ),
-                ButtonSegment(value: ThemeMode.light, label: Text('Light'), icon: Icon(Icons.light_mode_outlined)),
-                ButtonSegment(value: ThemeMode.dark, label: Text('Dark'), icon: Icon(Icons.dark_mode_outlined)),
+                ButtonSegment(
+                  value: ThemeMode.light,
+                  label: Text('Light'),
+                  icon: Icon(Icons.light_mode_outlined),
+                ),
+                ButtonSegment(
+                  value: ThemeMode.dark,
+                  label: Text('Dark'),
+                  icon: Icon(Icons.dark_mode_outlined),
+                ),
               ],
               selected: {mode},
               onSelectionChanged: (selection) => context.read<ThemeCubit>().updateTheme(selection.first),
             ),
+            if (AppPlatform.isLinux) ...[
+              const Divider(height: 40),
+              Text(
+                'Updates',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                'Linux updates are manual. Sanad only opens a newer official package after validating its release manifest.',
+              ),
+              const SizedBox(height: 12),
+              OutlinedButton.icon(
+                onPressed: _checking ? null : _checkForUpdates,
+                icon: _checking
+                    ? const SizedBox.square(
+                        dimension: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.system_update_alt),
+                label: const Text('Check for Updates'),
+              ),
+              if (_updateMessage != null) ...[
+                const SizedBox(height: 10),
+                Text(_updateMessage!),
+              ],
+            ],
           ],
         ),
       ),
@@ -126,7 +214,11 @@ class EmptyDevicePage extends StatelessWidget {
 }
 
 class DeviceOverviewPage extends StatefulWidget {
-  const DeviceOverviewPage({super.key, required this.device, required this.isActive});
+  const DeviceOverviewPage({
+    super.key,
+    required this.device,
+    required this.isActive,
+  });
   final DeviceConfig device;
   final bool isActive;
 
@@ -177,9 +269,11 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
       if (!mounted) return;
       setState(() => _settings = value);
       if (value.restartRequired) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('Setting saved. The agent is restarting…')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Setting saved. The agent is restarting…'),
+          ),
+        );
       }
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
@@ -190,10 +284,14 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
 
   Future<void> _toggleComputerUse(bool enabled) async {
     if (enabled && !(_settings?.computerUsePermissionsGranted ?? false)) {
-      final granted = await _client.requestComputerUsePermissions(widget.device);
+      final granted = await _client.requestComputerUsePermissions(
+        widget.device,
+      );
       if (!granted) {
         if (mounted) {
-          setState(() => _error = 'Accessibility or screen-recording permission was not granted.');
+          setState(
+            () => _error = 'Accessibility or screen-recording permission was not granted.',
+          );
         }
         return;
       }
@@ -221,7 +319,10 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
                   ),
                   title: DeviceNameEditor(
                     device: widget.device,
-                    onRename: (name) => context.read<DeviceCubit>().renameAgent(widget.device, name),
+                    onRename: (name) => context.read<DeviceCubit>().renameAgent(
+                      widget.device,
+                      name,
+                    ),
                   ),
                   subtitle: Text(
                     '${widget.device.isOnline ? 'Online' : 'Offline'} · ${route == ConnectionScope.local ? 'Local connection' : 'Sanad Gateway'}',
@@ -234,12 +335,18 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
                         ),
                 ),
                 const Divider(),
-                DetailRow(label: 'Device ID', value: widget.device.hardwareId ?? widget.device.id),
+                DetailRow(
+                  label: 'Device ID',
+                  value: widget.device.hardwareId ?? widget.device.id,
+                ),
                 DetailRow(
                   label: 'Agent version',
                   value: widget.device.metadata?['version']?.toString() ?? _coordinator.expectedVersion,
                 ),
-                DetailRow(label: 'Current route', value: route == ConnectionScope.local ? 'Local' : 'Cloud'),
+                DetailRow(
+                  label: 'Current route',
+                  value: route == ConnectionScope.local ? 'Local' : 'Cloud',
+                ),
                 if (route == ConnectionScope.local)
                   Align(
                     alignment: Alignment.centerRight,
@@ -259,7 +366,9 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
               padding: const EdgeInsets.only(bottom: 12),
               child: MaterialBanner(
                 content: Text(_error!),
-                actions: [TextButton(onPressed: _load, child: const Text('Retry'))],
+                actions: [
+                  TextButton(onPressed: _load, child: const Text('Retry')),
+                ],
               ),
             ),
           if (settings != null) ...[
@@ -301,7 +410,9 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
                 children: [
                   Text(
                     'Web Search',
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
@@ -310,10 +421,16 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
                     // ships ddg/serper). Dropping the unknown initialValue keeps
                     // the dropdown usable instead of tripping Flutter's
                     // "exactly one item" assertion.
-                    initialValue: _knownWebSearchProviders.contains(settings.webSearchProvider)
+                    initialValue:
+                        _knownWebSearchProviders.contains(
+                          settings.webSearchProvider,
+                        )
                         ? settings.webSearchProvider
                         : null,
-                    decoration: const InputDecoration(labelText: 'Provider', border: OutlineInputBorder()),
+                    decoration: const InputDecoration(
+                      labelText: 'Provider',
+                      border: OutlineInputBorder(),
+                    ),
                     items: const [
                       DropdownMenuItem(value: 'ddg', child: Text('DuckDuckGo')),
                       DropdownMenuItem(value: 'serper', child: Text('Serper')),
@@ -322,7 +439,9 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
                         ? null
                         : (value) {
                             if (value != null) {
-                              unawaited(_update({'web_search_provider': value}));
+                              unawaited(
+                                _update({'web_search_provider': value}),
+                              );
                             }
                           },
                   ),
@@ -355,7 +474,9 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
                           onPressed:
                               _saving || settings.serperKeyManagedExternally || _serperKeyController.text.trim().isEmpty
                               ? null
-                              : () => _update({'serper_api_key': _serperKeyController.text.trim()}),
+                              : () => _update({
+                                  'serper_api_key': _serperKeyController.text.trim(),
+                                }),
                           child: const Text('Save key'),
                         ),
                       ],
@@ -371,9 +492,14 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
               contentPadding: EdgeInsets.zero,
               title: Text(
                 'Danger zone',
-                style: TextStyle(color: Theme.of(context).colorScheme.error, fontWeight: FontWeight.w600),
+                style: TextStyle(
+                  color: Theme.of(context).colorScheme.error,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
-              subtitle: const Text('Remove this device from your Sanad account.'),
+              subtitle: const Text(
+                'Remove this device from your Sanad account.',
+              ),
               trailing: OutlinedButton(
                 onPressed: () => _confirmDelete(context),
                 child: const Text('Remove device'),
@@ -390,10 +516,18 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Remove device?'),
-        content: Text('${widget.device.name} will be removed from your account.'),
+        content: Text(
+          '${widget.device.name} will be removed from your account.',
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Remove')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Remove'),
+          ),
         ],
       ),
     );
@@ -404,7 +538,11 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
 }
 
 class DeviceNameEditor extends StatelessWidget {
-  const DeviceNameEditor({super.key, required this.device, required this.onRename});
+  const DeviceNameEditor({
+    super.key,
+    required this.device,
+    required this.onRename,
+  });
 
   final DeviceConfig device;
   final Future<void> Function(String name) onRename;
@@ -414,7 +552,11 @@ class DeviceNameEditor extends StatelessWidget {
     return Row(
       children: [
         Flexible(
-          child: Text(device.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+          child: Text(
+            device.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
         if (device.accountDeviceId != null) ...[
           const SizedBox(width: 4),
@@ -427,7 +569,10 @@ class DeviceNameEditor extends StatelessWidget {
               unawaited(
                 showDialog<void>(
                   context: context,
-                  builder: (context) => DeviceRenameDialog(currentName: device.name, onRename: onRename),
+                  builder: (context) => DeviceRenameDialog(
+                    currentName: device.name,
+                    onRename: onRename,
+                  ),
                 ),
               );
             },
@@ -439,7 +584,11 @@ class DeviceNameEditor extends StatelessWidget {
 }
 
 class DeviceRenameDialog extends StatefulWidget {
-  const DeviceRenameDialog({super.key, required this.currentName, required this.onRename});
+  const DeviceRenameDialog({
+    super.key,
+    required this.currentName,
+    required this.onRename,
+  });
 
   final String currentName;
   final Future<void> Function(String name) onRename;
@@ -461,7 +610,10 @@ class _DeviceRenameDialogState extends State<DeviceRenameDialog> {
   void initState() {
     super.initState();
     _controller = TextEditingController(text: widget.currentName)
-      ..selection = TextSelection(baseOffset: 0, extentOffset: widget.currentName.length);
+      ..selection = TextSelection(
+        baseOffset: 0,
+        extentOffset: widget.currentName.length,
+      );
   }
 
   @override
@@ -501,7 +653,10 @@ class _DeviceRenameDialogState extends State<DeviceRenameDialog> {
           autofocus: true,
           enabled: !_saving,
           maxLength: DeviceConfig.maxNameLength,
-          decoration: InputDecoration(labelText: 'Device name', errorText: _requestError),
+          decoration: InputDecoration(
+            labelText: 'Device name',
+            errorText: _requestError,
+          ),
           onChanged: (_) => setState(() => _requestError = null),
           onSubmitted: (_) => unawaited(_submit()),
         ),
@@ -515,7 +670,10 @@ class _DeviceRenameDialogState extends State<DeviceRenameDialog> {
           key: const Key('device_name_rename_button'),
           onPressed: _canSubmit ? () => unawaited(_submit()) : null,
           child: _saving
-              ? const SizedBox.square(dimension: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              ? const SizedBox.square(
+                  dimension: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
               : const Text('Rename'),
         ),
       ],
@@ -553,7 +711,9 @@ class _ProvidersPageState extends State<ProvidersPage> {
 
   Future<void> _toggleFailover(bool enabled) async {
     try {
-      final value = await _settingsClient.update(widget.device, {'provider_auto_failover_enabled': enabled});
+      final value = await _settingsClient.update(widget.device, {
+        'provider_auto_failover_enabled': enabled,
+      });
       if (mounted) setState(() => _settings = value);
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
@@ -602,7 +762,10 @@ class SkillsPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => FutureBuilder<List<DeviceSkillEntry>>(
-    future: getIt<DeviceSkillsClient>().list(device, workspaceId: workspace?.id),
+    future: getIt<DeviceSkillsClient>().list(
+      device,
+      workspaceId: workspace?.id,
+    ),
     builder: (context, snapshot) {
       final title = workspace == null ? 'Skills' : '${workspace!.name} Skills';
       final subtitle = workspace == null
@@ -615,14 +778,21 @@ class SkillsPage extends StatelessWidget {
             ? const LinearProgressIndicator()
             : snapshot.hasError
             ? SettingsCard(child: Text(snapshot.error.toString()))
-            : SkillList(skills: snapshot.data ?? const [], workspaceScoped: workspace != null),
+            : SkillList(
+                skills: snapshot.data ?? const [],
+                workspaceScoped: workspace != null,
+              ),
       );
     },
   );
 }
 
 class SkillList extends StatelessWidget {
-  const SkillList({super.key, required this.skills, required this.workspaceScoped});
+  const SkillList({
+    super.key,
+    required this.skills,
+    required this.workspaceScoped,
+  });
   final List<DeviceSkillEntry> skills;
   final bool workspaceScoped;
 
@@ -637,12 +807,16 @@ class SkillList extends StatelessWidget {
           SettingsCard(
             child: ListTile(
               contentPadding: EdgeInsets.zero,
-              leading: Icon(skill.active ? Icons.auto_awesome : Icons.visibility_off_outlined),
+              leading: Icon(
+                skill.active ? Icons.auto_awesome : Icons.visibility_off_outlined,
+              ),
               title: Text(skill.name),
               subtitle: Text(
                 skill.description ?? (skill.shadowedBy == null ? 'No description' : 'Shadowed by ${skill.shadowedBy}'),
               ),
-              trailing: Chip(label: Text(_originLabel(skill.origin, workspaceScoped))),
+              trailing: Chip(
+                label: Text(_originLabel(skill.origin, workspaceScoped)),
+              ),
             ),
           ),
           const SizedBox(height: 10),
@@ -692,19 +866,24 @@ class WorkspacePage extends StatelessWidget {
                           TextSpan(
                             text: 'Workspace: ',
                             style: TextStyle(
-                              color: Theme.of(context).colorScheme.onSurfaceVariant,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
                               fontWeight: FontWeight.w500,
                             ),
                           ),
-                          TextSpan(
-                            text: workspace.name,
-                          ),
+                          TextSpan(text: workspace.name),
                         ],
                       ),
                       style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700),
                     ),
                     const SizedBox(height: 4),
-                    Text(workspace.path, style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+                    Text(
+                      workspace.path,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -746,7 +925,9 @@ class WorkspacePage extends StatelessWidget {
                           ),
                           FilledButton.icon(
                             onPressed: onChangePath,
-                            icon: const Icon(Icons.drive_folder_upload_outlined),
+                            icon: const Icon(
+                              Icons.drive_folder_upload_outlined,
+                            ),
                             label: const Text('Change Path'),
                           ),
                         ],
