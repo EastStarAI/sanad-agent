@@ -81,6 +81,20 @@ Future<void> _handleComponentJournalLogs({
     });
   }
 
+  // Ctrl+C must restore the terminal before exit; on Windows the process is
+  // otherwise killed before the finally block below runs.
+  final sigintSubscription = ProcessSignal.sigint.watch().listen((_) {
+    if (stdin.hasTerminal) {
+      try {
+        stdin.lineMode = true;
+        stdin.echoMode = true;
+      } on Object {
+        // The host terminal may not expose mutable modes.
+      }
+    }
+    exit(0);
+  });
+
   var seenActive = false;
   final graceDeadline = DateTime.now().add(startupGrace);
   try {
@@ -101,6 +115,7 @@ Future<void> _handleComponentJournalLogs({
       stdout.add(bytes);
     }
   } finally {
+    await sigintSubscription.cancel();
     await stdinSubscription?.cancel();
     if (stdin.hasTerminal) {
       try {
@@ -769,6 +784,12 @@ Future<void> handleAgentLogs(
     ProcessSignal.sigint.watch().listen((signal) async {
       shouldExit = true;
       await stdinSub?.cancel();
+      if (stdin.hasTerminal) {
+        try {
+          stdin.lineMode = true;
+          stdin.echoMode = true;
+        } catch (_) {}
+      }
       exit(0);
     });
 
@@ -832,7 +853,10 @@ Future<void> handleAgentRestart(
   bool force = false,
   int timeoutSeconds = 60,
 }) async {
-  final instance = await selectAgentInstance(portOverride);
+  final instance = await selectAgentInstance(
+    portOverride,
+    allowStartupGrace: true,
+  );
   if (instance == null) exit(1);
   final runtime = await _currentRuntime();
   final workspaceHash = runtime.worktreeId.split('-').last;
@@ -911,6 +935,26 @@ Future<void> handleAgentRestart(
     final responseData = data;
     if (response.statusCode == 200 && responseData?['success'] == true) {
       print('✓ Daemon Response: ${responseData?['message'] ?? body}');
+      print(
+        'Waiting for local agent daemon on port ${instance.port} to complete restart...',
+      );
+      final healthy = await _waitForAgentHealthPort(
+        instance.port,
+        workspaceHash,
+        activeHome,
+        timeout: Duration(seconds: timeoutSeconds),
+      );
+      if (healthy) {
+        print(
+          '✓ Agent daemon restarted and healthy on port ${instance.port}.',
+        );
+      } else {
+        stderr.writeln(
+          'Restart failed: daemon accepted the request, but the health probe '
+          'timed out on port ${instance.port} after ${timeoutSeconds}s.',
+        );
+        exitCode = 1;
+      }
     } else {
       stderr.writeln(
         'Restart failed: '
