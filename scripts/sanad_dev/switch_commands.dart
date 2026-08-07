@@ -350,14 +350,16 @@ class _SwitchableRuntimeController {
         }
       });
     }
+    sigint = ProcessSignal.sigint.watch().listen((_) {
+      if (!shutdown.isCompleted) {
+        shutdown.complete(const _ShutdownRequested());
+      }
+    });
     if (!Platform.isWindows) {
-      sigint = ProcessSignal.sigint.watch().listen((_) {
-        if (!shutdown.isCompleted)
-          shutdown.complete(const _ShutdownRequested());
-      });
       sigterm = ProcessSignal.sigterm.watch().listen((_) {
-        if (!shutdown.isCompleted)
+        if (!shutdown.isCompleted) {
           shutdown.complete(const _ShutdownRequested());
+        }
       });
     }
 
@@ -422,7 +424,7 @@ class _SwitchableRuntimeController {
         runtimeLauncherStopRequestPath(runtime.sanadHome, runtime.agentPort),
       );
       if (await stopRequest.exists()) await stopRequest.delete();
-      await sigint?.cancel();
+      await sigint.cancel();
       await sigterm?.cancel();
       await stdinKeys?.cancel();
       if (stdin.hasTerminal) {

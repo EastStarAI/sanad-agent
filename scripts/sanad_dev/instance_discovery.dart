@@ -569,8 +569,18 @@ Future<ClientInstance?> _recordedClientInstance(int port) async {
   }
 }
 
-Future<AgentInstance?> selectAgentInstance(int? portOverride) async {
-  final instances = await discoverAgentInstances();
+Future<AgentInstance?> selectAgentInstance(
+  int? portOverride, {
+  bool allowStartupGrace = false,
+}) async {
+  var instances = await discoverAgentInstances();
+  if (instances.isEmpty && allowStartupGrace) {
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (DateTime.now().isBefore(deadline) && instances.isEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      instances = await discoverAgentInstances();
+    }
+  }
   if (instances.isEmpty) {
     print(
       'Error: No running agent instances found. Make sure the agent daemon is running.',
@@ -595,9 +605,20 @@ Future<AgentInstance?> selectAgentInstance(int? portOverride) async {
   // Filter instances matching the current worktree's workspace root hash
   final runtime = await _currentRuntime();
   final currentWorkspaceHash = runtime.worktreeId.split('-').last;
-  final matchingInstances = instances
+  var matchingInstances = instances
       .where((inst) => inst.workspaceHash == currentWorkspaceHash)
       .toList();
+
+  if (matchingInstances.isEmpty && allowStartupGrace) {
+    final deadline = DateTime.now().add(const Duration(seconds: 5));
+    while (DateTime.now().isBefore(deadline) && matchingInstances.isEmpty) {
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      instances = await discoverAgentInstances();
+      matchingInstances = instances
+          .where((inst) => inst.workspaceHash == currentWorkspaceHash)
+          .toList();
+    }
+  }
 
   if (matchingInstances.length == 1) {
     return matchingInstances.first;
