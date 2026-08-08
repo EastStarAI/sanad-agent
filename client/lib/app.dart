@@ -11,6 +11,8 @@ import 'package:sanad_client/core/presentation/state/app_state.dart';
 import 'package:sanad_client/core/presentation/utils/external_paste_manager.dart';
 import 'package:sanad_client/features/conversations/data/persistence/conversation_cache_persistor.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
+import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
+import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 AppState get appCtrl => getIt<AppState>();
@@ -87,6 +89,10 @@ class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserv
       child: AppAuthListener(
         authService: appState.authService,
         socketService: appState.brainSocketController,
+        localSocketService: AppPlatform.isDesktop
+            ? getIt<SanadSocketService>(instanceName: 'localSocketService')
+            : null,
+        connectionCoordinator: AppPlatform.isDesktop ? getIt<DeviceConnectionCoordinator>() : null,
         syncAuthContext: () async => appState.syncAuthContext(),
         conversationCacheRepository: getIt<ConversationCacheRepository>(),
         conversationCachePersistor: _conversationCachePersistor,

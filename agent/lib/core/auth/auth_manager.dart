@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 import 'package:http/http.dart' as http;
@@ -13,7 +14,9 @@ class AuthManager {
   String? _deviceToken;
   String? _pairingToken;
   String? _pendingDeviceToken;
+  final _changesController = StreamController<void>.broadcast();
 
+  Stream<void> get changes => _changesController.stream;
   String? get accessToken => _accessToken;
   String? get hardwareId => _hardwareId;
   String? get refreshToken => _refreshToken;
@@ -28,11 +31,15 @@ class AuthManager {
 
     if (_hardwareId == null || _hardwareId!.isEmpty) {
       _hardwareId = const Uuid().v4();
-      await _saveAuth();
+      await _saveAuth(notify: false);
     }
   }
 
-  Future<void> reload() async {
+  /// Reloads the shared auth document. When [notifyIfChanged] is true, a
+  /// credential-free change signal is emitted only after memory differs from
+  /// the last loaded state.
+  Future<bool> reload({bool notifyIfChanged = false}) async {
+    final before = _fingerprint;
     final boundary = SanadHomeBootstrap.identity();
 
     if (boundary.fileExists('auth.json')) {
@@ -47,10 +54,17 @@ class AuthManager {
           _pairingToken = data['pairing_token'];
           _pendingDeviceToken = data['pending_device_token'];
         }
-      } catch (e) {
-        // Silently fail if file is malformed
+      } catch (_) {
+        // A malformed or temporarily unavailable file cannot authorize a
+        // state transition. Keep the last valid in-memory snapshot.
       }
     }
+
+    final changed = before != _fingerprint;
+    if (changed && notifyIfChanged) {
+      _notifyChanged();
+    }
+    return changed;
   }
 
   bool get isAuthenticated =>
@@ -133,7 +147,7 @@ class AuthManager {
     return false;
   }
 
-  Future<void> _saveAuth() async {
+  Future<void> _saveAuth({bool notify = true}) async {
     final boundary = SanadHomeBootstrap.identity();
 
     final data = <String, dynamic>{};
@@ -163,6 +177,9 @@ class AuthManager {
     }
 
     await boundary.writeSecretBytes('auth.json', utf8.encode(jsonEncode(data)));
+    if (notify) {
+      _notifyChanged();
+    }
   }
 
   /// Clear session
@@ -193,6 +210,22 @@ class AuthManager {
       } catch (_) {
         await boundary.deleteFile('auth.json');
       }
+    }
+    _notifyChanged();
+  }
+
+  String get _fingerprint => <String?>[
+    _accessToken,
+    _refreshToken,
+    _hardwareId,
+    _deviceToken,
+    _pairingToken,
+    _pendingDeviceToken,
+  ].join('\u0000');
+
+  void _notifyChanged() {
+    if (!_changesController.isClosed) {
+      _changesController.add(null);
     }
   }
 

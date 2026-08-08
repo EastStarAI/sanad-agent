@@ -11,10 +11,13 @@ import 'package:sanad_client/features/devices/data/device_connection_coordinator
 import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 
 class AppAuthListener extends StatefulWidget {
   final AuthService authService;
   final SanadSocketService socketService;
+  final SanadSocketService? localSocketService;
+  final DeviceConnectionCoordinator? connectionCoordinator;
   final Future<void> Function() syncAuthContext;
   final ConversationCacheRepository conversationCacheRepository;
   final ConversationCachePersistor conversationCachePersistor;
@@ -25,6 +28,8 @@ class AppAuthListener extends StatefulWidget {
     super.key,
     required this.authService,
     required this.socketService,
+    required this.localSocketService,
+    required this.connectionCoordinator,
     required this.syncAuthContext,
     required this.conversationCacheRepository,
     required this.conversationCachePersistor,
@@ -38,11 +43,15 @@ class AppAuthListener extends StatefulWidget {
 
 class _AppAuthListenerState extends State<AppAuthListener> {
   StreamSubscription<String?>? _accessTokenSubscription;
+  StreamSubscription<void>? _exchangeRequestSubscription;
+  StreamSubscription<Map<String, dynamic>>? _localEventSubscription;
+  StreamSubscription<SocketLifecycleState>? _localLifecycleSubscription;
 
   @override
   void initState() {
     super.initState();
     _listenForTerminalSessionInvalidation();
+    _listenForDesktopAuthenticationExchange();
   }
 
   @override
@@ -51,6 +60,17 @@ class _AppAuthListenerState extends State<AppAuthListener> {
     if (!identical(oldWidget.authService, widget.authService)) {
       unawaited(_accessTokenSubscription?.cancel());
       _listenForTerminalSessionInvalidation();
+    }
+    if (!identical(oldWidget.authService, widget.authService) ||
+        !identical(oldWidget.localSocketService, widget.localSocketService) ||
+        !identical(
+          oldWidget.connectionCoordinator,
+          widget.connectionCoordinator,
+        )) {
+      unawaited(_exchangeRequestSubscription?.cancel());
+      unawaited(_localEventSubscription?.cancel());
+      unawaited(_localLifecycleSubscription?.cancel());
+      _listenForDesktopAuthenticationExchange();
     }
   }
 
@@ -61,9 +81,47 @@ class _AppAuthListenerState extends State<AppAuthListener> {
     });
   }
 
+  void _listenForDesktopAuthenticationExchange() {
+    final localSocket = widget.localSocketService;
+    if (!AppPlatform.isDesktop || localSocket == null) return;
+
+    _exchangeRequestSubscription = widget.authService.authenticationExchangeStream.listen(
+      (_) => unawaited(_publishDesktopAuthenticationExchange()),
+    );
+    _localEventSubscription = localSocket.events.listen((event) {
+      if (event['type'] != 'authentication_exchange' || !mounted) return;
+      unawaited(context.read<AuthCubit>().synchronizeExternalSession());
+    });
+    _localLifecycleSubscription = localSocket.lifecycleStateStream.listen((state) {
+      if (state != SocketLifecycleState.ready || !mounted) return;
+      // Reconcile both processes after reconnect because a notification may
+      // have been missed while either side was unavailable.
+      unawaited(context.read<AuthCubit>().synchronizeExternalSession());
+      unawaited(_publishDesktopAuthenticationExchange(ensureConnected: false));
+    });
+  }
+
+  Future<void> _publishDesktopAuthenticationExchange({
+    bool ensureConnected = true,
+  }) async {
+    final localSocket = widget.localSocketService;
+    final coordinator = widget.connectionCoordinator;
+    if (!AppPlatform.isDesktop || localSocket == null || coordinator == null) {
+      return;
+    }
+    if (ensureConnected) {
+      await coordinator.ensureLocalConnection();
+    }
+    if (!localSocket.isConnected) return;
+    localSocket.emit('authentication_exchange', const {});
+  }
+
   @override
   void dispose() {
     unawaited(_accessTokenSubscription?.cancel());
+    unawaited(_exchangeRequestSubscription?.cancel());
+    unawaited(_localEventSubscription?.cancel());
+    unawaited(_localLifecycleSubscription?.cancel());
     super.dispose();
   }
 

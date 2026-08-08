@@ -40,6 +40,7 @@ class AuthService {
   final SharedPreferences? _prefs;
   final PortalAuthClient _portalAuth;
   final _accessTokenController = StreamController<String?>.broadcast();
+  final _authenticationExchangeController = StreamController<void>.broadcast();
   final _loginChallengeController = StreamController<AuthLoginChallenge?>.broadcast();
   Future<AuthRefreshResult>? _refreshFuture;
 
@@ -61,6 +62,7 @@ class AuthService {
   String? get accessToken => _backendAccessToken;
   String? get hardwareId => _hardwareId;
   Stream<String?> get accessTokenStream => _accessTokenController.stream;
+  Stream<void> get authenticationExchangeStream => _authenticationExchangeController.stream;
   AuthLoginChallenge? get loginChallenge => _loginChallenge;
   Stream<AuthLoginChallenge?> get loginChallengeStream => _loginChallengeController.stream;
 
@@ -240,6 +242,55 @@ class AuthService {
     }
   }
 
+  /// Reconciles native desktop memory with the shared auth document.
+  /// Incoming exchange notifications call this method; it never emits another
+  /// exchange notification, preventing an event loop between client and daemon.
+  Future<void> synchronizeDesktopAuthFile() async {
+    if (!AppPlatform.isDesktop) return;
+
+    final authDoc = await _settingsStore.readAuthDocument();
+    final nextAccessToken = authDoc['access_token']?.toString();
+    final nextRefreshToken = authDoc['refresh_token']?.toString();
+    final nextHardwareId = authDoc['hardware_id']?.toString();
+    final accessChanged = nextAccessToken != _backendAccessToken;
+    final refreshChanged = nextRefreshToken != _backendRefreshToken;
+
+    if (!accessChanged && !refreshChanged) {
+      if (nextHardwareId != null && nextHardwareId.isNotEmpty) {
+        _hardwareId = nextHardwareId;
+      }
+      return;
+    }
+
+    _backendAccessToken = nextAccessToken?.isNotEmpty == true ? nextAccessToken : null;
+    _backendRefreshToken = nextRefreshToken?.isNotEmpty == true ? nextRefreshToken : null;
+    if (nextHardwareId != null && nextHardwareId.isNotEmpty) {
+      _hardwareId = nextHardwareId;
+    }
+
+    final prefs = await _getPrefs();
+    if (_backendAccessToken == null) {
+      await prefs.remove(_authSessionKey);
+      await prefs.remove('backend_access_token');
+      await prefs.remove('backend_refresh_token');
+      username = null;
+      email = null;
+      userId = null;
+      userCredits = 0.0;
+      totalCredits = 0.0;
+    } else {
+      await _persistAuthPair(
+        prefs,
+        accessToken: _backendAccessToken!,
+        refreshToken: _backendRefreshToken,
+      );
+      if (accessChanged) {
+        await fetchProfile();
+      }
+    }
+    _emitAccessToken();
+  }
+
   Future<void> _syncAuthToFile() async {
     if (!AppPlatform.isDesktop) return;
     try {
@@ -409,6 +460,7 @@ class AuthService {
           refreshToken: _backendRefreshToken,
         );
         await _syncAuthToFile();
+        _emitAuthenticationExchange();
         await fetchProfile();
         _emitAccessToken();
         _setLoginChallenge(null);
@@ -458,8 +510,11 @@ class AuthService {
         final next = Map<String, dynamic>.from(existing)
           ..remove('access_token')
           ..remove('refresh_token')
-          ..remove('device_token');
+          ..remove('device_token')
+          ..remove('pairing_token')
+          ..remove('pending_device_token');
         await _settingsStore.saveAuthDocument(next);
+        _emitAuthenticationExchange();
       } catch (e) {
         _logger.warning('Failed to clean auth file during logout: $e');
       }
@@ -534,6 +589,7 @@ class AuthService {
       _backendRefreshToken = nextRefreshToken;
 
       await _syncAuthToFile();
+      _emitAuthenticationExchange();
       _logger.info('Token refreshed successfully');
       _emitAccessToken();
       return AuthRefreshResult.success(result.accessToken);
@@ -612,8 +668,15 @@ class AuthService {
     }
   }
 
+  void _emitAuthenticationExchange() {
+    if (AppPlatform.isDesktop && !_authenticationExchangeController.isClosed) {
+      _authenticationExchangeController.add(null);
+    }
+  }
+
   void dispose() {
     unawaited(_accessTokenController.close());
+    unawaited(_authenticationExchangeController.close());
     unawaited(_loginChallengeController.close());
   }
 }

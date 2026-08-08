@@ -16,6 +16,52 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   test(
+    'reconciles credential-free authentication exchanges through a spawned daemon',
+    () async {
+      final port = _pickPort();
+      final agentDir = Directory(
+        '${Directory.current.parent.path}${Platform.pathSeparator}agent',
+      );
+      final daemon = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: port,
+      );
+      addTearDown(daemon.stop);
+      final socket = _localSocket(
+        daemon,
+        url: 'http://127.0.0.1:$port',
+        hardwareId: 'auth-exchange-e2e',
+      );
+      addTearDown(socket.dispose);
+      await _waitForLocalSocket(socket);
+
+      final authFile = File(
+        '${daemon.isolatedSanadHome.path}${Platform.pathSeparator}auth.json',
+      );
+      final authDocument =
+          Map<String, dynamic>.from(
+              jsonDecode(await authFile.readAsString()) as Map,
+            )
+            ..['access_token'] = 'e2e-access'
+            ..['refresh_token'] = 'e2e-refresh';
+      await authFile.writeAsString(jsonEncode(authDocument), flush: true);
+
+      var exchange = _waitForAuthenticationExchange(socket);
+      socket.emit('authentication_exchange', const {});
+      expect(await exchange, {'type': 'authentication_exchange'});
+
+      authDocument
+        ..remove('access_token')
+        ..remove('refresh_token');
+      await authFile.writeAsString(jsonEncode(authDocument), flush: true);
+      exchange = _waitForAuthenticationExchange(socket);
+      socket.emit('authentication_exchange', const {});
+      expect(await exchange, {'type': 'authentication_exchange'});
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
     'runs a complete deterministic conversation through the local daemon websocket',
     () async {
       final port = _pickPort();
@@ -915,6 +961,14 @@ class _ProviderUsageFixture {
     await _subscription?.cancel();
     await server.close(force: true);
   }
+}
+
+Future<Map<String, dynamic>> _waitForAuthenticationExchange(
+  SanadSocketService socket,
+) async {
+  return socket.events
+      .firstWhere((event) => event['type'] == 'authentication_exchange')
+      .timeout(const Duration(seconds: 10));
 }
 
 Future<void> _waitForLocalSocket(SanadSocketService socket) async {

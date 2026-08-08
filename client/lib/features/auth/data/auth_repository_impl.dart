@@ -14,6 +14,12 @@ class AuthRepositoryImpl implements IAuthRepository {
   }
 
   @override
+  Future<AuthSession?> synchronizeExternalSession() async {
+    await _authService.synchronizeDesktopAuthFile();
+    return _snapshot();
+  }
+
+  @override
   Future<AuthSession?> login() async {
     await _authService.login();
     return _snapshot();

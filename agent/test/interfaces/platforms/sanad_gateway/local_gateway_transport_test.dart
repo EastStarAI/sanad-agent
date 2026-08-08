@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
@@ -26,6 +27,23 @@ class _TransportTestConfig extends Config {
   String get localGatewayUrl => 'http://127.0.0.1:$_port';
 }
 
+class _ExchangeAuthManager extends AuthManager {
+  final _controller = StreamController<void>.broadcast();
+  int reloadCalls = 0;
+
+  @override
+  Stream<void> get changes => _controller.stream;
+
+  @override
+  Future<bool> reload({bool notifyIfChanged = false}) async {
+    reloadCalls += 1;
+    if (notifyIfChanged) _controller.add(null);
+    return true;
+  }
+
+  Future<void> close() => _controller.close();
+}
+
 Future<int> _reserveFreePort() async {
   final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
   final port = socket.port;
@@ -36,6 +54,7 @@ Future<int> _reserveFreePort() async {
 void main() {
   const token = LocalGatewayCredential('transport-test-token');
   late LocalDaemonServerPlatform platform;
+  late _ExchangeAuthManager authManager;
   late int port;
   Future<void> Function()? upgradeHook;
 
@@ -44,6 +63,11 @@ void main() {
     upgradeHook = null;
     port = await _reserveFreePort();
     getIt.registerSingleton<Config>(_TransportTestConfig(port));
+    authManager = _ExchangeAuthManager();
+    getIt.registerSingleton<AuthManager>(
+      authManager,
+      dispose: (manager) => authManager.close(),
+    );
     getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
     getIt.registerSingleton<PlatformRuntimeBridge>(PlatformRuntimeBridge());
     platform = LocalDaemonServerPlatform(
@@ -153,6 +177,36 @@ void main() {
     expect(firstFrame['type'], 'register_success');
     await socket.close();
   });
+
+  test(
+    'authentication exchange reloads file state without returning credentials',
+    () async {
+      final socket = await WebSocket.connect(
+        'ws://127.0.0.1:$port/ws',
+        headers: {LocalGatewayCredentials.headerName: token.value},
+      );
+      final frames = StreamIterator<dynamic>(socket);
+      expect(await frames.moveNext(), isTrue); // register_success
+
+      socket.add(
+        jsonEncode({
+          'type': 'authentication_exchange',
+          'access_token': 'must-not-be-trusted-or-returned',
+        }),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(authManager.reloadCalls, 0);
+
+      socket.add(jsonEncode({'type': 'authentication_exchange'}));
+      expect(await frames.moveNext(), isTrue);
+      final exchange = jsonDecode(frames.current as String);
+      expect(exchange, {'type': 'authentication_exchange'});
+      expect(authManager.reloadCalls, 1);
+
+      await frames.cancel();
+      await socket.close();
+    },
+  );
 
   test(
     'WebSocket transport rejects excess simultaneous pre-auth work',

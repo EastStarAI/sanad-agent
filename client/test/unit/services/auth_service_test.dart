@@ -5,6 +5,7 @@ import 'package:sanad_client/infrastructure/local_tools/sanad_settings_store.dar
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:dio/dio.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 
 class MockSanadSettingsStore extends Fake implements SanadSettingsStore {
   Map<String, dynamic> authDocument = {};
@@ -57,6 +58,7 @@ void main() {
   late SharedPreferences prefs;
 
   setUp(() async {
+    AppPlatform.overrideIsDesktop = true;
     SharedPreferences.setMockInitialValues({});
     prefs = await SharedPreferences.getInstance();
     mockStore = MockSanadSettingsStore();
@@ -69,6 +71,7 @@ void main() {
 
   tearDown(() {
     authService.dispose();
+    AppPlatform.overrideIsDesktop = null;
   });
 
   group('AuthService SSoT Logic', () {
@@ -84,6 +87,33 @@ void main() {
       expect(authService.accessToken, equals('file_token'));
       expect(authService.hardwareId, equals('file_device'));
     });
+
+    test(
+      'external exchange reconciles login and logout without echoing',
+      () async {
+        mockStore.authDocument = {'hardware_id': 'device-1'};
+        await authService.init();
+        var exchangeCount = 0;
+        final subscription = authService.authenticationExchangeStream.listen(
+          (_) => exchangeCount += 1,
+        );
+
+        mockStore.authDocument = {
+          'access_token': 'external-access',
+          'refresh_token': 'external-refresh',
+          'hardware_id': 'device-1',
+        };
+        await authService.synchronizeDesktopAuthFile();
+        expect(authService.accessToken, 'external-access');
+
+        mockStore.authDocument = {'hardware_id': 'device-1'};
+        await authService.synchronizeDesktopAuthFile();
+        expect(authService.accessToken, isNull);
+        expect(exchangeCount, 0);
+
+        await subscription.cancel();
+      },
+    );
 
     test('atomic auth session value overrides legacy credential mirrors', () async {
       await prefs.setString(
@@ -133,8 +163,10 @@ void main() {
       };
       await prefs.setString('backend_access_token', 'test_token');
       await prefs.setString('backend_refresh_token', 'test_refresh');
+      final exchange = authService.authenticationExchangeStream.first;
 
       await authService.logout();
+      await exchange;
 
       expect(mockStore.authDocument['access_token'], isNull);
       expect(mockStore.authDocument['refresh_token'], isNull);
@@ -165,8 +197,10 @@ void main() {
           'hardware_id': 'device-1',
         };
         await authService.init();
+        final exchange = authService.authenticationExchangeStream.first;
 
         final result = await authService.refreshAccessToken();
+        await exchange;
 
         expect(result.outcome, AuthRefreshOutcome.success);
         expect(result.accessToken, 'rotated-access');

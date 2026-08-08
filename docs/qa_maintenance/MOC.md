@@ -22,6 +22,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Community Governance QA](community_governance_qa.md): Static and live verification for labels, templates, skills, protected CI, Discord routing, and repository governance.
 - [Conversation Cache Recovery QA](conversation_cache_recovery_qa.md): Local cache, draft, reconnect, and restart recovery coverage.
 - [Mobile Session and Resume Recovery QA](mobile_session_resume_recovery_qa.md): Typed refresh outcomes, foreground resume, stale-cache continuity, and authoritative mobile conversation resynchronization.
+- [Desktop Authentication Exchange QA](desktop_authentication_exchange_qa.md): Bidirectional login, refresh, logout, reconnect, and credential-free Local Gateway exchange coverage.
 - [Device Name Editing QA](device_name_editing_qa.md): Device rename validation, synchronization, and failure coverage.
 - [Provider Account Usage Limits QA](provider_account_usage_limits_qa.md): Regression coverage for instance isolation, capability discovery, freshness, stale responses, and usage-card presentation.
 - [Message Edit and Retry QA](message_edit_retry_qa.md): Coverage for inline editing, idle-boundary ordering, side-effect confirmation, latest-turn identity, navigation cancellation, and current route selection.

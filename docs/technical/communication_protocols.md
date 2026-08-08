@@ -328,10 +328,12 @@ stateDiagram-v2
   2. A valid local authentication token (`token` in `auth.json`) is present.
 - If either condition is missing, the daemon operates exclusively in **Local-Only (Offline) Mode** on the host port, completely ignoring cloud relay and avoiding infinite reconnection loop issues.
 
-#### B. Desktop Local Autoshare (Authentication Bypass)
-- When the Flutter client and Sanad Agent daemon run on the same computer:
-  - Both read/write from `~/.sanad/auth.json` (the shared directory contract).
-  - The client reads the daemon's configured `hardware_id` and token, enabling instant pairing and local WebSocket authentication without manual token exchanges.
+#### B. Desktop Local Authentication Exchange
+- When the native Flutter client and Sanad Agent daemon run under the same Sanad Home:
+  - Both derive authentication from the owner-only `auth.json` shared-document contract.
+  - After login, refresh, pairing, or logout, the writer sends only `{"type":"authentication_exchange"}` through the authenticated Local Gateway.
+  - The receiver reloads the file and updates memory plus cloud connection state. The event carries no credentials and cannot assert authentication state.
+  - Web and mobile remain cloud-only and never participate in this exchange.
 
 #### C. Headless Remote pairing
 - For remote servers running in headless mode:

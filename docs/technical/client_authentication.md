@@ -99,6 +99,11 @@ Only terminal refresh rejection changes presentation to unauthenticated.
 Desktop local inventory remains independent of this cloud recovery path; mobile
 and web never attempt the Local Gateway.
 
+Native desktop processes reconcile live login, refresh, and logout through the
+credential-free Local Gateway notification specified in
+`docs/technical/desktop_authentication_exchange.md`. The shared auth document,
+not the notification, remains authoritative.
+
 ## Runtime Consumers
 
 The Flutter `PortalAuthClient` and daemon/CLI auth manager implement the same
