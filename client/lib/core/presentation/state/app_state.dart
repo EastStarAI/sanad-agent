@@ -35,7 +35,9 @@ class AppState {
     AppLogStore? logStore,
   }) : _hardwareId = hardwareId,
        logStore = logStore ?? AppLogStore() {
-    _authSubscription = authService.accessTokenStream.listen((_) => syncAuthContext());
+    _authSubscription = authService.accessTokenStream.listen(
+      (_) => syncAuthContext(),
+    );
     _socketAuthRecoveryCoordinator = SocketAuthRecoveryCoordinator(
       authService: authService,
       socketService: brainSocketController,
@@ -51,6 +53,10 @@ class AppState {
 
   void syncAuthContext() {
     brainSocketController.setAccessToken(authService.accessToken);
+  }
+
+  void onAppResumed() {
+    _socketAuthRecoveryCoordinator.onAppResumed();
   }
 
   void dispose() {

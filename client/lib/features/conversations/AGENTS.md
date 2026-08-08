@@ -26,6 +26,7 @@ Incoming events follow:
 - The daemon alone classifies automatic delivery, resolves queue/steer intent, owns execution and recovery snapshots, and confirms provider/model routes.
 - Do not infer authoritative work from presentation flags, create optimistic queue/timeline rows, or clear recovery state before daemon confirmation.
 - Session state, drafts, processing, attention, suspension, and recovery remain isolated by device and session identity.
+- Reconnect history hydration must reject stale generations, retain live events received while the snapshot is in flight, and reconcile by canonical event identity before replacing the visible snapshot.
 - Raw `request_id` is the wire identity. Display prefixes must never become transport ids.
 
 ## Provider and Capability Boundary

@@ -53,6 +53,12 @@ class AuthCubit extends Cubit<AuthState> {
     emit(AuthUnauthenticated());
   }
 
+  void invalidateRejectedSession() {
+    if (state is AuthAuthenticated) {
+      emit(AuthUnauthenticated());
+    }
+  }
+
   Future<void> fetchCredits() async {
     final currentState = state;
     if (currentState is! AuthAuthenticated) return;

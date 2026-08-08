@@ -26,8 +26,8 @@ class AuthRepositoryImpl implements IAuthRepository {
 
   @override
   Future<AuthSession?> refreshSession() async {
-    final token = await _authService.refreshAccessToken();
-    if (token == null) return null;
+    final result = await _authService.refreshAccessToken();
+    if (!result.isSuccess) return null;
     await _authService.fetchProfile();
     return _snapshot();
   }

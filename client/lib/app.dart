@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sanad_client/core/di/injection.dart';
@@ -25,7 +26,10 @@ class SanadAgentApp extends StatefulWidget {
 
 class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserver {
   late final ConversationCachePersistor _conversationCachePersistor;
-  static const _pasteEventChannel = MethodChannel('com.eaststarai.sanad/pasteEvents');
+  bool _wasBackgrounded = false;
+  static const _pasteEventChannel = MethodChannel(
+    'com.eaststarai.sanad/pasteEvents',
+  );
 
   @override
   void initState() {
@@ -52,7 +56,17 @@ class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserv
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (_wasBackgrounded) {
+        _wasBackgrounded = false;
+        if (AppPlatform.isMobile || kIsWeb) {
+          appCtrl.onAppResumed();
+        }
+      }
+      return;
+    }
     if (state == AppLifecycleState.paused || state == AppLifecycleState.detached || state == AppLifecycleState.hidden) {
+      _wasBackgrounded = true;
       unawaited(_conversationCachePersistor.flush());
     }
   }
@@ -77,9 +91,7 @@ class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserv
         conversationCacheRepository: getIt<ConversationCacheRepository>(),
         conversationCachePersistor: _conversationCachePersistor,
         navigatorKey: appNavigatorKey,
-        child: AppShell(
-          navigatorKey: appNavigatorKey,
-        ),
+        child: AppShell(navigatorKey: appNavigatorKey),
       ),
     );
   }
