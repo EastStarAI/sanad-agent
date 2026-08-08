@@ -36,6 +36,7 @@ import 'adapters/llm_http_exception.dart';
 import 'adapters/rate_limited_llm_adapter.dart';
 import 'adapters/provider_state_rejected_exception.dart';
 import 'runtime/continuation_checkpoint_coordinator.dart';
+import 'runtime/deferred_tool_result.dart';
 import 'runtime/llm_route_snapshot.dart';
 import 'runtime/response_continuation_coordinator.dart';
 import 'runtime/steer_coordinator.dart' as steer_lib;
@@ -55,6 +56,7 @@ class AgentRunner {
   final SessionManager sessionManager;
   final PluginManager pluginManager;
   final ContextEngine contextEngine;
+  final DeferredToolResultResolver? _deferredToolResultResolver;
   late final FileMemoryStore memoryStore;
   late final String sessionId;
 
@@ -244,8 +246,10 @@ class AgentRunner {
     PluginManager? pluginManager,
     ContextEngine? contextEngine,
     String? existingSessionId,
+    DeferredToolResultResolver? deferredToolResultResolver,
   }) : pluginManager = pluginManager ?? PluginManager(),
-       contextEngine = contextEngine ?? ContextEngine(adapter: adapter) {
+       contextEngine = contextEngine ?? ContextEngine(adapter: adapter),
+       _deferredToolResultResolver = deferredToolResultResolver {
     if (existingSessionId != null) {
       final session = sessionManager.getSession(existingSessionId);
       if (session != null) {
@@ -288,6 +292,7 @@ class AgentRunner {
       sessionManager: sessionManager,
       pluginManager: pluginManager,
       checkpointCoordinator: _checkpointCoordinator,
+      deferredToolResultResolver: _deferredToolResultResolver,
     );
     _steerCoordinator = steer_lib.SteerCoordinator(sessionId: sessionId);
   }
@@ -1629,22 +1634,25 @@ class AgentRunner {
     );
     if (result.resumeHistoryLength < 0) return; // no-op (no repo / no item)
 
-    final ambiguousRecoveryBatch = result.ambiguousToolCallIds.isEmpty
+    final recoveryToolCallIds = <String>{
+      ...result.ambiguousToolCallIds,
+      ...result.deferredToolCallIds,
+    }.toList();
+    final recoveryBatch = recoveryToolCallIds.isEmpty
         ? null
-        : _findAssistantToolBatch(result.ambiguousToolCallIds);
-    if (result.ambiguousToolCallIds.isNotEmpty &&
-        ambiguousRecoveryBatch == null) {
+        : _findAssistantToolBatch(recoveryToolCallIds);
+    if (recoveryToolCallIds.isNotEmpty && recoveryBatch == null) {
       throw StateError(
         'Cannot continue session $sessionId: the durable assistant tool-call '
-        'batch for the interrupted tools is missing from conversation history.',
+        'batch for the recovering tools is missing from conversation history.',
       );
     }
 
     if (history.length > result.resumeHistoryLength) {
       history = history.take(result.resumeHistoryLength).toList(growable: true);
-      if (ambiguousRecoveryBatch != null &&
-          !_containsAssistantToolBatch(ambiguousRecoveryBatch.toolCalls!)) {
-        history.add(ambiguousRecoveryBatch);
+      if (recoveryBatch != null &&
+          !_containsAssistantToolBatch(recoveryBatch.toolCalls!)) {
+        history.add(recoveryBatch);
       }
       _saveHistory();
     }
@@ -1657,9 +1665,14 @@ class AgentRunner {
       currentModelStepId = result.savedModelStepId;
     }
 
-    if (result.ambiguousToolCallIds.isNotEmpty) {
-      final toolCalls = ambiguousRecoveryBatch!.toolCalls!;
-      _recordAmbiguousToolInterruptions(result.ambiguousToolCallIds, toolCalls);
+    if (recoveryBatch != null) {
+      final toolCalls = recoveryBatch.toolCalls!;
+      if (result.ambiguousToolCallIds.isNotEmpty) {
+        _recordAmbiguousToolInterruptions(
+          result.ambiguousToolCallIds,
+          toolCalls,
+        );
+      }
       await _toolExecutionCoordinator.executeToolCalls(
         toolCalls,
         parallel: shouldParallelizeToolBatch(toolCalls),
