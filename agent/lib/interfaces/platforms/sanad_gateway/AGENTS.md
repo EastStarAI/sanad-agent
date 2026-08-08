@@ -89,6 +89,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
   runtime nonce only as local ownership evidence; neither value is an
   authentication credential, and managed mutation still requires the complete
   launcher lease and client identity to agree.
+- Native desktop authentication reconciliation is local-only. Accept exactly `{"type":"authentication_exchange"}` with no additional fields, reload owner-only `auth.json`, and broadcast no credentials. Reject unexpected fields before payload logging; never route this event through the cloud platform.
 - Keep streaming events at fine/debug log level and lifecycle, command, and terminal events concise at info level.
 - Daemon restart and permanent stop use the shared restart coordinator so local HTTP and protocol callers preserve acknowledgment delay and supervisor exit semantics.
 - Long-running restart safety evaluation must not serialize local HTTP acceptance; health, stop, and unrelated WebSocket upgrades remain responsive while a restart waits.

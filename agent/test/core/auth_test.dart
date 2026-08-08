@@ -100,6 +100,26 @@ void main() {
       },
     );
 
+    test('external reload emits a credential-free change signal', () async {
+      await authManager.initialize();
+      final hardwareId = authManager.hardwareId;
+      final authFile = File(p.join(tempDir.path, 'auth.json'));
+      await authFile.writeAsString(
+        jsonEncode({
+          'access_token': 'external_access',
+          'refresh_token': 'external_refresh',
+          'hardware_id': hardwareId,
+        }),
+      );
+      final changed = authManager.changes.first;
+
+      expect(await authManager.reload(notifyIfChanged: true), isTrue);
+      await changed;
+
+      expect(authManager.accessToken, 'external_access');
+      expect(authManager.refreshToken, 'external_refresh');
+    });
+
     test('logout clears tokens but preserves hardware_id', () async {
       final authFile = File(p.join(tempDir.path, 'auth.json'));
       await authFile.writeAsString(

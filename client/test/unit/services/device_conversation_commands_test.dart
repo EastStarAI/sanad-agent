@@ -890,6 +890,53 @@ void main() {
     expect(store.currentRuntimeNotice?.title, 'Waiting B');
   });
 
+  test('loadSessionHistory rejects an older generation for the same session', () async {
+    final olderFuture = commands.loadSessionHistory('session-1');
+    final olderRequest = socket.capturedCommands.last['payload'] as Map<String, dynamic>;
+    final newerFuture = commands.loadSessionHistory('session-1');
+    final newerRequest = socket.capturedCommands.last['payload'] as Map<String, dynamic>;
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': newerRequest['request_id'],
+        'messages': [
+          {
+            'id': 2,
+            'sender': 'ai',
+            'type': 'final_answer',
+            'content': 'new snapshot',
+            'created_at': '2026-01-01T00:00:02Z',
+            'session_id': 'session-1',
+          },
+        ],
+      },
+    });
+    await newerFuture;
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': olderRequest['request_id'],
+        'messages': [
+          {
+            'id': 1,
+            'sender': 'ai',
+            'type': 'final_answer',
+            'content': 'old snapshot',
+            'created_at': '2026-01-01T00:00:01Z',
+            'session_id': 'session-1',
+          },
+        ],
+      },
+    });
+    await olderFuture;
+
+    expect(store.currentMessages.single.text, 'new snapshot');
+  });
+
   test('loadSessionHistory keeps the newest active session when responses arrive out of order', () async {
     final futureA = commands.loadSessionHistory('session-a');
     final requestA = socket.capturedCommands[socket.capturedCommands.length - 1]['payload'] as Map<String, dynamic>;

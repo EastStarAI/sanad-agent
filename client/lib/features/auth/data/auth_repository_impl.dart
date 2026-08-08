@@ -14,6 +14,12 @@ class AuthRepositoryImpl implements IAuthRepository {
   }
 
   @override
+  Future<AuthSession?> synchronizeExternalSession() async {
+    await _authService.synchronizeDesktopAuthFile();
+    return _snapshot();
+  }
+
+  @override
   Future<AuthSession?> login() async {
     await _authService.login();
     return _snapshot();
@@ -26,8 +32,8 @@ class AuthRepositoryImpl implements IAuthRepository {
 
   @override
   Future<AuthSession?> refreshSession() async {
-    final token = await _authService.refreshAccessToken();
-    if (token == null) return null;
+    final result = await _authService.refreshAccessToken();
+    if (!result.isSuccess) return null;
     await _authService.fetchProfile();
     return _snapshot();
   }

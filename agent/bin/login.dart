@@ -4,6 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 
 Future<void> main(List<String> args) async {
   try {
@@ -40,6 +41,7 @@ Future<void> main(List<String> args) async {
   if (tokenArg != null && tokenArg.isNotEmpty) {
     print('Preparing device pairing...');
     await authManager.prepareDevicePairing(tokenArg);
+    await _notifyRunningDaemon(config);
     print('✓ Device pairing is ready. Start the Sanad service to connect.');
     return;
   }
@@ -67,6 +69,7 @@ Future<void> main(List<String> args) async {
     }
     print('Preparing device pairing...');
     await authManager.prepareDevicePairing(pastedToken);
+    await _notifyRunningDaemon(config);
     print('✓ Device pairing is ready. Start the Sanad service to connect.');
     return;
   }
@@ -147,6 +150,7 @@ Future<void> main(List<String> args) async {
 
         print('\nSaving tokens...');
         await authManager.saveUserTokens(accessToken, refreshToken ?? '');
+        await _notifyRunningDaemon(config);
         print('✓ Login successful! Session tokens stored in auth.json.');
         return;
       } else if (statusStr == 'expired') {
@@ -173,12 +177,29 @@ Future<void> runLogout() async {
     setupDI();
   }
 
+  final config = getIt<Config>();
   final authManager = getIt<AuthManager>();
   await authManager.initialize();
 
   print('Logging out...');
   await authManager.logout();
+  await _notifyRunningDaemon(config);
   print('✓ Successfully logged out. Session tokens and device tokens removed.');
+}
+
+Future<void> _notifyRunningDaemon(Config config) async {
+  try {
+    final credential = await LocalGatewayCredentials.loadOrCreate();
+    final base = Uri.parse(config.localGatewayUrl);
+    await http
+        .post(
+          base.replace(path: '/authentication-exchange', query: null),
+          headers: {LocalGatewayCredentials.headerName: credential.value},
+        )
+        .timeout(const Duration(milliseconds: 750));
+  } catch (_) {
+    // The daemon may be stopped. It will load auth.json on its next startup.
+  }
 }
 
 Future<void> runStatus() async {

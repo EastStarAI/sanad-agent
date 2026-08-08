@@ -14,6 +14,9 @@ This contract applies to `client/lib/features/auth/`.
 - Keep the private polling token inside `AuthService`. Never place it in URLs, browser state, logs, or persistent storage.
 - Show `DeviceLoginChallengeOverlay` only for an explicit CLI/headless fallback with a non-empty user code. Desktop, web, and mobile browser sign-in must not show it.
 - Refresh and logout must use the portal-owned operations; never rotate tokens through the backend gateway.
+- Refresh outcomes are typed: only a trusted Portal `401` or missing local refresh credential is terminal; timeout, DNS/transport failure, malformed replies, and non-`401` HTTP failures are transient and must retain credentials.
+- Persist a rotated access/refresh pair as one authoritative value before publishing refresh success. Retry an authenticated request at most once; a second `401` is terminal.
+- Native desktop auth mutations publish only a credential-free exchange request after `auth.json` persistence. Incoming exchange reconciliation reloads that file and never echoes another request. Web and mobile do not participate.
 
 ## Secret Safety
 - Never log access, refresh, polling, device, or authorization tokens.

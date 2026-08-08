@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:get_it/get_it.dart';
@@ -81,6 +82,12 @@ class FakeSocket implements socket_io.Socket {
   bool get connected => isConnected;
 
   @override
+  socket_io.Socket disconnect() {
+    isConnected = false;
+    return this;
+  }
+
+  @override
   Manager get io => FakeManager();
 
   @override
@@ -94,11 +101,24 @@ class FakeSocket implements socket_io.Socket {
 }
 
 class FakeAuthManager extends AuthManager {
+  final _controller = StreamController<void>.broadcast();
+  bool authenticated = true;
+
   @override
-  bool get isAuthenticated => true;
+  Stream<void> get changes => _controller.stream;
+
+  @override
+  bool get isAuthenticated => authenticated;
 
   @override
   String get hardwareId => 'test-device-id';
+
+  void setAuthenticated(bool value) {
+    authenticated = value;
+    _controller.add(null);
+  }
+
+  Future<void> close() => _controller.close();
 }
 
 class TrackingPlatformRuntimeBridge extends PlatformRuntimeBridge {
@@ -229,6 +249,7 @@ void main() {
   final getIt = GetIt.instance;
   late Directory tempDir;
   late FakeSocket socket;
+  late FakeAuthManager authManager;
   late TrackingPlatformRuntimeBridge runtimeBridge;
   late TrackingWorkspaceRuntimeService workspaceRuntime;
   late ServerSanadGatewayPlatform platform;
@@ -242,14 +263,14 @@ void main() {
       sanadHomePath: tempDir.path,
     );
 
-    getIt.registerSingleton<AuthManager>(FakeAuthManager());
+    authManager = FakeAuthManager();
+    getIt.registerSingleton<AuthManager>(authManager);
     getIt.registerSingleton<Config>(Config());
     getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
     getIt.registerSingleton<PlatformRuntimeBridge>(runtimeBridge);
     getIt.registerSingleton<LocalWorkspaceRuntimeService>(workspaceRuntime);
 
-    platform = ServerSanadGatewayPlatform();
-    platform.socketForTesting = socket;
+    platform = ServerSanadGatewayPlatform(socketFactory: (_, _) => socket);
     await platform.initialize();
     await socket.trigger('register_success', {'device_id': 'test-device-id'});
     socket.emittedEvents.clear();
@@ -257,10 +278,44 @@ void main() {
 
   tearDown(() async {
     await platform.dispose();
+    await authManager.close();
     if (tempDir.existsSync()) {
       await tempDir.delete(recursive: true);
     }
     await getIt.reset();
+  });
+
+  test(
+    'disconnects and reconnects cloud transport after auth changes',
+    () async {
+      expect(platform.socket, same(socket));
+      expect(socket.connected, isTrue);
+
+      authManager.setAuthenticated(false);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(platform.socket, isNull);
+      expect(socket.connected, isFalse);
+
+      authManager.setAuthenticated(true);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(platform.socket, same(socket));
+      expect(socket.connected, isTrue);
+    },
+  );
+
+  test('blocks authentication exchange on both cloud envelope paths', () async {
+    await socket.trigger('execute_command', {
+      'command': 'authentication_exchange',
+      'payload': {'session_id': 'auth-session'},
+    });
+    await socket.trigger('protocol_event', {
+      'type': 'authentication_exchange',
+      'payload': <String, dynamic>{},
+      'session_id': 'auth-session',
+    });
+
+    expect(runtimeBridge.registeredSessionCount, 0);
+    expect(socket.emittedEvents, isEmpty);
   });
 
   group('cloud remote workspace admission', () {

@@ -22,10 +22,7 @@ enum SocketLifecycleState {
   error,
 }
 
-enum SocketTransportMode {
-  cloudSocketIo,
-  localWebSocket,
-}
+enum SocketTransportMode { cloudSocketIo, localWebSocket }
 
 class SanadSocketService implements ISocketService, ISocketGateway {
   static final _logger = Logger('SanadSocket');
@@ -141,7 +138,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     if (isReady) return;
 
     if (_connectFuture != null) {
-      _logger.info('[${hashCode}]: ⏳ Connection already in progress, waiting...');
+      _logger.info(
+        '[${hashCode}]: ⏳ Connection already in progress, waiting...',
+      );
       return _connectFuture!;
     }
 
@@ -245,7 +244,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       _authFailureController.add(payload);
       _setLifecycleState(SocketLifecycleState.authFailed);
       _completeReadyError(
-        StateError(payload['message']?.toString() ?? 'Socket authentication failed'),
+        StateError(
+          payload['message']?.toString() ?? 'Socket authentication failed',
+        ),
       );
     });
 
@@ -257,10 +258,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     _socket!.on('capabilities', (data) {
       if (_isDisposed) return;
       final payload = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
-      _safeAdd({
-        'type': 'capabilities',
-        ...payload,
-      });
+      _safeAdd({'type': 'capabilities', ...payload});
     });
 
     _socket!.on('device_event', _handleCloudDeviceEvent);
@@ -344,7 +342,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         cancelOnError: true,
       );
     } catch (e) {
-      _logger.severe('[${hashCode}]: Local socket connection failed to establish: $e');
+      _logger.severe(
+        '[${hashCode}]: Local socket connection failed to establish: $e',
+      );
       _setSocketConnected(false);
       _setLifecycleState(SocketLifecycleState.error);
       _handleLocalReconnect();
@@ -396,7 +396,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         return;
       case 'error':
         _setLifecycleState(SocketLifecycleState.error);
-        _completeReadyError(StateError(payload['message']?.toString() ?? 'Local socket error'));
+        _completeReadyError(
+          StateError(payload['message']?.toString() ?? 'Local socket error'),
+        );
         return;
       default:
         _safeAdd(payload);
@@ -467,7 +469,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     final deviceId = data['device_id'] as String?;
 
     if (!AppPlatform.isDesktop) {
-      _logger.warning('⚠️ Ignoring execute_tool on non-desktop platform: ${AppPlatform.name}');
+      _logger.warning(
+        '⚠️ Ignoring execute_tool on non-desktop platform: ${AppPlatform.name}',
+      );
       _sendToolResult(
         runId: data['run_id'] ?? '',
         error: 'Tool execution not supported on ${AppPlatform.name}',
@@ -493,7 +497,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     Map<String, dynamic>? payload,
   }) {
     if (!isConnected) {
-      _logger.severe('[${hashCode}]: ❌ Cannot send command, socket is not ready.');
+      _logger.severe(
+        '[${hashCode}]: ❌ Cannot send command, socket is not ready.',
+      );
       return;
     }
 
@@ -508,12 +514,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
 
     try {
       if (isLocalTransport) {
-        _localSocket?.add(
-          jsonEncode({
-            'type': 'execute_command',
-            ...data,
-          }),
-        );
+        _localSocket?.add(jsonEncode({'type': 'execute_command', ...data}));
       } else {
         _socket!.emit('device_command', data);
       }
@@ -525,21 +526,24 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   @override
   void emit(String event, dynamic data) {
     if (!isConnected) {
-      _logger.severe('[${hashCode}]: ❌ Cannot emit $event, socket is not ready');
+      _logger.severe(
+        '[${hashCode}]: ❌ Cannot emit $event, socket is not ready',
+      );
       return;
     }
     _logOutgoingSocketEvent(event, data);
     if (isLocalTransport) {
       final payload = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{'payload': data};
-      _localSocket?.add(
-        jsonEncode({
-          'type': event,
-          ...payload,
-        }),
-      );
+      _localSocket?.add(jsonEncode({'type': event, ...payload}));
       return;
     }
     _socket!.emit(event, data);
+  }
+
+  Future<void> reconnect() async {
+    if (_isDisposed) return;
+    disconnect();
+    await connect();
   }
 
   @override
@@ -550,6 +554,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     _reconnectAttempts = 0;
 
     _socket?.disconnect();
+    _socket?.dispose();
     unawaited(_localSocket?.close());
     _localSocket = null;
     _socket = null;
@@ -582,7 +587,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     String? deviceId,
   }) {
     if (!isConnected) {
-      _logger.severe('[${hashCode}]: ❌ Cannot send tool result, socket is not ready');
+      _logger.severe(
+        '[${hashCode}]: ❌ Cannot send tool result, socket is not ready',
+      );
       return;
     }
 
@@ -606,10 +613,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     try {
       if (isLocalTransport) {
         _localSocket?.add(
-          jsonEncode({
-            'type': 'execute_command',
-            ...commandData,
-          }),
+          jsonEncode({'type': 'execute_command', ...commandData}),
         );
       } else {
         _socket!.emit('device_command', commandData);
@@ -624,7 +628,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     Map<String, dynamic> data,
     void Function(Map<String, dynamic>) handler,
   ) async {
-    if (_socket == null || !_socket!.connected || !isReady || isLocalTransport) return;
+    if (_socket == null || !_socket!.connected || !isReady || isLocalTransport) {
+      return;
+    }
 
     final completer = Completer<void>();
     final responseEvent = '${event}_response';
@@ -712,11 +718,15 @@ class SanadSocketService implements ISocketService, ISocketGateway {
 
     _reconnectTimer = Timer(Duration(seconds: delaySeconds), () async {
       if (_isDisposed || _explicitDisconnect) return;
-      _logger.info('[${hashCode}]: Executing local WebSocket reconnect attempt #$_reconnectAttempts');
+      _logger.info(
+        '[${hashCode}]: Executing local WebSocket reconnect attempt #$_reconnectAttempts',
+      );
       try {
         await connect();
       } catch (e) {
-        _logger.severe('[${hashCode}]: Reconnect attempt #$_reconnectAttempts failed: $e');
+        _logger.severe(
+          '[${hashCode}]: Reconnect attempt #$_reconnectAttempts failed: $e',
+        );
       }
     });
   }
@@ -852,7 +862,10 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     final normalized = key
         .toString()
         .trim()
-        .replaceAllMapped(RegExp(r'([a-z0-9])([A-Z])'), (match) => '${match[1]}_${match[2]}')
+        .replaceAllMapped(
+          RegExp(r'([a-z0-9])([A-Z])'),
+          (match) => '${match[1]}_${match[2]}',
+        )
         .toLowerCase()
         .replaceAll('-', '_');
     return normalized == 'token' ||

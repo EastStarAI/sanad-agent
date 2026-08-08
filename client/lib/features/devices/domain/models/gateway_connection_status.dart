@@ -90,7 +90,7 @@ extension SanadGatewayStatusLabel on SanadGatewayStatus {
   String get displayLabel {
     return switch (this) {
       SanadGatewayStatus.loginRequired => 'Login to connect',
-      SanadGatewayStatus.disconnected => 'Disconnected',
+      SanadGatewayStatus.disconnected => 'Offline',
       SanadGatewayStatus.connecting => 'Connecting',
       SanadGatewayStatus.connected => 'Connected',
       SanadGatewayStatus.authenticatedNoDevices => 'No devices',

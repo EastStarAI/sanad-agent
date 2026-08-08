@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/app_config.dart';
+import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
@@ -62,6 +63,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   final _voiceEngines = <VoiceEngine>[];
 
   HttpServer? _server;
+  StreamSubscription<void>? _authChangeSubscription;
 
   @override
   String get platformId => 'local_gateway';
@@ -93,6 +95,10 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
   @override
   Future<void> initialize() async {
+    _authChangeSubscription ??= getIt<AuthManager>().changes.listen((_) {
+      unawaited(_broadcastAuthenticationExchange());
+    });
+
     final host = _config.localGatewayHost;
     final port = _config.localGatewayPort;
 
@@ -395,6 +401,13 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       return;
     }
 
+    if (request.uri.path == '/authentication-exchange' &&
+        request.method == 'POST') {
+      await getIt<AuthManager>().reload(notifyIfChanged: true);
+      await _writeJsonResponse(request.response, const {'success': true});
+      return;
+    }
+
     if (request.uri.path == '/capabilities') {
       final capabilities = await loadSanadCapabilities();
       await _writeJsonResponse(request.response, capabilities.toJson());
@@ -485,6 +498,19 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
     final type = envelope['type'] as String?;
     _logger.fine('⬇️ [ws] Received message type: $type');
+    if (type == 'authentication_exchange') {
+      if (envelope.length != 1) {
+        _logger.warning(
+          'Ignoring authentication_exchange with unexpected fields.',
+        );
+        return;
+      }
+      // The notification carries no credentials and grants no state. The
+      // owner-only shared document remains the sole authentication authority.
+      await getIt<AuthManager>().reload(notifyIfChanged: true);
+      return;
+    }
+
     _logger.fine('⬇️ [ws] Message payload: $envelope');
     _rememberSocketIdentity(socket, envelope);
 
@@ -682,6 +708,17 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     socket.add(jsonEncode(data));
   }
 
+  Future<void> _broadcastAuthenticationExchange() async {
+    const event = <String, dynamic>{'type': 'authentication_exchange'};
+    for (final client in _clients.toList(growable: false)) {
+      try {
+        await _sendToSocket(client, event);
+      } on Object {
+        // Socket lifecycle cleanup owns disconnected clients.
+      }
+    }
+  }
+
   Future<void> _writeJsonResponse(
     HttpResponse response,
     Map<String, dynamic> data, {
@@ -844,6 +881,8 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
   @override
   Future<void> dispose() async {
+    await _authChangeSubscription?.cancel();
+    _authChangeSubscription = null;
     await _eventController.close();
     for (final client in _clients.toList()) {
       await client.close();
