@@ -245,10 +245,10 @@ try {
     exit 0
   }
   $fvm = if ($command -eq 'run') { Invoke-Setup $true } else { Require-RuntimeCli }
-  $runtimeArgs = if ($command -eq 'run') {
+  [string[]] $runtimeArgs = if ($command -eq 'run') {
     @($SanadArgs | Where-Object { $_ -ne '--force' })
   } else {
-    $SanadArgs
+    @($SanadArgs)
   }
   $env:SANAD_DEV_CALLER_DIR = $CallerDir
   Push-Location (Join-Path $ProjectDir 'client')

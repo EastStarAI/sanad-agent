@@ -366,12 +366,30 @@ class SanadHomeBootstrap {
     if (Platform.isWindows) {
       const script = r'''
 $ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SanadAtomicMove {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern bool MoveFileExW(
+    string existingFile,
+    string newFile,
+    int flags
+  );
+}
+'@
 $source = $env:SANAD_ATOMIC_SOURCE
 $destination = $env:SANAD_ATOMIC_DESTINATION
-if ([IO.File]::Exists($destination)) {
-  [IO.File]::Replace($source, $destination, $null, $true)
-} else {
-  [IO.File]::Move($source, $destination)
+$replaceExisting = 0x1
+$writeThrough = 0x8
+if (-not [SanadAtomicMove]::MoveFileExW(
+  $source,
+  $destination,
+  ($replaceExisting -bor $writeThrough)
+)) {
+  throw [ComponentModel.Win32Exception]::new(
+    [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+  )
 }
 ''';
       final result = Process.runSync(

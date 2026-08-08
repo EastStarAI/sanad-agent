@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
+import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_release_contract/release_contract.dart';
 import 'local_daemon_controller.dart';
 import 'verified_agent_bootstrap_installer.dart';
@@ -11,7 +12,13 @@ import 'package:sanad_client/infrastructure/local_gateway/local_gateway_http_cli
 class StandaloneDaemonController implements LocalDaemonController {
   static final _logger = Logger('StandaloneDaemonController');
 
-  const StandaloneDaemonController();
+  const StandaloneDaemonController({
+    this.sanadHomePath,
+    this.environment,
+  });
+
+  final String? sanadHomePath;
+  final Map<String, String>? environment;
 
   LocalGatewayHttpClient get _gatewayClient => const LocalGatewayHttpClient();
 
@@ -20,19 +27,27 @@ class StandaloneDaemonController implements LocalDaemonController {
   }
 
   String getHomeDirectory() {
+    final environment = this.environment ?? Platform.environment;
     if (Platform.isWindows) {
-      return Platform.environment['USERPROFILE'] ?? '';
+      return environment['USERPROFILE'] ?? '';
     }
-    return Platform.environment['HOME'] ?? '';
+    return environment['HOME'] ?? '';
   }
 
   String getSanadHome() {
-    final configured = Platform.environment['SANAD_HOME']?.trim();
-    return configured != null && configured.isNotEmpty ? configured : p.join(getHomeDirectory(), '.sanad');
+    final explicit = sanadHomePath?.trim();
+    if (explicit != null && explicit.isNotEmpty) return explicit;
+    final compileTime = AppConfig.sanadHome.trim();
+    if (compileTime.isNotEmpty) return compileTime;
+    final runtime = (environment ?? Platform.environment)['SANAD_HOME']?.trim();
+    return runtime != null && runtime.isNotEmpty ? runtime : p.join(getHomeDirectory(), '.sanad');
   }
 
-  static String _serviceInstance() {
-    final value = Platform.environment['SANAD_SERVICE_INSTANCE']?.trim() ?? '';
+  String _serviceInstance() {
+    final configured = AppConfig.sanadServiceInstance.trim();
+    final value = configured.isNotEmpty
+        ? configured
+        : (environment ?? Platform.environment)['SANAD_SERVICE_INSTANCE']?.trim() ?? '';
     if (value.isNotEmpty && !RegExp(r'^[A-Za-z0-9-]{1,32}$').hasMatch(value)) {
       throw const FormatException('Invalid SANAD_SERVICE_INSTANCE.');
     }
@@ -349,8 +364,25 @@ class StandaloneDaemonController implements LocalDaemonController {
     if (Platform.environment.containsKey('FLUTTER_TEST')) {
       return false;
     }
+    if (Platform.isWindows) {
+      try {
+        final result = Process.runSync('schtasks', [
+          '/Query',
+          '/TN',
+          _windowsTaskName,
+        ]);
+        return result.exitCode == 0;
+      } catch (_) {
+        return false;
+      }
+    }
     final configPath = getServiceConfigPath();
     return File(configPath).existsSync();
+  }
+
+  String get _windowsTaskName {
+    final instance = _serviceInstance();
+    return instance.isEmpty ? 'SanadAgent' : 'SanadAgent-$instance';
   }
 
   @override

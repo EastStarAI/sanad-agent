@@ -76,11 +76,25 @@ class AppConfig {
     'LOCAL_GATEWAY_URL',
     defaultValue: 'http://127.0.0.1:58085',
   );
+  static const String stableAppcastUrl = String.fromEnvironment(
+    'SANAD_APPCAST_URL',
+    defaultValue: 'https://updates.sanad.eaststarai.com/appcast.xml',
+  );
+  static const String releaseManifestUrl = String.fromEnvironment(
+    'SANAD_RELEASE_MANIFEST_URL',
+    defaultValue: 'https://github.com/EastStarAI/sanad-agent/releases/latest/download/release-manifest.json',
+  );
+  static const String releaseArtifactMirrorUrl = String.fromEnvironment(
+    'SANAD_RELEASE_ARTIFACT_MIRROR_URL',
+  );
   static const bool enableCloudGateway = bool.fromEnvironment(
     'ENABLE_CLOUD_GATEWAY',
     defaultValue: true,
   );
   static const String sanadHome = String.fromEnvironment('SANAD_HOME');
+  static const String sanadServiceInstance = String.fromEnvironment(
+    'SANAD_SERVICE_INSTANCE',
+  );
   static const String sharedPreferencesPrefix = String.fromEnvironment(
     'SANAD_SHARED_PREFERENCES_PREFIX',
   );

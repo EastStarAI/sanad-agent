@@ -83,25 +83,58 @@ The macOS Dart AOT executable is signed with Hardened Runtime and only
 `com.apple.security.cs.allow-unsigned-executable-memory`, which Dart requires
 for runtime stubs. The release workflow supplies the contract version through
 `SANAD_AGENT_VERSION`; compiled releases do not retain a hardcoded `1.0.0`
-identity. On Windows, verified bytes
-are staged for a detached adapter. The daemon stops only after scheduling is
-accepted. Native Scheduled Task, PowerShell replacement, and rollback/start
-evidence remain Task 67B work and must not be inferred from shared tests.
+identity. On Windows, verified bytes are staged beside the installed executable. The
+updater writes an owned PowerShell replacement file and waits for its explicit
+acceptance marker before the daemon may stop. The replacement preserves a
+rollback executable, starts the user Scheduled Task after replacement, and, on
+start failure, restores and starts the previous executable. The installed task
+uses a hidden PowerShell host. Windows 11 Gate E proved logon startup remains
+background-only, while immediate first-install task startup can still surface a
+console before Windows minimizes it. A deterministic no-console launcher is
+explicitly deferred rather than expanding this release gate; source/FVM
+terminals remain developer-owned and visible. The updater records a typed local
+result (`started`, `replacement_failed`, `rollback_completed`, or
+`rollback_start_failed`) and removes staged scripts/files on terminal paths.
+The Client still decides success only from authenticated target-version health
+and a ready local WebSocket.
 
 ## Client self-update
 
-Packaged macOS and Windows clients initialize only the Stable Appcast and issue
-one non-blocking startup check. Feed failure never blocks application startup,
-and concurrent manual checks reuse one in-flight operation. Source clients do
-not initialize packaged update machinery. macOS retains Sparkle's native quit,
-installation, Developer ID, notarization, and EdDSA handoff. WinSparkle's native
-quit/install handoff remains a Windows Task 67B gate.
+Packaged macOS and Windows clients initialize only the Stable Appcast and let
+Sparkle/WinSparkle perform consent-based scheduled checks in the background.
+Startup never invokes the interactive check API, so an up-to-date launch shows
+no dialog. **Settings → General → Check for Updates** explicitly invokes the
+interactive native check, and concurrent manual checks reuse one in-flight
+operation. Source clients do not initialize packaged update machinery. macOS
+retains Sparkle's native quit,
+installation, Developer ID, notarization, and EdDSA handoff. On Windows,
+`before-quit-for-update` flushes the conversation cache once, removes its
+listener, and exits within a bounded handoff so the already-launched NSIS
+installer can replace the application. NSIS waits for that graceful exit and
+uses an exact-installed-path fallback only for clients released before the
+listener existed; it never terminates source runs or another installation by
+process name alone.
 
 Linux has no background poll, download, package replacement, privilege request,
 or rollback claim. **Settings → General → Check for Updates** performs a
 user-initiated manifest check. Only a newer canonical Linux x64 Client artifact
 is opened in the external browser; up-to-date and discovery failures remain
 non-blocking.
+
+## Isolated candidate verification
+
+Windows real-machine gates may compile private candidates with
+`SANAD_APPCAST_URL`, `SANAD_RELEASE_MANIFEST_URL`,
+`SANAD_RELEASE_ARTIFACT_MIRROR_URL`, `SANAD_HOME`, and
+`SANAD_SERVICE_INSTANCE`. These are build-time overrides only and isolate the
+candidate's feed, Home, and Scheduled Task without requiring a launch shell. The
+manifest must still carry canonical GitHub artifact identity and pass the normal
+version, size, SHA-256, and trust policy; the mirror changes only where the test
+candidate bytes are fetched. The Windows DSA private key remains outside the
+checkout and its path is passed directly to the signing tool; release tooling
+must not stage a private-key copy in the Client source tree. Public release
+builds omit all candidate overrides and retain the Stable endpoints, ordinary
+user Home, and default service identity.
 
 ## Publication boundary
 

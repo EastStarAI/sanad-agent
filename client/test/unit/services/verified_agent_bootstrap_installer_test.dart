@@ -12,6 +12,7 @@ class _FakeNativeUpdater implements NativeUpdateAdapter {
   int feedCount = 0;
   int intervalCount = 0;
   int checkCount = 0;
+  void Function()? quitForUpdate;
 
   @override
   Future<void> checkForUpdates() async => checkCount++;
@@ -19,6 +20,10 @@ class _FakeNativeUpdater implements NativeUpdateAdapter {
   Future<void> setFeedUrl(String url) async => feedCount++;
   @override
   Future<void> setScheduledCheckInterval(int seconds) async => intervalCount++;
+  @override
+  void setQuitForUpdateHandler(void Function()? callback) {
+    quitForUpdate = callback;
+  }
 }
 
 void main() {
@@ -58,6 +63,36 @@ void main() {
 
     expect((await installer.install(targetVersion: '1.1.0')).isSuccess, isTrue);
     expect(File(target).readAsBytesSync(), bytes);
+  });
+
+  test('isolated artifact mirror keeps canonical manifest trust metadata', () async {
+    final bytes = utf8.encode('mirrored-agent');
+    final artifactFile = File('${temporaryDirectory.path}/artifact')..writeAsBytesSync(bytes);
+    final manifest = _manifest(
+      size: bytes.length,
+      digest: await sha256OfFile(artifactFile),
+    );
+    Uri? requestedArtifact;
+    final installer = VerifiedAgentBootstrapInstaller(
+      targetPath: '${temporaryDirectory.path}/bin/sanad',
+      manifestUri: Uri.parse('http://127.0.0.1/release-manifest.json'),
+      artifactMirrorUri: Uri.parse('http://127.0.0.1/artifacts/'),
+      operatingSystem: 'linux',
+      architecture: 'x64',
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('release-manifest.json')) {
+          return http.Response(jsonEncode(manifest), 200);
+        }
+        requestedArtifact = request.url;
+        return http.Response.bytes(bytes, 200);
+      }),
+    );
+
+    expect((await installer.install(targetVersion: '1.1.0')).isSuccess, isTrue);
+    expect(
+      requestedArtifact?.toString(),
+      'http://127.0.0.1/artifacts/sanad-agent-1.1.0-linux-x64',
+    );
   });
 
   test('rejects a manifest version mismatch before downloading', () async {
@@ -169,7 +204,7 @@ void main() {
     expect(target.readAsStringSync(), 'existing');
   });
 
-  test('packaged macOS startup requests exactly one check', () async {
+  test('packaged macOS startup schedules without an interactive check', () async {
     final native = _FakeNativeUpdater();
     final service = AutoUpdateService.test(
       native: native,
@@ -179,10 +214,76 @@ void main() {
       currentVersion: () async => '1.0.0',
       launch: (_) async => true,
     );
+
     await service.initialize();
     await service.initialize();
+
+    expect(native.feedCount, 1);
+    expect(native.intervalCount, 1);
+    expect(native.checkCount, 0);
+  });
+
+  test('packaged desktop manual check uses the interactive native API', () async {
+    for (final platform in ['macos', 'windows']) {
+      final native = _FakeNativeUpdater();
+      final service = AutoUpdateService.test(
+        native: native,
+        client: MockClient((_) async => http.Response('', 500)),
+        platform: platform,
+        sourceRun: false,
+        currentVersion: () async => '1.0.0',
+        launch: (_) async => true,
+      );
+
+      await service.initialize();
+      final result = await service.checkForUpdates();
+
+      expect(result.status, ClientUpdateStatus.checkStarted);
+      expect(native.checkCount, 1, reason: platform);
+      service.dispose();
+    }
+  });
+
+  test('packaged Windows updater flushes once before native installation quit', () async {
+    final native = _FakeNativeUpdater();
+    var flushCount = 0;
+    final exitCodes = <int>[];
+    final service = AutoUpdateService.test(
+      native: native,
+      client: MockClient((_) async => http.Response('', 500)),
+      platform: 'windows',
+      sourceRun: false,
+      currentVersion: () async => '1.0.0',
+      launch: (_) async => true,
+      beforeQuitForUpdate: () async => flushCount++,
+      quit: exitCodes.add,
+    );
+
+    await service.initialize();
+    expect(native.quitForUpdate, isNotNull);
+    native.quitForUpdate!();
+    native.quitForUpdate?.call();
     await Future<void>.delayed(Duration.zero);
-    expect(native.checkCount, 1);
+
+    expect(flushCount, 1);
+    expect(exitCodes, [0]);
+    expect(native.quitForUpdate, isNull);
+  });
+
+  test('packaged macOS keeps its native Sparkle quit handoff', () async {
+    final native = _FakeNativeUpdater();
+    final service = AutoUpdateService.test(
+      native: native,
+      client: MockClient((_) async => http.Response('', 500)),
+      platform: 'macos',
+      sourceRun: false,
+      currentVersion: () async => '1.0.0',
+      launch: (_) async => true,
+    );
+
+    await service.initialize();
+
+    expect(native.quitForUpdate, isNull);
   });
 
   test('source runs never initialize the packaged updater', () async {

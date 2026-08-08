@@ -217,16 +217,19 @@ void main() {
       artifact
         ..['size'] = bytes.length
         ..['sha256'] = await sha256OfFile(artifactFile);
+      Uri? requestedArtifact;
       final service = AgentUpdateService(
         currentVersion: '1.0.0',
         executablePath: executable.path,
         isSourceManaged: false,
         operatingSystem: 'linux',
         architecture: 'x64',
+        artifactMirrorUri: Uri.parse('http://127.0.0.1/artifacts/'),
         client: MockClient((request) async {
           if (request.url.path.endsWith('release-manifest.json')) {
             return http.Response(jsonEncode(manifestJson), 200);
           }
+          requestedArtifact = request.url;
           return http.Response.bytes(bytes, 200);
         }),
       );
@@ -235,6 +238,10 @@ void main() {
 
       expect(result.status, AgentUpdateStatus.restartRequired);
       expect(executable.readAsBytesSync(), bytes);
+      expect(
+        requestedArtifact?.toString(),
+        'http://127.0.0.1/artifacts/sanad-agent-1.1.0-linux-x64',
+      );
     });
 
     test('rejects latest when it differs from the exact target', () async {
@@ -321,6 +328,29 @@ void main() {
       expect(executable.readAsStringSync(), 'old');
     });
 
+    test(
+      'classifies an unavailable manifest endpoint as a network failure',
+      () async {
+        final executable = File('${temporaryDirectory.path}/sanad')
+          ..writeAsStringSync('old');
+        final service = AgentUpdateService(
+          currentVersion: '1.0.0',
+          executablePath: executable.path,
+          isSourceManaged: false,
+          operatingSystem: 'windows',
+          architecture: 'x64',
+          client: MockClient((request) async {
+            throw http.ClientException('Connection refused.', request.url);
+          }),
+        );
+
+        final result = await service.update(targetVersion: '1.1.0');
+
+        expect(result.status, AgentUpdateStatus.networkFailed);
+        expect(executable.readAsStringSync(), 'old');
+      },
+    );
+
     test('rejects an artifact whose checksum differs', () async {
       final executable = File('${temporaryDirectory.path}/sanad')
         ..writeAsStringSync('old');
@@ -359,6 +389,7 @@ void main() {
           isSourceManaged: false,
           operatingSystem: 'windows',
           architecture: 'x64',
+          replacementScheduler: (_) async => false,
         );
         final result = AgentUpdateResult(
           status: AgentUpdateStatus.restartRequired,
@@ -369,10 +400,123 @@ void main() {
 
         expect(await service.scheduleWindowsReplacement(result), isFalse);
         expect(executable.readAsStringSync(), 'running');
+        expect(staged.existsSync(), isFalse);
       },
-      skip: Platform.isWindows
-          ? 'Native scheduling belongs to Task 67B.'
-          : false,
+    );
+
+    test(
+      'schedules a Windows replacement and accepts the staged script',
+      () async {
+        final executable = File('${temporaryDirectory.path}/sanad.exe')
+          ..writeAsStringSync('running');
+        final staged = File('${temporaryDirectory.path}/sanad.staged')
+          ..writeAsStringSync('candidate');
+        var receivedScript = '';
+        final service = AgentUpdateService(
+          currentVersion: '1.0.0',
+          executablePath: executable.path,
+          isSourceManaged: false,
+          operatingSystem: 'windows',
+          architecture: 'x64',
+          replacementScheduler: (script) async {
+            receivedScript = script;
+            return true;
+          },
+        );
+        final result = AgentUpdateResult(
+          status: AgentUpdateStatus.restartRequired,
+          currentVersion: '1.0.0',
+          availableVersion: '1.1.0',
+          stagedPath: staged.path,
+        );
+
+        expect(await service.scheduleWindowsReplacement(result), isTrue);
+        expect(receivedScript, contains("\$target = '${executable.path}'"));
+        expect(receivedScript, contains("\$staged = '${staged.path}'"));
+        expect(
+          receivedScript,
+          contains(r'Move-Item -LiteralPath $staged -Destination $target'),
+        );
+        expect(receivedScript, contains(r'& $target service start'));
+        expect(staged.existsSync(), isTrue);
+      },
+    );
+
+    test(
+      'runs the native detached PowerShell replacement handshake on Windows',
+      () async {
+        final target = File('${temporaryDirectory.path}/sanad-test.cmd')
+          ..writeAsStringSync('@exit /b 0\r\n');
+        final staged = File('${target.path}.1.1.0.staged')
+          ..writeAsStringSync('@exit /b 0\r\n');
+        final service = AgentUpdateService(
+          currentVersion: '1.0.0',
+          executablePath: target.path,
+          isSourceManaged: false,
+          operatingSystem: 'windows',
+          architecture: 'x64',
+        );
+        final result = AgentUpdateResult(
+          status: AgentUpdateStatus.restartRequired,
+          currentVersion: '1.0.0',
+          availableVersion: '1.1.0',
+          stagedPath: staged.path,
+        );
+
+        expect(await service.scheduleWindowsReplacement(result), isTrue);
+        final resultFile = File('${target.path}.update-result.json');
+        for (
+          var attempt = 0;
+          attempt < 40 && !resultFile.existsSync();
+          attempt++
+        ) {
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+        }
+        expect(resultFile.existsSync(), isTrue);
+        expect(jsonDecode(resultFile.readAsStringSync())['status'], 'started');
+        expect(File('${staged.path}.replace.ps1').existsSync(), isFalse);
+      },
+      skip: Platform.isWindows ? false : 'Windows native PowerShell gate.',
+    );
+
+    test(
+      'does not schedule a Windows replacement on a non-Windows service',
+      () async {
+        final service = AgentUpdateService(
+          currentVersion: '1.0.0',
+          executablePath: '/tmp/sanad',
+          isSourceManaged: false,
+          operatingSystem: 'macos',
+          architecture: 'arm64',
+          replacementScheduler: (_) async => true,
+        );
+        final result = AgentUpdateResult(
+          status: AgentUpdateStatus.restartRequired,
+          currentVersion: '1.0.0',
+          availableVersion: '1.1.0',
+          stagedPath: '/tmp/sanad.staged',
+        );
+
+        expect(await service.scheduleWindowsReplacement(result), isFalse);
+      },
+    );
+
+    test(
+      'buildWindowsReplacementScript restores and starts the backup path',
+      () {
+        final script = AgentUpdateService.buildWindowsReplacementScript(
+          target: "C:\\path\\sanad.exe",
+          staged: "C:\\path\\sanad.1.1.0.staged",
+        );
+        expect(script, contains(r'$backup = "$target.rollback"'));
+        expect(script, contains(r'Set-Content -LiteralPath $readyMarker'));
+        expect(script, contains("Write-UpdateResult 'started'"));
+        expect(script, contains("Write-UpdateResult 'rollback_completed'"));
+        expect(script, contains(r'Remove-Item -LiteralPath $staged -Force'));
+        expect(script, contains(r'& $target service start'));
+        expect(r'& $target service start'.allMatches(script).length, 2);
+        expect(script, contains(r'Remove-Item -LiteralPath $staged -Force'));
+      },
     );
   });
 }

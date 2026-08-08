@@ -15,12 +15,16 @@ class LocalGatewayCredentialException implements Exception {
 /// The value is returned only as an HTTP header and must never be copied into
 /// URLs, process arguments, environment variables, preferences, or logs.
 class LocalGatewayCredentialProvider {
-  const LocalGatewayCredentialProvider({this.sanadHomePath});
+  const LocalGatewayCredentialProvider({
+    this.sanadHomePath,
+    this.environment,
+  });
 
   static const headerName = 'x-sanad-local-token';
   static const credentialFileName = '.local_token';
 
   final String? sanadHomePath;
+  final Map<String, String>? environment;
 
   Future<String> read() async {
     final home = _resolveSanadHome();
@@ -62,7 +66,10 @@ class LocalGatewayCredentialProvider {
     final configured = AppConfig.sanadHome.trim();
     if (configured.isNotEmpty) return configured;
 
-    final environment = Platform.environment;
+    final environment = this.environment ?? Platform.environment;
+    final runtimeHome = environment['SANAD_HOME']?.trim();
+    if (runtimeHome != null && runtimeHome.isNotEmpty) return runtimeHome;
+
     final userHome = environment['HOME']?.trim().isNotEmpty == true
         ? environment['HOME']!.trim()
         : environment['USERPROFILE']?.trim().isNotEmpty == true

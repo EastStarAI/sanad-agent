@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_release_contract/release_contract.dart';
 
 enum AgentBootstrapStatus {
@@ -32,15 +33,15 @@ class VerifiedAgentBootstrapInstaller {
     String? operatingSystem,
     String? architecture,
     PlatformArtifactVerifier? platformVerifier,
+    Uri? artifactMirrorUri,
   }) : _client = client ?? http.Client(),
-       manifestUri =
-           manifestUri ??
-           Uri.parse(
-             'https://github.com/EastStarAI/sanad-agent/releases/latest/download/release-manifest.json',
-           ),
+       manifestUri = manifestUri ?? Uri.parse(AppConfig.releaseManifestUrl),
        operatingSystem = operatingSystem ?? Platform.operatingSystem,
        architecture = architecture ?? _architecture(),
-       _platformVerifier = platformVerifier ?? verifyPlatformCodeSignature;
+       _platformVerifier = platformVerifier ?? verifyPlatformCodeSignature,
+       _artifactMirrorUri =
+           artifactMirrorUri ??
+           (AppConfig.releaseArtifactMirrorUrl.trim().isEmpty ? null : Uri.parse(AppConfig.releaseArtifactMirrorUrl));
 
   final String targetPath;
   final Uri manifestUri;
@@ -48,6 +49,7 @@ class VerifiedAgentBootstrapInstaller {
   final String architecture;
   final http.Client _client;
   final PlatformArtifactVerifier _platformVerifier;
+  final Uri? _artifactMirrorUri;
 
   Future<AgentBootstrapResult> install({
     required String targetVersion,
@@ -101,7 +103,8 @@ class VerifiedAgentBootstrapInstaller {
     final staged = File('$targetPath.bootstrap-staged');
     try {
       if (staged.existsSync()) await staged.delete();
-      final response = await _client.send(http.Request('GET', artifact.url));
+      final downloadUri = _artifactMirrorUri?.resolve(artifact.filename) ?? artifact.url;
+      final response = await _client.send(http.Request('GET', downloadUri));
       if (response.statusCode != HttpStatus.ok) {
         return AgentBootstrapResult(
           AgentBootstrapStatus.downloadFailed,
@@ -134,7 +137,7 @@ class VerifiedAgentBootstrapInstaller {
       if (target.existsSync()) await target.rename(backup.path);
       try {
         await staged.rename(target.path);
-        if (operatingSystem != 'windows') {
+        if (operatingSystem != 'windows' && !Platform.isWindows) {
           final chmod = await Process.run('chmod', ['700', target.path]);
           if (chmod.exitCode != 0) throw const FileSystemException('chmod');
         }

@@ -2,7 +2,7 @@
 title: "Task 67: Desktop Client–Agent Installation, Update, and Connection Lifecycle"
 description: "إغلاق دورة Windows وmacOS من اكتشاف تحديث الواجهة حتى تنزيل الوكيل والتحقق منه وتثبيته وتشغيله والاتصال به، مع مسار Linux يدوي محدود واختبارات منصة قبل النشر."
 status: "in_review"
-current_gate: "Task 67A / D Exit — Awaiting owner diff review before commit"
+current_gate: "Task 67B / Gate E complete — awaiting owner diff review before commit"
 priority: "critical"
 depends_on: "Public Windows release and update architecture"
 file_budget: 24
@@ -43,9 +43,9 @@ Sanad حتى `100%` ثم تعرض:
    واضح للدورة نفسها.
 8. رسالة الفشل الحالية تختزل كل أخطاء manifest/verification/filesystem/service/
    health/authentication في خطأ إنترنت مضلل.
-9. الواجهة تضبط Appcast ومدة WinSparkle، لكنها لا تطلب فحصاً مؤكداً عند startup؛
-   WinSparkle يعطّل الفحص التلقائي افتراضياً في أول تشغيل ما لم يُفعّل أو يُطلب
-   الفحص صراحة.
+9. إضافة interactive check صريحة عند startup سببت نافذة `up to date` عند كل
+   فتح. قرار المالك المثبت هو العودة إلى consent-based scheduled checks الأصلية،
+   مع manual interactive check منفصلة في Settings.
 10. التطبيق لا يملك listener لحدث `before-quit-for-update` الذي يصدره WinSparkle،
     فلا توجد handoff مثبتة تغلق الواجهة بأمان قبل تشغيل المثبت.
 11. مسار الإصدار يسمح بغياب Authenticode لـ`1.0.0` فقط؛ أي إصدار إصلاحي جديد
@@ -83,8 +83,10 @@ Sparkle لتحديث Client، وDeveloper ID/notarization للتحقق، وlaunc
 Agent، ثم authenticated health وWebSocket وإعادة الاتصال بعد تحديث Agent. لا
 تُنسخ PowerShell/WinSparkle/Scheduled Task semantics إلى macOS.
 
-لا يعني "آلياً" تثبيت Client الجديدة دون موافقة المستخدم؛ المطلوب فحص startup
-وعرض واجهة WinSparkle، ثم تنفيذ handoff الآمنة عند قبول المستخدم. تحديث الوكيل
+لا يعني "آلياً" تثبيت Client الجديدة دون موافقة المستخدم؛ Sparkle/WinSparkle
+تنفذ الفحص المجدول في الخلفية بعد موافقة المستخدم ولا تعرض نافذة إلا عند وجود
+تحديث. الفحص التفاعلي الصريح متاح من **Settings → General → Check for Updates**،
+ثم تنفذ handoff الآمنة عند قبول المستخدم. تحديث الوكيل
 المحلي بعد تشغيل Client الجديدة يجوز أن يكون تلقائياً لأنه مكوّن runtime تابع
 لنسخة الواجهة، مع حالة مرئية وrollback.
 
@@ -154,8 +156,11 @@ Agent، ثم authenticated health وWebSocket وإعادة الاتصال بعد
 
 ### 3.5 دورة تحديث Client
 
-- packaged Windows Client تطلب فحص update مرة واحدة في startup بطريقة لا تمنع
-  رسم التطبيق ولا تكرر dialogs.
+- packaged Windows/macOS Client تهيئ الفحص التلقائي المجدول الذي يملكه
+  Sparkle/WinSparkle ولا تستدعي interactive check عند startup؛ لا تظهر نافذة
+  `up to date` عند فتح التطبيق.
+- **Settings → General → Check for Updates** يطلب الفحص التفاعلي يدويًا، ويجوز
+  لهذا المسار الذي بدأه المستخدم عرض نتيجة عدم وجود تحديث.
 - Appcast Stable فقط هي المصدر الافتراضي؛ RC لا تظهر لمستخدم Stable.
 - WinSparkle DSA verification تبقى إلزامية.
 - عند `before-quit-for-update` تنفذ الواجهة shutdown handoff محدودة: flush لحالة
@@ -338,7 +343,10 @@ Windows adapters عندما يلزم التصميم، لكن لا تُغلق ن�
 
 ### C3. تحديث Client — المشترك وmacOS
 
-- [x] تنفيذ startup update check مرة واحدة دون حجب startup.
+- [x] تهيئة automatic scheduled checks دون استدعاء interactive check عند
+      startup، مع إظهار نافذة فقط عندما يكتشف Sparkle/WinSparkle تحديثًا.
+- [x] إتاحة manual interactive check من Settings على Windows/macOS مع إبقاء
+      مسار Linux اليدوي.
 - [x] منع RC feed من Stable Client.
 - [x] الحفاظ على Sparkle handoff الأصلية على macOS وإصلاحها فقط إذا أثبت Gate A
       فجوة فعلية.
@@ -400,10 +408,9 @@ Windows adapters عندما يلزم التصميم، لكن لا تُغلق ن�
 
 ### D4. Client self-update and Linux manual-update tests
 
-- [x] macOS startup ينفذ check واحدة فقط بعد feed initialization.
-- [x] shared/platform-adapter tests تثبت أن Windows startup سيطلب check واحدة؛
-      التحقق native الفعلي مؤجل لـ67B.
-- [x] source run لا يفحص packaged update.
+- [x] macOS/Windows startup تهيئ feed والجدولة دون interactive check.
+- [x] manual check على macOS/Windows تستدعي native interactive API مرة واحدة.
+- [x] source run لا يهيئ أو يفحص packaged update.
 - [x] Appcast failure لا يمنع startup.
 - [x] WinSparkle DSA/public key wiring يبقى موجوداً كعقد static على macOS/CI.
 - [x] Sparkle EdDSA/feed contract يبقى صالحاً على macOS.
@@ -485,16 +492,17 @@ development. تستخدم Windows 11 x64 workstation/VM نظيفة مع Defender
 
 ### E0. Windows Native Implementation and Focused Verification
 
-- [ ] التحقق أن checkout تطابق branch وcommit SHA المسلّمتين من 67A.
-- [ ] تدقيق diff ونتائج 67A قبل تعديل Windows adapters.
-- [ ] إكمال WinSparkle startup check و`before-quit-for-update` handoff.
-- [ ] إكمال NSIS upgrade behavior دون معالجة موضوع auto-launch المؤجل.
-- [ ] إكمال Scheduled Task install/start/status idempotently.
-- [ ] إكمال PowerShell detached replacement وعدم إيقاف daemon قبل نجاح الجدولة.
-- [ ] عند فشل الجديد: استعادة Agent القديمة وتشغيلها وإثبات health.
-- [ ] polling محدود للنسخة المطلوبة وWebSocket reconnect دون fixed two-second
+- [x] التحقق أن checkout تطابق branch وcommit SHA المسلّمتين من 67A.
+- [x] تدقيق diff ونتائج 67A قبل تعديل Windows adapters.
+- [x] إكمال WinSparkle scheduled background checks، manual Settings check،
+      و`before-quit-for-update` handoff دون startup dialog عند عدم وجود تحديث.
+- [x] إكمال NSIS upgrade behavior دون معالجة موضوع auto-launch المؤجل.
+- [x] إكمال Scheduled Task install/start/status idempotently.
+- [x] إكمال PowerShell detached replacement وعدم إيقاف daemon قبل نجاح الجدولة.
+- [x] عند فشل الجديد: استعادة Agent القديمة وتشغيلها وإثبات health.
+- [x] polling محدود للنسخة المطلوبة وWebSocket reconnect دون fixed two-second
       success assumption.
-- [ ] تشغيل analyzers والاختبارات المركزة على Windows وإصلاح أي platform failure.
+- [x] تشغيل analyzers والاختبارات المركزة على Windows وإصلاح أي platform failure.
 
 ### E1. ترقية مستخدم الإصدار الحالي
 
@@ -529,16 +537,57 @@ development. تستخدم Windows 11 x64 workstation/VM نظيفة مع Defender
 - network unavailable مع بقاء Client وAgent الحالية قابلتين للاستخدام.
 - تكرار المحاولة بعد عودة الشبكة.
 
+### نتيجة Gate E الجارية على Windows — 2026-08-08
+
+- أُغلق E0 برمجياً وعلى Windows 11 Pro x64 build 22621. صححت المراجعة
+  `before-quit-for-update` ليكون Windows-only مع flush واحدة، وأضافت NSIS
+  انتظار الإغلاق الآمن وfallback محصوراً بمسار التثبيت للنسخة العامة القديمة.
+- أثبتت Scheduled Task معزولة حفظ Sanad Home وservice instance، وإعدادات
+  restart، وعدم وجود execution limit. نجحت health المصادقة وWebSocket
+  `get_capabilities` قبل وبعد تحديث Agent.
+- نجح Agent `1.0.1` إلى `1.0.2`: لم تتوقف daemon قبل PowerShell acceptance
+  marker، ثم سجلت `started` وعادت health/socket بالنسخة المطلوبة دون staged
+  أو script متبقٍ.
+- نجح فشل start والrollback: artifact `1.0.3` صحيحة الحجم/hash لكنها غير قابلة
+  للتنفيذ، فاستُعيدت `1.0.2` وشُغلت وسُجل `rollback_completed`.
+- مرّت target mismatch، hash corruption، truncated-size download، network
+  unavailable مع بقاء runtime الحالية، ثم retry بعد عودة الشبكة.
+- نجحت NSIS `1.0.1` إلى `1.0.2` في profile معزولة: exact-path shutdown، إزالة
+  payload قديمة، Installed Apps metadata، والحفاظ على Sanad Home.
+- أثبتت المراجعة التفاعلية ظهور WinSparkle `1.0.1` → `1.0.2` والتحقق من DSA،
+  وإغلاق Client القديمة، وتشغيل NSIS، ثم SmartScreen بـ`Unknown publisher` دون
+  UAC وفق سياسة Windows غير الموقعة الحالية.
+- كشف startup النهائي سباقًا في إغلاق HTTP client قبل اكتمال قراءة health،
+  وعدم اتساق fallback إلى runtime `SANAD_HOME`، وبقاء unauthenticated Desktop
+  على Onboarding إذا أصبح Local Gateway ready بعد قرار المسار الأول. أضيفت
+  إصلاحات واختبارات Windows لهذه الحدود.
+- نجحت candidate النهائية `1.0.2+4`: لم يظهر dialog عند startup وهي up to date،
+  وظهر **Settings → General → Check for Updates** وعمل الفحص التفاعلي كما هو
+  متوقع. أظهر SmartScreen نص `Windows protected your PC` وسمح بالمتابعة عبر
+  **More info → Run anyway**؛ لم يظهر UAC.
+- نجح missing-Agent bootstrap من الواجهة إلى Agent `1.0.2` النهائية، ثم
+  authenticated health وWebSocket ووصلت Client إلى Add Provider. عند التشغيل
+  المباشر بعد التثبيت ظهرت console ثم صُغرت؛ قرر المالك تأجيل background
+  launcher الحتمي إلى مهمة Windows لاحقة وعدم توسيع نطاق الإصدار الحالي.
+- بعد reboot بدأت `SanadAgent-gate-e` من AtLogOn في الخلفية دون console ظاهرة،
+  وأثبتت health `1.0.2` وWebSocket `register_success`/`get_capabilities`، ثم فتحت
+  Client يدويًا واتصلت دون Run Local أو إعادة تنزيل مع بقاء Sanad Home.
+- نُظفت Client/Agent/task/registry/feed/temp الخاصة بـGate E بموافقة صريحة، ولم
+  تُمس `sanad-dev` أو User Sanad Home. أزيلت Scheduled Task قديمة باسم
+  `SanadAgent` بعد إثبات أنها residue منفصلة كانت تشغل User Agent على `58085`؛
+  لم يُحذف أي ملف من User Sanad Home.
+
 ### E Exit — إغلاق 67B والتوقف
 
-- [ ] تمر E0 وE1 وE2 وE3 على Windows 11 حقيقية/VM نظيفة.
-- [ ] Defender وSmartScreen لم يُعطلا.
-- [ ] لا يبقى partial task أو staged file غير مملوك أو Agent متوقفة.
-- [ ] الأدلة تسجل النسخ والنتائج دون tokens أو مسارات/بيانات شخصية غير لازمة.
-- [ ] تحديث `docs/qa_maintenance/windows_release_clean_machine.md` بنتيجة
+- [x] تمر E0 وE1 وE2 وE3 على Windows 11 حقيقية/VM نظيفة.
+- [x] Defender وSmartScreen لم يُعطلا.
+- [x] لا يبقى partial task أو staged file غير مملوك أو Agent متوقفة.
+- [x] الأدلة تسجل النسخ والنتائج دون tokens أو مسارات/بيانات شخصية غير لازمة.
+- [x] تحديث `docs/qa_maintenance/windows_release_clean_machine.md` بنتيجة
       candidate الجديدة دون تحريف دليل `1.0.0` التاريخي.
 - [ ] commit وpush نتائج 67B، وإثبات clean status وتقديم SHA ونتائج Windows.
-- [ ] **التوقف وطلب مراجعة المستخدم؛ لا تبدأ Gate F ولا تنشر تلقائياً.**
+      **مؤجلان بأمر المالك إلى ما بعد مراجعة الـdiff؛ هذه الجلسة لا تنفذهما.**
+- [x] **التوقف وطلب مراجعة المستخدم؛ لا تبدأ Gate F ولا تنشر تلقائياً.**
 
 ---
 

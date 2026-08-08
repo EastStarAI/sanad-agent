@@ -160,7 +160,7 @@ class _GeneralPageState extends State<GeneralPage> {
               selected: {mode},
               onSelectionChanged: (selection) => context.read<ThemeCubit>().updateTheme(selection.first),
             ),
-            if (AppPlatform.isLinux) ...[
+            if (AppPlatform.isDesktop) ...[
               const Divider(height: 40),
               Text(
                 'Updates',
@@ -169,8 +169,10 @@ class _GeneralPageState extends State<GeneralPage> {
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 6),
-              const Text(
-                'Linux updates are manual. Sanad only opens a newer official package after validating its release manifest.',
+              Text(
+                AppPlatform.isLinux
+                    ? 'Linux updates are manual. Sanad only opens a newer official package after validating its release manifest.'
+                    : 'Automatic update checks run in the background. Use this action to check the signed update feed now.',
               ),
               const SizedBox(height: 12),
               OutlinedButton.icon(

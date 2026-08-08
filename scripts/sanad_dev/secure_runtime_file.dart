@@ -63,12 +63,30 @@ Future<void> _replaceRuntimeFile(File source, File destination) async {
   }
   const script = r'''
 $ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class SanadAtomicMove {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern bool MoveFileExW(
+    string existingFile,
+    string newFile,
+    int flags
+  );
+}
+'@
 $source = $env:SANAD_ATOMIC_SOURCE
 $destination = $env:SANAD_ATOMIC_DESTINATION
-if ([IO.File]::Exists($destination)) {
-  [IO.File]::Replace($source, $destination, $null, $true)
-} else {
-  [IO.File]::Move($source, $destination)
+$replaceExisting = 0x1
+$writeThrough = 0x8
+if (-not [SanadAtomicMove]::MoveFileExW(
+  $source,
+  $destination,
+  ($replaceExisting -bor $writeThrough)
+)) {
+  throw [ComponentModel.Win32Exception]::new(
+    [Runtime.InteropServices.Marshal]::GetLastWin32Error()
+  )
 }
 ''';
   final result = await Process.run(
@@ -108,8 +126,7 @@ Future<Directory> _validatedDirectory(String sanadHome, String path) async {
   final root = Directory(sanadHome).absolute;
   final rootType = await FileSystemEntity.type(root.path, followLinks: false);
   if (rootType == FileSystemEntityType.link ||
-      (rootType != FileSystemEntityType.notFound &&
-          rootType != FileSystemEntityType.directory)) {
+      (rootType != FileSystemEntityType.notFound && rootType != FileSystemEntityType.directory)) {
     throw const SecureRuntimeFileException('unsafe_home');
   }
   if (rootType == FileSystemEntityType.notFound) {
@@ -126,16 +143,13 @@ Future<Directory> _validatedDirectory(String sanadHome, String path) async {
     throw const SecureRuntimeFileException('outside_home');
   }
   var current = canonicalRoot;
-  final relative = configuredRoot == absolute
-      ? ''
-      : absolute.substring(rootPrefix.length);
+  final relative = configuredRoot == absolute ? '' : absolute.substring(rootPrefix.length);
   if (relative.isNotEmpty) {
     for (final segment in relative.split(Platform.pathSeparator)) {
       current = '$current${Platform.pathSeparator}$segment';
       final type = await FileSystemEntity.type(current, followLinks: false);
       if (type == FileSystemEntityType.link ||
-          (type != FileSystemEntityType.notFound &&
-              type != FileSystemEntityType.directory)) {
+          (type != FileSystemEntityType.notFound && type != FileSystemEntityType.directory)) {
         throw const SecureRuntimeFileException('unsafe_directory');
       }
       final directory = Directory(current);
@@ -158,8 +172,7 @@ Future<File> _validatedFile(
   );
   final type = await FileSystemEntity.type(file.path, followLinks: false);
   if (type == FileSystemEntityType.link ||
-      (type != FileSystemEntityType.file &&
-          (!allowMissing || type != FileSystemEntityType.notFound))) {
+      (type != FileSystemEntityType.file && (!allowMissing || type != FileSystemEntityType.notFound))) {
     throw const SecureRuntimeFileException('unsafe_file');
   }
   return file;

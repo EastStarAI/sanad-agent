@@ -98,6 +98,69 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release/validate_win
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release/validate_windows_clean_machine.ps1 -Phase Capture -Checkpoint AfterUninstall
 ```
 
+## Task 67B isolated lifecycle candidate — 2026-08-08
+
+Task 67B uses a separate user Scheduled Task, loopback ports, Sanad Home, client
+install directory, Appcast, and artifact mirror. It does not modify the user's
+normal `SanadAgent` task or Sanad Home and does not publish a Release or Appcast.
+The private Client candidates are signed with the production-matching WinSparkle
+DSA key outside the repository; the key is never copied into evidence or source.
+
+Evidence completed on Windows 11 Pro x64 build 22621:
+
+- Defender Antivirus and real-time protection remained enabled. The public
+  `1.0.0` artifacts and private `1.0.1`/`1.0.2` candidates retained Mark of the
+  Web for protection checks, scanned with zero detected threats, and reported
+  Authenticode `NotSigned` as required by the temporary policy.
+- The isolated Scheduled Task is idempotent, runs a PowerShell child command
+  that preserves the isolated `SANAD_HOME` and service instance, has restart
+  settings and no execution time limit, and reached authenticated health on the
+  isolated port.
+- Authenticated health and a real WebSocket `get_capabilities` request passed
+  before and after an Agent `1.0.1` to `1.0.2` replacement.
+- Detached replacement did not stop the daemon until PowerShell wrote its
+  acceptance marker. The successful path recorded `started`, retained the
+  rollback executable, removed staged/script files, restarted the Scheduled
+  Task, and returned health version `1.0.2`.
+- A hash mismatch and a truncated-size artifact returned `checksum_failed`; a
+  target/manifest mismatch returned `target_mismatch`; all kept Agent `1.0.2`
+  healthy and left no staged artifact.
+- A verified but non-executable `1.0.3` candidate caused start failure, restored
+  Agent `1.0.2`, restarted it, recorded `rollback_completed`, and left the task
+  running without staged/script residue.
+- With the loopback release server unavailable, update returned
+  `network_failed` while the current Agent remained healthy. After the server
+  returned, retry was accepted and the deliberate bad candidate again rolled
+  back to healthy `1.0.2`.
+- An isolated NSIS `1.0.1` to `1.0.2` upgrade stopped only the executable at the
+  exact installation path, removed stale payload data, updated Installed Apps
+  metadata, and preserved the isolated Sanad Home.
+
+The final `1.0.2+4` cycle then passed missing-Agent download, verification,
+Scheduled Task registration, authenticated health, WebSocket commands, and
+arrival at Add Provider. Startup no longer invoked the interactive WinSparkle
+check, so the current version displayed no dialog; **Settings → General → Check
+for Updates** remained available and produced the expected user-initiated result.
+SmartScreen displayed `Windows protected your PC`; continuation used **More info
+→ Run anyway**, publisher identity remained untrusted, and no UAC appeared.
+
+Immediate first-install task startup surfaced an Agent console and then Windows
+minimized it despite the hidden PowerShell host. The owner accepted deferring a
+deterministic no-console Windows launcher rather than expanding this release
+gate. After a real reboot, the same isolated AtLogOn task started fully in the
+background without a visible console. Authenticated health reported `1.0.2`, a
+WebSocket probe received `register_success` and a `capabilities` response, and a
+manual Client launch connected without Run Local or another Agent download while
+preserving the isolated Home.
+
+After evidence capture, the exact test Client, Agent process tree, Scheduled
+Task, test-profile registry entries, feed, and temporary artifacts were removed
+with explicit approval. Ports `58167` and `58168` were no longer listening. The
+active `sanad-dev` runtime and User Sanad Home were not removed or rewritten. A
+separate stale `SanadAgent` Scheduled Task discovered after reboot was removed
+only after its action proved it targeted the ordinary user Home; the Home and its
+Agent binary remain untouched.
+
 ## Acceptance criteria
 
 The Windows target passes only when:

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:auto_updater/auto_updater.dart';
 import 'package:http/http.dart' as http;
@@ -32,10 +33,11 @@ abstract class NativeUpdateAdapter {
   Future<void> setFeedUrl(String url);
   Future<void> setScheduledCheckInterval(int seconds);
   Future<void> checkForUpdates();
+  void setQuitForUpdateHandler(void Function()? callback);
 }
 
 class AutoUpdaterAdapter implements NativeUpdateAdapter {
-  const AutoUpdaterAdapter();
+  _WinSparkleQuitListener? _quitListener;
 
   @override
   Future<void> setFeedUrl(String url) => autoUpdater.setFeedURL(url);
@@ -45,23 +47,55 @@ class AutoUpdaterAdapter implements NativeUpdateAdapter {
 
   @override
   Future<void> checkForUpdates() => autoUpdater.checkForUpdates();
+
+  @override
+  void setQuitForUpdateHandler(void Function()? callback) {
+    final previous = _quitListener;
+    if (previous != null) autoUpdater.removeListener(previous);
+    _quitListener = callback == null ? null : _WinSparkleQuitListener(callback);
+    final next = _quitListener;
+    if (next != null) autoUpdater.addListener(next);
+  }
+}
+
+class _WinSparkleQuitListener implements UpdaterListener {
+  _WinSparkleQuitListener(this.onBeforeQuitForUpdate);
+
+  final void Function() onBeforeQuitForUpdate;
+
+  @override
+  void onUpdaterBeforeQuitForUpdate(AppcastItem? appcastItem) => onBeforeQuitForUpdate();
+
+  @override
+  void onUpdaterCheckingForUpdate(Appcast? appcast) {}
+
+  @override
+  void onUpdaterError(UpdaterError? error) {}
+
+  @override
+  void onUpdaterUpdateAvailable(AppcastItem? appcastItem) {}
+
+  @override
+  void onUpdaterUpdateDownloaded(AppcastItem? appcastItem) {}
+
+  @override
+  void onUpdaterUpdateNotAvailable(UpdaterError? error) {}
 }
 
 class AutoUpdateService {
   static final _logger = Logger('AutoUpdateService');
-  static final AutoUpdateService _instance = AutoUpdateService._internal();
 
-  factory AutoUpdateService() => _instance;
-
-  AutoUpdateService._internal()
-    : _native = const AutoUpdaterAdapter(),
+  AutoUpdateService({FutureOr<void> Function()? beforeQuitForUpdate})
+    : _native = AutoUpdaterAdapter(),
       _client = http.Client(),
       _platform = AppPlatform.name,
       _sourceRun = AppConfig.isSourceRun,
       _currentVersion = _packageVersion,
       _launch = _launchExternal,
       _manifestUrl = _defaultManifestUrl,
-      _feedUrl = 'https://updates.sanad.eaststarai.com/appcast.xml';
+      _feedUrl = AppConfig.stableAppcastUrl,
+      _quit = exit,
+      _beforeQuitForUpdate = beforeQuitForUpdate;
 
   AutoUpdateService.test({
     required NativeUpdateAdapter native,
@@ -72,6 +106,8 @@ class AutoUpdateService {
     required Future<bool> Function(Uri uri) launch,
     Uri? manifestUri,
     String feedUrl = 'https://updates.sanad.eaststarai.com/appcast.xml',
+    void Function(int code) quit = exit,
+    FutureOr<void> Function()? beforeQuitForUpdate,
   }) : _native = native,
        _client = client,
        _platform = platform,
@@ -79,7 +115,9 @@ class AutoUpdateService {
        _currentVersion = currentVersion,
        _launch = launch,
        _manifestUrl = manifestUri ?? _defaultManifestUrl,
-       _feedUrl = feedUrl;
+       _feedUrl = feedUrl,
+       _quit = quit,
+       _beforeQuitForUpdate = beforeQuitForUpdate;
 
   final String _feedUrl;
   static final Uri _defaultManifestUrl = Uri.parse(
@@ -93,8 +131,10 @@ class AutoUpdateService {
   final Future<String> Function() _currentVersion;
   final Future<bool> Function(Uri uri) _launch;
   final Uri _manifestUrl;
+  final void Function(int code) _quit;
+  final FutureOr<void> Function()? _beforeQuitForUpdate;
   bool _isInitialized = false;
-  bool _startupCheckRequested = false;
+  bool _quitForUpdateStarted = false;
   Future<ClientUpdateResult>? _activeCheck;
 
   Future<void> initialize() async {
@@ -109,16 +149,12 @@ class AutoUpdateService {
       try {
         await _native.setFeedUrl(_feedUrl);
         await _native.setScheduledCheckInterval(86400);
-        if (!_startupCheckRequested) {
-          _startupCheckRequested = true;
-          unawaited(
-            _native.checkForUpdates().catchError((Object error) {
-              _logger.warning(
-                'Startup update check failed without blocking startup: $error',
-              );
-            }),
-          );
+        if (_platform == 'windows') {
+          _native.setQuitForUpdateHandler(quitForUpdate);
         }
+        // Sparkle/WinSparkle owns consent-based scheduled checks. Calling the
+        // interactive API here would show an "up to date" dialog on every
+        // launch; it is reserved for the explicit Settings action.
       } catch (error) {
         _logger.warning(
           'Update feed initialization failed without blocking startup: $error',
@@ -135,6 +171,40 @@ class AutoUpdateService {
     final check = _checkForUpdates();
     _activeCheck = check;
     return check.whenComplete(() => _activeCheck = null);
+  }
+
+  /// WinSparkle/Sparkle `before-quit-for-update` handoff.
+  ///
+  /// Runs a bounded client-owned flush, then exits so the native installer
+  /// can replace application files. A timeout still exits because the
+  /// installer is already waiting for the process to close.
+  void quitForUpdate() {
+    if (_quitForUpdateStarted) return;
+    _quitForUpdateStarted = true;
+    unawaited(_quitForUpdate());
+  }
+
+  Future<void> _quitForUpdate() async {
+    _logger.info('Updater requested application quit; closing the client.');
+    _native.setQuitForUpdateHandler(null);
+    try {
+      final beforeQuit = _beforeQuitForUpdate;
+      if (beforeQuit != null) {
+        await Future<void>.sync(beforeQuit).timeout(
+          const Duration(seconds: 5),
+        );
+      }
+    } catch (error) {
+      _logger.warning('Pre-update shutdown flush finished with errors: $error');
+    }
+    _quit(0);
+  }
+
+  void dispose() {
+    if (_platform == 'windows') {
+      _native.setQuitForUpdateHandler(null);
+    }
+    _client.close();
   }
 
   Future<ClientUpdateResult> _checkForUpdates() async {

@@ -109,8 +109,8 @@ if (-not (Test-Path $installerScript)) {
     exit 1
 }
 
-# Run NSIS compiler
-& $NSIS_PATH $installerScript
+# Run NSIS compiler with explicit metadata consumed by Installed Apps.
+& $NSIS_PATH "/DAPP_VERSION=$VersionName" $installerScript
 
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERROR: NSIS build failed" -ForegroundColor Red

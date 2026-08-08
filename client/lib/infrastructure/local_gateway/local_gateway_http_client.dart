@@ -21,7 +21,7 @@ class LocalGatewayHttpClient {
       ..headers.addAll(await credentialProvider.headers());
     final client = http.Client();
     try {
-      return http.Response.fromStream(await client.send(request));
+      return await http.Response.fromStream(await client.send(request));
     } finally {
       client.close();
     }

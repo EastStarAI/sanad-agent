@@ -57,7 +57,9 @@ The hosted macOS Client job restores the exported Sparkle Ed25519 key to a
 runner-temporary file and passes that file directly to Sparkle `sign_update`.
 It does not import the key through `generate_keys` or depend on interactive
 Keychain authorization. Local operator builds may continue using the existing
-Keychain when no explicit Sparkle key-file path is supplied.
+Keychain when no explicit Sparkle key-file path is supplied. Windows signing
+likewise passes `WINSPARKLE_PRIVATE_KEY_PATH` directly to `sign_update`; the DSA
+private key is never copied into the Client checkout.
 
 ## Protected environments
 

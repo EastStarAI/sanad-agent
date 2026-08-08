@@ -9,10 +9,12 @@ class SanadSettingsStore {
   const SanadSettingsStore({
     this.homeDirectoryPath,
     this.sanadHomePath,
+    this.environment,
   });
 
   final String? homeDirectoryPath;
   final String? sanadHomePath;
+  final Map<String, String>? environment;
 
   Future<List<McpServerConfig>> readUserMcpServers() async {
     final settings = await readUserMcpConfigDocument();
@@ -141,6 +143,14 @@ class SanadSettingsStore {
     if (AppConfig.sanadHome.trim().isNotEmpty) {
       return AppConfig.sanadHome.trim();
     }
+    final explicitHomeDirectory = homeDirectoryPath?.trim();
+    if (explicitHomeDirectory != null && explicitHomeDirectory.isNotEmpty) {
+      return '$explicitHomeDirectory${Platform.pathSeparator}.sanad';
+    }
+    final runtimeHome = (environment ?? Platform.environment)['SANAD_HOME']?.trim();
+    if (runtimeHome != null && runtimeHome.isNotEmpty) {
+      return runtimeHome;
+    }
     return '${_resolveHomeDirectory()}${Platform.pathSeparator}.sanad';
   }
 
@@ -150,7 +160,7 @@ class SanadSettingsStore {
       return explicitPath;
     }
 
-    final environment = Platform.environment;
+    final environment = this.environment ?? Platform.environment;
     final home = environment['HOME']?.trim();
     if (home != null && home.isNotEmpty) {
       return home;

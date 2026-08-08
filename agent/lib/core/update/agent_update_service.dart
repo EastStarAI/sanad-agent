@@ -1,10 +1,18 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 import 'package:sanad_release_contract/release_contract.dart';
+
+const _defaultReleaseManifestUrl = String.fromEnvironment(
+  'SANAD_RELEASE_MANIFEST_URL',
+  defaultValue:
+      'https://github.com/EastStarAI/sanad-agent/releases/latest/download/release-manifest.json',
+);
+const _defaultReleaseArtifactMirrorUrl = String.fromEnvironment(
+  'SANAD_RELEASE_ARTIFACT_MIRROR_URL',
+);
 
 enum AgentUpdateStatus {
   upToDate('up_to_date'),
@@ -87,15 +95,19 @@ class AgentUpdateService {
     String? operatingSystem,
     String? architecture,
     PlatformArtifactVerifier? platformVerifier,
+    Future<bool> Function(String script)? replacementScheduler,
+    Uri? artifactMirrorUri,
   }) : _client = client ?? http.Client(),
-       manifestUri =
-           manifestUri ??
-           Uri.parse(
-             'https://github.com/EastStarAI/sanad-agent/releases/latest/download/release-manifest.json',
-           ),
+       manifestUri = manifestUri ?? Uri.parse(_defaultReleaseManifestUrl),
        operatingSystem = operatingSystem ?? Platform.operatingSystem,
        architecture = architecture ?? _detectArchitecture(),
-       _platformVerifier = platformVerifier ?? verifyPlatformCodeSignature;
+       _platformVerifier = platformVerifier ?? verifyPlatformCodeSignature,
+       _replacementScheduler = replacementScheduler,
+       _artifactMirrorUri =
+           artifactMirrorUri ??
+           (_defaultReleaseArtifactMirrorUrl.trim().isEmpty
+               ? null
+               : Uri.parse(_defaultReleaseArtifactMirrorUrl));
 
   final String currentVersion;
   final String executablePath;
@@ -105,6 +117,8 @@ class AgentUpdateService {
   final String architecture;
   final http.Client _client;
   final PlatformArtifactVerifier _platformVerifier;
+  final Future<bool> Function(String script)? _replacementScheduler;
+  final Uri? _artifactMirrorUri;
 
   Future<AgentUpdateResult> check({String? targetVersion}) async {
     if (isSourceManaged) return _sourceManaged();
@@ -184,7 +198,9 @@ class AgentUpdateService {
       final staged = File('$executablePath.${manifest.version}.staged');
       stagedFile = staged;
       if (staged.existsSync()) await staged.delete();
-      final response = await _client.send(http.Request('GET', artifact.url));
+      final downloadUri =
+          _artifactMirrorUri?.resolve(artifact.filename) ?? artifact.url;
+      final response = await _client.send(http.Request('GET', downloadUri));
       if (response.statusCode != HttpStatus.ok) {
         throw HttpException(
           'Artifact download failed with HTTP ${response.statusCode}.',
@@ -235,9 +251,13 @@ class AgentUpdateService {
       if (executable.existsSync()) await executable.rename(backup.path);
       try {
         await staged.rename(executable.path);
-        final chmod = await Process.run('chmod', ['700', executable.path]);
-        if (chmod.exitCode != 0) {
-          throw const FileSystemException('Unable to mark update executable.');
+        if (!Platform.isWindows) {
+          final chmod = await Process.run('chmod', ['700', executable.path]);
+          if (chmod.exitCode != 0) {
+            throw const FileSystemException(
+              'Unable to mark update executable.',
+            );
+          }
         }
       } catch (error) {
         if (executable.existsSync()) await executable.delete();
@@ -258,6 +278,10 @@ class AgentUpdateService {
     } on FormatException catch (error) {
       return _error(AgentUpdateStatus.manifestInvalid, error.message);
     } on HttpException catch (error) {
+      return _error(AgentUpdateStatus.networkFailed, error.message);
+    } on http.ClientException catch (error) {
+      return _error(AgentUpdateStatus.networkFailed, error.message);
+    } on SocketException catch (error) {
       return _error(AgentUpdateStatus.networkFailed, error.message);
     } catch (error) {
       return _error(AgentUpdateStatus.failed, 'Update failed: $error');
@@ -340,13 +364,117 @@ class AgentUpdateService {
     if (stagedPath == null || operatingSystem != 'windows') return false;
     final escapedExecutable = executablePath.replaceAll("'", "''");
     final escapedStaged = stagedPath.replaceAll("'", "''");
-    final script =
-        r'''
+    final script = buildWindowsReplacementScript(
+      target: escapedExecutable,
+      staged: escapedStaged,
+    );
+    final scheduler = _replacementScheduler;
+    if (scheduler != null) {
+      final accepted = await scheduler(script);
+      if (!accepted) await _deleteIfPresent(File(stagedPath));
+      return accepted;
+    }
+    final readyMarker = File('$stagedPath.replacement-ready');
+    final scriptFile = File('$stagedPath.replace.ps1');
+    await _deleteIfPresent(readyMarker);
+    await scriptFile.writeAsString(script, flush: true);
+    try {
+      await Process.start(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          scriptFile.path,
+        ],
+        mode: ProcessStartMode.normal,
+        runInShell: false,
+      );
+      for (var attempt = 0; attempt < 40; attempt++) {
+        if (await readyMarker.exists()) {
+          await _deleteIfPresent(readyMarker);
+          return true;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+      await _writeWindowsUpdateResult(
+        status: 'schedule_failed',
+        message:
+            'PowerShell did not acknowledge the replacement schedule within 10 seconds.',
+      );
+    } catch (error) {
+      await _writeWindowsUpdateResult(
+        status: 'schedule_failed',
+        message: 'PowerShell spawn failed: $error',
+      );
+    }
+    await _deleteIfPresent(readyMarker);
+    await _deleteIfPresent(scriptFile);
+    await _deleteIfPresent(File(stagedPath));
+    return false;
+  }
+
+  Future<void> _writeWindowsUpdateResult({
+    required String status,
+    required String message,
+  }) async {
+    final safeMessage = message.isEmpty
+        ? 'PowerShell exited before accepting the replacement schedule.'
+        : message.substring(0, message.length.clamp(0, 1000));
+    try {
+      await File('$executablePath.update-result.json').writeAsString(
+        jsonEncode({
+          'status': status,
+          'message': safeMessage,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }),
+        flush: true,
+      );
+    } on FileSystemException {
+      // The typed HTTP result remains authoritative if diagnostics cannot write.
+    }
+  }
+
+  static Future<void> _deleteIfPresent(File file) async {
+    try {
+      if (await file.exists()) await file.delete();
+    } on FileSystemException {
+      // Cleanup is best effort; the running executable remains untouched.
+    }
+  }
+
+  /// Detached Windows replacement script. `target` and `staged` must already
+  /// be PowerShell single-quote escaped. On start failure the previous
+  /// executable is restored AND started before the script exits, so the
+  /// machine never ends up without a working agent after a failed update.
+  static String buildWindowsReplacementScript({
+    required String target,
+    required String staged,
+  }) =>
+      r'''
 $ErrorActionPreference = 'Stop'
 $target = '__TARGET__'
 $staged = '__STAGED__'
 $backup = "$target.rollback"
-$deadline = (Get-Date).AddSeconds(60)
+$readyMarker = "$staged.replacement-ready"
+$resultPath = "$target.update-result.json"
+$scriptPath = $PSCommandPath
+function Exit-Replacement([int]$code) {
+  if (Test-Path $scriptPath) { Remove-Item -LiteralPath $scriptPath -Force }
+  exit $code
+}
+function Write-UpdateResult([string]$status, [string]$message) {
+  @{
+    status = $status
+    message = $message
+    updated_at = (Get-Date).ToUniversalTime().ToString('o')
+  } | ConvertTo-Json -Compress | Set-Content -LiteralPath $resultPath -Encoding UTF8
+}
+if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath -Force }
+Set-Content -LiteralPath $readyMarker -Value 'accepted' -Encoding ASCII
+$deadline = (Get-Date).AddSeconds(120)
 $ready = $false
 while ((Get-Date) -lt $deadline) {
   try {
@@ -358,44 +486,36 @@ while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 500
   }
 }
-if (-not $ready) { exit 1 }
+if (-not $ready) {
+  Write-UpdateResult 'replacement_failed' 'The running executable did not unlock before the replacement deadline.'
+  if (Test-Path $staged) { Remove-Item -LiteralPath $staged -Force }
+  Exit-Replacement 1
+}
 try {
   Move-Item -LiteralPath $staged -Destination $target -Force
-  & $target service start
+  & $target service start | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Service restart failed.' }
-  exit 0
+  Write-UpdateResult 'started' 'The replacement was installed and its Scheduled Task was started.'
+  Exit-Replacement 0
 } catch {
   if (Test-Path $target) { Remove-Item -LiteralPath $target -Force }
+  $rollbackStarted = $false
   if (Test-Path $backup) {
     Move-Item -LiteralPath $backup -Destination $target -Force
-    & $target service start
+    & $target service start | Out-Null
+    $rollbackStarted = $LASTEXITCODE -eq 0
   }
-  exit 1
+  if (Test-Path $staged) { Remove-Item -LiteralPath $staged -Force }
+  if ($rollbackStarted) {
+    Write-UpdateResult 'rollback_completed' 'The previous executable was restored and its Scheduled Task was started.'
+  } else {
+    Write-UpdateResult 'rollback_start_failed' 'The previous executable could not be restarted after rollback.'
+  }
+  Exit-Replacement 1
 }
 '''
-            .replaceFirst('__TARGET__', escapedExecutable)
-            .replaceFirst('__STAGED__', escapedStaged);
-    final bytes = BytesBuilder(copy: false);
-    for (final codeUnit in script.codeUnits) {
-      bytes.add([codeUnit & 0xff, codeUnit >> 8]);
-    }
-    try {
-      await Process.start(
-        'powershell.exe',
-        [
-          '-NoProfile',
-          '-NonInteractive',
-          '-EncodedCommand',
-          base64Encode(bytes.takeBytes()),
-        ],
-        mode: ProcessStartMode.detached,
-        runInShell: false,
-      );
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
+          .replaceFirst('__TARGET__', target)
+          .replaceFirst('__STAGED__', staged);
 
   Future<ReleaseManifest> _fetchManifest() async {
     final response = await _client.get(
