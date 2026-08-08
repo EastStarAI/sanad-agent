@@ -101,9 +101,23 @@ result into the original tool call:
 - `failed` means replacement did not begin or the safe drain was rejected;
 - `recovery_failed` means neither target nor previous group was verified.
 
-The switch mutation is never replayed. A crash after terminal persistence reads
-the already completed tool result. `status` keeps the outcome as `Last source
-switch` diagnostics, but the requester does not need a second command.
+The switch mutation is never replayed. Checkpoint restoration returns every
+requester-bound deferred tool-call id to the runner before trimming history. The
+runner preserves that call's complete durable assistant batch, resolves its
+launcher manifest through the tool coordinator, and only then continues the
+model loop. This prevents a second model-generated `switch` while the target
+Agent is healthy but its Clients are still starting. A crash after terminal
+persistence reads the already completed tool result. `status` keeps the outcome
+as `Last source switch` diagnostics, but the requester does not need a second
+command.
+
+Before replacement starts, the launcher waits for every previous managed Client
+process and retained VM-service endpoint to disappear. Target or rollback
+readiness then requires exactly one discovered Client per reserved VM port whose
+workspace source marker, launcher id, and runtime nonce match the expected
+group. A stale previous-source Client can neither satisfy readiness nor
+supply a PID to the rewritten launcher lease; terminal `complete` or
+`rolled_back` is persisted only after this exact identity set is available.
 
 ## Resumable development shutdown
 

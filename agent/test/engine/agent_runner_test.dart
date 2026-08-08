@@ -35,6 +35,7 @@ import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_state_rejected_exception.dart';
+import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
 
 class MockAdapter implements LLMAdapter {
   final List<AgentResponse> responses;
@@ -3729,6 +3730,119 @@ void main() {
             blockedItem.continuationMetadata['resume_failure_reason'],
             contains('not idempotent'),
           );
+        },
+      );
+
+      test(
+        'resume resolves deferred tool batch without replaying the tool call',
+        () async {
+          final session = sessionManager.createSession('gpt-4o');
+          sessionManager.saveSessionHistory(session.sessionId, [
+            Message(role: MessageRole.user, content: 'switch source'),
+            Message(
+              role: MessageRole.assistant,
+              toolCalls: [
+                ToolCall(
+                  id: 'call-deferred-switch',
+                  name: 'shell_execute',
+                  arguments: const {'command': 'sanad-dev switch'},
+                ),
+              ],
+            ),
+          ]);
+
+          final stateDb = AgentStateDatabase.inMemory();
+          final repo = PersistedRuntimeStateRepository(stateDb.db);
+          GetIt.I.registerSingleton<PersistedRuntimeStateRepository>(repo);
+          addTearDown(() {
+            GetIt.I.unregister<PersistedRuntimeStateRepository>();
+            stateDb.dispose();
+          });
+          stateDb.db.execute(
+            "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('${session.sessionId}', 'gpt-4o', '2026-08-09', '2026-08-09')",
+          );
+          repo.insertWorkItem(
+            SessionWorkItem(
+              workItemId: 'w-deferred-switch',
+              sessionId: session.sessionId,
+              requestId: 'req-deferred-switch',
+              sequence: 1,
+              state: SessionWorkState.resuming,
+              attempt: 0,
+              continuationMetadata: {
+                'checkpoint_kind': 'initial_model_request',
+                'resume_history_length': 1,
+                'currently_executing_tools': ['call-deferred-switch'],
+                'completed_tool_results': <String, dynamic>{},
+                'tool_replay_safety': {'call-deferred-switch': false},
+                'deferred_tool_results': {
+                  'call-deferred-switch': {
+                    'kind': 'sanad_dev_switch',
+                    'transaction_id': 'switch-1',
+                    'manifest_path':
+                        '${Directory.systemTemp.path}/home/dev/runtime-switch-58085.json',
+                    'requester_session_id': session.sessionId,
+                    'requester_tool_call_id': 'call-deferred-switch',
+                  },
+                },
+              },
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+          );
+          var manifestReads = 0;
+          final adapter = MockAdapter([
+            AgentResponse(
+              message: Message(
+                role: MessageRole.assistant,
+                content: 'continued after switch',
+              ),
+            ),
+          ]);
+          final home = '${Directory.systemTemp.path}/home';
+          final runner = AgentRunner(
+            adapter,
+            registry,
+            sessionManager,
+            existingSessionId: session.sessionId,
+            deferredToolResultResolver: DeferredToolResultResolver(
+              environment: {'SANAD_HOME': home},
+              readManifest: (_) async {
+                manifestReads++;
+                return '{'
+                    '"id":"switch-1",'
+                    '"requester_session_id":"${session.sessionId}",'
+                    '"requester_tool_call_id":"call-deferred-switch",'
+                    '"target_worktree_name":"target",'
+                    '"status":"complete"}';
+              },
+            ),
+          );
+
+          final chunks = await runner.resumeStream().toList();
+
+          expect(chunks.join(), 'continued after switch');
+          expect(manifestReads, 1);
+          expect(
+            runner.history
+                .where(
+                  (message) =>
+                      message.role == MessageRole.assistant &&
+                      message.toolCalls?.single.id == 'call-deferred-switch',
+                )
+                .length,
+            1,
+          );
+          final toolMessages = runner.history.where(
+            (message) => message.toolCallId == 'call-deferred-switch',
+          );
+          expect(toolMessages, hasLength(1));
+          expect(toolMessages.single.content, contains('Switch complete'));
+          final metadata = repo
+              .findWorkItem('w-deferred-switch')!
+              .continuationMetadata;
+          expect(metadata['deferred_tool_results'], isNull);
+          expect(metadata['currently_executing_tools'], isNull);
         },
       );
 
