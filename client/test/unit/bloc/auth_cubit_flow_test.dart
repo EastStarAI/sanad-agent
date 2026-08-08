@@ -34,6 +34,19 @@ void main() {
 
     await cubit.close();
   });
+
+  test('terminal session invalidation updates presentation without a second logout', () async {
+    final repository = _FakeAuthRepository();
+    final cubit = AuthCubit(authRepository: repository);
+
+    await cubit.login();
+    cubit.invalidateRejectedSession();
+
+    expect(cubit.state, isA<AuthUnauthenticated>());
+    expect(repository.loggedOut, isFalse);
+
+    await cubit.close();
+  });
 }
 
 class _FakeAuthRepository implements IAuthRepository {

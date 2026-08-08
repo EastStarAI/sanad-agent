@@ -1,4 +1,6 @@
+import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
+import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dart';
 import 'package:sanad_client/infrastructure/local_tools/sanad_settings_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -28,6 +30,25 @@ class MockDio extends Fake implements Dio {
   final interceptors = Interceptors();
 }
 
+class StubPortalAuthClient extends PortalAuthClient {
+  PortalAuthRefresh? response;
+  Object? error;
+  int refreshCalls = 0;
+
+  StubPortalAuthClient() : super(dio: MockDio());
+
+  @override
+  Future<PortalAuthRefresh> refresh({required String refreshToken}) async {
+    refreshCalls += 1;
+    final failure = error;
+    if (failure != null) throw failure;
+    return response!;
+  }
+
+  @override
+  Future<void> logout({String? accessToken, String? refreshToken}) async {}
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -39,7 +60,15 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     prefs = await SharedPreferences.getInstance();
     mockStore = MockSanadSettingsStore();
-    authService = AuthService(dio: MockDio(), prefs: prefs, settingsStore: mockStore);
+    authService = AuthService(
+      dio: MockDio(),
+      prefs: prefs,
+      settingsStore: mockStore,
+    );
+  });
+
+  tearDown(() {
+    authService.dispose();
   });
 
   group('AuthService SSoT Logic', () {
@@ -56,19 +85,40 @@ void main() {
       expect(authService.hardwareId, equals('file_device'));
     });
 
-    test('init uses the canonical desktop hardware id when auth is restored from preferences', () async {
-      await prefs.setString('backend_access_token', 'prefs_token');
-      await prefs.setString('backend_refresh_token', 'prefs_refresh');
-      await prefs.setString('hardware_id', 'stale_prefs_device');
+    test('atomic auth session value overrides legacy credential mirrors', () async {
+      await prefs.setString(
+        'backend_auth_session_v1',
+        '{"access_token":"atomic-access","refresh_token":"atomic-refresh"}',
+      );
+      await prefs.setString('backend_access_token', 'legacy-access');
+      await prefs.setString('backend_refresh_token', 'legacy-refresh');
 
-      await authService.init(fallbackDeviceId: 'canonical_device');
+      await authService.init(fallbackDeviceId: 'device-1');
 
-      expect(authService.accessToken, equals('prefs_token'));
-      expect(authService.hardwareId, equals('canonical_device'));
-
-      expect(mockStore.authDocument['access_token'], equals('prefs_token'));
-      expect(mockStore.authDocument['hardware_id'], equals('canonical_device'));
+      expect(authService.accessToken, 'atomic-access');
+      expect(mockStore.authDocument['access_token'], 'atomic-access');
+      expect(mockStore.authDocument['refresh_token'], 'atomic-refresh');
     });
+
+    test(
+      'init uses the canonical desktop hardware id when auth is restored from preferences',
+      () async {
+        await prefs.setString('backend_access_token', 'prefs_token');
+        await prefs.setString('backend_refresh_token', 'prefs_refresh');
+        await prefs.setString('hardware_id', 'stale_prefs_device');
+
+        await authService.init(fallbackDeviceId: 'canonical_device');
+
+        expect(authService.accessToken, equals('prefs_token'));
+        expect(authService.hardwareId, equals('canonical_device'));
+
+        expect(mockStore.authDocument['access_token'], equals('prefs_token'));
+        expect(
+          mockStore.authDocument['hardware_id'],
+          equals('canonical_device'),
+        );
+      },
+    );
 
     test('login updates both auth.json and SharedPreferences', () async {
       // Note: testing login might require mocking the profile request if it triggers it.
@@ -92,5 +142,111 @@ void main() {
       expect(prefs.getString('backend_access_token'), isNull);
       expect(prefs.getString('backend_refresh_token'), isNull);
     });
+
+    test(
+      'persists a rotated credential pair after successful refresh',
+      () async {
+        final portal = StubPortalAuthClient()
+          ..response = const PortalAuthRefresh(
+            accessToken: 'rotated-access',
+            refreshToken: 'rotated-refresh',
+            tokenType: 'bearer',
+          );
+        authService.dispose();
+        authService = AuthService(
+          dio: MockDio(),
+          prefs: prefs,
+          settingsStore: mockStore,
+          portalAuth: portal,
+        );
+        mockStore.authDocument = {
+          'access_token': 'old-access',
+          'refresh_token': 'old-refresh',
+          'hardware_id': 'device-1',
+        };
+        await authService.init();
+
+        final result = await authService.refreshAccessToken();
+
+        expect(result.outcome, AuthRefreshOutcome.success);
+        expect(result.accessToken, 'rotated-access');
+        expect(prefs.getString('backend_access_token'), 'rotated-access');
+        expect(prefs.getString('backend_refresh_token'), 'rotated-refresh');
+        expect(mockStore.authDocument['access_token'], 'rotated-access');
+        expect(mockStore.authDocument['refresh_token'], 'rotated-refresh');
+      },
+    );
+
+    test(
+      'classifies portal 401 as terminal rejection without clearing credentials',
+      () async {
+        final portal = StubPortalAuthClient()
+          ..error = DioException(
+            requestOptions: RequestOptions(path: '/auth/refresh'),
+            response: Response<void>(
+              requestOptions: RequestOptions(path: '/auth/refresh'),
+              statusCode: 401,
+            ),
+          );
+        authService.dispose();
+        authService = AuthService(
+          dio: MockDio(),
+          prefs: prefs,
+          settingsStore: mockStore,
+          portalAuth: portal,
+        );
+        mockStore.authDocument = {
+          'access_token': 'old-access',
+          'refresh_token': 'old-refresh',
+          'hardware_id': 'device-1',
+        };
+        await authService.init();
+
+        final result = await authService.refreshAccessToken();
+
+        expect(result.outcome, AuthRefreshOutcome.terminalRejected);
+        expect(prefs.getString('backend_refresh_token'), 'old-refresh');
+      },
+    );
+
+    test(
+      'classifies timeout and 503 as transient without clearing credentials',
+      () async {
+        for (final failure in <DioException>[
+          DioException(
+            requestOptions: RequestOptions(path: '/auth/refresh'),
+            type: DioExceptionType.connectionTimeout,
+          ),
+          DioException(
+            requestOptions: RequestOptions(path: '/auth/refresh'),
+            response: Response<void>(
+              requestOptions: RequestOptions(path: '/auth/refresh'),
+              statusCode: 503,
+            ),
+          ),
+        ]) {
+          final portal = StubPortalAuthClient()..error = failure;
+          authService.dispose();
+          authService = AuthService(
+            dio: MockDio(),
+            prefs: prefs,
+            settingsStore: mockStore,
+            portalAuth: portal,
+          );
+          mockStore.authDocument = {
+            'access_token': 'old-access',
+            'refresh_token': 'old-refresh',
+            'hardware_id': 'device-1',
+          };
+          await authService.init();
+
+          final result = await authService.refreshAccessToken();
+
+          expect(result.outcome, AuthRefreshOutcome.transientUnavailable);
+          expect(prefs.getString('backend_access_token'), 'old-access');
+          expect(prefs.getString('backend_refresh_token'), 'old-refresh');
+        }
+      },
+    );
   });
 }

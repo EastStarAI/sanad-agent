@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:dio/dio.dart';
 import 'package:sanad_client/utils/app_platform.dart';
@@ -10,6 +11,7 @@ import 'package:flutter/foundation.dart';
 import 'package:sanad_client/infrastructure/local_tools/sanad_settings_store.dart';
 import 'package:sanad_client/infrastructure/web_auth_popup_service_stub.dart'
     if (dart.library.html) 'package:sanad_client/infrastructure/web_auth_popup_service.dart';
+import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
 import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -30,6 +32,7 @@ class AuthLoginChallenge {
 
 class AuthService {
   static final _logger = Logger('AuthService');
+  static const _authSessionKey = 'backend_auth_session_v1';
   bool _isLoginCancelled = false;
   bool _isPolling = false;
   final Dio _dio;
@@ -38,7 +41,7 @@ class AuthService {
   final PortalAuthClient _portalAuth;
   final _accessTokenController = StreamController<String?>.broadcast();
   final _loginChallengeController = StreamController<AuthLoginChallenge?>.broadcast();
-  Future<bool>? _refreshFuture;
+  Future<AuthRefreshResult>? _refreshFuture;
 
   String? _backendAccessToken;
   String? _backendRefreshToken;
@@ -73,7 +76,7 @@ class AuthService {
              ..options.receiveTimeout = const Duration(seconds: 3)),
        _settingsStore = settingsStore ?? const SanadSettingsStore(),
        _prefs = prefs,
-       _portalAuth = portalAuth ?? PortalAuthClient(dio: dio) {
+       _portalAuth = portalAuth ?? PortalAuthClient() {
     _setupInterceptors();
   }
 
@@ -81,26 +84,83 @@ class AuthService {
     return _prefs ?? SharedPreferences.getInstance();
   }
 
+  (String?, String?) _readStoredAuthSession(SharedPreferences prefs) {
+    final encoded = prefs.getString(_authSessionKey);
+    if (encoded != null) {
+      try {
+        final decoded = jsonDecode(encoded);
+        if (decoded is Map) {
+          final accessToken = decoded['access_token']?.toString();
+          final refreshToken = decoded['refresh_token']?.toString();
+          if (accessToken?.isNotEmpty == true || refreshToken?.isNotEmpty == true) {
+            return (accessToken, refreshToken);
+          }
+        }
+      } on FormatException {
+        _logger.warning('Ignoring malformed persisted auth session.');
+      }
+    }
+    return (
+      prefs.getString('backend_access_token'),
+      prefs.getString('backend_refresh_token'),
+    );
+  }
+
+  Future<void> _persistAuthPair(
+    SharedPreferences prefs, {
+    required String accessToken,
+    required String? refreshToken,
+  }) async {
+    await prefs.setString(
+      _authSessionKey,
+      jsonEncode({
+        'access_token': accessToken,
+        'refresh_token': refreshToken,
+      }),
+    );
+    try {
+      await prefs.setString('backend_access_token', accessToken);
+      if (refreshToken == null || refreshToken.isEmpty) {
+        await prefs.remove('backend_refresh_token');
+      } else {
+        await prefs.setString('backend_refresh_token', refreshToken);
+      }
+    } catch (error) {
+      _logger.warning(
+        'Failed to update legacy auth mirrors: ${error.runtimeType}',
+      );
+    }
+  }
+
   void _setupInterceptors() {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onError: (DioException error, ErrorInterceptorHandler handler) async {
-          if (error.response?.statusCode == 401 && _backendRefreshToken != null) {
+          if (error.response?.statusCode == 401) {
+            if (_backendRefreshToken == null || _backendRefreshToken!.isEmpty) {
+              await logout();
+              return handler.next(error);
+            }
+            final alreadyRetried = error.requestOptions.extra['auth_refresh_retried'] == true;
+            if (alreadyRetried) {
+              await logout();
+              return handler.next(error);
+            }
+
             _logger.info('401 detected. Attempting to refresh token...');
-            try {
-              final refreshSuccess = await _refreshAccessToken();
-              if (refreshSuccess) {
-                final opts = error.requestOptions;
-                opts.headers['Authorization'] = 'Bearer $_backendAccessToken';
-                try {
-                  final loopedResponse = await _dio.fetch(opts);
-                  return handler.resolve(loopedResponse);
-                } catch (e) {
-                  return handler.next(error);
-                }
+            final refreshResult = await refreshAccessToken();
+            if (refreshResult.isSuccess) {
+              final opts = error.requestOptions;
+              opts.headers['Authorization'] = 'Bearer ${refreshResult.accessToken}';
+              opts.extra['auth_refresh_retried'] = true;
+              try {
+                final retriedResponse = await _dio.fetch(opts);
+                return handler.resolve(retriedResponse);
+              } catch (_) {
+                return handler.next(error);
               }
-            } catch (e) {
-              _logger.warning('Token refresh failed: $e');
+            }
+            if (refreshResult.isTerminal) {
               await logout();
             }
           }
@@ -142,11 +202,15 @@ class AuthService {
           _backendRefreshToken = refreshToken;
           _hardwareId = hardwareId;
 
-          if (token != null) await prefs.setString('backend_access_token', token);
+          if (token != null) {
+            await prefs.setString('backend_access_token', token);
+          }
           if (refreshToken != null) {
             await prefs.setString('backend_refresh_token', refreshToken);
           }
-          if (hardwareId != null) await prefs.setString('hardware_id', hardwareId);
+          if (hardwareId != null) {
+            await prefs.setString('hardware_id', hardwareId);
+          }
           await _syncAuthToFile();
 
           if (_backendAccessToken != null) {
@@ -156,12 +220,15 @@ class AuthService {
           return;
         }
       } catch (e) {
-        _logger.warning('Failed to load auth from file on desktop, using SharedPreferences: $e');
+        _logger.warning(
+          'Failed to load auth from file on desktop, using SharedPreferences: $e',
+        );
       }
     }
 
-    _backendAccessToken = prefs.getString('backend_access_token');
-    _backendRefreshToken = prefs.getString('backend_refresh_token');
+    final storedSession = _readStoredAuthSession(prefs);
+    _backendAccessToken = storedSession.$1;
+    _backendRefreshToken = storedSession.$2;
     _hardwareId = AppPlatform.isDesktop ? fallbackDeviceId : prefs.getString('hardware_id') ?? fallbackDeviceId;
 
     if (_backendAccessToken != null) {
@@ -178,8 +245,12 @@ class AuthService {
     try {
       final existing = await _settingsStore.readAuthDocument();
       final next = Map<String, dynamic>.from(existing);
-      if (_backendAccessToken != null) next['access_token'] = _backendAccessToken;
-      if (_backendRefreshToken != null) next['refresh_token'] = _backendRefreshToken;
+      if (_backendAccessToken != null) {
+        next['access_token'] = _backendAccessToken;
+      }
+      if (_backendRefreshToken != null) {
+        next['refresh_token'] = _backendRefreshToken;
+      }
       if (_hardwareId != null) next['hardware_id'] = _hardwareId;
       await _settingsStore.saveAuthDocument(next);
     } catch (e) {
@@ -192,7 +263,7 @@ class AuthService {
 
     final prefs = await _getPrefs();
     _backendAccessToken = accessToken;
-    _backendRefreshToken = prefs.getString('backend_refresh_token');
+    _backendRefreshToken = _readStoredAuthSession(prefs).$2;
     await fetchProfile();
     _emitAccessToken();
   }
@@ -202,7 +273,12 @@ class AuthService {
     final sessionId = _activeAuthSessionId;
     final pollingToken = _activePollingToken;
     if (sessionId != null && pollingToken != null) {
-      unawaited(_portalAuth.cancel(authSessionId: sessionId, pollingToken: pollingToken));
+      unawaited(
+        _portalAuth.cancel(
+          authSessionId: sessionId,
+          pollingToken: pollingToken,
+        ),
+      );
     }
     _setLoginChallenge(null);
     _logger.info('Login flow cancelled by user.');
@@ -273,7 +349,9 @@ class AuthService {
       final popupService = WebAuthPopupService.instance;
       final opened = popupService.openAuthPopup(start.authUrl);
       if (!opened) {
-        throw Exception('Popup blocker detected. Please allow popups for this site to log in.');
+        throw Exception(
+          'Popup blocker detected. Please allow popups for this site to log in.',
+        );
       }
       _logger.info('Popup authentication initiated');
     } else {
@@ -325,10 +403,11 @@ class AuthService {
         }
 
         final prefs = await _getPrefs();
-        await prefs.setString('backend_access_token', _backendAccessToken!);
-        if (_backendRefreshToken != null) {
-          await prefs.setString('backend_refresh_token', _backendRefreshToken!);
-        }
+        await _persistAuthPair(
+          prefs,
+          accessToken: _backendAccessToken!,
+          refreshToken: _backendRefreshToken,
+        );
         await _syncAuthToFile();
         await fetchProfile();
         _emitAccessToken();
@@ -353,7 +432,12 @@ class AuthService {
     final refreshToken = _backendRefreshToken;
     final accessToken = _backendAccessToken;
     if (refreshToken != null || accessToken != null) {
-      unawaited(_portalAuth.logout(accessToken: accessToken, refreshToken: refreshToken));
+      unawaited(
+        _portalAuth.logout(
+          accessToken: accessToken,
+          refreshToken: refreshToken,
+        ),
+      );
     }
 
     _backendAccessToken = null;
@@ -364,6 +448,7 @@ class AuthService {
     userId = null;
 
     final prefs = await _getPrefs();
+    await prefs.remove(_authSessionKey);
     await prefs.remove('backend_access_token');
     await prefs.remove('backend_refresh_token');
 
@@ -382,12 +467,7 @@ class AuthService {
     _emitAccessToken();
   }
 
-  Future<String?> refreshAccessToken() async {
-    final refreshSuccess = await _refreshAccessToken();
-    return refreshSuccess ? _backendAccessToken : null;
-  }
-
-  Future<bool> _refreshAccessToken() async {
+  Future<AuthRefreshResult> refreshAccessToken() async {
     if (_refreshFuture != null) {
       return _refreshFuture!;
     }
@@ -400,58 +480,77 @@ class AuthService {
     }
   }
 
-  Future<bool> _refreshAccessTokenInternal() async {
-    try {
-      if (AppPlatform.isDesktop) {
-        try {
-          final authDoc = await _settingsStore.readAuthDocument();
-          final fileAccessToken = authDoc['access_token'] as String?;
-          final fileRefreshToken = authDoc['refresh_token'] as String?;
-          if (fileAccessToken != null && fileAccessToken != _backendAccessToken) {
-            _logger.info('Detected updated access token in auth.json. Adopting it.');
-            _backendAccessToken = fileAccessToken;
-            if (fileRefreshToken != null && fileRefreshToken.isNotEmpty) {
-              _backendRefreshToken = fileRefreshToken;
-            }
-            final prefs = await _getPrefs();
-            await prefs.setString('backend_access_token', _backendAccessToken!);
-            if (_backendRefreshToken != null) {
-              await prefs.setString('backend_refresh_token', _backendRefreshToken!);
-            }
-            _emitAccessToken();
-            return true;
+  Future<AuthRefreshResult> _refreshAccessTokenInternal() async {
+    if (AppPlatform.isDesktop) {
+      try {
+        final authDoc = await _settingsStore.readAuthDocument();
+        final fileAccessToken = authDoc['access_token'] as String?;
+        final fileRefreshToken = authDoc['refresh_token'] as String?;
+        if (fileAccessToken != null && fileAccessToken != _backendAccessToken) {
+          _logger.info(
+            'Detected updated access token in auth.json. Adopting it.',
+          );
+          _backendAccessToken = fileAccessToken;
+          if (fileRefreshToken != null && fileRefreshToken.isNotEmpty) {
+            _backendRefreshToken = fileRefreshToken;
           }
-        } catch (e) {
-          _logger.warning('Failed to sync with auth.json before refresh: $e');
+          final prefs = await _getPrefs();
+          await prefs.setString('backend_access_token', _backendAccessToken!);
+          if (_backendRefreshToken != null) {
+            await prefs.setString(
+              'backend_refresh_token',
+              _backendRefreshToken!,
+            );
+          }
+          _emitAccessToken();
+          return AuthRefreshResult.success(_backendAccessToken!);
         }
+      } catch (error) {
+        _logger.warning(
+          'Failed to synchronize desktop auth before refresh: ${error.runtimeType}',
+        );
       }
+    }
 
-      if (_backendRefreshToken == null || _backendRefreshToken!.isEmpty) {
-        _logger.warning('No refresh token available.');
-        return false;
-      }
+    if (_backendRefreshToken == null || _backendRefreshToken!.isEmpty) {
+      _logger.warning('No refresh credential is available.');
+      return const AuthRefreshResult.terminalRejected();
+    }
 
+    try {
       _logger.info('Refreshing access token via portal...');
-      final result = await _portalAuth.refresh(refreshToken: _backendRefreshToken!);
-
-      _backendAccessToken = result.accessToken;
-      if (result.refreshToken != null && result.refreshToken!.isNotEmpty) {
-        _backendRefreshToken = result.refreshToken;
-      }
+      final result = await _portalAuth.refresh(
+        refreshToken: _backendRefreshToken!,
+      );
+      final nextRefreshToken = result.refreshToken?.isNotEmpty == true ? result.refreshToken! : _backendRefreshToken!;
 
       final prefs = await _getPrefs();
-      await prefs.setString('backend_access_token', _backendAccessToken!);
-      if (_backendRefreshToken != null) {
-        await prefs.setString('backend_refresh_token', _backendRefreshToken!);
-      }
+      await _persistAuthPair(
+        prefs,
+        accessToken: result.accessToken,
+        refreshToken: nextRefreshToken,
+      );
+      _backendAccessToken = result.accessToken;
+      _backendRefreshToken = nextRefreshToken;
 
       await _syncAuthToFile();
       _logger.info('Token refreshed successfully');
       _emitAccessToken();
-      return true;
-    } catch (e) {
-      _logger.warning('Failed to refresh token: $e');
-      return false;
+      return AuthRefreshResult.success(result.accessToken);
+    } on DioException catch (error) {
+      if (error.response?.statusCode == 401) {
+        _logger.info('Portal rejected the refresh credential.');
+        return const AuthRefreshResult.terminalRejected();
+      }
+      _logger.warning(
+        'Portal refresh temporarily unavailable type=${error.type.name} status=${error.response?.statusCode}',
+      );
+      return const AuthRefreshResult.transientUnavailable();
+    } catch (error) {
+      _logger.warning(
+        'Portal refresh temporarily unavailable type=${error.runtimeType}',
+      );
+      return const AuthRefreshResult.transientUnavailable();
     }
   }
 
@@ -462,9 +561,7 @@ class AuthService {
       final response = await _dio.get(
         '$backendUrl/api/user/credits',
         options: Options(
-          headers: {
-            'Authorization': 'Bearer $_backendAccessToken',
-          },
+          headers: {'Authorization': 'Bearer $_backendAccessToken'},
         ),
       );
       final data = response.data;
@@ -472,7 +569,9 @@ class AuthService {
       if (data != null) {
         userCredits = (data['remaining_credits'] as num).toDouble();
         totalCredits = (data['total_credits'] as num).toDouble();
-        _logger.info('Credits updated. Remaining: $userCredits, Total: $totalCredits');
+        _logger.info(
+          'Credits updated. Remaining: $userCredits, Total: $totalCredits',
+        );
       }
     } catch (e) {
       _logger.warning('Failed to fetch credits: $e');
@@ -486,9 +585,7 @@ class AuthService {
       final response = await _dio.get(
         '$backendUrl/api/user/profile',
         options: Options(
-          headers: {
-            'Authorization': 'Bearer $_backendAccessToken',
-          },
+          headers: {'Authorization': 'Bearer $_backendAccessToken'},
         ),
       );
       final data = response.data;
@@ -504,11 +601,8 @@ class AuthService {
         totalCredits = (data['credits']['total_credits'] as num).toDouble();
         _logger.info('Profile Loaded. Credits: $userCredits / $totalCredits');
       }
-    } catch (e) {
-      _logger.warning('Failed to fetch profile: $e');
-      if (e is DioException && e.response?.statusCode == 401) {
-        await logout();
-      }
+    } catch (error) {
+      _logger.warning('Failed to fetch profile: ${error.runtimeType}');
     }
   }
 

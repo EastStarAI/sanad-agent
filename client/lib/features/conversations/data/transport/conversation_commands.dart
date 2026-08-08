@@ -22,6 +22,7 @@ class ConversationCommands {
   final ConversationCommandGateway _gateway;
   final DeviceConversationStore _conversationStore;
   final DeviceEventMapper _mapper;
+  int _historyHydrationGeneration = 0;
 
   ConversationCommands({
     required ConversationCommandGateway gateway,
@@ -616,6 +617,7 @@ class ConversationCommands {
   }
 
   Future<List<CanonicalEvent>> loadSessionHistory(String sessionId) async {
+    final generation = ++_historyHydrationGeneration;
     _conversationStore.activateSession(sessionId);
 
     final requestId = generateConversationRequestId();
@@ -629,6 +631,10 @@ class ConversationCommands {
     );
 
     if (result != null) {
+      if (generation != _historyHydrationGeneration || _conversationStore.currentSessionId != sessionId) {
+        return List<CanonicalEvent>.from(_conversationStore.currentMessages);
+      }
+
       final payload = Map<String, dynamic>.from(result['payload'] as Map? ?? {});
       final messagesData = payload['messages'] as List? ?? [];
       final queuedMessagesData = payload['queued_messages'] as List? ?? [];
