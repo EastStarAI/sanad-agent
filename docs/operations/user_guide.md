@@ -18,17 +18,22 @@ install only the standalone Agent on the remote machine.
 
 ## Install Sanad Client
 
-Open the [latest Sanad Agent release](https://github.com/EastStarAI/sanad-agent/releases/latest)
-and choose the client package for your platform:
+Use the Production convenience link for your platform. Each link redirects to
+the matching public Stable Client artifact, so end users do not need to choose
+from the mixed Client, Agent, checksum, and update files on GitHub Releases.
 
-| Platform | Package |
+| Platform | Install or open |
 |---|---|
-| macOS | `sanad-client-<version>-macos-universal.dmg` |
-| Windows | `sanad-client-<version>-windows-x64.exe` |
-| Linux | `sanad-client-<version>-linux-x64.tar.gz` |
-| Android | `sanad-client-<version>-android-universal.apk` |
-| iOS | Internal TestFlight invitation only for the first release |
+| macOS | [Download Sanad Client for macOS](https://downloads.sanad.eaststarai.com/client/macos) |
+| Windows | [Download Sanad Client for Windows](https://downloads.sanad.eaststarai.com/client/windows) |
+| Linux | [Download Sanad Client for Linux](https://downloads.sanad.eaststarai.com/client/linux) |
+| Android | No stable public app yet; use the Web Client |
+| iOS | No stable public app yet; use the Web Client |
 | Web | [app.sanad.eaststarai.com](https://app.sanad.eaststarai.com) |
+
+These aliases exist only on the unprefixed Production downloads host. Their
+Stable destinations are verified against the release manifest before an edge
+configuration update; Development and Staging do not publish equivalent links.
 
 ### macOS
 

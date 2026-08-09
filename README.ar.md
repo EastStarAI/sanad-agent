@@ -74,19 +74,26 @@
 
 ### للمستخدمين
 
-#### ثبّت الواجهة والوكيل على هذا الجهاز
+#### نزّل واجهة Sanad Client
 
-1. نزّل Sanad Client لمنصة متاحة للتوزيع العام من
-   [أحدث إصدار](https://github.com/EastStarAI/sanad-agent/releases/latest).
-   يتوفر إصدار iOS الأول عبر Internal TestFlight فقط، وليس كتنزيل عام داخل
-   GitHub Releases.
-2. افتح واجهة سطح المكتب واختر **Run Locally**. ستنزّل الواجهة نسخة Sanad Agent
-   المطابقة وتتحقق منها وتثبتها وتشغلها على الجهاز نفسه.
-3. أضف مزودًا محليًا مثل Ollama أو LM Studio أو llama.cpp، أو أضف مزودًا
-   مستضافًا.
-4. اختر مساحة عمل وابدأ العمل.
+<p align="center">
+  <a href="https://downloads.sanad.eaststarai.com/client/macos"><img src="https://img.shields.io/badge/Download-macOS-2563EB?style=for-the-badge&logo=apple&logoColor=white" alt="تنزيل واجهة Sanad Client لنظام macOS"></a>
+  <a href="https://downloads.sanad.eaststarai.com/client/windows"><img src="https://img.shields.io/badge/Download-Windows-2563EB?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4OCA4OCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0wIDBoNDB2NDBIMHptNDggMGg0MHY0MEg0OHpNMCA0OGg0MHY0MEgwem00OCAwaDQwdjQwSDQ4eiIvPjwvc3ZnPg==" alt="تنزيل واجهة Sanad Client لنظام Windows"></a>
+  <a href="https://downloads.sanad.eaststarai.com/client/linux"><img src="https://img.shields.io/badge/Download-Linux-2563EB?style=for-the-badge&logo=linux&logoColor=white" alt="تنزيل واجهة Sanad Client لنظام Linux"></a>
+</p>
 
-لا يلزم حساب Sanad أو pairing token لهذا المسار المحلي.
+1. نزّل Sanad Client لمنصة سطح المكتب وافتحه.
+2. اختر **Run Locally**. تنزّل الواجهة نسخة Sanad Agent المطابقة وتتحقق منها
+   وتثبتها وتشغلها تلقائيًا؛ لا تحتاج إلى تنزيل Agent منفصلًا.
+3. أضف مزود نماذج محليًا أو مستضافًا، واختر مساحة عمل، وابدأ العمل.
+
+لا يلزم حساب Sanad أو pairing token لهذا المسار المحلي. على الهاتف، استخدم
+[Web Client](https://app.sanad.eaststarai.com) حتى تتوفر إصدارات Android وiOS
+المستقرة للعامة.
+
+> **بناء Windows غير موقّع:** إصدار Windows الحالي غير موقّع. نزّله فقط من
+> الزر الرسمي أعلاه واتبع إرشادات التحقق في
+> [دليل تثبيت واستخدام Sanad Agent](docs/operations/user_guide.md).
 
 #### صِل جهازًا آخر أو خادمًا بعيدًا
 

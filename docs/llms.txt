@@ -63,6 +63,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Develop Sanad Agent](docs/operations/developer_guide.md): Set up the public repository, run the Dart agent and Flutter client, test changes, and use isolated development runtimes.
 - [Release, Signing, and Deployment Architecture](docs/operations/release_and_signing.md): The stable release pipeline, protected signing boundaries, artifact publication, and live-release handoff.
 - [Install and Use Sanad Agent](docs/operations/user_guide.md): Install the Sanad client and agent, connect local or remote devices, configure providers, manage the service, and update Sanad.
+- [README Client Downloads](docs/plans/tasks/readme-client-downloads.md): Limited English/Arabic Quick Start refresh using the Production-only stable Client convenience links.
 - [خارطة متطلبات المنتج والأعمال](docs/product/MOC.md): فهرس وخارطة وثائق متطلبات المنتج، تجربة المستخدم، والأعمال الاستراتيجية للمشروع.
 - [Sanad Client Interface](docs/product/client_interface.md): Current user experience for devices, workspaces, conversations, providers, permissions, and active agent interactions.
 - [Conversation Navigation UX Spec](docs/product/conversation_navigation_ux_spec.md): UX specifications for conversation navigation destinations, history, deletion, and restart recovery.

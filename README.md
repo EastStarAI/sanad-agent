@@ -65,19 +65,26 @@ safely carry out the path you choose. Then let Sanad handle the rest.
 
 ### For users
 
-#### Install the Client and Agent on this computer
+#### Download Sanad Client
 
-1. Download Sanad Client for a publicly distributed platform from the
-   [latest release](https://github.com/EastStarAI/sanad-agent/releases/latest).
-   The first iOS release is available only through Internal TestFlight, not as
-   a public GitHub Release download.
-2. Launch the desktop Client and choose **Run Locally**. The Client downloads,
-   verifies, installs, and starts the matching Sanad Agent on this computer.
-3. Add a local provider such as Ollama, LM Studio, or llama.cpp—or add a hosted
-   provider.
-4. Select a workspace and start working.
+<p align="center">
+  <a href="https://downloads.sanad.eaststarai.com/client/macos"><img src="https://img.shields.io/badge/Download_for-macOS-2563EB?style=for-the-badge&logo=apple&logoColor=white" alt="Download Sanad Client for macOS"></a>
+  <a href="https://downloads.sanad.eaststarai.com/client/windows"><img src="https://img.shields.io/badge/Download_for-Windows-2563EB?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4OCA4OCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0wIDBoNDB2NDBIMHptNDggMGg0MHY0MEg0OHpNMCA0OGg0MHY0MEgwem00OCAwaDQwdjQwSDQ4eiIvPjwvc3ZnPg==" alt="Download Sanad Client for Windows"></a>
+  <a href="https://downloads.sanad.eaststarai.com/client/linux"><img src="https://img.shields.io/badge/Download_for-Linux-2563EB?style=for-the-badge&logo=linux&logoColor=white" alt="Download Sanad Client for Linux"></a>
+</p>
 
-A Sanad account and a pairing token are not required for this local-only path.
+1. Download and launch Sanad Client for your desktop platform.
+2. Choose **Run Locally**. The Client downloads, verifies, installs, and starts
+   the matching Sanad Agent automatically; you do not download Agent separately.
+3. Add a local or hosted model provider, select a workspace, and start working.
+
+A Sanad account and pairing token are not required for this local-only path.
+On mobile, use the [Web Client](https://app.sanad.eaststarai.com) until stable
+Android and iOS apps are publicly available.
+
+> **Unsigned Windows build:** The current Windows release is unsigned. Download it
+> only through the official button above and follow the verification guidance in
+> [Install and Use Sanad Agent](docs/operations/user_guide.md).
 
 #### Connect another computer or a server
 

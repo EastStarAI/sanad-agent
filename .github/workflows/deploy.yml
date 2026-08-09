@@ -92,15 +92,15 @@ jobs:
           set -euo pipefail
           tag="$RELEASE_TAG"
           expected_sha="$(git rev-parse HEAD)"
-          incoming="/srv/sanad/web/incoming-$tag-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          release="/srv/sanad/web/releases/$tag"
+          incoming="/opt/sanad-sites/assets/web/incoming-$tag-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          release="/opt/sanad-sites/assets/web/releases/$tag"
           if ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             "set -eu; test -s '$release/index.html'; test \"\$(cat '$release/sanad-public-sha.txt')\" = '$expected_sha'"; then
             echo "Reusing the existing immutable Production Web release $release."
             exit 0
           fi
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; test ! -e '$incoming'; test ! -e '$release'; mkdir -p '$incoming' /srv/sanad/web/releases"
+            "set -eu; test ! -e '$incoming'; test ! -e '$release'; mkdir -p '$incoming' /opt/sanad-sites/assets/web/releases"
           rsync -az --delete --delay-updates web/ \
             "$DEPLOY_USER@$DEPLOY_HOST:$incoming/"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
@@ -112,8 +112,8 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          release="/srv/sanad/web/releases/$RELEASE_TAG"
-          selector=/srv/sanad/web/current
+          release="/opt/sanad-sites/assets/web/releases/$RELEASE_TAG"
+          selector=/opt/sanad-sites/assets/web/current
           expected_sha="$(git rev-parse HEAD)"
           previous="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" "set -eu; readlink -f '$selector'")"
           test -n "$previous"
@@ -203,11 +203,11 @@ jobs:
         run: |
           tag="${{ inputs.release_tag }}"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "mkdir -p /srv/sanad/updates/releases/$tag"
+            "mkdir -p /opt/sanad-sites/assets/updates/releases/$tag"
           rsync -az download/appcast.xml \
-            "$DEPLOY_USER@$DEPLOY_HOST:/srv/sanad/updates/releases/$tag/appcast.xml"
+            "$DEPLOY_USER@$DEPLOY_HOST:/opt/sanad-sites/assets/updates/releases/$tag/appcast.xml"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; ln -sfn /srv/sanad/updates/releases/$tag /srv/sanad/updates/current"
+            "set -eu; ln -sfn /opt/sanad-sites/assets/updates/releases/$tag /opt/sanad-sites/assets/updates/current"
 
   installers:
     if: inputs.deploy_installers == true
@@ -233,8 +233,8 @@ jobs:
         run: |
           revision="$(git rev-parse HEAD)"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "mkdir -p /srv/sanad/install/releases/$revision"
+            "mkdir -p /opt/sanad-sites/assets/install/releases/$revision"
           rsync -az scripts/install.sh scripts/install.ps1 \
-            "$DEPLOY_USER@$DEPLOY_HOST:/srv/sanad/install/releases/$revision/"
+            "$DEPLOY_USER@$DEPLOY_HOST:/opt/sanad-sites/assets/install/releases/$revision/"
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; ln -sfn /srv/sanad/install/releases/$revision /srv/sanad/install/current"
+            "set -eu; ln -sfn /opt/sanad-sites/assets/install/releases/$revision /opt/sanad-sites/assets/install/current"

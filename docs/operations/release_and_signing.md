@@ -71,6 +71,7 @@ private key is never copied into the Client checkout.
 | `windows-update-signing` | WinSparkle DSA update signing only; it does not provide Authenticode publisher identity |
 | `android-signing` | Android APK/AAB release signing |
 | `release-publication` | Atomic publication of an already reviewed Draft RC or Stable Release |
+| `client-downloads-production` | Post-publication verification and restricted deployment of Production-only Stable Client redirects |
 | `web-production` | Atomic Web deployment |
 | `updates-production` | Atomic Appcast deployment |
 | `installers-production` | Publishing canonical installer sources |
@@ -115,7 +116,9 @@ It requires an exact public `main` commit, inventories existing `v1` tags and
 Releases before the gate, has no write permission, and never creates a candidate.
 Probe approval is not Release publication approval.
 
-The candidate workflow creates a private Draft and fails if the tag already owns any Draft or published Release. A separate least-privilege publication job can make that reviewed Draft public only after the required owner approval on `release-publication`. Rejected or cancelled approval leaves no partial public Release. Public release files use published checksums. The private Web handoff
+The candidate workflow creates a private Draft and fails if the tag already owns any Draft or published Release. A separate least-privilege publication job can make that reviewed Draft public only after the required owner approval on `release-publication`. Rejected or cancelled approval leaves no partial public Release. Public release files use published checksums. After an approved Stable publication, the protected Client-download job downloads the public manifest, checksum file, and three desktop Client artifacts; verifies canonical URLs, byte sizes, SHA-256 values, and GitHub attestations; generates a deterministic Nginx redirect include; and sends only that include to the server's restricted control command. RC publication never enters this path. The server remains a redirector rather than an artifact mirror and owns candidate validation, atomic activation, public regression verification, and automatic rollback.
+
+Production Web, Appcast, and installer releases use `/opt/sanad-sites/assets/web`, `/opt/sanad-sites/assets/updates`, and `/opt/sanad-sites/assets/install`; the obsolete `/srv/sanad/*` workflow roots are not valid deployment targets. The private Web handoff
 is downloaded from the explicitly selected successful release-workflow run and
 verified against its GitHub build attestation. Server deployment then writes a
 versioned directory and changes a `current` symlink only after the transfer
