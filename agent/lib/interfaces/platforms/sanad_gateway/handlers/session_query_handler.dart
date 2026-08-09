@@ -193,7 +193,9 @@ class SessionQueryHandler {
             message.metadata?['steer_original_content']?.toString() ??
             message.content ??
             '';
-        final isError = visibleContent.startsWith('Error:');
+        final isError =
+            message.metadata?['is_error'] == true ||
+            visibleContent.startsWith('Error:');
 
         historyMessages.add({
           'id': msgId,
