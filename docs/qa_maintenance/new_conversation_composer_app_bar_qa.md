@@ -5,6 +5,17 @@ description: "Focused Plan 32d scenarios for unified composition, device-scoped 
 
 # New Conversation, Composer, and App Bar QA
 
+## First-run defaults
+
+- With no saved thinking preference, New Conversation displays and sends
+  `balanced`; the first capability-list item must not implicitly become the
+  default.
+- A non-empty saved thinking preference is restored unchanged.
+- A provider-only or model-only restored preference is incomplete. A successful
+  authoritative readiness pair fills both selector values.
+- A complete saved provider/model pair remains unchanged unless an explicit
+  authoritative replacement flow owns the update.
+
 ## Scope
 
 This matrix validates the Plan 32d client surface without changing daemon authority. It covers the shared composer used before and after session creation, draft ownership transitions, and the session metadata shown above conversation content.

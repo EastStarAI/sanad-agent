@@ -8,6 +8,22 @@ import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/devices/domain/models/gateway_connection_status.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/gateway_connection_cubit.dart';
+import 'package:sanad_client/utils/app_platform.dart';
+
+class DesktopOnlyStatusBar extends StatelessWidget {
+  final Widget child;
+
+  const DesktopOnlyStatusBar({
+    super.key,
+    this.child = const StatusBar(),
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (!AppPlatform.isDesktop) return const SizedBox.shrink();
+    return child;
+  }
+}
 
 class StatusBar extends StatelessWidget {
   final String worktreeName;
