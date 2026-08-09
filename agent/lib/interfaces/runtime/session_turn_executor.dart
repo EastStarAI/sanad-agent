@@ -15,6 +15,7 @@ import 'package:sanad_agent/evolution/db/runtime/session_execution_state_coordin
 import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/session_payload_builder.dart';
 
@@ -240,6 +241,11 @@ class SessionTurnExecutor {
                   },
               onSteerContinuation: () {
                 if (!ownsRun(owner)) return;
+                _emitCompletedSteerSegment(
+                  owner: owner,
+                  event: event,
+                  content: fullContent,
+                );
                 fullContent = '';
                 sessionManager.clearInFlightSnapshot(event.sessionId);
               },
@@ -284,6 +290,11 @@ class SessionTurnExecutor {
                   },
               onSteerContinuation: () {
                 if (!ownsRun(owner)) return;
+                _emitCompletedSteerSegment(
+                  owner: owner,
+                  event: event,
+                  content: fullContent,
+                );
                 fullContent = '';
                 sessionManager.clearInFlightSnapshot(event.sessionId);
               },
@@ -316,6 +327,13 @@ class SessionTurnExecutor {
             return;
           }
           fullContent += chunk;
+          _appendInFlightSnapshot(
+            sessionId: event.sessionId,
+            runId: owner.runId,
+            modelStepId: agentRunner.currentModelStepId,
+            type: CanonicalEventTypes.thoughtStream,
+            delta: chunk,
+          );
           if (getIt.isRegistered<RuntimeRecoveryService>()) {
             getIt<RuntimeRecoveryService>().clearResumingOnProgress(
               event.sessionId,
@@ -425,6 +443,7 @@ class SessionTurnExecutor {
         return;
       }
 
+      sessionManager.clearInFlightSnapshot(event.sessionId);
       emitResponse(
         GatewayResponse(
           sessionId: event.sessionId,
@@ -526,6 +545,7 @@ class SessionTurnExecutor {
         'context_usage': ?contextUsageOnError,
       };
       agentRunner.attachMetadataToLastAssistantMessage(errorMetadata);
+      sessionManager.clearInFlightSnapshot(event.sessionId);
       emitResponse(
         GatewayResponse(
           sessionId: event.sessionId,
@@ -656,6 +676,13 @@ class SessionTurnExecutor {
     if (thought.isEmpty || !ownsRun(owner)) {
       return;
     }
+    _appendInFlightSnapshot(
+      sessionId: event.sessionId,
+      runId: owner.runId,
+      modelStepId: agentRunner.currentModelStepId,
+      type: CanonicalEventTypes.thoughtStream,
+      delta: thought,
+    );
     emitResponse(
       GatewayResponse(
         sessionId: event.sessionId,
@@ -678,6 +705,13 @@ class SessionTurnExecutor {
     if (reasoning.isEmpty || !ownsRun(owner)) {
       return;
     }
+    _appendInFlightSnapshot(
+      sessionId: event.sessionId,
+      runId: owner.runId,
+      modelStepId: agentRunner.currentModelStepId,
+      type: CanonicalEventTypes.reasoningStream,
+      delta: reasoning,
+    );
     emitResponse(
       GatewayResponse(
         sessionId: event.sessionId,
@@ -686,6 +720,67 @@ class SessionTurnExecutor {
         isComplete: false,
         runId: owner.runId,
         modelStepId: agentRunner.currentModelStepId,
+      ),
+    );
+  }
+
+  void _appendInFlightSnapshot({
+    required String sessionId,
+    required String runId,
+    required String? modelStepId,
+    required String type,
+    required String delta,
+  }) {
+    if (delta.isEmpty) return;
+    final sessionManager = getIt<SessionManager>();
+    final existing = sessionManager.getInFlightSnapshot(sessionId);
+    final sameStream =
+        existing != null &&
+        existing['type'] == type &&
+        existing['run_id'] == runId &&
+        existing['model_step_id'] == modelStepId &&
+        existing['content'] is String;
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    sessionManager.saveInFlightSnapshot(sessionId, {
+      'type': type,
+      'status': 'running',
+      'session_id': sessionId,
+      'run_id': runId,
+      'model_step_id': modelStepId,
+      'content': sameStream ? '${existing['content']}$delta' : delta,
+      'timestamp': timestamp,
+      'updated_at': timestamp,
+    });
+  }
+
+  void _emitCompletedSteerSegment({
+    required ActiveRun owner,
+    required GatewayEvent event,
+    required String content,
+  }) {
+    if (content.isEmpty || !ownsRun(owner)) return;
+    final modelStepId = owner.agentRunner.currentModelStepId;
+    emitResponse(
+      GatewayResponse(
+        sessionId: event.sessionId,
+        platformId: event.platformId,
+        message: Message(
+          role: MessageRole.assistant,
+          content: content,
+          metadata: {
+            'canonical_event_type': CanonicalEventTypes.thought,
+            'canonical_payload': {
+              'content': content,
+              'status': 'done',
+              'session_id': event.sessionId,
+              'run_id': owner.runId,
+              'model_step_id': ?modelStepId,
+            },
+          },
+        ),
+        isComplete: false,
+        runId: owner.runId,
+        modelStepId: modelStepId,
       ),
     );
   }

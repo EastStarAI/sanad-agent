@@ -64,6 +64,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Reserve pending steer durably before it enters history.
 - Resolve delivery/cancellation exactly once by raw request id and owner run/generation.
 - Failed history persistence rolls back in-memory mutation without losing text.
+- A late steer that follows a completed assistant model step publishes that pre-steer segment as a completed thought before resetting terminal accumulation; live and history projections must not discard it.
 - Restart never injects a pending steer into a new generation; unresolved pending/delivering rows become durable draft-recovery outcomes unless history proves delivery.
 - Recovered text and owner tokens never enter logs or broadcast payloads.
 
