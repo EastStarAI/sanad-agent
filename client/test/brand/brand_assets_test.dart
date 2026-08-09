@@ -75,38 +75,21 @@ void main() {
     expect((iosStoreIcon.width, iosStoreIcon.height), (1024, 1024));
     expect(iosStoreIcon.every((pixel) => pixel.a.toInt() == 255), isTrue);
 
-    expect(
-      (
-        _readPng('macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_16.png').width,
-        _readPng('macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_1024.png').width,
-      ),
-      (16, 1024),
+    final macOSSmallIcon = _readPng(
+      'macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_16.png',
     );
-    final macOSIconComposer =
-        jsonDecode(
-              File('macos/Runner/AppIcon.icon/icon.json').readAsStringSync(),
-            )
-            as Map<String, dynamic>;
-    final macOSIconGroups = macOSIconComposer['groups'] as List<dynamic>;
-    final macOSIconGroup = macOSIconGroups.single as Map<String, dynamic>;
-    final macOSIconLayers = macOSIconGroup['layers'] as List<dynamic>;
-    final macOSIconLayer = macOSIconLayers.single as Map<String, dynamic>;
-    expect(macOSIconGroup['specular'], isFalse);
-    expect(macOSIconGroup['shadow'], {'kind': 'none', 'opacity': 0});
-    expect(
-      macOSIconGroup['translucency'],
-      {'enabled': false, 'value': 0},
+    final macOSStoreIcon = _readPng(
+      'macos/Runner/Assets.xcassets/AppIcon.appiconset/app_icon_1024.png',
     );
-    expect(macOSIconLayer['glass'], isFalse);
-    expect(
-      File('macos/Runner/AppIcon.icon/Assets/sanad-mark.svg').existsSync(),
-      isTrue,
-    );
+    expect((macOSSmallIcon.width, macOSStoreIcon.width), (16, 1024));
+    expect(macOSStoreIcon.every((pixel) => pixel.a.toInt() == 255), isTrue);
+    expect(_rgbaBytes(macOSStoreIcon), _rgbaBytes(iosStoreIcon));
+    expect(Directory('macos/Runner/AppIcon.icon').existsSync(), isFalse);
     final macOSProject = File(
       'macos/Runner.xcodeproj/project.pbxproj',
     ).readAsStringSync();
-    expect(macOSProject, contains('folder.iconcomposer.icon'));
-    expect(macOSProject, contains('AppIcon.icon in Resources'));
+    expect(macOSProject, isNot(contains('folder.iconcomposer.icon')));
+    expect(macOSProject, isNot(contains('AppIcon.icon in Resources')));
 
     final ico = File('windows/runner/resources/app_icon.ico').readAsBytesSync();
     final icoData = ByteData.sublistView(Uint8List.fromList(ico));
@@ -186,4 +169,16 @@ image.Image _readPng(String path) {
   final decoded = image.decodePng(File(path).readAsBytesSync());
   expect(decoded, isNotNull, reason: path);
   return decoded!;
+}
+
+Uint8List _rgbaBytes(image.Image source) {
+  final bytes = Uint8List(source.length * 4);
+  var offset = 0;
+  for (final pixel in source) {
+    bytes[offset++] = pixel.r.toInt();
+    bytes[offset++] = pixel.g.toInt();
+    bytes[offset++] = pixel.b.toInt();
+    bytes[offset++] = pixel.a.toInt();
+  }
+  return bytes;
 }

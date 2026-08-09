@@ -10,6 +10,7 @@ Sanad 1.0.1 is a patch release focused on secure local operation, reliable recov
 - Completed verified desktop Client-Agent installation, exact-version update, restart, reconnect, and bounded rollback paths.
 - Improved Windows replacement safety, startup health confirmation, and terminal restoration.
 - Restored Web startup reliability and updated cross-platform release assets.
+- Removed the Xcode 26 layered macOS icon path that added light side rims; macOS now uses the same opaque flat composition as the corrected iOS icon.
 
 This release was built from tagged public source by the protected Sanad release workflow. Verify downloads against `SHA256SUMS`, `release-manifest.json`, and GitHub build provenance before installation.
 
