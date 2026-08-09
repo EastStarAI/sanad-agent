@@ -583,6 +583,8 @@ class _ModelChipState extends State<_ModelChip> {
   final Set<String> _providerDisplayLookupAttempts = <String>{};
   final Map<String, DateTime> _emptyProviderDisplayFetchUntilByAgent = {};
   bool _didLoadInitialProviderDisplayNames = false;
+  String? _lastLoadedProviderId;
+  String? _lastLoadedAgentId;
 
   @override
   void initState() {
@@ -699,15 +701,20 @@ class _ModelChipState extends State<_ModelChip> {
     final activeProviderId = _activeProviderId(selectedSession);
     if (activeProviderId == null || activeProviderId.isEmpty) return;
 
-    final knownDisplays = _providerDisplayNamesByAgent[key];
-    if (getIt.isRegistered<ProviderUsageCubit>()) {
-      unawaited(
-        getIt<ProviderUsageCubit>().onInstancesLoaded(
-          agent: activeAgent,
-          instanceIds: [activeProviderId],
-        ),
-      );
+    final activeAgentId = activeAgent.id;
+    if (activeProviderId != _lastLoadedProviderId || activeAgentId != _lastLoadedAgentId) {
+      _lastLoadedProviderId = activeProviderId;
+      _lastLoadedAgentId = activeAgentId;
+      if (getIt.isRegistered<ProviderUsageCubit>()) {
+        unawaited(
+          getIt<ProviderUsageCubit>().onInstancesLoaded(
+            agent: activeAgent,
+            instanceIds: [activeProviderId],
+          ),
+        );
+      }
     }
+    final knownDisplays = _providerDisplayNamesByAgent[key];
     if (knownDisplays != null && knownDisplays.isNotEmpty && knownDisplays.containsKey(activeProviderId)) return;
 
     final retryAfter = _emptyProviderDisplayFetchUntilByAgent[key];
