@@ -61,6 +61,7 @@ class ConversationInputSlice {
   final RuntimeNotice? runtimeNotice;
   final SessionExecutionSnapshot? executionSnapshot;
   final SessionAttentionState? attentionState;
+  final bool isAwaitingMessageAcceptance;
   final List<CanonicalEvent> queuedMessages;
   final Set<String> queuedMutationRequestIds;
 
@@ -79,6 +80,7 @@ class ConversationInputSlice {
     required this.runtimeNotice,
     this.executionSnapshot,
     this.attentionState,
+    this.isAwaitingMessageAcceptance = false,
     required this.queuedMessages,
     this.queuedMutationRequestIds = const {},
   });
@@ -99,6 +101,7 @@ class ConversationInputSlice {
         other.runtimeNotice == runtimeNotice &&
         other.executionSnapshot == executionSnapshot &&
         other.attentionState == attentionState &&
+        other.isAwaitingMessageAcceptance == isAwaitingMessageAcceptance &&
         other.selectedWorkspace == selectedWorkspace &&
         _sameWorkspaces(other.availableWorkspaces, availableWorkspaces) &&
         _sameMessages(other.queuedMessages, queuedMessages) &&
@@ -120,6 +123,7 @@ class ConversationInputSlice {
     runtimeNotice,
     executionSnapshot,
     attentionState,
+    isAwaitingMessageAcceptance,
     Object.hashAll(availableWorkspaces),
     Object.hashAll(queuedMessages),
     Object.hashAllUnordered(queuedMutationRequestIds),

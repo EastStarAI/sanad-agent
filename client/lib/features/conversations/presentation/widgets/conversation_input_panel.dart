@@ -160,6 +160,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
       runtimeNotice: state.runtimeNotice,
       executionSnapshot: state.executionSnapshot,
       attentionState: state.attentionState,
+      isAwaitingMessageAcceptance: state.isAwaitingMessageAcceptance,
       queuedMessages: state.queuedMessages,
       queuedMutationRequestIds: state.queuedMutationRequestIds,
     );
@@ -207,7 +208,12 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     if (_isSettingDraftText) return;
     _hasUnsavedDraftChanges = true;
     _observedPendingRequestId = null;
+    _setPendingAcceptance(null);
     _scheduleDraftSave();
+  }
+
+  void _setPendingAcceptance(String? requestId) {
+    _inputCubit.setMessageAcceptancePending(requestId?.trim().isNotEmpty == true);
   }
 
   void _handleSendAttempt(
@@ -215,6 +221,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     ConversationInputSlice inputSlice, {
     MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
   }) {
+    if (inputSlice.isAwaitingMessageAcceptance) return;
     if (!_validateSelections(agentSlice, inputSlice)) return;
 
     final dispatchExport = _chatController.exportForDispatch();
@@ -223,6 +230,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
 
     _draftSaveDebouncer?.cancel();
     _saveDraftNow();
+    _setPendingAcceptance('dispatching');
     widget.onSendMessage(text, intent: intent);
     _slashCommandsCubit.clear();
   }
@@ -332,6 +340,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     }
 
     _observedPendingRequestId = draft?.pendingRequestId;
+    _setPendingAcceptance(draft?.pendingRequestId);
     _setComposerText((draft != null && !draft.isEmpty) ? draft.text : '');
     _hasUnsavedDraftChanges = false;
     if ((sessionId == null || sessionId.isEmpty) && draft != null && !draft.isEmpty) {
@@ -367,6 +376,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
                 )]
                 ?.pendingRequestId
           : snapshot.contexts[deviceId]?.newConversationDraftPendingRequestId;
+      _setPendingAcceptance(pendingRequestId);
       if (pendingRequestId != null) {
         _observedPendingRequestId = pendingRequestId;
       } else if (_observedPendingRequestId != null) {

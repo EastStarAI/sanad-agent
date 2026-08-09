@@ -1013,6 +1013,32 @@ class _SendStopButton extends StatelessWidget {
       );
     }
 
+    if (inputSlice.isAwaitingMessageAcceptance) {
+      return SizedBox(
+        width: 32,
+        height: 32,
+        child: IconButton(
+          key: const Key('send_message_acceptance_indicator'),
+          tooltip: 'Waiting for message acceptance',
+          onPressed: null,
+          style: IconButton.styleFrom(
+            backgroundColor: Theme.of(context).colorScheme.onSurface,
+            disabledBackgroundColor: Theme.of(context).colorScheme.onSurface,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            padding: EdgeInsets.zero,
+          ),
+          icon: const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.black,
+            ),
+          ),
+        ),
+      );
+    }
+
     if (showVoiceButton) {
       return SizedBox(
         width: 32,
