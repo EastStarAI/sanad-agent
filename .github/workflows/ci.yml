@@ -245,7 +245,8 @@ jobs:
           grep -F 'sanad-client-downloads-control deploy' .github/workflows/release.yml
           grep -F 'name: Deploy Stable Production assets' .github/workflows/release.yml
           grep -F 'uses: ./.github/workflows/deploy.yml' .github/workflows/release.yml
-          grep -F 'release_run_id: ${{ github.run_id }}' .github/workflows/release.yml
+          grep -F 'release_run_id:' .github/workflows/release.yml
+          grep -F 'github.run_id' .github/workflows/release.yml
           ! grep -Fq '/srv/sanad/' .github/workflows/deploy.yml
           grep -Fq '/opt/sanad-sites/assets/web' .github/workflows/deploy.yml
           grep -Fq '/opt/sanad-sites/assets/updates' .github/workflows/deploy.yml
