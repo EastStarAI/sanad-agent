@@ -2,7 +2,7 @@
 title: "Task 67: Desktop Client–Agent Installation, Update, and Connection Lifecycle"
 description: "إغلاق دورة Windows وmacOS من اكتشاف تحديث الواجهة حتى تنزيل الوكيل والتحقق منه وتثبيته وتشغيله والاتصال به، مع مسار Linux يدوي محدود واختبارات منصة قبل النشر."
 status: "in_review"
-current_gate: "Task 67B / Gate E complete — awaiting owner diff review before commit"
+current_gate: "Task 67B / Gate E complete — pull request review; Gate F not authorized"
 priority: "critical"
 depends_on: "Public Windows release and update architecture"
 file_budget: 24
@@ -585,8 +585,8 @@ development. تستخدم Windows 11 x64 workstation/VM نظيفة مع Defender
 - [x] الأدلة تسجل النسخ والنتائج دون tokens أو مسارات/بيانات شخصية غير لازمة.
 - [x] تحديث `docs/qa_maintenance/windows_release_clean_machine.md` بنتيجة
       candidate الجديدة دون تحريف دليل `1.0.0` التاريخي.
-- [ ] commit وpush نتائج 67B، وإثبات clean status وتقديم SHA ونتائج Windows.
-      **مؤجلان بأمر المالك إلى ما بعد مراجعة الـdiff؛ هذه الجلسة لا تنفذهما.**
+- [x] commit وpush نتائج 67B على implementation branch؛ commit المثبت قبل دمج
+      `main` هو `dda91b8e57a65ea7c5103db4031efe4ef183a75e`.
 - [x] **التوقف وطلب مراجعة المستخدم؛ لا تبدأ Gate F ولا تنشر تلقائياً.**
 
 ---

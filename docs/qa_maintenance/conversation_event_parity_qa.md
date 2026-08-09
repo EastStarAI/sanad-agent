@@ -29,6 +29,9 @@ All items share one `run_id`. The three assistant segments have distinct `model_
 10. Daemon-backed E2E uses a unique temporary `SANAD_STATE_HOME` per daemon and the deterministic `e2e-provider/e2e-model`; it must not open the user's `state.db` or contact a configured provider.
 11. A leading tagged-reasoning stream emits confirmed reasoning before the closing tag or post-tag final content arrives; split closing markers never leak into either surface.
 12. The same incremental fallback covers provider-specific supported markers such as MiniMax `<mm:think>`, without branching in the provider-neutral runner.
+13. Local/cloud fan-out translates one response independently but updates the in-flight snapshot once at the stream source; two chunks hydrate as `A + B`, never `A + A + B + B`.
+14. A late steer completes the pre-steer running row as a visible thought before the steer continuation starts, and history hydration reproduces the same order.
+15. Running thought Markdown is exercised through the progressive renderer in widget tests; tests do not silently replace it with the completed-document renderer.
 
 ## Automated ownership
 

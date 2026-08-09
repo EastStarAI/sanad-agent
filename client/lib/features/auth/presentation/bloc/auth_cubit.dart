@@ -27,6 +27,19 @@ class AuthCubit extends Cubit<AuthState> {
     }
   }
 
+  Future<void> synchronizeExternalSession() async {
+    try {
+      final session = await _authRepository.synchronizeExternalSession();
+      if (session == null) {
+        emit(AuthUnauthenticated());
+      } else {
+        emit(_authenticated(session));
+      }
+    } catch (e) {
+      _logger.warning('Failed to synchronize external auth session: $e');
+    }
+  }
+
   Future<void> login() async {
     emit(AuthLoading());
     try {
@@ -51,6 +64,12 @@ class AuthCubit extends Cubit<AuthState> {
   Future<void> logout() async {
     await _authRepository.logout();
     emit(AuthUnauthenticated());
+  }
+
+  void invalidateRejectedSession() {
+    if (state is AuthAuthenticated) {
+      emit(AuthUnauthenticated());
+    }
   }
 
   Future<void> fetchCredits() async {

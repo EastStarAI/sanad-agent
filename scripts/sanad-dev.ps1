@@ -1,8 +1,16 @@
 [CmdletBinding()]
 param(
   [Parameter(ValueFromRemainingArguments = $true)]
-  [string[]] $SanadArgs
+  [string[]] $SanadArgs = @()
 )
+
+if (-not $SanadArgs) {
+  $SanadArgs = [string[]]@()
+} elseif ($SanadArgs -isnot [array]) {
+  $SanadArgs = [string[]]@($SanadArgs)
+} else {
+  $SanadArgs = [string[]]$SanadArgs
+}
 
 $ErrorActionPreference = 'Stop'
 $FvmVersion = '4.1.2'
@@ -138,9 +146,18 @@ function Ensure-Fvm {
 function Ensure-Flutter([string] $FvmPath) {
   $flutterPin = (Get-Content -Raw (Join-Path $ProjectDir '.fvmrc') | ConvertFrom-Json).flutter
   Push-Location $ProjectDir
+  $ready = $false
   try {
-    & $FvmPath spawn $flutterPin --version *> $null
-    $ready = $LASTEXITCODE -eq 0
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      & $FvmPath spawn $flutterPin --version *> $null
+      $ready = $LASTEXITCODE -eq 0
+    } catch {
+      $ready = $false
+    } finally {
+      $ErrorActionPreference = $prevEap
+    }
   } finally {
     Pop-Location
   }
@@ -216,9 +233,18 @@ function Require-RuntimeCli {
   if (-not $existing) { throw 'FVM is not installed. Run: sanad-dev install' }
   $flutterPin = (Get-Content -Raw (Join-Path $ProjectDir '.fvmrc') | ConvertFrom-Json).flutter
   Push-Location $ProjectDir
+  $flutterReady = $false
   try {
-    & $existing.Source spawn $flutterPin --version *> $null
-    $flutterReady = $LASTEXITCODE -eq 0
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      & $existing.Source spawn $flutterPin --version *> $null
+      $flutterReady = $LASTEXITCODE -eq 0
+    } catch {
+      $flutterReady = $false
+    } finally {
+      $ErrorActionPreference = $prevEap
+    }
   } finally {
     Pop-Location
   }
@@ -246,9 +272,9 @@ try {
   }
   $fvm = if ($command -eq 'run') { Invoke-Setup $true } else { Require-RuntimeCli }
   [string[]] $runtimeArgs = if ($command -eq 'run') {
-    @($SanadArgs | Where-Object { $_ -ne '--force' })
+    [string[]]@($SanadArgs | Where-Object { $_ -ne '--force' })
   } else {
-    @($SanadArgs)
+    [string[]]@($SanadArgs)
   }
   $env:SANAD_DEV_CALLER_DIR = $CallerDir
   Push-Location (Join-Path $ProjectDir 'client')

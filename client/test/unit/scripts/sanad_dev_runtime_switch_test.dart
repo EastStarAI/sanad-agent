@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 
+import '../../../../scripts/sanad_dev.dart' as sanad_dev;
 import '../../../../scripts/sanad_dev/client_launch_profile.dart';
 import '../../../../scripts/sanad_dev/runtime_switch.dart';
 
@@ -223,6 +224,83 @@ void main() {
       );
     }
   });
+
+  test(
+    'replacement waits for previous process and VM resources to disappear',
+    () async {
+      var processChecks = 0;
+      var vmChecks = 0;
+
+      final unavailable = await sanad_dev.waitForClientResourcesUnavailable(
+        clientPidsByVmPort: const {51123: 101},
+        timeout: const Duration(seconds: 1),
+        pollInterval: Duration.zero,
+        processRunning: (_) async => processChecks++ == 0,
+        vmServiceAvailable: (_) async => vmChecks++ == 0,
+      );
+
+      expect(unavailable, isTrue);
+      expect(processChecks, 3);
+      expect(vmChecks, 2);
+    },
+  );
+
+  test(
+    'managed PID selection rejects a stale source on the retained VM port',
+    () {
+      sanad_dev.ClientInstance client({
+        required int pid,
+        required String path,
+        required String workspaceHash,
+      }) {
+        return sanad_dev.ClientInstance(
+          51123,
+          'token',
+          path,
+          'macos',
+          pid: pid,
+          launchProfile: extractClientLaunchProfile([
+            '--dart-define=LOCAL_GATEWAY_URL=http://127.0.0.1:58091',
+            '--dart-define=SANAD_DEV_LAUNCHER_ID=launcher-1',
+            '--dart-define=SANAD_DEV_RUNTIME_NONCE=nonce-1',
+            '--dart-define=SANAD_DEV_WORKSPACE_HASH=$workspaceHash',
+          ]),
+        );
+      }
+
+      final stale = client(
+        pid: 101,
+        path: '/source/client',
+        workspaceHash: 'old',
+      );
+      expect(
+        sanad_dev.exactManagedClientPids(
+          discoveredClients: [stale],
+          expectedVmServicePorts: const {51123},
+          launcherId: 'launcher-1',
+          runtimeNonce: 'nonce-1',
+          workspaceHash: 'target',
+        ),
+        isNull,
+      );
+
+      final target = client(
+        pid: 202,
+        path: '/target/client',
+        workspaceHash: 'target',
+      );
+      expect(
+        sanad_dev.exactManagedClientPids(
+          discoveredClients: [stale, target],
+          expectedVmServicePorts: const {51123},
+          launcherId: 'launcher-1',
+          runtimeNonce: 'nonce-1',
+          workspaceHash: 'target',
+        ),
+        [202],
+      );
+    },
+  );
 
   test('process tree orders descendants after their owning parent', () {
     const listing = '''

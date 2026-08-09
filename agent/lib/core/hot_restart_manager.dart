@@ -264,6 +264,17 @@ class HotRestartManager {
 
     Future<void> shutdown() async {
       print('\n[HotRestartManager] Shutting down cleanly...');
+      // Restore the terminal before exit: raw mode was enabled for the 'r'
+      // key listener, and without this the host terminal stays corrupted
+      // (Backspace prints ^H) after Ctrl+C, especially on Windows.
+      if (stdin.hasTerminal) {
+        try {
+          stdin.lineMode = true;
+          stdin.echoMode = true;
+        } catch (_) {
+          // The host terminal may not expose mutable modes.
+        }
+      }
       childProcess?.kill();
       if (childProcess != null) {
         await childProcess!.exitCode;

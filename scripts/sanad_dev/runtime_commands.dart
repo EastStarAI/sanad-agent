@@ -459,11 +459,15 @@ Future<void> handleRun({
   );
   if (dryRun) return;
 
-  final configFile = File(
-    configPath.startsWith('/')
-        ? configPath
-        : '$clientDirectory${Platform.pathSeparator}$configPath',
-  );
+  final isAbsoluteConfig = configPath.startsWith('/') ||
+      File(configPath).isAbsolute ||
+      RegExp(r'^[a-zA-Z]:[/\\]').hasMatch(configPath);
+  final candidateFile = File(configPath);
+  final configFile = isAbsoluteConfig
+      ? candidateFile
+      : candidateFile.existsSync()
+          ? candidateFile
+          : File('$clientDirectory${Platform.pathSeparator}$configPath');
   if (!configFile.existsSync()) {
     stderr.writeln('Client configuration not found: ${configFile.path}');
     exitCode = 1;
@@ -1089,6 +1093,13 @@ Future<void> handleRuntimeDoctor({
         );
         return;
       }
+      if (!launcherLive && !clientLive) {
+        await deleteRuntimeLauncherRecord(record.sanadHome, record.agentPort);
+        print(
+          'Fixed: removed stale launcher record for agent port ${record.agentPort}.',
+        );
+        return;
+      }
       stderr.writeln(
         'No fix applied: a launcher or runtime endpoint is still live.',
       );
@@ -1484,9 +1495,10 @@ Future<bool> _restoreManualRuntime({
 Future<bool> _waitForAgentHealthPort(
   int port,
   String workspaceHash,
-  String sanadHome,
-) async {
-  final deadline = DateTime.now().add(const Duration(seconds: 30));
+  String sanadHome, {
+  Duration timeout = const Duration(seconds: 30),
+}) async {
+  final deadline = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(deadline)) {
     final client = HttpClient();
     try {

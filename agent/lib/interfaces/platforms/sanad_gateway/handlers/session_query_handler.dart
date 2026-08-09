@@ -103,6 +103,21 @@ class SessionQueryHandler {
 
       if (message.role == MessageRole.assistant &&
           message.metadata?['superseded_by_steer'] == true) {
+        final content = _nonEmpty(message.content);
+        if (content != null) {
+          final runId = message.metadata?['run_id'];
+          final modelStepId = message.metadata?['model_step_id'];
+          historyMessages.add({
+            'id': msgId,
+            'sender': 'ai',
+            'type': 'thought',
+            'content': content,
+            'created_at': message.metadata?['received_at'] ?? msgTime,
+            'session_id': sessionId,
+            'run_id': ?runId,
+            'model_step_id': ?modelStepId,
+          });
+        }
         continue;
       }
 

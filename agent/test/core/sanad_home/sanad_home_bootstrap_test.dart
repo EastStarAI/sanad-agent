@@ -134,6 +134,23 @@ void main() {
     });
 
     test(
+      'atomic replace overwrites existing content and leaves no backup',
+      () async {
+        await SanadHomeBootstrap.writeSecret('replace-me.json', [0x41]);
+        await SanadHomeBootstrap.writeSecret('replace-me.json', [0x42, 0x43]);
+        final bytes = SanadHomeBootstrap.readSecret('replace-me.json');
+        expect(bytes, equals([0x42, 0x43]));
+
+        final canonical = SanadHomeBootstrap.resolveChild('replace-me.json');
+        final leftovers = File(canonical).parent
+            .listSync()
+            .where((e) => e.path.endsWith('.bak') || e.path.contains('.tmp.'))
+            .toList();
+        expect(leftovers, isEmpty);
+      },
+    );
+
+    test(
       'writeSecret refuses traversal and never touches the target',
       () async {
         final untouched = File(p.join(realHome.path, 'traversal-target.txt'))

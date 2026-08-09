@@ -185,6 +185,54 @@ Future<void> handleRuntimeSwitch({
   }
 }
 
+Future<bool> waitForClientResourcesUnavailable({
+  required Map<int, int?> clientPidsByVmPort,
+  Duration timeout = const Duration(seconds: 15),
+  Duration pollInterval = const Duration(milliseconds: 100),
+  Future<bool> Function(int pid)? processRunning,
+  Future<bool> Function(int port)? vmServiceAvailable,
+}) async {
+  final isRunning = processRunning ?? isProcessRunning;
+  final vmAvailable = vmServiceAvailable ?? _vmServiceIsAvailable;
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    var unavailable = true;
+    for (final client in clientPidsByVmPort.entries) {
+      if ((client.value != null && await isRunning(client.value!)) ||
+          await vmAvailable(client.key)) {
+        unavailable = false;
+        break;
+      }
+    }
+    if (unavailable) return true;
+    await Future<void>.delayed(pollInterval);
+  }
+  return false;
+}
+
+List<int>? exactManagedClientPids({
+  required Iterable<ClientInstance> discoveredClients,
+  required Set<int> expectedVmServicePorts,
+  required String launcherId,
+  required String runtimeNonce,
+  required String workspaceHash,
+}) {
+  final pids = <int>[];
+  for (final expectedPort in expectedVmServicePorts) {
+    final matches = discoveredClients.where((client) {
+      final profile = client.launchProfile;
+      return client.port == expectedPort &&
+          client.pid != null &&
+          profile?.define('SANAD_DEV_LAUNCHER_ID') == launcherId &&
+          profile?.define('SANAD_DEV_RUNTIME_NONCE') == runtimeNonce &&
+          profile?.define('SANAD_DEV_WORKSPACE_HASH') == workspaceHash;
+    }).toList();
+    if (matches.length != 1) return null;
+    pids.add(matches.single.pid!);
+  }
+  return pids;
+}
+
 int? _requestingAgentPort() {
   final direct = int.tryParse(
     Platform.environment['LOCAL_GATEWAY_PORT']?.trim() ?? '',
@@ -350,14 +398,16 @@ class _SwitchableRuntimeController {
         }
       });
     }
+    sigint = ProcessSignal.sigint.watch().listen((_) {
+      if (!shutdown.isCompleted) {
+        shutdown.complete(const _ShutdownRequested());
+      }
+    });
     if (!Platform.isWindows) {
-      sigint = ProcessSignal.sigint.watch().listen((_) {
-        if (!shutdown.isCompleted)
-          shutdown.complete(const _ShutdownRequested());
-      });
       sigterm = ProcessSignal.sigterm.watch().listen((_) {
-        if (!shutdown.isCompleted)
+        if (!shutdown.isCompleted) {
           shutdown.complete(const _ShutdownRequested());
+        }
       });
     }
 
@@ -422,7 +472,7 @@ class _SwitchableRuntimeController {
         runtimeLauncherStopRequestPath(runtime.sanadHome, runtime.agentPort),
       );
       if (await stopRequest.exists()) await stopRequest.delete();
-      await sigint?.cancel();
+      await sigint.cancel();
       await sigterm?.cancel();
       await stdinKeys?.cancel();
       if (stdin.hasTerminal) {
@@ -892,6 +942,16 @@ class _SwitchableRuntimeController {
         .toList();
 
     try {
+      if (!await waitForClientResourcesUnavailable(
+        clientPidsByVmPort: {
+          for (final client in previousClients)
+            client.vmServicePort: client.pid,
+        },
+      )) {
+        throw StateError(
+          'Previous Client identity remained active after termination.',
+        );
+      }
       await _startAgent(targetAgentDirectory);
       final agentHealthy = await _waitForAgentHash(
         request.targetWorkspaceHash,
@@ -915,7 +975,10 @@ class _SwitchableRuntimeController {
       _agentDirectory = targetAgentDirectory;
       _clientDirectory = targetClientDirectory;
       _currentWorkspaceHash = request.targetWorkspaceHash;
-      final managedClientPids = await _managedClientPids(targetClients);
+      final managedClientPids = await _managedClientPids(
+        targetClients,
+        workspaceHash: request.targetWorkspaceHash,
+      );
       _launcherRecord = _launcherRecord.copyWith(
         workspaceHash: request.targetWorkspaceHash,
         sourceRoot: request.targetRepositoryRoot,
@@ -949,7 +1012,10 @@ class _SwitchableRuntimeController {
       List<int>? restoredClientPids;
       if (restored) {
         try {
-          restoredClientPids = await _managedClientPids(previousClients);
+          restoredClientPids = await _managedClientPids(
+            previousClients,
+            workspaceHash: previousWorkspaceHash,
+          );
         } on Object {
           restored = false;
         }
@@ -1012,28 +1078,26 @@ class _SwitchableRuntimeController {
   }
 
   Future<List<int>> _managedClientPids(
-    List<_RuntimeClientLaunch> expected,
-  ) async {
-    final expectedPorts = expected.map((item) => item.vmServicePort).toSet();
-    final deadline = DateTime.now().add(const Duration(seconds: 10));
+    List<_RuntimeClientLaunch> expected, {
+    required String workspaceHash,
+    Duration timeout = sanadDevClientStartupTimeout,
+  }) async {
+    final expectedVmServicePorts = expected
+        .map((client) => client.vmServicePort)
+        .toSet();
+    final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
-      final discovered =
-          clientsForAgentPort(
-            await discoverClientInstances(),
-            runtime.agentPort,
-          ).where(
-            (client) =>
-                expectedPorts.contains(client.port) &&
-                client.launchProfile?.define('SANAD_DEV_LAUNCHER_ID') ==
-                    _launcherRecord.launcherId &&
-                client.launchProfile?.define('SANAD_DEV_RUNTIME_NONCE') ==
-                    _launcherRecord.runtimeNonce,
-          );
-      final pids = discovered
-          .map((client) => client.pid)
-          .whereType<int>()
-          .toList();
-      if (pids.length == expected.length) return pids;
+      final pids = exactManagedClientPids(
+        discoveredClients: clientsForAgentPort(
+          await discoverClientInstances(),
+          runtime.agentPort,
+        ),
+        expectedVmServicePorts: expectedVmServicePorts,
+        launcherId: _launcherRecord.launcherId,
+        runtimeNonce: _launcherRecord.runtimeNonce,
+        workspaceHash: workspaceHash,
+      );
+      if (pids != null) return pids;
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
     throw StateError('Managed client process identity is incomplete.');

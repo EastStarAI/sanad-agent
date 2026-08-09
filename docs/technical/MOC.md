@@ -18,6 +18,7 @@ This directory owns the technical specifications of "HOW" the system is structur
 - **[Local Gateway and Sanad Home Protection](user_data_protection_and_minimization.md):** Authenticated desktop-only loopback transport, credential delivery, secure filesystem roots, legacy migration, and worktree isolation.
 - **[Agent Interface and Runtime Architecture](agent_interface_runtime.md):** Gateway routing, active-run orchestration, recovery, and Sanad protocol translation.
 - **[Client Portal Authentication](client_authentication.md):** Portal-owned login, polling-token secrecy, refresh, and local credential persistence.
+- **[Desktop Authentication Exchange](desktop_authentication_exchange.md):** Credential-free live reconciliation between a native Flutter client and its local daemon through the shared auth document.
 - **[Hosted Services Boundary](hosted_services_boundary.md):** Public/private ownership, supported local and cloud modes, and compatibility rules for EastStar AI hosted services.
 - **[Client Local Daemon Control](client_local_daemon_control.md):** Source/standalone lifecycle ownership and worktree-aware endpoint resolution.
 - **[Release and Update Architecture](update_architecture.md):** Shared release manifest, agent replacement ownership, first-install bootstrap, client self-update, and Appcast trust boundaries.

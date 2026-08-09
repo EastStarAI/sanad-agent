@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sanad_client/core/di/injection.dart';
@@ -10,6 +11,8 @@ import 'package:sanad_client/core/presentation/state/app_state.dart';
 import 'package:sanad_client/core/presentation/utils/external_paste_manager.dart';
 import 'package:sanad_client/features/conversations/data/persistence/conversation_cache_persistor.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
+import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
+import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 AppState get appCtrl => getIt<AppState>();
@@ -25,7 +28,10 @@ class SanadAgentApp extends StatefulWidget {
 
 class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserver {
   late final ConversationCachePersistor _conversationCachePersistor;
-  static const _pasteEventChannel = MethodChannel('com.eaststarai.sanad/pasteEvents');
+  bool _wasBackgrounded = false;
+  static const _pasteEventChannel = MethodChannel(
+    'com.eaststarai.sanad/pasteEvents',
+  );
 
   @override
   void initState() {
@@ -52,7 +58,17 @@ class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserv
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      if (_wasBackgrounded) {
+        _wasBackgrounded = false;
+        if (AppPlatform.isMobile || kIsWeb) {
+          appCtrl.onAppResumed();
+        }
+      }
+      return;
+    }
     if (state == AppLifecycleState.paused || state == AppLifecycleState.detached || state == AppLifecycleState.hidden) {
+      _wasBackgrounded = true;
       unawaited(_conversationCachePersistor.flush());
     }
   }
@@ -73,13 +89,15 @@ class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserv
       child: AppAuthListener(
         authService: appState.authService,
         socketService: appState.brainSocketController,
+        localSocketService: AppPlatform.isDesktop
+            ? getIt<SanadSocketService>(instanceName: 'localSocketService')
+            : null,
+        connectionCoordinator: AppPlatform.isDesktop ? getIt<DeviceConnectionCoordinator>() : null,
         syncAuthContext: () async => appState.syncAuthContext(),
         conversationCacheRepository: getIt<ConversationCacheRepository>(),
         conversationCachePersistor: _conversationCachePersistor,
         navigatorKey: appNavigatorKey,
-        child: AppShell(
-          navigatorKey: appNavigatorKey,
-        ),
+        child: AppShell(navigatorKey: appNavigatorKey),
       ),
     );
   }

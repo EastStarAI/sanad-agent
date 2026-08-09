@@ -338,13 +338,16 @@ class GatewayConnectionCubit extends Cubit<GatewayConnectionStatus> {
     }
 
     final cloud = _sanadGatewayStatus();
+    final authState = _authCubit.state;
     if (!AppPlatform.isDesktop && cloud == SanadGatewayStatus.loginRequired) {
       return AppRoutes.login;
     }
     if (cloud == SanadGatewayStatus.authenticatedNoDevices) {
       return AppRoutes.onboarding;
     }
-    if (cloud == SanadGatewayStatus.authenticatedWithDevices || cloud == SanadGatewayStatus.connected) {
+    if (cloud == SanadGatewayStatus.authenticatedWithDevices ||
+        cloud == SanadGatewayStatus.connected ||
+        (authState is AuthAuthenticated && cloud == SanadGatewayStatus.disconnected)) {
       return AppRoutes.home;
     }
     return AppPlatform.isDesktop ? AppRoutes.onboarding : AppRoutes.login;

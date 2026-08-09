@@ -132,6 +132,13 @@ curl -fsSL https://sanad.eaststarai.com/install.sh | bash
 
 ### للمطورين
 
+> **المتطلبات الأساسية:** تأكد من تثبيت أدوات التطوير الخاصة بنظام تشغيلك قبل الإعداد:
+> - **Windows:** برنامج Visual Studio 2022 مع حزمة *Desktop development with C++*.
+> - **macOS:** أدوات Xcode الخطية (`xcode-select --install`).
+> - **Linux:** حزم `clang`, `cmake`, `ninja-build`, `pkg-config`, `libgtk-3-dev`, `lld`.
+>
+> راجع [دليل المطور](docs/operations/developer_guide.md) للتفاصيل والإعداد الكامل.
+
 استنسخ المستودع وانتقل إلى مجلده:
 
 ```bash
