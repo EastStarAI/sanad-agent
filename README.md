@@ -113,12 +113,11 @@ Choose account sign-in to connect the machine through the Portal, or skip it
 to run the Agent locally and connect later. The installer never blocks an
 unattended terminal waiting for an answer.
 
-> **Unsigned Windows build:** The `1.0.0` Windows installer is intentionally
+> **Unsigned Windows build:** The `1.0.1` Windows installer is intentionally
 > unsigned. Verify that it came from the official release and that its SHA-256
 > matches the published release manifest before proceeding. Do not disable
-> Microsoft Defender or Smart App Control. The `1.0.0` clean-machine release
-> gate was validated on Windows 11; Windows 10 was not validated for this
-> release.
+> Microsoft Defender or Smart App Control. Windows release gates run on
+> Windows 11; Windows 10 has not been validated.
 
 See [Install and Use Sanad Agent](docs/operations/user_guide.md) for client
 packages, explicit installer modes, manual installation, service management,

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Intended v1.0.0 or v1.0.0-rc.N identity
+        description: Intended v1.0.1 or v1.0.1-rc.N identity
         type: string
         required: true
       validation_only:

@@ -18,7 +18,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [AGENTS](./agent/lib/capabilities/runtime/AGENTS.md): Rules governing ./agent/lib/capabilities/runtime.
 - [AGENTS](./agent/lib/capabilities/tools/AGENTS.md): Rules governing ./agent/lib/capabilities/tools.
 - [AGENTS](./agent/lib/core/AGENTS.md): Rules governing ./agent/lib/core.
-- [AGENTS](./agent/lib/core/sanad_home/AGENTS.md): Rules governing the owner-only Sanad Home filesystem boundary.
+- [AGENTS](./agent/lib/core/sanad_home/AGENTS.md): Rules governing ./agent/lib/core/sanad_home.
 - [AGENTS](./agent/lib/engine/AGENTS.md): Rules governing ./agent/lib/engine.
 - [AGENTS](./agent/lib/engine/adapters/AGENTS.md): Rules governing ./agent/lib/engine/adapters.
 - [AGENTS](./agent/lib/engine/runtime/AGENTS.md): Rules governing ./agent/lib/engine/runtime.
@@ -48,15 +48,10 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [AGENTS](./client/lib/features/settings/AGENTS.md): Rules governing ./client/lib/features/settings.
 - [AGENTS](./client/lib/features/voice/AGENTS.md): Rules governing ./client/lib/features/voice.
 - [AGENTS](./client/lib/infrastructure/AGENTS.md): Rules governing ./client/lib/infrastructure.
-- [MODIFY SANAD-AGENTAGENTLIBCAPABILITIESAGENTS](./graphify-out/obsidian/MODIFY sanad-agentagentlibcapabilitiesAGENTS.md): Rules governing ./graphify-out/obsidian/MODIFY sanad-agentagentlibcapabilitiesworkspace root.
-- [MODIFY SANAD-AGENTCLIENTAGENTS](./graphify-out/obsidian/MODIFY sanad-agentclientAGENTS.md): Rules governing ./graphify-out/obsidian/MODIFY sanad-agentclientworkspace root.
-- [MODIFY SANADAGENT-LOCALAGENTS](./graphify-out/obsidian/MODIFY sanadagent-localAGENTS.md): Rules governing ./graphify-out/obsidian/MODIFY sanadagent-localworkspace root.
 - [AGENTS](./scripts/sanad_dev/AGENTS.md): Rules governing ./scripts/sanad_dev.
 
 ## Functional Features & Architecture Guides
 
-- [Local Gateway and Sanad Home Protection](docs/technical/user_data_protection_and_minimization.md): Authenticated desktop-only loopback transport, local credential delivery, secure filesystem ownership, migration, and worktree isolation.
-- [Local Gateway and Sanad Home Security QA](docs/qa_maintenance/local_gateway_and_sanad_home_security_qa.md): Regression matrix for local admission, permissions, legacy restart, platform ACLs, and isolated runtimes.
 - [خارطة محرك ومنطق الوكلاء](docs/agent_engine/MOC.md): فهرس وخارطة وثائق منطق وهندسة الوكلاء، سجل الأوامر النظامية، ومواصفات أدوات الذكاء الاصطناعي.
 - [Capability Runtime Architecture](docs/agent_engine/capability_runtime.md): Architecture of tool specifications, runtime catalog assembly, permissions, MCP, workspace/web services, skills, and platform tools.
 - [Codex Responses Runtime Design](docs/agent_engine/codex_responses_runtime_design.md): تصميم codec وحالة الاستمرارية والبث والاستكمال لمحول Codex Responses في Sanad.
@@ -83,27 +78,28 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Conversation Cache and Draft Recovery QA](docs/qa_maintenance/conversation_cache_recovery_qa.md): QA scenarios for persistent conversation snapshots, draft acceptance, pagination recovery, cleanup, and lifecycle flush behavior.
 - [Conversation Event Live/History Parity QA](docs/qa_maintenance/conversation_event_parity_qa.md): Focused verification for model-step segmentation, tool identity, opaque event IDs, and canonical history hydration.
 - [Conversation Navigation — QA Recovery Matrix](docs/qa_maintenance/conversation_navigation_recovery_matrix.md): QA verification and recovery scenarios for conversation navigation, history, and deletion.
+- [Desktop Authentication Exchange QA](docs/qa_maintenance/desktop_authentication_exchange_qa.md): Regression matrix for credential-free client-daemon authentication reconciliation.
 - [Device Name Editing QA](docs/qa_maintenance/device_name_editing_qa.md): QA scenarios and test matrices for verifying device renaming.
 - [Device Workspace Sidebar QA](docs/qa_maintenance/device_workspace_sidebar_qa.md): Focused QA coverage for the Plan 32c device-scoped sidebar, including pagination, cache-first rendering, responsive layout, accessibility, and live ordering.
 - [Live Context Usage Indicator QA](docs/qa_maintenance/live_context_usage_indicator_qa.md): Regression matrix for latest provider usage, cached-input visibility, tool-loop updates, and history restoration.
+- [Local Gateway and Sanad Home Security QA](docs/qa_maintenance/local_gateway_and_sanad_home_security_qa.md): Regression matrix for authenticated loopback transport, secure local files, startup preparation, and isolated runtimes.
+- [MCP Server Configuration QA](docs/qa_maintenance/mcp_server_configuration_qa.md): Security, form, import/export, OAuth, lifecycle, and regression checks for daemon-owned MCP server configuration.
 - [Memory Tool Reliability QA](docs/qa_maintenance/memory_tool_reliability.md): Regression matrix for compact memory results, atomic batches, file safety, bounded recovery, and frozen prompt snapshots.
-- [MCP Server Configuration QA](docs/qa_maintenance/mcp_server_configuration_qa.md): Regression matrix for form-first MCP management, daemon authority, secrets, import/export, Advanced JSON, inspection, and OAuth lifecycle.
-- [Mobile Session and Resume Recovery QA](docs/qa_maintenance/mobile_session_resume_recovery_qa.md): Regression coverage for typed refresh outcomes, foreground resume, stale-cache continuity, and authoritative conversation resynchronization.
-- [Desktop Authentication Exchange QA](docs/qa_maintenance/desktop_authentication_exchange_qa.md): Regression coverage for bidirectional credential-free native desktop auth reconciliation.
 - [Message Edit and Retry QA Matrix](docs/qa_maintenance/message_edit_retry_qa.md): Quality Assurance matrix and test cases for the message edit and retry flow.
+- [Mobile Session and Resume Recovery QA](docs/qa_maintenance/mobile_session_resume_recovery_qa.md): Regression matrix for typed refresh outcomes, foreground resume, stale cache continuity, and authoritative conversation resynchronization.
 - [New Conversation, Composer, and App Bar QA](docs/qa_maintenance/new_conversation_composer_app_bar_qa.md): Focused Plan 32d scenarios for unified composition, device-scoped drafts, responsive actions, and atomic session presentation.
 - [Plan 30 Runtime Recovery Matrix](docs/qa_maintenance/plan30_runtime_recovery_matrix.md): Focused QA ownership for runtime recovery, route confirmation, reconnect hydration, and never-trapped-session behavior.
 - [Provider Account Usage Limits QA Matrix](docs/qa_maintenance/provider_account_usage_limits_qa.md): Regression coverage for provider-instance usage parsing, protocol isolation, freshness, stale responses, and card presentation.
 - [Plan 29 Provider Setup Regression Matrix](docs/qa_maintenance/provider_setup_plan29_regression_matrix.md): Regression coverage targets for the instance-first provider setup runtime.
 - [Release Verification Matrix](docs/qa_maintenance/release_verification.md): Required local and hosted evidence for Sanad release, signing, installation, update, and rollback.
+- [Remote MCP Management Boundary QA](docs/qa_maintenance/remote_mcp_management_qa.md): Regression matrix for disabling cloud MCP configuration management while preserving locally approved MCP tool use.
 - [Runtime Source Switch QA](docs/qa_maintenance/runtime_source_switch_qa.md): Regression matrix for moving one active sanad-dev pair between source worktrees without changing its durable runtime identity.
 - [sanad-dev Runtime Ownership QA](docs/qa_maintenance/sanad_dev_runtime_ownership_qa.md): Regression matrix for managed launcher ownership, reconciliation, clone isolation, and continuous source handoff.
 - [Session Title Generation QA](docs/qa_maintenance/session_title_generation_qa.md): Regression coverage for first-exchange background title generation, stale-result rejection, and client synchronization.
 - [Task 31 Authoritative Session State QA Matrix](docs/qa_maintenance/task31_authoritative_session_state_matrix.md): Regression coverage for durable execution snapshots, per-session attention isolation, reconnect recovery, and authoritative route failover UX.
 - [Task 36 Authoritative Steer, Queue, and Stop Recovery QA Matrix](docs/qa_maintenance/task36_authoritative_steer_queue_stop_recovery_matrix.md): Regression coverage for daemon-owned delivery classification, pending-steer cancellation, queue mutations, lossless Stop draft recovery, and first-writer restart claims.
-- [Windows Release Clean-Machine Validation](docs/qa_maintenance/windows_release_clean_machine.md): Windows 11 unsigned candidate release-gate verification, Defender and SmartScreen observations, lifecycle checkpoints, and sanitized evidence requirements.
-- [Remote Workspace Folder Management QA](docs/qa_maintenance/workspace_folder_management_qa.md): Regression matrix for create, rename, delete, validation, correlation, refresh, and error behavior in the remote workspace picker.
-- [Remote MCP Management Boundary QA](docs/qa_maintenance/remote_mcp_management_qa.md): Regression matrix for cloud-only MCP configuration rejection while preserving locally configured MCP tool use for all turn origins.
+- [Windows Release Clean-Machine Validation](docs/qa_maintenance/windows_release_clean_machine.md): Windows 11 release-gate evidence and reusable Windows clean-machine procedure for the unsigned Sanad 1.0.0 candidate.
+- [Remote Workspace Folder Management QA](docs/qa_maintenance/workspace_folder_management_qa.md): Regression matrix for the temporary cloud workspace-management shutdown and preserved local picker behavior.
 - [Workspace Identity and Change Path QA](docs/qa_maintenance/workspace_identity_relocation_qa.md): Regression coverage for UUID migration, missing folders, rename, Change Path, cache reconciliation, and scoped Settings routing.
 - [خارطة المعمارية والرمز التقني](docs/technical/MOC.md): فهرس وخارطة وثائق المعمارية البرمجية، تصميم قواعد البيانات، وواجهات برمجة التطبيقات.
 - [مواصفات قاعدة البيانات المحلية للوكيل](docs/technical/agent_database_schema.md): تصميم جداول قاعدة البيانات المحلية (SQLite - state.db) التابعة للوكيل sanad-agent لحفظ الجلسات وتفاصيل التعليق.
@@ -111,23 +107,25 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [معمارية تشغيل الوكيل المحلي](docs/technical/agent_runtime.md): تصميم محرك تشغيل الوكيل (sanad-agent) وتركيب موجه النظام (System Prompt) للـ KV-Cache والتأمين الأمني.
 - [Background Terminal Task Runtime](docs/technical/background_terminal_task_runtime.md): العقد التقني للمهام الطرفية الخلفية المملوكة، والنقل الذري من الجولة، والـPTY والمخرجات، والإيقاظ، والتفاعل الآمن، والتعافي.
 - [Client Portal Authentication](docs/technical/client_authentication.md): Portal-owned login, polling, refresh, credential persistence, and platform presentation architecture for Sanad clients.
-- [Desktop Authentication Exchange](docs/technical/desktop_authentication_exchange.md): Credential-free native desktop login, refresh, and logout reconciliation through the authenticated Local Gateway.
 - [Client Conversation Cache Schema](docs/technical/client_conversation_cache_schema.md): Ownership, persistence schema, pagination rules, draft correlation, and stable consumer APIs for the Flutter conversation cache.
 - [Client Conversation Navigation Runtime](docs/technical/client_conversation_navigation.md): Technical design for device-scoped sidebar projection, atomic history swaps, deletion fallback, and route synchronization.
 - [Client Local Daemon Control](docs/technical/client_local_daemon_control.md): Architecture for source and standalone daemon lifecycle control from the Flutter desktop client.
 - [بروتوكولات الاتصال ونظام نقل الأحداث](docs/technical/communication_protocols.md): توثيق بروتوكول Socket.IO ونقل الأحداث والمهام وطلبات التعليق (Suspension) مع العميل.
 - [مواصفات نظام التصميم والمكونات المرئية للمشاريع](docs/technical/design_system.md): توثيق شامل للألوان، الخطوط، الهيكل البنائي والواجهات التفاعلية المشتركة لمشاريع Sanad (التطبيق الرئيسي، صفحة الهبوط، ولوحة التحكم).
+- [Desktop Authentication Exchange](docs/technical/desktop_authentication_exchange.md): Credential-free live authentication reconciliation between a native Flutter client and its local Dart daemon.
 - [Device Runtime Settings Protocol](docs/technical/device_runtime_settings_protocol.md): Unified local/cloud protocol commands, validation, persistence, and secret-handling rules for device settings.
 - [Hosted Services Boundary](docs/technical/hosted_services_boundary.md): Ownership and compatibility boundary between the open-source Sanad Agent clients and EastStar AI hosted services.
-- [Public Client Endpoint Configuration](docs/technical/public_client_endpoint_configuration.md): Production/local public defaults and explicit private build-time injection for hosted Development or Staging services.
+- [MCP Server Configuration, Secrets, and Inspection](docs/technical/mcp_server_configuration.md): Daemon-owned MCP configuration, secret handling, inspection, OAuth, import/export, and runtime isolation architecture.
 - [Message Turn Replay Protocol](docs/technical/message_turn_replay_protocol.md): Technical specification and protocols governing historical message turn replay and recovery.
 - [بروتوكول مزودي نماذج اللغة](docs/technical/provider_protocol.md): بروتوكول إعداد مزودي LLM والمصادقة والتخزين واختيار النموذج في Sanad Agent.
+- [Public Client Endpoint Configuration](docs/technical/public_client_endpoint_configuration.md): Production and local endpoint defaults plus explicit private Development and Staging build-time injection.
 - [Reasoning, Thoughts, and Final Answer Separation](docs/technical/reasoning_thoughts_separation.md): Protocol, adapter normalization, history, and state for assistant surfaces. Streaming text shares the final-answer Markdown look; provider reasoning is a transient live-only row never rebuilt from history.
 - [Run Cancellation and Process Ownership](docs/technical/run_cancellation_and_process_ownership.md): العقد التقني لإلغاء جولة الوكيل إلغاءً محدود الزمن، ومقاطعة المزود والأداة، وامتلاك شجرة العمليات، وتثبيت نتيجة نهائية متطابقة حيًا وتاريخيًا.
 - [sanad-dev Runtime Ownership](docs/technical/sanad_dev_runtime_ownership.md): Managed launcher leases, workspace/client ownership, clone isolation, reconciliation, and continuous source handoff.
 - [Release and Update Architecture](docs/technical/update_architecture.md): The shared release manifest and the update ownership of the Sanad agent and client on every runtime.
+- [Local Gateway and Sanad Home Protection](docs/technical/user_data_protection_and_minimization.md): Authentication, origin enforcement, filesystem ownership, secure startup, and runtime isolation for local Sanad data.
 - [Experimental Realtime Voice](docs/technical/voice_streaming.md): Current experimental Gemini Realtime voice path, transports, audio format, interruption behavior, and release boundaries.
-- [Remote Workspace Folder Mutation Protocol](docs/technical/workspace_folder_mutation_protocol.md): Daemon-owned protocol and validation model for creating, renaming, and deleting folders while selecting a remote workspace.
+- [Remote Workspace Folder Mutation Protocol](docs/technical/workspace_folder_mutation_protocol.md): Current cloud rejection boundary and suspended design for remote workspace filesystem management.
 - [Workspace Identity, Rename, and Change Path Protocol](docs/technical/workspace_identity_protocol.md): Stable workspace UUID, availability projection, rename, path repair, and client routing contract.
 - [Implementation Plans](docs/plans/): Architectural blueprints, milestones, and step-by-step implementation plans for project development phases.
 

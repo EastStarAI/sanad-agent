@@ -26,9 +26,9 @@ The English and Arabic README heroes use the same light/dark horizontal wordmark
 `scripts/brand/generate_brand_assets.sh` derives every square icon from the canonical SVG, calls the repository's existing `flutter_launcher_icons` dependency for Android, iOS, legacy macOS, Windows, and Web, and then completes surfaces the package does not fully own. The complete generation path is macOS-oriented because it requires Apple's `sips` utility; it also requires Ruby, FFmpeg, and FVM, and fails before writing outputs when any prerequisite is missing:
 
 - Android adaptive safe-area foreground and Android 13 monochrome declaration;
-- a macOS 26 Icon Composer foreground generated from the canonical mark, with
-  specular highlight, shadow, translucency, and layer glass disabled while the
-  legacy asset catalog remains available for earlier macOS releases;
+- a flat macOS asset catalog generated from the same opaque canonical composition
+  as iOS, avoiding the Xcode 26 layered Icon Composer enclosure that adds a
+  visible light rim around dark icons;
 - a seven-frame Windows ICO (`16`, `24`, `32`, `48`, `64`, `128`, `256`) through `client/tool/generate_windows_icon.dart`;
 - independently padded Web maskable icons and `16`/`32`/ICO favicons;
 - Linux hicolor icons and desktop-entry packaging;
@@ -45,7 +45,7 @@ The standard app icon uses the approved 80% width proportion. Adaptive and maska
 | Android legacy launcher | `client/android/app/src/main/res/mipmap-{mdpi,hdpi,xhdpi,xxhdpi,xxxhdpi}/ic_launcher.png` | Complete `48`, `72`, `96`, `144`, `192` matrix | Device smoke in SANAD-12 |
 | Android adaptive / monochrome | `client/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml` and generated foreground densities | White safe-area foreground, `#0A0A0A` background, monochrome layer declared | Android 13 launcher smoke in SANAD-12 |
 | iOS / iPadOS | `client/ios/Runner/Assets.xcassets/AppIcon.appiconset/` | Every `Contents.json` slot generated; App Store `1024` output is opaque | Xcode/device archive in SANAD-12 |
-| macOS | `client/macos/Runner/AppIcon.icon/` with `client/macos/Runner/Assets.xcassets/AppIcon.appiconset/` fallback | Xcode 26 uses the layered Icon Composer source without the automatic white specular rim; the complete legacy `16` through `1024` set remains for earlier releases | Archive/notarization smoke in SANAD-12 |
+| macOS | `client/macos/Runner/Assets.xcassets/AppIcon.appiconset/` | The complete `16` through `1024` matrix uses the same opaque pixels as the corrected iOS icon; no competing `AppIcon.icon` layered source may reintroduce Xcode 26's light enclosure rim | Archive/notarization smoke in SANAD-12 |
 | Windows app | `client/windows/runner/resources/app_icon.ico` | Seven-frame ICO generated from the same master | Windows executable/taskbar smoke in SANAD-12 |
 | Windows installer | `client/release/windows/sanad_client_installer.iss` | `SetupIconFile` consumes the canonical generated ICO, not a PNG | Installer smoke in SANAD-12 |
 | Linux package | `client/linux/assets/icons/hicolor/` and `client/linux/com.eaststarai.sanad.desktop` | `16`, `24`, `32`, `48`, `64`, `128`, `256`, `512`; CMake installs the desktop entry and icon tree | Linux package smoke in SANAD-12 |
@@ -73,8 +73,8 @@ The `EastStarAI` organization avatar remains an EastStar identity decision; SANA
 Local acceptance requires:
 
 1. the canonical SVG and original wordmarks remain tracked;
-2. generated icon dimensions, near-black corner pixels, iOS opacity, macOS
-   Icon Composer effects-disabled contract and project linkage, adaptive
+2. generated icon dimensions, near-black corner pixels, iOS opacity, exact
+   iOS/macOS flat-icon pixel parity, absence of a layered macOS icon source, adaptive
    monochrome, maskable padding, Web metadata, Windows ICO frames, and Linux
    matrix pass `client/test/brand/brand_assets_test.dart`;
 3. no active client source, `pubspec.yaml`, or test refers to the removed legacy splash filename;

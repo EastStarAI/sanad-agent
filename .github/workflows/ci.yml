@@ -99,7 +99,7 @@ jobs:
           fvm dart pub get
           fvm dart run tool/release_tool.dart validate-contract --repo-root ..
           fvm dart run tool/release_tool.dart validate-contract \
-            --repo-root .. --tag v1.0.0-rc.1 --channel rc
+            --repo-root .. --tag v1.0.1-rc.1 --channel rc
       - name: Reject mismatched release identities
         working-directory: agent
         shell: bash
@@ -112,16 +112,16 @@ jobs:
               exit 1
             fi
           }
-          reject --tag v1.0.0-beta.1 --channel rc
-          reject --tag v1.0.0-rc.1 --channel stable
+          reject --tag v1.0.1-beta.1 --channel rc
+          reject --tag v1.0.1-rc.1 --channel stable
           contract=../release/release-contract.json
           backup="$RUNNER_TEMP/release-contract.json"
           cp "$contract" "$backup"
           trap 'cp "$backup" "$contract"' EXIT
-          jq '.build_number = 2' "$backup" > "$contract"
-          reject --tag v1.0.0 --channel stable
-          jq '.version = "1.0.1" | .tag = "v1.0.1"' "$backup" > "$contract"
+          jq '.build_number = 3' "$backup" > "$contract"
           reject --tag v1.0.1 --channel stable
+          jq '.version = "1.0.2" | .tag = "v1.0.2"' "$backup" > "$contract"
+          reject --tag v1.0.2 --channel stable
       - name: Analyze agent
         working-directory: agent
         run: fvm dart analyze

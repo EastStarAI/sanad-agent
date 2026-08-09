@@ -1,3 +1,8 @@
+---
+title: "MCP Server Configuration QA"
+description: "Security, form, import/export, OAuth, lifecycle, and regression checks for daemon-owned MCP server configuration."
+---
+
 # MCP Server Configuration QA
 
 ## Authority and security

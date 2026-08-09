@@ -1,3 +1,8 @@
+---
+title: "MCP Server Configuration, Secrets, and Inspection"
+description: "Daemon-owned MCP configuration, secret handling, inspection, OAuth, import/export, and runtime isolation architecture."
+---
+
 # MCP Server Configuration, Secrets, and Inspection
 
 ## Scope and authority
