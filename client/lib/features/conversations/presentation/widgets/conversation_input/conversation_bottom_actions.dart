@@ -54,6 +54,8 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
   final Set<String> _providerDisplayLookupAttempts = <String>{};
   final Map<String, DateTime> _emptyProviderDisplayFetchUntilByAgent = {};
   bool _didLoadInitialProviderDisplayNames = false;
+  String? _lastLoadedProviderId;
+  String? _lastLoadedAgentId;
 
   @override
   void initState() {
@@ -239,13 +241,18 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
       return;
     }
 
-    if (getIt.isRegistered<ProviderUsageCubit>()) {
-      unawaited(
-        getIt<ProviderUsageCubit>().onInstancesLoaded(
-          agent: widget.activeAgent,
-          instanceIds: [activeProviderId],
-        ),
-      );
+    final activeAgentId = widget.activeAgent?.id;
+    if (activeProviderId != _lastLoadedProviderId || activeAgentId != _lastLoadedAgentId) {
+      _lastLoadedProviderId = activeProviderId;
+      _lastLoadedAgentId = activeAgentId;
+      if (getIt.isRegistered<ProviderUsageCubit>()) {
+        unawaited(
+          getIt<ProviderUsageCubit>().onInstancesLoaded(
+            agent: widget.activeAgent,
+            instanceIds: [activeProviderId],
+          ),
+        );
+      }
     }
 
     final knownDisplays = _providerDisplayNamesByAgent[key];
