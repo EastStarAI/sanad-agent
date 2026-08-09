@@ -50,8 +50,10 @@ The macOS Agent uses Hardened Runtime with the narrowly scoped
 Dart AOT runtime stubs. The workflow injects the validated release-contract
 version at compilation, signs with that entitlement, executes the signed binary,
 and submits it for notarization. Raw CLI notarization is checked with
-`codesign --test-requirement '=notarized'`; `spctl --type execute` is not used
-because it rejects valid notarized non-bundle executables.
+`codesign --test-requirement '=notarized'`; after Apple accepts the submission,
+the workflow allows a short bounded retry window for ticket lookup propagation
+and still fails closed when the requirement remains unsatisfied. `spctl --type
+execute` is not used because it rejects valid notarized non-bundle executables.
 
 The hosted macOS Client job restores the exported Sparkle Ed25519 key to a
 runner-temporary file and passes that file directly to Sparkle `sign_update`.

@@ -465,16 +465,18 @@ void main() {
 
         expect(await service.scheduleWindowsReplacement(result), isTrue);
         final resultFile = File('${target.path}.update-result.json');
+        final replacementScript = File('${staged.path}.replace.ps1');
         for (
           var attempt = 0;
-          attempt < 40 && !resultFile.existsSync();
+          attempt < 40 &&
+              (!resultFile.existsSync() || replacementScript.existsSync());
           attempt++
         ) {
           await Future<void>.delayed(const Duration(milliseconds: 100));
         }
         expect(resultFile.existsSync(), isTrue);
         expect(jsonDecode(resultFile.readAsStringSync())['status'], 'started');
-        expect(File('${staged.path}.replace.ps1').existsSync(), isFalse);
+        expect(replacementScript.existsSync(), isFalse);
       },
       skip: Platform.isWindows ? false : 'Windows native PowerShell gate.',
     );

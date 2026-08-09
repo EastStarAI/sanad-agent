@@ -220,8 +220,19 @@ jobs:
             --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER_ID" \
             --wait
-          codesign --verify --strict --test-requirement '=notarized' \
-            --verbose=2 "$agent"
+          ticket_verified=false
+          for attempt in {1..12}; do
+            if codesign --verify --strict --test-requirement '=notarized' \
+              --verbose=2 "$agent"; then
+              ticket_verified=true
+              break
+            fi
+            if [[ "$attempt" -lt 12 ]]; then
+              echo "Notarization ticket is not queryable yet; retrying ($attempt/12)."
+              sleep 10
+            fi
+          done
+          test "$ticket_verified" = true
       - uses: actions/upload-artifact@v4
         with:
           name: agent-${{ matrix.platform }}-${{ matrix.architecture }}
