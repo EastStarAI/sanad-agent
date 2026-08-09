@@ -570,6 +570,17 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (widget.embedded)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton.icon(
+                        key: const ValueKey('add-mcp-server'),
+                        onPressed: _openAddServer,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add server'),
+                      ),
+                    ),
+                  if (widget.embedded && _workspacePath != null) const SizedBox(height: 12),
                   if (_workspacePath != null)
                     SegmentedButton<_McpConfigSource>(
                       segments: [

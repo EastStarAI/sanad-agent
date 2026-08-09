@@ -67,6 +67,7 @@ void main() {
     WidgetTester tester, {
     Size size = const Size(900, 800),
     bool workspace = false,
+    bool embedded = false,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
@@ -76,11 +77,20 @@ void main() {
       Provider<McpRuntimeClient>.value(
         value: client,
         child: MaterialApp(
-          home: McpServerManagementScreen(
-            device: device,
-            workspaceId: workspace ? '/workspace' : null,
-            workspaceName: workspace ? 'Project Alpha' : null,
-          ),
+          home: embedded
+              ? Scaffold(
+                  body: McpServerManagementScreen(
+                    device: device,
+                    workspaceId: workspace ? '/workspace' : null,
+                    workspaceName: workspace ? 'Project Alpha' : null,
+                    embedded: true,
+                  ),
+                )
+              : McpServerManagementScreen(
+                  device: device,
+                  workspaceId: workspace ? '/workspace' : null,
+                  workspaceName: workspace ? 'Project Alpha' : null,
+                ),
         ),
       ),
     );
@@ -101,6 +111,17 @@ void main() {
     await tester.tap(find.text(action));
     await _pumpFrames(tester);
   }
+
+  testWidgets('embedded Settings view exposes the Add server action', (
+    tester,
+  ) async {
+    await pumpManagement(tester, embedded: true);
+
+    final addButton = find.byKey(const ValueKey('add-mcp-server'));
+    expect(addButton, findsOneWidget);
+    expect(find.widgetWithText(FilledButton, 'Add server'), findsOneWidget);
+    expect(tester.widget<FilledButton>(addButton).onPressed, isNotNull);
+  });
 
   testWidgets('exports one redacted server and confirms credentials exclusion', (
     tester,

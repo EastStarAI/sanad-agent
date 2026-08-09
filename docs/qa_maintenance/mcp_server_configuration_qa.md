@@ -9,7 +9,7 @@
 
 ## Form and cards
 
-- The management destination has server cards and no permanent JSON pane. Cards distinguish Enabled, connection health, authentication, transport, tools, and origin.
+- The management destination has server cards and no permanent JSON pane. Its embedded Device/Workspace Settings presentation keeps a visible `Add server` action inside the page content rather than relying on a hidden route AppBar. Cards distinguish Enabled, connection health, authentication, transport, tools, and origin.
 - Add and Edit share Remote and Local branches. Remote covers Auto/HTTP/SSE plus None/Bearer/OAuth/Custom Headers. Local covers command, structured arguments with paste parsing, and structured environment rows.
 - Configured secrets display `Configured` with explicit Replace/Remove; stored values never populate a field.
 - Test performs daemon inspection, then review presents detected transport and selectable tools before Save.
