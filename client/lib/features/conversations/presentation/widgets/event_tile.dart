@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:sanad_client/utils/format_utils.dart';
 import 'package:sanad_client/utils/link_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/plan_task_list.dart';
@@ -16,7 +15,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/tools/w
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/ask_user_tool_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/generic_tool_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
-import 'package:sanad_client/features/conversations/presentation/widgets/markdown_style_helper.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/app_markdown_renderer.dart';
 
 class EventTile extends StatefulWidget {
   final CanonicalEvent event;
@@ -328,14 +327,11 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         child: SizedBox(
           key: Key('primary_markdown_${widget.event.kind.name}'),
           width: double.infinity,
-          child: MarkdownBody(
+          child: AppMarkdownRenderer(
             data: widget.event.text,
-            styleSheet: MarkdownStyleHelper.getStyleSheet(
-              context,
-              isFinal: true,
-            ),
+            isFinal: true,
             onTapLink: _onTapLink,
-            builders: {'code': AppInlineCodeBuilder(context)},
+            isStreaming: widget.event.status == EventStatus.running,
           ),
         ),
       ),
@@ -531,13 +527,11 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       default:
         return Directionality(
           textDirection: TextUtils.getTextDirection(widget.event.text),
-          child: MarkdownBody(
+          child: AppMarkdownRenderer(
             data: widget.event.text,
-            styleSheet: MarkdownStyleHelper.getStyleSheet(context, isFinal: false),
+            isFinal: false,
             onTapLink: _onTapLink,
-            builders: {
-              'code': AppInlineCodeBuilder(context),
-            },
+            isStreaming: widget.event.status == EventStatus.running,
           ),
         );
     }

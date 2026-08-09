@@ -79,10 +79,23 @@ contiguous. This prevents adjacent bold summaries from producing malformed
 
 ### In-flight snapshots
 
-The in-flight projection stores one active text stream per session. Chunks
-append only when canonical event type and run identity match. A transition from
-reasoning to ordinary answer text replaces the snapshot instead of combining
-the two surfaces. Durable history restores both after commit.
+The in-flight projection stores one active text stream per session. The
+`SessionTurnExecutor` updates this projection once at the stream source, before
+`GatewayManager` fans the immutable response out to local and cloud platforms.
+Protocol translation is side-effect free, so adding another transport cannot
+append a chunk again. Chunks append only when canonical event type, run id, and
+model-step id match. A transition from reasoning to ordinary answer text
+replaces the snapshot instead of combining the two surfaces. Durable history
+restores both after commit.
+
+### Late-steer completion
+
+When a steer is accepted after an assistant model step has already completed,
+that pre-steer content is superseded only for model continuation semantics. The
+runtime publishes the same segment as a completed `thought` before clearing the
+terminal accumulator and starting the next model step. History hydration maps
+the persisted `superseded_by_steer` assistant message to the same completed
+thought, preserving live/history order instead of dropping visible content.
 
 ## Client Mapping and Identity
 
@@ -120,10 +133,15 @@ reasoning streams are discarded.
 
 ### Markdown content
 
-`thinking` (Thoughts) and Final Answer use the same primary Markdown renderer,
-typography, spacing, directionality, selection, links, and inline-code behavior.
-There is no content-length threshold and no separate card, disclosure,
-measurement probe, bounded viewport, or nested scrollbar for streaming text.
+`thinking` (Thoughts) and Final Answer pass through the application-owned
+`AppMarkdownRenderer` boundary. Running text uses the progressive Markdown
+renderer without artificial typing, fade, or nested auto-scroll; completed text
+uses `MarkdownBody`. The boundary preserves the application typography
+baseline, directionality, and link actions; completed content retains the
+application inline-code builder. The package choice remains isolated for
+rollback. There is no content-length threshold and no separate
+card, disclosure, measurement probe, bounded viewport, or nested scrollbar for
+streaming text.
 Long content grows naturally inside the conversation timeline.
 
 Final Answer may append response metadata below the shared renderer. The
