@@ -24,7 +24,7 @@ GitHub attestation locally.
 
 | Component/platform | Required manifest trust metadata | Runtime proof |
 |---|---|---|
-| Agent macOS | `developer-id+notarization+github-attestation` | canonical URL, size, SHA-256, Developer ID identity, and the raw-CLI `codesign --test-requirement '=notarized'` ticket check |
+| Agent macOS | `developer-id+notarization+github-attestation` | canonical URL, size, SHA-256, Developer ID identity, plus protected CI matching Apple’s accepted notary-log architecture and `cdhash` ticket to the exact signed executable |
 | Agent Windows | `unsigned+github-attestation` | canonical URL, size, and SHA-256; provenance is proved by protected release CI |
 | Agent Linux | `github-attestation` | canonical URL, size, and SHA-256 |
 | Client macOS | `developer-id+notarization+sparkle-ed25519` | Sparkle EdDSA plus Apple package trust |

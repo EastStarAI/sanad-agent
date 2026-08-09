@@ -228,6 +228,13 @@ jobs:
           grep -F 'name: Build and verify signed private IPA' .github/workflows/release.yml
           grep -F 'fvm flutter test test/tool/app_web_startup_contract_test.dart' .github/workflows/release.yml
           grep -F 'build/web/sanad-public-sha.txt' .github/workflows/release.yml
+          grep -F 'xcrun notarytool log "$submission_id"' .github/workflows/release.yml
+          grep -F '.status == "Accepted"' .github/workflows/release.yml
+          grep -F '.ticketContents[]' .github/workflows/release.yml
+          grep -F '(.cdhash | ascii_downcase) == $cdhash' .github/workflows/release.yml
+          grep -F '.arch == $arch' .github/workflows/release.yml
+          grep -F 'fvm dart compile exe "-DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }}" bin/sanad_agent.dart -o' .github/workflows/release.yml
+          ! grep -F 'fvm dart compile exe `' .github/workflows/release.yml
           grep -F 'name: Activate, verify, and roll back Production Web on failure' .github/workflows/deploy.yml
           grep -F 'https://app.sanad.eaststarai.com/sanad-public-sha.txt' .github/workflows/deploy.yml
           grep -F 'environment: client-downloads-production' .github/workflows/release.yml

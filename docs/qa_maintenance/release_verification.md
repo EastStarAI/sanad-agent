@@ -33,7 +33,7 @@ rules remain fail-closed.
 
 | Target | Local evidence | Hosted or clean-machine evidence still required |
 |---|---|---|
-| Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification, bounded accepted-ticket lookup | both hosted runners, clean install, real upgrade and rollback |
+| Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification, accepted notary log with exact architecture/`cdhash` ticket match | both hosted runners, clean install, real upgrade and rollback |
 | Agent Linux x64 | contract and workflow path | hosted build, provenance, clean install, service/update/rollback |
 | Agent Windows x64 | contract and workflow path | Unsigned Windows build disclosure, SHA-256/manifest/provenance, Defender/SmartScreen and lifecycle on Windows 11, service/update/rollback |
 | Client macOS universal | universal Mach-O inspection, Developer ID-signed and notarized DMG, staple, Gatekeeper, Sparkle signature | clean update and rollback |
@@ -194,6 +194,25 @@ private. The Draft and publication jobs were skipped, and the run left no tag,
 Draft, or Release. This closes the hosted full-matrix build probe; clean-machine
 installation, update, rollback, Windows Defender/SmartScreen, and Internal
 TestFlight upload remain separate live gates.
+
+## 1.0.1 validation race follow-up
+
+Validation-only run `31293235254` at `b70bd25` accepted both macOS Agent
+submissions but exposed that the local raw-CLI ticket cache can remain
+unavailable despite Apple acceptance. Local macOS 26 arm64 submissions
+`c15943cf-f9a1-4955-817b-740f83b026e9` and
+`62b83964-8910-4f08-9882-8d5f18e31c5c` reproduced failure through 120 seconds
+and ten minutes respectively. The authoritative replacement gate passed only
+a notary log with status code zero, no issues, SHA-256 ticket metadata, and an
+exact architecture/`cdhash` match to the signed executable.
+
+Follow-up validation run `31294256992` at `81de416` then reached the hosted
+Windows compile step and exposed a separate PowerShell continuation failure:
+Dart received `compile exe` without its define, entry point, or output and
+reported `Missing Dart entry point`. The workflow now uses one explicitly quoted
+PowerShell command line and statically rejects the former backtick form. The
+complete matrix must be rerun after both follow-up fixes; neither failed run is
+release evidence.
 
 ## SANAD-08 local evidence
 
