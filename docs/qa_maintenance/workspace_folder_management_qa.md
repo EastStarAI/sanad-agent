@@ -27,6 +27,7 @@ description: "Regression matrix for the temporary cloud workspace-management shu
 | Client warning | A remote picker attempt displays the temporary security message. |
 | No remote browser | Conversation, Sidebar, and Settings use the shared helper, which returns no path remotely and never opens `WorkspaceBrowserDialog`. |
 | Local picker | A confirmed same-desktop local device still opens the native picker and can create or relocate a workspace using the selected path. |
+| Client projection | A workspace created from the sidebar/cache appears in the composer selector on its first opening without a close/reopen cycle. |
 
 ## Manual Regression Scenarios
 

@@ -905,8 +905,12 @@ class _ThinkingModeChip extends StatelessWidget {
   }
 
   String _firstMode() {
-    if (capabilities.thinkingModesList.isEmpty) return 'balanced';
-    return capabilities.thinkingModesList.first;
+    final modes = capabilities.thinkingModesList;
+    if (modes.contains(SessionMessagesCubit.defaultThinkingMode)) {
+      return SessionMessagesCubit.defaultThinkingMode;
+    }
+    if (modes.isNotEmpty) return modes.first;
+    return SessionMessagesCubit.defaultThinkingMode;
   }
 
   Widget _buildChip(BuildContext context, String text) {
@@ -1005,6 +1009,32 @@ class _SendStopButton extends StatelessWidget {
                   size: 16,
                   color: Theme.of(context).colorScheme.error,
                 ),
+        ),
+      );
+    }
+
+    if (inputSlice.isAwaitingMessageAcceptance) {
+      return SizedBox(
+        width: 32,
+        height: 32,
+        child: IconButton(
+          key: const Key('send_message_acceptance_indicator'),
+          tooltip: 'Waiting for message acceptance',
+          onPressed: null,
+          style: IconButton.styleFrom(
+            backgroundColor: Theme.of(context).colorScheme.onSurface,
+            disabledBackgroundColor: Theme.of(context).colorScheme.onSurface,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            padding: EdgeInsets.zero,
+          ),
+          icon: const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(
+              strokeWidth: 2,
+              color: Colors.black,
+            ),
+          ),
         ),
       );
     }

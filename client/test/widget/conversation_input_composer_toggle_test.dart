@@ -53,7 +53,10 @@ void main() {
     await slashCubit.close();
   });
 
-  ConversationInputSlice idleSlice({SessionExecutionSnapshot? executionSnapshot}) => ConversationInputSlice(
+  ConversationInputSlice idleSlice({
+    SessionExecutionSnapshot? executionSnapshot,
+    bool isAwaitingMessageAcceptance = false,
+  }) => ConversationInputSlice(
     isProcessing: false,
     nextMessageModel: null,
     nextMessageProviderId: null,
@@ -67,6 +70,7 @@ void main() {
     pendingSuspendedRequest: null,
     runtimeNotice: null,
     executionSnapshot: executionSnapshot,
+    isAwaitingMessageAcceptance: isAwaitingMessageAcceptance,
     queuedMessages: [],
   );
 
@@ -136,6 +140,27 @@ void main() {
 
     expect(find.byKey(const Key('voice_chat_btn')), findsNothing);
     expect(find.byKey(const Key('send_message_btn')), findsOneWidget);
+  });
+
+  testWidgets('shows acceptance spinner and disables duplicate send while awaiting canonical acceptance', (
+    tester,
+  ) async {
+    await pumpComposer(
+      tester,
+      capabilities: const Capability(supportsVoiceCall: true),
+      inputSlice: idleSlice(isAwaitingMessageAcceptance: true),
+      agentSlice: onlineAgentSlice,
+    );
+    await tester.enterText(find.byKey(const Key('chat_input')), 'hello sanad');
+    await tester.pump();
+
+    expect(find.byKey(const Key('send_message_acceptance_indicator')), findsOneWidget);
+    expect(find.byKey(const Key('send_message_btn')), findsNothing);
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(
+      tester.widget<IconButton>(find.byKey(const Key('send_message_acceptance_indicator'))).onPressed,
+      isNull,
+    );
   });
 
   testWidgets('Enter sends auto while Ctrl and Command Enter request queue', (tester) async {

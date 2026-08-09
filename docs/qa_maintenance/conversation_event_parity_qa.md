@@ -32,6 +32,7 @@ All items share one `run_id`. The three assistant segments have distinct `model_
 13. Local/cloud fan-out translates one response independently but updates the in-flight snapshot once at the stream source; two chunks hydrate as `A + B`, never `A + A + B + B`.
 14. A late steer completes the pre-steer running row as a visible thought before the steer continuation starts, and history hydration reproduces the same order.
 15. Running thought Markdown is exercised through the progressive renderer in widget tests; tests do not silently replace it with the completed-document renderer.
+16. Live and history tool execution events maintain identical error status parity (a tool failing with an error in the live run is hydrated as a tool error event in history).
 
 ## Automated ownership
 

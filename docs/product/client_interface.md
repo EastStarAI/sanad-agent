@@ -25,6 +25,9 @@ Changing the selected device changes the workspaces, conversations, provider
 configuration, and runtime state displayed by the client. It does not create a
 new conversation.
 
+The compact Home gateway/status bar is a native-desktop surface. Web and mobile
+never render it, regardless of browser or viewport width.
+
 When an empty device inventory is still being requested, the sidebar identifies
 that request as loading rather than claiming that no devices exist. If the
 request settles successfully, times out, or fails without returning a device,
@@ -78,7 +81,13 @@ created only after the first accepted send.
 
 The same composer is used for a new conversation and an existing session. It
 preserves per-device drafts and the selected workspace, provider, model, and
-thinking mode.
+thinking mode. A first-time user with no thinking preference starts at
+`balanced`, while saved returning-user choices remain unchanged. When the
+runtime has an authoritative provider/model route, the model selector is never
+left empty merely because only the provider half was restored.
+
+A workspace created elsewhere in the client appears on the selector's first
+opening; users never need to close and reopen the menu to refresh it.
 
 ## Active work
 

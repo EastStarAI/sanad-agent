@@ -24,8 +24,18 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     required this.messagesCubit,
   }) : super(_stateFromMessages(messagesCubit.state)) {
     _messagesSubscription = messagesCubit.stream.listen((state) {
-      emit(_stateFromMessages(state));
+      emit(
+        _stateFromMessages(
+          state,
+          isAwaitingMessageAcceptance: this.state.isAwaitingMessageAcceptance,
+        ),
+      );
     });
+  }
+
+  void setMessageAcceptancePending(bool isPending) {
+    if (state.isAwaitingMessageAcceptance == isPending) return;
+    emit(state.copyWith(isAwaitingMessageAcceptance: isPending));
   }
 
   Future<void> sendMessage(String text, {MessageDeliveryIntent intent = MessageDeliveryIntent.auto}) async {
@@ -62,7 +72,7 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     String? model,
     bool replaceExisting = false,
   }) {
-    if (!replaceExisting && (_hasText(state.nextMessageProviderId) || _hasText(state.nextMessageModel))) {
+    if (!replaceExisting && _hasText(state.nextMessageProviderId) && _hasText(state.nextMessageModel)) {
       return;
     }
     if (!_hasText(providerId) || !_hasText(model)) return;
@@ -321,7 +331,10 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     }
   }
 
-  static ConversationInputState _stateFromMessages(SessionMessagesState state) {
+  static ConversationInputState _stateFromMessages(
+    SessionMessagesState state, {
+    bool isAwaitingMessageAcceptance = false,
+  }) {
     return ConversationInputState(
       isProcessing: state.isProcessing,
       activeSessionId: state.activeSessionId,
@@ -342,6 +355,7 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
       runtimeNotice: state.runtimeNotice,
       executionSnapshot: state.executionSnapshot,
       attentionState: state.attentionState,
+      isAwaitingMessageAcceptance: isAwaitingMessageAcceptance,
       queuedMessages: state.queuedMessages,
       queuedMutationRequestIds: state.queuedMutationRequestIds,
       pendingSteerCancellationRequestIds: state.pendingSteerCancellationRequestIds,

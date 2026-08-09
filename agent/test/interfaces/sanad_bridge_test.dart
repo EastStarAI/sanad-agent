@@ -1245,6 +1245,59 @@ void main() {
     );
 
     test(
+      'get_session_history restores typed tool errors without relying on text prefixes',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-tool-error-history';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'sanad-agent',
+            createdAt: DateTime.parse('2026-07-02T10:00:00Z'),
+            updatedAt: DateTime.parse('2026-07-02T10:01:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Run the check'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'tool-error-1',
+                name: 'project_check',
+                arguments: const {},
+              ),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'tool-error-1',
+            content: 'Validation failed for two files',
+            metadata: const {'is_error': true},
+          ),
+          Message(role: MessageRole.assistant, content: 'The check failed.'),
+        ]);
+
+        Map<String, dynamic>? emitted;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-tool-error-history',
+            'session_id': sessionId,
+          },
+        }, (envelope) async => emitted = envelope);
+
+        final messages = emitted?['payload']['messages'] as List;
+        final toolResult = messages.singleWhere(
+          (message) => message['type'] == 'tool_result',
+        );
+        expect(toolResult['output'], 'Validation failed for two files');
+        expect(toolResult['isError'], isTrue);
+      },
+    );
+
+    test(
       'get_session_history restores steer after its tool result without exposing markers',
       () async {
         final bridge = SanadProtocolBridge();

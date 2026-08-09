@@ -3321,6 +3321,7 @@ void main() {
           final lastMsg = runner.history.last;
           expect(lastMsg.role, equals(MessageRole.tool));
           expect(lastMsg.toolCallId, equals('call-2'));
+          expect(lastMsg.metadata?['is_error'], isTrue);
           expect(
             lastMsg.content,
             contains('interrupted by a daemon crash/restart'),
