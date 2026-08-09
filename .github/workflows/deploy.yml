@@ -1,6 +1,25 @@
 name: Deploy prepared release assets
 
 on:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: Existing immutable GitHub Release tag
+        required: true
+        type: string
+      release_run_id:
+        description: Successful release workflow run containing private Web handoff artifacts
+        required: true
+        type: string
+      deploy_web:
+        required: true
+        type: boolean
+      deploy_updates:
+        required: true
+        type: boolean
+      deploy_installers:
+        required: true
+        type: boolean
   workflow_dispatch:
     inputs:
       release_tag:
@@ -33,7 +52,7 @@ jobs:
     if: inputs.deploy_web == true
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    environment: web-production
+    environment: client-downloads-production
     steps:
       - uses: actions/checkout@v6
         with:
@@ -173,7 +192,7 @@ jobs:
   updates:
     if: inputs.deploy_updates == true
     runs-on: ubuntu-24.04
-    environment: updates-production
+    environment: client-downloads-production
     steps:
       - uses: actions/checkout@v6
         with:
@@ -196,6 +215,8 @@ jobs:
             --pattern SHA256SUMS \
             --dir download
           (cd download && sha256sum --check SHA256SUMS --ignore-missing)
+          gh attestation verify download/appcast.xml \
+            --repo "$GITHUB_REPOSITORY"
       - name: Atomic Appcast deployment
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
@@ -212,7 +233,7 @@ jobs:
   installers:
     if: inputs.deploy_installers == true
     runs-on: ubuntu-24.04
-    environment: installers-production
+    environment: client-downloads-production
     steps:
       - uses: actions/checkout@v6
         with:
