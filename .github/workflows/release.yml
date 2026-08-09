@@ -639,3 +639,75 @@ jobs:
             -F draft=false \
             -F prerelease="$EXPECTED_PRERELEASE" \
             --silent
+
+  client-download-aliases:
+    name: Verify and deploy Stable Client aliases
+    needs: [validate, publish]
+    if: needs.validate.outputs.channel == 'stable'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: client-downloads-production
+    permissions:
+      contents: read
+      attestations: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.validate.outputs.tag }}
+      - name: Configure pinned restricted SSH host
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_PRIVATE_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_KEY" > "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/id_ed25519" "$HOME/.ssh/known_hosts"
+      - name: Verify published manifest and Client artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_state="$(gh release view "$RELEASE_TAG" --json isDraft,isPrerelease,tagName)"
+          jq -e --arg tag "$RELEASE_TAG" \
+            '.isDraft == false and .isPrerelease == false and .tagName == $tag' \
+            <<<"$release_state" >/dev/null
+          mkdir download generated
+          gh release download "$RELEASE_TAG" \
+            --pattern release-manifest.json --pattern SHA256SUMS --dir download
+          jq -e --arg tag "$RELEASE_TAG" --arg commit "$GITHUB_SHA" \
+            '.channel == "stable" and .tag == $tag and .commit == $commit' \
+            download/release-manifest.json >/dev/null
+          mapfile -t client_files < <(jq -r '
+            .artifacts[] |
+            select(.component == "client" and
+              ((.platform == "macos" and .architecture == "universal" and .format == "dmg") or
+               (.platform == "windows" and .architecture == "x64" and .format == "exe") or
+               (.platform == "linux" and .architecture == "x64" and .format == "tar.gz"))) |
+            .filename' download/release-manifest.json)
+          test "${#client_files[@]}" -eq 3
+          for file in "${client_files[@]}"; do
+            gh release download "$RELEASE_TAG" --pattern "$file" --dir download
+            gh attestation verify "download/$file" --repo "$GITHUB_REPOSITORY"
+          done
+          scripts/release/generate_client_download_redirects.sh \
+            download/release-manifest.json download/SHA256SUMS download \
+            generated/sanad-client-download-redirects.conf
+      - uses: actions/upload-artifact@v4
+        with:
+          name: stable-client-download-redirects-${{ needs.validate.outputs.tag }}
+          path: generated/sanad-client-download-redirects.conf
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
+          if-no-files-found: error
+      - name: Candidate, activate, verify, and roll back on failure
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          manifest_sha="$(sha256sum download/release-manifest.json | awk '{print $1}')"
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "sudo /usr/local/sbin/sanad-client-downloads-control deploy '$RELEASE_TAG' '$manifest_sha'" \
+            < generated/sanad-client-download-redirects.conf

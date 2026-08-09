@@ -74,6 +74,10 @@ inventory again found zero `v1` tags and zero `v1` Releases or Drafts. This
 closes the rejection/no-partial-publication evidence only; it grants no
 approval for RC1 or any later publication.
 
+## Stable Client convenience-link gate
+
+Only an approved, published Stable Release may update the Production convenience links. The post-publication job must reject Drafts, prereleases, non-canonical repositories or URLs, missing or duplicate desktop Client entries, Agent artifacts, and any size, SHA-256, checksum-file, or attestation mismatch. Its generated include contains exactly macOS, Windows, and Linux redirects and is retained as workflow evidence. The restricted server command must pass a loopback candidate before atomic activation, verify Production plus Development and Staging regressions, and restore the preceding include on any reload or verification failure. Development and Staging never expose equivalent aliases, and Client bytes continue to download directly from GitHub Releases.
+
 ## Update failure coverage
 
 Automated tests cover contract parsing, invalid tag rejection, deterministic

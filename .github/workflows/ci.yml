@@ -230,6 +230,13 @@ jobs:
           grep -F 'build/web/sanad-public-sha.txt' .github/workflows/release.yml
           grep -F 'name: Activate, verify, and roll back Production Web on failure' .github/workflows/deploy.yml
           grep -F 'https://app.sanad.eaststarai.com/sanad-public-sha.txt' .github/workflows/deploy.yml
+          grep -F 'environment: client-downloads-production' .github/workflows/release.yml
+          grep -F 'sanad-client-downloads-control deploy' .github/workflows/release.yml
+          ! grep -Fq '/srv/sanad/' .github/workflows/deploy.yml
+          grep -Fq '/opt/sanad-sites/assets/web' .github/workflows/deploy.yml
+          grep -Fq '/opt/sanad-sites/assets/updates' .github/workflows/deploy.yml
+          grep -Fq '/opt/sanad-sites/assets/install' .github/workflows/deploy.yml
+          scripts/release/test_generate_client_download_redirects.sh
           grep -F -- '--draft' .github/workflows/release.yml
           grep -F 'release-manifest-rc.json' release/release-contract.json
           grep -F 'appcast-rc.xml' release/release-contract.json
