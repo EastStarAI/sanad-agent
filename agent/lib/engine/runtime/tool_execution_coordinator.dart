@@ -178,6 +178,9 @@ class ToolExecutionCoordinator {
     final allCompleted = Map<String, dynamic>.from(
       updatedMeta['completed_tool_results'] as Map? ?? const {},
     );
+    final allOutputs = Map<String, dynamic>.from(
+      updatedMeta['completed_tool_outputs'] as Map? ?? const {},
+    );
     for (final toolCall in toolCalls) {
       finalResults[toolCall.id] = ToolOutputGuard.guardResult(
         allCompleted[toolCall.id]?.toString() ??
@@ -196,7 +199,11 @@ class ToolExecutionCoordinator {
       final result = finalResults[toolCall.id]!;
       final alreadyAdded = callbacks.isToolMessagePresent(toolCall.id);
       if (!alreadyAdded) {
-        await callbacks.addToolMessage(toolCall, result);
+        final outputRecord = allOutputs[toolCall.id];
+        final isError =
+            (outputRecord is Map && outputRecord['is_error'] == true) ||
+            result.startsWith('Error');
+        await callbacks.addToolMessage(toolCall, result, isError: isError);
       }
     }
     callbacks.saveHistory();
@@ -553,7 +560,7 @@ class ToolExecutionCoordinator {
     }
 
     if (appendToHistory) {
-      await callbacks.addToolMessage(toolCall, result);
+      await callbacks.addToolMessage(toolCall, result, isError: isError);
     }
     return result;
   }
@@ -565,7 +572,11 @@ abstract class ToolExecutionCallbacks {
   /// Appends a tool-result [Message] for [toolCall] with [result], notifies
   /// plugins, saves history, and deletes the suspended checkpoint for the
   /// tool call id.
-  Future<void> addToolMessage(ToolCall toolCall, String result);
+  Future<void> addToolMessage(
+    ToolCall toolCall,
+    String result, {
+    required bool isError,
+  });
 
   /// Returns true if a tool message with [toolCallId] already exists in
   /// history (used to avoid duplicate appends after sequential execution).

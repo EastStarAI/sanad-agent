@@ -1820,7 +1820,11 @@ class _RunnerToolCallbacks implements ToolExecutionCallbacks {
   _RunnerToolCallbacks(this._runner);
 
   @override
-  Future<void> addToolMessage(ToolCall toolCall, String result) async {
+  Future<void> addToolMessage(
+    ToolCall toolCall,
+    String result, {
+    required bool isError,
+  }) async {
     final toolMessage = Message(
       role: MessageRole.tool,
       content: result,
@@ -1831,6 +1835,7 @@ class _RunnerToolCallbacks implements ToolExecutionCallbacks {
         'tool_call_id': toolCall.id,
         if (_runner.currentModelStepId != null)
           'model_step_id': _runner.currentModelStepId,
+        'is_error': isError,
       },
     );
     _runner.history.add(toolMessage);
