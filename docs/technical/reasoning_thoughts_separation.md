@@ -134,14 +134,13 @@ reasoning streams are discarded.
 ### Markdown content
 
 `thinking` (Thoughts) and Final Answer pass through the application-owned
-`AppMarkdownRenderer` boundary. Running text uses the progressive Markdown
-renderer without artificial typing, fade, or nested auto-scroll; completed text
-uses `MarkdownBody`. The boundary preserves the application typography
-baseline, directionality, and link actions; completed content retains the
-application inline-code builder. The package choice remains isolated for
-rollback. There is no content-length threshold and no separate
-card, disclosure, measurement probe, bounded viewport, or nested scrollbar for
-streaming text.
+`AppMarkdownRenderer` boundary. Both running and completed text always use the
+final-answer `MarkdownBody` renderer with the same complete
+`MarkdownStyleSheet`, link handling, and inline-code builder. The former
+progressive Markdown dependency has been removed, so conversation content has
+only one Markdown implementation. There is no content-length threshold and no
+separate card, disclosure, measurement probe, bounded viewport, or nested
+scrollbar for streaming text.
 Long content grows naturally inside the conversation timeline.
 
 Final Answer may append response metadata below the shared renderer. The

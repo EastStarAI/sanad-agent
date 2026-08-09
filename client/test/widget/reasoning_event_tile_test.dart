@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
-import 'package:flutter_streaming_text_markdown/flutter_streaming_text_markdown.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
@@ -9,7 +8,7 @@ import 'package:sanad_client/shared/widgets/copy_button.dart';
 
 void main() {
   testWidgets(
-    'running thinking uses the streaming Markdown renderer with app styling',
+    'running thinking uses the final-answer Markdown renderer and styling',
     (tester) async {
       await _pumpEvent(
         tester,
@@ -19,18 +18,62 @@ void main() {
           text: '### Shared heading',
         ),
       );
-      final rendererFinder = find.byType(StreamingTextMarkdown);
+      final rendererFinder = find.byType(MarkdownBody);
       final rendererContext = tester.element(rendererFinder);
       final finalStyle = MarkdownStyleHelper.getStyleSheet(
         rendererContext,
         isFinal: true,
       );
-      final renderer = tester.widget<StreamingTextMarkdown>(rendererFinder);
-      expect(renderer.markdownEnabled, isTrue);
-      expect(renderer.animationsEnabled, isFalse);
-      expect(renderer.autoScroll, isFalse);
-      expect(renderer.styleSheet, finalStyle.p);
+      final renderer = tester.widget<MarkdownBody>(rendererFinder);
+      expect(renderer.data, '### Shared heading');
+      expect(renderer.styleSheet, finalStyle);
+      expect(renderer.builders, isNotNull);
+      expect(renderer.builders.keys, contains('code'));
       expect(find.byKey(const Key('primary_markdown_thinking')), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'running and completed text use the same MarkdownBody configuration',
+    (tester) async {
+      await _pumpEvent(
+        tester,
+        _event(
+          kind: EventKind.thinking,
+          status: EventStatus.running,
+          text: '**Shared content**',
+        ),
+      );
+      final runningRenderer = tester.widget<MarkdownBody>(
+        find.byType(MarkdownBody),
+      );
+
+      await _pumpEvent(
+        tester,
+        _event(
+          kind: EventKind.thinking,
+          status: EventStatus.done,
+          text: '**Shared content**',
+        ),
+      );
+      final completedRenderer = tester.widget<MarkdownBody>(
+        find.byType(MarkdownBody),
+      );
+      final runningStyle = runningRenderer.styleSheet!;
+      final completedStyle = completedRenderer.styleSheet!;
+
+      expect(runningStyle.p, completedStyle.p);
+      expect(runningStyle.code, completedStyle.code);
+      expect(runningStyle.blockquote, completedStyle.blockquote);
+      expect(
+        runningStyle.codeblockDecoration,
+        completedStyle.codeblockDecoration,
+      );
+      expect(runningRenderer.builders.keys, completedRenderer.builders.keys);
+      expect(
+        runningRenderer.builders['code'].runtimeType,
+        completedRenderer.builders['code'].runtimeType,
+      );
     },
   );
 
