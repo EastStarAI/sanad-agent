@@ -52,7 +52,7 @@ This contract applies strictly to the `sanad-client/lib/infrastructure/` directo
 ## Local Filesystem Authority (Plan 25)
 - **Local tools/ directory hosts client-side infrastructure only for capabilities the local daemon does not own.** The local daemon (`sanad-agent`) is the **sole source of truth** for any state that the user expects to persist across devices and platforms.
 - **Workspace permissions (`WorkspacePolicy`)** are owned by the local daemon. The client **must not** read or write `settings.json` directly — all access must go through `ConversationRepository` → `ConversationClient` → `ConversationCommandGateway` (WebSocket). See `sanad-agent/docs/plans/25-relocate-workspace-permission-storage-to-agent.md` for the full contract.
-- **MCP server configs and auth tokens** may continue to be read/written by the client (these are client-side preferences, not agent-owned state). All other agent-owned state must follow the same pattern as workspace permissions.
+- **MCP server configs, OAuth material, and auth tokens** are daemon-owned state. The client projects typed snapshots and mutations through `DeviceCommandClient`; it must not read or write MCP configuration files or persist MCP credentials locally.
 
 ## Phase 27 — Cross-Transport Event Deduplication
 - **Canonical `event_id`:** every `device_event` envelope carries an `event_id` minted once by the agent runtime and preserved across all local/cloud copies. The client must not dedupe by content, timestamp, or `run_id` alone.

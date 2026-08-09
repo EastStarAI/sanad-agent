@@ -49,13 +49,16 @@ import 'package:sanad_client/core/presentation/state/app_state.dart';
 
 final getIt = GetIt.instance;
 
-Future<void> configureDependencies() async {
+Future<void> configureDependencies({
+  Future<void> Function(String phase)? startupTrace,
+}) async {
   final storageModule = StorageModule();
   final socketModule = SocketModule();
 
   if (!getIt.isRegistered<SharedPreferences>()) {
     getIt.registerSingleton<SharedPreferences>(await storageModule.prefs());
   }
+  await startupTrace?.call('preferences-ready');
 
   if (!getIt.isRegistered<AuthService>()) {
     getIt.registerLazySingleton<AuthService>(() => AuthService());
@@ -107,6 +110,7 @@ Future<void> configureDependencies() async {
     );
     getIt.registerSingleton<String>(hardwareId, instanceName: 'hardwareId');
   }
+  await startupTrace?.call('hardware-id-ready');
 
   if (!getIt.isRegistered<SanadSocketService>(instanceName: 'cloudSocketService')) {
     getIt.registerLazySingleton<SanadSocketService>(
@@ -173,6 +177,7 @@ Future<void> configureDependencies() async {
       dispose: (coordinator) => coordinator.dispose(),
     );
   }
+  await startupTrace?.call('package-version-ready');
 
   if (!getIt.isRegistered<DeviceCapabilitiesStore>()) {
     getIt.registerLazySingleton<DeviceCapabilitiesStore>(
@@ -320,7 +325,12 @@ Future<void> configureDependencies() async {
   }
 
   if (!getIt.isRegistered<AutoUpdateService>()) {
-    getIt.registerLazySingleton<AutoUpdateService>(() => AutoUpdateService());
+    getIt.registerLazySingleton<AutoUpdateService>(
+      () => AutoUpdateService(
+        beforeQuitForUpdate: () => getIt<ConversationCachePersistor>().flush(),
+      ),
+      dispose: (service) => service.dispose(),
+    );
   }
 
   if (!getIt.isRegistered<ConversationHistoryController>()) {

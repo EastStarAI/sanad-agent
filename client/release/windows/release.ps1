@@ -28,19 +28,15 @@ try {
     if (-not $PrivateKeyPath -or -not (Test-Path -LiteralPath $PrivateKeyPath)) {
         throw "WINSPARKLE_PRIVATE_KEY_PATH is required."
     }
-    $TemporaryKey = Join-Path $ClientRoot "dsa_priv.pem"
-    Copy-Item -LiteralPath $PrivateKeyPath -Destination $TemporaryKey -Force
-    try {
-        $SignOutput = & fvm dart run auto_updater:sign_update $Installer 2>&1
-        $Match = [regex]::Match(($SignOutput -join "`n"), 'sparkle:dsaSignature="([^"]*)"')
-        if (-not $Match.Success) { throw "WinSparkle update signing failed." }
-        Set-Content -LiteralPath "$Installer.update-signature" `
-            -Value $Match.Groups[1].Value -NoNewline
-    } finally {
-        if (Test-Path -LiteralPath $TemporaryKey) {
-            Remove-Item -LiteralPath $TemporaryKey -Force
-        }
-    }
+    $SignOutput = & fvm dart run auto_updater:sign_update `
+        $Installer $PrivateKeyPath 2>&1
+    $Match = [regex]::Match(
+        ($SignOutput -join "`n"),
+        'sparkle:dsaSignature="([^"]*)"'
+    )
+    if (-not $Match.Success) { throw "WinSparkle update signing failed." }
+    Set-Content -LiteralPath "$Installer.update-signature" `
+        -Value $Match.Groups[1].Value -NoNewline
 } finally {
     Pop-Location
 }

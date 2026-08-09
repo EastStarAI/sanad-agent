@@ -6,6 +6,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/provider_route_label.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
@@ -457,10 +458,12 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
   }
 
   String _firstThinkingMode() {
-    if (widget.capabilities.thinkingModesList.isEmpty) {
-      return 'balanced';
+    final modes = widget.capabilities.thinkingModesList;
+    if (modes.contains(SessionMessagesCubit.defaultThinkingMode)) {
+      return SessionMessagesCubit.defaultThinkingMode;
     }
-    return widget.capabilities.thinkingModesList.first;
+    if (modes.isNotEmpty) return modes.first;
+    return SessionMessagesCubit.defaultThinkingMode;
   }
 
   String _permissionModeLabel(WorkspacePermissionMode mode) {

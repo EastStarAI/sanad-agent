@@ -15,7 +15,7 @@ void main() {
       'ThemeCubit.getSavedTheme()',
       'WindowManagerService.initialize()',
       'registerWindowsScheme()',
-      'configureDependencies()',
+      'configureDependencies(startupTrace: _trace)',
       'getIt<AppState>().ready',
       'getIt<ConversationCachePersistor>().hydrate()',
     ];

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:logging/logging.dart';
+import 'package:sanad_release_contract/release_contract.dart';
 import 'package:sanad_agent/core/app_config.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/config.dart';
@@ -220,14 +221,36 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     }
 
     if (request.uri.path == '/update' && request.method == 'POST') {
+      String? targetVersion;
+      try {
+        targetVersion = request.uri.queryParameters['target_version']?.trim();
+        if (targetVersion == null || targetVersion.isEmpty) {
+          throw const FormatException('target_version is required.');
+        }
+        ReleaseVersion.parse(targetVersion);
+      } on FormatException catch (error) {
+        await _writeJsonResponse(request.response, {
+          'success': false,
+          'status': 'target_mismatch',
+          'message': error.message,
+        }, statusCode: HttpStatus.badRequest);
+        return;
+      }
       final updater = AgentUpdateService(
         currentVersion: _config.version,
         executablePath: Platform.resolvedExecutable,
         isSourceManaged: AppConfig.isSourceRun,
       );
-      final result = await updater.update();
+      var result = await updater.update(targetVersion: targetVersion);
       if (Platform.isWindows && result.stagedPath != null) {
-        await updater.scheduleWindowsReplacement(result);
+        final scheduled = await updater.scheduleWindowsReplacement(result);
+        if (!scheduled) {
+          result = result.copyWith(
+            status: AgentUpdateStatus.scheduleFailed,
+            message:
+                'Verified replacement could not be scheduled; the running agent was kept.',
+          );
+        }
       }
       await _writeJsonResponse(
         request.response,

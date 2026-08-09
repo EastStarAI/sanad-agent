@@ -81,11 +81,21 @@ nonzero CLI exit.
 
 ## Configuration and State
 
+On Desktop, an authenticated ready Local Gateway is sufficient to complete app
+bootstrap and enter Home regardless of cloud-login state. If startup temporarily
+reaches Login or Onboarding before the local socket becomes ready, the gateway
+state refresh redirects to Home automatically; **Run Local** is reserved for
+install/start/repair when no ready local connection exists.
+
 The active `SANAD_HOME` owns machine identity, auth, providers, `state.db`,
 memories, and runtime dumps. A linked `sanad-dev` runtime receives one
 worktree-scoped home plus a deterministic SharedPreferences prefix derived from
 that home, isolating client caches and preferences despite a shared bundle id.
 The primary checkout, packaged application, and explicit `user` selection retain
 the ordinary home and default preference namespace. Absolute custom homes receive
-their own namespace. External tests may still use `SANAD_STATE_HOME`, but
-`sanad-dev` does not inject it.
+their own namespace. Client identity, settings, lifecycle, HTTP, and WebSocket
+credential readers resolve the same active Home in the order explicit dependency
+override, compile-time `SANAD_HOME`, runtime `SANAD_HOME`, then the ordinary user
+home. This keeps packaged isolated lifecycle harnesses authenticated without
+baking a machine-specific path into the candidate. External tests may still use
+`SANAD_STATE_HOME`, but `sanad-dev` does not inject it.

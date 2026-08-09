@@ -1,21 +1,38 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
-import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
-
 import 'package:sanad_release_contract/release_contract.dart';
+
+const _defaultReleaseManifestUrl = String.fromEnvironment(
+  'SANAD_RELEASE_MANIFEST_URL',
+  defaultValue:
+      'https://github.com/EastStarAI/sanad-agent/releases/latest/download/release-manifest.json',
+);
+const _defaultReleaseArtifactMirrorUrl = String.fromEnvironment(
+  'SANAD_RELEASE_ARTIFACT_MIRROR_URL',
+);
 
 enum AgentUpdateStatus {
   upToDate('up_to_date'),
   updateAvailable('update_available'),
-  updating('updating'),
   restartRequired('restart_required'),
   sourceManaged('source_managed'),
+  networkFailed('network_failed'),
+  manifestInvalid('manifest_invalid'),
+  targetMismatch('target_mismatch'),
+  downgradeRejected('downgrade_rejected'),
   unsupportedTarget('unsupported_target'),
-  verificationFailed('verification_failed'),
+  trustFailed('trust_failed'),
+  checksumFailed('checksum_failed'),
+  scheduleFailed('schedule_failed'),
+  replacementFailed('replacement_failed'),
   rollbackCompleted('rollback_completed'),
+  startFailed('start_failed'),
+  healthFailed('health_failed'),
+  versionFailed('version_failed'),
+  authFailed('auth_failed'),
   failed('failed');
 
   const AgentUpdateStatus(this.wireName);
@@ -41,10 +58,21 @@ class AgentUpdateResult {
     AgentUpdateStatus.upToDate ||
     AgentUpdateStatus.updateAvailable ||
     AgentUpdateStatus.restartRequired ||
-    AgentUpdateStatus.sourceManaged ||
-    AgentUpdateStatus.rollbackCompleted => true,
+    AgentUpdateStatus.sourceManaged => true,
     _ => false,
   };
+
+  AgentUpdateResult copyWith({
+    AgentUpdateStatus? status,
+    String? message,
+    String? stagedPath,
+  }) => AgentUpdateResult(
+    status: status ?? this.status,
+    currentVersion: currentVersion,
+    availableVersion: availableVersion,
+    message: message ?? this.message,
+    stagedPath: stagedPath ?? this.stagedPath,
+  );
 
   Map<String, dynamic> toJson() => {
     'success': isSuccess,
@@ -56,6 +84,8 @@ class AgentUpdateResult {
 }
 
 class AgentUpdateService {
+  static final Map<String, Future<AgentUpdateResult>> _inFlightUpdates = {};
+
   AgentUpdateService({
     required this.currentVersion,
     required this.executablePath,
@@ -64,14 +94,20 @@ class AgentUpdateService {
     Uri? manifestUri,
     String? operatingSystem,
     String? architecture,
+    PlatformArtifactVerifier? platformVerifier,
+    Future<bool> Function(String script)? replacementScheduler,
+    Uri? artifactMirrorUri,
   }) : _client = client ?? http.Client(),
-       manifestUri =
-           manifestUri ??
-           Uri.parse(
-             'https://github.com/EastStarAI/sanad-agent/releases/latest/download/release-manifest.json',
-           ),
+       manifestUri = manifestUri ?? Uri.parse(_defaultReleaseManifestUrl),
        operatingSystem = operatingSystem ?? Platform.operatingSystem,
-       architecture = architecture ?? _detectArchitecture();
+       architecture = architecture ?? _detectArchitecture(),
+       _platformVerifier = platformVerifier ?? verifyPlatformCodeSignature,
+       _replacementScheduler = replacementScheduler,
+       _artifactMirrorUri =
+           artifactMirrorUri ??
+           (_defaultReleaseArtifactMirrorUrl.trim().isEmpty
+               ? null
+               : Uri.parse(_defaultReleaseArtifactMirrorUrl));
 
   final String currentVersion;
   final String executablePath;
@@ -80,18 +116,18 @@ class AgentUpdateService {
   final String operatingSystem;
   final String architecture;
   final http.Client _client;
+  final PlatformArtifactVerifier _platformVerifier;
+  final Future<bool> Function(String script)? _replacementScheduler;
+  final Uri? _artifactMirrorUri;
 
-  Future<AgentUpdateResult> check() async {
-    if (isSourceManaged) {
-      return AgentUpdateResult(
-        status: AgentUpdateStatus.sourceManaged,
-        currentVersion: currentVersion,
-        message:
-            'This agent is running from source. Update the checkout manually; Sanad will not run Git or FVM.',
-      );
-    }
+  Future<AgentUpdateResult> check({String? targetVersion}) async {
+    if (isSourceManaged) return _sourceManaged();
+    final targetGate = _targetGate(targetVersion);
+    if (targetGate != null) return targetGate;
     try {
       final manifest = await _fetchManifest();
+      final mismatch = _manifestTargetGate(manifest, targetVersion);
+      if (mismatch != null) return mismatch;
       final available = manifest.version.toString();
       final current = ReleaseVersion.parse(currentVersion);
       if (manifest.version.compareTo(current) <= 0) {
@@ -101,68 +137,70 @@ class AgentUpdateService {
           availableVersion: available,
         );
       }
-      final artifact = _selectArtifact(manifest);
-      if (artifact == null) {
-        return AgentUpdateResult(
-          status: AgentUpdateStatus.unsupportedTarget,
-          currentVersion: currentVersion,
-          availableVersion: available,
-        );
+      if (_selectArtifact(manifest) == null) {
+        return _result(AgentUpdateStatus.unsupportedTarget, available);
       }
-      return AgentUpdateResult(
-        status: AgentUpdateStatus.updateAvailable,
-        currentVersion: currentVersion,
-        availableVersion: available,
-      );
+      return _result(AgentUpdateStatus.updateAvailable, available);
     } on FormatException catch (error) {
-      return AgentUpdateResult(
-        status: AgentUpdateStatus.verificationFailed,
-        currentVersion: currentVersion,
-        message: error.message,
-      );
+      return _error(AgentUpdateStatus.manifestInvalid, error.message);
+    } on HttpException catch (error) {
+      return _error(AgentUpdateStatus.networkFailed, error.message);
     } catch (error) {
-      return AgentUpdateResult(
-        status: AgentUpdateStatus.failed,
-        currentVersion: currentVersion,
-        message: 'Unable to check for updates: $error',
+      return _error(
+        AgentUpdateStatus.networkFailed,
+        'Unable to check for updates: $error',
       );
     }
   }
 
-  Future<AgentUpdateResult> update() async {
-    if (isSourceManaged) return check();
+  Future<AgentUpdateResult> update({String? targetVersion}) async {
+    final existing = _inFlightUpdates[executablePath];
+    if (existing != null) return existing;
+    final operation = _update(targetVersion: targetVersion);
+    _inFlightUpdates[executablePath] = operation;
+    try {
+      return await operation;
+    } finally {
+      if (identical(_inFlightUpdates[executablePath], operation)) {
+        _inFlightUpdates.remove(executablePath);
+      }
+    }
+  }
+
+  Future<AgentUpdateResult> _update({String? targetVersion}) async {
+    if (isSourceManaged) return _sourceManaged();
+    final targetGate = _targetGate(targetVersion);
+    if (targetGate != null) return targetGate;
     RandomAccessFile? lockHandle;
     File? stagedFile;
     var preserveStagedFile = false;
     try {
       final manifest = await _fetchManifest();
+      final mismatch = _manifestTargetGate(manifest, targetVersion);
+      if (mismatch != null) return mismatch;
       final available = manifest.version.toString();
       final current = ReleaseVersion.parse(currentVersion);
       if (manifest.version.compareTo(current) <= 0) {
-        return AgentUpdateResult(
-          status: AgentUpdateStatus.upToDate,
-          currentVersion: currentVersion,
-          availableVersion: available,
-        );
+        return _result(AgentUpdateStatus.upToDate, available);
       }
       final artifact = _selectArtifact(manifest);
       if (artifact == null) {
-        return AgentUpdateResult(
-          status: AgentUpdateStatus.unsupportedTarget,
-          currentVersion: currentVersion,
-          availableVersion: available,
-        );
+        return _result(AgentUpdateStatus.unsupportedTarget, available);
       }
 
       final executable = File(executablePath);
       await executable.parent.create(recursive: true);
-      final lockFile = File('$executablePath.update.lock');
-      lockHandle = await lockFile.open(mode: FileMode.write);
+      lockHandle = await File(
+        '$executablePath.update.lock',
+      ).open(mode: FileMode.write);
       await lockHandle.lock(FileLock.exclusive);
 
       final staged = File('$executablePath.${manifest.version}.staged');
       stagedFile = staged;
-      final response = await _client.send(http.Request('GET', artifact.url));
+      if (staged.existsSync()) await staged.delete();
+      final downloadUri =
+          _artifactMirrorUri?.resolve(artifact.filename) ?? artifact.url;
+      final response = await _client.send(http.Request('GET', downloadUri));
       if (response.statusCode != HttpStatus.ok) {
         throw HttpException(
           'Artifact download failed with HTTP ${response.statusCode}.',
@@ -178,29 +216,26 @@ class AgentUpdateService {
 
       if (received != artifact.size ||
           await sha256OfFile(staged) != artifact.sha256) {
-        await staged.delete();
-        return AgentUpdateResult(
-          status: AgentUpdateStatus.verificationFailed,
-          currentVersion: currentVersion,
-          availableVersion: available,
+        return _result(
+          AgentUpdateStatus.checksumFailed,
+          available,
           message: 'Downloaded artifact failed size or SHA-256 verification.',
         );
       }
-      if (!await verifyPlatformCodeSignature(
+      if (!await verifyReleaseArtifactTrust(
         staged,
-        operatingSystem: operatingSystem,
+        artifact: artifact,
+        platformVerifier: _platformVerifier,
       )) {
-        await staged.delete();
-        return AgentUpdateResult(
-          status: AgentUpdateStatus.verificationFailed,
-          currentVersion: currentVersion,
-          availableVersion: available,
+        return _result(
+          AgentUpdateStatus.trustFailed,
+          available,
           message:
-              'Downloaded artifact failed platform signature verification.',
+              'Downloaded artifact failed the declared platform trust policy.',
         );
       }
 
-      if (Platform.isWindows || operatingSystem == 'windows') {
+      if (operatingSystem == 'windows') {
         preserveStagedFile = true;
         return AgentUpdateResult(
           status: AgentUpdateStatus.restartRequired,
@@ -216,39 +251,40 @@ class AgentUpdateService {
       if (executable.existsSync()) await executable.rename(backup.path);
       try {
         await staged.rename(executable.path);
-        final chmod = await Process.run('chmod', ['700', executable.path]);
-        if (chmod.exitCode != 0) {
-          throw FileSystemException('Unable to mark update executable.');
+        if (!Platform.isWindows) {
+          final chmod = await Process.run('chmod', ['700', executable.path]);
+          if (chmod.exitCode != 0) {
+            throw const FileSystemException(
+              'Unable to mark update executable.',
+            );
+          }
         }
-      } catch (_) {
+      } catch (error) {
         if (executable.existsSync()) await executable.delete();
         if (backup.existsSync()) await backup.rename(executable.path);
-        return AgentUpdateResult(
-          status: AgentUpdateStatus.rollbackCompleted,
-          currentVersion: currentVersion,
-          availableVersion: available,
-          message: 'Replacement failed; the previous executable was restored.',
+        return _result(
+          AgentUpdateStatus.rollbackCompleted,
+          available,
+          message:
+              'Replacement failed; the previous executable was restored: $error',
         );
       }
 
-      return AgentUpdateResult(
-        status: AgentUpdateStatus.restartRequired,
-        currentVersion: currentVersion,
-        availableVersion: available,
+      return _result(
+        AgentUpdateStatus.restartRequired,
+        available,
         message: 'Verified update installed. Restart the Sanad service.',
       );
     } on FormatException catch (error) {
-      return AgentUpdateResult(
-        status: AgentUpdateStatus.verificationFailed,
-        currentVersion: currentVersion,
-        message: error.message,
-      );
+      return _error(AgentUpdateStatus.manifestInvalid, error.message);
+    } on HttpException catch (error) {
+      return _error(AgentUpdateStatus.networkFailed, error.message);
+    } on http.ClientException catch (error) {
+      return _error(AgentUpdateStatus.networkFailed, error.message);
+    } on SocketException catch (error) {
+      return _error(AgentUpdateStatus.networkFailed, error.message);
     } catch (error) {
-      return AgentUpdateResult(
-        status: AgentUpdateStatus.failed,
-        currentVersion: currentVersion,
-        message: 'Update failed: $error',
-      );
+      return _error(AgentUpdateStatus.failed, 'Update failed: $error');
     } finally {
       if (!preserveStagedFile && stagedFile?.existsSync() == true) {
         await stagedFile!.delete();
@@ -260,21 +296,185 @@ class AgentUpdateService {
     }
   }
 
+  AgentUpdateResult? _targetGate(String? targetVersion) {
+    if (targetVersion == null) return null;
+    final target = ReleaseVersion.parse(targetVersion);
+    final current = ReleaseVersion.parse(currentVersion);
+    final comparison = current.compareTo(target);
+    if (comparison > 0) {
+      return AgentUpdateResult(
+        status: AgentUpdateStatus.downgradeRejected,
+        currentVersion: currentVersion,
+        availableVersion: target.toString(),
+        message: 'Automatic downgrade from $current to $target is not allowed.',
+      );
+    }
+    if (comparison == 0) {
+      return AgentUpdateResult(
+        status: AgentUpdateStatus.upToDate,
+        currentVersion: currentVersion,
+        availableVersion: target.toString(),
+      );
+    }
+    return null;
+  }
+
+  AgentUpdateResult? _manifestTargetGate(
+    ReleaseManifest manifest,
+    String? targetVersion,
+  ) {
+    if (targetVersion == null) return null;
+    final target = ReleaseVersion.parse(targetVersion);
+    if (manifest.version.compareTo(target) == 0) return null;
+    return AgentUpdateResult(
+      status: AgentUpdateStatus.targetMismatch,
+      currentVersion: currentVersion,
+      availableVersion: manifest.version.toString(),
+      message:
+          'Manifest ${manifest.version} does not match requested target $target.',
+    );
+  }
+
+  AgentUpdateResult _sourceManaged() => AgentUpdateResult(
+    status: AgentUpdateStatus.sourceManaged,
+    currentVersion: currentVersion,
+    message: 'This agent runs from source and remains developer-managed.',
+  );
+
+  AgentUpdateResult _result(
+    AgentUpdateStatus status,
+    String availableVersion, {
+    String? message,
+  }) => AgentUpdateResult(
+    status: status,
+    currentVersion: currentVersion,
+    availableVersion: availableVersion,
+    message: message,
+  );
+
+  AgentUpdateResult _error(AgentUpdateStatus status, String message) =>
+      AgentUpdateResult(
+        status: status,
+        currentVersion: currentVersion,
+        message: message,
+      );
+
   Future<bool> scheduleWindowsReplacement(AgentUpdateResult result) async {
     final stagedPath = result.stagedPath;
-    if (stagedPath == null ||
-        !(Platform.isWindows || operatingSystem == 'windows')) {
-      return false;
-    }
+    if (stagedPath == null || operatingSystem != 'windows') return false;
     final escapedExecutable = executablePath.replaceAll("'", "''");
     final escapedStaged = stagedPath.replaceAll("'", "''");
-    final script =
-        r'''
+    final script = buildWindowsReplacementScript(
+      target: escapedExecutable,
+      staged: escapedStaged,
+    );
+    final scheduler = _replacementScheduler;
+    if (scheduler != null) {
+      final accepted = await scheduler(script);
+      if (!accepted) await _deleteIfPresent(File(stagedPath));
+      return accepted;
+    }
+    final readyMarker = File('$stagedPath.replacement-ready');
+    final scriptFile = File('$stagedPath.replace.ps1');
+    await _deleteIfPresent(readyMarker);
+    await scriptFile.writeAsString(script, flush: true);
+    try {
+      await Process.start(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          scriptFile.path,
+        ],
+        mode: ProcessStartMode.normal,
+        runInShell: false,
+      );
+      for (var attempt = 0; attempt < 40; attempt++) {
+        if (await readyMarker.exists()) {
+          await _deleteIfPresent(readyMarker);
+          return true;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+      }
+      await _writeWindowsUpdateResult(
+        status: 'schedule_failed',
+        message:
+            'PowerShell did not acknowledge the replacement schedule within 10 seconds.',
+      );
+    } catch (error) {
+      await _writeWindowsUpdateResult(
+        status: 'schedule_failed',
+        message: 'PowerShell spawn failed: $error',
+      );
+    }
+    await _deleteIfPresent(readyMarker);
+    await _deleteIfPresent(scriptFile);
+    await _deleteIfPresent(File(stagedPath));
+    return false;
+  }
+
+  Future<void> _writeWindowsUpdateResult({
+    required String status,
+    required String message,
+  }) async {
+    final safeMessage = message.isEmpty
+        ? 'PowerShell exited before accepting the replacement schedule.'
+        : message.substring(0, message.length.clamp(0, 1000));
+    try {
+      await File('$executablePath.update-result.json').writeAsString(
+        jsonEncode({
+          'status': status,
+          'message': safeMessage,
+          'updated_at': DateTime.now().toUtc().toIso8601String(),
+        }),
+        flush: true,
+      );
+    } on FileSystemException {
+      // The typed HTTP result remains authoritative if diagnostics cannot write.
+    }
+  }
+
+  static Future<void> _deleteIfPresent(File file) async {
+    try {
+      if (await file.exists()) await file.delete();
+    } on FileSystemException {
+      // Cleanup is best effort; the running executable remains untouched.
+    }
+  }
+
+  /// Detached Windows replacement script. `target` and `staged` must already
+  /// be PowerShell single-quote escaped. On start failure the previous
+  /// executable is restored AND started before the script exits, so the
+  /// machine never ends up without a working agent after a failed update.
+  static String buildWindowsReplacementScript({
+    required String target,
+    required String staged,
+  }) =>
+      r'''
 $ErrorActionPreference = 'Stop'
 $target = '__TARGET__'
 $staged = '__STAGED__'
 $backup = "$target.rollback"
-$deadline = (Get-Date).AddSeconds(60)
+$readyMarker = "$staged.replacement-ready"
+$resultPath = "$target.update-result.json"
+$scriptPath = $PSCommandPath
+function Exit-Replacement([int]$code) {
+  if (Test-Path $scriptPath) { Remove-Item -LiteralPath $scriptPath -Force }
+  exit $code
+}
+function Write-UpdateResult([string]$status, [string]$message) {
+  @{
+    status = $status
+    message = $message
+    updated_at = (Get-Date).ToUniversalTime().ToString('o')
+  } | ConvertTo-Json -Compress | Set-Content -LiteralPath $resultPath -Encoding UTF8
+}
+if (Test-Path $resultPath) { Remove-Item -LiteralPath $resultPath -Force }
+Set-Content -LiteralPath $readyMarker -Value 'accepted' -Encoding ASCII
+$deadline = (Get-Date).AddSeconds(120)
 $ready = $false
 while ((Get-Date) -lt $deadline) {
   try {
@@ -286,33 +486,36 @@ while ((Get-Date) -lt $deadline) {
     Start-Sleep -Milliseconds 500
   }
 }
-if (-not $ready) { exit 1 }
+if (-not $ready) {
+  Write-UpdateResult 'replacement_failed' 'The running executable did not unlock before the replacement deadline.'
+  if (Test-Path $staged) { Remove-Item -LiteralPath $staged -Force }
+  Exit-Replacement 1
+}
 try {
   Move-Item -LiteralPath $staged -Destination $target -Force
-  & $target service start
+  & $target service start | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Service restart failed.' }
-  exit 0
+  Write-UpdateResult 'started' 'The replacement was installed and its Scheduled Task was started.'
+  Exit-Replacement 0
 } catch {
   if (Test-Path $target) { Remove-Item -LiteralPath $target -Force }
-  if (Test-Path $backup) { Move-Item -LiteralPath $backup -Destination $target -Force }
-  exit 1
+  $rollbackStarted = $false
+  if (Test-Path $backup) {
+    Move-Item -LiteralPath $backup -Destination $target -Force
+    & $target service start | Out-Null
+    $rollbackStarted = $LASTEXITCODE -eq 0
+  }
+  if (Test-Path $staged) { Remove-Item -LiteralPath $staged -Force }
+  if ($rollbackStarted) {
+    Write-UpdateResult 'rollback_completed' 'The previous executable was restored and its Scheduled Task was started.'
+  } else {
+    Write-UpdateResult 'rollback_start_failed' 'The previous executable could not be restarted after rollback.'
+  }
+  Exit-Replacement 1
 }
 '''
-            .replaceFirst('__TARGET__', escapedExecutable)
-            .replaceFirst('__STAGED__', escapedStaged);
-    final bytes = BytesBuilder(copy: false);
-    for (final codeUnit in script.codeUnits) {
-      bytes.add([codeUnit & 0xff, codeUnit >> 8]);
-    }
-    final encoded = base64Encode(bytes.takeBytes());
-    await Process.start(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-EncodedCommand', encoded],
-      mode: ProcessStartMode.detached,
-      runInShell: false,
-    );
-    return true;
-  }
+          .replaceFirst('__TARGET__', target)
+          .replaceFirst('__STAGED__', staged);
 
   Future<ReleaseManifest> _fetchManifest() async {
     final response = await _client.get(
@@ -327,18 +530,16 @@ try {
     return ReleaseManifest.fromJsonString(utf8.decode(response.bodyBytes));
   }
 
-  ReleaseArtifact? _selectArtifact(ReleaseManifest manifest) {
-    return manifest.findArtifact(
-      component: 'agent',
-      platform: operatingSystem == 'macos' ? 'macos' : operatingSystem,
-      architecture: architecture,
-      publicOnly: true,
-    );
-  }
+  ReleaseArtifact? _selectArtifact(ReleaseManifest manifest) =>
+      manifest.findArtifact(
+        component: 'agent',
+        platform: operatingSystem == 'macos' ? 'macos' : operatingSystem,
+        architecture: architecture,
+        publicOnly: true,
+      );
 
   static String _detectArchitecture() {
     final value = Abi.current().toString().toLowerCase();
-    if (value.contains('arm64')) return 'arm64';
-    return 'x64';
+    return value.contains('arm64') ? 'arm64' : 'x64';
   }
 }

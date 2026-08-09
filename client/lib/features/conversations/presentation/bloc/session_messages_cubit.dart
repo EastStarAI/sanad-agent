@@ -1,7 +1,10 @@
 import 'dart:async';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
+import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/domain/models/conversation_resource_state.dart';
+import 'package:sanad_client/features/conversations/domain/models/device_conversation_cache_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
@@ -27,16 +30,19 @@ import 'package:uuid/uuid.dart';
 import 'session_messages_state.dart';
 
 class SessionMessagesCubit extends Cubit<SessionMessagesState> {
+  static const defaultThinkingMode = 'balanced';
   static final _logger = Logger('SessionMessagesCubit');
   final DeviceCubit agentCubit;
   final SessionCubit sessionCubit;
   final ConversationRepository conversationRepository;
+  final ConversationCacheRepository? conversationCacheRepository;
   final IDevicePreferencesRepository preferencesRepository;
   final DeviceCapabilitiesStore? capabilitiesStore;
   final LocalToolRuntimeService? localToolRuntime;
   final WorkspaceToolRuntimeContext? workspaceRuntimeContext;
   StreamSubscription<WorkspacePolicy>? _workspacePolicySubscription;
   StreamSubscription? _agentStateSubscription;
+  StreamSubscription<DeviceConversationCacheSnapshot>? _cacheSubscription;
   StreamSubscription? _sessionStateSubscription;
   StreamSubscription? _messageSubscription;
   StreamSubscription? _queuedMessagesSubscription;
@@ -66,16 +72,55 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     required this.agentCubit,
     required this.sessionCubit,
     required this.conversationRepository,
+    this.conversationCacheRepository,
     required this.preferencesRepository,
     this.capabilitiesStore,
     this.localToolRuntime,
     this.workspaceRuntimeContext,
   }) : super(const SessionMessagesState()) {
     _agentStateSubscription = agentCubit.stream.listen(_handleDeviceStateChange);
+    _cacheSubscription = conversationCacheRepository?.snapshotStream.listen(_handleCacheSnapshot);
     _sessionStateSubscription = sessionCubit.stream.listen(_handleSessionStateChange);
     // Initial check
     _handleDeviceStateChange(agentCubit.state);
+    final cacheRepository = conversationCacheRepository;
+    if (cacheRepository != null) {
+      _handleCacheSnapshot(cacheRepository.snapshot);
+    }
     _handleSessionStateChange(sessionCubit.state);
+  }
+
+  void _handleCacheSnapshot(DeviceConversationCacheSnapshot snapshot) {
+    final agent = _currentAgent;
+    if (agent == null) return;
+    final cachedWorkspaces = snapshot.contexts[agent.id]?.workspaces;
+    if (cachedWorkspaces == null || !cachedWorkspaces.state.hasUsableSnapshot) return;
+
+    final workspaces = List<DeviceWorkspace>.unmodifiable(cachedWorkspaces.workspaces);
+    _workspacesByAgentId[agent.id] = workspaces;
+
+    final currentSelection = _selectedWorkspaceByAgentId[agent.id];
+    var selectedWorkspace = currentSelection;
+    if (currentSelection != null) {
+      for (final workspace in workspaces) {
+        if (workspace.id == currentSelection.id) {
+          selectedWorkspace = workspace;
+          break;
+        }
+      }
+      _selectedWorkspaceByAgentId[agent.id] = selectedWorkspace!;
+      workspaceRuntimeContext?.setActiveWorkspace(selectedWorkspace);
+    }
+
+    if (!isClosed) {
+      emit(
+        state.copyWith(
+          availableWorkspaces: workspaces,
+          selectedWorkspace: selectedWorkspace,
+          clearSelectedWorkspace: selectedWorkspace == null,
+        ),
+      );
+    }
   }
 
   void _handleDeviceStateChange(DeviceState agentState) {
@@ -420,9 +465,11 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         }
       }
       if (!_nextMessageThinkingByAgentId.containsKey(agent.id)) {
-        final savedThinking = preferencesRepository.getLastThinkingMode(agent.id);
-        if (savedThinking != null) {
-          _nextMessageThinkingByAgentId[agent.id] = savedThinking;
+        final savedThinking = preferencesRepository.getLastThinkingMode(agent.id)?.trim();
+        final thinkingMode = savedThinking?.isNotEmpty == true ? savedThinking! : defaultThinkingMode;
+        _nextMessageThinkingByAgentId[agent.id] = thinkingMode;
+        if (savedThinking == null || savedThinking.isEmpty) {
+          unawaited(preferencesRepository.setLastThinkingMode(agent.id, thinkingMode));
         }
       }
 
@@ -1335,11 +1382,18 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     if (agent == null) return null;
 
     try {
-      final workspace = await conversationRepository.createWorkspace(
-        agent,
-        path: path,
-        name: name,
-      );
+      final workspace = conversationCacheRepository == null
+          ? await conversationRepository.createWorkspace(
+              agent,
+              path: path,
+              name: name,
+            )
+          : await conversationCacheRepository!.createWorkspace(
+              agent,
+              path: path,
+              name: name,
+            );
+      if (workspace == null) return null;
       final currentList = List<DeviceWorkspace>.from(_workspacesByAgentId[agent.id] ?? const []);
       currentList.removeWhere((item) => item.id == workspace.id);
       currentList.insert(0, workspace);
@@ -1586,6 +1640,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   Future<void> close() async {
     _delayedLoadingTimer?.cancel();
     await _agentStateSubscription?.cancel();
+    await _cacheSubscription?.cancel();
     await _sessionStateSubscription?.cancel();
     await _messageSubscription?.cancel();
     await _queuedMessagesSubscription?.cancel();

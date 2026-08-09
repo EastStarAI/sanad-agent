@@ -123,6 +123,9 @@ void main() {
     });
     when(mockSessionManager.saveSessionMetadata(any, any)).thenReturn(null);
     when(mockSessionManager.getSessionMetadata(any)).thenReturn(null);
+    when(mockSessionManager.getInFlightSnapshot(any)).thenReturn(null);
+    when(mockSessionManager.saveInFlightSnapshot(any, any)).thenReturn(null);
+    when(mockSessionManager.clearInFlightSnapshot(any)).thenReturn(null);
     when(mockSessionManager.updateSessionTitle(any, any)).thenReturn(null);
     when(
       mockSessionManager.updateSessionTitleIfCurrent(

@@ -16,6 +16,8 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Draft workspace, provider, model, thinking, and text restore together per device. Permission remains workspace-policy-owned and must not be mutated by restore.
 - Existing-session selection must replace or explicitly clear all context fields before presentation swaps. An identity-only restored-session placeholder is not authoritative context and must preserve the persisted provider/model route until a complete route or authoritative route revision arrives.
 - `thinkingMode` is the Dart/domain name and `thinking_mode` is the wire/cache key; do not add aliases.
+- For a new device with no saved thinking preference, initialize and persist `balanced`; preserve any non-empty returning-user value.
+- A partial provider/model preference is not a valid route. Authoritative readiness may complete or replace a partial pair, while a complete saved pair remains user intent.
 - Do not eagerly hydrate history for a session created locally for its first outgoing turn.
 - Block normal message dispatch before session creation when either the provider instance or model selection is absent.
 - Slash queries run only on explicit composer intent and use the daemon query surface, never local skill discovery or mount-time prefetch.
@@ -62,6 +64,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Missing workspaces remain visible with historical sessions; disable new workspace conversation intent and route hover-only workspace settings actions with explicit device and workspace ids.
 - `SessionSidebarCubit` is a pure projection of `ConversationCacheRepository.snapshotStream`; it owns no cache maps, cursors, or drafts.
 - Device selection comes from `DeviceCubit`; session/workspace data comes from the conversation cache repository.
+- Project cached workspace mutations into the composer selector immediately. Opening a popup must never be required to refresh state, and a newly created workspace must be present on the selector's first opening.
 - Invalidate a selected session from another device before restoring the new active device's last destination.
 - Do not request a collapsed workspace's first page during refresh.
 - Preserve canonical mutations received during in-flight pagination and do not remove newer workspaces with older responses.
@@ -86,6 +89,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Route replacement after current deletion must prevent the deleted URL from re-entering history.
 
 ## Presentation Fidelity
+- Running and completed assistant Markdown enter through one application-owned renderer boundary; progressive rendering must not own timeline scrolling, add artificial typing, or be silently bypassed in widget tests.
 - Provider chips render daemon-owned display names and model names, never raw provider UUIDs. Session display metadata is valid only when its provider identity matches the active or staged provider route.
 - Context-usage UI shows only the latest active-session snapshot, includes cached input only when available, and never displays cache-write usage.
 - Composer controls remain horizontally bounded on narrow layouts and expose Material semantics, labels, and keyboard focus.

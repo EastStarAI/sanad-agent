@@ -888,90 +888,31 @@ void main() {
   });
 
   group('In-Flight Thought Stream Snapshots', () {
-    test(
-      'translateResponse saves, appends, and clears in-flight snapshots',
-      () {
-        final bridge = SanadProtocolBridge();
-        final sessionManager = getIt<SessionManager>();
-
-        final chunk1 = GatewayResponse(
-          sessionId: 'session_stream_123',
-          message: Message(role: MessageRole.assistant, content: 'Hello'),
-          isComplete: false,
-          runId: 'run_abc',
-        );
-
-        bridge.translateResponse(chunk1);
-
-        final snap1 = sessionManager.getInFlightSnapshot('session_stream_123');
-        expect(snap1, isNotNull);
-        expect(snap1!['content'], equals('Hello'));
-        expect(snap1['run_id'], equals('run_abc'));
-
-        final chunk2 = GatewayResponse(
-          sessionId: 'session_stream_123',
-          message: Message(role: MessageRole.assistant, content: ' world!'),
-          isComplete: false,
-          runId: 'run_abc',
-        );
-
-        bridge.translateResponse(chunk2);
-
-        final snap2 = sessionManager.getInFlightSnapshot('session_stream_123');
-        expect(snap2, isNotNull);
-        expect(snap2!['content'], equals('Hello world!'));
-
-        final terminalChunk = GatewayResponse(
-          sessionId: 'session_stream_123',
-          message: Message(
-            role: MessageRole.assistant,
-            content: 'Hello world!',
-          ),
-          isComplete: true,
-          runId: 'run_abc',
-        );
-
-        bridge.translateResponse(terminalChunk);
-
-        final snapTerminal = sessionManager.getInFlightSnapshot(
-          'session_stream_123',
-        );
-        expect(snapTerminal, isNull);
-      },
-    );
-
-    test('in-flight snapshots do not combine reasoning and answer text', () {
+    test('translateResponse is side-effect free across transport copies', () {
       final bridge = SanadProtocolBridge();
       final sessionManager = getIt<SessionManager>();
-
-      bridge.translateResponse(
-        GatewayResponse(
-          sessionId: 'session-separated-streams',
-          message: Message(
-            role: MessageRole.assistant,
-            reasoning: 'Private reasoning',
-          ),
-          isComplete: false,
-          runId: 'run-separated-streams',
-        ),
-      );
-      bridge.translateResponse(
-        GatewayResponse(
-          sessionId: 'session-separated-streams',
-          message: Message(
-            role: MessageRole.assistant,
-            content: 'Visible answer',
-          ),
-          isComplete: false,
-          runId: 'run-separated-streams',
-        ),
+      const sessionId = 'session-stream-translation';
+      sessionManager.saveInFlightSnapshot(sessionId, {
+        'type': CanonicalEventTypes.thoughtStream,
+        'status': 'running',
+        'session_id': sessionId,
+        'run_id': 'run-abc',
+        'model_step_id': 'step-1',
+        'content': 'Already projected',
+      });
+      final response = GatewayResponse(
+        sessionId: sessionId,
+        message: Message(role: MessageRole.assistant, content: ' chunk'),
+        isComplete: false,
+        runId: 'run-abc',
+        modelStepId: 'step-1',
       );
 
-      final snapshot = sessionManager.getInFlightSnapshot(
-        'session-separated-streams',
-      );
-      expect(snapshot?['type'], CanonicalEventTypes.thoughtStream);
-      expect(snapshot?['content'], 'Visible answer');
+      expect(bridge.translateResponse(response).type, 'thought_stream');
+      expect(bridge.translateResponse(response).type, 'thought_stream');
+
+      final snapshot = sessionManager.getInFlightSnapshot(sessionId);
+      expect(snapshot?['content'], 'Already projected');
     });
 
     test('get_session_history injects in_flight snapshot if present', () async {
@@ -1304,6 +1245,59 @@ void main() {
     );
 
     test(
+      'get_session_history restores typed tool errors without relying on text prefixes',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-tool-error-history';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'sanad-agent',
+            createdAt: DateTime.parse('2026-07-02T10:00:00Z'),
+            updatedAt: DateTime.parse('2026-07-02T10:01:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Run the check'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'tool-error-1',
+                name: 'project_check',
+                arguments: const {},
+              ),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'tool-error-1',
+            content: 'Validation failed for two files',
+            metadata: const {'is_error': true},
+          ),
+          Message(role: MessageRole.assistant, content: 'The check failed.'),
+        ]);
+
+        Map<String, dynamic>? emitted;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-tool-error-history',
+            'session_id': sessionId,
+          },
+        }, (envelope) async => emitted = envelope);
+
+        final messages = emitted?['payload']['messages'] as List;
+        final toolResult = messages.singleWhere(
+          (message) => message['type'] == 'tool_result',
+        );
+        expect(toolResult['output'], 'Validation failed for two files');
+        expect(toolResult['isError'], isTrue);
+      },
+    );
+
+    test(
       'get_session_history restores steer after its tool result without exposing markers',
       () async {
         final bridge = SanadProtocolBridge();
@@ -1374,7 +1368,7 @@ void main() {
     );
 
     test(
-      'get_session_history hides assistant output superseded by late steer',
+      'get_session_history preserves assistant output superseded by late steer as a thought',
       () async {
         final bridge = SanadProtocolBridge();
         final sessionManager = getIt<SessionManager>();
@@ -1418,10 +1412,12 @@ void main() {
         final messages = emitted?['payload']['messages'] as List;
         expect(messages.map((message) => message['content']), [
           'Original request',
+          'Answer before steer',
           'Revise the answer',
           'Adjusted answer',
         ]);
-        expect(messages[1]['request_id'], 'steer-late-history-1');
+        expect(messages[1]['type'], 'thought');
+        expect(messages[2]['request_id'], 'steer-late-history-1');
       },
     );
   });

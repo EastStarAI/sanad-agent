@@ -49,6 +49,22 @@ void main() {
     });
   });
 
+  test('uses runtime SANAD_HOME before the user-profile fallback', () async {
+    await writeCredential(sanadHome, 'runtime-secret');
+    final fallbackHome = await Directory.systemTemp.createTemp(
+      'sanad-local-credential-fallback-',
+    );
+    addTearDown(() => fallbackHome.delete(recursive: true));
+    final provider = LocalGatewayCredentialProvider(
+      environment: {
+        'SANAD_HOME': sanadHome.path,
+        'USERPROFILE': fallbackHome.path,
+      },
+    );
+
+    expect(await provider.read(), 'runtime-secret');
+  });
+
   test('rejects missing, empty, and symlink credential files', () async {
     final provider = LocalGatewayCredentialProvider(
       sanadHomePath: sanadHome.path,

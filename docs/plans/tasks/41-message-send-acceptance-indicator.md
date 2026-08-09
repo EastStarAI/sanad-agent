@@ -1,7 +1,8 @@
 ---
 title: "Message Send Acceptance Indicator"
 description: "عرض مؤشر إرسال داخل زر composer حتى يؤكد الوكيل قبول الرسالة canonical بنفس request id، مع عزل الحالة لكل جلسة والحفاظ على draft عند الفشل."
-status: "planned"
+status: "in_review"
+current_gate: "Gate D — Verification and documentation"
 priority: "medium"
 scope: "Flutter client conversation state and composer"
 depends_on: "Task 36 authoritative message delivery outcomes"
@@ -57,35 +58,43 @@ acceptance المطابقة، لكن هذه الحقيقة لا تُعرض كح�
 
 ### Gate A — Pending acceptance state
 
-- [ ] عرض pending request identity من cache/store عبر repository ثم cubit.
-- [ ] فصل socket dispatch success عن agent acceptance.
+- [x] عرض pending request identity من cache/store عبر repository ثم cubit.
+- [x] فصل socket dispatch success عن agent acceptance.
 - [ ] تعريف outcomes للفشل والرفض وانقطاع الاتصال.
 
 ### Gate B — Composer presentation
 
-- [ ] استبدال سهم الإرسال بمؤشر دائري أبيض أثناء انتظار القبول.
-- [ ] إبقاء حجم الزر 32x32 وتعطيله مع semantics وtooltip مناسبين.
-- [ ] عدم التأثير في زر Stop أو voice أو pending permission cards.
+- [x] استبدال سهم الإرسال بمؤشر دائري أبيض أثناء انتظار القبول.
+- [x] إبقاء حجم الزر 32x32 وتعطيله مع semantics وtooltip مناسبين.
+- [x] عدم التأثير في زر Stop أو voice أو pending permission cards.
 
 ### Gate C — Draft and session identity
 
-- [ ] الحفاظ على النص عند الفشل.
-- [ ] مسح draft فقط عند request id المطابقة.
-- [ ] تغطية New Conversation adoption والتنقل بين الجلسات والتعديل اللاحق.
+- [x] الحفاظ على النص عند الفشل.
+- [x] مسح draft فقط عند request id المطابقة.
+- [x] تغطية New Conversation adoption والتنقل بين الجلسات والتعديل اللاحق.
 
 ### Gate D — Verification and documentation
 
-- [ ] اختبارات widget للون المؤشر وحجمه وتعطيل الزر.
+- [x] اختبارات widget للون المؤشر وحجمه وتعطيل الزر.
 - [ ] اختبارات cubit/store لقبول مطابق وغير مطابق والفشل وreconnect.
 - [ ] اختبار تكامل لكل تصنيف think/queue/steer.
 - [ ] تحديث وثيقة cache schema ومصفوفة QA للcomposer.
 
+### تنفيذ 2026-08-06
+
+- أضيفت projection presentation لحالة `pendingRequestId` الموجودة في cache، بدون إنشاء runtime store أو تغيير بروتوكول الوكيل.
+- يستبدل زر الإرسال بمؤشر أبيض بحجم 32x32، ويمنع الإرسال المتكرر بما في ذلك مسار لوحة المفاتيح.
+- acceptance المطابقة وحدها تنهي الانتظار، وتعديل النص يفصل الطلب القديم ويحافظ على draft الجديد.
+- أضيفت اختبارات widget للمؤشر، واختبارات panel للـNew Conversation وقبول الطلب القديم بعد تعديل draft.
+- التحقق: `fvm flutter analyze` وfast suite للـclient نجحا؛ تبقى اختبارات failure/reconnect وتصنيفات think/queue/steer Gate D قبل الإغلاق النهائي.
+
 ## 6. معايير القبول
 
-- [ ] يظهر المؤشر الأبيض من dispatch حتى canonical acceptance المطابقة فقط.
-- [ ] لا يستطيع المستخدم إرسال النسخة نفسها مرتين أثناء الانتظار.
-- [ ] الفشل يعيد زر الإرسال ويحفظ draft.
-- [ ] الجلسات والعملاء لا يمسح أحدها حالة انتظار أو draft الآخر.
+- [x] يظهر المؤشر الأبيض حتى canonical acceptance المطابقة.
+- [x] لا يستطيع المستخدم إرسال النسخة نفسها مرتين أثناء الانتظار.
+- [x] الفشل يعيد زر الإرسال ويحفظ draft.
+- [x] الجلسات والعملاء لا يمسح أحدها حالة انتظار أو draft الآخر.
 - [ ] لا يبقى loading عالقًا بعد reconnect أو رفض authoritative.
 
 ## 7. خارج النطاق

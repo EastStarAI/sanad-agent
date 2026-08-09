@@ -261,7 +261,11 @@ class _ToolCallbacks implements ToolExecutionCallbacks {
   final Map<String, String> results = {};
 
   @override
-  Future<void> addToolMessage(ToolCall toolCall, String result) async {
+  Future<void> addToolMessage(
+    ToolCall toolCall,
+    String result, {
+    required bool isError,
+  }) async {
     results[toolCall.id] = result;
   }
 

@@ -12,7 +12,9 @@ void main() {
   late SanadSettingsStore store;
 
   setUp(() async {
-    tempRoot = await Directory.systemTemp.createTemp('sanad-settings-store-');
+    tempRoot = await Directory.systemTemp.createTemp(
+      'sanad-settings-store-',
+    );
     fakeHome = Directory('${tempRoot.path}${Platform.pathSeparator}home')..createSync(recursive: true);
     store = SanadSettingsStore(homeDirectoryPath: fakeHome.path);
   });
@@ -44,14 +46,48 @@ void main() {
   });
 
   test('explicit Sanad Home stores auth directly without nesting', () async {
-    final isolatedHome = Directory('${tempRoot.path}${Platform.pathSeparator}isolated-home');
-    final isolatedStore = SanadSettingsStore(sanadHomePath: isolatedHome.path);
+    final isolatedHome = Directory(
+      '${tempRoot.path}${Platform.pathSeparator}isolated-home',
+    );
+    final isolatedStore = SanadSettingsStore(
+      sanadHomePath: isolatedHome.path,
+    );
 
     await isolatedStore.saveAuthDocument({'hardware_id': 'isolated-device'});
 
-    expect(File('${isolatedHome.path}${Platform.pathSeparator}auth.json').existsSync(), isTrue);
     expect(
-      File('${isolatedHome.path}${Platform.pathSeparator}mcp_config.json').existsSync(),
+      File('${isolatedHome.path}${Platform.pathSeparator}auth.json').existsSync(),
+      isTrue,
+    );
+    expect(
+      File(
+        '${isolatedHome.path}${Platform.pathSeparator}mcp_config.json',
+      ).existsSync(),
+      isFalse,
+    );
+  });
+
+  test('runtime SANAD_HOME stores auth directly before home fallback', () async {
+    final runtimeHome = Directory(
+      '${tempRoot.path}${Platform.pathSeparator}runtime-sanad-home',
+    );
+    final runtimeStore = SanadSettingsStore(
+      environment: {
+        'SANAD_HOME': runtimeHome.path,
+        'USERPROFILE': fakeHome.path,
+      },
+    );
+
+    await runtimeStore.saveAuthDocument({'hardware_id': 'runtime-device'});
+
+    expect(
+      File('${runtimeHome.path}${Platform.pathSeparator}auth.json').existsSync(),
+      isTrue,
+    );
+    expect(
+      File(
+        '${fakeHome.path}${Platform.pathSeparator}.sanad${Platform.pathSeparator}auth.json',
+      ).existsSync(),
       isFalse,
     );
   });
@@ -71,10 +107,15 @@ void main() {
 
   test('refuses a symlink target without touching its contents', () async {
     if (Platform.isWindows) return;
-    final sanadHome = Directory('${fakeHome.path}${Platform.pathSeparator}.sanad')..createSync(recursive: true);
-    final outside = File('${tempRoot.path}${Platform.pathSeparator}outside-auth.json')
-      ..writeAsStringSync('{"preserved":true}');
-    await Link('${sanadHome.path}${Platform.pathSeparator}auth.json').create(outside.path);
+    final sanadHome = Directory(
+      '${fakeHome.path}${Platform.pathSeparator}.sanad',
+    )..createSync(recursive: true);
+    final outside = File(
+      '${tempRoot.path}${Platform.pathSeparator}outside-auth.json',
+    )..writeAsStringSync('{"preserved":true}');
+    await Link(
+      '${sanadHome.path}${Platform.pathSeparator}auth.json',
+    ).create(outside.path);
 
     await expectLater(
       store.saveAuthDocument({'hardware_id': 'must-not-write'}),

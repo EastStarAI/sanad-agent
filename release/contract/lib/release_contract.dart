@@ -7,6 +7,61 @@ const sanadReleaseRepository = 'EastStarAI/sanad-agent';
 
 enum ReleaseChannel { rc, stable }
 
+typedef PlatformArtifactVerifier =
+    Future<bool> Function(File file, String operatingSystem);
+
+/// Central metadata policy shared by manifest validation, bootstrap, and update.
+/// GitHub attestations are release-pipeline evidence; runtime verification still
+/// independently proves the canonical URL, size, checksum, and native Apple
+/// publisher identity where applicable.
+class ReleaseArtifactTrustPolicy {
+  static const _signatureTypes = <String, String>{
+    'agent:macos': 'developer-id+notarization+github-attestation',
+    'agent:linux': 'github-attestation',
+    'agent:windows': 'unsigned+github-attestation',
+    'client:macos': 'developer-id+notarization+sparkle-ed25519',
+    'client:linux': 'github-attestation',
+    'client:windows': 'unsigned+winsparkle-dsa',
+    'client:android': 'android-apksigner',
+    'client:ios': 'apple-distribution',
+    'client:web': 'github-attestation',
+  };
+
+  static String expectedSignatureType({
+    required String component,
+    required String platform,
+  }) {
+    final expected = _signatureTypes['$component:$platform'];
+    if (expected == null) {
+      throw FormatException(
+        'Unsupported release trust target: $component/$platform.',
+      );
+    }
+    return expected;
+  }
+
+  static void validateMetadata(ReleaseArtifact artifact) {
+    final expected = expectedSignatureType(
+      component: artifact.component,
+      platform: artifact.platform,
+    );
+    if (artifact.signatureType != expected) {
+      throw FormatException(
+        'Unsupported signature type for ${artifact.component}/'
+        '${artifact.platform}: ${artifact.signatureType}.',
+      );
+    }
+    if ((artifact.platform == 'macos' || artifact.platform == 'windows') &&
+        artifact.component == 'client' &&
+        (artifact.updateSignature == null ||
+            artifact.updateSignature!.trim().isEmpty)) {
+      throw FormatException(
+        'Client update signature is required for ${artifact.platform}.',
+      );
+    }
+  }
+}
+
 class ReleaseVersion implements Comparable<ReleaseVersion> {
   const ReleaseVersion(
     this.major,
@@ -249,6 +304,7 @@ class ReleaseManifest {
     }
     final filenames = <String>{};
     for (final artifact in artifacts) {
+      ReleaseArtifactTrustPolicy.validateMetadata(artifact);
       if (!filenames.add(artifact.filename)) {
         throw FormatException('Duplicate artifact: ${artifact.filename}');
       }
@@ -313,10 +369,28 @@ Future<String> sha256OfFile(File file) async {
   return digest.toString();
 }
 
-Future<bool> verifyPlatformCodeSignature(
+Future<bool> verifyReleaseArtifactTrust(
   File file, {
-  required String operatingSystem,
+  required ReleaseArtifact artifact,
+  PlatformArtifactVerifier platformVerifier = verifyPlatformCodeSignature,
 }) async {
+  try {
+    ReleaseArtifactTrustPolicy.validateMetadata(artifact);
+  } on FormatException {
+    return false;
+  }
+  if (artifact.platform == 'macos') {
+    return platformVerifier(file, artifact.platform);
+  }
+  // Windows unsigned provenance and Linux GitHub attestations are proved by
+  // protected release CI. Runtime acceptance never claims to re-verify them.
+  return true;
+}
+
+Future<bool> verifyPlatformCodeSignature(
+  File file,
+  String operatingSystem,
+) async {
   if (operatingSystem == 'macos') {
     final verification = await Process.run('/usr/bin/codesign', [
       '--verify',
@@ -335,10 +409,14 @@ Future<bool> verifyPlatformCodeSignature(
         !output.contains('Developer ID Application: NanoSoft LY LLC')) {
       return false;
     }
-    final notarization = await Process.run('/usr/sbin/spctl', [
-      '--assess',
-      '--type',
-      'execute',
+    // Raw CLI executables are not app bundles, so spctl rejects them even when
+    // Apple notarized them. codesign's explicit notarized requirement validates
+    // the ticket without weakening the Developer ID check above.
+    final notarization = await Process.run('/usr/bin/codesign', [
+      '--verify',
+      '--strict',
+      '--test-requirement',
+      '=notarized',
       '--verbose=2',
       file.path,
     ]);

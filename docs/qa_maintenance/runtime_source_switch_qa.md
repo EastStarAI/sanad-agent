@@ -17,7 +17,9 @@ description: "Regression matrix for moving one active sanad-dev pair between sou
 | Agent requests `switch --runtime current` from a target worktree after authorization | Only the requester pair drains and restarts from the target source. |
 | Authorized source handoff begins | The agent runs `status` from the source worktree first and records the selected source, branch, agent, and clients. |
 | Agent-origin target startup succeeds | The original switch tool call returns `complete`; the agent then runs `status` from the target worktree and verifies its source, branch, agent, and clients. |
-| Startup loads history while the switch shell tool owns a valid deferred result | History healing preserves the unanswered tool call, resume resolves the launcher manifest into the original tool result, and no duplicate `switch` command or transient missing-client error is produced. |
+| Startup loads history while the switch shell tool owns a valid deferred result | History healing and checkpoint trim preserve the complete assistant tool-call batch; resume resolves the launcher manifest into the original tool result before another model request, and no duplicate `switch` command or transient missing-client error is produced. |
+| Previous Client termination is delayed while the retained VM port still answers | Target startup waits; the previous source cannot satisfy readiness and the handoff cannot become `complete`. |
+| Previous and target Client identities overlap briefly on one retained VM port | Lease PID collection accepts exactly the target workspace source marker plus launcher id/nonce and rejects the stale previous identity. |
 | Agent-origin target startup fails and rollback succeeds | The original switch tool call returns `rolled_back` after the same durable session resumes on the previous source; target-scoped status remains diagnostic and cannot override that result. |
 | Target and rollback both fail | The original switch tool call returns `recovery_failed` and does not claim continuity. |
 | Safe drain or pre-replacement validation fails | The original switch tool call returns `failed` and the source group remains intact. |

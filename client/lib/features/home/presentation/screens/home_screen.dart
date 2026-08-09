@@ -139,6 +139,7 @@ class _HomeScreenState extends State<HomeScreen> {
             agentCubit: context.read<DeviceCubit>(),
             sessionCubit: context.read<SessionCubit>(),
             conversationRepository: context.read<ConversationRepository>(),
+            conversationCacheRepository: context.read<ConversationCacheRepository>(),
             preferencesRepository: context.read<IDevicePreferencesRepository>(),
             capabilitiesStore: getIt<DeviceCapabilitiesStore>(),
             localToolRuntime: getIt<LocalToolRuntimeService>(),
@@ -348,14 +349,15 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
     }
 
     final draft = cacheRepository.newConversationDraft(device.id);
-    final hasExistingSelection =
+    final hasExistingProvider =
         inputCubit.state.nextMessageProviderId?.trim().isNotEmpty == true ||
-        inputCubit.state.nextMessageModel?.trim().isNotEmpty == true ||
         preferencesRepository.getLastProvider(device.id)?.trim().isNotEmpty == true ||
+        draft.providerId?.trim().isNotEmpty == true;
+    final hasExistingModel =
+        inputCubit.state.nextMessageModel?.trim().isNotEmpty == true ||
         preferencesRepository.getLastModel(device.id)?.trim().isNotEmpty == true ||
-        draft.providerId?.trim().isNotEmpty == true ||
         draft.model?.trim().isNotEmpty == true;
-    if (!replaceExisting && hasExistingSelection) return;
+    if (!replaceExisting && hasExistingProvider && hasExistingModel) return;
 
     if (!inputCubit.isClosed) {
       inputCubit.initializeProviderSelection(
@@ -476,7 +478,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
                       ],
                     ),
                   ),
-                  if (isDesktop) const StatusBar(),
+                  const DesktopOnlyStatusBar(),
                 ],
               ),
             );

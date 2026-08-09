@@ -89,6 +89,56 @@ platform operation, CSP refusal, CanvasKit/WebAssembly bootstrap failure, or
 blank view rejects the candidate even when the build, version marker, health
 endpoint, and root document all succeed.
 
+## Task 67A Desktop lifecycle regression matrix
+
+Shared automated coverage must prove exact target matching before download,
+rejected downgrade, canonical URL/size/SHA-256, exact signature metadata,
+Windows Agent `unsigned+github-attestation`, retained WinSparkle DSA, rejected
+empty/unknown/signed-under-unsigned-policy metadata, and unchanged macOS
+Developer ID/notarization rejection. Bootstrap preserves an existing executable
+on checksum/trust/replacement failure. Agent update keeps an exclusive lock,
+reports rollback as failure with a restored runtime, and never treats staging as
+final health success.
+
+Client tests prove one packaged macOS/Windows startup check, no packaged check in
+source mode, no Linux background check, canonical newer-artifact browser launch,
+up-to-date behavior, and retry after a failed local socket attempt. macOS
+real-machine evidence uses a temporary Sanad Home and records Developer ID,
+notarization/Gatekeeper, launchd registration/start, authenticated health,
+reported version, local WebSocket readiness, exact-target replacement/reconnect,
+and retained Home/old executable on a failure. It must not use Production or the
+user's normal Sanad Home.
+
+### Task 67A macOS real-machine evidence — 2026-08-07
+
+The macOS 26 arm64 gate used a temporary Sanad Home, scoped launchd label, and
+non-production ports. It produced two Developer ID-signed, Apple-notarized,
+stapled Client DMGs with build numbers 1 and 2 and a temporary loopback
+Appcast. Sparkle discovered build 2 at startup, rejected the first deliberately
+stale signature after stapling, then accepted the corrected post-staple EdDSA
+signature, downloaded the DMG, replaced build 1, and relaunched build 2.
+`codesign --deep --strict` and Gatekeeper accepted the updated app.
+
+The Agent gate exposed and fixed a real signed-runtime failure: Dart AOT was
+killed under Hardened Runtime until the narrowly scoped unsigned-executable-
+memory entitlement was added. The corrected arm64 Agent executed, Apple
+notarization was accepted, and the raw executable satisfied the explicit
+`=notarized` code requirement. A real missing-Agent bootstrap downloaded the
+exact official `1.0.0` macOS arm64 artifact to a temporary target after size,
+SHA-256, Developer ID, and notarization-ticket verification.
+
+The scoped launchd service then proved authenticated health and WebSocket ready,
+an older-to-target atomic replacement, target-version health, reconnect, and
+retained `auth.json` plus `state.db`. A replacement that could not execute was
+observed as unhealthy; restoring the backup and loading launchd restored
+`1.0.0` health and authenticated socket readiness. The scoped service, test
+Home, ports, local feed, applications, and artifacts were removed afterward.
+The normal user service and Sanad Home were never stopped or modified.
+
+Task 67A does **not** close WinSparkle, NSIS, Scheduled Task, detached PowerShell,
+Defender, SmartScreen, reboot, or Windows rollback/start evidence. Those remain
+Task 67B native gates even when shared tests pass on macOS.
+
 ## Installer coverage
 
 The canonical installer sources accept a creation-time pairing token, Portal

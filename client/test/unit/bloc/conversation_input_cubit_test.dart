@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
+import 'package:sanad_client/features/conversations/domain/stores/conversation_cache_store.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
@@ -36,6 +38,8 @@ void main() {
   late FakeDeviceClientRegistry agentClientRegistry;
   late TestDeviceCubit agentCubit;
   late FakeConversationRepository conversationRepository;
+  late ConversationCacheStore conversationCacheStore;
+  late ConversationCacheRepository conversationCacheRepository;
   late FakeDevicePreferencesRepository preferencesRepository;
   late SessionCubit sessionCubit;
   late _TestSessionMessagesCubit messagesCubit;
@@ -64,6 +68,11 @@ void main() {
       agentClientRegistry: agentClientRegistry,
     );
     conversationRepository = FakeConversationRepository();
+    conversationCacheStore = ConversationCacheStore();
+    conversationCacheRepository = ConversationCacheRepository(
+      cache: conversationCacheStore,
+      transport: conversationRepository,
+    );
     preferencesRepository = FakeDevicePreferencesRepository();
     resolver = createTestResolver(cloudSocket: socket, localSocket: socket);
     capabilitiesStore = DeviceCapabilitiesStore(resolver);
@@ -90,6 +99,7 @@ void main() {
       agentCubit: agentCubit,
       sessionCubit: sessionCubit,
       conversationRepository: conversationRepository,
+      conversationCacheRepository: conversationCacheRepository,
       preferencesRepository: preferencesRepository,
       capabilitiesStore: capabilitiesStore,
       localToolRuntime: localToolRuntime,
@@ -104,6 +114,7 @@ void main() {
     await sessionCubit.close();
     await agentCubit.close();
     await conversationRepository.dispose();
+    conversationCacheStore.dispose();
     resolver.dispose();
     socket.dispose();
   });
@@ -114,6 +125,37 @@ void main() {
 
     expect(inputCubit.state.isProcessing, isTrue);
     expect(inputCubit.state.activeSessionId, 'session-1');
+  });
+
+  test('new users default to balanced thinking mode', () async {
+    await Future<void>.delayed(Duration.zero);
+
+    expect(inputCubit.state.nextMessageThinkingMode, SessionMessagesCubit.defaultThinkingMode);
+    expect(
+      preferencesRepository.getLastThinkingMode(agent.id),
+      SessionMessagesCubit.defaultThinkingMode,
+    );
+  });
+
+  test('cache workspace creation updates the composer picker immediately', () async {
+    final created = await conversationCacheRepository.createWorkspace(
+      agent,
+      path: '/new-workspace',
+      name: 'New Workspace',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(created, isNotNull);
+    expect(
+      inputCubit.state.availableWorkspaces,
+      contains(
+        const DeviceWorkspace(
+          id: '/new-workspace',
+          name: 'New Workspace',
+          path: '/new-workspace',
+        ),
+      ),
+    );
   });
 
   test('sendMessage trims drafts and delegates non-empty text', () async {
@@ -191,6 +233,7 @@ void main() {
       'workspace_id': 'workspace-1',
       'provider_id': 'provider-1',
       'model': 'model-1',
+      'thinking_mode': SessionMessagesCubit.defaultThinkingMode,
     });
     expect(conversationRepository.sentMessageRequests.single['session_id'], 'session-1');
     expect(
@@ -735,7 +778,7 @@ void main() {
     // 1. Save some preferences first
     await preferencesRepository.setLastProvider(agent.id, 'provider-1');
     await preferencesRepository.setLastModel(agent.id, 'claude-3-opus');
-    await preferencesRepository.setLastThinkingMode(agent.id, 'balanced');
+      await preferencesRepository.setLastThinkingMode(agent.id, 'deep');
 
     // 2. Re-subscribe to agent by re-initializing the cubit (simulating fresh start)
     final newMessagesCubit = _TestSessionMessagesCubit(
@@ -754,7 +797,7 @@ void main() {
 
     expect(newInputCubit.state.nextMessageProviderId, 'provider-1');
     expect(newInputCubit.state.nextMessageModel, 'claude-3-opus');
-    expect(newInputCubit.state.nextMessageThinkingMode, 'balanced');
+      expect(newInputCubit.state.nextMessageThinkingMode, 'deep');
 
     await newInputCubit.close();
     await newMessagesCubit.close();
@@ -795,6 +838,20 @@ void main() {
       await restartedMessagesCubit.close();
     },
   );
+
+  test('authoritative readiness repairs a provider-only route', () async {
+    messagesCubit.setNextMessagePreferences(providerId: 'provider-partial');
+    await Future<void>.delayed(Duration.zero);
+
+    inputCubit.initializeProviderSelection(
+      providerId: 'provider-default',
+      model: 'model-default',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(inputCubit.state.nextMessageProviderId, 'provider-default');
+    expect(inputCubit.state.nextMessageModel, 'model-default');
+  });
 
   test('initializes an empty provider route once from authoritative readiness', () async {
     inputCubit.initializeProviderSelection(
@@ -861,6 +918,7 @@ class _TestSessionMessagesCubit extends SessionMessagesCubit {
     required super.agentCubit,
     required super.sessionCubit,
     required super.conversationRepository,
+    super.conversationCacheRepository,
     required super.preferencesRepository,
     required super.capabilitiesStore,
     super.localToolRuntime,

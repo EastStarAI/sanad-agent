@@ -103,6 +103,9 @@ String loadAgentVersion() {
     }
   } catch (_) {}
 
-  // 3. Fallback for native compiled production binary
-  return '1.0.0';
+  // 3. Native builds receive the release contract version at compile time.
+  return const String.fromEnvironment(
+    'SANAD_AGENT_VERSION',
+    defaultValue: '1.0.0',
+  );
 }

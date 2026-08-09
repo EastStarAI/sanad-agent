@@ -27,6 +27,7 @@ class ConversationInputState extends Equatable {
   final RuntimeNotice? runtimeNotice;
   final SessionExecutionSnapshot? executionSnapshot;
   final SessionAttentionState? attentionState;
+  final bool isAwaitingMessageAcceptance;
   final List<CanonicalEvent> queuedMessages;
   final Set<String> queuedMutationRequestIds;
   final Set<String> pendingSteerCancellationRequestIds;
@@ -52,6 +53,7 @@ class ConversationInputState extends Equatable {
     this.runtimeNotice,
     this.executionSnapshot,
     this.attentionState,
+    this.isAwaitingMessageAcceptance = false,
     this.queuedMessages = const [],
     this.queuedMutationRequestIds = const {},
     this.pendingSteerCancellationRequestIds = const {},
@@ -91,6 +93,7 @@ class ConversationInputState extends Equatable {
     bool clearExecutionSnapshot = false,
     SessionAttentionState? attentionState,
     bool clearAttentionState = false,
+    bool? isAwaitingMessageAcceptance,
     List<CanonicalEvent>? queuedMessages,
     Set<String>? queuedMutationRequestIds,
     Set<String>? pendingSteerCancellationRequestIds,
@@ -129,6 +132,7 @@ class ConversationInputState extends Equatable {
       runtimeNotice: clearRuntimeNotice ? null : runtimeNotice ?? this.runtimeNotice,
       executionSnapshot: clearExecutionSnapshot ? null : executionSnapshot ?? this.executionSnapshot,
       attentionState: clearAttentionState ? null : attentionState ?? this.attentionState,
+      isAwaitingMessageAcceptance: isAwaitingMessageAcceptance ?? this.isAwaitingMessageAcceptance,
       queuedMessages: queuedMessages ?? this.queuedMessages,
       queuedMutationRequestIds: queuedMutationRequestIds ?? this.queuedMutationRequestIds,
       pendingSteerCancellationRequestIds: pendingSteerCancellationRequestIds ?? this.pendingSteerCancellationRequestIds,
@@ -157,6 +161,7 @@ class ConversationInputState extends Equatable {
     runtimeNotice,
     executionSnapshot,
     attentionState,
+    isAwaitingMessageAcceptance,
     queuedMessages,
     queuedMutationRequestIds,
     pendingSteerCancellationRequestIds,

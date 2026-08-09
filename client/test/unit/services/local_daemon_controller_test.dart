@@ -116,6 +116,25 @@ void main() {
       controller = TestStandaloneDaemonController();
     });
 
+    test('resolves explicit and runtime Sanad Home before user fallback', () {
+      const explicit = StandaloneDaemonController(
+        sanadHomePath: r'C:\isolated\explicit-home',
+        environment: {
+          'SANAD_HOME': r'C:\isolated\runtime-home',
+          'USERPROFILE': r'C:\Users\fallback',
+        },
+      );
+      const runtime = StandaloneDaemonController(
+        environment: {
+          'SANAD_HOME': r'C:\isolated\runtime-home',
+          'USERPROFILE': r'C:\Users\fallback',
+        },
+      );
+
+      expect(explicit.getSanadHome(), r'C:\isolated\explicit-home');
+      expect(runtime.getSanadHome(), r'C:\isolated\runtime-home');
+    });
+
     test('delegates status checks and lifecycle methods correctly', () async {
       controller.runningState = true;
       controller.healthState = {'status': 'ok'};

@@ -222,6 +222,26 @@ Use the review skill.''',
 
     when(mockSessionManager.saveSessionMetadata(any, any)).thenReturn(null);
     when(mockSessionManager.getSessionMetadata(any)).thenReturn(null);
+    final inFlightSnapshots = <String, Map<String, dynamic>>{};
+    when(mockSessionManager.getInFlightSnapshot(any)).thenAnswer((invocation) {
+      final sessionId = invocation.positionalArguments.single as String;
+      return inFlightSnapshots[sessionId];
+    });
+    when(mockSessionManager.saveInFlightSnapshot(any, any)).thenAnswer((
+      invocation,
+    ) {
+      final sessionId = invocation.positionalArguments[0] as String;
+      final snapshot = Map<String, dynamic>.from(
+        invocation.positionalArguments[1] as Map,
+      );
+      inFlightSnapshots[sessionId] = snapshot;
+    });
+    when(mockSessionManager.clearInFlightSnapshot(any)).thenAnswer((
+      invocation,
+    ) {
+      final sessionId = invocation.positionalArguments.single as String;
+      inFlightSnapshots.remove(sessionId);
+    });
     when(mockSessionManager.updateSessionTitle(any, any)).thenReturn(null);
     when(
       mockSessionManager.updateSessionTitleIfCurrent(
@@ -428,9 +448,92 @@ Use the review skill.''',
         ),
       ),
     ).called(1);
+    final savedSnapshots = verify(
+      mockSessionManager.saveInFlightSnapshot('session-123', captureAny),
+    ).captured.cast<Map>();
+    expect(
+      savedSnapshots
+          .where((snapshot) => snapshot['type'] == 'thought_stream')
+          .map((snapshot) => snapshot['content'])
+          .toList()
+          .sublist(1),
+      ['Hello', 'Hello world'],
+    );
+    expect(getIt<SessionManager>().getInFlightSnapshot('session-123'), isNull);
 
     await eventController.close();
   });
+
+  test(
+    'late steer emits the completed prior segment before continuation',
+    () async {
+      final eventController = StreamController<GatewayEvent>();
+      final responses = <GatewayResponse>[];
+      var currentStep = 'step-before-steer';
+      when(mockPlatform.initialize()).thenAnswer((_) async => {});
+      when(mockPlatform.eventStream).thenAnswer((_) => eventController.stream);
+      when(mockPlatform.sendResponse(any)).thenAnswer((invocation) async {
+        responses.add(invocation.positionalArguments.single as GatewayResponse);
+      });
+      when(mockAgentRunner.currentModelStepId).thenAnswer((_) => currentStep);
+      when(
+        mockAgentRunner.streamMessage(
+          any,
+          runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+          providerId: anyNamed('providerId'),
+          model: anyNamed('model'),
+          thinkingMode: anyNamed('thinkingMode'),
+          receivedAt: anyNamed('receivedAt'),
+          onToolEvent: anyNamed('onToolEvent'),
+          onSteerContinuation: anyNamed('onSteerContinuation'),
+          onThoughtDelta: anyNamed('onThoughtDelta'),
+          onReasoningDelta: anyNamed('onReasoningDelta'),
+        ),
+      ).thenAnswer((invocation) async* {
+        final continueSteer =
+            invocation.namedArguments[#onSteerContinuation] as void Function();
+        yield 'Answer before steer';
+        continueSteer();
+        currentStep = 'step-after-steer';
+        yield 'Adjusted answer';
+      });
+
+      gatewayManager.registerPlatform(mockPlatform);
+      await gatewayManager.start();
+      eventController.add(
+        GatewayEvent(
+          sessionId: 'late-steer-session',
+          platformId: 'test-platform',
+          message: Message(role: MessageRole.user, content: 'Start'),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      final completedSegmentIndex = responses.indexWhere(
+        (response) =>
+            response.message.metadata?['canonical_event_type'] == 'thought',
+      );
+      final continuedChunkIndex = responses.indexWhere(
+        (response) =>
+            response.message.content == 'Adjusted answer' &&
+            !response.isComplete,
+      );
+      expect(completedSegmentIndex, greaterThanOrEqualTo(0));
+      expect(continuedChunkIndex, greaterThan(completedSegmentIndex));
+      final completedPayload =
+          responses[completedSegmentIndex]
+                  .message
+                  .metadata?['canonical_payload']
+              as Map;
+      expect(completedPayload['content'], 'Answer before steer');
+      expect(completedPayload['status'], 'done');
+      expect(completedPayload['model_step_id'], 'step-before-steer');
+      final terminal = responses.lastWhere((response) => response.isComplete);
+      expect(terminal.message.content, 'Adjusted answer');
+
+      await eventController.close();
+    },
+  );
 
   test(
     'GatewayManager returns authoritative user echoes to opted-in platforms',

@@ -148,8 +148,6 @@ class SanadProtocolBridge {
             )
           : null;
 
-  SanadProtocolBridge();
-
   GatewayEvent? translateCommand(Map<String, dynamic> data, String platformId) {
     return CanonicalToAgent.translate(data, platformId);
   }
@@ -173,51 +171,7 @@ class SanadProtocolBridge {
         delivery: response.delivery,
       );
     }
-    final event = AgentToCanonical.translate(response);
-
-    final sessionManager = getIt<SessionManager>();
-    if (event.type == CanonicalEventTypes.thoughtStream ||
-        event.type == CanonicalEventTypes.reasoningStream) {
-      final sessionId = response.sessionId;
-      final runId = response.runId ?? '';
-      final deltaContent =
-          response.message.reasoning ??
-          response.message.thought ??
-          response.message.content ??
-          '';
-
-      if (deltaContent.isNotEmpty) {
-        final existing = sessionManager.getInFlightSnapshot(sessionId);
-        var content = deltaContent;
-        if (existing != null &&
-            existing['type'] == event.type &&
-            existing['run_id'] == runId &&
-            existing['content'] is String) {
-          content = '${existing['content']}$deltaContent';
-        }
-        final timestamp = DateTime.now().millisecondsSinceEpoch;
-
-        sessionManager.saveInFlightSnapshot(sessionId, {
-          'type': event.type,
-          'status': 'running',
-          'session_id': sessionId,
-          'run_id': runId,
-          'model_step_id': response.modelStepId,
-          'content': content,
-          'timestamp': timestamp,
-          'updated_at': timestamp,
-        });
-      }
-    } else if (event.type == CanonicalEventTypes.thought ||
-        event.type == CanonicalEventTypes.reasoning ||
-        event.type == CanonicalEventTypes.finalAnswer ||
-        event.type == 'stopped' ||
-        event.type == 'error' ||
-        event.type == 'user_message') {
-      sessionManager.clearInFlightSnapshot(response.sessionId);
-    }
-
-    return event;
+    return AgentToCanonical.translate(response);
   }
 
   Future<bool> handleCommand(
