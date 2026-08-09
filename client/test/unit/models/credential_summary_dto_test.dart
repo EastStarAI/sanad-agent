@@ -30,13 +30,16 @@ void main() {
         'auth_method': 'device_code',
         'status': 'authenticated',
         'account_label': 'user@example.com',
+        'account_name': 'User Name',
         'relogin_required': false,
       });
 
       expect(summary.hasSecret, isTrue);
       expect(summary.maskedSecret, isNull);
       expect(summary.accountLabel, 'user@example.com');
+      expect(summary.accountName, 'User Name');
       expect(summary.status, 'authenticated');
+      expect(summary.toJson(), containsPair('account_name', 'User Name'));
     });
 
     test('accepts legacy client aliases during protocol migration', () {

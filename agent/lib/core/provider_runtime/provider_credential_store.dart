@@ -6,6 +6,7 @@ import 'package:logging/logging.dart';
 
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'secret_record.dart';
 
 /// Represents the persisted auth session for an OAuth-based LLM provider.
 ///
@@ -41,6 +42,12 @@ class ProviderAuthRecord {
   /// One of: `authenticated`, `expired`, `relogin_required`.
   final String status;
 
+  /// OAuth account label (e.g. email) for display only.
+  final String? accountLabel;
+
+  /// OAuth account name (e.g. user's name) for display only.
+  final String? accountName;
+
   ProviderAuthRecord({
     required this.providerId,
     required this.accessToken,
@@ -51,6 +58,8 @@ class ProviderAuthRecord {
     this.tokenType = 'Bearer',
     this.lastRefreshAt,
     this.status = 'authenticated',
+    this.accountLabel,
+    this.accountName,
   });
 
   bool get isExpired {
@@ -70,9 +79,22 @@ class ProviderAuthRecord {
     'token_type': tokenType,
     if (lastRefreshAt != null) 'last_refresh_at': lastRefreshAt,
     'status': status,
+    if (accountLabel != null) 'account_label': accountLabel,
+    if (accountName != null) 'account_name': accountName,
   };
 
   factory ProviderAuthRecord.fromJson(Map<String, dynamic> json) {
+    var accountLabel = json['account_label'] as String?;
+    var accountName = json['account_name'] as String?;
+    if (accountLabel == null || accountName == null) {
+      final token =
+          (json['id_token'] as String?) ?? (json['access_token'] as String?);
+      if (token != null) {
+        final identity = extractOAuthAccountIdentity(token);
+        accountLabel ??= identity.accountLabel;
+        accountName ??= identity.accountName;
+      }
+    }
     return ProviderAuthRecord(
       providerId: json['provider_id'] as String,
       accessToken: json['access_token'] as String,
@@ -87,6 +109,8 @@ class ProviderAuthRecord {
           ? json['last_refresh_at'] as int
           : int.tryParse('${json['last_refresh_at']}'),
       status: json['status'] as String? ?? 'authenticated',
+      accountLabel: accountLabel,
+      accountName: accountName,
     );
   }
 
@@ -99,6 +123,8 @@ class ProviderAuthRecord {
     String? tokenType,
     int? lastRefreshAt,
     String? status,
+    String? accountLabel,
+    String? accountName,
   }) {
     return ProviderAuthRecord(
       providerId: providerId,
@@ -110,6 +136,8 @@ class ProviderAuthRecord {
       tokenType: tokenType ?? this.tokenType,
       lastRefreshAt: lastRefreshAt ?? this.lastRefreshAt,
       status: status ?? this.status,
+      accountLabel: accountLabel ?? this.accountLabel,
+      accountName: accountName ?? this.accountName,
     );
   }
 }

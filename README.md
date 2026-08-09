@@ -126,6 +126,13 @@ providers, updates, and removal.
 
 ### For developers
 
+> **Prerequisites:** Ensure your system has the build toolchain for your platform:
+> - **Windows:** Visual Studio 2022 with *Desktop development with C++*.
+> - **macOS:** Xcode Command Line Tools (`xcode-select --install`).
+> - **Linux:** `clang`, `cmake`, `ninja-build`, `pkg-config`, `libgtk-3-dev`, `lld`.
+>
+> See the [Developer Guide](docs/operations/developer_guide.md) for full prerequisites and details.
+
 Clone the repository and enter its directory:
 
 ```bash

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_streaming_text_markdown/flutter_streaming_text_markdown.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
@@ -7,19 +8,31 @@ import 'package:sanad_client/features/conversations/presentation/widgets/markdow
 import 'package:sanad_client/shared/widgets/copy_button.dart';
 
 void main() {
-  testWidgets('streaming thinking shares the final answer Markdown presentation', (tester) async {
-    await _pumpEvent(
-      tester,
-      _event(kind: EventKind.thinking, text: '**shared** content'),
-    );
-    final markdownContext = tester.element(find.byType(MarkdownBody));
-    final finalStyle = MarkdownStyleHelper.getStyleSheet(
-      markdownContext,
-      isFinal: true,
-    );
-    expect(_markdown(tester).styleSheet?.p, finalStyle.p);
-    expect(find.byKey(const Key('primary_markdown_thinking')), findsOneWidget);
-  });
+  testWidgets(
+    'running thinking uses the streaming Markdown renderer with app styling',
+    (tester) async {
+      await _pumpEvent(
+        tester,
+        _event(
+          kind: EventKind.thinking,
+          status: EventStatus.running,
+          text: '### Shared heading',
+        ),
+      );
+      final rendererFinder = find.byType(StreamingTextMarkdown);
+      final rendererContext = tester.element(rendererFinder);
+      final finalStyle = MarkdownStyleHelper.getStyleSheet(
+        rendererContext,
+        isFinal: true,
+      );
+      final renderer = tester.widget<StreamingTextMarkdown>(rendererFinder);
+      expect(renderer.markdownEnabled, isTrue);
+      expect(renderer.animationsEnabled, isFalse);
+      expect(renderer.autoScroll, isFalse);
+      expect(renderer.styleSheet, finalStyle.p);
+      expect(find.byKey(const Key('primary_markdown_thinking')), findsOneWidget);
+    },
+  );
 
   testWidgets('streaming thinking renders no header label or icon', (tester) async {
     await _pumpEvent(
@@ -91,10 +104,6 @@ void main() {
     expect(find.byKey(const Key('reasoning_scroll_viewport')), findsNothing);
     expect(find.byType(SingleChildScrollView), findsNothing);
   });
-}
-
-MarkdownBody _markdown(WidgetTester tester) {
-  return tester.widget<MarkdownBody>(find.byType(MarkdownBody));
 }
 
 /// Flattens the visible text of the transient reasoning `RichText` row.

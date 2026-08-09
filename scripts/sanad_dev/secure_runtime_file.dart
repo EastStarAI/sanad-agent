@@ -65,8 +65,10 @@ Future<void> _replaceRuntimeFile(File source, File destination) async {
 $ErrorActionPreference = 'Stop'
 $source = $env:SANAD_ATOMIC_SOURCE
 $destination = $env:SANAD_ATOMIC_DESTINATION
+$backup = "$destination.bak"
 if ([IO.File]::Exists($destination)) {
-  [IO.File]::Replace($source, $destination, $null, $true)
+  [IO.File]::Replace($source, $destination, $backup, $true)
+  if ([IO.File]::Exists($backup)) { [IO.File]::Delete($backup) }
 } else {
   [IO.File]::Move($source, $destination)
 }

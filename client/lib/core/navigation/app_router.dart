@@ -249,7 +249,7 @@ class AppRouter {
       if (isSplash) {
         final isReady = AppPlatform.isDesktop
             ? (gatewayStatus?.isLocalConnected == true || gatewayStatus?.isCloudReady == true)
-            : gatewayStatus?.isCloudReady == true;
+            : (gatewayStatus?.isCloudReady == true || gatewayStatus?.sanadGateway == SanadGatewayStatus.disconnected);
         if (isReady) {
           final requestedLocation = currentUri.queryParameters['from'];
           final target = (requestedLocation != null && requestedLocation.isNotEmpty)

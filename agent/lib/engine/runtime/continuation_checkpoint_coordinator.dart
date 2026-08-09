@@ -194,6 +194,7 @@ class ContinuationCheckpointCoordinator {
       meta['tool_replay_safety'] as Map? ?? const {},
     );
     final ambiguousToolCallIds = <String>[];
+    final deferredToolCallIds = <String>[];
     final deferredResults = Map<String, dynamic>.from(
       meta['deferred_tool_results'] as Map? ?? const {},
     );
@@ -205,6 +206,7 @@ class ContinuationCheckpointCoordinator {
       if (deferred != null &&
           deferred.requesterSessionId == sessionId &&
           deferred.requesterToolCallId == toolId) {
+        deferredToolCallIds.add(toolId);
         continue;
       }
       final isReplaySafe = toolReplaySafety[toolId] == true;
@@ -246,6 +248,7 @@ class ContinuationCheckpointCoordinator {
     return ResumeResult(
       resumeHistoryLength: resumeHistoryLength,
       ambiguousToolCallIds: ambiguousToolCallIds,
+      deferredToolCallIds: deferredToolCallIds,
       savedTurnStartIndex:
           (savedTurnStart != null &&
               savedTurnStart >= 0 &&
@@ -323,12 +326,14 @@ class ResumeResult {
   final int? savedTurnStartIndex;
   final String? savedModelStepId;
   final List<String> ambiguousToolCallIds;
+  final List<String> deferredToolCallIds;
 
   const ResumeResult({
     required this.resumeHistoryLength,
     this.savedTurnStartIndex,
     this.savedModelStepId,
     this.ambiguousToolCallIds = const [],
+    this.deferredToolCallIds = const [],
   });
 
   static const ResumeResult empty = ResumeResult(resumeHistoryLength: -1);

@@ -38,6 +38,11 @@ To run the bootstrap and build components successfully, ensure your platform mee
   sudo apt update && sudo apt install -y curl clang cmake ninja-build pkg-config libgtk-3-dev lld
   ```
 
+### Windows Requirements
+- **Visual Studio 2022:** Required to compile Flutter desktop applications on Windows. Install [Visual Studio](https://visualstudio.microsoft.com/downloads/) with the **"Desktop development with C++"** workload (including MSVC C++ x64/x86 build tools and Windows 10/11 SDK).
+- **PowerShell:** PowerShell 5.1 or PowerShell Core (7+) for running `sanad-dev.ps1` and development automation scripts.
+- **System tools:** `curl` or `Invoke-WebRequest` (available by default in Windows PowerShell 5.1+).
+
 ---
 
 From a fresh checkout, install the user command once. On macOS or Linux:

@@ -49,6 +49,9 @@ class ServerSanadGatewayPlatform extends BasePlatform
       'Remote MCP management is disabled for security reasons.';
 
   final _logger = Logger('ServerSanadGatewayPlatform');
+  final io.Socket Function(String uri, dynamic options)? socketFactory;
+
+  ServerSanadGatewayPlatform({this.socketFactory});
 
   @override
   Logger get logger => _logger;
@@ -63,6 +66,9 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   io.Socket? _socket;
   String? _registeredDeviceId;
+  StreamSubscription<void>? _authChangeSubscription;
+  Future<void>? _authSynchronizationFuture;
+  bool _authSynchronizationPending = false;
 
   io.Socket? get socket => _socket;
 
@@ -92,10 +98,11 @@ class ServerSanadGatewayPlatform extends BasePlatform
   @override
   Future<void> initialize() async {
     final authManager = getIt<AuthManager>();
+    _authChangeSubscription ??= authManager.changes.listen((_) {
+      unawaited(_synchronizeAuthentication());
+    });
     if (!authManager.isAuthenticated) {
-      _logger.warning(
-        'AuthManager not authenticated. Gateway connection skipped.',
-      );
+      _logger.info('Cloud Gateway remains offline until authentication.');
       return;
     }
 
@@ -105,13 +112,13 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
       _logger.info('Connecting to Sanad Gateway at $gatewayUrl...');
 
-      _socket = io.io(
-        gatewayUrl,
-        io.OptionBuilder()
-            .setTransports(['websocket'])
-            .disableAutoConnect()
-            .build(),
-      );
+      final options = io.OptionBuilder()
+          .setTransports(['websocket'])
+          .disableAutoConnect()
+          .build();
+      _socket =
+          socketFactory?.call(gatewayUrl, options) ??
+          io.io(gatewayUrl, options);
     }
 
     _socket!.onConnect((_) async {
@@ -162,12 +169,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
         final success = await authManager.refreshAccessToken(config.portalUrl);
 
         if (success) {
-          _logger.info('Token refreshed successfully. Reconnecting...');
-          if (_socket!.disconnected) {
-            _socket!.connect();
-          } else {
-            await _register();
-          }
+          _logger.info('Token refreshed successfully. Reauthenticating...');
         } else {
           _logger.severe('❌ Failed to refresh token. Please login again.');
         }
@@ -192,6 +194,11 @@ class ServerSanadGatewayPlatform extends BasePlatform
           (envelope['device_id'] as String?) ??
           (payload['device_id'] as String?) ??
           '';
+
+      if (command == 'authentication_exchange') {
+        _logger.warning('Blocking cloud authentication_exchange command.');
+        return;
+      }
 
       if (_isRemoteWorkspaceManagementCommand(command)) {
         await _rejectRemoteWorkspaceManagement(
@@ -261,6 +268,11 @@ class ServerSanadGatewayPlatform extends BasePlatform
           event.sessionId ?? envelope['session_id'] as String? ?? 'default';
       final deviceId = envelope['device_id'] as String? ?? '';
 
+      if (event.type == 'authentication_exchange') {
+        _logger.warning('Blocking cloud authentication_exchange event.');
+        return;
+      }
+
       if (_isRemoteWorkspaceManagementCommand(event.type)) {
         await _rejectRemoteWorkspaceManagement(
           command: event.type,
@@ -294,6 +306,51 @@ class ServerSanadGatewayPlatform extends BasePlatform
     });
 
     _socket!.connect();
+  }
+
+  Future<void> _synchronizeAuthentication() async {
+    _authSynchronizationPending = true;
+    if (_authSynchronizationFuture != null) {
+      return _authSynchronizationFuture!;
+    }
+
+    final operation = () async {
+      while (_authSynchronizationPending) {
+        _authSynchronizationPending = false;
+        await _synchronizeAuthenticationInternal();
+      }
+    }();
+    _authSynchronizationFuture = operation;
+    try {
+      await operation;
+    } finally {
+      _authSynchronizationFuture = null;
+      if (_authSynchronizationPending) {
+        unawaited(_synchronizeAuthentication());
+      }
+    }
+  }
+
+  Future<void> _synchronizeAuthenticationInternal() async {
+    final authManager = getIt<AuthManager>();
+    if (!authManager.isAuthenticated) {
+      _registeredDeviceId = null;
+      _socket?.disconnect();
+      _socket?.dispose();
+      _socket = null;
+      _logger.info('Cloud Gateway disconnected after authentication logout.');
+      return;
+    }
+
+    if (_socket == null) {
+      await initialize();
+      return;
+    }
+    if (_socket!.connected) {
+      await _register();
+    } else {
+      _socket!.connect();
+    }
   }
 
   bool _isRemoteWorkspaceManagementCommand(String? command) =>
@@ -386,9 +443,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
   }
 
   Future<void> _register() async {
+    final targetSocket = _socket;
+    if (targetSocket == null) return;
     final authManager = getIt<AuthManager>();
     await authManager.reload();
     final capabilities = await loadSanadCapabilities();
+    if (!identical(_socket, targetSocket) || !targetSocket.connected) return;
 
     final isPairing = authManager.hasPendingDevicePairing;
     final payload = {
@@ -410,7 +470,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
     );
     _logger.fine('⬆️ [socket] Registration fields: ${payload.keys.join(', ')}');
 
-    _socket!.emit('register_device', payload);
+    targetSocket.emit('register_device', payload);
   }
 
   Future<void> _emitAgentEvent(Map<String, dynamic> envelope) async {
@@ -461,6 +521,8 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   @override
   Future<void> dispose() async {
+    await _authChangeSubscription?.cancel();
+    _authChangeSubscription = null;
     await _eventController.close();
     for (final engine in _voiceEngines.values.toList()) {
       await engine.close();

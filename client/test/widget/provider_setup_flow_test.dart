@@ -1167,6 +1167,7 @@ void main() {
               'auth_method': 'device_code',
               'status': 'authenticated',
               'account_label': 'user@example.com',
+              'account_name': 'User Name',
               'relogin_required': false,
             },
           }),
@@ -1180,10 +1181,15 @@ void main() {
       final cubit = tester.element(find.byType(AnimatedSwitcher)).read<ProviderSetupCubit>();
       await cubit.load(forcePicker: false);
       await tester.pumpAndSettle();
+
+      expect(find.text('Account: user@example.com'), findsOneWidget);
+      expect(find.text('Name: User Name'), findsOneWidget);
+
       await tester.tap(find.text('Edit'));
       await tester.pumpAndSettle();
 
       expect(find.text('user@example.com'), findsOneWidget);
+      expect(find.text('User Name'), findsOneWidget);
       expect(find.text('Disconnected'), findsNothing);
       expect(find.text('Reconnect account'), findsOneWidget);
     },

@@ -26,6 +26,7 @@ The canonical app composition flow must only go through:
 - Keep authentication-aware redirects and guards strictly centralized in `AppRouter`.
 - Treat `/` as the app bootstrap gate. It must render the bootstrap/loading screen and defer gateway/device readiness decisions to the centralized gateway state flow before `/home` is shown.
 - Full logout must clear app-wide, user-scoped ephemeral transport state such as cross-transport event deduplication before the next authenticated session starts.
+- An authenticated mobile/web session remains on the cached application surface while the cloud is transiently unavailable; route to login only after terminal session invalidation.
 - **DO NOT** hardcode route strings in features or presentations. Use strongly-typed routes or constants.
 - Navigation transitions must be executed using `context.go` or `context.push`.
 

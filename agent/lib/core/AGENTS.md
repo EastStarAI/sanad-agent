@@ -18,6 +18,7 @@ This contract applies to `agent/lib/core/`.
   locally; send both for the atomic claim, then remove the pairing token only
   after `register_success`. Retry the same pair after a lost response.
 - Refresh Sanad access through the portal lifecycle, send refresh tokens in request bodies, and never log raw credentials.
+- `AuthManager` publishes a credential-free process-local change signal only after a successful auth write or a meaningful external reload; credentials never enter that signal.
 - Provider credentials must never share Sanad identity storage.
 
 ## Provider Runtime
@@ -37,7 +38,7 @@ This contract applies to `agent/lib/core/`.
 ## Credential and State Storage
 - Keep instance metadata/model cache/recent selections in the shared agent state database through the owning repositories.
 - Open the agent state database through one shared connection; do not create a second handle for provider repositories.
-- Keep provider secrets in the secret store keyed by instance UUID and expose only masked summaries outside the resolver.
+- Keep provider secrets in the secret store keyed by instance UUID and expose only masked summaries outside the resolver. OAuth summaries may include display-only `account_label` and `account_name` derived locally from token claims; these values never become authorization state and raw tokens never cross the summary boundary.
 - Credential mutation uses explicit keep, replace, or remove semantics; empty input never implies removal.
 - When provider metadata and secrets share one Sanad Home boundary, mutating credentials must reconcile the secret store against authoritative instance UUIDs so replacement cannot preserve orphaned records; never prune across an explicit isolated state-home boundary.
 - OAuth session storage remains separate from simple API-key configuration and Sanad auth.

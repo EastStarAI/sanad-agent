@@ -24,6 +24,7 @@ Do not introduce convenience code that weakens these boundaries.
 - `DeviceCubit` is the sole presentation authority for the active conversation device. Settings inspection scope cannot change it implicitly.
 - Desktop local inventory survives cloud logout, refresh failure, and cloud socket failure; web and mobile remain cloud-only.
 - Cold start preserves a persisted cloud device while cloud inventory is pending, and a successful authoritative inventory clears a stale missing cloud id before fallback.
+- Mobile/web cloud interruption, timeout, or `5xx/503` never implies logout. Keep the authenticated cached surface visible and stale/offline until authoritative inventory and active-history resynchronization succeeds.
 - Local daemon health, lifecycle, update, socket, and voice endpoints derive from `AppConfig.localGatewayUrl`; never hardcode the production daemon port.
 - Local Gateway access is desktop-only. Web and mobile remain remote-only and must never read a Local Gateway credential or attempt a local connection.
 

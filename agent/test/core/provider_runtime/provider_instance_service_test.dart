@@ -542,6 +542,8 @@ void main() {
 
   group('Multi-account OAuth — two independent instances', () {
     setUp(() {
+      _FakeClient._counter = 0;
+      _FakeClient._tokenCounter = 0;
       secrets = SecureFileSecretStore(storePath: _tempStorePath());
     });
     tearDown(() async {
@@ -592,6 +594,10 @@ void main() {
         expect(t1, isNotNull);
         expect(t2, isNotNull);
         expect(t1!.accessToken, isNot(equals(t2!.accessToken)));
+        expect(t1.accountLabel, equals('user-1@example.com'));
+        expect(t1.accountName, equals('User 1'));
+        expect(t2.accountLabel, equals('user-2@example.com'));
+        expect(t2.accountName, equals('User 2'));
         expect(repo.findById(i1.id)!.credentialRevision, greaterThan(0));
         expect(repo.findById(i2.id)!.credentialRevision, greaterThan(0));
       },
@@ -749,6 +755,7 @@ class _FakeClient extends http.BaseClient {
   final bool _succeed;
   // Shared across concurrent clients so parallel flows get distinct tokens.
   static int _counter = 0;
+  static int _tokenCounter = 0;
 
   _FakeClient(this._succeed);
 
@@ -756,6 +763,16 @@ class _FakeClient extends http.BaseClient {
       () => _FakeClient(true);
   static http.Client Function() failureFactory() =>
       () => _FakeClient(false);
+
+  static String _jwt(Map<String, dynamic> claims) {
+    final header = base64Url
+        .encode(utf8.encode(jsonEncode({'alg': 'none', 'typ': 'JWT'})))
+        .replaceAll('=', '');
+    final payload = base64Url
+        .encode(utf8.encode(jsonEncode(claims)))
+        .replaceAll('=', '');
+    return '$header.$payload.test-signature';
+  }
 
   @override
   Future<http.StreamedResponse> send(http.BaseRequest request) async {
@@ -781,10 +798,11 @@ class _FakeClient extends http.BaseClient {
       if (!_succeed) {
         return _resp('{"error":"denied"}', 400);
       }
-      final n = ++_counter;
+      final n = ++_tokenCounter;
       final body = jsonEncode({
         'access_token': 'access-for-$n',
         'refresh_token': 'refresh-$n',
+        'id_token': _jwt({'email': 'user-$n@example.com', 'name': 'User $n'}),
         'token_type': 'Bearer',
         'expires_in': 3600,
         'scope': 'openid',

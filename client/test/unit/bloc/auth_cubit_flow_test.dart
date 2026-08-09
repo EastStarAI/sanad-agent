@@ -24,6 +24,16 @@ void main() {
     await cubit.close();
   });
 
+  test('external authentication exchange updates presentation state', () async {
+    final repository = _FakeAuthRepository();
+    final cubit = AuthCubit(authRepository: repository);
+
+    await cubit.synchronizeExternalSession();
+
+    expect(cubit.state, isA<AuthAuthenticated>());
+    await cubit.close();
+  });
+
   test('cancelLogin emits AuthUnauthenticated and cancels session login', () async {
     final repository = _FakeAuthRepository();
     final cubit = AuthCubit(authRepository: repository);
@@ -31,6 +41,19 @@ void main() {
     cubit.cancelLogin();
     expect(cubit.state, isA<AuthUnauthenticated>());
     expect(repository.loginCancelled, isTrue);
+
+    await cubit.close();
+  });
+
+  test('terminal session invalidation updates presentation without a second logout', () async {
+    final repository = _FakeAuthRepository();
+    final cubit = AuthCubit(authRepository: repository);
+
+    await cubit.login();
+    cubit.invalidateRejectedSession();
+
+    expect(cubit.state, isA<AuthUnauthenticated>());
+    expect(repository.loggedOut, isFalse);
 
     await cubit.close();
   });
@@ -42,6 +65,9 @@ class _FakeAuthRepository implements IAuthRepository {
 
   @override
   Future<AuthSession?> restoreSession() async => null;
+
+  @override
+  Future<AuthSession?> synchronizeExternalSession() async => login();
 
   @override
   Future<AuthSession?> login() async => const AuthSession(

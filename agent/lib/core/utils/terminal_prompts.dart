@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 int selectInteractive(String title, List<String> options) {
@@ -25,6 +26,19 @@ int selectInteractive(String title, List<String> options) {
   var selectedIndex = 0;
   final originalLineMode = stdin.lineMode;
   final originalEchoMode = stdin.echoMode;
+
+  // Ctrl+C must restore the terminal before exit; on Windows the process is
+  // otherwise killed before the finally block below runs.
+  final sigintSubscription = ProcessSignal.sigint.watch().listen((_) {
+    try {
+      stdin.lineMode = originalLineMode;
+      stdin.echoMode = originalEchoMode;
+      stdout.write('\x1b[?25h');
+    } on Object {
+      // The host terminal may not expose mutable modes.
+    }
+    exit(130);
+  });
 
   try {
     stdin.lineMode = false;
@@ -79,6 +93,7 @@ int selectInteractive(String title, List<String> options) {
       }
     }
   } finally {
+    unawaited(sigintSubscription.cancel());
     stdin.lineMode = originalLineMode;
     stdin.echoMode = originalEchoMode;
     stdout.write('\x1b[?25h');

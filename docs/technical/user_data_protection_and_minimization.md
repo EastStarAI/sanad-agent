@@ -36,6 +36,11 @@ allowlist. A missing `Origin` is acceptable only for an authenticated native
 loopback request; it never grants authority on its own. Browser-facing local
 requests are not a supported product mode.
 
+The native desktop authentication exchange sends only an exact notification
+with no payload fields. It causes the daemon to reload owner-only `auth.json`
+and never returns a credential; unexpected fields are rejected before payload
+logging.
+
 WebSocket admission has two bounded stages: unauthenticated upgrade work is
 reserved before the upgrade and released when the handshake succeeds or fails;
 exhausting the per-peer reservation budget installs a short bounded cool-down.

@@ -857,6 +857,65 @@ void main() {
       ]);
     });
 
+    test('late steer completion preserves the prior stream before the next step', () {
+      final now = DateTime.now();
+      state.apply(
+        CanonicalEvent(
+          id: 'thinking_step-1',
+          kind: EventKind.thinking,
+          text: 'Answer before steer',
+          status: EventStatus.running,
+          timestamp: now,
+          sessionId: 'session-1',
+          runId: 'run-1',
+          modelStepId: 'step-1',
+        ),
+      );
+      state.apply(
+        CanonicalEvent(
+          id: 'thinking_step-1',
+          kind: EventKind.thinking,
+          text: 'Answer before steer',
+          status: EventStatus.done,
+          timestamp: now.add(const Duration(milliseconds: 1)),
+          sessionId: 'session-1',
+          runId: 'run-1',
+          modelStepId: 'step-1',
+        ),
+      );
+      state.apply(
+        CanonicalEvent(
+          id: 'user_steer-1',
+          kind: EventKind.userMessage,
+          text: 'Revise it',
+          status: EventStatus.done,
+          timestamp: now.add(const Duration(milliseconds: 2)),
+          sessionId: 'session-1',
+          runId: 'run-1',
+        ),
+      );
+      state.apply(
+        CanonicalEvent(
+          id: 'thinking_step-2',
+          kind: EventKind.thinking,
+          text: 'Adjusted response',
+          status: EventStatus.running,
+          timestamp: now.add(const Duration(milliseconds: 3)),
+          sessionId: 'session-1',
+          runId: 'run-1',
+          modelStepId: 'step-2',
+        ),
+      );
+
+      expect(state.events.map((event) => event.id), [
+        'thinking_step-1',
+        'user_steer-1',
+        'thinking_step-2',
+      ]);
+      expect(state.events.first.status, EventStatus.done);
+      expect(state.events.first.text, 'Answer before steer');
+    });
+
     test('tool_use and tool_result merge via same id', () {
       final toolUseEvent = CanonicalEvent(
         id: 'tool_run-abc',
