@@ -331,7 +331,6 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
             data: widget.event.text,
             isFinal: true,
             onTapLink: _onTapLink,
-            isStreaming: widget.event.status == EventStatus.running,
           ),
         ),
       ),
@@ -531,7 +530,6 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
             data: widget.event.text,
             isFinal: false,
             onTapLink: _onTapLink,
-            isStreaming: widget.event.status == EventStatus.running,
           ),
         );
     }
