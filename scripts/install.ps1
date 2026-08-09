@@ -80,7 +80,7 @@ try {
     if ($ActualHash -ne $Artifact.sha256.ToLowerInvariant()) {
         throw "Downloaded artifact SHA-256 verification failed."
     }
-    Write-Warning "Sanad 1.0.0 for Windows is intentionally unsigned. Origin, manifest URL, size, and SHA-256 were verified; Windows may display Defender or SmartScreen warnings."
+    Write-Warning "Sanad 1.0.1 for Windows is intentionally unsigned. Origin, manifest URL, size, and SHA-256 were verified; Windows may display Defender or SmartScreen warnings."
 
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
     if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Force }

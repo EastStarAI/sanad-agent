@@ -1,3 +1,8 @@
+---
+title: "Public Client Endpoint Configuration"
+description: "Production and local endpoint defaults plus explicit private Development and Staging build-time injection."
+---
+
 # Public Client Endpoint Configuration
 
 ## Ownership boundary

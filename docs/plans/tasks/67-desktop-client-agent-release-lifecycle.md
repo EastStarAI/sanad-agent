@@ -596,8 +596,8 @@ development. تستخدم Windows 11 x64 workstation/VM نظيفة مع Defender
 لا تبدأ قبل E Exit وموافقة جديدة صريحة من المستخدم على release candidate
 والنشر. إكمال 67A أو 67B ليس تفويضاً للنشر.
 
-- [ ] رفع marketing version وbuild number بشكل متسق في release contract وAgent
-      وClient ومصادر Windows installer الفعلية.
+- [x] رفع marketing version إلى `1.0.1` وbuild number إلى `2` بشكل متسق في
+      release contract وAgent وClient ومصادر Windows installer الفعلية.
 - [ ] بناء validation-only full matrix من commit العام المقصود.
 - [ ] التحقق من Agent/Client Windows unsigned disclosure وSHA/manifest/SBOM/
       attestations وWinSparkle DSA.

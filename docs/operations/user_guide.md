@@ -39,14 +39,14 @@ and choose the client package for your platform:
 
 ### Windows
 
-The `1.0.0` package is an **Unsigned Windows build**. Download it only from the
+The `1.0.1` package is an **Unsigned Windows build**. Download it only from the
 official release, compare its SHA-256 with the published release manifest, and
 then run the versioned Windows x64 installer. Do not disable Microsoft Defender
 or Smart App Control. If SmartScreen warns after origin and hash verification,
 use the operating-system review flow to inspect the publisher status before
-choosing whether to continue. The `1.0.0` clean-machine release gate was
-validated on Windows 11. Windows 10 was not validated and no Windows 10 test
-result should be inferred from the shared x64 package.
+choosing whether to continue. Windows release gates run on Windows 11. Windows
+10 has not been validated and no Windows 10 result should be inferred from the
+shared x64 package.
 
 After installation, launch Sanad Client from the Start menu.
 

@@ -20,6 +20,6 @@ Public assets use:
 
 `<component>-<release-version>-<platform>-<architecture>.<extension>`
 
-For RCs, `<release-version>` includes `-rc.N`; therefore RC1, RC2, and Stable downloads never collide on disk even though all share marketing version `1.0.0`.
+For RCs, `<release-version>` includes `-rc.N`; therefore RC1, RC2, and Stable downloads never collide on disk even though all share the same marketing version.
 
-Windows `1.0.0` Agent artifacts use `unsigned+github-attestation`; Client artifacts use `unsigned+winsparkle-dsa`. The release notes disclose the missing Authenticode publisher and retain official-origin, manifest, size, SHA-256, SBOM, and GitHub-provenance verification.
+Windows Agent artifacts use `unsigned+github-attestation`; Client artifacts use `unsigned+winsparkle-dsa` until the documented Authenticode transition is completed. The release notes disclose the missing Authenticode publisher and retain official-origin, manifest, size, SHA-256, SBOM, and GitHub-provenance verification.

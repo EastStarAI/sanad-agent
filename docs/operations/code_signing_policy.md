@@ -9,7 +9,7 @@ description: "Public artifact trust, protected signing, role separation, verific
 
 Sanad Agent publishes release artifacts only from a tagged GitHub Actions build. Every release must include a release manifest and SHA-256 checksums generated from the immutable artifacts. Users should verify the official release origin and checksum before installation or update.
 
-The `1.0.0` Windows installer is planned as an **Unsigned Windows build**. Release notes, download surfaces, and installation guidance must disclose that status. Documentation must not tell users to disable Microsoft Defender or Smart App Control. Any SmartScreen bypass guidance is limited to a user who has independently verified the official origin and SHA-256 hash.
+Windows installers remain **Unsigned Windows builds** until the documented Authenticode transition is completed. Release notes, download surfaces, and installation guidance must disclose that status. Documentation must not tell users to disable Microsoft Defender or Smart App Control. Any SmartScreen bypass guidance is limited to a user who has independently verified the official origin and SHA-256 hash.
 
 macOS and Android signing follow the protected release workflow and platform-specific credentials. Private keys and signing credentials must never enter Git, pull-request jobs, fork jobs, logs, or general build artifacts.
 

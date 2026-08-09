@@ -120,11 +120,10 @@ curl -fsSL https://sanad.eaststarai.com/install.sh | bash
 اختر تسجيل الدخول لربط الجهاز من خلال Portal، أو تخطَّه لتشغيل الوكيل محليًا
 وربطه لاحقًا. لا ينتظر المُثبّت إجابة عند تشغيله في طرفية غير تفاعلية.
 
-> **بناء Windows غير موقّع:** مثبّت Windows في الإصدار `1.0.0` غير موقّع
+> **بناء Windows غير موقّع:** مثبّت Windows في الإصدار `1.0.1` غير موقّع
 > عمدًا. تحقق أنه من الإصدار الرسمي وأن SHA-256 يطابق release manifest المنشور
-> قبل المتابعة. لا تعطّل Microsoft Defender أوSmart App Control. تحقق مسار
-> clean-machine للإصدار `1.0.0` على Windows 11؛ لم يُتحقق من Windows 10 لهذا
-> الإصدار.
+> قبل المتابعة. لا تعطّل Microsoft Defender أوSmart App Control. تُنفذ بوابات
+> إصدار Windows على Windows 11؛ ولم يُتحقق من Windows 10.
 
 راجع [دليل تثبيت واستخدام Sanad Agent](docs/operations/user_guide.md) لحزم
 العميل، وخيارات المُثبّت الصريحة، والتثبيت اليدوي، وإدارة الخدمة، والمزودين،
