@@ -14,7 +14,7 @@ description: "Ownership, persistence schema, pagination rules, draft correlation
 `ConversationCacheStore` (`lib/features/conversations/domain/stores/conversation_cache_store.dart`) is the single in-memory owner of:
 
 - Active device context.
-- Cached workspace list per device.
+- Cached workspace list per device. Ready, refreshing, or stale-error workspace snapshots project immediately into both the sidebar and composer selector; a create/update mutation must not wait for the selector popup to open.
 - Unscoped conversation page per device.
 - Per-workspace conversation pages per `deviceId + workspaceId`.
 - Cursors, `hasMore`, loading/error state, and last-refresh time per resource.
