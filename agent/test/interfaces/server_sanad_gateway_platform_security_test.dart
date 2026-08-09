@@ -29,6 +29,15 @@ const blockedMcpManagementCommands = <String>[
   CanonicalEventTypes.deleteMcpServer,
   CanonicalEventTypes.replaceMcpConfig,
   CanonicalEventTypes.inspectMcpServer,
+  CanonicalEventTypes.previewMcpImport,
+  CanonicalEventTypes.exportMcpServers,
+  CanonicalEventTypes.readAdvancedMcpServer,
+  CanonicalEventTypes.previewAdvancedMcpServer,
+  CanonicalEventTypes.saveAdvancedMcpServer,
+  CanonicalEventTypes.startMcpOAuth,
+  CanonicalEventTypes.getMcpOAuthStatus,
+  CanonicalEventTypes.cancelMcpOAuth,
+  CanonicalEventTypes.completeMcpOAuth,
 ];
 
 class FakeManager implements Manager {

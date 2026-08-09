@@ -27,6 +27,8 @@ Compact layouts move the same navigation into a drawer. Destinations and capabil
 - Device MCP lists and edits only device-level servers.
 - Device Skills lists only user-level skills discovered by the agent.
 - Workspace MCP shows Device and Workspace origins. A same-name workspace definition is effective and the inherited device definition is identified as overridden.
+- MCP management is card-first: each server presents enabled, connection, authentication, tools, transport, and origin independently. Add and Edit share a typed Remote/Local form with structured arguments, environment variables, headers, configured-secret replacement, real daemon testing, and tool review.
+- Import is a secondary preview-first action. Export always excludes credentials. Advanced JSON is available per server only and requires validation plus a reviewed diff before Save; no raw JSON pane appears in normal management.
 - Workspace Skills shows Device and Workspace origins plus active and shadowed state returned by the agent.
 
 ## Device Overview

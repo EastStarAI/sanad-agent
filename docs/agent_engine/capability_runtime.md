@@ -18,7 +18,7 @@ execution services, approval policy, and external catalogs:
   explicitly supplied platform capabilities;
 - permission policy gates sensitive execution and persists suspended approval;
 - focused workspace/web handlers execute host operations;
-- the MCP manager owns merged configuration and persistent server sessions.
+- the MCP manager owns merged configuration, owner-protected credentials, real inspection, OAuth discovery/PKCE/callback lifecycle, and persistent server sessions; clients receive only redacted snapshots, opaque flow IDs, authorization URLs, and typed states.
 
 ## Per-Turn Assembly
 

@@ -36,6 +36,7 @@ class McpRuntimeClient {
     required McpConfigScope scope,
     required McpServerConfig config,
     String? workspaceId,
+    Map<String, dynamic> secrets = const {},
   }) async {
     final payload = await _request(
       device: _resolveDevice(device),
@@ -46,6 +47,7 @@ class McpRuntimeClient {
           'name': config.name,
           ...config.toConfigJson(),
         },
+        if (secrets.isNotEmpty) 'secrets': secrets,
         if (workspaceId != null && workspaceId.trim().isNotEmpty) 'workspace_id': workspaceId.trim(),
       },
       expectedEvent: 'mcp_server_saved',
@@ -72,30 +74,13 @@ class McpRuntimeClient {
     return McpRuntimeSnapshot.fromJson(payload);
   }
 
-  Future<McpRuntimeSnapshot> replaceConfig({
-    DeviceConfig? device,
-    required McpConfigScope scope,
-    required Map<String, dynamic> document,
-    String? workspaceId,
-  }) async {
-    final payload = await _request(
-      device: _resolveDevice(device),
-      command: 'replace_mcp_config',
-      payload: {
-        'scope': scope.wireValue,
-        'document': document,
-        if (workspaceId != null && workspaceId.trim().isNotEmpty) 'workspace_id': workspaceId.trim(),
-      },
-      expectedEvent: 'mcp_config_replaced',
-    );
-    return McpRuntimeSnapshot.fromJson(payload);
-  }
-
   Future<McpServerInspection> inspectServer({
     DeviceConfig? device,
     required String serverName,
     McpConfigScope scope = McpConfigScope.effective,
     String? workspaceId,
+    McpServerConfig? draft,
+    Map<String, dynamic> secrets = const {},
   }) async {
     final payload = await _request(
       device: _resolveDevice(device),
@@ -103,12 +88,185 @@ class McpRuntimeClient {
       payload: {
         'scope': scope.wireValue,
         'server_name': serverName,
+        if (draft != null) 'config': draft.toConfigJson(),
+        if (secrets.isNotEmpty) 'secrets': secrets,
         if (workspaceId != null && workspaceId.trim().isNotEmpty) 'workspace_id': workspaceId.trim(),
       },
       expectedEvent: 'mcp_server_inspected',
     );
     return McpServerInspection.fromJson(payload);
   }
+
+  Future<McpConfigPreview> previewImport({
+    DeviceConfig? device,
+    required String input,
+  }) async => McpConfigPreview.fromJson(
+    await _request(
+      device: _resolveDevice(device),
+      command: 'preview_mcp_import',
+      payload: {'input': input},
+      expectedEvent: 'mcp_import_previewed',
+    ),
+  );
+
+  Future<McpExportDocument> exportServers({
+    DeviceConfig? device,
+    required List<String> serverNames,
+    McpConfigScope scope = McpConfigScope.effective,
+    String? workspaceId,
+  }) async {
+    final result = await _request(
+      device: _resolveDevice(device),
+      command: 'export_mcp_servers',
+      payload: {
+        'server_names': serverNames,
+        'scope': scope.wireValue,
+        if (workspaceId?.trim().isNotEmpty == true) 'workspace_id': workspaceId!.trim(),
+      },
+      expectedEvent: 'mcp_servers_exported',
+    );
+    return McpExportDocument.fromJson(result);
+  }
+
+  Future<McpAdvancedDocument> readAdvanced({
+    DeviceConfig? device,
+    required String serverName,
+    required McpConfigScope scope,
+    String? workspaceId,
+  }) async => McpAdvancedDocument.fromJson(
+    await _advancedRequest(
+      device: device,
+      command: 'read_advanced_mcp_server',
+      expectedEvent: 'mcp_advanced_read',
+      serverName: serverName,
+      scope: scope,
+      workspaceId: workspaceId,
+    ),
+  );
+
+  Future<McpConfigPreview> previewAdvanced({
+    DeviceConfig? device,
+    required String serverName,
+    required McpConfigScope scope,
+    required String input,
+    String? workspaceId,
+  }) async => McpConfigPreview.fromJson(
+    await _advancedRequest(
+      device: device,
+      command: 'preview_advanced_mcp_server',
+      expectedEvent: 'mcp_advanced_previewed',
+      serverName: serverName,
+      scope: scope,
+      workspaceId: workspaceId,
+      extra: {'input': input},
+    ),
+  );
+
+  Future<McpRuntimeSnapshot> saveAdvanced({
+    DeviceConfig? device,
+    required String serverName,
+    required McpConfigScope scope,
+    required String input,
+    required String baseRevision,
+    required String previewRevision,
+    String? workspaceId,
+  }) async => McpRuntimeSnapshot.fromJson(
+    await _advancedRequest(
+      device: device,
+      command: 'save_advanced_mcp_server',
+      expectedEvent: 'mcp_advanced_saved',
+      serverName: serverName,
+      scope: scope,
+      workspaceId: workspaceId,
+      extra: {
+        'input': input,
+        'base_revision': baseRevision,
+        'preview_revision': previewRevision,
+      },
+    ),
+  );
+
+  Future<McpOAuthFlow> startOAuth({
+    DeviceConfig? device,
+    required McpServerConfig draft,
+    Map<String, dynamic> secrets = const {},
+  }) async => McpOAuthFlow.fromJson(
+    await _request(
+      device: _resolveDevice(device),
+      command: 'start_mcp_oauth',
+      payload: {
+        'server_name': draft.name,
+        'config': draft.toConfigJson(),
+        if (secrets.isNotEmpty) 'secrets': secrets,
+      },
+      expectedEvent: 'mcp_oauth_started',
+      timeout: const Duration(seconds: 30),
+    ),
+  );
+
+  Future<McpOAuthFlow> oauthStatus({
+    DeviceConfig? device,
+    required String flowId,
+  }) async => McpOAuthFlow.fromJson(
+    await _request(
+      device: _resolveDevice(device),
+      command: 'get_mcp_oauth_status',
+      payload: {'flow_id': flowId},
+      expectedEvent: 'mcp_oauth_status',
+    ),
+  );
+
+  Future<McpOAuthFlow> cancelOAuth({
+    DeviceConfig? device,
+    required String flowId,
+  }) async => McpOAuthFlow.fromJson(
+    await _request(
+      device: _resolveDevice(device),
+      command: 'cancel_mcp_oauth',
+      payload: {'flow_id': flowId},
+      expectedEvent: 'mcp_oauth_cancelled',
+    ),
+  );
+
+  Future<McpRuntimeSnapshot> completeOAuth({
+    DeviceConfig? device,
+    required String flowId,
+    required McpServerConfig config,
+    required McpConfigScope scope,
+    String? workspaceId,
+  }) async => McpRuntimeSnapshot.fromJson(
+    await _request(
+      device: _resolveDevice(device),
+      command: 'complete_mcp_oauth',
+      payload: {
+        'flow_id': flowId,
+        'config': {'name': config.name, ...config.toConfigJson()},
+        'scope': scope.wireValue,
+        if (workspaceId?.trim().isNotEmpty == true) 'workspace_id': workspaceId!.trim(),
+      },
+      expectedEvent: 'mcp_oauth_completed',
+    ),
+  );
+
+  Future<Map<String, dynamic>> _advancedRequest({
+    DeviceConfig? device,
+    required String command,
+    required String expectedEvent,
+    required String serverName,
+    required McpConfigScope scope,
+    String? workspaceId,
+    Map<String, dynamic> extra = const {},
+  }) => _request(
+    device: _resolveDevice(device),
+    command: command,
+    payload: {
+      'server_name': serverName,
+      'scope': scope.wireValue,
+      if (workspaceId?.trim().isNotEmpty == true) 'workspace_id': workspaceId!.trim(),
+      ...extra,
+    },
+    expectedEvent: expectedEvent,
+  );
 
   Future<Map<String, dynamic>> _request({
     required DeviceConfig device,

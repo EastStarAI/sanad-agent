@@ -5,20 +5,29 @@ import 'dart:io';
 import 'package:mcp_client/mcp_client.dart';
 
 import '../models/local_tool_spec.dart';
+import 'mcp_oauth_service.dart';
 import 'mcp_server_config.dart';
 import 'sanad_settings_store.dart';
 
 class McpRuntimeManager {
-  McpRuntimeManager({SanadSettingsStore? settingsStore})
-    : _settingsStore = settingsStore ?? const SanadSettingsStore();
+  McpRuntimeManager({
+    SanadSettingsStore? settingsStore,
+    McpOAuthService? oauthService,
+  }) : _settingsStore = settingsStore ?? const SanadSettingsStore(),
+       _oauthService = oauthService ?? McpOAuthService();
 
   final SanadSettingsStore _settingsStore;
+  final McpOAuthService _oauthService;
+  final Map<String, DateTime> _refreshedOAuthExpiry = {};
 
   // Active persistent connection instances map: serverName -> client
   final Map<String, dynamic> _activeClients = {};
 
   // Config used to establish the active connections: serverName -> config
   final Map<String, McpServerConfig> _connectedConfigs = {};
+
+  // Last concrete transport selected by a bounded inspection.
+  McpTransportType? _lastConnectedTransport;
 
   // Cached tool specs: workspacePath (or 'global') -> specs list
   final Map<String, List<LocalToolSpec>> _specsCache = {};
@@ -163,16 +172,35 @@ class McpRuntimeManager {
     }
   }
 
-  Future<({bool success, String? error, List<Tool>? tools})>
-  verifyMcpConnection(McpServerConfig serverConfig) async {
-    // Inspection or dynamic validation: always use a fresh connection to preserve dynamic refresh capability.
+  Future<
+    ({
+      bool success,
+      String? error,
+      List<Tool>? tools,
+      McpTransportType? transport,
+      String authState,
+    })
+  >
+  verifyMcpConnection(
+    McpServerConfig serverConfig, {
+    Map<String, String>? resolvedHeaders,
+    Map<String, String>? resolvedEnvironment,
+  }) async {
+    // Inspection always uses a fresh connection and may receive ephemeral
+    // credentials that must never be persisted merely to test a draft.
     try {
-      final result = await connectToClient(serverConfig);
+      final result = await connectToClient(
+        serverConfig,
+        resolvedHeaders: resolvedHeaders,
+        resolvedEnvironment: resolvedEnvironment,
+      );
       if (result.client == null) {
         return (
           success: false,
           error: _sanitizeError(result.error),
           tools: null,
+          transport: null,
+          authState: _authStateForFailure(serverConfig, result.error),
         );
       }
 
@@ -182,12 +210,22 @@ class McpRuntimeManager {
         final tools = (toolsDynamic as List).cast<Tool>().toList(
           growable: false,
         );
-        return (success: true, error: null, tools: tools);
+        return (
+          success: true,
+          error: null,
+          tools: tools,
+          transport: _lastConnectedTransport ?? serverConfig.transport,
+          authState: serverConfig.authType == McpAuthType.oauth
+              ? 'approved'
+              : 'not_required',
+        );
       } catch (error) {
         return (
           success: false,
           error: _sanitizeError('Failed to list tools: $error'),
           tools: null,
+          transport: _lastConnectedTransport,
+          authState: _authStateForFailure(serverConfig, error),
         );
       } finally {
         await disconnectClient(client);
@@ -197,6 +235,8 @@ class McpRuntimeManager {
         success: false,
         error: _sanitizeError(error.toString()),
         tools: null,
+        transport: _lastConnectedTransport,
+        authState: _authStateForFailure(serverConfig, error),
       );
     }
   }
@@ -231,13 +271,18 @@ class McpRuntimeManager {
   bool _isConfigChanged(McpServerConfig oldConfig, McpServerConfig newConfig) {
     if (oldConfig.command != newConfig.command ||
         oldConfig.serverUrl != newConfig.serverUrl ||
-        oldConfig.detectedTransport != newConfig.detectedTransport ||
+        oldConfig.transport != newConfig.transport ||
         oldConfig.authType != newConfig.authType ||
-        oldConfig.accessToken != newConfig.accessToken) {
+        oldConfig.bearerTokenRef != newConfig.bearerTokenRef ||
+        oldConfig.oauthAccessTokenRef != newConfig.oauthAccessTokenRef) {
       return true;
     }
     return jsonEncode(oldConfig.args) != jsonEncode(newConfig.args) ||
-        jsonEncode(oldConfig.env) != jsonEncode(newConfig.env);
+        jsonEncode(oldConfig.env) != jsonEncode(newConfig.env) ||
+        jsonEncode(oldConfig.secretEnv) != jsonEncode(newConfig.secretEnv) ||
+        jsonEncode(oldConfig.headers) != jsonEncode(newConfig.headers) ||
+        jsonEncode(oldConfig.secretHeaders) !=
+            jsonEncode(newConfig.secretHeaders);
   }
 
   Future<void> _closeConnection(String serverName) async {
@@ -283,30 +328,34 @@ class McpRuntimeManager {
   }
 
   Future<({dynamic client, String? error})> connectToClient(
-    McpServerConfig config,
-  ) async {
+    McpServerConfig config, {
+    Map<String, String>? resolvedHeaders,
+    Map<String, String>? resolvedEnvironment,
+  }) async {
     final clientConfig = McpClient.simpleConfig(
       name: 'Sanad Agent',
       version: '1.0.0',
     );
 
-    if (config.detectedTransport == McpTransportType.stdio) {
+    _lastConnectedTransport = null;
+    if (config.transport == McpTransportType.stdio) {
       if (config.command == null || config.command!.trim().isEmpty) {
         return (client: null, error: 'STDIO server missing command.');
       }
-      final transportConfig = TransportConfig.stdio(
-        command: config.command!,
-        arguments: config.args ?? const [],
-        environment: _buildSafeEnvironment(config.env),
-      );
       final result = await McpClient.createAndConnect(
         config: clientConfig,
-        transportConfig: transportConfig,
-      );
-      return result.fold(
-        (client) => (client: client, error: null),
-        (error) => (client: null, error: error.toString()),
-      );
+        transportConfig: TransportConfig.stdio(
+          command: config.command!,
+          arguments: config.args,
+          environment: _buildSafeEnvironment(
+            resolvedEnvironment ?? _settingsStore.resolveEnvironment(config),
+          ),
+        ),
+      ).timeout(const Duration(seconds: 20));
+      return result.fold((client) {
+        _lastConnectedTransport = McpTransportType.stdio;
+        return (client: client, error: null);
+      }, (error) => (client: null, error: error.toString()));
     }
 
     if (config.serverUrl.trim().isEmpty) {
@@ -316,26 +365,36 @@ class McpRuntimeManager {
       );
     }
 
-    Map<String, String>? headers;
-    if (config.authType == McpAuthType.oauth && config.accessToken != null) {
-      headers = {'Authorization': 'Bearer ${config.accessToken}'};
+    final headers = resolvedHeaders ?? await _resolvedHeaders(config);
+    final candidates = config.transport == McpTransportType.auto
+        ? const [McpTransportType.streamableHttp, McpTransportType.sse]
+        : [config.transport];
+    String? lastError;
+    for (final candidate in candidates) {
+      final transportConfig = candidate == McpTransportType.sse
+          ? TransportConfig.sse(serverUrl: config.serverUrl, headers: headers)
+          : TransportConfig.streamableHttp(
+              baseUrl: config.serverUrl,
+              headers: headers,
+            );
+      try {
+        final result = await McpClient.createAndConnect(
+          config: clientConfig,
+          transportConfig: transportConfig,
+        ).timeout(const Duration(seconds: 20));
+        final connection = result.fold<dynamic>((client) => client, (error) {
+          lastError = error.toString();
+          return null;
+        });
+        if (connection != null) {
+          _lastConnectedTransport = candidate;
+          return (client: connection, error: null);
+        }
+      } on TimeoutException {
+        lastError = 'Connection timed out.';
+      }
     }
-
-    final transportConfig = config.detectedTransport == McpTransportType.sse
-        ? TransportConfig.sse(serverUrl: config.serverUrl, headers: headers)
-        : TransportConfig.streamableHttp(
-            baseUrl: config.serverUrl,
-            headers: headers,
-          );
-
-    final result = await McpClient.createAndConnect(
-      config: clientConfig,
-      transportConfig: transportConfig,
-    );
-    return result.fold(
-      (client) => (client: client, error: null),
-      (error) => (client: null, error: error.toString()),
-    );
+    return (client: null, error: lastError ?? 'MCP connection failed.');
   }
 
   Future<void> disconnectClient(dynamic client) async {
@@ -372,6 +431,45 @@ class McpRuntimeManager {
   String _sanitizeError(dynamic error) {
     final text = error.toString();
     return text.replaceAll(_credentialPattern, '[REDACTED]');
+  }
+
+  Future<Map<String, String>> _resolvedHeaders(McpServerConfig config) async {
+    final headers = _settingsStore.resolveHeaders(config);
+    if (config.authType != McpAuthType.oauth) return headers;
+    final persistedExpiry = config.tokenExpiry;
+    final refreshedExpiry = _refreshedOAuthExpiry[config.name];
+    final expiresAt = refreshedExpiry ?? persistedExpiry;
+    if (expiresAt == null || expiresAt.isAfter(DateTime.now())) return headers;
+
+    final refreshToken = _settingsStore.resolveOAuthRefreshToken(config);
+    if (refreshToken == null) return headers;
+    final grant = await _oauthService.refresh(
+      config: config,
+      refreshToken: refreshToken,
+      clientSecret: _settingsStore.resolveOAuthClientSecret(config),
+    );
+    await _settingsStore.applySecretMutations(config, {
+      'oauth': {
+        'access_token': grant.accessToken,
+        if (grant.refreshToken != null) 'refresh_token': grant.refreshToken!,
+      },
+    });
+    _refreshedOAuthExpiry[config.name] = DateTime.now().add(
+      Duration(seconds: grant.expiresIn ?? 3600),
+    );
+    return {...headers, 'Authorization': 'Bearer ${grant.accessToken}'};
+  }
+
+  String _authStateForFailure(McpServerConfig config, Object? error) {
+    if (config.authType != McpAuthType.oauth) return 'not_required';
+    final text = error?.toString().toLowerCase() ?? '';
+    if (text.contains('401') ||
+        text.contains('403') ||
+        text.contains('unauthorized') ||
+        !config.hasConfiguredOAuth) {
+      return 'authorization_required';
+    }
+    return 'error';
   }
 
   Map<String, String> _buildSafeEnvironment(Map<String, String>? userEnv) {
