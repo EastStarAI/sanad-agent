@@ -1,7 +1,29 @@
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_release_contract/release_contract.dart';
+
+enum AgentBootstrapStatus {
+  installed,
+  networkFailed,
+  manifestInvalid,
+  targetMismatch,
+  unsupportedTarget,
+  downloadFailed,
+  checksumFailed,
+  trustFailed,
+  replacementFailed,
+}
+
+class AgentBootstrapResult {
+  const AgentBootstrapResult(this.status, {this.message});
+
+  final AgentBootstrapStatus status;
+  final String? message;
+
+  bool get isSuccess => status == AgentBootstrapStatus.installed;
+}
 
 class VerifiedAgentBootstrapInstaller {
   VerifiedAgentBootstrapInstaller({
@@ -10,28 +32,61 @@ class VerifiedAgentBootstrapInstaller {
     Uri? manifestUri,
     String? operatingSystem,
     String? architecture,
+    PlatformArtifactVerifier? platformVerifier,
+    Uri? artifactMirrorUri,
   }) : _client = client ?? http.Client(),
-       manifestUri =
-           manifestUri ??
-           Uri.parse(
-             'https://github.com/EastStarAI/sanad-agent/releases/latest/download/release-manifest.json',
-           ),
+       manifestUri = manifestUri ?? Uri.parse(AppConfig.releaseManifestUrl),
        operatingSystem = operatingSystem ?? Platform.operatingSystem,
-       architecture = architecture ?? _architecture();
+       architecture = architecture ?? _architecture(),
+       _platformVerifier = platformVerifier ?? verifyPlatformCodeSignature,
+       _artifactMirrorUri =
+           artifactMirrorUri ??
+           (AppConfig.releaseArtifactMirrorUrl.trim().isEmpty ? null : Uri.parse(AppConfig.releaseArtifactMirrorUrl));
 
   final String targetPath;
   final Uri manifestUri;
   final String operatingSystem;
   final String architecture;
   final http.Client _client;
+  final PlatformArtifactVerifier _platformVerifier;
+  final Uri? _artifactMirrorUri;
 
-  Future<bool> install({void Function(double progress)? onProgress}) async {
-    final manifestResponse = await _client.get(
-      manifestUri,
-      headers: const {'User-Agent': 'sanad-client'},
-    );
-    if (manifestResponse.statusCode != HttpStatus.ok) return false;
-    final manifest = ReleaseManifest.fromJsonString(manifestResponse.body);
+  Future<AgentBootstrapResult> install({
+    required String targetVersion,
+    void Function(double progress)? onProgress,
+  }) async {
+    ReleaseManifest manifest;
+    try {
+      final response = await _client.get(
+        manifestUri,
+        headers: const {'User-Agent': 'sanad-client'},
+      );
+      if (response.statusCode != HttpStatus.ok) {
+        return AgentBootstrapResult(
+          AgentBootstrapStatus.networkFailed,
+          message: 'Manifest request failed with HTTP ${response.statusCode}.',
+        );
+      }
+      manifest = ReleaseManifest.fromJsonString(response.body);
+    } on FormatException catch (error) {
+      return AgentBootstrapResult(
+        AgentBootstrapStatus.manifestInvalid,
+        message: error.message,
+      );
+    } catch (error) {
+      return AgentBootstrapResult(
+        AgentBootstrapStatus.networkFailed,
+        message: 'Unable to fetch the release manifest: $error',
+      );
+    }
+
+    final requested = ReleaseVersion.parse(targetVersion);
+    if (manifest.version.compareTo(requested) != 0) {
+      return AgentBootstrapResult(
+        AgentBootstrapStatus.targetMismatch,
+        message: 'Release manifest ${manifest.version} does not match required agent $requested.',
+      );
+    }
     final platform = operatingSystem == 'macos' ? 'macos' : operatingSystem;
     final artifact = manifest.findArtifact(
       component: 'agent',
@@ -39,47 +94,69 @@ class VerifiedAgentBootstrapInstaller {
       architecture: architecture,
       publicOnly: true,
     );
-    if (artifact == null || artifact.signatureType.trim().isEmpty) return false;
+    if (artifact == null) {
+      return const AgentBootstrapResult(AgentBootstrapStatus.unsupportedTarget);
+    }
 
     final target = File(targetPath);
     await target.parent.create(recursive: true);
     final staged = File('$targetPath.bootstrap-staged');
-    final response = await _client.send(http.Request('GET', artifact.url));
-    if (response.statusCode != HttpStatus.ok) return false;
-    final sink = staged.openWrite();
-    var downloaded = 0;
-    await for (final chunk in response.stream) {
-      downloaded += chunk.length;
-      sink.add(chunk);
-      if (artifact.size > 0) onProgress?.call(downloaded / artifact.size);
-    }
-    await sink.close();
-    if (downloaded != artifact.size || await sha256OfFile(staged) != artifact.sha256) {
-      await staged.delete();
-      return false;
-    }
-    if (!await verifyPlatformCodeSignature(
-      staged,
-      operatingSystem: operatingSystem,
-    )) {
-      await staged.delete();
-      return false;
-    }
-
-    final backup = File('$targetPath.rollback');
-    if (backup.existsSync()) await backup.delete();
-    if (target.existsSync()) await target.rename(backup.path);
     try {
-      await staged.rename(target.path);
-      if (!Platform.isWindows) {
-        final chmod = await Process.run('chmod', ['700', target.path]);
-        if (chmod.exitCode != 0) throw const FileSystemException('chmod');
+      if (staged.existsSync()) await staged.delete();
+      final downloadUri = _artifactMirrorUri?.resolve(artifact.filename) ?? artifact.url;
+      final response = await _client.send(http.Request('GET', downloadUri));
+      if (response.statusCode != HttpStatus.ok) {
+        return AgentBootstrapResult(
+          AgentBootstrapStatus.downloadFailed,
+          message: 'Agent download failed with HTTP ${response.statusCode}.',
+        );
       }
-      return true;
-    } catch (_) {
-      if (target.existsSync()) await target.delete();
-      if (backup.existsSync()) await backup.rename(target.path);
-      return false;
+      final sink = staged.openWrite();
+      var downloaded = 0;
+      await for (final chunk in response.stream) {
+        downloaded += chunk.length;
+        sink.add(chunk);
+        if (artifact.size > 0) {
+          onProgress?.call((downloaded / artifact.size).clamp(0, 1));
+        }
+      }
+      await sink.close();
+      if (downloaded != artifact.size || await sha256OfFile(staged) != artifact.sha256) {
+        return const AgentBootstrapResult(AgentBootstrapStatus.checksumFailed);
+      }
+      if (!await verifyReleaseArtifactTrust(
+        staged,
+        artifact: artifact,
+        platformVerifier: _platformVerifier,
+      )) {
+        return const AgentBootstrapResult(AgentBootstrapStatus.trustFailed);
+      }
+
+      final backup = File('$targetPath.rollback');
+      if (backup.existsSync()) await backup.delete();
+      if (target.existsSync()) await target.rename(backup.path);
+      try {
+        await staged.rename(target.path);
+        if (operatingSystem != 'windows' && !Platform.isWindows) {
+          final chmod = await Process.run('chmod', ['700', target.path]);
+          if (chmod.exitCode != 0) throw const FileSystemException('chmod');
+        }
+        return const AgentBootstrapResult(AgentBootstrapStatus.installed);
+      } catch (error) {
+        if (target.existsSync()) await target.delete();
+        if (backup.existsSync()) await backup.rename(target.path);
+        return AgentBootstrapResult(
+          AgentBootstrapStatus.replacementFailed,
+          message: 'Could not install the verified agent: $error',
+        );
+      }
+    } catch (error) {
+      return AgentBootstrapResult(
+        AgentBootstrapStatus.downloadFailed,
+        message: 'Agent download failed: $error',
+      );
+    } finally {
+      if (staged.existsSync()) await staged.delete();
     }
   }
 

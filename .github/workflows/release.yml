@@ -149,7 +149,9 @@ jobs:
         shell: bash
         run: |
           mkdir -p ../dist
-          fvm dart compile exe bin/sanad_agent.dart \
+          fvm dart compile exe \
+            -DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }} \
+            bin/sanad_agent.dart \
             -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
       - name: Validate Windows release surface
         if: matrix.platform == 'windows'
@@ -165,7 +167,9 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path ../dist -Force | Out-Null
-          fvm dart compile exe bin/sanad_agent.dart `
+          fvm dart compile exe `
+            -DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }} `
+            bin/sanad_agent.dart `
             -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
       - name: Import Apple Developer ID
         if: matrix.platform == 'macos'
@@ -194,10 +198,13 @@ jobs:
             sed -n 's/.*"\(Developer ID Application: NanoSoft LY LLC ([^"]*)\)".*/\1/p' |
             head -n 1)"
           test -n "$identity"
-          codesign --force --options runtime --timestamp --sign "$identity" \
+          codesign --force --options runtime --timestamp \
+            --entitlements .github/release/macos_agent.entitlements \
+            --sign "$identity" \
             "dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
-          codesign --verify --strict --verbose=2 \
-            "dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
+          agent="dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
+          codesign --verify --strict --verbose=2 "$agent"
+          "$agent" version | grep -F "Version: ${{ needs.validate.outputs.version }}"
       - name: Notarize macOS agent
         if: matrix.platform == 'macos'
         shell: bash
@@ -213,6 +220,8 @@ jobs:
             --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER_ID" \
             --wait
+          codesign --verify --strict --test-requirement '=notarized' \
+            --verbose=2 "$agent"
       - uses: actions/upload-artifact@v4
         with:
           name: agent-${{ matrix.platform }}-${{ matrix.architecture }}

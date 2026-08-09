@@ -277,6 +277,31 @@ void main() {
     );
   });
 
+  test('runtime SANAD_HOME stores files directly before home fallback', () async {
+    final runtimeHome = Directory(
+      '${tempRoot.path}${Platform.pathSeparator}runtime-sanad-home',
+    );
+    final runtimeStore = SanadSettingsStore(
+      environment: {
+        'SANAD_HOME': runtimeHome.path,
+        'USERPROFILE': fakeHome.path,
+      },
+    );
+
+    await runtimeStore.saveAuthDocument({'hardware_id': 'runtime-device'});
+
+    expect(
+      File('${runtimeHome.path}${Platform.pathSeparator}auth.json').existsSync(),
+      isTrue,
+    );
+    expect(
+      File(
+        '${fakeHome.path}${Platform.pathSeparator}.sanad${Platform.pathSeparator}auth.json',
+      ).existsSync(),
+      isFalse,
+    );
+  });
+
   group('auth.json operations', () {
     test('saveAuthDocument writes to ~/.sanad/auth.json', () async {
       final authData = {

@@ -7,10 +7,7 @@ import 'package:sanad_client/infrastructure/socket/event_deduplicator.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
-enum ConnectionScope {
-  cloud,
-  local,
-}
+enum ConnectionScope { cloud, local }
 
 class ResolvedAgentEndpoint {
   final DeviceConfig agent;
@@ -67,7 +64,10 @@ class DeviceConnectionCoordinator {
   SanadSocketService get localSocketService => _localSocketService;
   LocalDaemonController get serviceManager => _serviceManager;
   String get currentDeviceId => _currentDeviceId;
-  List<Stream<Map<String, dynamic>>> get eventStreams => [_cloudSocketService.events, _localSocketService.events];
+  List<Stream<Map<String, dynamic>>> get eventStreams => [
+    _cloudSocketService.events,
+    _localSocketService.events,
+  ];
 
   /// Phase 27 — clears the cross-transport dedupe state. Call on full logout
   /// only, NOT on a transport switch for the same device.
@@ -84,74 +84,50 @@ class DeviceConnectionCoordinator {
 
     final isRunning = await _serviceManager.isDaemonRunning();
     if (isRunning) {
-      final health = await _serviceManager.getDaemonHealth();
-      final currentVersion = health?['version']?.toString();
-
-      if (currentVersion != expectedVersion) {
-        final success = await _serviceManager.updateDaemon(tag: 'v$expectedVersion');
-        if (success) {
-          await Future<void>.delayed(const Duration(milliseconds: 2000));
-          return await _serviceManager.isDaemonRunning();
-        }
-      }
-      return true;
+      final result = await _serviceManager.updateDaemon(
+        targetVersion: expectedVersion,
+      );
+      return result.isSuccess;
     }
 
-    if (_serviceManager.shouldAutoStart || force) {
-      if (_serviceManager.isServiceInstalled()) {
-        final started = await _serviceManager.startDaemon();
-        if (started) {
-          // Wait a brief moment for daemon to bind and start listening
-          await Future<void>.delayed(const Duration(milliseconds: 1500));
-
-          final isNowRunning = await _serviceManager.isDaemonRunning();
-          if (isNowRunning) {
-            final health = await _serviceManager.getDaemonHealth();
-            final currentVersion = health?['version']?.toString();
-            if (currentVersion != expectedVersion) {
-              final success = await _serviceManager.updateDaemon(tag: 'v$expectedVersion');
-              if (success) {
-                await Future<void>.delayed(const Duration(milliseconds: 2000));
-                return await _serviceManager.isDaemonRunning();
-              }
-            }
-          }
-          return isNowRunning;
+    if ((_serviceManager.shouldAutoStart || force) && _serviceManager.isServiceInstalled()) {
+      final started = await _serviceManager.startDaemon();
+      if (!started) return false;
+      for (var attempt = 0; attempt < 8; attempt++) {
+        if (await _serviceManager.isDaemonRunning()) {
+          final result = await _serviceManager.updateDaemon(
+            targetVersion: expectedVersion,
+          );
+          return result.isSuccess;
         }
+        await Future<void>.delayed(Duration(milliseconds: 300 + attempt * 250));
       }
     }
     return false;
   }
 
   Future<void> ensureLocalConnection() async {
-    if (!AppPlatform.isDesktop) {
-      return;
-    }
-    if (_localConnectionFuture != null) {
-      return _localConnectionFuture!;
-    }
+    if (!AppPlatform.isDesktop || _localSocketService.isConnected) return;
+    final inFlight = _localConnectionFuture;
+    if (inFlight != null) return inFlight;
 
-    final completer = Completer<void>();
-    _localConnectionFuture = completer.future;
+    final attempt = _connectLocal();
+    _localConnectionFuture = attempt;
+    try {
+      await attempt;
+    } finally {
+      _localConnectionFuture = null;
+      _emitChange();
+    }
+  }
 
-    // Try to auto-start local service if installed but stopped
+  Future<void> _connectLocal() async {
     await checkAndStartLocalDaemon();
-
-    unawaited(
-      _localSocketService
-          .connect()
-          .then((_) {
-            completer.complete();
-          })
-          .catchError((Object error) {
-            completer.complete();
-          })
-          .whenComplete(() {
-            _emitChange();
-          }),
-    );
-
-    return _localConnectionFuture!;
+    try {
+      await _localSocketService.connect();
+    } catch (_) {
+      // A later call starts a fresh attempt; failed futures are never retained.
+    }
   }
 
   ResolvedAgentEndpoint resolve(DeviceConfig agent) {
@@ -165,7 +141,9 @@ class DeviceConnectionCoordinator {
     );
   }
 
-  Future<ResolvedAgentEndpoint> ensureConnectedEndpointForAgent(DeviceConfig agent) async {
+  Future<ResolvedAgentEndpoint> ensureConnectedEndpointForAgent(
+    DeviceConfig agent,
+  ) async {
     await ensureLocalConnection();
     var endpoint = resolve(agent);
     if (!endpoint.socketService.isConnected) {

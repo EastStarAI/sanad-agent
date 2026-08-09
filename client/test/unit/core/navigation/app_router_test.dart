@@ -152,7 +152,7 @@ void main() {
       );
     });
 
-    test('on desktop: allows unauthenticated users to access home when local gateway is connected', () {
+    test('on desktop: local-ready unauthenticated startup recovers to home', () {
       AppPlatform.overrideIsDesktop = true;
       const connectedStatus = GatewayConnectionStatus(
         localGateway: LocalGatewayStatus.connected,
@@ -161,6 +161,21 @@ void main() {
         recommendedRoute: AppRoutes.home,
         isDesktop: true,
       );
+      for (final route in [
+        AppRoutes.splash,
+        AppRoutes.login,
+        AppRoutes.onboarding,
+      ]) {
+        expect(
+          AppRouter.handleRedirect(
+            AuthUnauthenticated(),
+            uri: Uri.parse(route),
+            matchedLocation: route,
+            gatewayStatus: connectedStatus,
+          ),
+          AppRoutes.home,
+        );
+      }
       expect(
         AppRouter.handleRedirect(
           AuthUnauthenticated(),

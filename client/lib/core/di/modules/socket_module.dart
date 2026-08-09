@@ -16,7 +16,9 @@ class SocketModule {
       final existing = authDoc[_hardwareIdKey]?.toString();
 
       if (existing != null && existing.isNotEmpty) {
-        await _persistHardwareId(settingsStore, prefs, authDoc, existing);
+        if (prefs.getString(_hardwareIdKey) != existing) {
+          await prefs.setString(_hardwareIdKey, existing);
+        }
         return existing;
       }
 

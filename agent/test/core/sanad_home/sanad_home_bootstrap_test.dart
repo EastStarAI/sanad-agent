@@ -111,6 +111,22 @@ void main() {
       expect(stragglers, isEmpty);
     });
 
+    test('writeSecret atomically replaces an existing file', () async {
+      await SanadHomeBootstrap.writeSecret('auth.json', [0x6f, 0x6c, 0x64]);
+      await SanadHomeBootstrap.writeSecret('auth.json', [0x6e, 0x65, 0x77]);
+
+      expect(
+        String.fromCharCodes(SanadHomeBootstrap.readSecret('auth.json')),
+        equals('new'),
+      );
+      final canonical = SanadHomeBootstrap.resolveChild('auth.json');
+      final stragglers = File(canonical).parent
+          .listSync()
+          .where((entry) => entry.path.contains('.tmp.'))
+          .toList();
+      expect(stragglers, isEmpty);
+    });
+
     test('writeConfig creates a file with the expected bytes', () async {
       await SanadHomeBootstrap.writeConfig('note.txt', 'hello-world');
       final bytes = SanadHomeBootstrap.readSecret('note.txt');

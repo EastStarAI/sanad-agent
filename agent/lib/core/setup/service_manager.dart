@@ -1,12 +1,29 @@
+import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 
 class ServiceManager {
-  static const String label = 'com.eaststarai.sanad.agent';
-  static const String serviceName = 'sanad-agent.service';
-  static const String taskName = 'SanadAgent';
+  static String get _instance {
+    final value = Platform.environment['SANAD_SERVICE_INSTANCE']?.trim() ?? '';
+    if (value.isEmpty) return '';
+    if (!RegExp(r'^[A-Za-z0-9-]{1,32}$').hasMatch(value)) {
+      throw const FormatException('Invalid SANAD_SERVICE_INSTANCE.');
+    }
+    return value;
+  }
+
+  static String get label => _instance.isEmpty
+      ? 'com.eaststarai.sanad.agent'
+      : 'com.eaststarai.sanad.agent.$_instance';
+  static String get serviceName => _instance.isEmpty
+      ? 'sanad-agent.service'
+      : 'sanad-agent-$_instance.service';
+  static String get taskName =>
+      _instance.isEmpty ? 'SanadAgent' : 'SanadAgent-$_instance';
 
   static String getHomeDirectory() {
     if (Platform.isWindows) {
@@ -96,6 +113,7 @@ class ServiceManager {
         <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>SANAD_HOME</key>
         <string>$sanadHome</string>
+        ${_instance.isEmpty ? '' : '<key>SANAD_SERVICE_INSTANCE</key><string>$_instance</string>'}
     </dict>
 </dict>
 </plist>
@@ -127,6 +145,7 @@ UMask=0077
 StandardOutput=append:$sanadHome/logs/daemon.log
 StandardError=append:$sanadHome/logs/daemon.error.log
 Environment=SANAD_HOME=$sanadHome
+${_instance.isEmpty ? '' : 'Environment=SANAD_SERVICE_INSTANCE=$_instance'}
 
 [Install]
 WantedBy=default.target
@@ -144,18 +163,24 @@ WantedBy=default.target
         ]);
         return result.exitCode == 0;
       } else if (Platform.isWindows) {
-        final actionExec = finalExec;
-        final actionArgs = args.join(' ');
-        final psCommand =
-            '''\$Action = New-ScheduledTaskAction -Execute "$actionExec" -Argument "$actionArgs" -WorkingDirectory "$sanadHome"
-\$Trigger = New-ScheduledTaskTrigger -AtLogOn
-\$Settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-Register-ScheduledTask -TaskName "$taskName" -Action \$Action -Trigger \$Trigger -Settings \$Settings -Force
-Start-ScheduledTask -TaskName "$taskName"
-''';
+        final daemonCommand = buildWindowsDaemonCommand(
+          executable: finalExec,
+          arguments: args,
+          sanadHome: sanadHome,
+          serviceInstance: _instance,
+        );
+        final registrationCommand = buildWindowsTaskRegistrationCommand(
+          encodedDaemonCommand: encodePowerShellCommand(daemonCommand),
+          sanadHome: sanadHome,
+          taskName: taskName,
+        );
         final result = await Process.run('powershell.exe', [
-          '-Command',
-          psCommand,
+          '-NoProfile',
+          '-NonInteractive',
+          '-WindowStyle',
+          'Hidden',
+          '-EncodedCommand',
+          encodePowerShellCommand(registrationCommand),
         ]);
         return result.exitCode == 0;
       }
@@ -164,6 +189,46 @@ Start-ScheduledTask -TaskName "$taskName"
     }
     return false;
   }
+
+  static String buildWindowsDaemonCommand({
+    required String executable,
+    required List<String> arguments,
+    required String sanadHome,
+    required String serviceInstance,
+  }) {
+    final escapedArguments = arguments
+        .map((argument) => "'${_escapePowerShellLiteral(argument)}'")
+        .join(' ');
+    return '''\$ErrorActionPreference = 'Stop'
+\$env:SANAD_HOME = '${_escapePowerShellLiteral(sanadHome)}'
+${serviceInstance.isEmpty ? '' : "\$env:SANAD_SERVICE_INSTANCE = '${_escapePowerShellLiteral(serviceInstance)}'\n"}& '${_escapePowerShellLiteral(executable)}' $escapedArguments
+exit \$LASTEXITCODE
+''';
+  }
+
+  static String buildWindowsTaskRegistrationCommand({
+    required String encodedDaemonCommand,
+    required String sanadHome,
+    required String taskName,
+  }) =>
+      '''\$ErrorActionPreference = 'Stop'
+\$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedDaemonCommand' -WorkingDirectory '${_escapePowerShellLiteral(sanadHome)}'
+\$trigger = New-ScheduledTaskTrigger -AtLogOn -User \$env:USERNAME
+\$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
+Register-ScheduledTask -TaskName '${_escapePowerShellLiteral(taskName)}' -Action \$action -Trigger \$trigger -Settings \$settings -Force | Out-Null
+Start-ScheduledTask -TaskName '${_escapePowerShellLiteral(taskName)}'
+''';
+
+  static String encodePowerShellCommand(String command) {
+    final bytes = BytesBuilder(copy: false);
+    for (final codeUnit in command.codeUnits) {
+      bytes.add([codeUnit & 0xff, codeUnit >> 8]);
+    }
+    return base64Encode(bytes.takeBytes());
+  }
+
+  static String _escapePowerShellLiteral(String value) =>
+      value.replaceAll("'", "''");
 
   static Future<bool> uninstall() async {
     try {

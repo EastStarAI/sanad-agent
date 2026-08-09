@@ -218,6 +218,24 @@ class AppRouter {
 
     final isLocalInstalled =
         AppPlatform.isDesktop && gatewayStatus != null && gatewayStatus.localGateway != LocalGatewayStatus.notFound;
+    final isLocalReady = AppPlatform.isDesktop && gatewayStatus?.isLocalConnected == true;
+
+    // A ready desktop-local Agent is sufficient runtime authority even when
+    // cloud authentication is absent. If bootstrap previously fell back to an
+    // unauthenticated surface, route refresh must recover to Home without a
+    // manual Run Local action.
+    if (authState is! AuthAuthenticated && isLocalReady && (isSplash || isLoggingIn || isOnboarding)) {
+      final requestedLocation = currentUri.queryParameters['from'];
+      return _debugRedirect(
+        requestedLocation != null && requestedLocation.isNotEmpty
+            ? requestedLocation
+            : (gatewayStatus?.recommendedRoute ?? AppRoutes.home),
+        authState: authState,
+        uri: currentUri,
+        matchedLocation: matchedLocation,
+        reason: 'desktop_local_ready_redirect',
+      );
+    }
 
     // 1. Authenticated state
     if (authState is AuthAuthenticated) {
