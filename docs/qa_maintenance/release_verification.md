@@ -33,7 +33,7 @@ rules remain fail-closed.
 
 | Target | Local evidence | Hosted or clean-machine evidence still required |
 |---|---|---|
-| Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification | both hosted runners, clean install, real upgrade and rollback |
+| Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification, bounded accepted-ticket lookup | both hosted runners, clean install, real upgrade and rollback |
 | Agent Linux x64 | contract and workflow path | hosted build, provenance, clean install, service/update/rollback |
 | Agent Windows x64 | contract and workflow path | Unsigned Windows build disclosure, SHA-256/manifest/provenance, Defender/SmartScreen and lifecycle on Windows 11, service/update/rollback |
 | Client macOS universal | universal Mach-O inspection, Developer ID-signed and notarized DMG, staple, Gatekeeper, Sparkle signature | clean update and rollback |
@@ -82,7 +82,10 @@ Only an approved, published Stable Release may update the Production convenience
 
 Automated tests cover contract parsing, invalid tag rejection, deterministic
 Appcast output, source-managed no-mutation behavior, checksum rejection, client
-bootstrap selection, and existing daemon-controller behavior.
+bootstrap selection, and existing daemon-controller behavior. The native Windows
+replacement gate waits for both terminal result publication and detached-script
+cleanup, because PowerShell writes the result immediately before its final
+self-removal.
 
 Hosted validation begins with a `validation_only` full-matrix run from protected `main`. It requires no tag and must leave zero Drafts and Releases while retaining private Agent/Client artifacts, the signed IPA, manifest, checksums, SBOM, Appcast, and attestations. Later lifecycle validation additionally exercises interrupted downloads, wrong architecture, corrupted size and checksum, replacement failure, service restart, retained Sanad Home, repeated update requests, and rollback to the prior signed version.
 
