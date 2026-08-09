@@ -905,8 +905,12 @@ class _ThinkingModeChip extends StatelessWidget {
   }
 
   String _firstMode() {
-    if (capabilities.thinkingModesList.isEmpty) return 'balanced';
-    return capabilities.thinkingModesList.first;
+    final modes = capabilities.thinkingModesList;
+    if (modes.contains(SessionMessagesCubit.defaultThinkingMode)) {
+      return SessionMessagesCubit.defaultThinkingMode;
+    }
+    if (modes.isNotEmpty) return modes.first;
+    return SessionMessagesCubit.defaultThinkingMode;
   }
 
   Widget _buildChip(BuildContext context, String text) {

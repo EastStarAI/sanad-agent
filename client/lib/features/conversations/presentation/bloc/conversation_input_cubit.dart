@@ -62,7 +62,7 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     String? model,
     bool replaceExisting = false,
   }) {
-    if (!replaceExisting && (_hasText(state.nextMessageProviderId) || _hasText(state.nextMessageModel))) {
+    if (!replaceExisting && _hasText(state.nextMessageProviderId) && _hasText(state.nextMessageModel)) {
       return;
     }
     if (!_hasText(providerId) || !_hasText(model)) return;
