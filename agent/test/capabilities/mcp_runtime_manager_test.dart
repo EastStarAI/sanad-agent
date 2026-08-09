@@ -21,8 +21,10 @@ class TestableMcpRuntimeManager extends McpRuntimeManager {
 
   @override
   Future<({dynamic client, String? error})> connectToClient(
-    McpServerConfig config,
-  ) async {
+    McpServerConfig config, {
+    Map<String, String>? resolvedHeaders,
+    Map<String, String>? resolvedEnvironment,
+  }) async {
     connectCallCount++;
     return (client: FakeMcpClient(config), error: null);
   }
@@ -79,8 +81,8 @@ void main() {
           command: 'node',
           args: ['server.js'],
           env: const {'ENV': 'test'},
-          authType: McpAuthType.noAuth,
-          detectedTransport: McpTransportType.stdio,
+          authType: McpAuthType.none,
+          transport: McpTransportType.stdio,
         );
         manager.mockServers = [config1];
 
@@ -110,8 +112,8 @@ void main() {
           enabled: true,
           command: 'node',
           args: ['server.js'],
-          authType: McpAuthType.noAuth,
-          detectedTransport: McpTransportType.stdio,
+          authType: McpAuthType.none,
+          transport: McpTransportType.stdio,
         );
         manager.mockServers = [config1];
 
@@ -125,8 +127,8 @@ void main() {
           enabled: true,
           command: 'node',
           args: ['different-args.js'], // changed
-          authType: McpAuthType.noAuth,
-          detectedTransport: McpTransportType.stdio,
+          authType: McpAuthType.none,
+          transport: McpTransportType.stdio,
         );
         manager.mockServers = [config2];
 
@@ -145,15 +147,15 @@ void main() {
         name: 'server-1',
         enabled: true,
         command: 'node',
-        authType: McpAuthType.noAuth,
-        detectedTransport: McpTransportType.stdio,
+        authType: McpAuthType.none,
+        transport: McpTransportType.stdio,
       );
       final config2 = McpServerConfig(
         name: 'server-2',
         enabled: true,
         command: 'python',
-        authType: McpAuthType.noAuth,
-        detectedTransport: McpTransportType.stdio,
+        authType: McpAuthType.none,
+        transport: McpTransportType.stdio,
       );
       manager.mockServers = [config1, config2];
 
@@ -165,8 +167,8 @@ void main() {
         name: 'server-1',
         enabled: false,
         command: 'node',
-        authType: McpAuthType.noAuth,
-        detectedTransport: McpTransportType.stdio,
+        authType: McpAuthType.none,
+        transport: McpTransportType.stdio,
       );
       manager.mockServers = [config1Disabled];
 

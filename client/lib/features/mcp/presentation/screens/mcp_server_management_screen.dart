@@ -1,8 +1,6 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 
@@ -41,7 +39,6 @@ class McpServerManagementScreen extends StatefulWidget {
 
 class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
   final WorkspaceToolRuntimeContext _workspaceRuntimeContext = getIt<WorkspaceToolRuntimeContext>();
-  final TextEditingController _jsonController = TextEditingController();
 
   final Map<String, bool> _activeConnections = {};
   final Map<String, List<McpRuntimeTool>> _serverTools = {};
@@ -54,10 +51,8 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
   _McpTransportFilter _transportFilter = _McpTransportFilter.all;
 
   bool _isLoading = true;
-  bool _isSavingJson = false;
   bool _isRefreshingConnections = false;
   bool _refreshConnectionsQueued = false;
-  String? _jsonError;
   int _connectionRefreshCycle = 0;
 
   String? _workspacePath;
@@ -66,9 +61,6 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
   List<McpServerConfig> _workspaceServers = const [];
   List<McpServerConfig> _effectiveServers = const [];
   McpRuntimeSnapshot? _snapshot;
-  Map<String, dynamic> _globalDocument = const {};
-  Map<String, dynamic> _workspaceDocument = const {};
-  Map<String, dynamic> _effectiveDocument = const {};
 
   @override
   void initState() {
@@ -76,17 +68,8 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
     unawaited(_loadData());
   }
 
-  @override
-  void dispose() {
-    _jsonController.dispose();
-    super.dispose();
-  }
-
   Future<void> _loadData() async {
-    setState(() {
-      _isLoading = true;
-      _jsonError = null;
-    });
+    setState(() => _isLoading = true);
 
     try {
       final workspace = _workspaceRuntimeContext.activeWorkspace;
@@ -100,10 +83,9 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
         ),
       );
 
-      _syncJsonEditor();
       await _reconnectVisibleServers();
-    } catch (e) {
-      _jsonError = e.toString();
+    } catch (error) {
+      if (mounted) ToastUtils.showError(context, error.toString());
     } finally {
       if (mounted) {
         setState(() => _isLoading = false);
@@ -133,24 +115,10 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
   void _applySnapshot(McpRuntimeSnapshot snapshot) {
     _snapshot = snapshot;
     _workspacePath = snapshot.workspaceId ?? _workspacePath;
-    _globalDocument = snapshot.global.document;
-    _workspaceDocument = snapshot.workspace.document;
-    _effectiveDocument = snapshot.effective.document;
     _globalServers = snapshot.global.servers.map((entry) => entry.config).toList(growable: false);
     _workspaceServers = snapshot.workspace.servers.map((entry) => entry.config).toList(growable: false);
     _effectiveServers = snapshot.effective.servers.map((entry) => entry.config).toList(growable: false);
     _rebuildEffectiveOrigins();
-  }
-
-  void _syncJsonEditor() {
-    final document = switch (_source) {
-      _McpConfigSource.global => _globalDocument,
-      _McpConfigSource.workspace => _workspaceDocument,
-      _McpConfigSource.effective => _effectiveDocument,
-    };
-    _jsonController.text = const JsonEncoder.withIndent('  ').convert(
-      document.isEmpty ? {'mcpServers': {}} : document,
-    );
   }
 
   List<McpServerConfig> get _currentServers {
@@ -334,39 +302,151 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
     }
   }
 
-  Future<void> _saveJsonEditor() async {
-    if (!_canEditCurrentSource) {
-      return;
-    }
+  Future<void> _openEditServer(McpServerConfig server) async {
+    final source = _source == _McpConfigSource.effective
+        ? _effectiveOrigins[server.name] ?? _McpConfigSource.global
+        : _source;
+    final result = await context.push(
+      AppRoutes.addMcpServer,
+      extra: {..._extraForSource(source), 'initialConfig': server},
+    );
+    if (result != null) await _loadData();
+  }
 
-    setState(() {
-      _isSavingJson = true;
-      _jsonError = null;
-    });
-
+  Future<void> _exportServer(McpServerConfig server) async {
     try {
-      final decoded = jsonDecode(_jsonController.text);
-      if (decoded is! Map<String, dynamic>) {
-        throw const FormatException('MCP config root must be a JSON object.');
-      }
-      final snapshot = await context.read<McpRuntimeClient>().replaceConfig(
+      final result = await context.read<McpRuntimeClient>().exportServers(
         device: _targetDevice,
+        serverNames: [server.name],
         scope: _currentScope,
-        workspaceId: _editableWorkspacePath,
-        document: decoded,
+        workspaceId: _workspacePath,
       );
+      await Clipboard.setData(ClipboardData(text: result.json));
       if (mounted) {
-        setState(() => _applySnapshot(snapshot));
+        ToastUtils.showSuccess(
+          context,
+          'Copied redacted JSON. Credentials were excluded.',
+        );
       }
-      if (mounted) {
-        ToastUtils.showSuccess(context, 'MCP config saved');
-      }
-    } catch (e) {
-      setState(() => _jsonError = e.toString());
-    } finally {
-      if (mounted) {
-        setState(() => _isSavingJson = false);
-      }
+    } catch (error) {
+      if (mounted) ToastUtils.showError(context, error.toString());
+    }
+  }
+
+  Future<void> _editAdvancedJson(McpServerConfig server) async {
+    final source = _source == _McpConfigSource.effective
+        ? _effectiveOrigins[server.name] ?? _McpConfigSource.global
+        : _source;
+    final scope = source == _McpConfigSource.workspace ? McpConfigScope.workspace : McpConfigScope.global;
+    final workspaceId = source == _McpConfigSource.workspace ? _workspacePath : null;
+    try {
+      final document = await context.read<McpRuntimeClient>().readAdvanced(
+        device: _targetDevice,
+        serverName: server.name,
+        scope: scope,
+        workspaceId: workspaceId,
+      );
+      if (!mounted) return;
+      final controller = TextEditingController(text: document.json);
+      McpConfigPreview? preview;
+      String? error;
+      var busy = false;
+      final saved = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => StatefulBuilder(
+          builder: (context, setDialogState) => AlertDialog(
+            title: Text('Advanced JSON · ${server.name}'),
+            content: SizedBox(
+              width: 680,
+              child: SingleChildScrollView(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Credentials are excluded. Preview is required before Save.'),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: controller,
+                      minLines: 12,
+                      maxLines: 20,
+                      style: const TextStyle(fontFamily: 'monospace'),
+                      onChanged: (_) => setDialogState(() {
+                        preview = null;
+                        error = null;
+                      }),
+                    ),
+                    if (preview != null) ...[
+                      const SizedBox(height: 12),
+                      Text('${preview!.diff.length} fields changed'),
+                      for (final item in preview!.diff) Text('• ${item.field}'),
+                    ],
+                    if (error != null) ...[
+                      const SizedBox(height: 12),
+                      Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: busy ? null : () => Navigator.pop(context, false), child: const Text('Cancel')),
+              OutlinedButton(
+                onPressed: busy
+                    ? null
+                    : () async {
+                        setDialogState(() => busy = true);
+                        try {
+                          final value = await dialogContext.read<McpRuntimeClient>().previewAdvanced(
+                            device: _targetDevice,
+                            serverName: server.name,
+                            scope: scope,
+                            workspaceId: workspaceId,
+                            input: controller.text,
+                          );
+                          setDialogState(() {
+                            preview = value;
+                            error = null;
+                          });
+                        } catch (value) {
+                          setDialogState(() => error = value.toString());
+                        } finally {
+                          setDialogState(() => busy = false);
+                        }
+                      },
+                child: const Text('Preview changes'),
+              ),
+              FilledButton(
+                onPressed: busy || preview == null
+                    ? null
+                    : () async {
+                        setDialogState(() => busy = true);
+                        try {
+                          await dialogContext.read<McpRuntimeClient>().saveAdvanced(
+                            device: _targetDevice,
+                            serverName: server.name,
+                            scope: scope,
+                            workspaceId: workspaceId,
+                            input: controller.text,
+                            baseRevision: document.baseRevision,
+                            previewRevision: preview!.revision,
+                          );
+                          if (context.mounted) Navigator.pop(context, true);
+                        } catch (value) {
+                          setDialogState(() => error = value.toString());
+                        } finally {
+                          if (context.mounted) setDialogState(() => busy = false);
+                        }
+                      },
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        ),
+      );
+      await Future<void>.delayed(kThemeAnimationDuration);
+      controller.dispose();
+      if (saved == true) await _loadData();
+    } catch (error) {
+      if (mounted) ToastUtils.showError(context, error.toString());
     }
   }
 
@@ -448,17 +528,6 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
     };
   }
 
-  String get _documentPathLabel {
-    return switch (_source) {
-      _McpConfigSource.global => '~/.sanad/mcp_config.json',
-      _McpConfigSource.workspace =>
-        _workspacePath == null
-            ? 'Select a workspace'
-            : '${_workspacePath!}${Platform.pathSeparator}.sanad${Platform.pathSeparator}mcp_config.json',
-      _McpConfigSource.effective => 'Effective merged view',
-    };
-  }
-
   bool get _canEditCurrentSource {
     if (_source == _McpConfigSource.effective) {
       return false;
@@ -501,6 +570,17 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  if (widget.embedded)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: FilledButton.icon(
+                        key: const ValueKey('add-mcp-server'),
+                        onPressed: _openAddServer,
+                        icon: const Icon(Icons.add),
+                        label: const Text('Add server'),
+                      ),
+                    ),
+                  if (widget.embedded && _workspacePath != null) const SizedBox(height: 12),
                   if (_workspacePath != null)
                     SegmentedButton<_McpConfigSource>(
                       segments: [
@@ -524,7 +604,6 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                       selected: {_source},
                       onSelectionChanged: (selection) async {
                         setState(() => _source = selection.first);
-                        _syncJsonEditor();
                         await _reconnectVisibleServers();
                       },
                     ),
@@ -550,29 +629,10 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                       await _reconnectVisibleServers();
                     },
                   ),
-                  const SizedBox(height: 12),
-                  Text(
-                    _documentPathLabel,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
-                  ),
                 ],
               ),
             ),
-            Expanded(
-              child: Row(
-                children: [
-                  Expanded(flex: 6, child: _buildServerPane(context)),
-                  VerticalDivider(
-                    width: 1,
-                    thickness: 1,
-                    color: theme.colorScheme.outline.withValues(alpha: 0.12),
-                  ),
-                  Expanded(flex: 5, child: _buildJsonPane(context)),
-                ],
-              ),
-            ),
+            Expanded(child: _buildServerPane(context)),
           ],
         ),
         if (_isLoading)
@@ -640,228 +700,205 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
         ? 'Connecting...'
         : error ?? (isConnected ? '${tools.length} tools' : 'Disconnected');
 
-    return Container(
-      decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surface,
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.12)),
-      ),
-      child: Column(
-        children: [
-          InkWell(
-            onTap: () {
-              setState(() {
-                if (isExpanded) {
-                  _expandedServerIds.remove(server.id);
-                } else {
-                  _expandedServerIds.add(server.id);
-                }
-              });
-            },
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Row(
-                children: [
-                  _StatusDot(
-                    color: !server.enabled
-                        ? Theme.of(context).colorScheme.outline
-                        : error != null
-                        ? Theme.of(context).colorScheme.error
-                        : isConnected
-                        ? Theme.of(context).colorScheme.primary
-                        : Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          server.name,
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 4),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
+    return Semantics(
+      container: true,
+      explicitChildNodes: true,
+      label: '${server.name}, ${server.enabled ? 'Enabled' : 'Disabled'}, ${tools.length} tools',
+      child: Container(
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surface,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.12)),
+        ),
+        child: Column(
+          children: [
+            Semantics(
+              button: true,
+              container: true,
+              explicitChildNodes: true,
+              label: '${isExpanded ? 'Collapse' : 'Expand'} ${server.name} details',
+
+              child: InkWell(
+                excludeFromSemantics: true,
+                onTap: () {
+                  setState(() {
+                    if (isExpanded) {
+                      _expandedServerIds.remove(server.id);
+                    } else {
+                      _expandedServerIds.add(server.id);
+                    }
+                  });
+                },
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    children: [
+                      _StatusDot(
+                        color: !server.enabled
+                            ? Theme.of(context).colorScheme.outline
+                            : error != null
+                            ? Theme.of(context).colorScheme.error
+                            : isConnected
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            _MetaChip(label: _transportLabel(server)),
-                            if (_source == _McpConfigSource.effective) _MetaChip(label: _originLabel(server)),
-                            if (server.disabledTools.isNotEmpty)
-                              _MetaChip(label: '${server.disabledTools.length} disabled'),
+                            Text(
+                              server.name,
+                              style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 4),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: [
+                                _MetaChip(label: server.enabled ? 'Enabled' : 'Disabled'),
+                                _MetaChip(label: _transportLabel(server)),
+                                _MetaChip(label: server.authType.displayName),
+                                _MetaChip(label: '${tools.length} tools'),
+                                if (_source == _McpConfigSource.effective) _MetaChip(label: _originLabel(server)),
+                                if (server.disabledTools.isNotEmpty)
+                                  _MetaChip(label: '${server.disabledTools.length} disabled'),
+                              ],
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              statusText,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                color: error != null
+                                    ? Theme.of(context).colorScheme.error
+                                    : Theme.of(context).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
                           ],
                         ),
-                        const SizedBox(height: 8),
-                        Text(
-                          statusText,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: error != null
-                                ? Theme.of(context).colorScheme.error
-                                : Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Switch(
-                    value: server.enabled,
-                    onChanged: _canEditCurrentSource ? (value) => _toggleServerEnabled(server, value) : null,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          if (isExpanded)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Divider(color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.12)),
-                  if (tools.isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 8),
-                      child: Text(
-                        server.enabled ? 'Connect to discover tools.' : 'Server is disabled.',
-                        style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                      const SizedBox(width: 12),
+                      Semantics(
+                        excludeSemantics: true,
+                        label: '${server.enabled ? 'Disable' : 'Enable'} ${server.name}',
+                        toggled: server.enabled,
+
+                        child: Switch(
+                          value: server.enabled,
+                          onChanged: _canEditCurrentSource ? (value) => _toggleServerEnabled(server, value) : null,
                         ),
                       ),
-                    ),
-                  ...tools.map(
-                    (tool) => Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(tool.name, style: const TextStyle(fontWeight: FontWeight.w600)),
-                                const SizedBox(height: 4),
-                                Text(
-                                  tool.description,
-                                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            if (isExpanded)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Divider(color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.12)),
+                    if (tools.isEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Text(
+                          server.enabled ? 'Connect to discover tools.' : 'Server is disabled.',
+                          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    ...tools.map(
+                      (tool) => Padding(
+                        padding: const EdgeInsets.only(top: 12),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(tool.name, style: const TextStyle(fontWeight: FontWeight.w600)),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    tool.description,
+                                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                    ),
                                   ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Column(
+                              children: [
+                                Semantics(
+                                  excludeSemantics: true,
+                                  label: '${server.isToolDisabled(tool.name) ? 'Enable' : 'Disable'} tool ${tool.name}',
+                                  toggled: !server.isToolDisabled(tool.name),
+                                  child: Switch(
+                                    value: !server.isToolDisabled(tool.name),
+                                    onChanged: _canEditCurrentSource
+                                        ? (value) => _toggleToolEnabled(server, tool.name, value)
+                                        : null,
+                                  ),
+                                ),
+                                Text(
+                                  server.isToolDisabled(tool.name) ? 'Disabled' : 'Enabled',
+                                  style: Theme.of(context).textTheme.bodySmall,
                                 ),
                               ],
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          Column(
-                            children: [
-                              Switch(
-                                value: !server.isToolDisabled(tool.name),
-                                onChanged: _canEditCurrentSource
-                                    ? (value) => _toggleToolEnabled(server, tool.name, value)
-                                    : null,
-                              ),
-                              Text(
-                                server.isToolDisabled(tool.name) ? 'Disabled' : 'Enabled',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ],
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      if (_canEditCurrentSource)
-                        TextButton.icon(
-                          onPressed: () => _deleteServer(server),
-                          icon: const Icon(Icons.delete_outline),
-                          label: const Text('Remove'),
+                    const SizedBox(height: 16),
+                    Wrap(
+                      alignment: WrapAlignment.end,
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: () => _connectToServer(server, _connectionRefreshCycle),
+                          icon: const Icon(Icons.wifi_find),
+                          label: const Text('Test'),
                         ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildJsonPane(BuildContext context) {
-    final readOnly = !_canEditCurrentSource;
-    return Padding(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                readOnly ? 'JSON View' : 'JSON Editor',
-                style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
-              ),
-              const Spacer(),
-              IconButton(
-                onPressed: _loadData,
-                tooltip: 'Reload',
-                icon: const Icon(Icons.refresh),
-              ),
-              if (!readOnly)
-                FilledButton.icon(
-                  onPressed: _isSavingJson ? null : _saveJsonEditor,
-                  icon: _isSavingJson
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.save_outlined),
-                  label: const Text('Save'),
-                ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Expanded(
-            child: TextField(
-              controller: _jsonController,
-              readOnly: readOnly,
-              expands: true,
-              maxLines: null,
-              minLines: null,
-              style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
-              decoration: InputDecoration(
-                alignLabelWithHint: true,
-                filled: true,
-                fillColor: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.25),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide(color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.12)),
+                        if (_source != _McpConfigSource.effective || _effectiveOrigins.containsKey(server.name))
+                          OutlinedButton.icon(
+                            onPressed: () => _openEditServer(server),
+                            icon: const Icon(Icons.edit_outlined),
+                            label: const Text('Edit'),
+                          ),
+                        PopupMenuButton<String>(
+                          tooltip: 'Advanced actions',
+                          onSelected: (value) {
+                            if (value == 'export') unawaited(_exportServer(server));
+                            if (value == 'json') unawaited(_editAdvancedJson(server));
+                          },
+                          itemBuilder: (context) => const [
+                            PopupMenuItem(value: 'export', child: Text('Export JSON')),
+                            PopupMenuItem(value: 'json', child: Text('Edit JSON')),
+                          ],
+                        ),
+                        if (_canEditCurrentSource)
+                          TextButton.icon(
+                            onPressed: () => _deleteServer(server),
+                            icon: const Icon(Icons.delete_outline),
+                            label: const Text('Remove'),
+                          ),
+                      ],
+                    ),
+                  ],
                 ),
               ),
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            readOnly
-                ? 'Effective mode is read-only and shows the merged result for the current workspace.'
-                : 'Edit the raw file directly. The root object must contain `mcpServers`.',
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
-            ),
-          ),
-          if (_jsonError != null) ...[
-            const SizedBox(height: 8),
-            Text(
-              _jsonError!,
-              style: TextStyle(color: Theme.of(context).colorScheme.error),
-            ),
           ],
-        ],
+        ),
       ),
     );
   }
@@ -939,10 +976,10 @@ class _MetaChip extends StatelessWidget {
 }
 
 String _transportLabel(McpServerConfig server) {
-  return switch (server.detectedTransport) {
+  return switch (server.transport) {
+    McpTransportType.auto => 'Auto-detect',
     McpTransportType.stdio => 'STDIO',
     McpTransportType.sse => 'SSE',
     McpTransportType.streamableHttp => 'HTTP',
-    null => server.command?.trim().isNotEmpty == true ? 'STDIO' : 'Unknown',
   };
 }

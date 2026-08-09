@@ -17,6 +17,7 @@ import 'package:sanad_client/features/devices/presentation/screens/onboarding_se
 import 'package:sanad_client/features/mcp/presentation/screens/mcp_server_management_screen.dart';
 import 'package:sanad_client/features/mcp/presentation/screens/add_mcp_server_screen.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_runtime_models.dart';
+import 'package:sanad_client/features/mcp/domain/models/mcp_server_config.dart';
 import 'package:sanad_client/core/presentation/screens/not_found_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -169,6 +170,7 @@ class AppRouter {
                   scope: payload['scope'] is McpConfigScope
                       ? payload['scope'] as McpConfigScope
                       : McpConfigScope.global,
+                  initialConfig: payload['initialConfig'] as McpServerConfig?,
                 );
               },
         ),

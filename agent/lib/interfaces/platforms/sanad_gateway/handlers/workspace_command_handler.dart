@@ -276,7 +276,12 @@ class WorkspaceCommandHandler {
     final snapshot = await _runtimeService.saveMcpServer(
       scope: scope,
       workspaceId: workspaceId,
-      config: config,
+      config: {
+        ...config,
+        '_secretMutations': Map<String, dynamic>.from(
+          event.payload['secrets'] as Map? ?? const {},
+        ),
+      },
     );
 
     return _bridge.buildAgentEventEnvelope(
@@ -331,6 +336,129 @@ class WorkspaceCommandHandler {
     );
   }
 
+  Future<Map<String, dynamic>> buildPreviewMcpImportEnvelope(
+    CanonicalEvent event,
+  ) async => _mcpResultEnvelope(
+    event,
+    CanonicalEventTypes.mcpImportPreviewed,
+    _runtimeService.previewMcpImport(_requiredString(event, 'input')),
+  );
+
+  Future<Map<String, dynamic>> buildExportMcpServersEnvelope(
+    CanonicalEvent event,
+  ) async => _mcpResultEnvelope(
+    event,
+    CanonicalEventTypes.mcpServersExported,
+    await _runtimeService.exportMcpServers(
+      serverNames: (event.payload['server_names'] as List? ?? const [])
+          .map((item) => item.toString())
+          .toList(growable: false),
+      scope: event.payload['scope'] as String? ?? 'effective',
+      workspaceId: event.payload['workspace_id'] as String?,
+    ),
+  );
+
+  Future<Map<String, dynamic>> buildReadAdvancedMcpServerEnvelope(
+    CanonicalEvent event,
+  ) async => _mcpResultEnvelope(
+    event,
+    CanonicalEventTypes.mcpAdvancedRead,
+    await _runtimeService.readAdvancedMcpServer(
+      serverName: _requiredString(event, 'server_name'),
+      scope: event.payload['scope'] as String? ?? 'global',
+      workspaceId: event.payload['workspace_id'] as String?,
+    ),
+  );
+
+  Future<Map<String, dynamic>> buildPreviewAdvancedMcpServerEnvelope(
+    CanonicalEvent event,
+  ) async => _mcpResultEnvelope(
+    event,
+    CanonicalEventTypes.mcpAdvancedPreviewed,
+    await _runtimeService.previewAdvancedMcpServer(
+      serverName: _requiredString(event, 'server_name'),
+      scope: event.payload['scope'] as String? ?? 'global',
+      input: _requiredString(event, 'input'),
+      workspaceId: event.payload['workspace_id'] as String?,
+    ),
+  );
+
+  Future<Map<String, dynamic>> buildSaveAdvancedMcpServerEnvelope(
+    CanonicalEvent event,
+  ) async => _mcpResultEnvelope(
+    event,
+    CanonicalEventTypes.mcpAdvancedSaved,
+    await _runtimeService.saveAdvancedMcpServer(
+      serverName: _requiredString(event, 'server_name'),
+      scope: event.payload['scope'] as String? ?? 'global',
+      input: _requiredString(event, 'input'),
+      baseRevision: _requiredString(event, 'base_revision'),
+      previewRevision: _requiredString(event, 'preview_revision'),
+      workspaceId: event.payload['workspace_id'] as String?,
+    ),
+  );
+
+  Future<Map<String, dynamic>> buildStartMcpOAuthEnvelope(
+    CanonicalEvent event,
+  ) async => _mcpResultEnvelope(
+    event,
+    CanonicalEventTypes.mcpOAuthStarted,
+    await _runtimeService.startMcpOAuth(
+      serverName: _requiredString(event, 'server_name'),
+      draftConfig: Map<String, dynamic>.from(
+        event.payload['config'] as Map? ?? const {},
+      ),
+      secretMutations: Map<String, dynamic>.from(
+        event.payload['secrets'] as Map? ?? const {},
+      ),
+    ),
+  );
+
+  Future<Map<String, dynamic>> buildMcpOAuthStatusEnvelope(
+    CanonicalEvent event,
+  ) async => _mcpResultEnvelope(
+    event,
+    CanonicalEventTypes.mcpOAuthStatus,
+    _runtimeService.mcpOAuthStatus(_requiredString(event, 'flow_id')),
+  );
+
+  Future<Map<String, dynamic>> buildCancelMcpOAuthEnvelope(
+    CanonicalEvent event,
+  ) async => _mcpResultEnvelope(
+    event,
+    CanonicalEventTypes.mcpOAuthCancelled,
+    await _runtimeService.cancelMcpOAuth(_requiredString(event, 'flow_id')),
+  );
+
+  Future<Map<String, dynamic>> buildCompleteMcpOAuthEnvelope(
+    CanonicalEvent event,
+  ) async => _mcpResultEnvelope(
+    event,
+    CanonicalEventTypes.mcpOAuthCompleted,
+    await _runtimeService.completeMcpOAuth(
+      flowId: _requiredString(event, 'flow_id'),
+      scope: event.payload['scope'] as String? ?? 'global',
+      workspaceId: event.payload['workspace_id'] as String?,
+      config: Map<String, dynamic>.from(
+        event.payload['config'] as Map? ?? const {},
+      ),
+    ),
+  );
+
+  Map<String, dynamic> _mcpResultEnvelope(
+    CanonicalEvent event,
+    String type,
+    Map<String, dynamic> result,
+  ) => _bridge.buildAgentEventEnvelope(
+    CanonicalEvent(
+      type: type,
+      payload: {
+        'request_id': event.payload['request_id'] as String?,
+        ...result,
+      },
+    ),
+  );
+
   Future<Map<String, dynamic>> buildInspectMcpServerEnvelope(
     CanonicalEvent event,
   ) async {
@@ -338,11 +466,23 @@ class WorkspaceCommandHandler {
     final workspaceId = event.payload['workspace_id'] as String?;
     final scope = event.payload['scope'] as String? ?? 'effective';
     final serverName = event.payload['server_name'] as String? ?? '';
-    final inspection = await _runtimeService.inspectMcpServer(
-      serverName: serverName,
-      scope: scope,
-      workspaceId: workspaceId,
-    );
+    final inspection = event.payload['config'] is Map
+        ? await _runtimeService.inspectMcpDraft(
+            serverName: serverName,
+            scope: scope,
+            workspaceId: workspaceId,
+            draftConfig: Map<String, dynamic>.from(
+              event.payload['config'] as Map,
+            ),
+            secretMutations: Map<String, dynamic>.from(
+              event.payload['secrets'] as Map? ?? const {},
+            ),
+          )
+        : await _runtimeService.inspectMcpServer(
+            serverName: serverName,
+            scope: scope,
+            workspaceId: workspaceId,
+          );
 
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(

@@ -42,6 +42,15 @@ class ServerSanadGatewayPlatform extends BasePlatform
     CanonicalEventTypes.deleteMcpServer,
     CanonicalEventTypes.replaceMcpConfig,
     CanonicalEventTypes.inspectMcpServer,
+    CanonicalEventTypes.previewMcpImport,
+    CanonicalEventTypes.exportMcpServers,
+    CanonicalEventTypes.readAdvancedMcpServer,
+    CanonicalEventTypes.previewAdvancedMcpServer,
+    CanonicalEventTypes.saveAdvancedMcpServer,
+    CanonicalEventTypes.startMcpOAuth,
+    CanonicalEventTypes.getMcpOAuthStatus,
+    CanonicalEventTypes.cancelMcpOAuth,
+    CanonicalEventTypes.completeMcpOAuth,
   };
   static const _remoteMcpManagementDisabledCode =
       'remote_mcp_management_disabled';

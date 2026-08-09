@@ -278,6 +278,51 @@ class SanadProtocolBridge {
           type: CanonicalEventTypes.inspectMcpServer,
           payload: payload,
         );
+      case 'preview_mcp_import':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.previewMcpImport,
+          payload: payload,
+        );
+      case 'export_mcp_servers':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.exportMcpServers,
+          payload: payload,
+        );
+      case 'read_advanced_mcp_server':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.readAdvancedMcpServer,
+          payload: payload,
+        );
+      case 'preview_advanced_mcp_server':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.previewAdvancedMcpServer,
+          payload: payload,
+        );
+      case 'save_advanced_mcp_server':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.saveAdvancedMcpServer,
+          payload: payload,
+        );
+      case 'start_mcp_oauth':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.startMcpOAuth,
+          payload: payload,
+        );
+      case 'get_mcp_oauth_status':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.getMcpOAuthStatus,
+          payload: payload,
+        );
+      case 'cancel_mcp_oauth':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.cancelMcpOAuth,
+          payload: payload,
+        );
+      case 'complete_mcp_oauth':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.completeMcpOAuth,
+          payload: payload,
+        );
       case 'search_slash_commands':
         event = CanonicalEvent(
           type: CanonicalEventTypes.searchSlashCommands,
@@ -703,6 +748,51 @@ class SanadProtocolBridge {
       case CanonicalEventTypes.inspectMcpServer:
         await emitEnvelope(
           await _workspaceHandler.buildInspectMcpServerEnvelope(event),
+        );
+        return;
+      case CanonicalEventTypes.previewMcpImport:
+        await emitEnvelope(
+          await _workspaceHandler.buildPreviewMcpImportEnvelope(event),
+        );
+        return;
+      case CanonicalEventTypes.exportMcpServers:
+        await emitEnvelope(
+          await _workspaceHandler.buildExportMcpServersEnvelope(event),
+        );
+        return;
+      case CanonicalEventTypes.readAdvancedMcpServer:
+        await emitEnvelope(
+          await _workspaceHandler.buildReadAdvancedMcpServerEnvelope(event),
+        );
+        return;
+      case CanonicalEventTypes.previewAdvancedMcpServer:
+        await emitEnvelope(
+          await _workspaceHandler.buildPreviewAdvancedMcpServerEnvelope(event),
+        );
+        return;
+      case CanonicalEventTypes.saveAdvancedMcpServer:
+        await emitEnvelope(
+          await _workspaceHandler.buildSaveAdvancedMcpServerEnvelope(event),
+        );
+        return;
+      case CanonicalEventTypes.startMcpOAuth:
+        await emitEnvelope(
+          await _workspaceHandler.buildStartMcpOAuthEnvelope(event),
+        );
+        return;
+      case CanonicalEventTypes.getMcpOAuthStatus:
+        await emitEnvelope(
+          await _workspaceHandler.buildMcpOAuthStatusEnvelope(event),
+        );
+        return;
+      case CanonicalEventTypes.cancelMcpOAuth:
+        await emitEnvelope(
+          await _workspaceHandler.buildCancelMcpOAuthEnvelope(event),
+        );
+        return;
+      case CanonicalEventTypes.completeMcpOAuth:
+        await emitEnvelope(
+          await _workspaceHandler.buildCompleteMcpOAuthEnvelope(event),
         );
         return;
       case CanonicalEventTypes.searchSlashCommands:

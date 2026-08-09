@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:mcp_client/mcp_client.dart';
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/capabilities/mcp/mcp_config_codec.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
+import 'package:sanad_agent/capabilities/mcp/mcp_oauth_service.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_server_config.dart';
 import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
 import 'package:sanad_agent/capabilities/skills/skill_load_service.dart';
@@ -20,6 +22,7 @@ class LocalWorkspaceRuntimeService {
     SkillRegistry? skillRegistry,
     SkillLoadService? skillLoadService,
     McpRuntimeManager? mcpRuntimeManager,
+    McpOAuthService? mcpOAuthService,
     SessionDB? sessionDb,
   }) : _sanadHomePath = sanadHomePath,
        _currentWorkingDirectory = currentWorkingDirectory,
@@ -34,6 +37,7 @@ class LocalWorkspaceRuntimeService {
                homeDirectoryPath: sanadHomePath,
              ),
            ),
+       _mcpOAuthService = mcpOAuthService ?? McpOAuthService(),
        _sessionDb = sessionDb;
 
   final String? _sanadHomePath;
@@ -41,6 +45,7 @@ class LocalWorkspaceRuntimeService {
   final SkillRegistry _skillRegistry;
   final SkillLoadService _skillLoadService;
   final McpRuntimeManager _mcpRuntimeManager;
+  final McpOAuthService _mcpOAuthService;
   final SessionDB? _sessionDb;
   SessionDB? _localDb;
   AgentStateDatabase? _localStateDb;
@@ -280,7 +285,7 @@ class LocalWorkspaceRuntimeService {
     final effectiveServers = await settingsStore.readEffectiveMcpServers(
       workspacePath: resolvedWorkspacePath,
     );
-    final effectiveDocument = settingsStore.encodeMcpServersDocument(
+    final effectiveDocument = settingsStore.encodeMcpSnapshotDocument(
       effectiveServers,
     );
     final workspaceOverrides = workspaceServers
@@ -291,9 +296,7 @@ class LocalWorkspaceRuntimeService {
       'workspace_id': resolvedWorkspaceId,
       'global': {
         'scope': 'global',
-        'document': globalDocument.isEmpty
-            ? {'mcpServers': <String, dynamic>{}}
-            : globalDocument,
+        'document': settingsStore.encodeMcpSnapshotDocument(globalServers),
         'servers': globalServers
             .map(
               (server) => _encodeMcpServerEntry(
@@ -306,9 +309,7 @@ class LocalWorkspaceRuntimeService {
       },
       'workspace': {
         'scope': 'workspace',
-        'document': workspaceDocument.isEmpty
-            ? {'mcpServers': <String, dynamic>{}}
-            : workspaceDocument,
+        'document': settingsStore.encodeMcpSnapshotDocument(workspaceServers),
         'servers': workspaceServers
             .map(
               (server) => _encodeMcpServerEntry(
@@ -361,11 +362,28 @@ class LocalWorkspaceRuntimeService {
     final servers = settingsStore
         .parseMcpServersDocument(currentDocument)
         .toList(growable: true);
-    final server = McpServerConfig.fromJson(Map<String, dynamic>.from(config));
+    final normalizedConfig = Map<String, dynamic>.from(config);
+    final secretMutations = Map<String, dynamic>.from(
+      normalizedConfig.remove('_secretMutations') as Map? ?? const {},
+    );
+    var server = McpServerConfig.fromJson(normalizedConfig);
     final serverKey = server.name.trim().toLowerCase();
     final existingIndex = servers.indexWhere(
       (entry) => entry.name.trim().toLowerCase() == serverKey,
     );
+    if (existingIndex >= 0) {
+      final existing = servers[existingIndex];
+      server = server.copyWith(
+        bearerTokenRef: existing.bearerTokenRef,
+        secretEnv: {...existing.secretEnv, ...server.secretEnv},
+        secretHeaders: {...existing.secretHeaders, ...server.secretHeaders},
+        oauthClientSecretRef: existing.oauthClientSecretRef,
+        oauthAccessTokenRef: existing.oauthAccessTokenRef,
+        oauthRefreshTokenRef: existing.oauthRefreshTokenRef,
+      );
+    }
+    server = await settingsStore.applySecretMutations(server, secretMutations);
+    const McpConfigCodec().validate(server);
 
     if (existingIndex >= 0) {
       servers[existingIndex] = server;
@@ -399,11 +417,15 @@ class LocalWorkspaceRuntimeService {
       scope: normalizedScope,
       workspacePath: resolvedWorkspacePath,
     );
-    final servers = settingsStore.parseMcpServersDocument(currentDocument)
-      ..removeWhere(
-        (entry) =>
-            entry.name.trim().toLowerCase() == serverName.trim().toLowerCase(),
-      );
+    final servers =
+        settingsStore
+            .parseMcpServersDocument(currentDocument)
+            .toList(growable: true)
+          ..removeWhere(
+            (entry) =>
+                entry.name.trim().toLowerCase() ==
+                serverName.trim().toLowerCase(),
+          );
 
     await _writeMcpDocumentForScope(
       settingsStore: settingsStore,
@@ -420,29 +442,188 @@ class LocalWorkspaceRuntimeService {
     String? workspaceId,
     required Map<String, dynamic> document,
   }) async {
-    final settingsStore = SanadSettingsStore(homeDirectoryPath: _sanadHome);
-    final normalizedScope = _normalizeMcpScope(scope);
-    final resolvedWorkspacePath = await _resolveWorkspacePathForMcpMutation(
-      scope: normalizedScope,
+    throw const FormatException(
+      'Whole-document MCP replacement is disabled. Use reviewed server mutations.',
+    );
+  }
+
+  Map<String, dynamic> previewMcpImport(String input) =>
+      const McpConfigCodec().previewImport(input).toJson();
+
+  Future<Map<String, dynamic>> exportMcpServers({
+    required List<String> serverNames,
+    String scope = 'effective',
+    String? workspaceId,
+  }) async {
+    if (serverNames.isEmpty) {
+      throw const FormatException('Select at least one MCP server to export.');
+    }
+    final servers = await _serversForScope(
+      scope: scope,
       workspaceId: workspaceId,
     );
-    final normalizedDocument = Map<String, dynamic>.from(document);
+    final selected = servers
+        .where(
+          (server) => serverNames.any(
+            (name) =>
+                name.trim().toLowerCase() == server.name.trim().toLowerCase(),
+          ),
+        )
+        .toList(growable: false);
+    if (selected.length != serverNames.length) {
+      throw StateError('One or more selected MCP servers were not found.');
+    }
+    return {
+      'json': const McpConfigCodec().exportServers(selected),
+      'credentials_excluded': true,
+    };
+  }
 
-    settingsStore.parseMcpServersDocument(normalizedDocument);
-    await _writeMcpDocumentForScope(
-      settingsStore: settingsStore,
-      scope: normalizedScope,
-      workspacePath: resolvedWorkspacePath,
-      document: normalizedDocument,
+  Future<Map<String, dynamic>> readAdvancedMcpServer({
+    required String serverName,
+    required String scope,
+    String? workspaceId,
+  }) async {
+    final server = await _serverForScope(
+      serverName: serverName,
+      scope: scope,
+      workspaceId: workspaceId,
     );
+    final codec = const McpConfigCodec();
+    final json = codec.advancedJson(server);
+    return {
+      'server_name': server.name,
+      'json': json,
+      'base_revision': codec.previewImport(json).revision,
+      'credentials_excluded': true,
+    };
+  }
 
-    return readMcpSnapshot(workspaceId: workspaceId);
+  Future<Map<String, dynamic>> previewAdvancedMcpServer({
+    required String serverName,
+    required String scope,
+    required String input,
+    String? workspaceId,
+  }) async {
+    final current = await _serverForScope(
+      serverName: serverName,
+      scope: scope,
+      workspaceId: workspaceId,
+    );
+    return const McpConfigCodec()
+        .previewAdvanced(serverName: serverName, current: current, input: input)
+        .toJson();
+  }
+
+  Future<Map<String, dynamic>> saveAdvancedMcpServer({
+    required String serverName,
+    required String scope,
+    required String input,
+    required String baseRevision,
+    required String previewRevision,
+    String? workspaceId,
+  }) async {
+    final current = await _serverForScope(
+      serverName: serverName,
+      scope: scope,
+      workspaceId: workspaceId,
+    );
+    final codec = const McpConfigCodec();
+    final currentRevision = codec
+        .previewImport(codec.advancedJson(current))
+        .revision;
+    if (currentRevision != baseRevision) {
+      throw StateError(
+        'The MCP server changed after editing began. Reload and retry.',
+      );
+    }
+    final preview = codec.previewAdvanced(
+      serverName: serverName,
+      current: current,
+      input: input,
+    );
+    if (preview.revision != previewRevision) {
+      throw StateError('Advanced JSON no longer matches the reviewed preview.');
+    }
+    final candidate = preview.servers.single;
+    return saveMcpServer(
+      scope: scope,
+      workspaceId: workspaceId,
+      config: {'name': candidate.name, ...candidate.toConfigJson()},
+    );
+  }
+
+  Future<Map<String, dynamic>> startMcpOAuth({
+    required String serverName,
+    required Map<String, dynamic> draftConfig,
+    Map<String, dynamic> secretMutations = const {},
+  }) async {
+    final config = McpServerConfig.fromJson({
+      'name': serverName,
+      ...draftConfig,
+    });
+    final oauth = _runtimeStringMap(secretMutations['oauth']);
+    return _mcpOAuthService.start(
+      config: config,
+      clientSecret: oauth['client_secret'],
+    );
+  }
+
+  Map<String, dynamic> mcpOAuthStatus(String flowId) =>
+      _mcpOAuthService.status(flowId);
+
+  Future<Map<String, dynamic>> cancelMcpOAuth(String flowId) =>
+      _mcpOAuthService.cancel(flowId);
+
+  Future<Map<String, dynamic>> completeMcpOAuth({
+    required String flowId,
+    required String scope,
+    String? workspaceId,
+    required Map<String, dynamic> config,
+  }) async {
+    final grant = _mcpOAuthService.consumeApproved(flowId);
+    final normalized = Map<String, dynamic>.from(config);
+    normalized['oauth'] = {
+      ...Map<String, dynamic>.from(normalized['oauth'] as Map? ?? const {}),
+      'clientId': grant.clientId,
+      'authorizationUrl': grant.authorizationUrl,
+      'tokenUrl': grant.tokenUrl,
+      if (grant.expiresIn != null)
+        'tokenExpiry': DateTime.now()
+            .add(Duration(seconds: grant.expiresIn!))
+            .toUtc()
+            .toIso8601String(),
+    };
+    normalized['_secretMutations'] = {
+      'oauth': {
+        'access_token': grant.accessToken,
+        if (grant.refreshToken != null) 'refresh_token': grant.refreshToken,
+        if (grant.clientSecret != null) 'client_secret': grant.clientSecret,
+      },
+    };
+    return saveMcpServer(
+      scope: scope,
+      workspaceId: workspaceId,
+      config: normalized,
+    );
   }
 
   Future<Map<String, dynamic>> inspectMcpServer({
     required String serverName,
     String scope = 'effective',
     String? workspaceId,
+  }) => inspectMcpDraft(
+    serverName: serverName,
+    scope: scope,
+    workspaceId: workspaceId,
+  );
+
+  Future<Map<String, dynamic>> inspectMcpDraft({
+    required String serverName,
+    String scope = 'effective',
+    String? workspaceId,
+    Map<String, dynamic>? draftConfig,
+    Map<String, dynamic> secretMutations = const {},
   }) async {
     final settingsStore = SanadSettingsStore(homeDirectoryPath: _sanadHome);
     final normalizedScope = _normalizeMcpScope(scope);
@@ -465,23 +646,63 @@ class LocalWorkspaceRuntimeService {
       ),
     };
 
-    final server = servers
+    final existing = servers
         .where(
           (entry) =>
               entry.name.trim().toLowerCase() ==
               serverName.trim().toLowerCase(),
         )
         .firstOrNull;
+    McpServerConfig? server;
+    Map<String, String>? transientHeaders;
+    Map<String, String>? transientEnvironment;
+    if (draftConfig != null) {
+      server = McpServerConfig.fromJson({'name': serverName, ...draftConfig});
+      if (existing != null) {
+        server = server.copyWith(
+          bearerTokenRef: existing.bearerTokenRef,
+          secretEnv: existing.secretEnv,
+          secretHeaders: existing.secretHeaders,
+          oauthClientSecretRef: existing.oauthClientSecretRef,
+          oauthAccessTokenRef: existing.oauthAccessTokenRef,
+          oauthRefreshTokenRef: existing.oauthRefreshTokenRef,
+        );
+      }
+      final transientBearer = secretMutations['bearer_token'];
+      const McpConfigCodec().validate(
+        server,
+        allowMissingBearer:
+            transientBearer is String && transientBearer.isNotEmpty,
+      );
+      transientHeaders = {
+        ...settingsStore.resolveHeaders(server),
+        ..._runtimeStringMap(secretMutations['secret_headers']),
+        if (transientBearer is String && transientBearer.isNotEmpty)
+          'Authorization': 'Bearer $transientBearer',
+      };
+      transientEnvironment = {
+        ...settingsStore.resolveEnvironment(server),
+        ..._runtimeStringMap(secretMutations['secret_env']),
+      };
+    } else {
+      server = existing;
+    }
     if (server == null) {
       throw StateError("MCP server '$serverName' not found.");
     }
 
-    final result = await _mcpRuntimeManager.verifyMcpConnection(server);
+    final result = await _mcpRuntimeManager.verifyMcpConnection(
+      server,
+      resolvedHeaders: transientHeaders,
+      resolvedEnvironment: transientEnvironment,
+    );
     return {
       'name': server.name,
       'scope': normalizedScope,
       'workspace_id': resolvedWorkspaceId,
       'success': result.success,
+      if (result.transport != null) 'transport': result.transport!.name,
+      'auth_state': result.authState,
       if (result.error != null) 'error': result.error,
       'tools': (result.tools ?? const <Tool>[])
           .map(
@@ -800,6 +1021,39 @@ class LocalWorkspaceRuntimeService {
         p.isWithin(normalizedRoot, normalizedTarget);
   }
 
+  Future<List<McpServerConfig>> _serversForScope({
+    required String scope,
+    String? workspaceId,
+  }) async {
+    final settingsStore = SanadSettingsStore(homeDirectoryPath: _sanadHome);
+    final normalizedScope = _normalizeMcpScope(scope);
+    final workspacePath = workspaceId == null
+        ? null
+        : await _resolveWorkspacePath(workspaceId);
+    return switch (normalizedScope) {
+      'global' => settingsStore.readUserMcpServers(),
+      'workspace' =>
+        workspacePath == null
+            ? Future.value(const <McpServerConfig>[])
+            : settingsStore.readWorkspaceMcpServers(workspacePath),
+      _ => settingsStore.readEffectiveMcpServers(workspacePath: workspacePath),
+    };
+  }
+
+  Future<McpServerConfig> _serverForScope({
+    required String serverName,
+    required String scope,
+    String? workspaceId,
+  }) async {
+    final normalizedName = serverName.trim().toLowerCase();
+    final server =
+        (await _serversForScope(scope: scope, workspaceId: workspaceId))
+            .where((entry) => entry.name.trim().toLowerCase() == normalizedName)
+            .firstOrNull;
+    if (server == null) throw StateError("MCP server '$serverName' not found.");
+    return server;
+  }
+
   Map<String, dynamic> _encodeMcpServerEntry({
     required McpServerConfig server,
     required String source,
@@ -809,7 +1063,7 @@ class LocalWorkspaceRuntimeService {
       'name': server.name,
       'source': source,
       'workspace_id': workspaceId,
-      'config': server.toConfigJson(),
+      'config': server.toSnapshotJson(),
     };
   }
 
@@ -990,3 +1244,7 @@ class LocalWorkspaceRuntimeService {
   String get _currentWorkspacePath =>
       _normalizePath(_currentWorkingDirectory ?? Directory.current.path);
 }
+
+Map<String, String> _runtimeStringMap(Object? value) => value is Map
+    ? value.map((key, item) => MapEntry(key.toString(), item.toString()))
+    : const {};

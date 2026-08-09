@@ -87,6 +87,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Device Workspace Sidebar QA](docs/qa_maintenance/device_workspace_sidebar_qa.md): Focused QA coverage for the Plan 32c device-scoped sidebar, including pagination, cache-first rendering, responsive layout, accessibility, and live ordering.
 - [Live Context Usage Indicator QA](docs/qa_maintenance/live_context_usage_indicator_qa.md): Regression matrix for latest provider usage, cached-input visibility, tool-loop updates, and history restoration.
 - [Memory Tool Reliability QA](docs/qa_maintenance/memory_tool_reliability.md): Regression matrix for compact memory results, atomic batches, file safety, bounded recovery, and frozen prompt snapshots.
+- [MCP Server Configuration QA](docs/qa_maintenance/mcp_server_configuration_qa.md): Regression matrix for form-first MCP management, daemon authority, secrets, import/export, Advanced JSON, inspection, and OAuth lifecycle.
 - [Mobile Session and Resume Recovery QA](docs/qa_maintenance/mobile_session_resume_recovery_qa.md): Regression coverage for typed refresh outcomes, foreground resume, stale-cache continuity, and authoritative conversation resynchronization.
 - [Desktop Authentication Exchange QA](docs/qa_maintenance/desktop_authentication_exchange_qa.md): Regression coverage for bidirectional credential-free native desktop auth reconciliation.
 - [Message Edit and Retry QA Matrix](docs/qa_maintenance/message_edit_retry_qa.md): Quality Assurance matrix and test cases for the message edit and retry flow.

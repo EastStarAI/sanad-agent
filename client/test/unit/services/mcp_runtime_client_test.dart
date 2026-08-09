@@ -102,7 +102,7 @@ void main() {
       workspaceId: '/repo',
       config: McpServerConfig(
         name: 'filesystem',
-        authType: McpAuthType.noAuth,
+        authType: McpAuthType.none,
         command: 'npx',
         args: ['-y', '@modelcontextprotocol/server-filesystem'],
       ),
@@ -164,6 +164,72 @@ void main() {
 
     final snapshot = await future;
     expect(snapshot.workspace.servers.single.name, 'filesystem');
+  });
+
+  test('previewImport maps daemon response to typed draft models', () async {
+    final future = client.previewImport(
+      input: '{"mcpServers":{"demo":{"url":"https://example.test/mcp"}}}',
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(socket.capturedCommands.single['command'], 'preview_mcp_import');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.debugEmitEvent({
+      'type': 'device_event',
+      'event': 'mcp_import_previewed',
+      'payload': {
+        'request_id': payload['request_id'],
+        'servers': [
+          {
+            'name': 'demo',
+            'config': {
+              'url': 'https://example.test/mcp',
+              'transport': 'auto',
+              'authType': 'none',
+            },
+          },
+        ],
+        'warnings': ['normalized'],
+        'unsupported_fields': ['demo.vendor'],
+        'revision': 'abc123',
+      },
+    });
+
+    final preview = await future;
+    expect(preview.servers.single.config.serverUrl, 'https://example.test/mcp');
+    expect(preview.warnings, ['normalized']);
+    expect(preview.unsupportedFields, ['demo.vendor']);
+    expect(preview.revision, 'abc123');
+  });
+
+  test('OAuth start returns only typed flow metadata', () async {
+    final future = client.startOAuth(
+      draft: McpServerConfig(
+        name: 'oauth',
+        serverUrl: 'https://example.test/mcp',
+        authType: McpAuthType.oauth,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(socket.capturedCommands.single['command'], 'start_mcp_oauth');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.debugEmitEvent({
+      'type': 'device_event',
+      'event': 'mcp_oauth_started',
+      'payload': {
+        'request_id': payload['request_id'],
+        'flow_id': 'flow-1',
+        'status': 'authorization_required',
+        'authorization_url': 'https://auth.example/authorize',
+        'expires_at': '2026-08-09T12:00:00Z',
+      },
+    });
+
+    final flow = await future;
+    expect(flow.flowId, 'flow-1');
+    expect(flow.status, McpOAuthStatus.authorizationRequired);
+    expect(flow.authorizationUrl.toString(), 'https://auth.example/authorize');
   });
 
   test('inspectServer reads tool metadata from local runtime', () async {
