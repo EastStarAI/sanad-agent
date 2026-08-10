@@ -16,6 +16,7 @@ This contract applies to `client/lib/features/auth/`.
 - Refresh and logout must use the portal-owned operations; never rotate tokens through the backend gateway.
 - Refresh outcomes are typed: only a trusted Portal `401` or missing local refresh credential is terminal; timeout, DNS/transport failure, malformed replies, and non-`401` HTTP failures are transient and must retain credentials.
 - Persist a rotated access/refresh pair as one authoritative value before publishing refresh success. Retry an authenticated request at most once; a second `401` is terminal.
+- Native desktop login, refresh, logout, and auth-document mutations use the shared `auth.refresh.lock`. Refresh re-reads `auth.json` only after acquiring the lock and adopts a pair rotated by another process without calling the Portal again. Web and mobile never use this file lock.
 - Native desktop auth mutations publish only a credential-free exchange request after `auth.json` persistence. Incoming exchange reconciliation reloads that file and never echoes another request. Web and mobile do not participate.
 
 ## Secret Safety

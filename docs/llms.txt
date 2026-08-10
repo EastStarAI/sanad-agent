@@ -49,6 +49,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [AGENTS](./client/lib/features/voice/AGENTS.md): Rules governing ./client/lib/features/voice.
 - [AGENTS](./client/lib/infrastructure/AGENTS.md): Rules governing ./client/lib/infrastructure.
 - [AGENTS](./scripts/sanad_dev/AGENTS.md): Rules governing ./scripts/sanad_dev.
+- [AGENTS](./shared/auth_lock/AGENTS.md): Rules governing ./shared/auth_lock.
 
 ## Functional Features & Architecture Guides
 

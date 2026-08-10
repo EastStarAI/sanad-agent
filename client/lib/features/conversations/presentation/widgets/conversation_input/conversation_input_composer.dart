@@ -26,6 +26,9 @@ import 'package:sanad_client/features/conversations/presentation/widgets/multili
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
+import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
+import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_state.dart';
+import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
@@ -580,6 +583,8 @@ class _ModelChipState extends State<_ModelChip> {
   final Set<String> _providerDisplayLookupAttempts = <String>{};
   final Map<String, DateTime> _emptyProviderDisplayFetchUntilByAgent = {};
   bool _didLoadInitialProviderDisplayNames = false;
+  String? _lastLoadedProviderId;
+  String? _lastLoadedAgentId;
 
   @override
   void initState() {
@@ -622,17 +627,66 @@ class _ModelChipState extends State<_ModelChip> {
       providerDisplayNames: providerDisplayNames,
     );
 
+    final showProgress = getIt.isRegistered<ProviderUsageCubit>();
+
+    Widget buildChip(BuildContext context, double? progress, Color? progressColor) {
+      return InkWell(
+        onTap: () => _openModelPicker(context),
+        borderRadius: BorderRadius.circular(8),
+        child: _buildModelChip(context, currentModel, contextUsage, progress, progressColor),
+      );
+    }
+
     return BlocListener<SessionCubit, SessionState>(
       listenWhen: (previous, current) => previous.selectedSession != current.selectedSession,
       listener: (context, state) {
         _providerDisplayLookupAttempts.clear();
         unawaited(_ensureProviderDisplayNamesLoaded(selectedSession: state.selectedSession));
       },
-      child: InkWell(
-        onTap: () => _openModelPicker(context),
-        borderRadius: BorderRadius.circular(8),
-        child: _buildModelChip(context, currentModel, contextUsage),
-      ),
+      child: showProgress
+          ? BlocBuilder<ProviderUsageCubit, ProviderUsageState>(
+              bloc: getIt<ProviderUsageCubit>(),
+              builder: (context, usageState) {
+                final theme = Theme.of(context);
+                final activeProviderId = _activeProviderId(selectedSession);
+                double? progress;
+                Color? progressColor;
+
+                if (activeProviderId != null && activeProviderId.isNotEmpty) {
+                  final deviceId = widget.agentSlice.activeAgent?.id ?? DeviceInventoryIds.localDevice;
+                  final entry = usageState.entry(deviceId, activeProviderId);
+                  final supports = usageState.support.supports(deviceId, activeProviderId);
+
+                  if (supports && entry != null && entry.phase != ProviderUsagePhase.hidden) {
+                    final hasSnapshot = entry.hasVisibleSnapshot;
+                    if (hasSnapshot && entry.result?.snapshot?.windows != null) {
+                      double maxProgress = 0.0;
+                      for (final window in entry.result!.snapshot!.windows) {
+                        final remaining = window.remainingPercent;
+                        final used = window.usedPercent;
+                        final p = (used ?? (remaining != null ? 100.0 - remaining : 0.0)) / 100.0;
+                        if (p > maxProgress) {
+                          maxProgress = p;
+                        }
+                      }
+                      progress = maxProgress.clamp(0.0, 1.0);
+
+                      Color getProgressColor(double value) {
+                        if (value >= 0.9) return const Color(0xFFE53935);
+                        return theme.colorScheme.primary;
+                      }
+
+                      progressColor = getProgressColor(progress);
+                    }
+                  }
+                }
+
+                return buildChip(context, progress, progressColor);
+              },
+            )
+          : Builder(
+              builder: (context) => buildChip(context, null, null),
+            ),
     );
   }
 
@@ -647,6 +701,19 @@ class _ModelChipState extends State<_ModelChip> {
     final activeProviderId = _activeProviderId(selectedSession);
     if (activeProviderId == null || activeProviderId.isEmpty) return;
 
+    final activeAgentId = activeAgent.id;
+    if (activeProviderId != _lastLoadedProviderId || activeAgentId != _lastLoadedAgentId) {
+      _lastLoadedProviderId = activeProviderId;
+      _lastLoadedAgentId = activeAgentId;
+      if (getIt.isRegistered<ProviderUsageCubit>()) {
+        unawaited(
+          getIt<ProviderUsageCubit>().onInstancesLoaded(
+            agent: activeAgent,
+            instanceIds: [activeProviderId],
+          ),
+        );
+      }
+    }
     final knownDisplays = _providerDisplayNamesByAgent[key];
     if (knownDisplays != null && knownDisplays.isNotEmpty && knownDisplays.containsKey(activeProviderId)) return;
 
@@ -788,6 +855,8 @@ class _ModelChipState extends State<_ModelChip> {
     BuildContext context,
     String text,
     LlmUsageSnapshot? contextUsage,
+    double? progress,
+    Color? progressColor,
   ) {
     final parts = text.split(' | ');
     final provider = parts.length > 1 ? parts[0] : null;
@@ -796,54 +865,76 @@ class _ModelChipState extends State<_ModelChip> {
     final useTwoLineLayout = provider != null && SidebarBreakpoints.isCompact(context);
 
     return Container(
-      padding: EdgeInsets.symmetric(horizontal: 8, vertical: useTwoLineLayout ? 2 : 4),
       decoration: BoxDecoration(
         color: widget.chipBgColor.withValues(alpha: 0.50),
         borderRadius: BorderRadius.circular(8),
         border: Border.all(color: widget.borderColor),
       ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          if (contextUsage?.usageFraction != null) ...[
-            ContextUsageIndicator(usage: contextUsage!),
-            const SizedBox(width: 6),
-          ],
-          if (useTwoLineLayout)
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  model,
-                  style: GoogleFonts.inter(
-                    color: widget.dimTextColor,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w500,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            if (progress != null && progressColor != null)
+              Positioned.fill(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: FractionallySizedBox(
+                    widthFactor: progress,
+                    child: Container(
+                      color: progressColor.withValues(alpha: 0.20),
+                    ),
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
                 ),
-                Text(
-                  provider,
-                  style: GoogleFonts.inter(
-                    color: widget.dimTextColor.withValues(alpha: 0.7),
-                    fontSize: 9,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            )
-          else
-            Text(
-              text,
-              style: GoogleFonts.inter(color: widget.dimTextColor, fontSize: 11),
+              ),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8, vertical: useTwoLineLayout ? 2 : 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  if (contextUsage?.usageFraction != null) ...[
+                    ContextUsageIndicator(usage: contextUsage!),
+                    const SizedBox(width: 6),
+                  ],
+                  if (useTwoLineLayout)
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          model,
+                          style: GoogleFonts.inter(
+                            color: widget.dimTextColor,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          provider,
+                          style: GoogleFonts.inter(
+                            color: widget.dimTextColor.withValues(alpha: 0.7),
+                            fontSize: 9,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    )
+                  else
+                    Text(
+                      text,
+                      style: GoogleFonts.inter(color: widget.dimTextColor, fontSize: 11),
+                    ),
+                  const SizedBox(width: 4),
+                  Icon(Icons.keyboard_arrow_down, size: 12, color: widget.dimTextColor),
+                ],
+              ),
             ),
-          const SizedBox(width: 4),
-          Icon(Icons.keyboard_arrow_down, size: 12, color: widget.dimTextColor),
-        ],
+          ],
+        ),
       ),
     );
   }

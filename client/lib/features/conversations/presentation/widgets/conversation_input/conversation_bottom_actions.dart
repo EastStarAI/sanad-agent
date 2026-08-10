@@ -12,6 +12,9 @@ import 'package:sanad_client/features/conversations/presentation/utils/provider_
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/model_picker_dialog.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
+import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
+import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_state.dart';
+import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -51,6 +54,8 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
   final Set<String> _providerDisplayLookupAttempts = <String>{};
   final Map<String, DateTime> _emptyProviderDisplayFetchUntilByAgent = {};
   bool _didLoadInitialProviderDisplayNames = false;
+  String? _lastLoadedProviderId;
+  String? _lastLoadedAgentId;
 
   @override
   void initState() {
@@ -126,27 +131,101 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
       nextMessageModel: widget.inputSlice.nextMessageModel,
       providerDisplayNames: providerDisplayNames,
     );
+
+    final showProgress = getIt.isRegistered<ProviderUsageCubit>();
+
+    Widget buildButton(BuildContext context, double? progress, Color? progressColor) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: Stack(
+          alignment: Alignment.centerLeft,
+          children: [
+            if (progress != null && progressColor != null)
+              Positioned.fill(
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: FractionallySizedBox(
+                    widthFactor: progress,
+                    child: Container(
+                      color: progressColor.withValues(alpha: 0.20),
+                    ),
+                  ),
+                ),
+              ),
+            InkWell(
+              onTap: () => _openModelPicker(context),
+              borderRadius: BorderRadius.circular(6),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _buildActionText(currentModel),
+                    const SizedBox(width: 2),
+                    Icon(
+                      Icons.keyboard_arrow_down,
+                      size: 14,
+                      color: widget.dimTextColor.withValues(alpha: 0.5),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     return BlocListener<SessionCubit, SessionState>(
       listenWhen: (previous, current) => previous.selectedSession != current.selectedSession,
       listener: (context, state) {
         _providerDisplayLookupAttempts.clear();
         unawaited(_ensureProviderDisplayNamesLoaded(selectedSession: state.selectedSession));
       },
-      child: InkWell(
-        onTap: () => _openModelPicker(context),
-        borderRadius: BorderRadius.circular(6),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildActionText(currentModel),
-              const SizedBox(width: 2),
-              Icon(Icons.keyboard_arrow_down, size: 14, color: widget.dimTextColor.withValues(alpha: 0.5)),
-            ],
-          ),
-        ),
-      ),
+      child: showProgress
+          ? BlocBuilder<ProviderUsageCubit, ProviderUsageState>(
+              bloc: getIt<ProviderUsageCubit>(),
+              builder: (context, usageState) {
+                final theme = Theme.of(context);
+                final activeProviderId = _activeProviderId(selectedSession);
+                double? progress;
+                Color? progressColor;
+
+                if (activeProviderId != null && activeProviderId.isNotEmpty) {
+                  final deviceId = widget.activeAgent?.id ?? DeviceInventoryIds.localDevice;
+                  final entry = usageState.entry(deviceId, activeProviderId);
+                  final supports = usageState.support.supports(deviceId, activeProviderId);
+
+                  if (supports && entry != null && entry.phase != ProviderUsagePhase.hidden) {
+                    final hasSnapshot = entry.hasVisibleSnapshot;
+                    if (hasSnapshot && entry.result?.snapshot?.windows != null) {
+                      double maxProgress = 0.0;
+                      for (final window in entry.result!.snapshot!.windows) {
+                        final remaining = window.remainingPercent;
+                        final used = window.usedPercent;
+                        final p = (used ?? (remaining != null ? 100.0 - remaining : 0.0)) / 100.0;
+                        if (p > maxProgress) {
+                          maxProgress = p;
+                        }
+                      }
+                      progress = maxProgress.clamp(0.0, 1.0);
+
+                      Color getProgressColor(double value) {
+                        if (value >= 0.9) return const Color(0xFFE53935);
+                        return theme.colorScheme.primary;
+                      }
+
+                      progressColor = getProgressColor(progress);
+                    }
+                  }
+                }
+
+                return buildButton(context, progress, progressColor);
+              },
+            )
+          : Builder(
+              builder: (context) => buildButton(context, null, null),
+            ),
     );
   }
 
@@ -155,10 +234,25 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
   String _providerDisplayLookupAttemptKey(String agentKey, String providerId) => '$agentKey::$providerId';
 
   Future<void> _ensureProviderDisplayNamesLoaded({Session? selectedSession}) async {
+    final resolvedSession = selectedSession ?? (mounted ? context.read<SessionCubit>().state.selectedSession : null);
     final key = _providerLookupKey(widget.activeAgent);
-    final activeProviderId = _activeProviderId(selectedSession);
+    final activeProviderId = _activeProviderId(resolvedSession);
     if (activeProviderId == null || activeProviderId.isEmpty) {
       return;
+    }
+
+    final activeAgentId = widget.activeAgent?.id;
+    if (activeProviderId != _lastLoadedProviderId || activeAgentId != _lastLoadedAgentId) {
+      _lastLoadedProviderId = activeProviderId;
+      _lastLoadedAgentId = activeAgentId;
+      if (getIt.isRegistered<ProviderUsageCubit>()) {
+        unawaited(
+          getIt<ProviderUsageCubit>().onInstancesLoaded(
+            agent: widget.activeAgent,
+            instanceIds: [activeProviderId],
+          ),
+        );
+      }
     }
 
     final knownDisplays = _providerDisplayNamesByAgent[key];

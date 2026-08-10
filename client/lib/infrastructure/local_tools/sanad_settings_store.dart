@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/infrastructure/local_tools/secure_sanad_home_writer.dart';
 
@@ -40,6 +41,14 @@ class SanadSettingsStore {
 
   Future<void> deleteAuthDocument() async {
     await _secureHomeWriter().delete('auth.json');
+  }
+
+  Future<T> withAuthFileLock<T>(Future<T> Function() operation) async {
+    final writer = _secureHomeWriter();
+    await writer.resolveFile('auth.json');
+    return NativeAuthFileLock(
+      _resolveSanadHomeDirectory(),
+    ).runExclusive(operation);
   }
 
   SecureSanadHomeWriter _secureHomeWriter() {
