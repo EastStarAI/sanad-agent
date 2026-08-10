@@ -18,18 +18,21 @@ for command in ruby sips ffmpeg fvm; do
 done
 
 mkdir -p "$DELIVERABLES"
+mkdir -p "$CLIENT/macos/Runner/AppIcon.icon/Assets"
 
 # Compose every square mark from the approved vector. The 80% composition
 # matches the supplied proportion references; adaptive/maskable artwork uses a
 # deliberately smaller 62.5% safe-area composition.
 ruby - "$BRAND/sanad-mark.svg" "$BRAND/sanad-app-icon-source.svg" \
+  "$CLIENT/macos/Runner/AppIcon.icon/Assets/sanad-mark.svg" \
   "$SANAD_PRIMARY" '#ffffff' "$SANAD_DARK" 104 247 3.185242 <<'RUBY'
-source, output, source_color, foreground, background, x, y, scale = ARGV
+source, output, macos_foreground_output, source_color, foreground, background, x, y, scale = ARGV
 svg = File.read(source)
 svg.sub!(/<svg\b[^>]*>/m, '<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">')
 svg.gsub!(Regexp.new(Regexp.escape(source_color), Regexp::IGNORECASE), foreground)
 svg.sub!(/(<g id="Layer_1-2"[^>]*>)/, %(<g transform="translate(#{x} #{y}) scale(#{scale})">\n    \\1))
 svg.sub!(/<\/svg>\s*\z/, "  </g>\n</svg>\n")
+File.write(macos_foreground_output, svg)
 File.write(
   output,
   svg.sub(
