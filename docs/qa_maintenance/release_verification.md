@@ -98,7 +98,7 @@ approval for RC1 or any later publication.
 
 ## Stable Client convenience-link gate
 
-Only an approved, published Stable Release may update the Production convenience links. The post-publication job must reject Drafts, prereleases, non-canonical repositories or URLs, missing or duplicate desktop Client entries, Agent artifacts, and any size, SHA-256, checksum-file, or attestation mismatch. Its generated include contains exactly macOS, Windows, and Linux redirects and is retained as workflow evidence. The restricted server command must pass a loopback candidate before atomic activation, verify Production plus Development and Staging regressions, and restore the preceding include on any reload or verification failure. Development and Staging never expose equivalent aliases, and Client bytes continue to download directly from GitHub Releases.
+Only an approved, published Stable Release may update the Production convenience links. The post-publication job must reject Drafts, prereleases, non-canonical repositories or URLs, missing or duplicate desktop Client entries, Agent artifacts, and any size, SHA-256, checksum-file, or attestation mismatch. Its generated include contains exactly macOS, Windows, and Linux redirects and is retained as workflow evidence. The Production forced-command broker accepts that file only with an exact bounded length and SHA-256, and the root-owned restricted server command must pass a loopback candidate before atomic activation, verify Production plus Development and Staging regressions, and restore the preceding include on any reload or verification failure. Development and Staging never expose equivalent aliases, and Client bytes continue to download directly from GitHub Releases.
 
 ## Stable Production asset handoff gate
 
@@ -114,11 +114,14 @@ Static verification rejects separate `web-production`, `updates-production`, or
 provisioned and protected in a separate reviewed change. Manual recovery from
 `main` remains blocked by the Environment branch policy until an operator
 explicitly authorizes that ref; tag-restricted automatic releases require no
-such exception. Each selector activation and rollback must invoke the bounded
-Production static refresh for exactly one service. Updates and downloads
-candidates must inherit the preceding static shell, contain `index.html` and
-`favicon.svg`, and replace only their release-owned files before atomic
-publication. Runtime acceptance requires the exact public Web commit and version
+such exception. Each selector activation and rollback must pass through the
+forced-command broker and root-owned controller, which refresh exactly one
+Production static service. The workflow must contain no direct remote `rsync`,
+selector mutation, live-host path, Docker command, or `sudo` command. Updates
+and downloads candidates must inherit the preceding verified static shell
+inside the trusted controller, contain `index.html` and `favicon.svg`, and
+accept only their exact two-file overlay allowlist before atomic publication.
+Runtime acceptance requires the exact public Web commit and version
 markers, the public Appcast and Stable manifest SHA-256 values, both public
 installer-source SHA-256 values, and a clean browser render. A stale bind mount,
 incomplete static root, selector-only success, or HTTP-only shell response fails

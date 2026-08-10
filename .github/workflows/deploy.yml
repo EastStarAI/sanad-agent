@@ -102,28 +102,17 @@ jobs:
           find web -type d -exec chmod 755 {} +
           find web -type f -exec chmod 644 {} +
           test -z "$(find web -type f ! -perm -004 -print -quit)"
-      - name: Publish immutable Production Web release
+      - id: publish_asset
+        name: Publish immutable Production Web release
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          tag="$RELEASE_TAG"
           expected_sha="$(git rev-parse HEAD)"
-          incoming="/opt/sanad-sites/assets/web/incoming-$tag-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          release="/opt/sanad-sites/assets/web/releases/$tag"
-          if ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; test -s '$release/index.html'; test \"\$(cat '$release/sanad-public-sha.txt')\" = '$expected_sha'"; then
-            echo "Reusing the existing immutable Production Web release $release."
-            exit 0
-          fi
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; test ! -e '$incoming'; test ! -e '$release'; mkdir -p '$incoming' /opt/sanad-sites/assets/web/releases"
-          rsync -az --delete --delay-updates web/ \
-            "$DEPLOY_USER@$DEPLOY_HOST:$incoming/"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; find '$incoming' -type d -exec chmod 755 {} +; find '$incoming' -type f -exec chmod 644 {} +; test -z \"\$(find '$incoming' -type f ! -perm -004 -print -quit)\"; test -s '$incoming/index.html'; grep -Fq flutter_bootstrap.js '$incoming/index.html'; test \"\$(cat '$incoming/sanad-public-sha.txt')\" = '$expected_sha'; test ! -e '$release'; mv '$incoming' '$release'"
+          digest="$(scripts/release/deploy_production_asset.sh \
+            publish static-web "$expected_sha" web)"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
       - name: Activate, verify, and roll back Production Web on failure
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
@@ -131,16 +120,11 @@ jobs:
           RELEASE_TAG: ${{ inputs.release_tag }}
         run: |
           set -euo pipefail
-          release="/opt/sanad-sites/assets/web/releases/$RELEASE_TAG"
-          selector=/opt/sanad-sites/assets/web/current
           expected_sha="$(git rev-parse HEAD)"
-          previous="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" "set -eu; readlink -f '$selector'")"
-          test -n "$previous"
-          previous_index_sha="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; sha256sum '$previous/index.html' | cut -d ' ' -f 1")"
-          test -n "$previous_index_sha"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; test -s '$release/index.html'; test \"\$(cat '$release/sanad-public-sha.txt')\" = '$expected_sha'; ln -sfn '$release' '$selector'; sudo /usr/local/sbin/sanad-sites-control refresh-static production web"
+          read -r previous_identity previous_digest \
+            <<<"$(scripts/release/deploy_production_asset.sh previous static-web)"
+          scripts/release/deploy_production_asset.sh activate static-web \
+            "$expected_sha" "${{ steps.publish_asset.outputs.digest }}"
 
           verify_web() {
             body="$(mktemp)"
@@ -167,20 +151,16 @@ jobs:
           done
           if [[ "$activated" != true ]]; then
             echo "Production Web verification failed; restoring the previous selector."
-            ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-              "set -eu; test -s '$previous/index.html'; ln -sfn '$previous' '$selector'; sudo /usr/local/sbin/sanad-sites-control refresh-static production web"
+            scripts/release/deploy_production_asset.sh rollback static-web \
+              "$previous_identity" "$previous_digest"
             rollback_verified=false
             for attempt in $(seq 1 12); do
-              rolled_back_index="$(mktemp)"
-              if curl --fail --silent --show-error --location --max-time 20 \
-                --output "$rolled_back_index" \
-                "https://app.sanad.eaststarai.com/?rollback=$previous_index_sha" && \
-                [[ "$(sha256sum "$rolled_back_index" | cut -d ' ' -f 1)" == "$previous_index_sha" ]]; then
+              served_previous="$(curl --fail --silent --show-error --max-time 20 \
+                "https://app.sanad.eaststarai.com/sanad-public-sha.txt?rollback=$previous_identity" || true)"
+              if [[ "$served_previous" == "$previous_identity" ]]; then
                 rollback_verified=true
-                rm -f "$rolled_back_index"
                 break
               fi
-              rm -f "$rolled_back_index"
               sleep 5
             done
             if [[ "$rollback_verified" != true ]]; then
@@ -227,30 +207,16 @@ jobs:
         run: |
           set -euo pipefail
           tag="${{ inputs.release_tag }}"
-          root=/opt/sanad-sites/assets/updates
-          release="$root/releases/$tag"
-          selector="$root/current"
-          incoming="$root/incoming-$tag-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          revision="$(git rev-parse HEAD)"
           expected_appcast="$(sha256sum download/appcast.xml | awk '{print $1}')"
           expected_manifest="$(sha256sum download/release-manifest.json | awk '{print $1}')"
-          previous="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" "set -eu; readlink -f '$selector'")"
-          previous_appcast="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; sha256sum '$previous/appcast.xml' | awk '{print \$1}'")"
-          previous_manifest="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; sha256sum '$previous/release-manifest.json' | awk '{print \$1}'")"
-          if ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; test -s '$release/index.html'; test -s '$release/favicon.svg'; test \"\$(sha256sum '$release/appcast.xml' | awk '{print \$1}')\" = '$expected_appcast'; test \"\$(sha256sum '$release/release-manifest.json' | awk '{print \$1}')\" = '$expected_manifest'"; then
-            echo "Reusing the existing complete immutable updates release $release."
-          else
-            ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-              "set -eu; test ! -e '$incoming'; test ! -e '$release'; mkdir -p '$incoming'; cp -a '$previous/.' '$incoming/'"
-            rsync -az download/appcast.xml download/release-manifest.json \
-              "$DEPLOY_USER@$DEPLOY_HOST:$incoming/"
-            ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-              "set -eu; test -s '$incoming/index.html'; test -s '$incoming/favicon.svg'; test \"\$(sha256sum '$incoming/appcast.xml' | awk '{print \$1}')\" = '$expected_appcast'; test \"\$(sha256sum '$incoming/release-manifest.json' | awk '{print \$1}')\" = '$expected_manifest'; mv '$incoming' '$release'"
-          fi
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; ln -sfn '$release' '$selector'; sudo /usr/local/sbin/sanad-sites-control refresh-static production updates"
+          read -r previous_identity previous_digest \
+            <<<"$(scripts/release/deploy_production_asset.sh previous static-updates)"
+          previous_appcast="$(scripts/release/deploy_production_asset.sh hash static-updates appcast.xml)"
+          previous_manifest="$(scripts/release/deploy_production_asset.sh hash static-updates release-manifest.json)"
+          digest="$(scripts/release/deploy_production_asset.sh \
+            publish static-updates "$revision" download)"
+          scripts/release/deploy_production_asset.sh activate static-updates "$revision" "$digest"
 
           verify_update() {
             local name="$1" expected="$2" output="$3" marker="$4"
@@ -264,8 +230,8 @@ jobs:
           if ! verify_update appcast.xml "$expected_appcast" "$temporary/appcast.xml" "release=$tag" || \
             ! verify_update release-manifest.json "$expected_manifest" "$temporary/release-manifest.json" "release=$tag"; then
             echo "Updates verification failed; restoring the previous selector."
-            ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-              "set -eu; ln -sfn '$previous' '$selector'; sudo /usr/local/sbin/sanad-sites-control refresh-static production updates"
+            scripts/release/deploy_production_asset.sh rollback static-updates \
+              "$previous_identity" "$previous_digest"
             verify_update appcast.xml "$previous_appcast" "$temporary/rollback-appcast.xml" "rollback=$previous_appcast"
             verify_update release-manifest.json "$previous_manifest" "$temporary/rollback-manifest.json" "rollback=$previous_manifest"
             exit 1
@@ -295,30 +261,15 @@ jobs:
         run: |
           set -euo pipefail
           revision="$(git rev-parse HEAD)"
-          root=/opt/sanad-sites/assets/install
-          release="$root/releases/$revision"
-          selector="$root/current"
-          incoming="$root/incoming-$revision-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           expected_sh="$(sha256sum scripts/install.sh | awk '{print $1}')"
           expected_ps1="$(sha256sum scripts/install.ps1 | awk '{print $1}')"
-          previous="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" "set -eu; readlink -f '$selector'")"
-          previous_sh="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; sha256sum '$previous/install.sh' | awk '{print \$1}'")"
-          previous_ps1="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; sha256sum '$previous/install.ps1' | awk '{print \$1}'")"
-          if ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; test -s '$release/index.html'; test -s '$release/favicon.svg'; test \"\$(sha256sum '$release/install.sh' | awk '{print \$1}')\" = '$expected_sh'; test \"\$(sha256sum '$release/install.ps1' | awk '{print \$1}')\" = '$expected_ps1'"; then
-            echo "Reusing the existing complete immutable installer release $release."
-          else
-            ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-              "set -eu; test ! -e '$incoming'; test ! -e '$release'; mkdir -p '$incoming'; cp -a '$previous/.' '$incoming/'"
-            rsync -az scripts/install.sh scripts/install.ps1 \
-              "$DEPLOY_USER@$DEPLOY_HOST:$incoming/"
-            ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-              "set -eu; test -s '$incoming/index.html'; test -s '$incoming/favicon.svg'; test \"\$(sha256sum '$incoming/install.sh' | awk '{print \$1}')\" = '$expected_sh'; test \"\$(sha256sum '$incoming/install.ps1' | awk '{print \$1}')\" = '$expected_ps1'; mv '$incoming' '$release'"
-          fi
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; ln -sfn '$release' '$selector'; sudo /usr/local/sbin/sanad-sites-control refresh-static production downloads"
+          read -r previous_identity previous_digest \
+            <<<"$(scripts/release/deploy_production_asset.sh previous static-downloads)"
+          previous_sh="$(scripts/release/deploy_production_asset.sh hash static-downloads install.sh)"
+          previous_ps1="$(scripts/release/deploy_production_asset.sh hash static-downloads install.ps1)"
+          digest="$(scripts/release/deploy_production_asset.sh \
+            publish static-downloads "$revision" scripts)"
+          scripts/release/deploy_production_asset.sh activate static-downloads "$revision" "$digest"
 
           verify_installer() {
             local name="$1" expected="$2" output="$3" marker="$4"
@@ -332,8 +283,8 @@ jobs:
           if ! verify_installer install.sh "$expected_sh" "$temporary/install.sh" "release=$revision" || \
             ! verify_installer install.ps1 "$expected_ps1" "$temporary/install.ps1" "release=$revision"; then
             echo "Installer verification failed; restoring the previous selector."
-            ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-              "set -eu; ln -sfn '$previous' '$selector'; sudo /usr/local/sbin/sanad-sites-control refresh-static production downloads"
+            scripts/release/deploy_production_asset.sh rollback static-downloads \
+              "$previous_identity" "$previous_digest"
             verify_installer install.sh "$previous_sh" "$temporary/rollback.sh" "rollback=$previous_sh"
             verify_installer install.ps1 "$previous_ps1" "$temporary/rollback.ps1" "rollback=$previous_ps1"
             exit 1
