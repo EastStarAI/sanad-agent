@@ -84,3 +84,24 @@ static-container refresh after every selector change and rollback.
       gain Docker or general host authority.
 - [x] Manual and automatic Stable deployments share the same reusable workflow.
 - [x] Focused workflow contracts, documentation checks, and Graphify update pass.
+
+## Complete static-root follow-up
+
+The canonical updates and downloads containers also serve stable shell files
+such as `index.html` and `favicon.svg`. A release containing only Appcast or
+installer payloads is not a complete mount root. Each new immutable release must
+therefore copy the preceding selected static root into an incoming directory,
+replace only its verified release-owned files, validate the complete candidate,
+and atomically publish it before selection.
+
+### Completion Definition of Done
+
+- [x] Updates releases contain the attested Stable manifest and Appcast plus the
+      inherited static shell.
+- [x] Installer releases contain both canonical scripts plus the inherited
+      static shell.
+- [x] Incoming directories are unique, complete, and moved atomically; existing
+      immutable releases are reused only when every required file matches.
+- [x] Public verification and rollback compare both Appcast/manifest or both
+      installer files.
+- [x] Focused workflow contracts, documentation, and Graphify update pass.

@@ -239,9 +239,13 @@ jobs:
           grep -F 'name: Activate, verify, and roll back Production Web on failure' .github/workflows/deploy.yml
           grep -F 'https://app.sanad.eaststarai.com/sanad-public-sha.txt' .github/workflows/deploy.yml
           grep -F 'gh attestation verify download/appcast.xml' .github/workflows/deploy.yml
+          grep -F 'gh attestation verify download/release-manifest.json' .github/workflows/deploy.yml
           test "$(grep -Fc 'sanad-sites-control refresh-static production' .github/workflows/deploy.yml)" -eq 6
-          grep -F 'name: Activate, verify, and roll back Appcast on failure' .github/workflows/deploy.yml
-          grep -F 'https://updates.sanad.eaststarai.com/appcast.xml' .github/workflows/deploy.yml
+          grep -F 'name: Activate, verify, and roll back updates on failure' .github/workflows/deploy.yml
+          grep -F 'https://updates.sanad.eaststarai.com/$name' .github/workflows/deploy.yml
+          test "$(grep -Fc 'cp -a' .github/workflows/deploy.yml)" -eq 2
+          test "$(grep -Fc 'incoming/index.html' .github/workflows/deploy.yml)" -eq 3
+          test "$(grep -Fc 'incoming/favicon.svg' .github/workflows/deploy.yml)" -eq 2
           grep -F 'name: Activate, verify, and roll back installer sources on failure' .github/workflows/deploy.yml
           grep -F 'https://downloads.sanad.eaststarai.com/$name' .github/workflows/deploy.yml
           grep -F 'restoring the previous selector' .github/workflows/deploy.yml
