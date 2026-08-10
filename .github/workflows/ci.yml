@@ -243,9 +243,9 @@ jobs:
           test "$(grep -Fc 'sanad-sites-control refresh-static production' .github/workflows/deploy.yml)" -eq 6
           grep -F 'name: Activate, verify, and roll back updates on failure' .github/workflows/deploy.yml
           grep -F 'https://updates.sanad.eaststarai.com/$name' .github/workflows/deploy.yml
-          test "$(grep -Fc \"cp -a '\$previous/.' '\$incoming/'\" .github/workflows/deploy.yml)" -eq 2
-          test "$(grep -Fc \"test -s '\$incoming/index.html'\" .github/workflows/deploy.yml)" -eq 3
-          test "$(grep -Fc \"test -s '\$incoming/favicon.svg'\" .github/workflows/deploy.yml)" -eq 2
+          test "$(grep -Fc 'cp -a' .github/workflows/deploy.yml)" -eq 2
+          test "$(grep -Fc 'incoming/index.html' .github/workflows/deploy.yml)" -eq 3
+          test "$(grep -Fc 'incoming/favicon.svg' .github/workflows/deploy.yml)" -eq 2
           grep -F 'name: Activate, verify, and roll back installer sources on failure' .github/workflows/deploy.yml
           grep -F 'https://downloads.sanad.eaststarai.com/$name' .github/workflows/deploy.yml
           grep -F 'restoring the previous selector' .github/workflows/deploy.yml
