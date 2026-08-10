@@ -235,10 +235,18 @@ jobs:
           grep -F '.arch == $arch' .github/workflows/release.yml
           grep -F 'fvm dart compile exe "-DSANAD_AGENT_VERSION=' .github/workflows/release.yml
           ! grep -F 'fvm dart compile exe `' .github/workflows/release.yml
+          grep -F 'workflow_call:' .github/workflows/deploy.yml
           grep -F 'name: Activate, verify, and roll back Production Web on failure' .github/workflows/deploy.yml
           grep -F 'https://app.sanad.eaststarai.com/sanad-public-sha.txt' .github/workflows/deploy.yml
+          grep -F 'gh attestation verify download/appcast.xml' .github/workflows/deploy.yml
+          test "$(grep -Fc 'environment: client-downloads-production' .github/workflows/deploy.yml)" -eq 3
+          ! grep -Eq 'environment: (web|updates|installers)-production' .github/workflows/deploy.yml
           grep -F 'environment: client-downloads-production' .github/workflows/release.yml
           grep -F 'sanad-client-downloads-control deploy' .github/workflows/release.yml
+          grep -F 'name: Deploy Stable Production assets' .github/workflows/release.yml
+          grep -F 'uses: ./.github/workflows/deploy.yml' .github/workflows/release.yml
+          grep -F 'release_run_id:' .github/workflows/release.yml
+          grep -F 'github.run_id' .github/workflows/release.yml
           ! grep -Fq '/srv/sanad/' .github/workflows/deploy.yml
           grep -Fq '/opt/sanad-sites/assets/web' .github/workflows/deploy.yml
           grep -Fq '/opt/sanad-sites/assets/updates' .github/workflows/deploy.yml

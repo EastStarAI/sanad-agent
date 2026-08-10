@@ -78,6 +78,24 @@ approval for RC1 or any later publication.
 
 Only an approved, published Stable Release may update the Production convenience links. The post-publication job must reject Drafts, prereleases, non-canonical repositories or URLs, missing or duplicate desktop Client entries, Agent artifacts, and any size, SHA-256, checksum-file, or attestation mismatch. Its generated include contains exactly macOS, Windows, and Linux redirects and is retained as workflow evidence. The restricted server command must pass a loopback candidate before atomic activation, verify Production plus Development and Staging regressions, and restore the preceding include on any reload or verification failure. Development and Staging never expose equivalent aliases, and Client bytes continue to download directly from GitHub Releases.
 
+## Stable Production asset handoff gate
+
+A successful Stable publication must deploy the Client aliases first, then call
+the reusable Production asset workflow with all three surfaces enabled, the
+canonical Stable tag, and the exact producing release run ID. The called jobs
+must enter `client-downloads-production`, consume only its restricted deployment
+credentials, and retain read-only contents plus attestation permissions. RC and
+validation-only runs must not call the Production asset workflow.
+
+Static verification rejects separate `web-production`, `updates-production`, or
+`installers-production` references unless those Environments are deliberately
+provisioned and protected in a separate reviewed change. Manual recovery from
+`main` remains blocked by the Environment branch policy until an operator
+explicitly authorizes that ref; tag-restricted automatic releases require no
+such exception. Runtime acceptance still requires the exact public Web commit
+and version markers, Appcast identity, canonical installer content, and a clean
+browser render. HTTP-only success is insufficient.
+
 ## Update failure coverage
 
 Automated tests cover contract parsing, invalid tag rejection, deterministic

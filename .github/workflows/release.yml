@@ -742,3 +742,19 @@ jobs:
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             "sudo /usr/local/sbin/sanad-client-downloads-control deploy '$RELEASE_TAG' '$manifest_sha'" \
             < generated/sanad-client-download-redirects.conf
+
+  production-assets:
+    name: Deploy Stable Production assets
+    needs: [validate, publish, client-download-aliases]
+    if: needs.validate.outputs.channel == 'stable'
+    permissions:
+      contents: read
+      attestations: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      release_tag: ${{ needs.validate.outputs.tag }}
+      release_run_id: ${{ github.run_id }}
+      deploy_web: true
+      deploy_updates: true
+      deploy_installers: true
+    secrets: inherit
