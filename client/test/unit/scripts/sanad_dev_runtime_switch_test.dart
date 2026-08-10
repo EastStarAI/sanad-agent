@@ -61,6 +61,54 @@ void main() {
     );
   });
 
+  test('already-target classification requires Agent and Client agreement', () {
+    final targetClient = [
+      'target',
+      'client',
+    ].join(Platform.pathSeparator);
+    final previousClient = [
+      'previous',
+      'client',
+    ].join(Platform.pathSeparator);
+
+    expect(
+      sanad_dev.classifyRuntimeTargetSource(
+        agentWorkspaceHash: 'targethash',
+        targetWorkspaceHash: 'targethash',
+        clientPaths: [targetClient],
+        targetClientDirectory: targetClient,
+      ),
+      sanad_dev.RuntimeTargetSourceState.alreadyUsesTarget,
+    );
+    expect(
+      sanad_dev.classifyRuntimeTargetSource(
+        agentWorkspaceHash: 'previoushash',
+        targetWorkspaceHash: 'targethash',
+        clientPaths: [targetClient],
+        targetClientDirectory: targetClient,
+      ),
+      sanad_dev.RuntimeTargetSourceState.inconsistent,
+    );
+    expect(
+      sanad_dev.classifyRuntimeTargetSource(
+        agentWorkspaceHash: 'targethash',
+        targetWorkspaceHash: 'targethash',
+        clientPaths: [previousClient],
+        targetClientDirectory: targetClient,
+      ),
+      sanad_dev.RuntimeTargetSourceState.inconsistent,
+    );
+    expect(
+      sanad_dev.classifyRuntimeTargetSource(
+        agentWorkspaceHash: 'previoushash',
+        targetWorkspaceHash: 'targethash',
+        clientPaths: [previousClient],
+        targetClientDirectory: targetClient,
+      ),
+      sanad_dev.RuntimeTargetSourceState.different,
+    );
+  });
+
   test('fromJson does not validate target root if status is not requested', () async {
     final home = await Directory.systemTemp.createTemp('sanad-switch-home');
     addTearDown(() => home.delete(recursive: true));

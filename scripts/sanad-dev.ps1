@@ -270,7 +270,11 @@ try {
     Invoke-Setup $false | Out-Null
     exit 0
   }
-  $fvm = if ($command -eq 'run') { Invoke-Setup $true } else { Require-RuntimeCli }
+  $fvm = if ($command -in @('run', 'switch')) {
+    Invoke-Setup $true
+  } else {
+    Require-RuntimeCli
+  }
   [string[]] $runtimeArgs = if ($command -eq 'run') {
     [string[]]@($SanadArgs | Where-Object { $_ -ne '--force' })
   } else {
