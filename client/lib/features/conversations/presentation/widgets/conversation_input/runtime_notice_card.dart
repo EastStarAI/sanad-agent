@@ -74,12 +74,14 @@ class _RuntimeNoticeCardState extends State<RuntimeNoticeCard> {
     final resumeAt = widget.notice.resumeAt;
     if (resumeAt != null) {
       final delta = resumeAt.difference(_now);
-      return delta.isNegative ? Duration.zero : delta;
+      // Hide the countdown once the deadline has passed instead of pinning
+      // the notice at "0s" forever.
+      return delta.isNegative ? null : delta;
     }
     final retryDeadline = _retryDeadline;
     if (retryDeadline != null) {
       final delta = retryDeadline.difference(_now);
-      return delta.isNegative ? Duration.zero : delta;
+      return delta.isNegative ? null : delta;
     }
     return null;
   }
@@ -139,7 +141,7 @@ class _RuntimeNoticeCardState extends State<RuntimeNoticeCard> {
           ),
           if ((widget.notice.message ?? '').trim().isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text(widget.notice.message!, style: bodyStyle),
+            SelectableText(widget.notice.message!, style: bodyStyle),
           ],
           if (_remaining != null) ...[
             const SizedBox(height: 6),

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/core/presentation/bloc/theme/theme_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
@@ -16,6 +17,7 @@ import 'package:sanad_client/features/settings/data/device_settings_client.dart'
 import 'package:sanad_client/features/settings/data/device_skills_client.dart';
 import 'package:sanad_client/infrastructure/platform/auto_update_service.dart';
 import 'package:sanad_client/utils/app_platform.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 
 import 'settings_widgets.dart';
 
@@ -90,6 +92,33 @@ class GeneralPage extends StatefulWidget {
 class _GeneralPageState extends State<GeneralPage> {
   bool _checking = false;
   String? _updateMessage;
+  String? _currentVersion;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_loadCurrentVersion());
+  }
+
+  Future<void> _loadCurrentVersion() async {
+    try {
+      final packageInfo = await PackageInfo.fromPlatform();
+      if (!mounted) return;
+      setState(() {
+        final version = packageInfo.version.trim();
+        _currentVersion = version.isNotEmpty ? 'v$version' : null;
+      });
+    } catch (_) {
+      if (getIt.isRegistered<DeviceConnectionCoordinator>()) {
+        final expected = getIt<DeviceConnectionCoordinator>().expectedVersion;
+        if (mounted && expected.isNotEmpty) {
+          setState(() {
+            _currentVersion = 'v$expected';
+          });
+        }
+      }
+    }
+  }
 
   Future<void> _checkForUpdates() async {
     setState(() {
@@ -174,16 +203,32 @@ class _GeneralPageState extends State<GeneralPage> {
                     ? 'Linux updates are manual. Sanad only opens a newer official package after validating its release manifest.'
                     : 'Automatic update checks run in the background. Use this action to check the signed update feed now.',
               ),
-              const SizedBox(height: 12),
-              OutlinedButton.icon(
-                onPressed: _checking ? null : _checkForUpdates,
-                icon: _checking
-                    ? const SizedBox.square(
-                        dimension: 16,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.system_update_alt),
-                label: const Text('Check for Updates'),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (_currentVersion != null) ...[
+                    Text(
+                      'Current Version: $_currentVersion',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                  ],
+                  OutlinedButton.icon(
+                    onPressed: _checking ? null : _checkForUpdates,
+                    icon: _checking
+                        ? const SizedBox.square(
+                            dimension: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.system_update_alt),
+                    label: const Text('Check for Updates'),
+                  ),
+                ],
               ),
               if (_updateMessage != null) ...[
                 const SizedBox(height: 10),
@@ -271,10 +316,9 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
       if (!mounted) return;
       setState(() => _settings = value);
       if (value.restartRequired) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Setting saved. The agent is restarting…'),
-          ),
+        ToastUtils.showSuccess(
+          context,
+          'Setting saved. The agent is restarting…',
         );
       }
     } catch (error) {

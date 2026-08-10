@@ -17,6 +17,7 @@ import '../../../domain/models/conversation_resource_state.dart';
 import '../../../domain/models/device_workspace.dart';
 import '../../../domain/models/session.dart';
 import '../../../domain/models/sidebar_conversation_group.dart';
+import '../../../../../utils/toast_utils.dart';
 import '../../../../../utils/workspace_picker_helper.dart';
 import '../../bloc/session_cubit.dart';
 import '../../bloc/session_sidebar_cubit.dart';
@@ -243,9 +244,7 @@ class _SidebarBody extends StatelessWidget {
       if (workspace != null && context.mounted) {
         unawaited(sidebarCubit.loadWorkspaceConversationsIfNeeded(device, workspace.id));
       } else if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Could not create workspace')),
-        );
+        ToastUtils.showError(context, 'Could not create workspace');
       }
     }
 
