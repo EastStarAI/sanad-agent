@@ -22,6 +22,7 @@ Use this skill after work is accepted and scoped. It may prepare local changes a
 4. Update the owning task checklist and evidence only after verification.
 5. Use a Conventional Commits pull-request title. The human PR will be squash merged, so the title must describe the final commit.
 6. Write the pull request with Problem/Goal, linked `Closes #...`, Changes, Verification, risk, cross-platform impact, documentation, and rollback.
+7. Map all modified paths against the repository label taxonomy before creating the pull request. Apply appropriate non-protected category labels such as `type/*` and `comp/*` only when the taxonomy calls for them. For any required protected positive-review label (`maintainer-reviewed`, `security-reviewed`, or `release-reviewed`), report why it is required and ask the responsible maintainer for explicit authorization after presenting the review evidence; never add a protected label merely to make CI pass. If authorization is withheld or unavailable, leave the label absent and report the merge blocker.
 
 ## CI Repair Loop
 
