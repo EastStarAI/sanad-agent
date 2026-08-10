@@ -120,11 +120,24 @@ Probe approval is not Release publication approval.
 
 The candidate workflow creates a private Draft and fails if the tag already owns any Draft or published Release. A separate least-privilege publication job can make that reviewed Draft public only after the required owner approval on `release-publication`. Rejected or cancelled approval leaves no partial public Release. Public release files use published checksums. After an approved Stable publication, the protected Client-download job downloads the public manifest, checksum file, and three desktop Client artifacts; verifies canonical URLs, byte sizes, SHA-256 values, and GitHub attestations; generates a deterministic Nginx redirect include; and uploads only that bounded include through the Production forced-command deployment broker. The broker verifies the exact byte count and digest, and the root-owned controller invokes the fixed alias validator with the verified payload. The Stable release then calls the reusable Production asset workflow with Web, Appcast, and installers enabled and its own release run ID. This ordering serializes the redirect deployment before the remaining Production assets and prevents an asset handoff when publication or redirect verification fails. RC and validation-only runs never enter either Production path. The server remains a redirector rather than an artifact mirror and owns candidate validation, atomic activation, public regression verification, and automatic rollback.
 
-A manual `Deploy prepared release assets` dispatch is recovery-only. It must identify an existing immutable Stable tag and its successful producing release run. Because a default-branch dispatch has `main` as its deployment ref, the `client-downloads-production` Environment must explicitly allow the reviewed `main` recovery ref before credentials are available; normal automatic deployment remains tag-restricted. Changing that policy is a repository-setting mutation and is not implied by a workflow edit.
+Every static-surface job captures the preceding identity before activation and
+must enter the same verified rollback path when the controller activation
+command itself returns nonzero or when later public-byte verification fails.
+Shell fail-fast behavior must not exit between a selector-changing activation
+and rollback. Rollback command failure is reported separately from rollback
+verification failure, and the release job remains failed in either case.
+
+A manual `Deploy prepared release assets` dispatch is recovery-only. It must identify an existing immutable Stable tag and its completed producing release run. Because a default-branch dispatch has `main` as its deployment ref, the `client-downloads-production` Environment must explicitly allow the reviewed `main` recovery ref before credentials are available; normal automatic deployment remains tag-restricted. Changing that policy is a repository-setting mutation and is not implied by a workflow edit.
+
+The producing release run may be completed with `success` or `failure`, because
+an asset deployment failure can make the parent release run fail after the
+immutable Release and attested Web handoff already exist. A run with no final
+conclusion is accepted only when its ID is the current reusable-workflow run;
+manual recovery cannot consume an unrelated queued or in-progress run.
 
 The public workflow never names, creates, reads, or selects a live-host release
 directory. The private Web handoff is downloaded from the explicitly selected
-successful release-workflow run and verified against its GitHub build
+producing release-workflow run and verified against its GitHub build
 attestation. It is packaged with its exact public commit identity and sent to
 the Production forced-command broker. The root-owned controller safely extracts
 the bounded archive, rejects links, traversal, secret-shaped paths, unexpected

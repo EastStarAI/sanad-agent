@@ -248,7 +248,12 @@ jobs:
           grep -F 'https://app.sanad.eaststarai.com/sanad-public-sha.txt' .github/workflows/deploy.yml
           grep -F 'gh attestation verify download/appcast.xml' .github/workflows/deploy.yml
           grep -F 'gh attestation verify download/release-manifest.json' .github/workflows/deploy.yml
+          grep -Fq "'') test \"\$RELEASE_RUN_ID\" = \"\$GITHUB_RUN_ID\" ;;" .github/workflows/deploy.yml
           test "$(grep -Fc 'scripts/release/deploy_production_asset.sh' .github/workflows/deploy.yml)" -ge 12
+          test "$(grep -Fc 'if ! scripts/release/deploy_production_asset.sh activate static-' .github/workflows/deploy.yml)" -eq 3
+          test "$(grep -Fc 'if ! rollback_web' .github/workflows/deploy.yml)" -eq 2
+          test "$(grep -Fc 'if ! rollback_updates' .github/workflows/deploy.yml)" -eq 2
+          test "$(grep -Fc 'if ! rollback_installers' .github/workflows/deploy.yml)" -eq 2
           ! grep -Eq '(^|[[:space:]])rsync[[:space:]]|ln -sfn|sudo /usr/local/sbin|/opt/sanad-sites/' .github/workflows/deploy.yml
           grep -F 'name: Activate, verify, and roll back updates on failure' .github/workflows/deploy.yml
           grep -F 'https://updates.sanad.eaststarai.com/$name' .github/workflows/deploy.yml

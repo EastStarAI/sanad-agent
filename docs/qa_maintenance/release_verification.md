@@ -126,7 +126,11 @@ markers, the public Appcast and Stable manifest SHA-256 values, both public
 installer-source SHA-256 values, and a clean browser render. A stale bind mount,
 incomplete static root, selector-only success, or HTTP-only shell response fails
 the gate. A failed surface must restore and publicly verify all its preceding
-release-owned bytes without recreating data or application services.
+release-owned bytes without recreating data or application services. This
+includes a controller activation that returns nonzero after changing the
+selector: Web, updates, and installer jobs must catch that command result,
+invoke rollback, verify the preceding public bytes, and only then report the
+failed deployment.
 
 ### Live Stable asset rehearsal — 2026-08-10
 
@@ -145,6 +149,23 @@ console error. The Production, Development, and Staging public verifiers passed;
 Production PostgreSQL and Redis volumes remained present. The rehearsal used the
 same reusable workflow that every future approved Stable publication calls
 automatically.
+
+### Stable Web `v1.0.2` promotion failure — 2026-08-10
+
+Run `31422198524` published and verified the signed Stable packages, update
+feed, installer sources, and Client aliases, but its Web job exposed two
+deployment-contract defects. The root-owned promotion directory retained
+`mktemp -d` mode `0700`, so the unprivileged Nginx worker returned `403` despite
+healthy container state and readable files. Controller activation returned
+nonzero from its internal smoke after changing the selector; step-level
+`set -e` then exited before the external-verification rollback block.
+
+The bounded live recovery changed only the verified `v1.0.2` Web release root
+to `0755`; its exact source marker and Flutter bootstrap immediately returned
+success. The permanent gate normalizes promoted release roots in the private
+controller and requires activation-command failure rollback for all three
+public static jobs. A successful Web-only rerun and clean-browser evidence are
+required before this incident is closed.
 
 ## Update failure coverage
 

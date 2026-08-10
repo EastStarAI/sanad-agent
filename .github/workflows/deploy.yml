@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       release_run_id:
-        description: Successful release workflow run containing private Web handoff artifacts
+        description: Producing release workflow run containing private Web handoff artifacts
         required: true
         type: string
       deploy_web:
@@ -27,7 +27,7 @@ on:
         required: true
         default: v1.0.1
       release_run_id:
-        description: Successful release workflow run containing private Web handoff artifacts
+        description: Completed producing release workflow run containing private Web handoff artifacts
         required: true
       deploy_web:
         type: boolean
@@ -78,7 +78,11 @@ jobs:
           expected_sha="$(git rev-parse HEAD)"
           run_metadata="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID")"
           run_conclusion="$(jq -r '.conclusion // empty' <<<"$run_metadata")"
-          test "$run_conclusion" = "success" || test "$run_conclusion" = "failure" || test -z "$run_conclusion"
+          case "$run_conclusion" in
+            success|failure) ;;
+            '') test "$RELEASE_RUN_ID" = "$GITHUB_RUN_ID" ;;
+            *) echo "The producing release run is not deployable: $run_conclusion" >&2; exit 1 ;;
+          esac
           test "$(jq -r '.path' <<<"$run_metadata")" = .github/workflows/release.yml
           test "$(jq -r '.head_sha' <<<"$run_metadata")" = "$expected_sha"
           gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft == false' | grep -Fxq true
@@ -124,8 +128,6 @@ jobs:
           expected_sha="$(git rev-parse HEAD)"
           read -r previous_identity previous_digest \
             <<<"$(scripts/release/deploy_production_asset.sh previous static-web)"
-          scripts/release/deploy_production_asset.sh activate static-web \
-            "$expected_sha" "${{ steps.publish_asset.outputs.digest }}"
 
           verify_web() {
             body="$(mktemp)"
@@ -142,6 +144,33 @@ jobs:
             test "$served_sha" = "$expected_sha"
           }
 
+          rollback_web() {
+            if ! scripts/release/deploy_production_asset.sh rollback static-web \
+              "$previous_identity" "$previous_digest"; then
+              echo "Production Web rollback command failed." >&2
+              return 1
+            fi
+            for attempt in $(seq 1 12); do
+              served_previous="$(curl --fail --silent --show-error --max-time 20 \
+                "https://app.sanad.eaststarai.com/sanad-public-sha.txt?rollback=$previous_identity" || true)"
+              if [[ "$served_previous" == "$previous_identity" ]]; then
+                return 0
+              fi
+              sleep 5
+            done
+            echo "Production Web rollback verification failed." >&2
+            return 1
+          }
+
+          if ! scripts/release/deploy_production_asset.sh activate static-web \
+            "$expected_sha" "${{ steps.publish_asset.outputs.digest }}"; then
+            echo "Production Web activation failed; restoring the previous selector."
+            if ! rollback_web; then
+              echo "Production Web rollback did not complete." >&2
+            fi
+            exit 1
+          fi
+
           activated=false
           for attempt in $(seq 1 12); do
             if verify_web; then
@@ -152,20 +181,8 @@ jobs:
           done
           if [[ "$activated" != true ]]; then
             echo "Production Web verification failed; restoring the previous selector."
-            scripts/release/deploy_production_asset.sh rollback static-web \
-              "$previous_identity" "$previous_digest"
-            rollback_verified=false
-            for attempt in $(seq 1 12); do
-              served_previous="$(curl --fail --silent --show-error --max-time 20 \
-                "https://app.sanad.eaststarai.com/sanad-public-sha.txt?rollback=$previous_identity" || true)"
-              if [[ "$served_previous" == "$previous_identity" ]]; then
-                rollback_verified=true
-                break
-              fi
-              sleep 5
-            done
-            if [[ "$rollback_verified" != true ]]; then
-              echo "Production Web rollback verification failed." >&2
+            if ! rollback_web; then
+              echo "Production Web rollback did not complete." >&2
             fi
             exit 1
           fi
@@ -217,7 +234,6 @@ jobs:
           previous_manifest="$(scripts/release/deploy_production_asset.sh hash static-updates release-manifest.json)"
           digest="$(scripts/release/deploy_production_asset.sh \
             publish static-updates "$revision" download)"
-          scripts/release/deploy_production_asset.sh activate static-updates "$revision" "$digest"
 
           verify_update() {
             local name="$1" expected="$2" output="$3" marker="$4"
@@ -228,13 +244,33 @@ jobs:
 
           temporary="$(mktemp -d)"
           trap 'rm -rf "$temporary"' EXIT
+          rollback_updates() {
+            if ! scripts/release/deploy_production_asset.sh rollback static-updates \
+              "$previous_identity" "$previous_digest"; then
+              echo "Updates rollback command failed." >&2
+              return 1
+            fi
+            if ! verify_update appcast.xml "$previous_appcast" "$temporary/rollback-appcast.xml" "rollback=$previous_appcast" || \
+              ! verify_update release-manifest.json "$previous_manifest" "$temporary/rollback-manifest.json" "rollback=$previous_manifest"; then
+              echo "Updates rollback verification failed." >&2
+              return 1
+            fi
+          }
+
+          if ! scripts/release/deploy_production_asset.sh activate static-updates "$revision" "$digest"; then
+            echo "Updates activation failed; restoring the previous selector."
+            if ! rollback_updates; then
+              echo "Updates rollback did not complete." >&2
+            fi
+            exit 1
+          fi
+
           if ! verify_update appcast.xml "$expected_appcast" "$temporary/appcast.xml" "release=$tag" || \
             ! verify_update release-manifest.json "$expected_manifest" "$temporary/release-manifest.json" "release=$tag"; then
             echo "Updates verification failed; restoring the previous selector."
-            scripts/release/deploy_production_asset.sh rollback static-updates \
-              "$previous_identity" "$previous_digest"
-            verify_update appcast.xml "$previous_appcast" "$temporary/rollback-appcast.xml" "rollback=$previous_appcast"
-            verify_update release-manifest.json "$previous_manifest" "$temporary/rollback-manifest.json" "rollback=$previous_manifest"
+            if ! rollback_updates; then
+              echo "Updates rollback did not complete." >&2
+            fi
             exit 1
           fi
 
@@ -270,7 +306,6 @@ jobs:
           previous_ps1="$(scripts/release/deploy_production_asset.sh hash static-downloads install.ps1)"
           digest="$(scripts/release/deploy_production_asset.sh \
             publish static-downloads "$revision" scripts)"
-          scripts/release/deploy_production_asset.sh activate static-downloads "$revision" "$digest"
 
           verify_installer() {
             local name="$1" expected="$2" output="$3" marker="$4"
@@ -281,12 +316,32 @@ jobs:
 
           temporary="$(mktemp -d)"
           trap 'rm -rf "$temporary"' EXIT
+          rollback_installers() {
+            if ! scripts/release/deploy_production_asset.sh rollback static-downloads \
+              "$previous_identity" "$previous_digest"; then
+              echo "Installer rollback command failed." >&2
+              return 1
+            fi
+            if ! verify_installer install.sh "$previous_sh" "$temporary/rollback.sh" "rollback=$previous_sh" || \
+              ! verify_installer install.ps1 "$previous_ps1" "$temporary/rollback.ps1" "rollback=$previous_ps1"; then
+              echo "Installer rollback verification failed." >&2
+              return 1
+            fi
+          }
+
+          if ! scripts/release/deploy_production_asset.sh activate static-downloads "$revision" "$digest"; then
+            echo "Installer activation failed; restoring the previous selector."
+            if ! rollback_installers; then
+              echo "Installer rollback did not complete." >&2
+            fi
+            exit 1
+          fi
+
           if ! verify_installer install.sh "$expected_sh" "$temporary/install.sh" "release=$revision" || \
             ! verify_installer install.ps1 "$expected_ps1" "$temporary/install.ps1" "release=$revision"; then
             echo "Installer verification failed; restoring the previous selector."
-            scripts/release/deploy_production_asset.sh rollback static-downloads \
-              "$previous_identity" "$previous_digest"
-            verify_installer install.sh "$previous_sh" "$temporary/rollback.sh" "rollback=$previous_sh"
-            verify_installer install.ps1 "$previous_ps1" "$temporary/rollback.ps1" "rollback=$previous_ps1"
+            if ! rollback_installers; then
+              echo "Installer rollback did not complete." >&2
+            fi
             exit 1
           fi
