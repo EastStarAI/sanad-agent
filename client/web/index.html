@@ -32,9 +32,52 @@
 
   <title>Sanad</title>
   <link rel="manifest" href="manifest.json">
+  <style>
+    body {
+      background-color: #0A0A0A;
+      margin: 0;
+      height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      overflow: hidden;
+    }
+
+    .loading-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .spinner {
+      width: 50px;
+      height: 50px;
+      border: 3px solid rgba(96, 165, 250, 0.1);
+      border-radius: 50%;
+      border-top-color: #60A5FA;
+      animation: spin 1s ease-in-out infinite;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+  </style>
 </head>
 
 <body>
+  <div id="loading" class="loading-container">
+    <div class="spinner"></div>
+  </div>
+  <script>
+    window.addEventListener('flutter-first-frame', function () {
+      var loading = document.getElementById('loading');
+      if (loading) {
+        loading.remove();
+      }
+    });
+  </script>
   <script src="auth_popup.js"></script>
   <script src="flutter_bootstrap.js" async></script>
 </body>
