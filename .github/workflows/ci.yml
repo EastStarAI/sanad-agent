@@ -98,8 +98,9 @@ jobs:
         run: |
           fvm dart pub get
           fvm dart run tool/release_tool.dart validate-contract --repo-root ..
+          version="$(jq -r '.version' ../release/release-contract.json)"
           fvm dart run tool/release_tool.dart validate-contract \
-            --repo-root .. --tag v1.0.1-rc.1 --channel rc
+            --repo-root .. --tag "v${version}-rc.1" --channel rc
       - name: Reject mismatched release identities
         working-directory: agent
         shell: bash
@@ -112,16 +113,18 @@ jobs:
               exit 1
             fi
           }
-          reject --tag v1.0.1-beta.1 --channel rc
-          reject --tag v1.0.1-rc.1 --channel stable
+          version="$(jq -r '.version' ../release/release-contract.json)"
+          build="$(jq -r '.build_number' ../release/release-contract.json)"
+          reject --tag "v${version}-beta.1" --channel rc
+          reject --tag "v${version}-rc.1" --channel stable
           contract=../release/release-contract.json
           backup="$RUNNER_TEMP/release-contract.json"
           cp "$contract" "$backup"
           trap 'cp "$backup" "$contract"' EXIT
-          jq '.build_number = 3' "$backup" > "$contract"
-          reject --tag v1.0.1 --channel stable
-          jq '.version = "1.0.2" | .tag = "v1.0.2"' "$backup" > "$contract"
-          reject --tag v1.0.2 --channel stable
+          jq --argjson b "$((build + 99))" '.build_number = $b' "$backup" > "$contract"
+          reject --tag "v${version}" --channel stable
+          jq '.version = "99.99.99" | .tag = "v99.99.99"' "$backup" > "$contract"
+          reject --tag "v99.99.99" --channel stable
       - name: Analyze agent
         working-directory: agent
         run: fvm dart analyze

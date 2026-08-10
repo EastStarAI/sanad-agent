@@ -1,23 +1,24 @@
-# Sanad 1.0.1
+# Sanad 1.0.2
 
-Sanad 1.0.1 is a patch release focused on secure local operation, reliable recovery, desktop lifecycle hardening, and a more consistent client experience.
+Sanad 1.0.2 is a patch release focusing on cross-process authentication safety, local-first onboarding, UI fidelity and theme contrast, macOS native icon presentation, and Web/PWA theme harmonization.
 
 ## Highlights
 
-- Hardened Sanad Home, Local Gateway admission, desktop authentication synchronization, and remote-management boundaries.
-- Improved session recovery, message acceptance feedback, streaming/final Markdown parity, workspace caching, and provider account presentation.
-- Added form-first MCP server configuration with isolated runtime ownership.
-- Completed verified desktop Client-Agent installation, exact-version update, restart, reconnect, and bounded rollback paths.
-- Improved Windows replacement safety, startup health confirmation, and terminal restoration.
-- Restored Web startup reliability and updated cross-platform release assets.
-- Removed the Xcode 26 layered macOS icon path that added light side rims; macOS now uses the same opaque flat composition as the corrected iOS icon.
+- **Desktop Authentication Concurrency:** Serialized credential refresh across the Flutter client, Dart daemon, and CLI using native cross-process file locks (`shared/auth_lock`) to eliminate token refresh race conditions (#59).
+- **macOS App Icon Fidelity:** Restored native Apple Icon Composer (`AppIcon.icon`) asset definitions to eliminate squircle container backplates on the macOS Dock (#61).
+- **RTL & Event Presentation:** Added automatic right-to-left (RTL) text alignment for Arabic question headers and event cards (#62).
+- **Local-First Onboarding:** Streamlined initial onboarding and workspace initialization with local-first discovery (#65).
+- **Theme & Contrast Tiers:** Polished surface, card, outline, and divider contrast levels for light/dark themes, added dedicated tooltip styling, and added an active version indicator badge in settings (#68).
+- **Web & PWA Dark Theme Alignment:** Set `theme_color` to `#0A0A0A` for mobile status bars and integrated a smooth dark startup splash loader (#69).
+- **Runtime Development Tooling:** Hardened `sanad-dev switch` runtime handoff to automatically prepare target checkout workspaces (#60).
+- **Packaging & Security:** Added compatible Linux DEB packaging (#64) and restricted production deployment privilege boundaries (#66, #67).
 
 This release was built from tagged public source by the protected Sanad release workflow. Verify downloads against `SHA256SUMS`, `release-manifest.json`, and GitHub build provenance before installation.
 
 > [!WARNING]
-> **Unsigned Windows build:** Sanad Agent and Sanad Client `1.0.1` artifacts for Windows x64 intentionally do not carry Authenticode signatures. Windows Defender or SmartScreen may show an unknown-publisher warning. Download only from this official `EastStarAI/sanad-agent` release, verify the manifest, file size, SHA-256, and GitHub provenance, and do not disable platform protection. Windows release gates run on Windows 11; Windows 10 has not been validated. The Client update package remains signed separately with WinSparkle DSA; that update signature is not Authenticode and does not establish a Windows publisher.
+> **Unsigned Windows build:** Sanad Agent and Sanad Client `1.0.2` artifacts for Windows x64 intentionally do not carry Authenticode signatures. Windows Defender or SmartScreen may show an unknown-publisher warning. Download only from this official `EastStarAI/sanad-agent` release, verify the manifest, file size, SHA-256, and GitHub provenance, and do not disable platform protection. Windows release gates run on Windows 11; Windows 10 has not been validated. The Client update package remains signed separately with WinSparkle DSA; that update signature is not Authenticode and does not establish a Windows publisher.
 
 macOS and Android artifacts use their documented platform signatures. Linux and Windows artifacts are bound to the release through checksums, the immutable manifest, SBOM, and GitHub attestations.
 
 > [!NOTE]
-> **iOS Internal TestFlight only:** The iOS artifact for `1.0.1` is distributed exclusively to internal TestFlight testers of the `NanoSoft LY LLC` team. It is not included in public downloads and is not available through the public App Store. Build number `2` corresponds to marketing version `1.0.1`.
+> **iOS Internal TestFlight only:** The iOS artifact for `1.0.2` is distributed exclusively to internal TestFlight testers of the `NanoSoft LY LLC` team. It is not included in public downloads and is not available through the public App Store. Build number `3` corresponds to marketing version `1.0.2`.
