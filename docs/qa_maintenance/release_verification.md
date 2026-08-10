@@ -92,9 +92,13 @@ Static verification rejects separate `web-production`, `updates-production`, or
 provisioned and protected in a separate reviewed change. Manual recovery from
 `main` remains blocked by the Environment branch policy until an operator
 explicitly authorizes that ref; tag-restricted automatic releases require no
-such exception. Runtime acceptance still requires the exact public Web commit
-and version markers, Appcast identity, canonical installer content, and a clean
-browser render. HTTP-only success is insufficient.
+such exception. Each selector activation and rollback must invoke the bounded
+Production static refresh for exactly one service. Runtime acceptance requires
+the exact public Web commit and version markers, the public Appcast SHA-256, both
+public installer-source SHA-256 values, and a clean browser render. A stale bind
+mount, selector-only success, or HTTP-only shell response fails the gate. A
+failed surface must restore and publicly verify its preceding bytes without
+recreating data or application services.
 
 ## Update failure coverage
 
