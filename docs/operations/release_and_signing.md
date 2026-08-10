@@ -124,14 +124,21 @@ A manual `Deploy prepared release assets` dispatch is recovery-only. It must ide
 
 Production Web, Appcast, and installer releases use `/opt/sanad-sites/assets/web`, `/opt/sanad-sites/assets/updates`, and `/opt/sanad-sites/assets/install`; the obsolete `/srv/sanad/*` workflow roots are not valid deployment targets. The private Web handoff
 is downloaded from the explicitly selected successful release-workflow run and
-verified against its GitHub build attestation. Server deployment then writes a
-versioned directory and changes a `current` symlink only after the transfer
-succeeds. The Web handoff records its exact public commit, validates the Flutter
-shell, bootstrap, favicon, version marker, and hosted readability before
-activation, then verifies the public Production URL. A failed public probe
-restores the preceding selector automatically. Rollback switches that symlink
-to the last known good version; it does not rebuild or mutate a published
-release.
+verified against its GitHub build attestation. Server deployment writes an
+immutable versioned directory, changes the owning `current` symlink only after
+the transfer succeeds, and invokes the private host-owned
+`sanad-sites-control refresh-static production` action for exactly the affected
+Web, updates, or downloads container. This refresh is required because Docker
+bind mounts resolve the selected directory when the container is created; a
+symlink change alone does not update a running container.
+
+The Web handoff records its exact public commit and validates the Flutter shell,
+bootstrap, favicon, version marker, and hosted readability. Appcast activation
+verifies the attested public bytes, while installer activation verifies both
+canonical public source files. Any public mismatch restores the preceding
+selector, refreshes only the affected static container, and verifies the prior
+public bytes. Rollback never rebuilds or mutates a published release, and the
+public workflow receives neither Docker access nor general host authority.
 
 Web assets use content-hashed Flutter output plus a small no-cache
 `version.json`. The server must route unknown application paths to

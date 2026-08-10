@@ -60,3 +60,27 @@ deploy Production assets.
       deployment and manual recovery prerequisites.
 - [x] Focused workflow/static validation passes with bounded output.
 - [x] Graphify is updated after the workflow/documentation change.
+
+## Live activation follow-up
+
+The first `v1.0.1` recovery run proved that changing a host selector does not
+refresh an existing Docker bind mount. Web activation failed before selection
+because the canonical root lacked a baseline, while Appcast and installer jobs
+changed their new selectors without changing the publicly mounted legacy
+content. The permanent handoff therefore also requires a bounded Production
+static-container refresh after every selector change and rollback.
+
+### Follow-up Definition of Done
+
+- [x] Web activation refreshes only `app-site` after selecting or restoring a
+      release.
+- [x] Appcast activation captures the previous selector, refreshes only
+      `updates-site`, verifies the exact public bytes, and rolls back on failure.
+- [x] Installer activation captures the previous selector, refreshes only
+      `downloads-site`, verifies both exact public source files, and rolls back
+      on failure.
+- [x] Every refresh uses the private host-owned `sanad-sites-control
+      refresh-static production <surface>` command; the public workflow does not
+      gain Docker or general host authority.
+- [x] Manual and automatic Stable deployments share the same reusable workflow.
+- [x] Focused workflow contracts, documentation checks, and Graphify update pass.
