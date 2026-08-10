@@ -17,6 +17,8 @@ void main() {
 
     expect(index, isNot(contains('<script>')));
     expect(index, contains('<script src="auth_popup.js"></script>'));
+    expect(index, contains('<script src="splash.js"></script>'));
+    expect(File('web/splash.js').existsSync(), isTrue);
     expect(
       index.indexOf('auth_popup.js'),
       lessThan(index.indexOf('flutter_bootstrap.js')),

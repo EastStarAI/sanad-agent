@@ -4,7 +4,7 @@
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0A0A0A",
-    "theme_color": "#60A5FA",
+    "theme_color": "#0A0A0A",
     "description": "An AI Companion built with Sanad",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,

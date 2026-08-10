@@ -15,6 +15,7 @@ doc/api/
 *.dart.js
 *.info.json
 *.js
+!client/web/*.js
 *.js_
 *.js.deps
 *.js.map

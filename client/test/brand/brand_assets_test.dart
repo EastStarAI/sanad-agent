@@ -113,7 +113,7 @@ void main() {
   test('web standard and maskable icons use intentional brand colors', () {
     final manifest = jsonDecode(File('web/manifest.json').readAsStringSync()) as Map<String, dynamic>;
     expect(manifest['background_color'], '#0A0A0A');
-    expect(manifest['theme_color'], '#60A5FA');
+    expect(manifest['theme_color'], '#0A0A0A');
 
     expect((_readPng('web/icons/Icon-192.png').width, _readPng('web/icons/Icon-512.png').width), (192, 512));
     expect(

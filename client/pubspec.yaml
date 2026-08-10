@@ -123,7 +123,7 @@ flutter_launcher_icons:
     generate: true
     image_path: "assets/app-logo.png"
     background_color: "#0A0A0A"
-    theme_color: "#60A5FA"
+    theme_color: "#0A0A0A"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
