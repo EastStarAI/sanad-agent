@@ -6,12 +6,54 @@ import 'package:sanad_client/features/conversations/domain/models/canonical_even
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/clarifying_question_card.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/ask_user_tool_tile.dart';
 
 void main() {
   test('detects Arabic extended Unicode blocks as RTL', () {
     expect(TextUtils.getTextDirection('\u0870'), TextDirection.rtl);
     expect(TextUtils.getTextDirection('\u08A0'), TextDirection.rtl);
+  });
+
+  testWidgets('renders EventTile header for Arabic ask_user event as RTL', (tester) async {
+    final event = CanonicalEvent(
+      id: 'event-header-rtl',
+      kind: EventKind.toolCall,
+      timestamp: DateTime(2026),
+      tool: {
+        'name': 'system_ask_user',
+        'input': {
+          'questions': [
+            {'question': 'ما هو استفسارك؟'}
+          ]
+        },
+      },
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: EventTile(event: event),
+        ),
+      ),
+    );
+
+    final headerDirectionality = tester.widget<Directionality>(
+      find.descendant(
+        of: find.byType(InkWell),
+        matching: find.byType(Directionality),
+      ).first,
+    );
+    expect(headerDirectionality.textDirection, TextDirection.rtl);
+
+    final richTexts = tester.widgetList<RichText>(
+      find.descendant(
+        of: find.byType(InkWell),
+        matching: find.byType(RichText),
+      ),
+    );
+    expect(richTexts.isNotEmpty, isTrue);
+    expect(richTexts.first.textDirection, TextDirection.rtl);
   });
 
   testWidgets('resolves every clarifying question string direction independently', (tester) async {

@@ -92,7 +92,11 @@ opening; users never need to close and reopen the menu to refresh it.
 ## Active work
 
 The conversation timeline renders Markdown, code, reasoning summaries, tool
-activity, permission requests, recovery notices, and final responses.
+activity, permission requests, recovery notices, and final responses. Dynamic
+event titles resolve their own text direction; Arabic ask-user headers mirror
+the complete header row while English headers remain left-to-right. Event
+runtime metadata uses milliseconds below one second, seconds below one minute,
+minutes plus seconds below one hour, and hours plus minutes thereafter.
 
 While the agent is working:
 
