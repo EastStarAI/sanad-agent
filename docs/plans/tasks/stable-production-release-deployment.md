@@ -1,7 +1,7 @@
 ---
 title: "Stable Production Release Deployment Handoff"
 description: "Connect approved Stable publication to Production Web, Appcast, and installer deployment without weakening protected release or rollback boundaries."
-status: "in_review"
+status: "done"
 priority: "critical"
 design_contract: "docs/operations/release_and_signing.md"
 qa_contract: "docs/qa_maintenance/release_verification.md"
@@ -105,3 +105,16 @@ and atomically publish it before selection.
 - [x] Public verification and rollback compare both Appcast/manifest or both
       installer files.
 - [x] Focused workflow contracts, documentation, and Graphify update pass.
+
+## Live closure — 2026-08-10
+
+Private host control commit `61a7c846` and public workflow commits `2f8dbe33`
+and `4273491c` were merged after protected review and complete CI. The one-time
+Production mount migration preserved an owner-only rollback copy and activated
+the canonical static roots. Public rehearsal run `31346940281`, sourced from
+Stable release run `31296207510`, passed Web, updates, and installers. Web serves
+version `1.0.1`, build `2`, and public commit
+`7bbb88a874011490ee8b0f94dd78f4640e4f718d`; all release-owned public bytes,
+clean-browser rendering, and Production/Development/Staging regressions passed.
+Future Stable publication invokes the same reusable workflow automatically with
+all three surfaces enabled.

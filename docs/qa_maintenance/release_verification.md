@@ -103,6 +103,24 @@ incomplete static root, selector-only success, or HTTP-only shell response fails
 the gate. A failed surface must restore and publicly verify all its preceding
 release-owned bytes without recreating data or application services.
 
+### Live Stable asset rehearsal — 2026-08-10
+
+After the one-time Production static-root migration, public workflow run
+`31346940281` deployed all three surfaces from `v1.0.1` release run
+`31296207510`. Web serves version `1.0.1`, build `2`, and commit
+`7bbb88a874011490ee8b0f94dd78f4640e4f718d`. Public Appcast and Stable manifest
+bytes matched their GitHub Release SHA-256 values, and both public installer
+sources matched the tagged source bytes. The selected updates and downloads
+roots also contain their inherited `index.html` and `favicon.svg` files.
+
+A fresh isolated browser reached `/login`, created a full-size Flutter view with
+glass pane and semantics host, loaded CanvasKit/Wasm, `main.dart.js`, fonts, and
+brand assets with successful responses, and reported no uncaught exception or
+console error. The Production, Development, and Staging public verifiers passed;
+Production PostgreSQL and Redis volumes remained present. The rehearsal used the
+same reusable workflow that every future approved Stable publication calls
+automatically.
+
 ## Update failure coverage
 
 Automated tests cover contract parsing, invalid tag rejection, deterministic
