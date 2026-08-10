@@ -7,7 +7,7 @@ description: "Verification matrix for Arabic directionality and platform-aware m
 
 ## Scope
 
-This matrix covers text direction in the active `system_ask_user` suspension card and the completed ask-user tool result.
+This matrix covers text direction in the active `system_ask_user` suspension card, completed ask-user tool results, and conversation event headers.
 
 ## Automated Coverage
 
@@ -22,6 +22,8 @@ This matrix covers text direction in the active `system_ask_user` suspension car
 | Custom answer Android/iOS software-keyboard `Enter` | A line break is inserted and the answer remains open until the visible submit action is used. |
 | Completed Arabic question and answer | Question and answer each render RTL and right-aligned. |
 | Arabic extended Unicode characters | Direction detection classifies the text as RTL. |
+| Arabic ask-user event header | The complete header row follows RTL direction, including status, title, expansion, and error indicators. |
+| English event header | The header row retains LTR ordering and alignment. |
 
 ## Visual Review
 
