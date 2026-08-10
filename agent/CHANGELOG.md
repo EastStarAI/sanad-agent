@@ -1,6 +1,8 @@
 ## 1.0.2
 
-- Version bump aligned with Client 1.0.2+3 and stable release contract.
+- Serialized native desktop authentication and token refresh with cross-process OS file locks (`shared/auth_lock`).
+- Hardened `sanad-dev switch` runtime handoff to automatically prepare target checkout workspaces.
+- Synchronized release manifest contract and version definitions with Client 1.0.2+3.
 
 ## 1.0.1
 
