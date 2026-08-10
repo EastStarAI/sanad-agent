@@ -1,3 +1,4 @@
+import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dart';
@@ -9,6 +10,19 @@ import 'package:sanad_client/utils/app_platform.dart';
 
 class MockSanadSettingsStore extends Fake implements SanadSettingsStore {
   Map<String, dynamic> authDocument = {};
+  Future<void> Function()? beforeNextLock;
+  Object? nextLockError;
+
+  @override
+  Future<T> withAuthFileLock<T>(Future<T> Function() operation) async {
+    final lockError = nextLockError;
+    nextLockError = null;
+    if (lockError != null) throw lockError;
+    final beforeLock = beforeNextLock;
+    beforeNextLock = null;
+    await beforeLock?.call();
+    return operation();
+  }
 
   @override
   Future<Map<String, dynamic>> readAuthDocument() async => authDocument;
@@ -208,6 +222,64 @@ void main() {
         expect(prefs.getString('backend_refresh_token'), 'rotated-refresh');
         expect(mockStore.authDocument['access_token'], 'rotated-access');
         expect(mockStore.authDocument['refresh_token'], 'rotated-refresh');
+      },
+    );
+
+    test(
+      'adopts credentials rotated while waiting for the desktop lock',
+      () async {
+        final portal = StubPortalAuthClient();
+        authService.dispose();
+        authService = AuthService(
+          dio: MockDio(),
+          prefs: prefs,
+          settingsStore: mockStore,
+          portalAuth: portal,
+        );
+        mockStore.authDocument = {
+          'access_token': 'old-access',
+          'refresh_token': 'old-refresh',
+          'hardware_id': 'device-1',
+        };
+        await authService.init();
+        mockStore.beforeNextLock = () async {
+          mockStore.authDocument = {
+            'access_token': 'peer-access',
+            'refresh_token': 'peer-refresh',
+            'hardware_id': 'device-1',
+          };
+          // Model an exchange notification arriving while this refresh waits.
+          await authService.synchronizeDesktopAuthFile();
+        };
+
+        final result = await authService.refreshAccessToken();
+
+        expect(result.outcome, AuthRefreshOutcome.success);
+        expect(result.accessToken, 'peer-access');
+        expect(authService.accessToken, 'peer-access');
+        expect(portal.refreshCalls, 0);
+        expect(prefs.getString('backend_refresh_token'), 'peer-refresh');
+      },
+    );
+
+    test(
+      'treats desktop lock timeout as transient without clearing credentials',
+      () async {
+        mockStore.authDocument = {
+          'access_token': 'old-access',
+          'refresh_token': 'old-refresh',
+          'hardware_id': 'device-1',
+        };
+        await authService.init();
+        mockStore.nextLockError = const AuthFileLockTimeout(
+          Duration(seconds: 15),
+        );
+
+        final result = await authService.refreshAccessToken();
+
+        expect(result.outcome, AuthRefreshOutcome.transientUnavailable);
+        expect(authService.accessToken, 'old-access');
+        expect(mockStore.authDocument['refresh_token'], 'old-refresh');
       },
     );
 

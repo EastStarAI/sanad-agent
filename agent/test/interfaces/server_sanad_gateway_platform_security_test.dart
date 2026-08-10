@@ -122,6 +122,9 @@ class FakeAuthManager extends AuthManager {
   @override
   String get hardwareId => 'test-device-id';
 
+  @override
+  Future<bool> reload({bool notifyIfChanged = false}) async => false;
+
   void setAuthenticated(bool value) {
     authenticated = value;
     _controller.add(null);

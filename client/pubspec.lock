@@ -959,6 +959,13 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.28.0"
+  sanad_auth_lock:
+    dependency: "direct main"
+    description:
+      path: "../shared/auth_lock"
+      relative: true
+    source: path
+    version: "1.0.0"
   sanad_release_contract:
     dependency: "direct main"
     description:

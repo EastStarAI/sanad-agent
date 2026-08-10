@@ -18,6 +18,7 @@ This contract applies to `agent/lib/core/`.
   locally; send both for the atomic claim, then remove the pairing token only
   after `register_success`. Retry the same pair after a lost response.
 - Refresh Sanad access through the portal lifecycle, send refresh tokens in request bodies, and never log raw credentials.
+- Every native `auth.json` mutation participates in the shared `auth.refresh.lock` transaction. Refresh must acquire the lock before re-reading credentials and must adopt a pair rotated by another process instead of submitting the old refresh credential again.
 - `AuthManager` publishes a credential-free process-local change signal only after a successful auth write or a meaningful external reload; credentials never enter that signal.
 - Provider credentials must never share Sanad identity storage.
 

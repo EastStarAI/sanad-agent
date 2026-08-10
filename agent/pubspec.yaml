@@ -27,6 +27,8 @@ dependencies:
   intl: ^0.20.0
   sanad_release_contract:
     path: ../release/contract
+  sanad_auth_lock:
+    path: ../shared/auth_lock
 
 
 

@@ -63,6 +63,8 @@ dependencies:
   package_info_plus: ^9.0.0
   sanad_release_contract:
     path: ../release/contract
+  sanad_auth_lock:
+    path: ../shared/auth_lock
 
   flutter_highlight: ^0.7.0
   highlight: ^0.7.0
