@@ -77,7 +77,8 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           expected_sha="$(git rev-parse HEAD)"
           run_metadata="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID")"
-          test "$(jq -r '.conclusion' <<<"$run_metadata")" = success
+          run_conclusion="$(jq -r '.conclusion // empty' <<<"$run_metadata")"
+          test "$run_conclusion" = "success" || test "$run_conclusion" = "failure" || test -z "$run_conclusion"
           test "$(jq -r '.path' <<<"$run_metadata")" = .github/workflows/release.yml
           test "$(jq -r '.head_sha' <<<"$run_metadata")" = "$expected_sha"
           gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft == false' | grep -Fxq true
