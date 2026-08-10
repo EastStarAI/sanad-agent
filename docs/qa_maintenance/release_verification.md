@@ -164,8 +164,14 @@ The bounded live recovery changed only the verified `v1.0.2` Web release root
 to `0755`; its exact source marker and Flutter bootstrap immediately returned
 success. The permanent gate normalizes promoted release roots in the private
 controller and requires activation-command failure rollback for all three
-public static jobs. A successful Web-only rerun and clean-browser evidence are
-required before this incident is closed.
+public static jobs. Public PR `#72` and private PR `#171` passed their gates and
+merged before the live controller update. Web-only recovery run `31425367807`
+then passed without redeploying Updates or Installers. Production serves exact
+source `79be55372b8cf528a4404871f8c356542576096d` from a `root:root 0755`
+immutable root; Development, Staging, and Production verifiers all passed. A
+fresh browser rendered the Sanad sign-in view and logo, selected the versioned
+`favicon.svg`, created one Flutter view, and reported no warning or error. The
+incident is closed; missing Portal favicons remain outside this recovery.
 
 ## Update failure coverage
 
