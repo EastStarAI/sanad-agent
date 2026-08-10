@@ -133,12 +133,16 @@ bind mounts resolve the selected directory when the container is created; a
 symlink change alone does not update a running container.
 
 The Web handoff records its exact public commit and validates the Flutter shell,
-bootstrap, favicon, version marker, and hosted readability. Appcast activation
-verifies the attested public bytes, while installer activation verifies both
-canonical public source files. Any public mismatch restores the preceding
-selector, refreshes only the affected static container, and verifies the prior
-public bytes. Rollback never rebuilds or mutates a published release, and the
-public workflow receives neither Docker access nor general host authority.
+bootstrap, favicon, version marker, and hosted readability. Updates releases
+publish both attested Stable Appcast and manifest files; installer releases
+publish both canonical source files. Each updates or downloads candidate first
+copies the preceding selected static root into a unique incoming directory so
+server-owned `index.html` and `favicon.svg` remain present, replaces only the
+release-owned files, validates the complete root, and atomically publishes it.
+Any public mismatch restores the preceding selector, refreshes only the affected
+static container, and verifies all prior release-owned bytes. Rollback never
+rebuilds or mutates a published release, and the public workflow receives
+neither Docker access nor general host authority.
 
 Web assets use content-hashed Flutter output plus a small no-cache
 `version.json`. The server must route unknown application paths to

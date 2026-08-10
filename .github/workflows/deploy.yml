@@ -212,52 +212,62 @@ jobs:
         run: |
           gh release download "${{ inputs.release_tag }}" \
             --pattern appcast.xml \
+            --pattern release-manifest.json \
             --pattern SHA256SUMS \
             --dir download
           (cd download && sha256sum --check SHA256SUMS --ignore-missing)
           gh attestation verify download/appcast.xml \
             --repo "$GITHUB_REPOSITORY"
-      - name: Activate, verify, and roll back Appcast on failure
+          gh attestation verify download/release-manifest.json \
+            --repo "$GITHUB_REPOSITORY"
+      - name: Activate, verify, and roll back updates on failure
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_SSH_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_SSH_USER }}
         run: |
           set -euo pipefail
           tag="${{ inputs.release_tag }}"
-          release="/opt/sanad-sites/assets/updates/releases/$tag"
-          selector=/opt/sanad-sites/assets/updates/current
-          expected_sha="$(sha256sum download/appcast.xml | awk '{print $1}')"
+          root=/opt/sanad-sites/assets/updates
+          release="$root/releases/$tag"
+          selector="$root/current"
+          incoming="$root/incoming-$tag-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          expected_appcast="$(sha256sum download/appcast.xml | awk '{print $1}')"
+          expected_manifest="$(sha256sum download/release-manifest.json | awk '{print $1}')"
           previous="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" "set -eu; readlink -f '$selector'")"
-          previous_sha="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+          previous_appcast="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             "set -eu; sha256sum '$previous/appcast.xml' | awk '{print \$1}'")"
+          previous_manifest="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -eu; sha256sum '$previous/release-manifest.json' | awk '{print \$1}'")"
           if ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; test -s '$release/appcast.xml'; test \"\$(sha256sum '$release/appcast.xml' | awk '{print \$1}')\" = '$expected_sha'"; then
-            echo "Reusing the existing immutable Appcast release $release."
+            "set -eu; test -s '$release/index.html'; test -s '$release/favicon.svg'; test \"\$(sha256sum '$release/appcast.xml' | awk '{print \$1}')\" = '$expected_appcast'; test \"\$(sha256sum '$release/release-manifest.json' | awk '{print \$1}')\" = '$expected_manifest'"; then
+            echo "Reusing the existing complete immutable updates release $release."
           else
             ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-              "set -eu; test ! -e '$release'; mkdir -p '$release'"
-            rsync -az download/appcast.xml \
-              "$DEPLOY_USER@$DEPLOY_HOST:$release/appcast.xml"
+              "set -eu; test ! -e '$incoming'; test ! -e '$release'; mkdir -p '$incoming'; cp -a '$previous/.' '$incoming/'"
+            rsync -az download/appcast.xml download/release-manifest.json \
+              "$DEPLOY_USER@$DEPLOY_HOST:$incoming/"
             ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-              "set -eu; test \"\$(sha256sum '$release/appcast.xml' | awk '{print \$1}')\" = '$expected_sha'"
+              "set -eu; test -s '$incoming/index.html'; test -s '$incoming/favicon.svg'; test \"\$(sha256sum '$incoming/appcast.xml' | awk '{print \$1}')\" = '$expected_appcast'; test \"\$(sha256sum '$incoming/release-manifest.json' | awk '{print \$1}')\" = '$expected_manifest'; mv '$incoming' '$release'"
           fi
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             "set -eu; ln -sfn '$release' '$selector'; sudo /usr/local/sbin/sanad-sites-control refresh-static production updates"
 
-          public_appcast="$(mktemp)"
-          rollback_appcast="$(mktemp)"
-          trap 'rm -f "$public_appcast" "$rollback_appcast"' EXIT
-          if ! curl --fail --silent --show-error --max-time 20 \
-            "https://updates.sanad.eaststarai.com/appcast.xml?release=$tag" \
-            -o "$public_appcast" || \
-            [[ "$(sha256sum "$public_appcast" | awk '{print $1}')" != "$expected_sha" ]]; then
-            echo "Appcast verification failed; restoring the previous selector."
+          verify_update() {
+            local name="$1" expected="$2" output="$3" marker="$4"
+            curl --fail --silent --show-error --max-time 20 \
+              "https://updates.sanad.eaststarai.com/$name?$marker" -o "$output"
+            test "$(sha256sum "$output" | awk '{print $1}')" = "$expected"
+          }
+
+          temporary="$(mktemp -d)"
+          trap 'rm -rf "$temporary"' EXIT
+          if ! verify_update appcast.xml "$expected_appcast" "$temporary/appcast.xml" "release=$tag" || \
+            ! verify_update release-manifest.json "$expected_manifest" "$temporary/release-manifest.json" "release=$tag"; then
+            echo "Updates verification failed; restoring the previous selector."
             ssh "$DEPLOY_USER@$DEPLOY_HOST" \
               "set -eu; ln -sfn '$previous' '$selector'; sudo /usr/local/sbin/sanad-sites-control refresh-static production updates"
-            curl --fail --silent --show-error --max-time 20 \
-              "https://updates.sanad.eaststarai.com/appcast.xml?rollback=$previous_sha" \
-              -o "$rollback_appcast"
-            test "$(sha256sum "$rollback_appcast" | awk '{print $1}')" = "$previous_sha"
+            verify_update appcast.xml "$previous_appcast" "$temporary/rollback-appcast.xml" "rollback=$previous_appcast"
+            verify_update release-manifest.json "$previous_manifest" "$temporary/rollback-manifest.json" "rollback=$previous_manifest"
             exit 1
           fi
 
@@ -285,8 +295,10 @@ jobs:
         run: |
           set -euo pipefail
           revision="$(git rev-parse HEAD)"
-          release="/opt/sanad-sites/assets/install/releases/$revision"
-          selector=/opt/sanad-sites/assets/install/current
+          root=/opt/sanad-sites/assets/install
+          release="$root/releases/$revision"
+          selector="$root/current"
+          incoming="$root/incoming-$revision-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
           expected_sh="$(sha256sum scripts/install.sh | awk '{print $1}')"
           expected_ps1="$(sha256sum scripts/install.ps1 | awk '{print $1}')"
           previous="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" "set -eu; readlink -f '$selector'")"
@@ -295,15 +307,15 @@ jobs:
           previous_ps1="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             "set -eu; sha256sum '$previous/install.ps1' | awk '{print \$1}'")"
           if ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -eu; test \"\$(sha256sum '$release/install.sh' | awk '{print \$1}')\" = '$expected_sh'; test \"\$(sha256sum '$release/install.ps1' | awk '{print \$1}')\" = '$expected_ps1'"; then
-            echo "Reusing the existing immutable installer release $release."
+            "set -eu; test -s '$release/index.html'; test -s '$release/favicon.svg'; test \"\$(sha256sum '$release/install.sh' | awk '{print \$1}')\" = '$expected_sh'; test \"\$(sha256sum '$release/install.ps1' | awk '{print \$1}')\" = '$expected_ps1'"; then
+            echo "Reusing the existing complete immutable installer release $release."
           else
             ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-              "set -eu; test ! -e '$release'; mkdir -p '$release'"
+              "set -eu; test ! -e '$incoming'; test ! -e '$release'; mkdir -p '$incoming'; cp -a '$previous/.' '$incoming/'"
             rsync -az scripts/install.sh scripts/install.ps1 \
-              "$DEPLOY_USER@$DEPLOY_HOST:$release/"
+              "$DEPLOY_USER@$DEPLOY_HOST:$incoming/"
             ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-              "set -eu; test \"\$(sha256sum '$release/install.sh' | awk '{print \$1}')\" = '$expected_sh'; test \"\$(sha256sum '$release/install.ps1' | awk '{print \$1}')\" = '$expected_ps1'"
+              "set -eu; test -s '$incoming/index.html'; test -s '$incoming/favicon.svg'; test \"\$(sha256sum '$incoming/install.sh' | awk '{print \$1}')\" = '$expected_sh'; test \"\$(sha256sum '$incoming/install.ps1' | awk '{print \$1}')\" = '$expected_ps1'; mv '$incoming' '$release'"
           fi
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             "set -eu; ln -sfn '$release' '$selector'; sudo /usr/local/sbin/sanad-sites-control refresh-static production downloads"
