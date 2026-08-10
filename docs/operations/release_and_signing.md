@@ -118,31 +118,36 @@ It requires an exact public `main` commit, inventories existing `v1` tags and
 Releases before the gate, has no write permission, and never creates a candidate.
 Probe approval is not Release publication approval.
 
-The candidate workflow creates a private Draft and fails if the tag already owns any Draft or published Release. A separate least-privilege publication job can make that reviewed Draft public only after the required owner approval on `release-publication`. Rejected or cancelled approval leaves no partial public Release. Public release files use published checksums. After an approved Stable publication, the protected Client-download job downloads the public manifest, checksum file, and three desktop Client artifacts; verifies canonical URLs, byte sizes, SHA-256 values, and GitHub attestations; generates a deterministic Nginx redirect include; and sends only that include to the server's restricted control command. The Stable release then calls the reusable Production asset workflow with Web, Appcast, and installers enabled and its own release run ID. This ordering serializes the redirect deployment before the remaining Production assets and prevents an asset handoff when publication or redirect verification fails. RC and validation-only runs never enter either Production path. The server remains a redirector rather than an artifact mirror and owns candidate validation, atomic activation, public regression verification, and automatic rollback.
+The candidate workflow creates a private Draft and fails if the tag already owns any Draft or published Release. A separate least-privilege publication job can make that reviewed Draft public only after the required owner approval on `release-publication`. Rejected or cancelled approval leaves no partial public Release. Public release files use published checksums. After an approved Stable publication, the protected Client-download job downloads the public manifest, checksum file, and three desktop Client artifacts; verifies canonical URLs, byte sizes, SHA-256 values, and GitHub attestations; generates a deterministic Nginx redirect include; and uploads only that bounded include through the Production forced-command deployment broker. The broker verifies the exact byte count and digest, and the root-owned controller invokes the fixed alias validator with the verified payload. The Stable release then calls the reusable Production asset workflow with Web, Appcast, and installers enabled and its own release run ID. This ordering serializes the redirect deployment before the remaining Production assets and prevents an asset handoff when publication or redirect verification fails. RC and validation-only runs never enter either Production path. The server remains a redirector rather than an artifact mirror and owns candidate validation, atomic activation, public regression verification, and automatic rollback.
 
 A manual `Deploy prepared release assets` dispatch is recovery-only. It must identify an existing immutable Stable tag and its successful producing release run. Because a default-branch dispatch has `main` as its deployment ref, the `client-downloads-production` Environment must explicitly allow the reviewed `main` recovery ref before credentials are available; normal automatic deployment remains tag-restricted. Changing that policy is a repository-setting mutation and is not implied by a workflow edit.
 
-Production Web, Appcast, and installer releases use `/opt/sanad-sites/assets/web`, `/opt/sanad-sites/assets/updates`, and `/opt/sanad-sites/assets/install`; the obsolete `/srv/sanad/*` workflow roots are not valid deployment targets. The private Web handoff
-is downloaded from the explicitly selected successful release-workflow run and
-verified against its GitHub build attestation. Server deployment writes an
-immutable versioned directory, changes the owning `current` symlink only after
-the transfer succeeds, and invokes the private host-owned
-`sanad-sites-control refresh-static production` action for exactly the affected
-Web, updates, or downloads container. This refresh is required because Docker
-bind mounts resolve the selected directory when the container is created; a
-symlink change alone does not update a running container.
+The public workflow never names, creates, reads, or selects a live-host release
+directory. The private Web handoff is downloaded from the explicitly selected
+successful release-workflow run and verified against its GitHub build
+attestation. It is packaged with its exact public commit identity and sent to
+the Production forced-command broker. The root-owned controller safely extracts
+the bounded archive, rejects links, traversal, secret-shaped paths, unexpected
+static-overlay files, changed manifests, or non-root-writable promoted content,
+and creates the immutable release and selector. Activation recreates exactly
+the affected Web, updates, or downloads container because Docker bind mounts
+resolve the selected directory when the container is created; selector change
+alone does not update a running container.
 
 The Web handoff records its exact public commit and validates the Flutter shell,
 bootstrap, favicon, version marker, and hosted readability. Updates releases
 publish both attested Stable Appcast and manifest files; installer releases
-publish both canonical source files. Each updates or downloads candidate first
-copies the preceding selected static root into a unique incoming directory so
-server-owned `index.html` and `favicon.svg` remain present, replaces only the
-release-owned files, validates the complete root, and atomically publishes it.
-Any public mismatch restores the preceding selector, refreshes only the affected
-static container, and verifies all prior release-owned bytes. Rollback never
-rebuilds or mutates a published release, and the public workflow receives
-neither Docker access nor general host authority.
+publish both canonical source files. For each updates or downloads candidate,
+the root-owned controller first reverifies and copies the preceding immutable
+static release so `index.html` and `favicon.svg` remain present, then overlays
+exactly the two allowlisted release-owned files. The workflow cannot request any
+other overlay path. The controller manifests and reverifies the complete
+candidate before atomic publication. Any public mismatch restores the preceding
+selector, refreshes only the affected static container, and verifies all prior
+release-owned bytes against hashes read through a filename allowlist. Rollback
+never rebuilds or mutates a published release, and the public workflow receives
+neither Docker access, filesystem traversal, an interactive shell, nor general
+host authority.
 
 Web assets use content-hashed Flutter output plus a small no-cache
 `version.json`. The server must route unknown application paths to

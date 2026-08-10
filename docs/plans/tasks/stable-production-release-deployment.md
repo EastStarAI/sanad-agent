@@ -118,3 +118,28 @@ version `1.0.1`, build `2`, and public commit
 clean-browser rendering, and Production/Development/Staging regressions passed.
 Future Stable publication invokes the same reusable workflow automatically with
 all three surfaces enabled.
+
+## Deployment credential privilege-boundary follow-up
+
+The original bounded command still allowed the deployment account to write live
+release trees and exposed wildcard root entrypoints. The release handoff now
+uses only a forced-command broker protocol: bounded uploads enter an untrusted
+incoming namespace, while a root-owned controller validates, manifests,
+promotes, selects, refreshes, and rolls back immutable releases. Static overlay
+archives contain exactly the two owned Appcast/manifest or installer files; the
+controller inherits the remaining shell from the preceding verified release.
+Stable Client aliases use the same bounded upload protocol.
+
+### Follow-up Definition of Done
+
+- [x] Public workflows contain no direct live path, remote `rsync`, selector
+      mutation, Docker command, or `sudo` command.
+- [x] Production Web, updates, installers, and Client aliases use the common
+      forced-command deployment protocol.
+- [x] Rollback captures the previous immutable identity and digest and reads
+      comparison hashes only for an exact static filename allowlist.
+- [x] Release architecture and QA contracts describe the root-owned promotion
+      boundary and two-file overlay contract.
+- [x] Focused workflow and YAML validation pass on the final branch.
+- [ ] The public PR is merged before the private repository pins the resulting
+      public commit and performs the live credential cutover.

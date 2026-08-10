@@ -245,28 +245,27 @@ jobs:
           grep -F 'https://app.sanad.eaststarai.com/sanad-public-sha.txt' .github/workflows/deploy.yml
           grep -F 'gh attestation verify download/appcast.xml' .github/workflows/deploy.yml
           grep -F 'gh attestation verify download/release-manifest.json' .github/workflows/deploy.yml
-          test "$(grep -Fc 'sanad-sites-control refresh-static production' .github/workflows/deploy.yml)" -eq 6
+          test "$(grep -Fc 'scripts/release/deploy_production_asset.sh' .github/workflows/deploy.yml)" -ge 12
+          ! grep -Eq '(^|[[:space:]])rsync[[:space:]]|ln -sfn|sudo /usr/local/sbin|/opt/sanad-sites/' .github/workflows/deploy.yml
           grep -F 'name: Activate, verify, and roll back updates on failure' .github/workflows/deploy.yml
           grep -F 'https://updates.sanad.eaststarai.com/$name' .github/workflows/deploy.yml
-          test "$(grep -Fc 'cp -a' .github/workflows/deploy.yml)" -eq 2
-          test "$(grep -Fc 'incoming/index.html' .github/workflows/deploy.yml)" -eq 3
-          test "$(grep -Fc 'incoming/favicon.svg' .github/workflows/deploy.yml)" -eq 2
           grep -F 'name: Activate, verify, and roll back installer sources on failure' .github/workflows/deploy.yml
           grep -F 'https://downloads.sanad.eaststarai.com/$name' .github/workflows/deploy.yml
           grep -F 'restoring the previous selector' .github/workflows/deploy.yml
           test "$(grep -Fc 'environment: client-downloads-production' .github/workflows/deploy.yml)" -eq 3
           ! grep -Eq 'environment: (web|updates|installers)-production' .github/workflows/deploy.yml
           grep -F 'environment: client-downloads-production' .github/workflows/release.yml
-          grep -F 'sanad-client-downloads-control deploy' .github/workflows/release.yml
+          grep -F 'deploy_production_asset.sh deploy-client-aliases' .github/workflows/release.yml
+          ! grep -Fq 'sudo /usr/local/sbin/sanad-client-downloads-control' .github/workflows/release.yml
           grep -F 'name: Deploy Stable Production assets' .github/workflows/release.yml
           grep -F 'uses: ./.github/workflows/deploy.yml' .github/workflows/release.yml
           grep -F 'release_run_id:' .github/workflows/release.yml
           grep -F 'github.run_id' .github/workflows/release.yml
-          ! grep -Fq '/srv/sanad/' .github/workflows/deploy.yml
-          grep -Fq '/opt/sanad-sites/assets/web' .github/workflows/deploy.yml
-          grep -Fq '/opt/sanad-sites/assets/updates' .github/workflows/deploy.yml
-          grep -Fq '/opt/sanad-sites/assets/install' .github/workflows/deploy.yml
+          bash -n scripts/release/deploy_production_asset.sh
+          grep -Fq 'broker "upload $kind' scripts/release/deploy_production_asset.sh
+          grep -Fq 'upload-client-aliases' scripts/release/deploy_production_asset.sh
           scripts/release/test_generate_client_download_redirects.sh
+          scripts/release/test_deploy_production_asset.sh
           grep -F -- '--draft' .github/workflows/release.yml
           grep -F 'release-manifest-rc.json' release/release-contract.json
           grep -F 'appcast-rc.xml' release/release-contract.json

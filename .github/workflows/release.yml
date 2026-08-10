@@ -750,9 +750,8 @@ jobs:
         run: |
           set -euo pipefail
           manifest_sha="$(sha256sum download/release-manifest.json | awk '{print $1}')"
-          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
-            "sudo /usr/local/sbin/sanad-client-downloads-control deploy '$RELEASE_TAG' '$manifest_sha'" \
-            < generated/sanad-client-download-redirects.conf
+          scripts/release/deploy_production_asset.sh deploy-client-aliases \
+            "$RELEASE_TAG" "$manifest_sha" generated/sanad-client-download-redirects.conf
 
   production-assets:
     name: Deploy Stable Production assets
