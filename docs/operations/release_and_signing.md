@@ -49,9 +49,14 @@ The macOS Agent uses Hardened Runtime with the narrowly scoped
 `com.apple.security.cs.allow-unsigned-executable-memory` entitlement required by
 Dart AOT runtime stubs. The workflow injects the validated release-contract
 version at compilation, signs with that entitlement, executes the signed binary,
-and submits it for notarization. Raw CLI notarization is checked with
-`codesign --test-requirement '=notarized'`; `spctl --type execute` is not used
-because it rejects valid notarized non-bundle executables.
+and submits it for notarization. After Apple accepts the submission, the
+workflow fetches the authoritative notary log with a bounded retry and requires
+`Accepted`, status code zero, no issues, SHA-256 ticket metadata, and an exact
+architecture plus `cdhash` match to the signed executable. This avoids relying
+on the local `codesign --test-requirement '=notarized'` online-ticket cache,
+which remained unavailable for more than ten minutes despite an accepted ticket
+for the exact raw CLI. `spctl --type execute` is not used because it rejects
+valid notarized non-bundle executables.
 
 The hosted macOS Client job restores the exported Sparkle Ed25519 key to a
 runner-temporary file and passes that file directly to Sparkle `sign_update`.
@@ -71,12 +76,9 @@ private key is never copied into the Client checkout.
 | `windows-update-signing` | WinSparkle DSA update signing only; it does not provide Authenticode publisher identity |
 | `android-signing` | Android APK/AAB release signing |
 | `release-publication` | Atomic publication of an already reviewed Draft RC or Stable Release |
-| `client-downloads-production` | Post-publication verification and restricted deployment of Production-only Stable Client redirects |
-| `web-production` | Atomic Web deployment |
-| `updates-production` | Atomic Appcast deployment |
-| `installers-production` | Publishing canonical installer sources |
+| `client-downloads-production` | Restricted Production deployment of Stable Client redirects, Web, Appcast, and canonical installer sources |
 
-Signing environments and `release-publication` require the repository owner as reviewer and accept deployments only from protected refs. `release-build` has no signing responsibility. Repository secret scanning and push protection are enabled. Signing secrets were transferred directly from the validated local signing store to their owning Environments without exposing values in Git, logs, or durable temporary files. Publication and production-deployment Environments contain no deployment secret. Fork, pull-request, and Dependabot workflows remain read-only and cannot trigger the tag/manual release workflow or enter protected environments.
+Signing environments and `release-publication` require the repository owner as reviewer and accept deployments only from protected refs. `release-build` has no signing responsibility. Repository secret scanning and push protection are enabled. Signing secrets were transferred directly from the validated local signing store to their owning Environments without exposing values in Git, logs, or durable temporary files. The restricted SSH deployment credential set belongs only to `client-downloads-production`; separate per-surface Environment names must not be introduced without provisioning and protecting them first. Fork, pull-request, and Dependabot workflows remain read-only and cannot trigger the tag/manual release workflow or enter protected environments.
 
 ## Secret inventory
 
@@ -116,7 +118,9 @@ It requires an exact public `main` commit, inventories existing `v1` tags and
 Releases before the gate, has no write permission, and never creates a candidate.
 Probe approval is not Release publication approval.
 
-The candidate workflow creates a private Draft and fails if the tag already owns any Draft or published Release. A separate least-privilege publication job can make that reviewed Draft public only after the required owner approval on `release-publication`. Rejected or cancelled approval leaves no partial public Release. Public release files use published checksums. After an approved Stable publication, the protected Client-download job downloads the public manifest, checksum file, and three desktop Client artifacts; verifies canonical URLs, byte sizes, SHA-256 values, and GitHub attestations; generates a deterministic Nginx redirect include; and sends only that include to the server's restricted control command. RC publication never enters this path. The server remains a redirector rather than an artifact mirror and owns candidate validation, atomic activation, public regression verification, and automatic rollback.
+The candidate workflow creates a private Draft and fails if the tag already owns any Draft or published Release. A separate least-privilege publication job can make that reviewed Draft public only after the required owner approval on `release-publication`. Rejected or cancelled approval leaves no partial public Release. Public release files use published checksums. After an approved Stable publication, the protected Client-download job downloads the public manifest, checksum file, and three desktop Client artifacts; verifies canonical URLs, byte sizes, SHA-256 values, and GitHub attestations; generates a deterministic Nginx redirect include; and sends only that include to the server's restricted control command. The Stable release then calls the reusable Production asset workflow with Web, Appcast, and installers enabled and its own release run ID. This ordering serializes the redirect deployment before the remaining Production assets and prevents an asset handoff when publication or redirect verification fails. RC and validation-only runs never enter either Production path. The server remains a redirector rather than an artifact mirror and owns candidate validation, atomic activation, public regression verification, and automatic rollback.
+
+A manual `Deploy prepared release assets` dispatch is recovery-only. It must identify an existing immutable Stable tag and its successful producing release run. Because a default-branch dispatch has `main` as its deployment ref, the `client-downloads-production` Environment must explicitly allow the reviewed `main` recovery ref before credentials are available; normal automatic deployment remains tag-restricted. Changing that policy is a repository-setting mutation and is not implied by a workflow edit.
 
 Production Web, Appcast, and installer releases use `/opt/sanad-sites/assets/web`, `/opt/sanad-sites/assets/updates`, and `/opt/sanad-sites/assets/install`; the obsolete `/srv/sanad/*` workflow roots are not valid deployment targets. The private Web handoff
 is downloaded from the explicitly selected successful release-workflow run and

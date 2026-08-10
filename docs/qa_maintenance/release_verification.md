@@ -33,7 +33,7 @@ rules remain fail-closed.
 
 | Target | Local evidence | Hosted or clean-machine evidence still required |
 |---|---|---|
-| Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification | both hosted runners, clean install, real upgrade and rollback |
+| Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification, accepted notary log with exact architecture/`cdhash` ticket match | both hosted runners, clean install, real upgrade and rollback |
 | Agent Linux x64 | contract and workflow path | hosted build, provenance, clean install, service/update/rollback |
 | Agent Windows x64 | contract and workflow path | Unsigned Windows build disclosure, SHA-256/manifest/provenance, Defender/SmartScreen and lifecycle on Windows 11, service/update/rollback |
 | Client macOS universal | universal Mach-O inspection, Developer ID-signed and notarized DMG, staple, Gatekeeper, Sparkle signature | clean update and rollback |
@@ -78,11 +78,32 @@ approval for RC1 or any later publication.
 
 Only an approved, published Stable Release may update the Production convenience links. The post-publication job must reject Drafts, prereleases, non-canonical repositories or URLs, missing or duplicate desktop Client entries, Agent artifacts, and any size, SHA-256, checksum-file, or attestation mismatch. Its generated include contains exactly macOS, Windows, and Linux redirects and is retained as workflow evidence. The restricted server command must pass a loopback candidate before atomic activation, verify Production plus Development and Staging regressions, and restore the preceding include on any reload or verification failure. Development and Staging never expose equivalent aliases, and Client bytes continue to download directly from GitHub Releases.
 
+## Stable Production asset handoff gate
+
+A successful Stable publication must deploy the Client aliases first, then call
+the reusable Production asset workflow with all three surfaces enabled, the
+canonical Stable tag, and the exact producing release run ID. The called jobs
+must enter `client-downloads-production`, consume only its restricted deployment
+credentials, and retain read-only contents plus attestation permissions. RC and
+validation-only runs must not call the Production asset workflow.
+
+Static verification rejects separate `web-production`, `updates-production`, or
+`installers-production` references unless those Environments are deliberately
+provisioned and protected in a separate reviewed change. Manual recovery from
+`main` remains blocked by the Environment branch policy until an operator
+explicitly authorizes that ref; tag-restricted automatic releases require no
+such exception. Runtime acceptance still requires the exact public Web commit
+and version markers, Appcast identity, canonical installer content, and a clean
+browser render. HTTP-only success is insufficient.
+
 ## Update failure coverage
 
 Automated tests cover contract parsing, invalid tag rejection, deterministic
 Appcast output, source-managed no-mutation behavior, checksum rejection, client
-bootstrap selection, and existing daemon-controller behavior.
+bootstrap selection, and existing daemon-controller behavior. The native Windows
+replacement gate waits for both terminal result publication and detached-script
+cleanup, because PowerShell writes the result immediately before its final
+self-removal.
 
 Hosted validation begins with a `validation_only` full-matrix run from protected `main`. It requires no tag and must leave zero Drafts and Releases while retaining private Agent/Client artifacts, the signed IPA, manifest, checksums, SBOM, Appcast, and attestations. Later lifecycle validation additionally exercises interrupted downloads, wrong architecture, corrupted size and checksum, replacement failure, service restart, retained Sanad Home, repeated update requests, and rollback to the prior signed version.
 
@@ -191,6 +212,25 @@ private. The Draft and publication jobs were skipped, and the run left no tag,
 Draft, or Release. This closes the hosted full-matrix build probe; clean-machine
 installation, update, rollback, Windows Defender/SmartScreen, and Internal
 TestFlight upload remain separate live gates.
+
+## 1.0.1 validation race follow-up
+
+Validation-only run `31293235254` at `b70bd25` accepted both macOS Agent
+submissions but exposed that the local raw-CLI ticket cache can remain
+unavailable despite Apple acceptance. Local macOS 26 arm64 submissions
+`c15943cf-f9a1-4955-817b-740f83b026e9` and
+`62b83964-8910-4f08-9882-8d5f18e31c5c` reproduced failure through 120 seconds
+and ten minutes respectively. The authoritative replacement gate passed only
+a notary log with status code zero, no issues, SHA-256 ticket metadata, and an
+exact architecture/`cdhash` match to the signed executable.
+
+Follow-up validation run `31294256992` at `81de416` then reached the hosted
+Windows compile step and exposed a separate PowerShell continuation failure:
+Dart received `compile exe` without its define, entry point, or output and
+reported `Missing Dart entry point`. The workflow now uses one explicitly quoted
+PowerShell command line and statically rejects the former backtick form. The
+complete matrix must be rerun after both follow-up fixes; neither failed run is
+release evidence.
 
 ## SANAD-08 local evidence
 

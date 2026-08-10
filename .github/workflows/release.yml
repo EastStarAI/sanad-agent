@@ -167,10 +167,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path ../dist -Force | Out-Null
-          fvm dart compile exe `
-            -DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }} `
-            bin/sanad_agent.dart `
-            -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
+          fvm dart compile exe "-DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }}" bin/sanad_agent.dart -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
       - name: Import Apple Developer ID
         if: matrix.platform == 'macos'
         shell: bash
@@ -215,13 +212,47 @@ jobs:
           agent="dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}"
           archive="$RUNNER_TEMP/sanad-agent-notarization.zip"
           ditto -c -k --keepParent "$agent" "$archive"
+          submission_result="$RUNNER_TEMP/notary-submission.json"
+          notary_log="$RUNNER_TEMP/notary-log.json"
           xcrun notarytool submit "$archive" \
             --key "$RUNNER_TEMP/AuthKey.p8" \
             --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER_ID" \
-            --wait
-          codesign --verify --strict --test-requirement '=notarized' \
-            --verbose=2 "$agent"
+            --wait \
+            --output-format json > "$submission_result"
+          submission_id="$(jq -r '.id // empty' "$submission_result")"
+          test -n "$submission_id"
+          jq -e '.status == "Accepted"' "$submission_result" >/dev/null
+          log_fetched=false
+          for attempt in {1..12}; do
+            if xcrun notarytool log "$submission_id" \
+              --key "$RUNNER_TEMP/AuthKey.p8" \
+              --key-id "$APPLE_API_KEY_ID" \
+              --issuer "$APPLE_API_ISSUER_ID" \
+              "$notary_log"; then
+              log_fetched=true
+              break
+            fi
+            if [[ "$attempt" -lt 12 ]]; then
+              echo "Accepted notarization log is not queryable yet; retrying ($attempt/12)."
+              sleep 10
+            fi
+          done
+          test "$log_fetched" = true
+          binary_cdhash="$(codesign -d --verbose=4 "$agent" 2>&1 |
+            sed -n 's/^CDHash=//p' | head -n 1 | tr '[:upper:]' '[:lower:]')"
+          binary_arch="$(lipo -archs "$agent")"
+          test -n "$binary_cdhash"
+          test -n "$binary_arch"
+          jq -e --arg cdhash "$binary_cdhash" --arg arch "$binary_arch" '
+            .status == "Accepted" and
+            .statusCode == 0 and
+            (.issues == null or .issues == []) and
+            any(.ticketContents[];
+              (.cdhash | ascii_downcase) == $cdhash and
+              .arch == $arch and
+              .digestAlgorithm == "SHA-256")
+          ' "$notary_log" >/dev/null
       - uses: actions/upload-artifact@v4
         with:
           name: agent-${{ matrix.platform }}-${{ matrix.architecture }}
@@ -711,3 +742,19 @@ jobs:
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             "sudo /usr/local/sbin/sanad-client-downloads-control deploy '$RELEASE_TAG' '$manifest_sha'" \
             < generated/sanad-client-download-redirects.conf
+
+  production-assets:
+    name: Deploy Stable Production assets
+    needs: [validate, publish, client-download-aliases]
+    if: needs.validate.outputs.channel == 'stable'
+    permissions:
+      contents: read
+      attestations: read
+    uses: ./.github/workflows/deploy.yml
+    with:
+      release_tag: ${{ needs.validate.outputs.tag }}
+      release_run_id: ${{ github.run_id }}
+      deploy_web: true
+      deploy_updates: true
+      deploy_installers: true
+    secrets: inherit
