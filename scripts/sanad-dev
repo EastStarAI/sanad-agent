@@ -226,6 +226,9 @@ main() {
     run)
       run_setup "$force" true
       ;;
+    switch)
+      run_setup false true
+      ;;
     *)
       require_runtime_cli
       ;;

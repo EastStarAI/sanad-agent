@@ -82,7 +82,10 @@ This conflict check is read-only, including in dry-run. A cross-owned client is 
 `switch --runtime current` requires the complete live launcher lease and embeds
 its launcher id and nonce in the versioned handoff transaction. The launcher
 retains that identity, Home, Agent port, preferences namespace, devices, and VM
-ports while replacing source roots and workspace markers. A manifest with an
+ports while replacing source roots and workspace markers. The CLI reports that
+a runtime already uses the target only when the Agent workspace hash and every
+managed Client source path agree with that target; partial agreement is an
+inconsistent managed source and fails closed with a diagnostic. A manifest with an
 unsupported version or invalid shape remains fail-closed and is not mutated by
 the launcher. Polling reports an unchanged invalid on-disk revision only once;
 a replaced invalid revision can produce one new diagnostic, and a valid or
@@ -144,9 +147,12 @@ command contract. No arguments render static help without mutation. `install`
 owns verified FVM, pinned Flutter, and the checkout-owned user shim, then stops.
 `setup` ensures install, resolves the Release Contract followed by Agent and
 Client packages, then stops. `run` ensures only missing or stale install/setup
-stages before entering the runtime CLI. Other runtime commands never bootstrap
-implicitly and fail with the exact prerequisite command when the Dart CLI is not
-ready.
+stages before entering the runtime CLI. `switch` performs the same idempotent
+target preparation before submitting its handoff transaction, without replacing
+a functional user shim owned by another checkout. Preparation failure occurs
+before runtime mutation, so the source group remains unchanged. Other runtime
+commands never bootstrap implicitly and fail with the exact prerequisite command
+when the Dart CLI is not ready.
 
 Missing FVM is installed from pinned official release archives after
 per-platform SHA-256 verification; detecting ready FVM, Flutter, shim, or package

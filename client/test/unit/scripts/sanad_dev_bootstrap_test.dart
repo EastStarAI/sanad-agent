@@ -183,6 +183,41 @@ fi
       expect((await calls.readAsLines()).last, contains('sanad_dev.dart run'));
     });
 
+    test('switch prepares an unready target before entering runtime CLI', () async {
+      final shim = Link('${userBin.path}${Platform.pathSeparator}sanad-dev');
+      final foreign = '${fixture.path}${Platform.pathSeparator}other-checkout';
+      await shim.create(foreign);
+
+      final result = await runBootstrap(const ['switch', '--runtime', 'current']);
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      final invocations = await calls.readAsLines();
+      expect(invocations[1], contains('release/contract|dart pub get'));
+      expect(invocations[2], contains('agent|dart pub get'));
+      expect(invocations[3], contains('client|flutter pub get'));
+      expect(
+        invocations[4],
+        contains('sanad_dev.dart switch --runtime current'),
+      );
+      expect(await shim.target(), foreign);
+    });
+
+    test('failed switch preparation never enters runtime CLI', () async {
+      final result = await runBootstrap(
+        const ['switch', '--runtime', 'current'],
+        environment: const {'FAIL_STAGE': 'dart-pub'},
+      );
+
+      expect(result.exitCode, isNonZero);
+      final invocations = await calls.readAsLines();
+      expect(invocations, hasLength(2));
+      expect(invocations.last, contains('release/contract|dart pub get'));
+      expect(
+        invocations.any((line) => line.contains('sanad_dev.dart switch')),
+        isFalse,
+      );
+    });
+
     test('foreign wrapper redispatches to the caller Git worktree', () async {
       final gitInit = await Process.run('git', ['init', '--quiet'], workingDirectory: fixture.path);
       expect(gitInit.exitCode, 0, reason: '${gitInit.stderr}');
@@ -329,6 +364,7 @@ fi
     expect(source, contains('Get-FileHash -Algorithm SHA256'));
     expect(source, contains("[Environment]::SetEnvironmentVariable('Path'"));
     expect(source, contains("'User')"));
+    expect(source, contains("\$command -in @('run', 'switch')"));
     expect(source, isNot(contains('Start-Process -Verb RunAs')));
   });
 }

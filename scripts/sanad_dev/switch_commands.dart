@@ -105,13 +105,25 @@ Future<void> handleRuntimeSwitch({
     exitCode = 1;
     return;
   }
-  if (runtimeClients.every(
-    (client) => _samePath(client.path, targetClientDirectory),
-  )) {
+  final targetWorkspaceHash = targetRuntime.worktreeId.split('-').last;
+  final targetSourceState = classifyRuntimeTargetSource(
+    agentWorkspaceHash: agent.workspaceHash,
+    targetWorkspaceHash: targetWorkspaceHash,
+    clientPaths: runtimeClients.map((client) => client.path),
+    targetClientDirectory: targetClientDirectory,
+  );
+  if (targetSourceState == RuntimeTargetSourceState.alreadyUsesTarget) {
     print('Runtime already uses ${targetRuntime.worktreeId}.');
     return;
   }
-  final targetWorkspaceHash = targetRuntime.worktreeId.split('-').last;
+  if (targetSourceState == RuntimeTargetSourceState.inconsistent) {
+    stderr.writeln(
+      'Switch aborted: the selected Agent and Clients do not agree on the '
+      'target source. Use "sanad-dev doctor" before retrying.',
+    );
+    exitCode = 1;
+    return;
+  }
   final targetAlreadyRunning =
       agents.any((agent) => agent.workspaceHash == targetWorkspaceHash) ||
       clients.any((client) => _samePath(client.path, targetClientDirectory));
@@ -183,6 +195,27 @@ Future<void> handleRuntimeSwitch({
       '${targetRuntime.worktreeDisplayName}.',
     );
   }
+}
+
+enum RuntimeTargetSourceState { different, alreadyUsesTarget, inconsistent }
+
+RuntimeTargetSourceState classifyRuntimeTargetSource({
+  required String agentWorkspaceHash,
+  required String targetWorkspaceHash,
+  required Iterable<String> clientPaths,
+  required String targetClientDirectory,
+}) {
+  final agentUsesTarget = agentWorkspaceHash == targetWorkspaceHash;
+  final clientsUseTarget = clientPaths.every(
+    (path) => _samePath(path, targetClientDirectory),
+  );
+  if (agentUsesTarget && clientsUseTarget) {
+    return RuntimeTargetSourceState.alreadyUsesTarget;
+  }
+  if (agentUsesTarget != clientsUseTarget) {
+    return RuntimeTargetSourceState.inconsistent;
+  }
+  return RuntimeTargetSourceState.different;
 }
 
 Future<bool> waitForClientResourcesUnavailable({

@@ -72,6 +72,9 @@ The command contract is layered and explicit:
   Contract before Agent and Client packages, then stops without a runtime.
 - `sanad-dev run` ensures only missing or stale install/setup stages, then starts
   the requested runtime target.
+- `sanad-dev switch --runtime current` prepares the invoking target checkout and
+  then submits the handoff as one command; preparation failure leaves the source
+  runtime unchanged.
 
 Add `--force` to explicit `install` or `setup` only when replacing a user
 command owned by another checkout. `run` accepts an already-functional shim
