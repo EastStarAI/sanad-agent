@@ -10,6 +10,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/event_t
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../widgets/sidebar/sidebar_composition.dart';
 
@@ -582,9 +583,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     if (result.isAccepted) {
       _cancelInlineEdit(notify: false);
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(_turnReplayError(result.outcome))),
-      );
+      ToastUtils.showError(context, _turnReplayError(result.outcome));
     }
     setState(() => _replayPendingEventId = null);
   }

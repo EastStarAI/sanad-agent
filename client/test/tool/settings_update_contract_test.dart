@@ -18,5 +18,9 @@ void main() {
       source,
       contains('Linux updates are manual.'),
     );
+    expect(
+      source,
+      contains('Current Version:'),
+    );
   });
 }

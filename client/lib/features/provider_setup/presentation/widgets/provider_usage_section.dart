@@ -358,13 +358,16 @@ class _WindowRow extends StatelessWidget {
         ),
         if (window.resetAt != null) ...[
           const SizedBox(height: 2),
-          Tooltip(
-            message: DateFormat('EEEE, MMMM d, y, HH:mm:ss').format(window.resetAt!.toLocal()),
-            child: Text(
-              'Resets ${_formatLocalRelative(window.resetAt!)}',
-              style: TextStyle(
-                fontSize: 11,
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Tooltip(
+              message: DateFormat('EEEE, MMMM d, y, HH:mm:ss').format(window.resetAt!.toLocal()),
+              child: Text(
+                'Resets ${_formatLocalRelative(window.resetAt!)}',
+                style: TextStyle(
+                  fontSize: 11,
+                  color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                ),
               ),
             ),
           ),

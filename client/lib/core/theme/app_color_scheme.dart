@@ -5,18 +5,21 @@ class AppColorScheme {
     brightness: Brightness.light,
     primary: Color(0xFF60A5FA),
     onPrimary: Color(0xFF0A0A0A),
-    primaryContainer: Color(0xFFE8E8EA),
+    primaryContainer: Color(0xFFE0E7FF),
     onPrimaryContainer: Color(0xFF0A0A0A),
-    secondary: Color(0xFF03DAC6),
-    onSecondary: Colors.black,
+    secondary: Color(0xFF0D9488),
+    onSecondary: Colors.white,
     error: Color(0xFFB00020),
     onError: Colors.white,
     surface: Color(0xFFF4F4F5),
-    onSurface: Color(0xFF0A0A0A),
-    outline: Color(0xFFE4E4E7),
-    surfaceContainer: Color(0xFFE8E8EA),
-    surfaceContainerHigh: Color(0xFFDEDEE0),
-    surfaceContainerHighest: Color(0xFFDFDFE1),
+    onSurface: Color(0xFF1A1A1A),
+    onSurfaceVariant: Color(0xFF737373),
+    outline: Color(0xFFDCDDE0),
+    surfaceContainerLowest: Color(0xFFFFFFFF),
+    surfaceContainerLow: Color(0xFFF7F7F8),
+    surfaceContainer: Color(0xFFE5E5E7),
+    surfaceContainerHigh: Color(0xFFDCDDE0),
+    surfaceContainerHighest: Color(0xFFD0D1D5),
   );
 
   static const ColorScheme dark = ColorScheme(
@@ -33,7 +36,11 @@ class AppColorScheme {
     onSurface: Colors.white,
     onSurfaceVariant: Colors.white70,
     outline: Color(0xFF2D2D2D), // Border color
+    surfaceContainerLowest: Color(0xFF141414),
+    surfaceContainerLow: Color(0xFF1A1A1A),
     surfaceContainer: Color(0xFF252525), // Selected/Hover color
+    surfaceContainerHigh: Color(0xFF2A2A2A),
+    surfaceContainerHighest: Color(0xFF333333),
   );
 }
 
