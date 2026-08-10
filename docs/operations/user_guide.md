@@ -57,12 +57,12 @@ After installation, launch Sanad Client from the Start menu.
 
 ### Linux
 
-1. Extract the versioned Linux x64 bundle.
-2. Open the extracted bundle.
-3. Run the Sanad Client executable.
-
-The release notes list any distribution-specific desktop integration
-requirements.
+Download the versioned Linux x64 `.deb`, open it with the Ubuntu/Debian software
+installer, and select **Install**. The package adds Sanad to the applications
+menu with its desktop icon. For terminal installation, run
+`sudo apt install ./sanad-client-<version>-linux-x64.deb` from the download
+directory. The portable `tar.gz` remains available for advanced users who do
+not want a system installation.
 
 ## Use Sanad locally
 
@@ -223,11 +223,11 @@ installer replaces the application.
 Linux Client updates are deliberately manual:
 
 1. Open **Settings → General** and select **Check for Updates**.
-2. If a newer canonical Linux x64 artifact exists, Sanad opens that exact
+2. If a newer canonical Linux x64 `.deb` exists, Sanad opens that exact
    official GitHub Release artifact in the external browser. It does not
    download, replace, elevate, or restart the application.
-3. Download and extract the newer bundle, close the current Client, replace the
-   Client bundle, and launch it again.
+3. Close the current Client and install the downloaded `.deb` with the software
+   installer or `sudo apt install ./sanad-client-<version>-linux-x64.deb`.
 4. Keep the existing Sanad Home (normally `~/.sanad`). Do not delete or replace
    it; identity, provider configuration, and Agent state remain there.
 
