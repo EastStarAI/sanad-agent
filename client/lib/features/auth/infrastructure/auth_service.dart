@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
+import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:logging/logging.dart';
@@ -115,10 +116,7 @@ class AuthService {
   }) async {
     await prefs.setString(
       _authSessionKey,
-      jsonEncode({
-        'access_token': accessToken,
-        'refresh_token': refreshToken,
-      }),
+      jsonEncode({'access_token': accessToken, 'refresh_token': refreshToken}),
     );
     try {
       await prefs.setString('backend_access_token', accessToken);
@@ -193,17 +191,17 @@ class AuthService {
 
     if (AppPlatform.isDesktop) {
       try {
-        final authDoc = await _settingsStore.readAuthDocument();
-        final String? token = authDoc['access_token'];
-        final String? refreshToken = authDoc['refresh_token'];
-        final String? hardwareId = authDoc['hardware_id']?.toString();
+        final restored = await _settingsStore.withAuthFileLock(() async {
+          final authDoc = await _settingsStore.readAuthDocument();
+          final String? token = authDoc['access_token'];
+          final String? refreshToken = authDoc['refresh_token'];
+          final String? hardwareId = authDoc['hardware_id']?.toString();
+          if (token == null && hardwareId == null) return false;
 
-        if (token != null || hardwareId != null) {
           _logger.info('Restored auth from auth.json');
           _backendAccessToken = token;
           _backendRefreshToken = refreshToken;
           _hardwareId = hardwareId;
-
           if (token != null) {
             await prefs.setString('backend_access_token', token);
           }
@@ -213,8 +211,10 @@ class AuthService {
           if (hardwareId != null) {
             await prefs.setString('hardware_id', hardwareId);
           }
-          await _syncAuthToFile();
-
+          await _syncAuthToFileUnlocked();
+          return true;
+        });
+        if (restored) {
           if (_backendAccessToken != null) {
             await fetchProfile();
             _emitAccessToken();
@@ -247,7 +247,10 @@ class AuthService {
   /// exchange notification, preventing an event loop between client and daemon.
   Future<void> synchronizeDesktopAuthFile() async {
     if (!AppPlatform.isDesktop) return;
+    await _settingsStore.withAuthFileLock(_synchronizeDesktopAuthFileUnlocked);
+  }
 
+  Future<void> _synchronizeDesktopAuthFileUnlocked() async {
     final authDoc = await _settingsStore.readAuthDocument();
     final nextAccessToken = authDoc['access_token']?.toString();
     final nextRefreshToken = authDoc['refresh_token']?.toString();
@@ -292,6 +295,11 @@ class AuthService {
   }
 
   Future<void> _syncAuthToFile() async {
+    if (!AppPlatform.isDesktop) return;
+    await _settingsStore.withAuthFileLock(_syncAuthToFileUnlocked);
+  }
+
+  Future<void> _syncAuthToFileUnlocked() async {
     if (!AppPlatform.isDesktop) return;
     try {
       final existing = await _settingsStore.readAuthDocument();
@@ -445,21 +453,33 @@ class AuthService {
         if (st.accessToken == null) {
           throw Exception('Login completed but no access token was returned.');
         }
-        _backendAccessToken = st.accessToken;
-        _backendRefreshToken = st.refreshToken;
+        final completedAccessToken = st.accessToken!;
+        final completedRefreshToken = st.refreshToken;
+        _backendAccessToken = completedAccessToken;
+        _backendRefreshToken = completedRefreshToken;
         _logger.info('Login successful.');
 
         if (kIsWeb) {
           WebAuthPopupService.instance.closePopup();
         }
 
-        final prefs = await _getPrefs();
-        await _persistAuthPair(
-          prefs,
-          accessToken: _backendAccessToken!,
-          refreshToken: _backendRefreshToken,
-        );
-        await _syncAuthToFile();
+        Future<void> persistLogin() async {
+          _backendAccessToken = completedAccessToken;
+          _backendRefreshToken = completedRefreshToken;
+          final prefs = await _getPrefs();
+          await _persistAuthPair(
+            prefs,
+            accessToken: completedAccessToken,
+            refreshToken: completedRefreshToken,
+          );
+          await _syncAuthToFileUnlocked();
+        }
+
+        if (AppPlatform.isDesktop) {
+          await _settingsStore.withAuthFileLock(persistLogin);
+        } else {
+          await persistLogin();
+        }
         _emitAuthenticationExchange();
         await fetchProfile();
         _emitAccessToken();
@@ -481,16 +501,21 @@ class AuthService {
   }
 
   Future<void> logout() async {
+    if (AppPlatform.isDesktop) {
+      await _settingsStore.withAuthFileLock(_logoutUnlocked);
+    } else {
+      await _logoutUnlocked();
+    }
+  }
+
+  Future<void> _logoutUnlocked() async {
+    if (AppPlatform.isDesktop) {
+      final latest = await _settingsStore.readAuthDocument();
+      _backendAccessToken = latest['access_token']?.toString();
+      _backendRefreshToken = latest['refresh_token']?.toString();
+    }
     final refreshToken = _backendRefreshToken;
     final accessToken = _backendAccessToken;
-    if (refreshToken != null || accessToken != null) {
-      unawaited(
-        _portalAuth.logout(
-          accessToken: accessToken,
-          refreshToken: refreshToken,
-        ),
-      );
-    }
 
     _backendAccessToken = null;
     _backendRefreshToken = null;
@@ -520,6 +545,15 @@ class AuthService {
       }
     }
     _emitAccessToken();
+
+    if (refreshToken != null || accessToken != null) {
+      unawaited(
+        _portalAuth.logout(
+          accessToken: accessToken,
+          refreshToken: refreshToken,
+        ),
+      );
+    }
   }
 
   Future<AuthRefreshResult> refreshAccessToken() async {
@@ -536,12 +570,41 @@ class AuthService {
   }
 
   Future<AuthRefreshResult> _refreshAccessTokenInternal() async {
+    if (!AppPlatform.isDesktop) {
+      return _refreshAccessTokenWithCurrentCredentials();
+    }
+    final accessBeforeLock = _backendAccessToken;
+    final refreshBeforeLock = _backendRefreshToken;
+    try {
+      return await _settingsStore.withAuthFileLock(
+        () => _refreshAccessTokenWithCurrentCredentials(
+          accessBeforeLock: accessBeforeLock,
+          refreshBeforeLock: refreshBeforeLock,
+        ),
+      );
+    } on AuthFileLockTimeout {
+      _logger.warning('Timed out waiting for another authentication mutation.');
+      return const AuthRefreshResult.transientUnavailable();
+    } catch (error) {
+      _logger.warning(
+        'Desktop authentication lock unavailable: ${error.runtimeType}',
+      );
+      return const AuthRefreshResult.transientUnavailable();
+    }
+  }
+
+  Future<AuthRefreshResult> _refreshAccessTokenWithCurrentCredentials({
+    String? accessBeforeLock,
+    String? refreshBeforeLock,
+  }) async {
     if (AppPlatform.isDesktop) {
       try {
         final authDoc = await _settingsStore.readAuthDocument();
-        final fileAccessToken = authDoc['access_token'] as String?;
-        final fileRefreshToken = authDoc['refresh_token'] as String?;
-        if (fileAccessToken != null && fileAccessToken != _backendAccessToken) {
+        final fileAccessToken = authDoc['access_token']?.toString();
+        final fileRefreshToken = authDoc['refresh_token']?.toString();
+        final filePairChanged =
+            fileAccessToken != null && (fileAccessToken != accessBeforeLock || fileRefreshToken != refreshBeforeLock);
+        if (filePairChanged) {
           _logger.info(
             'Detected updated access token in auth.json. Adopting it.',
           );
@@ -550,13 +613,11 @@ class AuthService {
             _backendRefreshToken = fileRefreshToken;
           }
           final prefs = await _getPrefs();
-          await prefs.setString('backend_access_token', _backendAccessToken!);
-          if (_backendRefreshToken != null) {
-            await prefs.setString(
-              'backend_refresh_token',
-              _backendRefreshToken!,
-            );
-          }
+          await _persistAuthPair(
+            prefs,
+            accessToken: _backendAccessToken!,
+            refreshToken: _backendRefreshToken,
+          );
           _emitAccessToken();
           return AuthRefreshResult.success(_backendAccessToken!);
         }
@@ -588,7 +649,7 @@ class AuthService {
       _backendAccessToken = result.accessToken;
       _backendRefreshToken = nextRefreshToken;
 
-      await _syncAuthToFile();
+      await _syncAuthToFileUnlocked();
       _emitAuthenticationExchange();
       _logger.info('Token refreshed successfully');
       _emitAccessToken();

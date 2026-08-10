@@ -19,7 +19,7 @@ When the native desktop client and daemon share one Sanad Home, either process m
 - Login, refresh, and logout writers persist first, update their own memory, then emit the notification.
 - Reconciliation caused by an incoming notification never emits another notification.
 - Native desktop performs the exchange. Mobile and Web remain cloud-only and keep their independent Portal authentication lifecycle.
-- Cross-process refresh locking is intentionally deferred for launch risk control. Both processes retain the existing re-read-before-refresh mitigation.
+- Native auth writers serialize through the shared owner-only `auth.refresh.lock`; a waiter re-reads and adopts a peer-rotated pair before deciding whether a Portal refresh is still required.
 
 ## Implementation Gates
 
@@ -29,6 +29,7 @@ When the native desktop client and daemon share one Sanad Home, either process m
 - [x] Flutter Desktop emits after local login/refresh/logout persistence and reconciles incoming notifications without echo.
 - [x] Flutter authentication presentation follows externally reloaded login/logout state.
 - [x] Startup/reconnect reconciliation covers notifications missed while either process was unavailable.
+- [x] Windows, Linux, and macOS auth mutations use one shared OS-backed lock and concurrent refresh waiters do not replay the old credential.
 - [x] Focused agent, Flutter unit/widget, and daemon-backed local exchange tests pass.
 - [x] Technical and QA documentation describe the final contract.
 
@@ -36,4 +37,4 @@ When the native desktop client and daemon share one Sanad Home, either process m
 
 - Sending access or refresh credentials in an exchange event or Local Gateway response.
 - Changing Web or Mobile authentication behavior.
-- Adding a cross-process refresh lock in this release task.
+- Recovering a process crash after server-side refresh consumption but before local pair persistence; that requires server-side idempotency.

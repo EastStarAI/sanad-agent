@@ -65,6 +65,7 @@ The `sanad-agent` repository is structured as follows:
 * **`client/`**: Flutter UI desktop client.
 * **`docs/`**: Feature plans, product specifications, and markdown documentation.
 * **`release/`**: The versioned release contract, generated-output policy, and shared Dart contract package under `release/contract/` for manifest, checksum, and Appcast models consumed by the agent, client, and release tooling.
+* **`shared/`**: Focused pure-Dart runtime primitives consumed by both the agent and client; each package owns a local contract and must remain independent of presentation and agent execution domains.
 * **`scripts/`**: Management, build, and release helper scripts.
   * `scripts/sanad_dev.dart` is the thin `sanad-dev` CLI entry point. Worktree runtime context, process supervision, instance discovery, and developer actions belong in focused modules under `scripts/sanad_dev/`; do not grow the entry point back into a monolith.
 

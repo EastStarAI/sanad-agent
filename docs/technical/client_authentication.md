@@ -102,7 +102,12 @@ and web never attempt the Local Gateway.
 Native desktop processes reconcile live login, refresh, and logout through the
 credential-free Local Gateway notification specified in
 `docs/technical/desktop_authentication_exchange.md`. The shared auth document,
-not the notification, remains authoritative.
+not the notification, remains authoritative. Windows, Linux, and macOS serialize
+all auth-document mutations through the shared owner-only `auth.refresh.lock`;
+a waiting refresher re-reads and adopts a peer-rotated pair instead of replaying
+the prior refresh credential. Web and mobile retain in-process refresh and never
+open either desktop file.
+
 
 ## Runtime Consumers
 

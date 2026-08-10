@@ -29,7 +29,11 @@ No additional field is accepted, returned, broadcast, or logged. Receiving this 
 
 ## Refresh Boundary
 
-The existing re-read-before-refresh mitigation remains in both processes. The exchange lets the peer adopt a completed rotation instead of starting from stale memory. A cross-process refresh lock is deliberately deferred for this release; the narrow simultaneous-read race remains documented rather than introducing a new locking lifecycle immediately before launch.
+Native Windows, Linux, and macOS processes serialize authentication mutations with the stable `SANAD_HOME/auth.refresh.lock` file. The shared pure-Dart lock combines an in-isolate queue with a bounded operating-system advisory exclusive lock; the file is owner-only, contains no credentials, and is never replaced or deleted during normal operation.
+
+A refresher acquires the lock before re-reading `auth.json`. If the persisted access/refresh pair changed while it waited, it adopts that complete pair and does not call the Portal. Otherwise it keeps the lock through the bounded Portal request and atomic pair persistence. Login, logout, pairing, and auth-document read-modify-write mutations use the same lock to prevent lost updates. Web and mobile neither open `auth.json` nor participate in this lock.
+
+An operating-system lock is released automatically when its process exits. A crash after the Portal consumes a rotating credential but before the new pair is persisted remains a separate distributed commit gap; closing that gap requires a server-side idempotent refresh protocol and is not solved by local mutual exclusion.
 
 ## Security
 

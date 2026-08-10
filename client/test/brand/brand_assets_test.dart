@@ -84,12 +84,12 @@ void main() {
     expect((macOSSmallIcon.width, macOSStoreIcon.width), (16, 1024));
     expect(macOSStoreIcon.every((pixel) => pixel.a.toInt() == 255), isTrue);
     expect(_rgbaBytes(macOSStoreIcon), _rgbaBytes(iosStoreIcon));
-    expect(Directory('macos/Runner/AppIcon.icon').existsSync(), isFalse);
+    expect(Directory('macos/Runner/AppIcon.icon').existsSync(), isTrue);
     final macOSProject = File(
       'macos/Runner.xcodeproj/project.pbxproj',
     ).readAsStringSync();
-    expect(macOSProject, isNot(contains('folder.iconcomposer.icon')));
-    expect(macOSProject, isNot(contains('AppIcon.icon in Resources')));
+    expect(macOSProject, contains('folder.iconcomposer.icon'));
+    expect(macOSProject, contains('AppIcon.icon in Resources'));
 
     final ico = File('windows/runner/resources/app_icon.ico').readAsBytesSync();
     final icoData = ByteData.sublistView(Uint8List.fromList(ico));

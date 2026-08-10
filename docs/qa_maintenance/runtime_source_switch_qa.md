@@ -14,6 +14,8 @@ description: "Regression matrix for moving one active sanad-dev pair between sou
 | Another session may share the selected pair | The agent warns that all shared sessions will reconnect and waits for fresh user confirmation. |
 | Requester identity is available but user consent is absent | Identity may select a pair but must not authorize execution. |
 | User directly confirms the identified runtime and target worktree | The agent may invoke the command once; failure or rollback requires a new direct instruction before retry. |
+| Authorized switch targets an unprepared worktree | The same switch command idempotently prepares Contract, Agent, and Client packages before submitting the handoff; no separate setup command is required. |
+| Target preparation fails | The command fails before writing the handoff transaction, and the source runtime remains unchanged. |
 | Agent requests `switch --runtime current` from a target worktree after authorization | Only the requester pair drains and restarts from the target source. |
 | Authorized source handoff begins | The agent runs `status` from the source worktree first and records the selected source, branch, agent, and clients. |
 | Agent-origin target startup succeeds | The original switch tool call returns `complete`; the agent then runs `status` from the target worktree and verifies its source, branch, agent, and clients. |
@@ -27,6 +29,8 @@ description: "Regression matrix for moving one active sanad-dev pair between sou
 | One agent has macOS and iPhone Simulator clients | Status lists both clients; switch preserves both device ids and VM-service ports and completes only after both are healthy. |
 | One target client fails startup | The target group is terminated and the agent plus every previous client are restored. |
 | Status is invoked from a different worktree with an explicit agent port | Output distinguishes the command worktree/branch from the selected runtime source/branch. |
+| Target Client paths match the invoking worktree but the Agent workspace hash does not, or vice versa | Switch reports inconsistent Agent/Client sources and fails closed; it does not claim the runtime already uses the target. |
+| Agent workspace hash and every managed Client source match the target | Switch may report that the runtime already uses the target without submitting another handoff. |
 | Human command is ambiguous | Command fails and requests `--port`; no manifest or process mutation occurs. |
 | Target worktree already runs a pair | Command fails before drain; neither runtime changes. |
 | Target agent and client become healthy | Retained Home, gateway port, VM-service port, cloud mode, preferences namespace, and session recovery are unchanged. |

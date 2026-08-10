@@ -1,9 +1,24 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'package:test/test.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:path/path.dart' as p;
+
+class _BeforeAcquireAuthLock extends NativeAuthFileLock {
+  _BeforeAcquireAuthLock(super.sanadHomePath);
+
+  Future<void> Function()? beforeNextLock;
+
+  @override
+  Future<T> runExclusive<T>(Future<T> Function() operation) async {
+    final beforeLock = beforeNextLock;
+    beforeNextLock = null;
+    await beforeLock?.call();
+    return super.runExclusive(operation);
+  }
+}
 
 void main() {
   late Directory tempDir;
@@ -119,6 +134,41 @@ void main() {
       expect(authManager.accessToken, 'external_access');
       expect(authManager.refreshToken, 'external_refresh');
     });
+
+    test(
+      'adopts credentials rotated while waiting for the process lock',
+      () async {
+        final authFile = File(p.join(tempDir.path, 'auth.json'));
+        await authFile.writeAsString(
+          jsonEncode({
+            'access_token': 'old_access',
+            'refresh_token': 'old_refresh',
+            'hardware_id': 'test_hardware',
+          }),
+        );
+        final lock = _BeforeAcquireAuthLock(tempDir.path);
+        authManager = AuthManager(authFileLock: lock);
+        await authManager.initialize();
+        lock.beforeNextLock = () async {
+          await authFile.writeAsString(
+            jsonEncode({
+              'access_token': 'peer_access',
+              'refresh_token': 'peer_refresh',
+              'hardware_id': 'test_hardware',
+            }),
+            flush: true,
+          );
+        };
+
+        final refreshed = await authManager.refreshAccessToken(
+          'http://127.0.0.1:1',
+        );
+
+        expect(refreshed, isTrue);
+        expect(authManager.accessToken, 'peer_access');
+        expect(authManager.refreshToken, 'peer_refresh');
+      },
+    );
 
     test('logout clears tokens but preserves hardware_id', () async {
       final authFile = File(p.join(tempDir.path, 'auth.json'));

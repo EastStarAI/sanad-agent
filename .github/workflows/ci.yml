@@ -53,11 +53,11 @@ jobs:
           cat "$RUNNER_TEMP/changed"
           agent=false; client=false; docs=false; release=false; security=false
           while IFS= read -r path; do
-            case "$path" in agent/*|release/contract/*|release/release-contract.json) agent=true ;; esac
-            case "$path" in client/*|release/contract/*|release/release-contract.json) client=true ;; esac
+            case "$path" in agent/*|shared/auth_lock/*|release/contract/*|release/release-contract.json) agent=true ;; esac
+            case "$path" in client/*|shared/auth_lock/*|release/contract/*|release/release-contract.json) client=true ;; esac
             case "$path" in *.md|docs/*|.vscode/*|.agents/*|.github/ISSUE_TEMPLATE/*|.github/DISCUSSION_TEMPLATE/*|.github/labels.yml|.github/CODEOWNERS|.github/PULL_REQUEST_TEMPLATE.md|scripts/community/*) docs=true ;; esac
             case "$path" in .github/workflows/*|release/*|client/release/*|agent/tool/release_tool.dart|scripts/install.sh|scripts/install.ps1) release=true ;; esac
-            case "$path" in SECURITY.md|docs/operations/code_signing_policy.md|agent/lib/core/auth/*|agent/lib/core/auth/**/*|agent/lib/capabilities/permissions/*|agent/lib/capabilities/permissions/**/*) security=true ;; esac
+            case "$path" in SECURITY.md|docs/operations/code_signing_policy.md|shared/auth_lock/*|shared/auth_lock/**/*|agent/lib/core/auth/*|agent/lib/core/auth/**/*|agent/lib/capabilities/permissions/*|agent/lib/capabilities/permissions/**/*) security=true ;; esac
           done < "$RUNNER_TEMP/changed"
           if [[ "$EVENT_NAME" != "pull_request" || "$classification_failed" == true ]] ||
             [[ "$agent$client$docs$release$security" == falsefalsefalsefalsefalse ]]; then
@@ -163,6 +163,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
+      - name: Verify native cross-process authentication lock
+        working-directory: shared/auth_lock
+        run: |
+          fvm dart pub get
+          fvm dart test
       - name: Verify bootstrap, journals, and terminal quoting without hosted traffic
         working-directory: client
         run: >-
@@ -239,6 +244,16 @@ jobs:
           grep -F 'name: Activate, verify, and roll back Production Web on failure' .github/workflows/deploy.yml
           grep -F 'https://app.sanad.eaststarai.com/sanad-public-sha.txt' .github/workflows/deploy.yml
           grep -F 'gh attestation verify download/appcast.xml' .github/workflows/deploy.yml
+          grep -F 'gh attestation verify download/release-manifest.json' .github/workflows/deploy.yml
+          test "$(grep -Fc 'sanad-sites-control refresh-static production' .github/workflows/deploy.yml)" -eq 6
+          grep -F 'name: Activate, verify, and roll back updates on failure' .github/workflows/deploy.yml
+          grep -F 'https://updates.sanad.eaststarai.com/$name' .github/workflows/deploy.yml
+          test "$(grep -Fc 'cp -a' .github/workflows/deploy.yml)" -eq 2
+          test "$(grep -Fc 'incoming/index.html' .github/workflows/deploy.yml)" -eq 3
+          test "$(grep -Fc 'incoming/favicon.svg' .github/workflows/deploy.yml)" -eq 2
+          grep -F 'name: Activate, verify, and roll back installer sources on failure' .github/workflows/deploy.yml
+          grep -F 'https://downloads.sanad.eaststarai.com/$name' .github/workflows/deploy.yml
+          grep -F 'restoring the previous selector' .github/workflows/deploy.yml
           test "$(grep -Fc 'environment: client-downloads-production' .github/workflows/deploy.yml)" -eq 3
           ! grep -Eq 'environment: (web|updates|installers)-production' .github/workflows/deploy.yml
           grep -F 'environment: client-downloads-production' .github/workflows/release.yml
@@ -308,7 +323,7 @@ jobs:
             fi
           }
           require_for_paths maintainer-reviewed '^(\.github/|GOVERNANCE\.md$|CONTRIBUTING\.md$|CODE_OF_CONDUCT\.md$)'
-          require_for_paths security-reviewed '^(SECURITY\.md$|agent/lib/core/auth/|agent/lib/capabilities/permissions/)'
+          require_for_paths security-reviewed '^(SECURITY\.md$|shared/auth_lock/|agent/lib/core/auth/|agent/lib/capabilities/permissions/)'
           require_for_paths release-reviewed '^(CODE_SIGNING_POLICY\.md$|release/|client/release/|scripts/install\.(sh|ps1)$|\.github/workflows/(release|deploy|testflight)\.yml$)'
 
   all-required:

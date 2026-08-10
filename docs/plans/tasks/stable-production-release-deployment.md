@@ -1,7 +1,7 @@
 ---
 title: "Stable Production Release Deployment Handoff"
 description: "Connect approved Stable publication to Production Web, Appcast, and installer deployment without weakening protected release or rollback boundaries."
-status: "in_review"
+status: "done"
 priority: "critical"
 design_contract: "docs/operations/release_and_signing.md"
 qa_contract: "docs/qa_maintenance/release_verification.md"
@@ -60,3 +60,61 @@ deploy Production assets.
       deployment and manual recovery prerequisites.
 - [x] Focused workflow/static validation passes with bounded output.
 - [x] Graphify is updated after the workflow/documentation change.
+
+## Live activation follow-up
+
+The first `v1.0.1` recovery run proved that changing a host selector does not
+refresh an existing Docker bind mount. Web activation failed before selection
+because the canonical root lacked a baseline, while Appcast and installer jobs
+changed their new selectors without changing the publicly mounted legacy
+content. The permanent handoff therefore also requires a bounded Production
+static-container refresh after every selector change and rollback.
+
+### Follow-up Definition of Done
+
+- [x] Web activation refreshes only `app-site` after selecting or restoring a
+      release.
+- [x] Appcast activation captures the previous selector, refreshes only
+      `updates-site`, verifies the exact public bytes, and rolls back on failure.
+- [x] Installer activation captures the previous selector, refreshes only
+      `downloads-site`, verifies both exact public source files, and rolls back
+      on failure.
+- [x] Every refresh uses the private host-owned `sanad-sites-control
+      refresh-static production <surface>` command; the public workflow does not
+      gain Docker or general host authority.
+- [x] Manual and automatic Stable deployments share the same reusable workflow.
+- [x] Focused workflow contracts, documentation checks, and Graphify update pass.
+
+## Complete static-root follow-up
+
+The canonical updates and downloads containers also serve stable shell files
+such as `index.html` and `favicon.svg`. A release containing only Appcast or
+installer payloads is not a complete mount root. Each new immutable release must
+therefore copy the preceding selected static root into an incoming directory,
+replace only its verified release-owned files, validate the complete candidate,
+and atomically publish it before selection.
+
+### Completion Definition of Done
+
+- [x] Updates releases contain the attested Stable manifest and Appcast plus the
+      inherited static shell.
+- [x] Installer releases contain both canonical scripts plus the inherited
+      static shell.
+- [x] Incoming directories are unique, complete, and moved atomically; existing
+      immutable releases are reused only when every required file matches.
+- [x] Public verification and rollback compare both Appcast/manifest or both
+      installer files.
+- [x] Focused workflow contracts, documentation, and Graphify update pass.
+
+## Live closure — 2026-08-10
+
+Private host control commit `61a7c846` and public workflow commits `2f8dbe33`
+and `4273491c` were merged after protected review and complete CI. The one-time
+Production mount migration preserved an owner-only rollback copy and activated
+the canonical static roots. Public rehearsal run `31346940281`, sourced from
+Stable release run `31296207510`, passed Web, updates, and installers. Web serves
+version `1.0.1`, build `2`, and public commit
+`7bbb88a874011490ee8b0f94dd78f4640e4f718d`; all release-owned public bytes,
+clean-browser rendering, and Production/Development/Staging regressions passed.
+Future Stable publication invokes the same reusable workflow automatically with
+all three surfaces enabled.
