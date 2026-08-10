@@ -28,6 +28,13 @@ new conversation.
 The compact Home gateway/status bar is a native-desktop surface. Web and mobile
 never render it, regardless of browser or viewport width.
 
+Desktop onboarding is local-first: installing the agent on the current computer
+is the primary card action, while signing in or connecting a remote device is a
+secondary text action. Mobile and web never offer local installation. When an
+authenticated mobile or web user has no registered devices, onboarding presents
+a `No devices connected` empty state with `Add a Remote Device` as its primary
+action.
+
 When an empty device inventory is still being requested, the sidebar identifies
 that request as loading rather than claiming that no devices exist. If the
 request settles successfully, times out, or fails without returning a device,
