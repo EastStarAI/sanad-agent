@@ -4,6 +4,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 
 class ToolPresentationHelper {
   static String getEventTitle(CanonicalEvent event) {
@@ -139,10 +140,16 @@ class ToolPresentationHelper {
     required BuildContext context,
     required CanonicalEvent event,
     required Color titleColor,
+    TextDirection? textDirection,
   }) {
+    final title = getEventTitle(event);
+    final resolvedDirection = textDirection ?? TextUtils.getTextDirection(title);
+
     if (event.kind != EventKind.toolCall) {
       return Text(
-        getEventTitle(event),
+        title,
+        textDirection: resolvedDirection,
+        textAlign: resolvedDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
         style: GoogleFonts.outfit(
           color: titleColor,
           fontSize: 13,
@@ -383,6 +390,7 @@ class ToolPresentationHelper {
     return RichText(
       maxLines: 1,
       overflow: TextOverflow.ellipsis,
+      textDirection: resolvedDirection,
       text: TextSpan(
         style: GoogleFonts.outfit(
           fontSize: 13,

@@ -56,7 +56,7 @@ class EventMetadataFormatter {
     if (resolvedModel.isNotEmpty) {
       parts.add(resolvedModel);
     }
-    final durationText = _formatRuntime(runtimeMs);
+    final durationText = formatRuntime(runtimeMs);
     if (durationText.isNotEmpty) {
       parts.add(durationText);
     }
@@ -70,7 +70,7 @@ class EventMetadataFormatter {
     );
   }
 
-  static String _formatRuntime(dynamic runtimeMs) {
+  static String formatRuntime(dynamic runtimeMs) {
     if (runtimeMs is! num) return '';
     final milliseconds = runtimeMs.round();
     if (milliseconds < 1000) return '${milliseconds}ms';
@@ -78,9 +78,17 @@ class EventMetadataFormatter {
     if (seconds < 60) {
       return '${seconds.toStringAsFixed(seconds >= 10 ? 0 : 1)}s';
     }
-    final minutes = (seconds / 60).floor();
-    final remainingSeconds = (seconds % 60).round();
-    return '${minutes}m ${remainingSeconds}s';
+
+    final totalSeconds = (milliseconds / 1000).round();
+    final hours = totalSeconds ~/ 3600;
+    final minutes = (totalSeconds % 3600) ~/ 60;
+    final remainingSeconds = totalSeconds % 60;
+
+    if (hours > 0) {
+      return '${hours}h ${minutes}m';
+    } else {
+      return '${minutes}m ${remainingSeconds}s';
+    }
   }
 
   static num? _readUsageNumber(dynamic usage, List<String> keys) {

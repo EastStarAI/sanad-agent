@@ -393,50 +393,56 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
 
   Widget _buildEventHeader(bool canExpand) {
     final bool isError = widget.event.status == EventStatus.error;
+    final titleText = ToolPresentationHelper.getEventTitle(widget.event);
+    final textDirection = TextUtils.getTextDirection(titleText);
 
     final Widget header = InkWell(
       onTap: canExpand ? _toggleExpanded : null,
       borderRadius: BorderRadius.circular(8),
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 12.0),
-        child: Row(
-          children: [
-            _buildStatusIndicator(),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Flexible(
-                    child: ToolPresentationHelper.buildTitleWidget(
-                      context: context,
-                      event: widget.event,
-                      titleColor: _getTitleColor(context),
-                    ),
-                  ),
-                  if (canExpand) ...[
-                    const SizedBox(width: 4),
-                    RotationTransition(
-                      turns: _expansionAnimation.drive(Tween<double>(begin: 0.0, end: 0.25)),
-                      child: Icon(
-                        Icons.chevron_right,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        size: 20,
+        child: Directionality(
+          textDirection: textDirection,
+          child: Row(
+            children: [
+              _buildStatusIndicator(),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Flexible(
+                      child: ToolPresentationHelper.buildTitleWidget(
+                        context: context,
+                        event: widget.event,
+                        titleColor: _getTitleColor(context),
+                        textDirection: textDirection,
                       ),
                     ),
+                    if (canExpand) ...[
+                      const SizedBox(width: 4),
+                      RotationTransition(
+                        turns: _expansionAnimation.drive(Tween<double>(begin: 0.0, end: 0.25)),
+                        child: Icon(
+                          Icons.chevron_right,
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          size: 20,
+                        ),
+                      ),
+                    ],
+                    if (isError) ...[
+                      const SizedBox(width: 6),
+                      Icon(
+                        Icons.error_outline_rounded,
+                        size: 14,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ],
                   ],
-                  if (isError) ...[
-                    const SizedBox(width: 6),
-                    Icon(
-                      Icons.error_outline_rounded,
-                      size: 14,
-                      color: Theme.of(context).colorScheme.error,
-                    ),
-                  ],
-                ],
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
