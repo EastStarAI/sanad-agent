@@ -155,6 +155,12 @@ Local verification proves the release contract, manifest/checksum generation,
 macOS universal packaging and Developer ID signatures, iOS signed export,
 Sparkle signatures, Web packaging, analyzers, and updater tests.
 
+Production rehearsal run `31346940281` completed the reusable Stable asset
+handoff from `v1.0.1` release run `31296207510`. Web, Appcast, Stable manifest,
+and both installer sources matched their immutable source identities; clean
+Flutter rendering and all three environment regressions passed. The same
+workflow is called automatically after every future approved Stable publication.
+
 The protected validation-only run at public `main` commit `c2bd6b3b` passed the
 complete hosted Agent and Client matrix. It exercised the protected signing
 Environments, generated the assembled manifest, checksums, Appcast, SBOM, and
