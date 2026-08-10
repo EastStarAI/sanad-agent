@@ -141,5 +141,5 @@ Stable Client aliases use the same bounded upload protocol.
 - [x] Release architecture and QA contracts describe the root-owned promotion
       boundary and two-file overlay contract.
 - [x] Focused workflow and YAML validation pass on the final branch.
-- [ ] The public PR is merged before the private repository pins the resulting
+- [x] The public PR is merged before the private repository pins the resulting
       public commit and performs the live credential cutover.
