@@ -11,11 +11,13 @@ import 'package:sanad_client/features/devices/domain/models/gateway_connection_s
 import 'package:flutter/material.dart';
 import 'package:sanad_client/features/devices/presentation/widgets/installation_terminal_view.dart';
 import 'package:sanad_client/features/devices/presentation/widgets/gateway_connection_indicator.dart';
+import 'package:sanad_client/features/devices/presentation/widgets/onboarding_setup_choices.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_flow.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 import 'package:go_router/go_router.dart';
 
 class OnboardingSetupScreen extends StatefulWidget {
@@ -146,7 +148,7 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
                       onComplete: _onInstallSuccess,
                       onFailure: _onInstallFailure,
                     )
-                  : _buildSelectionView(theme),
+                  : _buildSelectionView(),
             ),
           ),
         ),
@@ -154,109 +156,41 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
     );
   }
 
-  Widget _buildSelectionView(ThemeData theme) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // Brand Header
-        Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.rocket_launch_outlined,
-              size: 44,
-              color: theme.colorScheme.primary,
-            ),
-            const SizedBox(width: 12),
-            Text(
-              'Sanad Agent',
-              style: TextStyle(
-                fontSize: 36,
-                fontWeight: FontWeight.bold,
-                letterSpacing: -1.0,
-                color: theme.colorScheme.onSurface,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 12),
-        Text(
-          'The local agent is currently inactive. Please select your preferred setup mode to start.',
-          textAlign: TextAlign.center,
-          style: TextStyle(
-            fontSize: 16,
-            height: 1.5,
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-          ),
-        ),
-        const SizedBox(height: 36),
-        const Align(
-          alignment: Alignment.center,
-          child: GatewayConnectionIndicator(),
-        ),
-        const SizedBox(height: 24),
+  Widget _buildSelectionView() {
+    return BlocBuilder<AuthCubit, AuthState>(
+      builder: (context, authState) {
+        return BlocBuilder<DeviceCubit, DeviceState>(
+          builder: (context, deviceState) {
+            final isAuthenticated = authState is AuthAuthenticated;
+            final hasRegisteredDevices = _registeredDevicesFromState(deviceState).isNotEmpty;
 
-        // Option A: Local offline mode
-        _buildOptionCard(
-          theme: theme,
-          icon: Icons.computer_outlined,
-          title: 'Run Locally (Offline Mode)',
-          description: 'Download the local agent and install it as a background service running on your machine.',
-          onTap: () {
-            setState(() {
-              _showTerminal = true;
-              _error = null;
-            });
-          },
-        ),
-        const SizedBox(height: 16),
-
-        BlocBuilder<AuthCubit, AuthState>(
-          builder: (context, authState) {
-            return BlocBuilder<DeviceCubit, DeviceState>(
-              builder: (context, deviceState) {
-                final isAuthenticated = authState is AuthAuthenticated;
-                final registeredDevices = _registeredDevicesFromState(deviceState);
-                final hasRegisteredDevices = registeredDevices.isNotEmpty;
-
-                return _buildOptionCard(
-                  theme: theme,
-                  icon: Icons.cloud_outlined,
-                  title: isAuthenticated
-                      ? (hasRegisteredDevices ? 'Use Existing Cloud Devices' : 'Add Remote Device')
-                      : 'Sign in to Connect Remote',
-                  description: isAuthenticated
-                      ? (hasRegisteredDevices
-                            ? 'Continue to your linked computers and servers through SanadGateway.'
-                            : 'Create a remote device record, then install Sanad Agent on that machine.')
-                      : 'Sign in first, then add or choose a remote computer or server.',
-                  onTap: () {
-                    if (!isAuthenticated) {
-                      unawaited(context.read<AuthCubit>().login());
-                      return;
-                    }
-                    if (hasRegisteredDevices) {
-                      context.go(AppRoutes.home);
-                    } else {
-                      unawaited(context.push(AppRoutes.addAgent));
-                    }
-                  },
-                );
+            return OnboardingSetupChoices(
+              isDesktop: AppPlatform.isDesktop,
+              isAuthenticated: isAuthenticated,
+              hasRegisteredDevices: hasRegisteredDevices,
+              connectionIndicator: AppPlatform.isDesktop ? const GatewayConnectionIndicator() : null,
+              error: _error,
+              onRunLocally: () {
+                setState(() {
+                  _showTerminal = true;
+                  _error = null;
+                });
+              },
+              onRemoteAction: () {
+                if (!isAuthenticated) {
+                  unawaited(context.read<AuthCubit>().login());
+                  return;
+                }
+                if (hasRegisteredDevices) {
+                  context.go(AppRoutes.home);
+                } else {
+                  unawaited(context.push(AppRoutes.addAgent));
+                }
               },
             );
           },
-        ),
-
-        if (_error != null) ...[
-          const SizedBox(height: 24),
-          Text(
-            _error!,
-            style: const TextStyle(color: Colors.redAccent, fontSize: 13),
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ],
+        );
+      },
     );
   }
 
@@ -281,67 +215,5 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
         ? state.agents
         : (state is DeviceNoActive ? state.agents : const <DeviceConfig>[]);
     return devices.where((device) => device.id != DeviceInventoryIds.localDevice).toList();
-  }
-
-  Widget _buildOptionCard({
-    required ThemeData theme,
-    required IconData icon,
-    required String title,
-    required String description,
-    required VoidCallback onTap,
-  }) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: onTap,
-        borderRadius: BorderRadius.circular(16),
-        child: Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            border: Border.all(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.1),
-            ),
-            borderRadius: BorderRadius.circular(16),
-            color: theme.colorScheme.onSurface.withValues(alpha: 0.02),
-          ),
-          child: Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: theme.colorScheme.primary.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(icon, color: theme.colorScheme.primary, size: 28),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      title,
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      description,
-                      style: TextStyle(
-                        fontSize: 13,
-                        color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-                        height: 1.4,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }
