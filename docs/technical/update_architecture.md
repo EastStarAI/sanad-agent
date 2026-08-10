@@ -29,7 +29,7 @@ GitHub attestation locally.
 | Agent Linux | `github-attestation` | canonical URL, size, and SHA-256 |
 | Client macOS | `developer-id+notarization+sparkle-ed25519` | Sparkle EdDSA plus Apple package trust |
 | Client Windows | `unsigned+winsparkle-dsa` | WinSparkle DSA plus manifest/checksum/provenance release gates |
-| Client Linux | `github-attestation` | manual discovery of a canonical release artifact |
+| Client Linux | `github-attestation` | manual discovery of the canonical x64 `.deb`; portable `tar.gz` remains an alternative |
 
 Windows remains intentionally unsigned for every release until an explicit
 signed-only migration changes this centralized policy. Signed and unsigned
@@ -117,9 +117,10 @@ process name alone.
 
 Linux has no background poll, download, package replacement, privilege request,
 or rollback claim. **Settings → General → Check for Updates** performs a
-user-initiated manifest check. Only a newer canonical Linux x64 Client artifact
+user-initiated manifest check. Only a newer canonical Linux x64 Client `.deb`
 is opened in the external browser; up-to-date and discovery failures remain
-non-blocking.
+non-blocking. Installation and replacement remain user-approved system package
+manager actions.
 
 ## Isolated candidate verification
 

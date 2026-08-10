@@ -70,6 +70,15 @@
       "component": "client",
       "platform": "linux",
       "architecture": "x64",
+      "format": "deb",
+      "filename": "sanad-client-1.0.1-linux-x64.deb",
+      "public": true,
+      "signature_type": "github-attestation"
+    },
+    {
+      "component": "client",
+      "platform": "linux",
+      "architecture": "x64",
       "format": "tar.gz",
       "filename": "sanad-client-1.0.1-linux-x64.tar.gz",
       "public": true,

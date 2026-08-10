@@ -264,7 +264,7 @@ class AutoUpdateService {
       component: 'client',
       platform: 'linux',
       architecture: 'x64',
-      format: 'tar.gz',
+      format: 'deb',
       publicOnly: true,
     );
     if (artifact == null) {

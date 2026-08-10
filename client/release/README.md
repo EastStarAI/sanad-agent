@@ -9,7 +9,8 @@ The release pipeline publishes the supported client packages, including:
 
 - `sanad-client-<version>-macos-universal.dmg`
 - `sanad-client-<version>-windows-x64.exe`
-- `sanad-client-<version>-linux-x64.tar.gz`
+- `sanad-client-<version>-linux-x64.deb` (primary Ubuntu/Debian package)
+- `sanad-client-<version>-linux-x64.tar.gz` (portable advanced-user bundle)
 - `sanad-client-<version>-android-universal.apk`
 
 Store or hosted-web destinations are linked from the GitHub Release when they
@@ -20,6 +21,7 @@ apply.
 - `macos/` builds the macOS DMG and owns the macOS release helper.
 - `windows/` builds and verifies the Windows x64 installer. Its automated
   installer path uses NSIS.
+- `linux/` builds the Ubuntu/Debian x64 package from the verified Flutter bundle.
 - `ios/` owns the Internal TestFlight export policy.
 - `release/release-contract.json` and `release/contract/` at repository
   root own version validation, manifest parsing, Appcast generation, and

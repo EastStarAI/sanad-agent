@@ -317,6 +317,7 @@ void main() {
     await service.initialize();
     expect((await service.checkForUpdates()).status, ClientUpdateStatus.updateOpened);
     expect(opened?.host, 'github.com');
+    expect(opened?.path, endsWith('sanad-client-1.1.0-linux-x64.deb'));
   });
 }
 
@@ -333,9 +334,9 @@ Map<String, dynamic> _linuxClientManifest() => {
       'component': 'client',
       'platform': 'linux',
       'architecture': 'x64',
-      'format': 'tar.gz',
-      'filename': 'sanad-client-1.1.0-linux-x64.tar.gz',
-      'url': 'https://github.com/EastStarAI/sanad-agent/releases/download/v1.1.0/sanad-client-1.1.0-linux-x64.tar.gz',
+      'format': 'deb',
+      'filename': 'sanad-client-1.1.0-linux-x64.deb',
+      'url': 'https://github.com/EastStarAI/sanad-agent/releases/download/v1.1.0/sanad-client-1.1.0-linux-x64.deb',
       'sha256': List.filled(64, 'a').join(),
       'size': 42,
       'public': true,

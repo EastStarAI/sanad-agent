@@ -262,7 +262,7 @@ jobs:
 
   client-linux-web:
     needs: validate
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
@@ -270,7 +270,7 @@ jobs:
       - name: Install Linux build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev xvfb
       - name: Build Linux and Web
         working-directory: client
         run: |
@@ -278,6 +278,7 @@ jobs:
           fvm flutter pub get
           fvm flutter analyze
           fvm flutter test test/tool/app_web_startup_contract_test.dart
+          fvm flutter test test/tool/linux_release_compatibility_contract_test.dart
           fvm flutter build linux --release --dart-define-from-file=config/prod.json
           fvm flutter build web --release --dart-define-from-file=config/prod.json
           printf '%s\n' '{"version":"${{ needs.validate.outputs.artifact_version }}","build":${{ needs.validate.outputs.build }}}' \
@@ -299,6 +300,16 @@ jobs:
           mkdir -p ../dist
           tar -C build/linux/x64/release -czf \
             "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-linux-x64.tar.gz" bundle
+          bash ../scripts/release/test_linux_release_bundle.sh \
+            "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-linux-x64.tar.gz"
+          SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$GITHUB_SHA")" \
+            bash release/linux/build_linux_deb.sh \
+            build/linux/x64/release/bundle \
+            "${{ needs.validate.outputs.artifact_version }}" \
+            "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-linux-x64.deb"
+          bash ../scripts/release/test_linux_deb_package.sh \
+            "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-linux-x64.deb" \
+            --install
           tar -C build/web -czf \
             "../dist/sanad-client-${{ needs.validate.outputs.artifact_version }}-web-universal.tar.gz" .
       - uses: actions/upload-artifact@v4
@@ -715,7 +726,7 @@ jobs:
             select(.component == "client" and
               ((.platform == "macos" and .architecture == "universal" and .format == "dmg") or
                (.platform == "windows" and .architecture == "x64" and .format == "exe") or
-               (.platform == "linux" and .architecture == "x64" and .format == "tar.gz"))) |
+               (.platform == "linux" and .architecture == "x64" and .format == "deb"))) |
             .filename' download/release-manifest.json)
           test "${#client_files[@]}" -eq 3
           for file in "${client_files[@]}"; do

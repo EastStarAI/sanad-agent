@@ -21,7 +21,7 @@ Pull-request CI is read-only and never receives signing or deployment credential
 | Agent | Linux x64 | GitHub Release | SHA-256 plus GitHub attestation |
 | Agent | Windows x64 | GitHub Release | Temporarily unsigned Windows build for every release; canonical manifest/URL/size/SHA-256 and protected GitHub provenance |
 | Client | macOS universal | GitHub Release | Developer ID, notarization, Sparkle EdDSA |
-| Client | Linux x64 | GitHub Release | SHA-256 plus GitHub attestation |
+| Client | Linux x64 `.deb` and portable `tar.gz` | GitHub Release | SHA-256 plus GitHub attestation |
 | Client | Windows x64 | GitHub Release | Temporarily unsigned Windows build for every release; WinSparkle DSA plus canonical manifest/URL/size/SHA-256 and protected GitHub provenance |
 | Client | Android universal APK | GitHub Release | Android release signature |
 | Client | Android AAB | Private release handoff | Android release signature |

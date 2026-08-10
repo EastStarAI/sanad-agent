@@ -59,7 +59,7 @@ while IFS=$'\t' read -r platform architecture format; do
 done <<'PLATFORMS'
 macos	universal	dmg
 windows	x64	exe
-linux	x64	tar.gz
+linux	x64	deb
 PLATFORMS
 
 install -m 0644 "$temporary" "$OUTPUT"

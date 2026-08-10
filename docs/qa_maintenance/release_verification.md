@@ -29,6 +29,28 @@ default rules and narrowly allows only the reviewed `generic-api-key` fixtures
 in three exact credential/redaction test files; production paths and all other
 rules remain fail-closed.
 
+Linux desktop release compatibility is a release gate. The supported binary
+baseline is Ubuntu 22.04 or newer. The `client-linux-web` job must therefore
+build the packaged Linux x64 Client on `ubuntu-22.04`, not a newer runner, so
+the produced executable and native Linux plugins do not raise the runtime
+GLib/GLIBC baseline above target systems. After packaging, CI must run
+`scripts/release/test_linux_release_bundle.sh` against the generated `tar.gz`;
+the smoke rejects any bundled executable or `.so` that imports
+`g_once_init_enter_pointer`, verifies the required runtime files exist, and
+launches the extracted `./sanad-client` under an isolated D-Bus session and
+Xvfb long enough to prove the bundle starts successfully.
+
+This gate regresses the `v1.0.1` Linux artifact built on Ubuntu 24.04. GLib
+introduced `g_once_init_enter_pointer` in 2.80; the published executable and
+five GTK plugin libraries imported it and consequently failed against Ubuntu
+23.04 GLib 2.76. Building on Ubuntu 22.04 GLib 2.72 keeps those generated native
+objects below that ABI boundary without bundling or replacing system GLib.
+The same job builds the primary `.deb` from that verified bundle, checks package
+metadata, standard `/opt`, `/usr/bin`, desktop-entry, and hicolor icon layout,
+then installs, launches, and purges it on the clean runner. The Stable Linux
+convenience link selects this `.deb`; the `tar.gz` remains a public portable
+alternative.
+
 ## Platform matrix
 
 | Target | Local evidence | Hosted or clean-machine evidence still required |
@@ -37,7 +59,7 @@ rules remain fail-closed.
 | Agent Linux x64 | contract and workflow path | hosted build, provenance, clean install, service/update/rollback |
 | Agent Windows x64 | contract and workflow path | Unsigned Windows build disclosure, SHA-256/manifest/provenance, Defender/SmartScreen and lifecycle on Windows 11, service/update/rollback |
 | Client macOS universal | universal Mach-O inspection, Developer ID-signed and notarized DMG, staple, Gatekeeper, Sparkle signature | clean update and rollback |
-| Client Linux x64 | Web/Linux workflow definition | hosted package, dependency audit, clean install/update/uninstall |
+| Client Linux x64 | Web/Linux workflow definition, compatibility-runner contract, `.deb` metadata/layout audit, portable-bundle smoke, and forbidden-symbol audit | hosted `.deb` install/launch/purge, provenance, clean update |
 | Client Windows x64 | installer and current fail-closed signing workflow definition | SANAD-12 unsigned-policy workflow adaptation, disclosure, SHA-256/manifest/provenance, Windows 11 clean installer/update/rollback and Defender/SmartScreen |
 | Client Android APK/AAB | signed local APK/AAB, package identity and keystore fingerprint | signed hosted build, clean install/upgrade |
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
