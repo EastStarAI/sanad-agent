@@ -160,11 +160,27 @@ Future<void> handleRuntimeSwitch({
   final manifestPath = runtimeSwitchManifestPath(sanadHome, agent.port);
   try {
     final existing = await readRuntimeSwitchRequest(manifestPath);
-    if (existing != null &&
-        const {'requested', 'draining', 'starting'}.contains(existing.status)) {
-      stderr.writeln('Switch aborted: another runtime handoff is active.');
-      exitCode = 1;
-      return;
+    if (existing != null && isActiveRuntimeSwitch(existing)) {
+      if (isRuntimeSwitchOwnedByLauncher(
+        existing,
+        launcherId: launcherRecord.launcherId,
+        runtimeNonce: launcherRecord.runtimeNonce,
+      )) {
+        stderr.writeln('Switch aborted: another runtime handoff is active.');
+        exitCode = 1;
+        return;
+      }
+      await writeRuntimeSwitchRequest(
+        manifestPath,
+        existing.copyWith(
+          status: 'failed',
+          message:
+              'Stale runtime handoff discarded because its owning launcher is no longer active.',
+        ),
+      );
+      print(
+        'Recovered stale runtime handoff ${existing.id} from a previous launcher.',
+      );
     }
   } on Object {
     stderr.writeln('Switch aborted: the existing handoff record is invalid.');

@@ -1077,6 +1077,40 @@ Future<void> handleRuntimeDoctor({
       '(${launcherLive ? 'live' : 'stale'})',
     );
     if (fix) {
+      final switchPath = runtimeSwitchManifestPath(
+        activeHome,
+        state.agent?.port ?? runtime.agentPort,
+      );
+      try {
+        final handoff = await readRuntimeSwitchRequest(switchPath);
+        if (handoff != null &&
+            isActiveRuntimeSwitch(handoff) &&
+            !isRuntimeSwitchOwnedByLauncher(
+              handoff,
+              launcherId: record.launcherId,
+              runtimeNonce: record.runtimeNonce,
+            )) {
+          await writeRuntimeSwitchRequest(
+            switchPath,
+            handoff.copyWith(
+              status: 'failed',
+              message:
+                  'Stale runtime handoff discarded because its owning launcher is no longer active.',
+            ),
+          );
+          print(
+            'Fixed: terminalized stale runtime handoff ${handoff.id}; '
+            'no process was signaled.',
+          );
+          return;
+        }
+      } on Object catch (error) {
+        stderr.writeln(
+          'No fix applied: runtime handoff record is invalid: $error',
+        );
+        exitCode = 1;
+        return;
+      }
       final endpointLive = agents.any(
         (agent) => agent.port == record.agentPort,
       );

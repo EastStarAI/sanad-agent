@@ -5,6 +5,17 @@ import 'client_launch_profile.dart';
 import 'secure_runtime_file.dart';
 
 const runtimeSwitchManifestVersion = 2;
+const activeRuntimeSwitchStatuses = {'requested', 'draining', 'starting'};
+
+bool isActiveRuntimeSwitch(RuntimeSwitchRequest request) =>
+    activeRuntimeSwitchStatuses.contains(request.status);
+
+bool isRuntimeSwitchOwnedByLauncher(
+  RuntimeSwitchRequest request, {
+  required String launcherId,
+  required String runtimeNonce,
+}) =>
+    request.launcherId == launcherId && request.runtimeNonce == runtimeNonce;
 
 class RuntimeSwitchRequest {
   const RuntimeSwitchRequest({

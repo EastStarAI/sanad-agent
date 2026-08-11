@@ -3,6 +3,7 @@ import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/provider_runtime/session_queue_provider_override.dart';
+import 'package:sanad_agent/core/provider_runtime/runtime_recovery_exception.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
@@ -438,7 +439,24 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       );
     }
     if (stopFuture != null) {
-      await stopFuture;
+      try {
+        await stopFuture;
+      } on RuntimeRecoveryCancelled catch (error) {
+        // Stop intentionally aborts an active recovery wait. The stream
+        // cancellation can surface that expected lifecycle transition through
+        // the subscription cancellation Future; durable cleanup must continue.
+        _logger.info(
+          'Runtime recovery cancelled while stopping session $sessionId: '
+          '$error',
+        );
+      } on RuntimeRecoveryRequired catch (error) {
+        // Recovery can race with Stop before stream cancellation completes.
+        // Stop is authoritative and must still transition durable state to idle.
+        _logger.info(
+          'Runtime recovery transition superseded by stop for session '
+          '$sessionId: $error',
+        );
+      }
     }
     final hasNewerDurableWork =
         persistedState
