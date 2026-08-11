@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 // ignore: depend_on_referenced_packages
 import 'package:markdown/markdown.dart' as md;
 import 'package:sanad_client/core/theme/app_color_scheme.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 
 /// Centralized helper for generating consistent Markdown style sheets and
 /// element builders across conversation widgets (e.g. UserMessageTile, EventTile).
@@ -60,6 +61,51 @@ class MarkdownStyleHelper {
   }
 }
 
+/// Renders a multiline Markdown code block with detected text direction.
+///
+/// The viewport intentionally remains LTR so horizontal offset zero always
+/// exposes the left edge. The code text gets its own detected direction.
+class AppCodeBlock extends StatelessWidget {
+  final String codeText;
+  final Color codeColor;
+
+  const AppCodeBlock({
+    super.key,
+    required this.codeText,
+    required this.codeColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final codeDirection = TextUtils.getTextDirection(codeText);
+    return Container(
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.1)),
+      ),
+      padding: const EdgeInsets.all(16.0),
+      child: Directionality(
+        textDirection: TextDirection.ltr,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Directionality(
+            textDirection: codeDirection,
+            child: Text(
+              codeText,
+              style: GoogleFonts.firaCode(
+                color: codeColor,
+                fontSize: 12,
+                height: 1.5,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 /// Custom builder for inline code and multiline fallback blocks in Markdown text.
 class AppInlineCodeBuilder extends MarkdownElementBuilder {
   final BuildContext context;
@@ -78,25 +124,9 @@ class AppInlineCodeBuilder extends MarkdownElementBuilder {
         codeText = codeText.substring(0, codeText.length - 1);
       }
 
-      return Container(
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.1)),
-        ),
-        padding: const EdgeInsets.all(16.0),
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Text(
-            codeText,
-            textDirection: TextDirection.ltr,
-            style: GoogleFonts.firaCode(
-              color: codeColor,
-              fontSize: 12,
-              height: 1.5,
-            ),
-          ),
-        ),
+      return AppCodeBlock(
+        codeText: codeText,
+        codeColor: codeColor,
       );
     }
 
