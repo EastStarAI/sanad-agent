@@ -11,8 +11,9 @@ class FileWriteHandler {
 
   Future<String> execute(
     Map<String, dynamic> arguments,
-    String workspacePath,
-  ) async {
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
     final path = arguments['path']?.toString() ?? '';
     final content = arguments['content']?.toString() ?? '';
     if (utf8.encode(content).length > _maxWriteBytes) {
@@ -23,6 +24,7 @@ class FileWriteHandler {
     final resolvedPath = _pathResolver.resolvePathAllowMissing(
       workspaceRoot: workspaceRoot,
       inputPath: path,
+      authorizedExternalRoot: authorizedExternalRoot,
     );
     final file = File(resolvedPath);
     final exists = await file.exists();

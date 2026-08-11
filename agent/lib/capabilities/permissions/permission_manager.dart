@@ -44,6 +44,8 @@ class PermissionManager {
     required LocalToolSpec tool,
     required Map<String, dynamic> arguments,
     required ToolContext context,
+    String? approvalKeyOverride,
+    Map<String, dynamic>? permissionDisplayArguments,
   }) async {
     if (!_requiresApproval(tool)) {
       return;
@@ -56,7 +58,7 @@ class PermissionManager {
     final workspacePath = workspace?['path']?.toString();
     final workspaceId = workspace?['id']?.toString();
     final workspaceName = workspace?['name']?.toString();
-    final approvalKey = _approvalKey(tool, arguments);
+    final approvalKey = approvalKeyOverride ?? _approvalKey(tool, arguments);
     final permissionClass =
         tool.approval['permission_class']?.toString() ?? tool.category;
 
@@ -109,7 +111,8 @@ class PermissionManager {
       'workspace_name': workspaceName,
       'workspace_path': workspacePath,
       'session_id': context.sessionId,
-      'tool_input': arguments,
+      'tool_input': permissionDisplayArguments ?? arguments,
+      'approval_key': approvalKey,
       'tool': tool.toJson(),
     };
 
@@ -185,7 +188,9 @@ class PermissionManager {
     final workspacePath = permissionPayload['workspace_path']?.toString();
     final scope = decision['scope']?.toString() ?? 'once';
     final allowed = decision['allowed'] == true;
-    final approvalKey = _approvalKey(tool, arguments);
+    final approvalKey =
+        permissionPayload['approval_key']?.toString() ??
+        _approvalKey(tool, arguments);
     final currentPolicy = workspacePath == null || workspacePath.isEmpty
         ? null
         : await _policyStore.readPolicy(workspacePath);

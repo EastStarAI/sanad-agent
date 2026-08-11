@@ -15,8 +15,9 @@ class FileReadHandler {
 
   Future<String> execute(
     Map<String, dynamic> arguments,
-    String workspacePath,
-  ) async {
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
     final path = arguments['path']?.toString() ?? '';
     final offset =
         WorkspaceToolsUtils.asNonNegativeInt(arguments['offset']) ?? 0;
@@ -26,6 +27,7 @@ class FileReadHandler {
     final resolvedPath = _pathResolver.resolveExistingPath(
       workspaceRoot: workspaceRoot,
       inputPath: path,
+      authorizedExternalRoot: authorizedExternalRoot,
     );
 
     if (FileSystemEntity.isDirectorySync(resolvedPath)) {

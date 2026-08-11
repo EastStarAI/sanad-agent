@@ -2,6 +2,20 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+class WorkspacePathResolution {
+  const WorkspacePathResolution({
+    required this.workspaceRoot,
+    required this.resolvedPath,
+  });
+
+  final String workspaceRoot;
+  final String resolvedPath;
+
+  bool get isExternal =>
+      !p.equals(workspaceRoot, resolvedPath) &&
+      !p.isWithin(workspaceRoot, resolvedPath);
+}
+
 class WorkspacePathResolver {
   const WorkspacePathResolver();
 
@@ -14,7 +28,7 @@ class WorkspacePathResolver {
     return _canonicalizeExistingPath(trimmed);
   }
 
-  String resolveExistingPath({
+  WorkspacePathResolution classifyExistingPath({
     required String workspaceRoot,
     required String inputPath,
   }) {
@@ -25,27 +39,57 @@ class WorkspacePathResolver {
       throw FileSystemException('Path does not exist.', candidate);
     }
 
-    final resolved = _canonicalizeExistingPath(candidate);
-    return _ensureWithinWorkspace(
+    return WorkspacePathResolution(
       workspaceRoot: normalizedWorkspace,
-      resolvedPath: resolved,
+      resolvedPath: _canonicalizeExistingPath(candidate),
+    );
+  }
+
+  WorkspacePathResolution classifyPathAllowMissing({
+    required String workspaceRoot,
+    required String inputPath,
+  }) {
+    final normalizedWorkspace = normalizeWorkspaceRoot(workspaceRoot);
+    final candidate = _candidatePath(normalizedWorkspace, inputPath);
+    return WorkspacePathResolution(
+      workspaceRoot: normalizedWorkspace,
+      resolvedPath: _canonicalizePathAllowMissing(candidate),
+    );
+  }
+
+  String resolveExistingPath({
+    required String workspaceRoot,
+    required String inputPath,
+    String? authorizedExternalRoot,
+  }) {
+    final resolution = classifyExistingPath(
+      workspaceRoot: workspaceRoot,
+      inputPath: inputPath,
+    );
+    return _ensureWithinWorkspace(
+      workspaceRoot: resolution.workspaceRoot,
+      resolvedPath: resolution.resolvedPath,
+      authorizedExternalRoot: authorizedExternalRoot,
     );
   }
 
   String resolvePathAllowMissing({
     required String workspaceRoot,
     required String inputPath,
+    String? authorizedExternalRoot,
   }) {
-    final normalizedWorkspace = normalizeWorkspaceRoot(workspaceRoot);
-    final candidate = _candidatePath(normalizedWorkspace, inputPath);
-    final resolved = _canonicalizePathAllowMissing(candidate);
+    final resolution = classifyPathAllowMissing(
+      workspaceRoot: workspaceRoot,
+      inputPath: inputPath,
+    );
     return _ensureWithinWorkspace(
-      workspaceRoot: normalizedWorkspace,
-      resolvedPath: resolved,
+      workspaceRoot: resolution.workspaceRoot,
+      resolvedPath: resolution.resolvedPath,
+      authorizedExternalRoot: authorizedExternalRoot,
     );
   }
 
-  String relativeToWorkspace({
+  String displayPath({
     required String workspaceRoot,
     required String resolvedPath,
   }) {
@@ -54,8 +98,16 @@ class WorkspacePathResolver {
     if (p.equals(normalizedWorkspace, normalizedPath)) {
       return '.';
     }
-    return p.relative(normalizedPath, from: normalizedWorkspace);
+    if (p.isWithin(normalizedWorkspace, normalizedPath)) {
+      return p.relative(normalizedPath, from: normalizedWorkspace);
+    }
+    return normalizedPath;
   }
+
+  String relativeToWorkspace({
+    required String workspaceRoot,
+    required String resolvedPath,
+  }) => displayPath(workspaceRoot: workspaceRoot, resolvedPath: resolvedPath);
 
   String _candidatePath(String workspaceRoot, String inputPath) {
     final trimmed = inputPath.trim();
@@ -118,6 +170,7 @@ class WorkspacePathResolver {
   String _ensureWithinWorkspace({
     required String workspaceRoot,
     required String resolvedPath,
+    String? authorizedExternalRoot,
   }) {
     final normalizedWorkspace = p.normalize(workspaceRoot);
     final normalizedPath = p.normalize(resolvedPath);
@@ -126,8 +179,18 @@ class WorkspacePathResolver {
       return normalizedPath;
     }
 
+    if (authorizedExternalRoot != null) {
+      final normalizedAuthorizedRoot = _canonicalizePathAllowMissing(
+        authorizedExternalRoot,
+      );
+      if (p.equals(normalizedAuthorizedRoot, normalizedPath) ||
+          p.isWithin(normalizedAuthorizedRoot, normalizedPath)) {
+        return normalizedPath;
+      }
+    }
+
     throw FileSystemException(
-      'Path escapes the current workspace.',
+      'Path escapes the current workspace without authorization.',
       normalizedPath,
     );
   }
