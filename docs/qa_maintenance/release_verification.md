@@ -126,7 +126,11 @@ markers, the public Appcast and Stable manifest SHA-256 values, both public
 installer-source SHA-256 values, and a clean browser render. A stale bind mount,
 incomplete static root, selector-only success, or HTTP-only shell response fails
 the gate. A failed surface must restore and publicly verify all its preceding
-release-owned bytes without recreating data or application services.
+release-owned bytes without recreating data or application services. This
+includes a controller activation that returns nonzero after changing the
+selector: Web, updates, and installer jobs must catch that command result,
+invoke rollback, verify the preceding public bytes, and only then report the
+failed deployment.
 
 ### Live Stable asset rehearsal — 2026-08-10
 
@@ -145,6 +149,29 @@ console error. The Production, Development, and Staging public verifiers passed;
 Production PostgreSQL and Redis volumes remained present. The rehearsal used the
 same reusable workflow that every future approved Stable publication calls
 automatically.
+
+### Stable Web `v1.0.2` promotion failure — 2026-08-10
+
+Run `31422198524` published and verified the signed Stable packages, update
+feed, installer sources, and Client aliases, but its Web job exposed two
+deployment-contract defects. The root-owned promotion directory retained
+`mktemp -d` mode `0700`, so the unprivileged Nginx worker returned `403` despite
+healthy container state and readable files. Controller activation returned
+nonzero from its internal smoke after changing the selector; step-level
+`set -e` then exited before the external-verification rollback block.
+
+The bounded live recovery changed only the verified `v1.0.2` Web release root
+to `0755`; its exact source marker and Flutter bootstrap immediately returned
+success. The permanent gate normalizes promoted release roots in the private
+controller and requires activation-command failure rollback for all three
+public static jobs. Public PR `#72` and private PR `#171` passed their gates and
+merged before the live controller update. Web-only recovery run `31425367807`
+then passed without redeploying Updates or Installers. Production serves exact
+source `79be55372b8cf528a4404871f8c356542576096d` from a `root:root 0755`
+immutable root; Development, Staging, and Production verifiers all passed. A
+fresh browser rendered the Sanad sign-in view and logo, selected the versioned
+`favicon.svg`, created one Flutter view, and reported no warning or error. The
+incident is closed; missing Portal favicons remain outside this recovery.
 
 ## Update failure coverage
 

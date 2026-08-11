@@ -10,7 +10,6 @@ import 'package:sanad_client/features/devices/presentation/bloc/gateway_connecti
 import 'package:sanad_client/features/devices/domain/models/gateway_connection_status.dart';
 import 'package:flutter/material.dart';
 import 'package:sanad_client/features/devices/presentation/widgets/installation_terminal_view.dart';
-import 'package:sanad_client/features/devices/presentation/widgets/gateway_connection_indicator.dart';
 import 'package:sanad_client/features/devices/presentation/widgets/onboarding_setup_choices.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_flow.dart';
@@ -168,7 +167,6 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
               isDesktop: AppPlatform.isDesktop,
               isAuthenticated: isAuthenticated,
               hasRegisteredDevices: hasRegisteredDevices,
-              connectionIndicator: AppPlatform.isDesktop ? const GatewayConnectionIndicator() : null,
               error: _error,
               onRunLocally: () {
                 setState(() {
