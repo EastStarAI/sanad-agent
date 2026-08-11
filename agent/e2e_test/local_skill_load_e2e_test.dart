@@ -163,8 +163,11 @@ Use the review skill for workspace audits.
         toolResultFrame!['payload'] as Map,
       );
       final toolOutput = toolResultPayload['output']?.toString() ?? '';
-      expect(toolOutput, contains('"skill": "review"'));
-      expect(toolOutput, contains('"args": "--focus docs"'));
+      expect(toolOutput, startsWith('Skill source: '));
+      expect(
+        toolOutput,
+        contains('/workspace/.sanad/skills/review/SKILL.md\n\n'),
+      );
       expect(
         toolOutput,
         contains('Use the review skill for workspace audits.'),

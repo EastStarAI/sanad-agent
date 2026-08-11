@@ -90,8 +90,11 @@ dispatch. This admission boundary does not alter per-turn catalog assembly:
 servers configured by the local user remain available for tool discovery and
 execution in both local and cloud-origin turns.
 
-Skills are discovered and loaded by the runtime skill registry. The client does
-not inspect skill files to determine runtime availability.
+Skills are discovered and loaded by the runtime skill registry. A successful
+`skill_load` result contains one source-path header followed by the original
+skill Markdown; model-visible results omit duplicated input, frontmatter,
+provenance, and shadowing diagnostics. The client does not inspect skill files
+to determine runtime availability.
 
 ## Platform Tools
 

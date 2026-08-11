@@ -64,21 +64,26 @@ class StatusBar extends StatelessWidget {
           color: backgroundColor,
           child: Row(
             children: [
-              _GatewayStatusButton(
-                status: status,
-                foregroundColor: foregroundColor,
-              ),
-              if (worktreeName.isNotEmpty) ...[
-                const SizedBox(width: 4),
-                Flexible(
-                  child: WorktreeRuntimeBadge(
-                    worktreeName: worktreeName,
-                    branch: worktreeBranch,
-                    foregroundColor: foregroundColor,
-                  ),
+              Expanded(
+                child: Row(
+                  children: [
+                    _GatewayStatusButton(
+                      status: status,
+                      foregroundColor: foregroundColor,
+                    ),
+                    if (worktreeName.isNotEmpty) ...[
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: WorktreeRuntimeBadge(
+                          worktreeName: worktreeName,
+                          branch: worktreeBranch,
+                          foregroundColor: foregroundColor,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-              ],
-              const Spacer(),
+              ),
               // Right side: environment details (VS Code style placeholders)
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 8),
