@@ -18,10 +18,10 @@ This contract applies to `agent/bin/`.
 - Source file watching remains disabled; runtime reload is explicit.
 
 ## Authentication Entry Flow
-- CLI login uses the portal-owned authentication lifecycle from `Config.portalUrl`.
-- Send platform and non-sensitive capabilities only; do not name providers or portal flow types.
-- Keep polling tokens in process memory and out of URLs, stdout, logs, and persistent state.
-- Display a user code only when the portal explicitly returns one for headless fallback.
+- CLI Headless login uses Portal Device Authorization from `Config.portalUrl` and never obtains User access/refresh credentials.
+- Generate or load the Agent-owned P-256 key before starting. Send only its public JWK plus bounded device display metadata; never name providers.
+- Display only the fixed verification URI, user code, and shortened JWK thumbprint. Keep device code and private key out of URLs, CLI arguments, stdout, logs, and telemetry.
+- Device credential redemption requires fresh ES256 DPoP-style proof; Gateway reconnect requires a fresh server nonce signed by the same key.
 
 ## Configuration
 - Setup removes non-ASCII/smart-quote corruption from imported credential keys before persistence.

@@ -1,5 +1,6 @@
 import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
+import 'package:sanad_client/features/auth/infrastructure/auth_callback_contract.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dart';
 import 'package:sanad_client/infrastructure/local_tools/sanad_settings_store.dart';
@@ -49,8 +50,37 @@ class StubPortalAuthClient extends PortalAuthClient {
   PortalAuthRefresh? response;
   Object? error;
   int refreshCalls = 0;
+  int redemptionCalls = 0;
 
   StubPortalAuthClient() : super(dio: MockDio());
+
+  @override
+  Future<PortalClientTransaction> createClientTransaction({
+    required String clientId,
+    required String redirectUri,
+    required String codeChallenge,
+  }) async {
+    return const PortalClientTransaction(
+      transactionId: 'expected-transaction',
+      authorizationUrl: 'https://portal.test/authorize',
+      expiresIn: 30,
+    );
+  }
+
+  @override
+  Future<PortalAuthTokens> redeemAuthorizationCode({
+    required String clientId,
+    required String redirectUri,
+    required String code,
+    required String codeVerifier,
+  }) async {
+    redemptionCalls += 1;
+    return const PortalAuthTokens(
+      accessToken: 'synthetic-access',
+      refreshToken: 'synthetic-refresh',
+      tokenType: 'bearer',
+    );
+  }
 
   @override
   Future<PortalAuthRefresh> refresh({required String refreshToken}) async {
@@ -62,6 +92,27 @@ class StubPortalAuthClient extends PortalAuthClient {
 
   @override
   Future<void> logout({String? accessToken, String? refreshToken}) async {}
+}
+
+class StubCallbackBinding implements AuthCallbackBinding {
+  StubCallbackBinding(this.result);
+
+  final AuthCallbackResult result;
+  bool disposed = false;
+
+  @override
+  String get clientId => 'sanad_flutter_desktop';
+
+  @override
+  String get redirectUri => 'http://127.0.0.1:49152/oauth/callback';
+
+  @override
+  Future<AuthCallbackResult> waitForResult(Duration timeout) async => result;
+
+  @override
+  Future<void> dispose() async {
+    disposed = true;
+  }
 }
 
 void main() {
@@ -164,9 +215,30 @@ void main() {
       },
     );
 
-    test('login updates both auth.json and SharedPreferences', () async {
-      // Note: testing login might require mocking the profile request if it triggers it.
-      // But we can test the internal state if we can trigger it.
+    test('wrong callback state is rejected before code redemption', () async {
+      final portal = StubPortalAuthClient();
+      final callback = StubCallbackBinding(
+        const AuthCallbackResult(
+          code: 'copied-code',
+          state: 'attacker-transaction',
+        ),
+      );
+      authService.dispose();
+      authService = AuthService(
+        dio: MockDio(),
+        prefs: prefs,
+        settingsStore: mockStore,
+        portalAuth: portal,
+        callbackBindingFactory: () async => callback,
+        authorizationLauncher: (_) async => true,
+      );
+
+      await expectLater(authService.login(), throwsStateError);
+
+      expect(portal.redemptionCalls, 0);
+      expect(authService.accessToken, isNull);
+      expect(callback.disposed, isTrue);
+      expect(prefs.getString('backend_access_token'), isNull);
     });
 
     test('logout clears tokens but preserves hardware_id', () async {

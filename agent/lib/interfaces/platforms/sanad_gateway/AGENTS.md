@@ -79,6 +79,12 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Platform-provided tools use canonical platform call/result and remain distinct from daemon-local execution.
 - Permission resolution is first-writer-wins and resumed execution reapplies the persisted decision before invoking the gated tool.
 
+## Cloud Device Authentication
+- A key-bound `sanad_agent` Device Credential never registers by bearer possession alone. Request a one-use Gateway challenge, then send an ES256 proof over `SOCKET`, the canonical Gateway registration target, nonce, bounded issue time, and fresh JTI.
+- The registration proof uses the same Agent-owned P-256 key approved during Device Authorization. Never send the private key, device code, or proof through logs or durable protocol state.
+- One-command pairing is a separate provisioning grant but has the same final possession boundary: request a challenge before claim, send pairing token plus public JWK and proof, and retain the same key/credential for fresh-proof lost-response recovery.
+- User `sanad_client` access credentials are not an Agent registration fallback for new key-bound enrollment.
+
 ## Logging and Restart
 - Local Gateway binds only to loopback and authenticates every HTTP request and
   WebSocket upgrade before route handling. The credential is owner-only in the

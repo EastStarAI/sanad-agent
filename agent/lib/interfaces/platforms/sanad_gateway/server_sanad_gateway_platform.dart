@@ -6,6 +6,7 @@ import 'package:meta/meta.dart';
 import 'package:logging/logging.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:sanad_agent/core/auth/auth_manager.dart';
+import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
@@ -59,8 +60,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   final _logger = Logger('ServerSanadGatewayPlatform');
   final io.Socket Function(String uri, dynamic options)? socketFactory;
+  final Future<DeviceKeyIdentity> Function() identityLoader;
 
-  ServerSanadGatewayPlatform({this.socketFactory});
+  ServerSanadGatewayPlatform({
+    this.socketFactory,
+    Future<DeviceKeyIdentity> Function()? identityLoader,
+  }) : identityLoader = identityLoader ?? DeviceKeyIdentity.loadOrCreate;
 
   @override
   Logger get logger => _logger;
@@ -133,6 +138,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
     _socket!.onConnect((_) async {
       _logger.info('⚡ Connected to Sanad Gateway');
       await _register();
+    });
+
+    _socket!.on('device_challenge', (data) async {
+      final nonce = toMap(data)['nonce']?.toString();
+      if (nonce == null || nonce.isEmpty) return;
+      await _register(challengeNonce: nonce);
     });
 
     _socket!.onDisconnect((reason) {
@@ -451,23 +462,34 @@ class ServerSanadGatewayPlatform extends BasePlatform
     }
   }
 
-  Future<void> _register() async {
+  Future<void> _register({String? challengeNonce}) async {
     final targetSocket = _socket;
     if (targetSocket == null) return;
     final authManager = getIt<AuthManager>();
     await authManager.reload();
+    final isPairing = authManager.hasPendingDevicePairing;
+    final requiresKeyProof = authManager.deviceToken != null || isPairing;
+    if (requiresKeyProof && challengeNonce == null) {
+      targetSocket.emit('request_device_challenge');
+      return;
+    }
+    final identity = requiresKeyProof ? await identityLoader() : null;
+    final deviceProof = identity != null
+        ? await identity.gatewayProof(challengeNonce!)
+        : null;
     final capabilities = await loadSanadCapabilities();
     if (!identical(_socket, targetSocket) || !targetSocket.connected) return;
 
-    final isPairing = authManager.hasPendingDevicePairing;
     final payload = {
       if (isPairing) ...{
         'pairing_token': authManager.pairingToken,
         'proposed_device_token': authManager.pendingDeviceToken,
+        'public_jwk': identity!.publicJwk,
+        'device_proof': deviceProof,
       } else ...{
-        if (authManager.accessToken != null) 'token': authManager.accessToken,
         if (authManager.deviceToken != null)
           'device_token': authManager.deviceToken,
+        'device_proof': ?deviceProof,
       },
       'hardware_id': authManager.hardwareId,
       'platform': _getPlatformName(),

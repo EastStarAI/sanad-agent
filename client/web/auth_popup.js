@@ -1,5 +1,15 @@
 window.AuthPopup = (function() {
   let popupWindow = null;
+  let expectedPortalOrigin = null;
+  let pendingAuthorizationMessage = null;
+
+  window.addEventListener('message', function(event) {
+    if (!popupWindow || event.source !== popupWindow || event.origin !== expectedPortalOrigin) return;
+    const data = event.data;
+    if (!data || data.type !== 'sanad_authorization_code' ||
+        typeof data.code !== 'string' || typeof data.state !== 'string') return;
+    pendingAuthorizationMessage = JSON.stringify({code: data.code, state: data.state});
+  });
 
   function openPopup(url, windowName, windowFeatures) {
     const width = 500;
@@ -8,6 +18,8 @@ window.AuthPopup = (function() {
     const top = Math.max(0, (window.screen.height - height) / 2);
     const centeredFeatures = `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,status=no,location=no,resizable=yes,scrollbars=yes`;
 
+    expectedPortalOrigin = new URL(url).origin;
+    pendingAuthorizationMessage = null;
     popupWindow = window.open(url, windowName, centeredFeatures);
     if (popupWindow) {
       popupWindow.focus();
@@ -31,9 +43,21 @@ window.AuthPopup = (function() {
     }
   }
 
+  function takeAuthorizationMessage() {
+    const message = pendingAuthorizationMessage;
+    pendingAuthorizationMessage = null;
+    return message;
+  }
+
+  function appOrigin() {
+    return window.location.origin;
+  }
+
   return {
     openPopup: openPopup,
     isPopupClosed: isPopupClosed,
-    closePopup: closePopup
+    closePopup: closePopup,
+    takeAuthorizationMessage: takeAuthorizationMessage,
+    appOrigin: appOrigin
   };
 })();

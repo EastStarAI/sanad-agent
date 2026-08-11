@@ -8,13 +8,19 @@ import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'package:uuid/uuid.dart';
 
 import '../sanad_home/sanad_home_bootstrap.dart';
+import 'agent_secret_store.dart';
 
 class AuthManager {
-  AuthManager({NativeAuthFileLock? authFileLock})
-    : _authFileLock = authFileLock;
+  AuthManager({NativeAuthFileLock? authFileLock, AgentSecretStore? secretStore})
+    : _authFileLock = authFileLock,
+      _secretStore = secretStore ?? createAgentSecretStore();
+
+  static const deviceCredentialKey = 'device_credential';
+  static const pendingDeviceCredentialKey = 'pending_device_credential';
 
   final _logger = Logger('AuthManager');
   final NativeAuthFileLock? _authFileLock;
+  final AgentSecretStore _secretStore;
   String? _accessToken;
   String? _refreshToken;
   String? _hardwareId;
@@ -56,22 +62,61 @@ class AuthManager {
     final before = _fingerprint;
     final boundary = SanadHomeBootstrap.identity();
 
+    Map<String, dynamic>? data;
     if (boundary.fileExists('auth.json')) {
       try {
         final content = utf8.decode(boundary.readSecretBytes('auth.json'));
         if (content.trim().isNotEmpty) {
-          final data = jsonDecode(content) as Map<String, dynamic>;
+          data = jsonDecode(content) as Map<String, dynamic>;
           _accessToken = data['access_token'];
           _refreshToken = data['refresh_token'];
           _hardwareId = data['hardware_id'];
-          _deviceToken = data['device_token'];
           _pairingToken = data['pairing_token'];
-          _pendingDeviceToken = data['pending_device_token'];
         }
       } catch (_) {
         // A malformed or temporarily unavailable file cannot authorize a
         // state transition. Keep the last valid in-memory snapshot.
       }
+    }
+
+    var storedCredential = await _secretStore.read(deviceCredentialKey);
+    final legacyCredential = data?['device_token'] as String?;
+    if (storedCredential == null && legacyCredential != null) {
+      await _secretStore.write(deviceCredentialKey, legacyCredential);
+      storedCredential = await _secretStore.read(deviceCredentialKey);
+      if (storedCredential != legacyCredential) {
+        throw const AgentSecretStoreUnavailable(
+          'Device Credential migration verification failed.',
+        );
+      }
+    }
+    _deviceToken = storedCredential;
+
+    var pendingCredential = await _secretStore.read(pendingDeviceCredentialKey);
+    final legacyPendingCredential = data?['pending_device_token'] as String?;
+    if (pendingCredential == null && legacyPendingCredential != null) {
+      await _secretStore.write(
+        pendingDeviceCredentialKey,
+        legacyPendingCredential,
+      );
+      pendingCredential = await _secretStore.read(pendingDeviceCredentialKey);
+      if (pendingCredential != legacyPendingCredential) {
+        throw const AgentSecretStoreUnavailable(
+          'Pending Device Credential migration verification failed.',
+        );
+      }
+    }
+    _pendingDeviceToken = pendingCredential;
+
+    if (data != null &&
+        (data.containsKey('device_token') ||
+            data.containsKey('pending_device_token'))) {
+      data.remove('device_token');
+      data.remove('pending_device_token');
+      await boundary.writeSecretBytes(
+        'auth.json',
+        utf8.encode(jsonEncode(data)),
+      );
     }
 
     final changed = before != _fingerprint;
@@ -85,6 +130,13 @@ class AuthManager {
   Future<void> saveDeviceToken(String token) {
     return _withAuthFileLock(() async {
       await _reloadUnlocked();
+      await _secretStore.write(deviceCredentialKey, token);
+      if (await _secretStore.read(deviceCredentialKey) != token) {
+        throw const AgentSecretStoreUnavailable(
+          'Device Credential write verification failed.',
+        );
+      }
+      await _secretStore.delete(pendingDeviceCredentialKey);
       _deviceToken = token;
       _pairingToken = null;
       _pendingDeviceToken = null;
@@ -102,9 +154,18 @@ class AuthManager {
     }
     return _withAuthFileLock(() async {
       await _reloadUnlocked();
+      final pendingCredential = _generateDeviceToken();
+      await _secretStore.write(pendingDeviceCredentialKey, pendingCredential);
+      if (await _secretStore.read(pendingDeviceCredentialKey) !=
+          pendingCredential) {
+        throw const AgentSecretStoreUnavailable(
+          'Pending Device Credential write verification failed.',
+        );
+      }
       _pairingToken = pairingToken;
-      _pendingDeviceToken = _generateDeviceToken();
+      _pendingDeviceToken = pendingCredential;
       _deviceToken = null;
+      await _secretStore.delete(deviceCredentialKey);
       await _saveAuthUnlocked();
     });
   }
@@ -114,6 +175,13 @@ class AuthManager {
       await _reloadUnlocked();
       final pendingToken = _pendingDeviceToken;
       if (pendingToken == null || _pairingToken == null) return false;
+      await _secretStore.write(deviceCredentialKey, pendingToken);
+      if (await _secretStore.read(deviceCredentialKey) != pendingToken) {
+        throw const AgentSecretStoreUnavailable(
+          'Paired Device Credential write verification failed.',
+        );
+      }
+      await _secretStore.delete(pendingDeviceCredentialKey);
       _deviceToken = pendingToken;
       _pairingToken = null;
       _pendingDeviceToken = null;
@@ -216,7 +284,6 @@ class AuthManager {
     if (_accessToken != null) data['access_token'] = _accessToken;
     if (_refreshToken != null) data['refresh_token'] = _refreshToken;
     if (_hardwareId != null) data['hardware_id'] = _hardwareId;
-    if (_deviceToken != null) data['device_token'] = _deviceToken;
     if (_pairingToken != null) data['pairing_token'] = _pairingToken;
     if (_pendingDeviceToken != null) {
       data['pending_device_token'] = _pendingDeviceToken;
@@ -235,6 +302,8 @@ class AuthManager {
       _deviceToken = null;
       _pairingToken = null;
       _pendingDeviceToken = null;
+      await _secretStore.delete(deviceCredentialKey);
+      await _secretStore.delete(pendingDeviceCredentialKey);
       final boundary = SanadHomeBootstrap.identity();
       if (boundary.fileExists('auth.json')) {
         try {

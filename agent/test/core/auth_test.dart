@@ -2,9 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'package:test/test.dart';
+import 'package:sanad_agent/core/auth/agent_secret_store.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:path/path.dart' as p;
+
+import '../support/memory_agent_secret_store.dart';
 
 class _BeforeAcquireAuthLock extends NativeAuthFileLock {
   _BeforeAcquireAuthLock(super.sanadHomePath);
@@ -23,11 +26,13 @@ class _BeforeAcquireAuthLock extends NativeAuthFileLock {
 void main() {
   late Directory tempDir;
   late AuthManager authManager;
+  late MemoryAgentSecretStore secrets;
 
   setUp(() async {
     tempDir = await Directory.systemTemp.createTemp('sanadagent_auth_test');
     setSanadHomeOverride(tempDir.path);
-    authManager = AuthManager();
+    secrets = MemoryAgentSecretStore();
+    authManager = AuthManager(secretStore: secrets);
   });
 
   tearDown(() async {
@@ -54,6 +59,50 @@ void main() {
       expect(authManager.accessToken, equals('test_access'));
       expect(authManager.refreshToken, equals('test_refresh'));
       expect(authManager.hardwareId, equals('test_hardware'));
+    });
+
+    test(
+      'migrates a legacy Device Credential only after vault verification',
+      () async {
+        final authFile = File(p.join(tempDir.path, 'auth.json'));
+        await authFile.writeAsString(
+          jsonEncode({
+            'device_token': 'legacy-device-credential',
+            'hardware_id': 'test_hardware',
+          }),
+        );
+
+        await authManager.initialize();
+
+        expect(authManager.deviceToken, 'legacy-device-credential');
+        expect(
+          secrets.values[AuthManager.deviceCredentialKey],
+          'legacy-device-credential',
+        );
+        expect(
+          await authFile.readAsString(),
+          isNot(contains('legacy-device-credential')),
+        );
+      },
+    );
+
+    test('keeps legacy credential when the vault is unavailable', () async {
+      final authFile = File(p.join(tempDir.path, 'auth.json'));
+      await authFile.writeAsString(
+        jsonEncode({'device_token': 'legacy-device-credential'}),
+      );
+      secrets.available = false;
+
+      await expectLater(
+        authManager.initialize(),
+        throwsA(isA<AgentSecretStoreUnavailable>()),
+      );
+
+      expect(
+        await authFile.readAsString(),
+        contains('legacy-device-credential'),
+      );
+      expect(authManager.deviceToken, isNull);
     });
 
     test('handles missing auth.json gracefully', () async {
@@ -93,7 +142,11 @@ void main() {
         final authFile = File(p.join(tempDir.path, 'auth.json'));
         final data =
             jsonDecode(await authFile.readAsString()) as Map<String, dynamic>;
-        expect(data['device_token'], equals(proposed));
+        expect(data.containsKey('device_token'), isFalse);
+        expect(
+          secrets.values[AuthManager.deviceCredentialKey],
+          equals(proposed),
+        );
         expect(data.containsKey('pairing_token'), isFalse);
         expect(data.containsKey('pending_device_token'), isFalse);
       },
@@ -106,7 +159,7 @@ void main() {
         await authManager.prepareDevicePairing('sanad_retry_pairing_token');
         final proposed = authManager.pendingDeviceToken;
 
-        final restored = AuthManager();
+        final restored = AuthManager(secretStore: secrets);
         await restored.initialize();
 
         expect(restored.pairingToken, equals('sanad_retry_pairing_token'));
@@ -147,7 +200,7 @@ void main() {
           }),
         );
         final lock = _BeforeAcquireAuthLock(tempDir.path);
-        authManager = AuthManager(authFileLock: lock);
+        authManager = AuthManager(authFileLock: lock, secretStore: secrets);
         await authManager.initialize();
         lock.beforeNextLock = () async {
           await authFile.writeAsString(

@@ -29,6 +29,7 @@ dependencies:
     path: ../release/contract
   sanad_auth_lock:
     path: ../shared/auth_lock
+  pointycastle: ^4.0.0
 
 
 

@@ -21,15 +21,51 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- app_links exclusively owns incoming links; disable Flutter's
+                 competing deep-link handler so each callback is delivered once. -->
+            <meta-data
+                android:name="flutter_deeplinking_enabled"
+                android:value="false" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+            <!-- General Sanad application deep link. Authentication never
+                 accepts this custom scheme as an OAuth callback. -->
             <intent-filter android:label="sanad_deep_link">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="sanad" />
+            </intent-filter>
+            <!-- SEC-01E accepts only domain-verified HTTPS callbacks. Each
+                 environment owns the same fixed Android callback path. -->
+            <intent-filter android:autoVerify="true" android:label="sanad_auth_development">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="dev.portal.sanad.eaststarai.com"
+                    android:path="/oauth/android" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true" android:label="sanad_auth_staging">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="staging.portal.sanad.eaststarai.com"
+                    android:path="/oauth/android" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true" android:label="sanad_auth_production">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="portal.sanad.eaststarai.com"
+                    android:path="/oauth/android" />
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

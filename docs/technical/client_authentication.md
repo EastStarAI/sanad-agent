@@ -1,25 +1,19 @@
 ---
-title: "Client Portal Authentication"
-description: "Portal-owned login, polling, refresh, credential persistence, and platform presentation architecture for Sanad clients."
+title: "Bound Client and Agent Authentication"
+description: "PKCE-bound Flutter login and P-256-bound Headless Agent authorization through Sanad Portal."
 ---
 
-# Client Portal Authentication
-
-The Web client loads its `AuthPopup` JavaScript bridge from the same-origin
-`web/auth_popup.js` file before the asynchronous Flutter bootstrap. The bridge
-must not be embedded inline: deployment CSP keeps script `unsafe-inline`
-disabled, and the external source avoids a release-specific CSP hash while
-ensuring the Dart JS-interop target exists before the user can start login.
+# Bound Client and Agent Authentication
 
 ## Ownership
 
-`sanad-portal` is the public authentication broker for open-source Sanad clients.
-The Flutter client and agent CLI use the same portal-facing lifecycle and do not
-construct backend authentication URLs or choose an identity provider flow.
-Google login is completed entirely by the Portal/Backend OAuth flow; the Flutter
-client consumes only the resulting Sanad authentication lifecycle.
-After authentication completes, the backend gateway is used only as an
-authenticated application transport.
+`sanad-portal` is the only public Sanad authentication surface. The Flutter
+Client and Headless Agent use separate grants and credentials:
+
+- Flutter receives `sanad_client` User access/refresh credentials only after an
+  S256 PKCE authorization-code exchange.
+- Agent receives a key-bound `sanad_agent` Device Credential only after
+  user-code approval plus P-256 proof-of-possession.
 
 The authenticated profile keeps the unique technical `username` separate from
 the optional human-facing `display_name`. Flutter presents `display_name` when
@@ -28,95 +22,107 @@ profiles remain compatible.
 
 ## Public Lifecycle
 
-1. The client sends platform identity plus non-sensitive capabilities to the
-   portal start operation.
-2. The portal returns a browser-visible authorization URL, a private polling
-   token, and an optional user code for explicit headless fallback.
-3. The client opens the authorization URL in the platform-appropriate browser
-   surface and retains the polling token only in process memory.
-4. Status polling sends the private token in a request body until the portal
-   reports completion, cancellation, expiry, or failure.
-5. Completed access and refresh credentials are persisted locally, then used for
-   authenticated backend REST and Socket.IO connections.
-6. Refresh and logout continue through the portal-owned lifecycle rather than
-   backend `/api/auth/*` orchestration.
+The public code remains provider-neutral. Provider choice and callback exchange
+are Portal/Backend details. Legacy `/auth/start`, `/auth/status`, `/auth/cancel`,
+and `/handoff` are not supported; no transferable polling secret can retrieve a
+User credential.
 
-## Secret Boundaries
+## Flutter Client flow
 
-- The polling token never enters a URL, browser state, logs, stdout, or durable
-  storage.
-- Refresh tokens are transmitted in request bodies and are never query values.
-- Raw access, refresh, device, and polling tokens are excluded from logs.
-- Socket diagnostic serialization recursively replaces credential-shaped fields
-  with a redaction marker before length limits are applied. Nested maps and
-  lists follow the same rule, including authorization headers, cookies,
-  passwords, API keys, and client secrets.
-- Desktop Sanad authentication is stored in `SANAD_HOME/auth.json` (normally
-  `~/.sanad/auth.json`) with owner-only permissions on Unix-like systems and an
-  equivalent user-restricted ACL on Windows.
-- Provider OAuth and API-key credentials are separate from Sanad identity and
-  follow `docs/technical/provider_protocol.md`.
+1. The Client creates a random PKCE verifier in memory and its S256 challenge.
+2. A platform callback binding is created before the transaction:
+   - Web: exact app origin and popup message receiver.
+   - Desktop: literal `127.0.0.1`, ephemeral port, fixed `/oauth/callback` path.
+   - iOS/Android: environment-configured claimed HTTPS app/universal link.
+3. The Client calls `POST /auth/client/transactions` with registered client ID,
+   exact redirect URI, and challenge.
+4. The system browser/Portal completes provider login.
+5. The registered callback receives only a short code and transaction state.
+6. The Client validates state and calls `POST /auth/client/token` with the code,
+   exact client/redirect, and locally held verifier.
+7. Only then is the User access/refresh pair persisted atomically.
 
-## Platform Presentation
+Web `postMessage` validates the exact Portal origin, popup source, message type,
+and payload. The Portal success page targets only the registered app origin;
+neither side uses `*`. Desktop binds only IPv4 loopback and rejects any other
+path. Mobile keeps `sanad://` as a general application deep-link namespace, but
+authentication rejects it and every unrelated claimed link; OAuth completion
+accepts only the exact registered HTTPS callback.
 
-Desktop, web, and mobile normally complete authentication in a browser without
-showing an in-app code-entry overlay. A visible user code is reserved for an
-explicit CLI/headless fallback selected by the portal. Platform clients do not
-encode provider names or portal flow identifiers in their public auth request.
+### Mobile claimed-link ownership
 
-## Refresh outcome contract
+Android declares three verified HTTPS App Links, one for each Portal environment,
+all restricted to `/oauth/android`; `assetlinks.json` binds them to
+`com.eaststarai.sanad` and the environment-injected public SHA-256 signing
+certificate fingerprints. iOS uses `Runner.entitlements` Associated Domains for
+the same three hosts, while each host serves an AASA document binding
+`UC2824B99G.com.eaststarai.sanad` only to `/oauth/ios`. Missing Android
+fingerprints return `503` instead of publishing an unverified association.
 
-Flutter refresh is a three-way result rather than a Boolean:
+Production mobile builds receive the exact callback URIs through
+`client/config/prod.json`. Development and Staging test builds inject their
+matching URI explicitly. `app_links` subscribes before the system browser opens,
+accepts cold-start and warm-link events, and filters exact scheme, host, port,
+and path before code/state validation. Flutter's competing built-in Android
+deep-link handler is disabled to prevent duplicate callback delivery.
 
-- `success` publishes the rotated access token only after the access/refresh
-  pair has been persisted as one authoritative preference value. Legacy keys
-  remain migration mirrors and cannot override that pair.
-- `terminalRejected` is limited to a trusted Portal `401` or the local absence
-  of any refresh credential. It clears the user session exactly once.
-- `transientUnavailable` covers offline state, DNS/connection/timeout failures,
-  malformed replies, and non-`401` HTTP failures including `5xx/503`. It keeps
-  both credentials and cached user data intact.
+## Headless Agent Device Authorization
 
-The Portal preserves a Backend `401` as the public terminal result. Backend
-status failures other than `401` and transport failures become a bounded public
-`503`; neither response nor logs expose Backend bodies or credential details.
-An authenticated request is retried at most once after refresh. A second `401`
-for the newly issued access token is terminal and cannot start another rotation.
+1. `sanad login --portal` creates or loads an Agent-owned P-256 identity from
+   the OS-backed Agent vault (macOS Keychain, Linux Secret Service, or Windows
+   DPAPI-protected ciphertext).
+2. The Agent calls `POST /auth/device/transactions` with the public JWK,
+   normalized device display name, and platform.
+3. CLI prints only the fixed verification URI, short user code, and shortened
+   RFC 7638 JWK thumbprint. Device code and private key remain local and never
+   enter CLI arguments, URLs, or output.
+4. The user enters the code from another browser, checks device identity and
+   fingerprint, authenticates, then explicitly approves or denies.
+5. Agent polls `POST /auth/device/token` with a fresh ES256 DPoP-style proof
+   containing exact method/URI, time, JTI, and device-code hash. Dart CLI signs
+   P-256 through Pointy Castle and serializes the JOSE signature as fixed-width
+   raw `r || s`; DER signatures are not sent.
+6. Success returns only a key-bound `sanad_agent` Device Credential. No User
+   access/refresh token is stored by Headless login.
+7. Gateway reconnect first requests a one-use nonce without sending the Device
+   Credential, then signs a `SOCKET`/`sanad-gateway:register_device` proof with
+   the same P-256 key and sends credential plus proof in registration.
 
-## Foreground resume and socket recovery
+The private key and durable Device Credential are separate OS-vault entries
+scoped by the canonical Sanad Home. macOS uses Keychain directly, Linux uses
+Secret Service without placing values in process arguments, and Windows stores
+only DPAPI ciphertext under the protected Home boundary. Startup migrates
+legacy `device_identity.json` and `auth.json.device_token` by writing and reading
+back the vault entry before deleting plaintext. An unavailable or unverifiable
+vault fails closed and preserves legacy bytes only for recovery; it never loads
+them as an active fallback credential.
 
-After a real background-to-foreground transition, the client debounces one
-single-flight cloud reconnect. Initial app startup does not count as resume.
-Socket authentication failure enters the typed refresh path; transient refresh
-failure leaves the application authenticated and its cache visible.
+## Pairing boundary
 
-`auth_success` is a recovery trigger, not proof that client data is fresh. The
-existing data-layer listeners request authoritative device inventory and then
-rehydrate managed conversation clients. Session-list and selected-session
-history hydration preserve the prior snapshot until success. History requests
-carry a monotonically increasing client generation, so an older response for
-the same session cannot replace a newer one. Live events observed while history
-is in flight are reconciled through canonical event identities.
+One-command pairing remains separate. It begins from an already authenticated
+Client and consumes a short-lived pairing credential. Before claim, Agent loads
+its vault-backed P-256 key, obtains a one-use Gateway nonce, then sends pairing
+authority, public JWK, and proof. Backend consumes the pairing token only after
+proof verification and atomically binds the final credential to the JWK
+thumbprint, `sanad_agent` audience, hardware, and auth epoch. A lost success
+response is retried with the same key/credential but a fresh nonce proof.
+This does not turn pairing into user-code login, and Headless Device
+Authorization never accepts a pairing token.
 
-Authenticated mobile/web clients remain on their cached home surface while the
-cloud is offline and expose the existing non-blocking `Offline`/retry status.
-Only terminal refresh rejection changes presentation to unauthenticated.
-Desktop local inventory remains independent of this cloud recovery path; mobile
-and web never attempt the Local Gateway.
+## Refresh and logout
 
-Native desktop processes reconcile live login, refresh, and logout through the
-credential-free Local Gateway notification specified in
-`docs/technical/desktop_authentication_exchange.md`. The shared auth document,
-not the notification, remains authoritative. Windows, Linux, and macOS serialize
-all auth-document mutations through the shared owner-only `auth.refresh.lock`;
-a waiting refresher re-reads and adopts a peer-rotated pair instead of replaying
-the prior refresh credential. Web and mobile retain in-process refresh and never
-open either desktop file.
+Only Flutter User sessions refresh through `/auth/refresh`. Refresh outcomes
+remain typed: a trusted `401` is terminal, while network and `5xx/503` failures
+retain credentials and cached state. Native desktop auth mutations retain the
+shared `auth.refresh.lock` and credential-free local exchange notification.
+Device Credentials do not enter this User refresh family.
 
+## Secret boundaries
 
-## Runtime Consumers
-
-The Flutter `PortalAuthClient` and daemon/CLI auth manager implement the same
-logical lifecycle while retaining platform-specific browser and persistence
-adapters. `hardware_id` remains persistent Sanad device identity and is distinct
-from backend-assigned device registration ids.
+- PKCE verifier, provider code, device code, proof JWTs, private keys, and raw
+  credentials never enter logs.
+- Authorization and Device Credentials never enter URLs.
+- Refresh credentials are request-body values only.
+- User codes are display identifiers, attempt/rate limited, and are not bearer
+  credentials.
+- `sanad_client` and `sanad_agent` audiences are never cross-accepted.
