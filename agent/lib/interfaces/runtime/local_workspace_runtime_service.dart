@@ -775,7 +775,6 @@ class LocalWorkspaceRuntimeService {
 
   Future<String> loadSkill({
     required String skill,
-    String? args,
     String? workspaceId,
     String? workspacePath,
   }) async {
@@ -784,7 +783,6 @@ class LocalWorkspaceRuntimeService {
         (workspaceId == null ? null : await _resolveWorkspacePath(workspaceId));
     return _skillLoadService.load(
       skill: skill,
-      args: args,
       workspacePath: resolvedWorkspacePath,
     );
   }

@@ -14,6 +14,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/tools/t
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/web_tool_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/ask_user_tool_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/generic_tool_tile.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/tools/skill_load_tool_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/app_markdown_renderer.dart';
 
@@ -569,11 +570,11 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         return WebToolTile(event: widget.event);
       case 'Ask':
         return AskUserToolTile(event: widget.event);
-      // todo : They have been suspended until the UI is fixed.
+      case 'Skill Load':
+        return SkillLoadToolTile(event: widget.event);
+      // todo : Memory presentation remains suspended until its UI is fixed.
       // case 'Memory':
       //   return MemoryToolTile(event: widget.event);
-      // case 'Skill Load':
-      //   return SkillLoadToolTile(event: widget.event);
       default:
         return GenericToolTile(event: widget.event);
     }

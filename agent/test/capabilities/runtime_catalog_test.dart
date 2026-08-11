@@ -314,14 +314,24 @@ Use the review skill.''');
         );
         registry.registerTools(tools);
 
+        final skillSpec = registry.getSpec('skill_load')!;
+        final properties = Map<String, dynamic>.from(
+          skillSpec.inputSchema['properties'] as Map,
+        );
+        expect(properties.keys, equals(['skill']));
+
         final payload = await registry.getTool('skill_load')!.execute({
           'skill': 'review',
-          'args': '--focus docs',
         });
 
-        expect(payload, contains('"skill": "review"'));
-        expect(payload, contains('"args": "--focus docs"'));
+        expect(payload, startsWith('Skill source: '));
+        expect(
+          payload,
+          contains('/workspace/.sanad/skills/review/SKILL.md\n\n'),
+        );
         expect(payload, contains('Use the review skill.'));
+        expect(payload, isNot(contains('"origin"')));
+        expect(payload, isNot(contains('"metadata"')));
 
         final slashCommands = await workspaceRuntimeService.searchSlashCommands(
           query: 'review',

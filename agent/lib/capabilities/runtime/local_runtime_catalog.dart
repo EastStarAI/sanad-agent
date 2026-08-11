@@ -306,7 +306,6 @@ class LocalRuntimeCatalog {
           'type': 'object',
           'properties': {
             'skill': {'type': 'string'},
-            'args': {'type': 'string'},
           },
           'required': ['skill'],
           'additionalProperties': false,
@@ -320,10 +319,8 @@ class LocalRuntimeCatalog {
       ),
       onExecute: (args, {context}) async {
         final skill = args['skill']?.toString() ?? '';
-        final extra = args['args']?.toString();
         return _workspaceRuntimeService.loadSkill(
           skill: skill,
-          args: extra,
           workspacePath: workspacePath,
         );
       },

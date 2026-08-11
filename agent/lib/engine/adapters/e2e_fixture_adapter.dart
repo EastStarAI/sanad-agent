@@ -78,7 +78,7 @@ class E2eFixtureAdapter implements LLMAdapter {
               ToolCall(
                 id: skillLoadToolCallId,
                 name: skillLoadToolName,
-                arguments: const {'skill': 'review', 'args': '--focus docs'},
+                arguments: const {'skill': 'review'},
               ),
             ],
           ),

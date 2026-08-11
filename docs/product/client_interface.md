@@ -26,7 +26,9 @@ configuration, and runtime state displayed by the client. It does not create a
 new conversation.
 
 The compact Home gateway/status bar is a native-desktop surface. Web and mobile
-never render it, regardless of browser or viewport width.
+never render it, regardless of browser or viewport width. Its gateway and
+optional worktree badge consume only the expandable leading region; desktop
+mode and `SanadAgent` remain anchored to the trailing edge.
 
 Desktop onboarding is local-first: installing the agent on the current computer
 is the primary card action, while signing in or connecting a remote device is a
@@ -99,8 +101,19 @@ opening; users never need to close and reopen the menu to refresh it.
 ## Active work
 
 The conversation timeline renders Markdown, code, reasoning summaries, tool
-activity, permission requests, recovery notices, and final responses. Dynamic
-event titles resolve their own text direction; Arabic ask-user headers mirror
+activity, permission requests, recovery notices, and final responses. Skill
+loading uses the same compact path-and-content presentation as File Read, while
+the loaded `SKILL.md` body renders as selectable README-style Markdown rather
+than raw tool JSON. File Read results for `.md` and `.markdown` targets place a
+`Raw | MD` switch beside the target path, default to rendered Markdown, and
+preserve the existing line-numbered source view under Raw. Both modes share one
+fixed-height scrollable viewport so switching never moves the surrounding
+timeline. The compact 8px-radius selector marks the active mode with the
+application primary color at 20% opacity and reuses the tool-surface border at
+5% on-surface opacity. Other file types keep the raw
+presentation without a switch. Dynamic event titles resolve their own
+text direction;
+Arabic ask-user headers mirror
 the complete header row while English headers remain left-to-right. Event
 runtime metadata uses milliseconds below one second, seconds below one minute,
 minutes plus seconds below one hour, and hours plus minutes thereafter.
