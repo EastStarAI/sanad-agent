@@ -1,5 +1,6 @@
 class AuthSession {
   final String username;
+  final String displayName;
   final String email;
   final String userId;
   final String accessToken;
@@ -8,6 +9,7 @@ class AuthSession {
 
   const AuthSession({
     required this.username,
+    required this.displayName,
     required this.email,
     required this.userId,
     required this.accessToken,

@@ -16,6 +16,8 @@ void main() {
     final authenticated = cubit.state as AuthAuthenticated;
     expect(authenticated.accessToken, 'access-token');
     expect(authenticated.userId, 'user-1');
+    expect(authenticated.username, 'ahmedattia');
+    expect(authenticated.displayName, 'Ahmed Attia');
 
     await cubit.logout();
     expect(cubit.state, isA<AuthUnauthenticated>());
@@ -71,7 +73,8 @@ class _FakeAuthRepository implements IAuthRepository {
 
   @override
   Future<AuthSession?> login() async => const AuthSession(
-    username: 'Test User',
+    username: 'ahmedattia',
+    displayName: 'Ahmed Attia',
     email: 'test@example.com',
     userId: 'user-1',
     accessToken: 'access-token',

@@ -21,6 +21,11 @@ client consumes only the resulting Sanad authentication lifecycle.
 After authentication completes, the backend gateway is used only as an
 authenticated application transport.
 
+The authenticated profile keeps the unique technical `username` separate from
+the optional human-facing `display_name`. Flutter presents `display_name` when
+it is non-empty and falls back to `username` so older accounts and older hosted
+profiles remain compatible.
+
 ## Public Lifecycle
 
 1. The client sends platform identity plus non-sensitive capabilities to the

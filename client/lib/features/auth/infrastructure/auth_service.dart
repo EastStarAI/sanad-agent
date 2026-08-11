@@ -14,6 +14,7 @@ import 'package:sanad_client/infrastructure/web_auth_popup_service_stub.dart'
     if (dart.library.html) 'package:sanad_client/infrastructure/web_auth_popup_service.dart';
 import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
 import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dart';
+import 'package:sanad_client/features/auth/domain/user_display_name.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class AuthLoginChallenge {
@@ -52,6 +53,7 @@ class AuthService {
   String? _activeAuthSessionId;
   String? _activePollingToken;
   String? username;
+  String? displayName;
   String? email;
   String? userId;
 
@@ -277,6 +279,7 @@ class AuthService {
       await prefs.remove('backend_access_token');
       await prefs.remove('backend_refresh_token');
       username = null;
+      displayName = null;
       email = null;
       userId = null;
       userCredits = 0.0;
@@ -521,6 +524,7 @@ class AuthService {
     _backendRefreshToken = null;
     userCredits = 0.0;
     username = null;
+    displayName = null;
     email = null;
     userId = null;
 
@@ -707,10 +711,18 @@ class AuthService {
       );
       final data = response.data;
 
-      if (data['user'] != null) {
-        username = data['user']['username'];
-        email = data['user']['email'];
-        userId = data['user']['id']?.toString();
+      final user = data['user'];
+      if (user is Map) {
+        final profileUsername = user['username']?.toString().trim() ?? '';
+        if (profileUsername.isNotEmpty) {
+          username = profileUsername;
+          displayName = resolveUserDisplayName(
+            username: profileUsername,
+            displayName: user['display_name'],
+          );
+        }
+        email = user['email']?.toString();
+        userId = user['id']?.toString();
       }
 
       if (data['credits'] != null) {

@@ -89,6 +89,7 @@ class AuthCubit extends Cubit<AuthState> {
   AuthAuthenticated _authenticated(AuthSession session) {
     return AuthAuthenticated(
       username: session.username,
+      displayName: session.displayName,
       email: session.email,
       userId: session.userId,
       accessToken: session.accessToken,

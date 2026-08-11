@@ -8,6 +8,7 @@ This contract applies to `client/lib/features/auth/`.
 - Do not call backend `/api/auth/*` endpoints from this feature.
 - Do not mention identity-provider names, portal flow identifiers, or `{provider}` in auth feature contracts or payload construction; the portal chooses provider and flow.
 - `backendUrl` is available only for authenticated REST and Socket.IO traffic after access-token acquisition.
+- Preserve the authenticated profile's technical `username` separately from its human-facing `display_name`. Presentation prefers a non-empty display name and falls back to username for legacy accounts or servers.
 
 ## Authentication Flow
 - `AuthService.login()` sends platform and non-sensitive capabilities to `PortalAuthClient`, opens the returned portal URL, polls through the portal client, and stores tokens only after completion.
