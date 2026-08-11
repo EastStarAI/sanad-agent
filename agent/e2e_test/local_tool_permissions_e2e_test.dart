@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'support/local_gateway_test_support.dart';
+
 void main() {
   test(
     'local daemon requests permission before executing a sensitive platform tool',
@@ -14,14 +16,18 @@ void main() {
       final sanadHome = await Directory.systemTemp.createTemp(
         'sanad-agent-permission-e2e-home',
       );
-      final sanadStateHome = Directory('${sanadHome.path}/state')
-        ..createSync(recursive: true);
+      final sanadStateHome = await Directory.systemTemp.createTemp(
+        'sanad-agent-permission-e2e-state',
+      );
       final workspaceDir = Directory('${sanadHome.path}/workspace')
         ..createSync(recursive: true);
 
       addTearDown(() async {
         if (sanadHome.existsSync()) {
           await sanadHome.delete(recursive: true);
+        }
+        if (sanadStateHome.existsSync()) {
+          await sanadStateHome.delete(recursive: true);
         }
       });
 
@@ -46,9 +52,12 @@ void main() {
         );
       });
 
-      await _waitForHealth(port);
+      await _waitForHealth(port, sanadHome.path);
 
-      final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+      final socket = await connectAuthenticatedLocalGateway(
+        port: port,
+        sanadHomePath: sanadHome.path,
+      );
       addTearDown(() async {
         await socket.close();
       });
@@ -267,7 +276,7 @@ Future<Process> _startDaemon({
   return process;
 }
 
-Future<void> _waitForHealth(int port) async {
+Future<void> _waitForHealth(int port, String sanadHomePath) async {
   final client = HttpClient();
   final deadline = DateTime.now().add(const Duration(seconds: 20));
   Object? lastError;
@@ -278,6 +287,7 @@ Future<void> _waitForHealth(int port) async {
         final request = await client.getUrl(
           Uri.parse('http://127.0.0.1:$port/health'),
         );
+        authorizeLocalGatewayTestRequest(request, sanadHomePath);
         final response = await request.close();
         final body = await response.transform(utf8.decoder).join();
         if (response.statusCode == 200) {

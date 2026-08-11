@@ -17,9 +17,9 @@ class AppColorScheme {
     outline: Color(0xFFDCDDE0),
     surfaceContainerLowest: Color(0xFFFFFFFF),
     surfaceContainerLow: Color(0xFFF7F7F8),
-    surfaceContainer: Color(0xFFE5E5E7),
-    surfaceContainerHigh: Color(0xFFDCDDE0),
-    surfaceContainerHighest: Color(0xFFD0D1D5),
+    surfaceContainer: Color(0xFFEFEFEF),
+    surfaceContainerHigh: Color(0xFFEFEFEF),
+    surfaceContainerHighest: Color(0xFFE5E5E7),
   );
 
   static const ColorScheme dark = ColorScheme(
@@ -37,10 +37,10 @@ class AppColorScheme {
     onSurfaceVariant: Colors.white70,
     outline: Color(0xFF2D2D2D), // Border color
     surfaceContainerLowest: Color(0xFF141414),
-    surfaceContainerLow: Color(0xFF1A1A1A),
+    surfaceContainerLow: Color(0xFF171717),
     surfaceContainer: Color(0xFF252525), // Selected/Hover color
-    surfaceContainerHigh: Color(0xFF2A2A2A),
-    surfaceContainerHighest: Color(0xFF333333),
+    surfaceContainerHigh: Color(0xFF1E1E1E), // Matches main app background
+    surfaceContainerHighest: Color(0xFF222222),
   );
 }
 

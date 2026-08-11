@@ -4,24 +4,31 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'support/local_gateway_test_support.dart';
+
 void main() {
   final port = int.tryParse(
     Platform.environment['SANAD_E2E_GATEWAY_PORT'] ??
         Platform.environment['SANAD_LOCAL_GATEWAY_PORT'] ??
         '',
   );
+  final sanadHomePath = Platform.environment['SANAD_E2E_SANAD_HOME']?.trim();
 
   test(
     'real runtime snapshot covers all configured provider instances and returns normalized model ids',
     () async {
-      if (port == null) {
-        fail(
-          'Set SANAD_E2E_GATEWAY_PORT to the running local gateway port before '
-          'executing this E2E test.',
+      if (port == null || sanadHomePath == null || sanadHomePath.isEmpty) {
+        markTestSkipped(
+          'Set SANAD_E2E_GATEWAY_PORT and SANAD_E2E_SANAD_HOME for the isolated '
+          'running local gateway before executing this E2E test.',
         );
+        return;
       }
 
-      final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+      final socket = await connectAuthenticatedLocalGateway(
+        port: port,
+        sanadHomePath: sanadHomePath,
+      );
       addTearDown(() async {
         await socket.close();
       });

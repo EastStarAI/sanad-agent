@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'support/local_gateway_test_support.dart';
+
 void main() {
   test(
     'local daemon persists memory tool writes across restart through the real think path',
@@ -41,6 +43,7 @@ void main() {
       await _runAddMemoryScenario(
         daemon: firstDaemon,
         port: port,
+        sanadHomePath: sanadHome.path,
         workspacePath: workspaceDir.path,
       );
 
@@ -58,6 +61,7 @@ void main() {
       await _runReadMemoryScenario(
         daemon: secondDaemon,
         port: port,
+        sanadHomePath: sanadHome.path,
         workspacePath: workspaceDir.path,
       );
     },
@@ -68,13 +72,17 @@ void main() {
 Future<void> _runAddMemoryScenario({
   required Process daemon,
   required int port,
+  required String sanadHomePath,
   required String workspacePath,
 }) async {
   final teardown = _daemonTearDown(daemon);
   try {
-    await _waitForHealth(port);
+    await _waitForHealth(port, sanadHomePath);
 
-    final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+    final socket = await connectAuthenticatedLocalGateway(
+      port: port,
+      sanadHomePath: sanadHomePath,
+    );
     final frames = StreamIterator(socket);
     expect(await frames.moveNext(), isTrue);
     final registerSuccess =
@@ -145,13 +153,17 @@ Future<void> _runAddMemoryScenario({
 Future<void> _runReadMemoryScenario({
   required Process daemon,
   required int port,
+  required String sanadHomePath,
   required String workspacePath,
 }) async {
   final teardown = _daemonTearDown(daemon);
   try {
-    await _waitForHealth(port);
+    await _waitForHealth(port, sanadHomePath);
 
-    final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+    final socket = await connectAuthenticatedLocalGateway(
+      port: port,
+      sanadHomePath: sanadHomePath,
+    );
     final frames = StreamIterator(socket);
     expect(await frames.moveNext(), isTrue);
     final registerSuccess =
@@ -313,7 +325,7 @@ Future<Process> _startDaemon({
   return process;
 }
 
-Future<void> _waitForHealth(int port) async {
+Future<void> _waitForHealth(int port, String sanadHomePath) async {
   final client = HttpClient();
   final deadline = DateTime.now().add(const Duration(seconds: 20));
   Object? lastError;
@@ -324,6 +336,7 @@ Future<void> _waitForHealth(int port) async {
         final request = await client.getUrl(
           Uri.parse('http://127.0.0.1:$port/health'),
         );
+        authorizeLocalGatewayTestRequest(request, sanadHomePath);
         final response = await request.close();
         final body = await response.transform(utf8.decoder).join();
         if (response.statusCode == 200) {
