@@ -31,6 +31,28 @@ class LocalDeviceInventorySource implements DeviceInventorySource {
   }
 }
 
+class DeviceInventoryOrdering {
+  const DeviceInventoryOrdering._();
+
+  static List<DeviceConfig> oldestFirst(Iterable<DeviceConfig> devices) {
+    final ordered = devices.toList()..sort(compare);
+    return List.unmodifiable(ordered);
+  }
+
+  static int compare(DeviceConfig left, DeviceConfig right) {
+    if (left.id == DeviceInventoryIds.localDevice && right.id != DeviceInventoryIds.localDevice) return -1;
+    if (left.id != DeviceInventoryIds.localDevice && right.id == DeviceInventoryIds.localDevice) return 1;
+
+    final leftCreatedAt = left.createdAt;
+    final rightCreatedAt = right.createdAt;
+    if (leftCreatedAt == null && rightCreatedAt != null) return 1;
+    if (leftCreatedAt != null && rightCreatedAt == null) return -1;
+    final timestampOrder = leftCreatedAt?.compareTo(rightCreatedAt!) ?? 0;
+    if (timestampOrder != 0) return timestampOrder;
+    return left.id.compareTo(right.id);
+  }
+}
+
 class DeviceInventoryMerger {
   final DeviceConnectionCoordinator _connectionCoordinator;
   final DeviceInventorySource _localSource;
@@ -45,17 +67,17 @@ class DeviceInventoryMerger {
     final decoratedCloud = cloudDevices.map(_connectionCoordinator.decorateAgent).toList();
     final localDevices = _localSource.snapshot();
     if (localDevices.isEmpty) {
-      return List.unmodifiable(decoratedCloud);
+      return DeviceInventoryOrdering.oldestFirst(decoratedCloud);
     }
     final localDevice = localDevices.first;
     final matchingCloudDevice = _sameHardwareDevice(decoratedCloud);
     if (matchingCloudDevice != null) {
-      return List.unmodifiable([
+      return DeviceInventoryOrdering.oldestFirst([
         _localDeviceWithCloudDisplay(localDevice, matchingCloudDevice),
         ...decoratedCloud.where((device) => !_isSameHardwareDevice(device)),
       ]);
     }
-    return List.unmodifiable([...decoratedCloud, ...localDevices]);
+    return DeviceInventoryOrdering.oldestFirst([...decoratedCloud, ...localDevices]);
   }
 
   DeviceConfig? _sameHardwareDevice(List<DeviceConfig> devices) {

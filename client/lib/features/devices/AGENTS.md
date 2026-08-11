@@ -8,6 +8,7 @@ This contract applies to `client/lib/features/devices/`.
 - Keep local inventory desktop-only and cloud inventory auth-owned.
 - Cloud logout, cloud refresh failure, or cloud socket failure must not remove the desktop local inventory source.
 - Web and mobile paths remain cloud-only and must not create local placeholders.
+- On desktop, pin the synthetic/merged local device first. Order every remaining visible inventory oldest-first by `createdAt`, with stable device-id ties and missing timestamps after timestamped records. Web/mobile have no local row and are fully chronological. Reapply this invariant after authoritative fetches, live mutations/status events, and local/cloud merging rather than trusting source order.
 - `DeviceCubit` is the sole presentation authority for the active conversation device; settings inspection state must not replace it implicitly.
 
 ## Selection and Restore

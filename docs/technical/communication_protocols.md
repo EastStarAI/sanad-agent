@@ -361,6 +361,7 @@ The Flutter client builds its visible device list from platform-specific invento
 - **Desktop clients:** merge a local inventory source with the cloud inventory when the user is authenticated. The local source represents the current machine as `This device` and exists independently from Sanad Gateway login state.
 - **Web and mobile clients:** use the cloud inventory only. They must not create a local placeholder, attempt localhost daemon discovery, or expose local-only runtime controls.
 - **Hybrid desktop clients:** when a cloud device has the same `hardware_id` as the current machine and the local daemon is reachable, the UI keeps the stable local entry identity and applies the cloud display name and cloud metadata to it instead of switching the visible device id.
+- **Canonical ordering:** desktop pins its synthetic or same-hardware merged `local-agent` row first, then orders every other device by `created_at` ascending. Web/mobile have no local row and are fully oldest-to-newest. The Client reapplies this ordering after initial fetch, `device_created`, updates/status changes, and local/cloud merging; equal timestamps use device id as a stable tie-breaker, while records without a creation timestamp follow timestamped records.
 
 Logout clears only the cloud inventory. It must not remove the desktop local source while the local daemon remains reachable.
 

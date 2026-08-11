@@ -3,6 +3,7 @@ import 'package:sanad_client/features/devices/data/device_connection_coordinator
 import 'package:sanad_client/features/devices/data/device_manager.dart';
 import 'package:sanad_client/features/devices/domain/device_repository.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../mocks/mock_socket_service.dart';
@@ -31,6 +32,7 @@ void main() {
   });
 
   tearDown(() {
+    AppPlatform.overrideIsDesktop = null;
     manager.dispose();
     coordinator.dispose();
     cloudSocket.dispose();
@@ -152,4 +154,63 @@ void main() {
     await expectLater(manager.renameAgent(localOnly, 'New name'), throwsA(isA<DeviceMutationException>()));
     expect(cloudSocket.capturedCommands, isEmpty);
   });
+
+  test('initial fetch normalizes cloud inventory from oldest to newest', () async {
+    AppPlatform.overrideIsDesktop = false;
+
+    await manager.handleDevicesResponseForTesting({
+      'status': 'ok',
+      'devices': [
+        _deviceJson('newest', '2026-03-03T00:00:00Z'),
+        _deviceJson('oldest', '2026-01-01T00:00:00Z'),
+        _deviceJson('middle', '2026-02-02T00:00:00Z'),
+      ],
+    });
+
+    expect(manager.agents.map((device) => device.id), ['oldest', 'middle', 'newest']);
+  });
+
+  test('device_created inserts the new device by creation time', () async {
+    AppPlatform.overrideIsDesktop = false;
+    await manager.handleDevicesResponseForTesting({
+      'status': 'ok',
+      'devices': [
+        _deviceJson('oldest', '2026-01-01T00:00:00Z'),
+        _deviceJson('newest', '2026-03-03T00:00:00Z'),
+      ],
+    });
+
+    manager.handleDeviceCreatedForTesting({
+      'status': 'ok',
+      'device': _deviceJson('middle', '2026-02-02T00:00:00Z'),
+    });
+
+    expect(manager.agents.map((device) => device.id), ['oldest', 'middle', 'newest']);
+  });
+
+  test('device_status_changed preserves oldest-to-newest ordering', () async {
+    AppPlatform.overrideIsDesktop = false;
+    await manager.handleDevicesResponseForTesting({
+      'status': 'ok',
+      'devices': [
+        _deviceJson('newest', '2026-03-03T00:00:00Z'),
+        _deviceJson('oldest', '2026-01-01T00:00:00Z'),
+      ],
+    });
+
+    manager.handleStatusChangeForTesting({
+      'device_id': 'oldest',
+      'is_online': true,
+    });
+
+    expect(manager.agents.map((device) => device.id), ['oldest', 'newest']);
+    expect(manager.agents.first.isOnline, isTrue);
+  });
 }
+
+Map<String, dynamic> _deviceJson(String id, String createdAt) => {
+  'id': id,
+  'name': id,
+  'is_online': false,
+  'created_at': createdAt,
+};

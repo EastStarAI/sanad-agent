@@ -17,6 +17,15 @@ description: "Focused QA coverage for the Plan 32c device-scoped sidebar, includ
 
 ## Manual Validation Scenarios
 
+### Device inventory ordering
+
+1. Load at least three account devices with distinct creation times on desktop and mobile/web.
+2. **Expected:** Desktop shows its local device first and every remaining device oldest→newest; mobile/web show the full inventory oldest→newest.
+3. Create a device while both interfaces remain connected, then toggle an older device Online/Offline.
+4. **Expected:** `device_created` inserts by creation time and `device_status_changed` changes only status; neither event disturbs chronological order.
+5. On desktop, ensure the local machine also has a matching cloud record.
+6. **Expected:** local/cloud merge produces one `local-agent` row pinned first, followed by all other devices oldest→newest. A local-only placeholder is also pinned first.
+
 ### 0. Empty inventory loading lifecycle
 1. Sign in with no cached or local devices while the cloud inventory response is delayed.
 2. **Expected:** The device header shows `Loading devices…`, not `No devices`.

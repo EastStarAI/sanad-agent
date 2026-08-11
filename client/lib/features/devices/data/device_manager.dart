@@ -85,14 +85,7 @@ class DeviceManager {
     });
 
     // Listen for device creation
-    socket.on('device_created', (data) {
-      if (data is Map<String, dynamic> && data['status'] == 'ok') {
-        final agent = DeviceConfig.fromApiResponse(data['device'] as Map<String, dynamic>);
-        _cloudAgents = [..._cloudAgents, agent];
-        _rebuildInventory();
-        _emitAgentsUpdate();
-      }
-    });
+    socket.on('device_created', _handleDeviceCreated);
 
     // Listen for device updates
     socket.on('device_updated', (data) {
@@ -318,7 +311,31 @@ class DeviceManager {
   Future<void> handleDevicesResponseForTesting(dynamic data) => _handleDevicesResponse(data);
 
   @visibleForTesting
+  void handleDeviceCreatedForTesting(dynamic data) => _handleDeviceCreated(data);
+
+  @visibleForTesting
   void handleDeviceUpdatedForTesting(dynamic data) => _handleDeviceUpdated(data);
+
+  @visibleForTesting
+  void handleStatusChangeForTesting(dynamic data) => _handleStatusChange(data);
+
+  void _handleDeviceCreated(dynamic data) {
+    if (data is! Map<String, dynamic> || data['status'] != 'ok') return;
+    final rawDevice = data['device'];
+    if (rawDevice is! Map<String, dynamic>) return;
+
+    final agent = DeviceConfig.fromApiResponse(rawDevice);
+    final existingIndex = _cloudAgents.indexWhere((candidate) => candidate.id == agent.id);
+    _cloudAgents = existingIndex < 0
+        ? [..._cloudAgents, agent]
+        : [
+            ..._cloudAgents.take(existingIndex),
+            agent,
+            ..._cloudAgents.skip(existingIndex + 1),
+          ];
+    _rebuildInventory();
+    _emitAgentsUpdate();
+  }
 
   void _handleDeviceUpdated(dynamic data) {
     if (data is! Map<String, dynamic>) return;
