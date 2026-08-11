@@ -20,6 +20,10 @@ class E2eFixtureAdapter implements LLMAdapter {
   static const memoryToolName = 'memory';
   static const memoryAddPrompt = '__SANAD_E2E_MEMORY_ADD__';
   static const memoryReadPrompt = '__SANAD_E2E_MEMORY_READ__';
+  static const runtimeContextPrompt = '__SANAD_E2E_RUNTIME_CONTEXT__';
+  static const skillLoadPrompt = '__SANAD_E2E_SKILL_LOAD__';
+  static const skillLoadToolName = 'skill_load';
+  static const skillLoadToolCallId = 'e2e-skill-load-tool-call';
   static const memoryAddToolCallId = 'e2e-memory-add-tool-call';
   static const memoryReadToolCallId = 'e2e-memory-read-tool-call';
   static const memoryEntry = 'User name is Ahmed Memory E2E';
@@ -33,6 +37,65 @@ class E2eFixtureAdapter implements LLMAdapter {
         latestUserContent = message.content ?? '';
       }
     }
+    if (latestUserContent == runtimeContextPrompt) {
+      final markerPattern = RegExp(
+        r'^CURRENT_RUNTIME_MARKER=(.+)$',
+        multiLine: true,
+      );
+      String? marker;
+      for (final message in history) {
+        if (message.role != MessageRole.system) continue;
+        marker = markerPattern
+            .firstMatch(message.content ?? '')
+            ?.group(1)
+            ?.trim();
+        if (marker != null && marker.isNotEmpty) break;
+      }
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: marker ?? 'MISSING_RUNTIME_MARKER',
+        ),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
+    final hasSkillLoadTool =
+        tools?.any((tool) => tool.name == skillLoadToolName) ?? false;
+    if (latestUserContent == skillLoadPrompt && hasSkillLoadTool) {
+      final hasResult = history.any(
+        (message) =>
+            message.role == MessageRole.tool &&
+            message.toolCallId == skillLoadToolCallId,
+      );
+      if (!hasResult) {
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: skillLoadToolCallId,
+                name: skillLoadToolName,
+                arguments: const {'skill': 'review', 'args': '--focus docs'},
+              ),
+            ],
+          ),
+          isToolCall: true,
+          model: modelId,
+          provider: providerId,
+          finishReason: LLMFinishReason.toolCalls,
+        );
+      }
+      return AgentResponse(
+        message: Message(role: MessageRole.assistant, content: 'SKILL_LOADED'),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
     final hasMemoryTool =
         tools?.any((tool) => tool.name == memoryToolName) ?? false;
     final memoryToolCallId = latestUserContent == memoryAddPrompt
@@ -111,11 +174,26 @@ class E2eFixtureAdapter implements LLMAdapter {
       );
     }
 
+    String? platformMarker;
+    if (hasPermissionToolResult) {
+      final markerPattern = RegExp(r'PLATFORM_MARKER_[A-Za-z0-9_-]+');
+      for (final message in history) {
+        if (message.role != MessageRole.tool ||
+            message.toolCallId != permissionToolCallId) {
+          continue;
+        }
+        platformMarker = markerPattern
+            .firstMatch(message.content ?? '')
+            ?.group(0);
+        if (platformMarker != null) break;
+      }
+    }
+
     return AgentResponse(
       message: Message(
         role: MessageRole.assistant,
         content: hasPermissionToolResult
-            ? permissionResponseText
+            ? platformMarker ?? permissionResponseText
             : responseText,
       ),
       model: modelId,

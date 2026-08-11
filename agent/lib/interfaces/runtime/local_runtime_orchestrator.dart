@@ -23,9 +23,6 @@ class LocalRuntimeOrchestrator {
   final LocalWorkspaceRuntimeService _workspaceRuntimeService;
   final LocalRuntimeCatalog _runtimeCatalog;
   final RuntimeContextBuilder _runtimeContextBuilder;
-  String? _cachedWorkspacePath;
-  String? _cachedWorkspaceName;
-  String? _cachedRuntimeContext;
 
   Future<Map<String, dynamic>> buildSessionMetadata(
     AgentTurnRequest request,
@@ -191,20 +188,11 @@ class LocalRuntimeOrchestrator {
     }
 
     final workspaceName = workspace?['name'] as String?;
-    if (_cachedWorkspacePath == workspacePath &&
-        _cachedWorkspaceName == workspaceName &&
-        _cachedRuntimeContext != null) {
-      return _cachedRuntimeContext;
-    }
-
     final runtimeContext = await _runtimeContextBuilder.build(
       workspacePath: workspacePath,
       workspaceName: workspaceName,
       registry: agentRunner.registry,
     );
-    _cachedWorkspacePath = workspacePath;
-    _cachedWorkspaceName = workspaceName;
-    _cachedRuntimeContext = runtimeContext;
     return runtimeContext;
   }
 

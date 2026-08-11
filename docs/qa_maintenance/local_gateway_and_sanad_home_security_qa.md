@@ -20,7 +20,10 @@ description: "Regression matrix for authenticated loopback transport, secure loc
 Real transport coverage includes health, ordinary WebSocket admission,
 Origin/Host enforcement, and the pre-authentication budget. The same admission
 gate runs before every lifecycle, logs, and voice route. Constructor coverage
-proves an empty expected credential cannot become a fail-open mode.
+proves an empty expected credential cannot become a fail-open mode. Daemon-backed
+E2E clients read the credential from their temporary Sanad Home and authenticate
+health, lifecycle, and WebSocket requests through the production admission gate;
+test mode never disables or weakens Local Gateway authentication.
 
 ## Filesystem Matrix
 
