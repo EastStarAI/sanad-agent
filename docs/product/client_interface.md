@@ -58,8 +58,10 @@ temporarily unavailable. Recent user activity moves a conversation to the top
 of its section without losing the current selection or scroll position.
 
 On wide desktop and tablet layouts, navigation appears as a persistent,
-resizable sidebar. On mobile and narrow layouts, it becomes a drawer that
-closes after a destination is selected.
+resizable sidebar. The resize target follows the sidebar's visible edge,
+including the macOS shell margin, and the selected desktop width is restored
+from local client preferences on the next launch. On mobile and narrow layouts,
+it becomes a drawer that closes after a destination is selected.
 
 Opening a conversation with active work shows its latest event so current
 progress is immediately visible. An idle conversation resumes from the event
@@ -101,7 +103,10 @@ opening; users never need to close and reopen the menu to refresh it.
 ## Active work
 
 The conversation timeline renders Markdown, code, reasoning summaries, tool
-activity, permission requests, recovery notices, and final responses. Skill
+activity, permission requests, recovery notices, and final responses. Multiline
+Markdown code blocks detect Arabic versus non-Arabic content for text direction:
+Arabic code is RTL and other code is LTR. The code viewport itself always uses
+an LTR horizontal scroll origin so long blocks open with their left edge visible. Skill
 loading uses the same compact path-and-content presentation as File Read, while
 the loaded `SKILL.md` body renders as selectable README-style Markdown rather
 than raw tool JSON. File Read results for `.md` and `.markdown` targets place a

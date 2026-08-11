@@ -34,7 +34,7 @@ class SidebarBreakpoints {
   static const double tablet = 900;
 
   /// Default fixed sidebar width on desktop.
-  static const double desktopWidth = 280;
+  static const double desktopWidth = 300;
 
   /// Drawer width on compact layouts, expressed as a fraction of viewport width.
   static const double drawerWidthFactor = 0.8;
