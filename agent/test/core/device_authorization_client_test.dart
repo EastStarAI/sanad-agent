@@ -155,6 +155,46 @@ void main() {
     },
   );
 
+  test('co-located enrollment sends non-secret hardware identity', () async {
+    final client = MockClient((request) async {
+      final payload = jsonDecode(request.body) as Map<String, dynamic>;
+      expect(payload['client_id'], 'sanad_agent_colocated');
+      expect(payload['device_name'], 'Sanad Agent (macOS)');
+      expect(payload['platform'], 'macos');
+      expect(payload['hardware_id'], 'hardware-123');
+      expect(payload, isNot(contains('device_code')));
+      return http.Response(
+        jsonEncode({
+          'transaction_id': 'colocated-transaction',
+          'device_code': 'private-device-code',
+          'user_code': 'ABCD-EFGH',
+          'verification_uri': 'https://portal.test/device',
+          'expires_in': 600,
+          'interval': 5,
+        }),
+        200,
+      );
+    });
+    final auth = AuthManager(secretStore: secrets);
+    await auth.initialize();
+    final authorization = DeviceAuthorizationClient(
+      portalUrl: 'https://portal.test',
+      authManager: auth,
+      httpClient: client,
+      identityLoader: () =>
+          DeviceKeyIdentity.loadOrCreate(secretStore: secrets),
+    );
+
+    final enrollment = await authorization.startEnrollment(
+      clientId: 'sanad_agent_colocated',
+      deviceName: 'Sanad Agent (macOS)',
+      platform: 'macos',
+      hardwareId: 'hardware-123',
+    );
+
+    expect(enrollment.transactionId, 'colocated-transaction');
+  });
+
   test(
     'polls with fresh proofs, honors slow_down, and survives restart',
     () async {

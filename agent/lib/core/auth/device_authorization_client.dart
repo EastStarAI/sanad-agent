@@ -235,6 +235,7 @@ class DeviceAuthorizationClient {
     required String clientId,
     required String deviceName,
     required String platform,
+    String? hardwareId,
   }) async {
     final identity = await _identityLoader();
     final startUri = Uri.parse('$portalUrl/auth/device/transactions');
@@ -246,6 +247,7 @@ class DeviceAuthorizationClient {
         'public_jwk': identity.publicJwk,
         'device_name': deviceName,
         'platform': platform,
+        'hardware_id': ?hardwareId,
       }),
     );
     if (startResponse.statusCode != 200) {

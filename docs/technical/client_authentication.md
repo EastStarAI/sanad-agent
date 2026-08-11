@@ -122,7 +122,10 @@ Device Credentials do not enter this User refresh family. A User login or token
 rotation does not make the local Agent eligible for cloud registration. On
 Desktop, the Client first asks the authenticated Local Gateway for a non-secret,
 key-bound enrollment request identity and includes only that identity in its
-normal PKCE transaction. Portal binds both issuance grants to the authenticated
+normal PKCE transaction. The Agent separately sends its non-secret persistent
+hardware identity to Portal so Backend reuses the canonical device record and
+preserves its display name; default names are `Sanad Agent (<OS name>)`, never a
+hostname or IP address. Portal binds both issuance grants to the authenticated
 principal; the Client receives only Client credentials, while the Agent redeems
 its Device Credential with its private device code and P-256 proof. The UI stays
 `Completing sign-in` until the local status reports completion. No local Agent
