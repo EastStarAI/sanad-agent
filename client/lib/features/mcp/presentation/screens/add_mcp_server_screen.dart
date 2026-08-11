@@ -56,6 +56,8 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
   bool _isSaving = false;
   bool _removeBearer = false;
   bool _acceptedRisks = false;
+  bool _obscureBearer = true;
+  bool _obscureOAuthSecret = true;
   McpOAuthFlow? _oauthFlow;
 
   bool get _isEditing => widget.initialConfig != null;
@@ -322,6 +324,10 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
                     minLines: 8,
                     maxLines: 14,
                     style: const TextStyle(fontFamily: 'monospace'),
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      hintText: '{\n  "mcpServers": { ... }\n}',
+                    ),
                     onChanged: (_) => setDialogState(() {
                       preview = null;
                       selected = null;
@@ -332,7 +338,10 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
                     const SizedBox(height: 12),
                     DropdownButtonFormField<McpDraftPreviewEntry>(
                       initialValue: selected,
-                      decoration: const InputDecoration(labelText: 'Draft to review'),
+                      decoration: const InputDecoration(
+                        labelText: 'Draft to review',
+                        border: OutlineInputBorder(),
+                      ),
                       items: preview!.servers
                           .map((entry) => DropdownMenuItem(value: entry, child: Text(entry.name)))
                           .toList(growable: false),
@@ -565,11 +574,34 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
             _inspection = null;
           }),
         ),
-        const SizedBox(height: 20),
-        _field(_name, 'Name', enabled: !_isEditing, required: true),
+        const SizedBox(height: 24),
+        Text(
+          'Server Details',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          _isEditing ? 'Server identity and metadata.' : 'Enter basic details for this MCP server.',
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
         const SizedBox(height: 12),
-        _field(_description, 'Description (optional)', maxLines: 2),
-        const SizedBox(height: 20),
+        _field(
+          _name,
+          'Name',
+          hint: 'e.g. Memory Server',
+          prefixIcon: const Icon(Icons.badge_outlined),
+          enabled: !_isEditing,
+          required: true,
+        ),
+        const SizedBox(height: 12),
+        _field(
+          _description,
+          'Description (optional)',
+          hint: 'e.g. MCP server for persistent memory storage',
+          prefixIcon: const Icon(Icons.description_outlined),
+          maxLines: 2,
+        ),
+        const SizedBox(height: 24),
         if (_serverType == _McpServerFormType.remote) ..._remoteFields(),
         if (_serverType == _McpServerFormType.stdio) ..._stdioFields(),
       ],
@@ -716,10 +748,21 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
   }
 
   List<Widget> _remoteFields() => [
+    Text(
+      'Connection',
+      style: Theme.of(context).textTheme.titleMedium,
+    ),
+    const SizedBox(height: 4),
+    Text(
+      'Configure how Sanad connects to this remote MCP server.',
+      style: Theme.of(context).textTheme.bodySmall,
+    ),
+    const SizedBox(height: 12),
     _field(
       _url,
       'Server URL',
       hint: 'https://example.com/mcp',
+      prefixIcon: const Icon(Icons.link),
       required: true,
       validator: (value) {
         final uri = Uri.tryParse(value?.trim() ?? '');
@@ -729,7 +772,11 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
     const SizedBox(height: 12),
     DropdownButtonFormField<McpTransportType>(
       initialValue: _transport,
-      decoration: const InputDecoration(labelText: 'Transport'),
+      decoration: const InputDecoration(
+        labelText: 'Transport',
+        border: OutlineInputBorder(),
+        prefixIcon: Icon(Icons.swap_calls_outlined),
+      ),
       items: const [
         McpTransportType.auto,
         McpTransportType.streamableHttp,
@@ -740,18 +787,32 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
         _inspection = null;
       }),
     ),
+    const SizedBox(height: 24),
+    Text(
+      'Credentials',
+      style: Theme.of(context).textTheme.titleMedium,
+    ),
+    const SizedBox(height: 4),
+    Text(
+      'Select and configure credentials for this server.',
+      style: Theme.of(context).textTheme.bodySmall,
+    ),
     const SizedBox(height: 12),
     DropdownButtonFormField<McpAuthType>(
       initialValue: _authType,
-      decoration: const InputDecoration(labelText: 'Authentication'),
+      decoration: const InputDecoration(
+        labelText: 'Authentication',
+        border: OutlineInputBorder(),
+        prefixIcon: Icon(Icons.security_outlined),
+      ),
       items: McpAuthType.values.map((value) => DropdownMenuItem(value: value, child: Text(value.displayName))).toList(),
       onChanged: (value) => setState(() {
         _authType = value ?? McpAuthType.none;
         _inspection = null;
       }),
     ),
-    const SizedBox(height: 12),
     if (_authType == McpAuthType.bearer) ...[
+      const SizedBox(height: 12),
       if (widget.initialConfig?.bearerConfigured == true && !_removeBearer)
         _configuredSecret(
           'Bearer token',
@@ -760,49 +821,107 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
       _field(
         _bearer,
         widget.initialConfig?.bearerConfigured == true ? 'Replace bearer token' : 'Bearer token',
-        obscure: true,
+        hint: 'Enter token string',
+        prefixIcon: const Icon(Icons.vpn_key_outlined),
+        obscure: _obscureBearer,
+        isObscured: _obscureBearer,
+        onToggleObscure: () => setState(() => _obscureBearer = !_obscureBearer),
       ),
     ],
     if (_authType == McpAuthType.oauth) ...[
-      _field(_oauthClientId, 'OAuth client ID (optional)'),
+      const SizedBox(height: 12),
+      _field(
+        _oauthClientId,
+        'OAuth client ID (optional)',
+        hint: 'e.g. client_12345',
+        prefixIcon: const Icon(Icons.badge_outlined),
+      ),
       const SizedBox(height: 12),
       if (widget.initialConfig?.oauthConfigured == true)
-        const ListTile(
-          contentPadding: EdgeInsets.zero,
-          leading: Icon(Icons.check_circle_outline),
-          title: Text('OAuth credentials configured'),
+        _configuredSecret(
+          'OAuth credentials',
+          onRemove: () {},
         ),
-      _field(_oauthClientSecret, 'Replace OAuth client secret (optional)', obscure: true),
+      _field(
+        _oauthClientSecret,
+        'Replace OAuth client secret (optional)',
+        hint: 'Enter client secret',
+        prefixIcon: const Icon(Icons.vpn_key_outlined),
+        obscure: _obscureOAuthSecret,
+        isObscured: _obscureOAuthSecret,
+        onToggleObscure: () => setState(() => _obscureOAuthSecret = !_obscureOAuthSecret),
+      ),
     ],
     if (_authType == McpAuthType.customHeaders) ...[
-      const Text('Headers', style: TextStyle(fontWeight: FontWeight.w700)),
+      const SizedBox(height: 24),
+      Text('Headers', style: Theme.of(context).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600)),
       const SizedBox(height: 8),
       ..._rows(_headers),
-      TextButton.icon(
-        onPressed: () => setState(() => _headers.add(_KeyValueRowState())),
-        icon: const Icon(Icons.add),
-        label: const Text('Add header'),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton.icon(
+          onPressed: () => setState(() => _headers.add(_KeyValueRowState())),
+          icon: const Icon(Icons.add),
+          label: const Text('Add header'),
+        ),
       ),
     ],
   ];
 
   List<Widget> _stdioFields() => [
-    _field(_command, 'Command', hint: 'npx', required: true),
-    const SizedBox(height: 16),
+    Text(
+      'Local Command',
+      style: Theme.of(context).textTheme.titleMedium,
+    ),
+    const SizedBox(height: 4),
+    Text(
+      'Specify the executable command to run locally.',
+      style: Theme.of(context).textTheme.bodySmall,
+    ),
+    const SizedBox(height: 12),
+    _field(
+      _command,
+      'Command',
+      hint: 'e.g. npx, uvx, python, or node',
+      prefixIcon: const Icon(Icons.terminal_outlined),
+      required: true,
+    ),
+    const SizedBox(height: 24),
     Row(
       children: [
-        const Expanded(
-          child: Text('Arguments', style: TextStyle(fontWeight: FontWeight.w700)),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Arguments', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 4),
+              Text('Command line arguments passed to the process.', style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
         ),
-        TextButton.icon(onPressed: _pasteArguments, icon: const Icon(Icons.content_paste), label: const Text('Paste')),
+        TextButton.icon(
+          onPressed: _pasteArguments,
+          icon: const Icon(Icons.content_paste, size: 16),
+          label: const Text('Paste'),
+        ),
       ],
     ),
+    const SizedBox(height: 12),
     ..._args.asMap().entries.map(
       (entry) => Padding(
         padding: const EdgeInsets.only(bottom: 8),
         child: Row(
           children: [
-            Expanded(child: _field(entry.value, 'Argument ${entry.key + 1}')),
+            Expanded(
+              child: _field(
+                entry.value,
+                'Argument ${entry.key + 1}',
+                hint: 'e.g. -y or @modelcontextprotocol/server',
+                prefixIcon: const Icon(Icons.code_outlined),
+                isDense: true,
+              ),
+            ),
+            const SizedBox(width: 4),
             IconButton(
               tooltip: 'Remove argument',
               onPressed: () => setState(() {
@@ -815,19 +934,27 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
         ),
       ),
     ),
-    TextButton.icon(
-      onPressed: () => setState(() => _args.add(TextEditingController())),
-      icon: const Icon(Icons.add),
-      label: const Text('Add argument'),
+    Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: () => setState(() => _args.add(TextEditingController())),
+        icon: const Icon(Icons.add),
+        label: const Text('Add argument'),
+      ),
     ),
-    const SizedBox(height: 16),
-    const Text('Environment variables', style: TextStyle(fontWeight: FontWeight.w700)),
-    const SizedBox(height: 8),
+    const SizedBox(height: 24),
+    Text('Environment variables', style: Theme.of(context).textTheme.titleMedium),
+    const SizedBox(height: 4),
+    Text('Set environment variables for the subprocess.', style: Theme.of(context).textTheme.bodySmall),
+    const SizedBox(height: 12),
     ..._rows(_env),
-    TextButton.icon(
-      onPressed: () => setState(() => _env.add(_KeyValueRowState())),
-      icon: const Icon(Icons.add),
-      label: const Text('Add variable'),
+    Align(
+      alignment: Alignment.centerLeft,
+      child: TextButton.icon(
+        onPressed: () => setState(() => _env.add(_KeyValueRowState())),
+        icon: const Icon(Icons.add),
+        label: const Text('Add variable'),
+      ),
     ),
   ];
 
@@ -839,15 +966,28 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
           child: LayoutBuilder(
             builder: (context, constraints) {
               final fields = [
-                Expanded(child: _field(row.key, 'Key', required: row.value.text.isNotEmpty || row.configured)),
+                Expanded(
+                  child: _field(
+                    row.key,
+                    'Key',
+                    hint: 'KEY_NAME',
+                    prefixIcon: const Icon(Icons.label_outline, size: 18),
+                    isDense: true,
+                    required: row.value.text.isNotEmpty || row.configured,
+                  ),
+                ),
                 const SizedBox(width: 8, height: 8),
                 Expanded(
                   child: _field(
                     row.value,
                     row.configured ? 'Configured — enter replacement' : 'Value',
+                    hint: 'value',
+                    prefixIcon: Icon(row.secret ? Icons.lock_outline : Icons.text_fields_outlined, size: 18),
+                    isDense: true,
                     obscure: row.secret,
                   ),
                 ),
+                const SizedBox(width: 4),
                 IconButton(
                   tooltip: row.secret ? 'Secret value' : 'Visible value',
                   onPressed: () => setState(() => row.secret = !row.secret),
@@ -915,11 +1055,19 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
     );
   }
 
-  Widget _configuredSecret(String label, {required VoidCallback onRemove}) => ListTile(
-    contentPadding: EdgeInsets.zero,
-    leading: const Icon(Icons.check_circle_outline),
-    title: Text('$label configured'),
-    trailing: TextButton(onPressed: onRemove, child: const Text('Remove')),
+  Widget _configuredSecret(String label, {required VoidCallback onRemove}) => Container(
+    margin: const EdgeInsets.only(bottom: 12),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(8),
+      border: Border.all(color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.25)),
+      color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.25),
+    ),
+    child: ListTile(
+      dense: true,
+      leading: const Icon(Icons.check_circle_outline, color: Colors.green, size: 20),
+      title: Text('$label configured', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+      trailing: TextButton(onPressed: onRemove, child: const Text('Remove')),
+    ),
   );
 
   Widget _field(
@@ -928,15 +1076,34 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
     String? hint,
     bool required = false,
     bool obscure = false,
+    bool? isObscured,
+    VoidCallback? onToggleObscure,
     bool enabled = true,
+    bool isDense = false,
     int maxLines = 1,
+    Widget? prefixIcon,
+    Widget? suffixIcon,
     String? Function(String?)? validator,
   }) => TextFormField(
     controller: controller,
     enabled: enabled,
     obscureText: obscure,
     maxLines: obscure ? 1 : maxLines,
-    decoration: InputDecoration(labelText: label, hintText: hint),
+    decoration: InputDecoration(
+      labelText: label,
+      hintText: hint,
+      isDense: isDense,
+      border: const OutlineInputBorder(),
+      prefixIcon: prefixIcon,
+      suffixIcon: onToggleObscure != null
+          ? IconButton(
+              onPressed: onToggleObscure,
+              icon: Icon(
+                (isObscured ?? true) ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+              ),
+            )
+          : suffixIcon,
+    ),
     validator: validator ?? (required ? (value) => value?.trim().isEmpty == true ? '$label is required' : null : null),
     onChanged: (_) => _inspection = null,
   );
