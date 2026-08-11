@@ -68,7 +68,7 @@ class LocalRuntimeCatalog {
     ];
 
     if (workspacePath != null && workspacePath.isNotEmpty) {
-      tools.addAll(_buildWorkspaceTools(workspacePath));
+      tools.addAll(_buildWorkspaceTools(workspacePath, request));
     }
 
     final hasConfig = getIt.isRegistered<Config>();
@@ -327,7 +327,10 @@ class LocalRuntimeCatalog {
     );
   }
 
-  List<BaseTool> _buildWorkspaceTools(String workspacePath) {
+  List<BaseTool> _buildWorkspaceTools(
+    String workspacePath,
+    AgentTurnRequest request,
+  ) {
     return [
       ShellExecuteTool(
         workspacePath: workspacePath,
@@ -338,7 +341,7 @@ class LocalRuntimeCatalog {
           name: 'file_read',
           displayName: 'Read File',
           description:
-              'Read a file or list contents of a directory. For files, returns up to 2000 lines from the start. Use offset (1-indexed) to read later sections. Lines are prefixed with line numbers. Lines >2000 chars are truncated. For directories, returns paginated entries.',
+              'Read a file or list a directory. Paths inside the workspace execute directly; external paths require full access or user approval. Files return up to 2000 lines, with offset for later sections, and directories return paginated entries.',
           inputSchema: const {
             'type': 'object',
             'properties': {
@@ -353,7 +356,18 @@ class LocalRuntimeCatalog {
           restartReplaySafe: true,
         ),
         onExecute: (args, {context}) async {
-          return FileReadHandler(_pathResolver).execute(args, workspacePath);
+          final authorizedExternalRoot = await _authorizeExternalWorkspacePath(
+            toolName: 'file_read',
+            arguments: args,
+            context: context,
+            request: request,
+            workspacePath: workspacePath,
+          );
+          return FileReadHandler(_pathResolver).execute(
+            args,
+            workspacePath,
+            authorizedExternalRoot: authorizedExternalRoot,
+          );
         },
       ),
       CallbackTool(
@@ -361,7 +375,7 @@ class LocalRuntimeCatalog {
           name: 'file_write',
           displayName: 'Write File',
           description:
-              'Create or replace a text file inside the selected workspace.',
+              'Create or replace a text file inside the workspace or at an authorized external path.',
           inputSchema: const {
             'type': 'object',
             'properties': {
@@ -374,7 +388,19 @@ class LocalRuntimeCatalog {
           category: 'workspace_io',
         ),
         onExecute: (args, {context}) async {
-          return FileWriteHandler(_pathResolver).execute(args, workspacePath);
+          final authorizedExternalRoot = await _authorizeExternalWorkspacePath(
+            toolName: 'file_write',
+            arguments: args,
+            context: context,
+            request: request,
+            workspacePath: workspacePath,
+            allowMissing: true,
+          );
+          return FileWriteHandler(_pathResolver).execute(
+            args,
+            workspacePath,
+            authorizedExternalRoot: authorizedExternalRoot,
+          );
         },
       ),
       CallbackTool(
@@ -382,7 +408,7 @@ class LocalRuntimeCatalog {
           name: 'file_edit',
           displayName: 'Edit File',
           description:
-              'Performs exact string replacements using an elastic matching algorithm. old_string must preserve exact indentation. Fails if not found or if multiple matches exist (unless replace_all is true). Do NOT include line number prefixes from file_read in old_string.',
+              'Perform an exact string replacement inside the workspace or in an authorized external file. old_string must preserve indentation and must not include file_read line-number prefixes. Fails when no unique match exists unless replace_all is true.',
           inputSchema: const {
             'type': 'object',
             'properties': {
@@ -397,7 +423,18 @@ class LocalRuntimeCatalog {
           category: 'workspace_io',
         ),
         onExecute: (args, {context}) async {
-          return FileEditHandler(_pathResolver).execute(args, workspacePath);
+          final authorizedExternalRoot = await _authorizeExternalWorkspacePath(
+            toolName: 'file_edit',
+            arguments: args,
+            context: context,
+            request: request,
+            workspacePath: workspacePath,
+          );
+          return FileEditHandler(_pathResolver).execute(
+            args,
+            workspacePath,
+            authorizedExternalRoot: authorizedExternalRoot,
+          );
         },
       ),
       CallbackTool(
@@ -405,7 +442,7 @@ class LocalRuntimeCatalog {
           name: 'search_glob',
           displayName: 'Glob Search',
           description:
-              'Fast file pattern matching tool. Supports glob patterns like "**/*.dart". Returns matching file paths sorted by modification time.',
+              'Match file patterns in the workspace or an authorized external directory. Supports patterns like "**/*.dart" and returns matches sorted by modification time.',
           inputSchema: const {
             'type': 'object',
             'properties': {
@@ -419,7 +456,18 @@ class LocalRuntimeCatalog {
           restartReplaySafe: true,
         ),
         onExecute: (args, {context}) async {
-          return SearchGlobHandler(_pathResolver).execute(args, workspacePath);
+          final authorizedExternalRoot = await _authorizeExternalWorkspacePath(
+            toolName: 'search_glob',
+            arguments: args,
+            context: context,
+            request: request,
+            workspacePath: workspacePath,
+          );
+          return SearchGlobHandler(_pathResolver).execute(
+            args,
+            workspacePath,
+            authorizedExternalRoot: authorizedExternalRoot,
+          );
         },
       ),
       CallbackTool(
@@ -427,7 +475,7 @@ class LocalRuntimeCatalog {
           name: 'search_grep',
           displayName: 'Grep Search',
           description:
-              'Searches file contents using regular expressions. Filter files with the glob parameter. Returns file paths and line numbers with matches.',
+              'Search file contents in the workspace or an authorized external path using regular expressions, with optional glob filtering and line-numbered matches.',
           inputSchema: const {
             'type': 'object',
             'properties': {
@@ -449,10 +497,100 @@ class LocalRuntimeCatalog {
           restartReplaySafe: true,
         ),
         onExecute: (args, {context}) async {
-          return SearchGrepHandler(_pathResolver).execute(args, workspacePath);
+          final authorizedExternalRoot = await _authorizeExternalWorkspacePath(
+            toolName: 'search_grep',
+            arguments: args,
+            context: context,
+            request: request,
+            workspacePath: workspacePath,
+          );
+          return SearchGrepHandler(_pathResolver).execute(
+            args,
+            workspacePath,
+            authorizedExternalRoot: authorizedExternalRoot,
+          );
         },
       ),
     ];
+  }
+
+  Future<String?> _authorizeExternalWorkspacePath({
+    required String toolName,
+    required Map<String, dynamic> arguments,
+    required ToolContext? context,
+    required AgentTurnRequest request,
+    required String workspacePath,
+    bool allowMissing = false,
+  }) async {
+    final inputPath = arguments['path']?.toString().trim();
+    final effectivePath = inputPath == null || inputPath.isEmpty
+        ? '.'
+        : inputPath;
+    final resolution = allowMissing
+        ? _pathResolver.classifyPathAllowMissing(
+            workspaceRoot: workspacePath,
+            inputPath: effectivePath,
+          )
+        : _pathResolver.classifyExistingPath(
+            workspaceRoot: workspacePath,
+            inputPath: effectivePath,
+          );
+    if (!resolution.isExternal) {
+      return null;
+    }
+
+    final existingWorkspace = context?.metadata['workspace'] is Map
+        ? Map<String, dynamic>.from(context!.metadata['workspace'] as Map)
+        : <String, dynamic>{};
+    final toolContext = ToolContext(
+      sessionId: context?.sessionId ?? request.sessionId,
+      toolCallId: context?.toolCallId,
+      metadata: {
+        ...request.toMetadata(),
+        ...?context?.metadata,
+        'workspace': {
+          ...existingWorkspace,
+          'id': existingWorkspace['id'] ?? request.workspaceId,
+          'path': workspacePath,
+        },
+      },
+    );
+    final approvalSpec = _externalWorkspaceAccessSpec(toolName);
+    await _permissionManager.ensureAuthorized(
+      tool: approvalSpec,
+      arguments: arguments,
+      context: toolContext,
+      approvalKeyOverride:
+          'external_workspace_path::$toolName::${resolution.resolvedPath}',
+      permissionDisplayArguments: {
+        'action': toolName,
+        'path': resolution.resolvedPath,
+      },
+    );
+    return resolution.resolvedPath;
+  }
+
+  LocalToolSpec _externalWorkspaceAccessSpec(String toolName) {
+    return LocalToolSpec(
+      name: toolName,
+      displayName: toolName,
+      description: 'Access a canonical path outside the selected workspace.',
+      inputSchema: const {'type': 'object', 'additionalProperties': true},
+      source: const {
+        'type': 'builtin_workspace',
+        'id': 'sanad-agent.workspace',
+      },
+      category: 'workspace_io',
+      workspaceRequired: true,
+      approval: const {
+        'mode': 'ask',
+        'sensitive': true,
+        'scope': 'once',
+        'permission_class': 'external_workspace_path',
+      },
+      execution: const {'target': 'local_runtime', 'timeout_ms': 30000},
+      serverName: 'workspace',
+    );
   }
 
   LocalToolSpec _workspaceSpec({

@@ -38,9 +38,15 @@ delegation, and permissioned platform actions remain unsafe unless their exact
 contract proves otherwise.
 
 Workspace file operations are implemented by focused read/write/edit/search
-handlers. Recursive glob/grep discovery omits common generated, cache, build,
-and dependency trees such as virtual environments, `site-packages`, `.next`,
-`dist`, and `target`. A candidate that passes binary sniffing but cannot be
+handlers. Paths are canonicalized before host access. Targets inside the selected
+workspace execute directly; targets outside it execute directly only in
+`full_access` mode, while `default` mode suspends the turn for user approval.
+Remembered grants are scoped by tool plus canonical target. Approval cards expose
+only the action and canonical path, while durable checkpoints retain the original
+arguments required to resume safely. External results use absolute paths and
+internal results remain workspace-relative. Recursive glob/grep discovery omits
+common generated, cache, build, and dependency trees such as virtual
+environments, `site-packages`, `.next`, `dist`, and `target`. A candidate that passes binary sniffing but cannot be
 decoded as UTF-8 is skipped without failing the whole search. Shell execution
 follows host-native command semantics, enforces workspace/path and permission
 policy, applies a bounded timeout, bounds stdout and stderr while streaming, and

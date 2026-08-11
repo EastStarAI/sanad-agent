@@ -123,7 +123,7 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
             Icon(Icons.shield_outlined, size: 16, color: colorScheme.tertiary),
             const SizedBox(width: 8),
             Text(
-              'Allow running this command?',
+              'Allow this tool action?',
               style: GoogleFonts.inter(
                 color: colorScheme.onSurface,
                 fontSize: 15,

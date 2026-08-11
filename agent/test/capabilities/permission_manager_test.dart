@@ -195,6 +195,70 @@ void main() {
       expect(bridge.requestCount, equals(1));
     });
 
+    test(
+      'uses explicit approval keys with sanitized display arguments',
+      () async {
+        final context = ToolContext(
+          sessionId: 'thread-external',
+          toolCallId: 'call-external',
+          metadata: {
+            'workspace': {
+              'id': workspaceDir.path,
+              'name': 'workspace',
+              'path': workspaceDir.path,
+            },
+          },
+        );
+        const approvalKey =
+            'external_workspace_path::file_write::/external/file.txt';
+
+        await manager.ensureAuthorized(
+          tool: shellTool,
+          arguments: {
+            'path': '/external/file.txt',
+            'content': 'private content',
+          },
+          context: context,
+          approvalKeyOverride: approvalKey,
+          permissionDisplayArguments: const {
+            'action': 'file_write',
+            'path': '/external/file.txt',
+          },
+        );
+
+        final policy = await store.readPolicy(workspaceDir.path);
+        expect(policy.permissions.allow, contains(approvalKey));
+        expect(bridge.lastPermissionPayload?['approval_key'], approvalKey);
+        expect(bridge.lastPermissionPayload?['tool_input'], const {
+          'action': 'file_write',
+          'path': '/external/file.txt',
+        });
+        expect(
+          bridge.lastPermissionPayload.toString(),
+          isNot(contains('private content')),
+        );
+        expect(
+          checkpointStore.byRequestId.values.single.toolArguments['content'],
+          'private content',
+        );
+
+        await manager.ensureAuthorized(
+          tool: shellTool,
+          arguments: {
+            'path': '/external/file.txt',
+            'content': 'updated private content',
+          },
+          context: context,
+          approvalKeyOverride: approvalKey,
+          permissionDisplayArguments: const {
+            'action': 'file_write',
+            'path': '/external/file.txt',
+          },
+        );
+        expect(bridge.requestCount, equals(1));
+      },
+    );
+
     test('uses full_access workspace mode without prompting', () async {
       await store.savePolicy(
         workspaceDir.path,
