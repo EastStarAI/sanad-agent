@@ -406,77 +406,90 @@ class _SidebarSessionTrailing extends StatelessWidget {
           );
         }
 
-        if (isHovered && hasOptions) {
-          return PopupMenuButton<String>(
-            tooltip: '',
-            icon: Icon(
-              Icons.more_vert,
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
-              size: 14,
-            ),
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(
-              minWidth: 32,
-              minHeight: 32,
-            ),
-            onSelected: (value) {
-              final sessionCubit = context.read<SessionCubit>();
-              switch (value) {
-                case 'rename':
-                  _showRenameDialog(context, sessionCubit, device, session);
-                case 'delete':
-                  _showDeleteConfirmation(context, sessionCubit, device, session);
-              }
-            },
-            itemBuilder: (context) => [
-              ...switch (caps.supportsUpdateSessionName) {
-                true => [
-                  PopupMenuItem(
-                    value: 'rename',
-                    height: 32,
-                    child: Row(
-                      children: [
-                        Icon(Icons.edit_outlined, size: 14, color: theme.colorScheme.onSurfaceVariant),
-                        const SizedBox(width: 8),
-                        Text(
-                          'Rename',
-                          style: TextStyle(color: theme.colorScheme.onSurfaceVariant, fontSize: 12),
+        final showOptions = isHovered && hasOptions;
+        return SizedBox(
+          width: 32,
+          height: 32,
+          child: Stack(
+            alignment: Alignment.centerRight,
+            children: [
+              Visibility(
+                visible: showOptions,
+                maintainState: true,
+                maintainAnimation: true,
+                child: PopupMenuButton<String>(
+                  tooltip: '',
+                  icon: Icon(
+                    Icons.more_vert,
+                    color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+                    size: 14,
+                  ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(
+                    minWidth: 32,
+                    minHeight: 32,
+                  ),
+                  onSelected: (value) {
+                    final sessionCubit = context.read<SessionCubit>();
+                    switch (value) {
+                      case 'rename':
+                        _showRenameDialog(context, sessionCubit, device, session);
+                      case 'delete':
+                        _showDeleteConfirmation(context, sessionCubit, device, session);
+                    }
+                  },
+                  itemBuilder: (context) => [
+                    ...switch (caps.supportsUpdateSessionName) {
+                      true => [
+                        PopupMenuItem(
+                          value: 'rename',
+                          height: 32,
+                          child: Row(
+                            children: [
+                              Icon(Icons.edit_outlined, size: 14, color: theme.colorScheme.onSurfaceVariant),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Rename',
+                                style: TextStyle(color: theme.colorScheme.onSurfaceVariant, fontSize: 12),
+                              ),
+                            ],
+                          ),
                         ),
                       ],
-                    ),
-                  ),
-                ],
-                false => const <PopupMenuItem<String>>[],
-              },
-              ...switch (caps.supportsDeleteSession) {
-                true => [
-                  PopupMenuItem(
-                    value: 'delete',
-                    height: 32,
-                    child: Row(
-                      children: [
-                        Icon(Icons.delete_outline, size: 14, color: Colors.redAccent),
-                        const SizedBox(width: 8),
-                        const Text('Delete', style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                      false => const <PopupMenuItem<String>>[],
+                    },
+                    ...switch (caps.supportsDeleteSession) {
+                      true => [
+                        PopupMenuItem(
+                          value: 'delete',
+                          height: 32,
+                          child: Row(
+                            children: [
+                              Icon(Icons.delete_outline, size: 14, color: Colors.redAccent),
+                              const SizedBox(width: 8),
+                              const Text('Delete', style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                            ],
+                          ),
+                        ),
                       ],
+                      false => const <PopupMenuItem<String>>[],
+                    },
+                  ],
+                ),
+              ),
+              if (!showOptions)
+                Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: Text(
+                    formatCompactRelativeTime(session.updatedAt),
+                    style: TextStyle(
+                      color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w400,
                     ),
                   ),
-                ],
-                false => const <PopupMenuItem<String>>[],
-              },
+                ),
             ],
-          );
-        }
-
-        return Padding(
-          padding: const EdgeInsets.only(right: 4),
-          child: Text(
-            formatCompactRelativeTime(session.updatedAt),
-            style: TextStyle(
-              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
-              fontSize: 10,
-              fontWeight: FontWeight.w400,
-            ),
           ),
         );
       },

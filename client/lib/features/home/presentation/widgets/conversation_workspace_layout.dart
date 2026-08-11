@@ -35,7 +35,7 @@ class ConversationWorkspaceLayout extends StatefulWidget {
 class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout> {
   static const double _resizeHandleWidth = 10;
 
-  late final SidebarPreferences _sidebarPreferences;
+  SidebarPreferences? _sidebarPreferences;
   double _sidebarWidth = SidebarBreakpoints.desktopWidth;
   bool _isPinned = true;
   bool _isHovered = false;
@@ -46,8 +46,10 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
   @override
   void initState() {
     super.initState();
-    _sidebarPreferences = widget.sidebarPreferences ?? SidebarPreferences(getIt<SharedPreferences>());
-    final savedWidth = _sidebarPreferences.sidebarWidth;
+    _sidebarPreferences =
+        widget.sidebarPreferences ??
+        (getIt.isRegistered<SharedPreferences>() ? SidebarPreferences(getIt<SharedPreferences>()) : null);
+    final savedWidth = _sidebarPreferences?.sidebarWidth;
     if (savedWidth != null && savedWidth.isFinite) {
       _sidebarWidth = savedWidth
           .clamp(
@@ -96,7 +98,10 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
     setState(() {
       _isResizing = false;
     });
-    unawaited(_sidebarPreferences.setSidebarWidth(_sidebarWidth));
+    final sidebarPreferences = _sidebarPreferences;
+    if (sidebarPreferences != null) {
+      unawaited(sidebarPreferences.setSidebarWidth(_sidebarWidth));
+    }
   }
 
   void _onDragCancel() {
