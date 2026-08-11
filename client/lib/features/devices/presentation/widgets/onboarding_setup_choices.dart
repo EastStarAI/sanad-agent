@@ -7,7 +7,6 @@ class OnboardingSetupChoices extends StatelessWidget {
     required this.hasRegisteredDevices,
     required this.onRunLocally,
     required this.onRemoteAction,
-    this.connectionIndicator,
     this.error,
     super.key,
   });
@@ -17,7 +16,6 @@ class OnboardingSetupChoices extends StatelessWidget {
   final bool hasRegisteredDevices;
   final VoidCallback onRunLocally;
   final VoidCallback onRemoteAction;
-  final Widget? connectionIndicator;
   final String? error;
 
   @override
@@ -37,7 +35,6 @@ class OnboardingSetupChoices extends StatelessWidget {
             hasRegisteredDevices: hasRegisteredDevices,
             onRunLocally: onRunLocally,
             onRemoteAction: onRemoteAction,
-            connectionIndicator: connectionIndicator,
           )
         else
           _RemoteOnlyEmptyState(
@@ -95,7 +92,6 @@ class _DesktopChoices extends StatelessWidget {
     required this.hasRegisteredDevices,
     required this.onRunLocally,
     required this.onRemoteAction,
-    required this.connectionIndicator,
   });
 
   final ThemeData theme;
@@ -103,7 +99,6 @@ class _DesktopChoices extends StatelessWidget {
   final bool hasRegisteredDevices;
   final VoidCallback onRunLocally;
   final VoidCallback onRemoteAction;
-  final Widget? connectionIndicator;
 
   @override
   Widget build(BuildContext context) {
@@ -119,10 +114,6 @@ class _DesktopChoices extends StatelessWidget {
             color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
           ),
         ),
-        if (connectionIndicator != null) ...[
-          const SizedBox(height: 28),
-          Align(alignment: Alignment.center, child: connectionIndicator),
-        ],
         const SizedBox(height: 24),
         Material(
           color: Colors.transparent,

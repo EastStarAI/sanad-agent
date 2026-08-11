@@ -21,7 +21,6 @@ void main() {
               hasRegisteredDevices: hasRegisteredDevices,
               onRunLocally: onRunLocally ?? () {},
               onRemoteAction: onRemoteAction ?? () {},
-              connectionIndicator: isDesktop ? const Text('Connection status') : null,
             ),
           ),
         ),
