@@ -55,6 +55,7 @@ class AuthRepositoryImpl implements IAuthRepository {
 
     return AuthSession(
       username: _authService.username ?? 'User',
+      displayName: _authService.displayName ?? _authService.username ?? 'User',
       email: _authService.email ?? '',
       userId: _authService.userId ?? '',
       accessToken: accessToken,

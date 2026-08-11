@@ -37,11 +37,13 @@ class ProfilePage extends StatelessWidget {
                 children: [
                   CircleAvatar(
                     radius: 28,
-                    child: Text(auth.username.characters.first.toUpperCase()),
+                    child: Text(
+                      auth.displayName.characters.first.toUpperCase(),
+                    ),
                   ),
                   const SizedBox(height: 16),
                   Text(
-                    auth.username,
+                    auth.displayName,
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                   Text(

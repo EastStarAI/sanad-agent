@@ -16,7 +16,7 @@ class UserProfileTile extends StatelessWidget {
         final bool isAuthenticated = authState is AuthAuthenticated;
         final String displayName;
         if (isAuthenticated) {
-          displayName = authState.username;
+          displayName = authState.displayName;
         } else if (authState is AuthLoading) {
           displayName = 'Signing in...';
         } else {
