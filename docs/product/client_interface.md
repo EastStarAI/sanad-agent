@@ -140,9 +140,11 @@ When the agent calls the user-question tool, the composer area displays an
 inline question card with the prompt, suggested answers, and a custom-answer
 option. Submitting the answer resumes the same suspended turn.
 
-Permission cards show the requested action and the available approval scope.
-Permission decisions remain owned by the workspace and are distinct from
-ordinary clarification answers.
+Permission cards show the requested tool action and the available approval
+scope. For file access outside the selected workspace, the card shows the
+canonical target path without exposing write or edit content. Permission
+decisions remain owned by the workspace and are distinct from ordinary
+clarification answers.
 
 ## Providers and models
 

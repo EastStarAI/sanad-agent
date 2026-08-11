@@ -9,8 +9,9 @@ class FileEditHandler {
 
   Future<String> execute(
     Map<String, dynamic> arguments,
-    String workspacePath,
-  ) async {
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
     final path = arguments['path']?.toString() ?? '';
     final oldString = arguments['old_string']?.toString() ?? '';
     final newString = arguments['new_string']?.toString() ?? '';
@@ -23,6 +24,7 @@ class FileEditHandler {
     final resolvedPath = _pathResolver.resolveExistingPath(
       workspaceRoot: workspaceRoot,
       inputPath: path,
+      authorizedExternalRoot: authorizedExternalRoot,
     );
     final file = File(resolvedPath);
     final originalFile = await file.readAsString();

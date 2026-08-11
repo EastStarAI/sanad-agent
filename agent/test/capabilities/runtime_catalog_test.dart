@@ -6,6 +6,7 @@ import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
@@ -70,6 +71,11 @@ class FakeMcpRuntimeManager extends McpRuntimeManager {
 class FakePlatformRuntimeBridge extends PlatformRuntimeBridge {
   Map<String, dynamic>? lastPermissionPayload;
   Map<String, dynamic>? lastExecutionPayload;
+  Map<String, dynamic> nextDecision = const {
+    'allowed': true,
+    'scope': 'session',
+  };
+  int permissionRequestCount = 0;
 
   @override
   Future<Map<String, dynamic>> requestToolPermission({
@@ -77,8 +83,9 @@ class FakePlatformRuntimeBridge extends PlatformRuntimeBridge {
     required Map<String, dynamic> payload,
     Duration timeout = const Duration(seconds: 60),
   }) async {
+    permissionRequestCount++;
     lastPermissionPayload = payload;
-    return const {'allowed': true, 'scope': 'session'};
+    return nextDecision;
   }
 
   @override
@@ -97,8 +104,12 @@ class FakePlatformRuntimeBridge extends PlatformRuntimeBridge {
 }
 
 class NoopCheckpointStore extends SuspendedCheckpointStore {
+  SuspendedCheckpoint? lastSaved;
+
   @override
-  Future<void> save(SuspendedCheckpoint checkpoint) async {}
+  Future<void> save(SuspendedCheckpoint checkpoint) async {
+    lastSaved = checkpoint;
+  }
 
   @override
   Future<SuspendedCheckpoint?> getByRequestId(String requestId) async {
@@ -123,6 +134,8 @@ void main() {
     late ToolsRegistry registry;
     late FakeMcpRuntimeManager fakeMcpManager;
     late FakePlatformRuntimeBridge fakePlatformBridge;
+    late WorkspacePolicyStore policyStore;
+    late NoopCheckpointStore checkpointStore;
     late LocalRuntimeCatalog catalog;
 
     setUp(() async {
@@ -149,15 +162,17 @@ Use the review skill.''');
       registry = ToolsRegistry();
       fakeMcpManager = FakeMcpRuntimeManager();
       fakePlatformBridge = FakePlatformRuntimeBridge();
+      policyStore = WorkspacePolicyStore(
+        settingsStore: SanadSettingsStore(homeDirectoryPath: tempDir.path),
+      );
+      checkpointStore = NoopCheckpointStore();
       catalog = LocalRuntimeCatalog(
         workspaceRuntimeService: workspaceRuntimeService,
         mcpRuntimeManager: fakeMcpManager,
         permissionManager: PermissionManager(
-          policyStore: WorkspacePolicyStore(
-            settingsStore: SanadSettingsStore(homeDirectoryPath: tempDir.path),
-          ),
+          policyStore: policyStore,
           platformRuntimeBridge: fakePlatformBridge,
-          checkpointStore: NoopCheckpointStore(),
+          checkpointStore: checkpointStore,
         ),
         platformRuntimeBridge: fakePlatformBridge,
       );
@@ -283,6 +298,126 @@ Use the review skill.''');
           .execute({'path': 'notes.txt'});
       expect(mcpResult, contains('mcp__filesystem__read_file'));
       expect(fakeMcpManager.lastArguments?['path'], equals('notes.txt'));
+      expect(fakePlatformBridge.permissionRequestCount, equals(0));
+    });
+
+    test(
+      'asks before each external workspace file capability and exposes only path details',
+      () async {
+        final externalDir = Directory('${tempDir.path}/external')
+          ..createSync(recursive: true);
+        final externalFile = File('${externalDir.path}/notes.txt')
+          ..writeAsStringSync('external hello');
+        final tools = await catalog.buildTools(
+          registry: registry,
+          request: AgentTurnRequest(
+            sessionId: 'thread-external',
+            message: 'Inspect an external path',
+            workspaceId: workspaceDir.path,
+          ),
+        );
+        registry.registerTools(tools);
+
+        final readResult = await registry.getTool('file_read')!.execute({
+          'path': externalFile.path,
+        });
+        expect(readResult, contains(externalFile.path));
+
+        await registry.getTool('file_edit')!.execute({
+          'path': externalFile.path,
+          'old_string': 'hello',
+          'new_string': 'updated',
+        });
+        expect(externalFile.readAsStringSync(), equals('external updated'));
+
+        final globResult = await registry.getTool('search_glob')!.execute({
+          'pattern': '**/*.txt',
+          'path': externalDir.path,
+        });
+        expect(globResult, contains(externalFile.path));
+
+        final grepResult = await registry.getTool('search_grep')!.execute({
+          'pattern': 'updated',
+          'path': externalDir.path,
+        });
+        expect(grepResult, contains(externalFile.path));
+
+        final createdFile = '${externalDir.path}/created.txt';
+        await registry.getTool('file_write')!.execute({
+          'path': createdFile,
+          'content': 'private content',
+        });
+
+        expect(fakePlatformBridge.permissionRequestCount, equals(5));
+        expect(fakePlatformBridge.lastPermissionPayload?['tool_input'], {
+          'action': 'file_write',
+          'path': File(createdFile).resolveSymbolicLinksSync(),
+        });
+        expect(
+          fakePlatformBridge.lastPermissionPayload.toString(),
+          isNot(contains('private content')),
+        );
+        expect(
+          checkpointStore.lastSaved?.toolArguments['content'],
+          equals('private content'),
+        );
+        expect(File(createdFile).readAsStringSync(), equals('private content'));
+      },
+    );
+
+    test('full_access executes an external path without prompting', () async {
+      final externalFile = File('${tempDir.path}/full-access.txt')
+        ..writeAsStringSync('allowed');
+      await policyStore.savePolicy(
+        workspaceDir.path,
+        const WorkspacePolicy(
+          permissionMode: WorkspacePermissionMode.fullAccess,
+        ),
+      );
+      final tools = await catalog.buildTools(
+        registry: registry,
+        request: AgentTurnRequest(
+          sessionId: 'thread-full-access',
+          message: 'Read an external path',
+          workspaceId: workspaceDir.path,
+        ),
+      );
+      registry.registerTools(tools);
+
+      final result = await registry.getTool('file_read')!.execute({
+        'path': externalFile.path,
+      });
+
+      expect(result, contains('allowed'));
+      expect(fakePlatformBridge.permissionRequestCount, equals(0));
+    });
+
+    test('denial prevents an external write', () async {
+      fakePlatformBridge.nextDecision = const {
+        'allowed': false,
+        'scope': 'once',
+      };
+      final externalPath = '${tempDir.path}/denied.txt';
+      final tools = await catalog.buildTools(
+        registry: registry,
+        request: AgentTurnRequest(
+          sessionId: 'thread-denied',
+          message: 'Write an external path',
+          workspaceId: workspaceDir.path,
+        ),
+      );
+      registry.registerTools(tools);
+
+      await expectLater(
+        registry.getTool('file_write')!.execute({
+          'path': externalPath,
+          'content': 'must not be written',
+        }),
+        throwsA(isA<Exception>()),
+      );
+
+      expect(File(externalPath).existsSync(), isFalse);
+      expect(fakePlatformBridge.permissionRequestCount, equals(1));
     });
 
     test('tool search is temporarily disabled and not registered', () async {

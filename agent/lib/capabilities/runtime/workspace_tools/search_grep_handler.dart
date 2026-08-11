@@ -15,8 +15,9 @@ class SearchGrepHandler {
 
   Future<String> execute(
     Map<String, dynamic> arguments,
-    String workspacePath,
-  ) async {
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
     var pattern = arguments['pattern']?.toString() ?? '';
     if (pattern.trim().isEmpty) {
       throw const FormatException('pattern is required.');
@@ -39,6 +40,7 @@ class SearchGrepHandler {
     final searchRoot = _resolveSearchRoot(
       workspaceRoot: workspaceRoot,
       pathArgument: arguments['path']?.toString(),
+      authorizedExternalRoot: authorizedExternalRoot,
     );
     final fileGlob = arguments['glob']?.toString();
     final fileGlobRegexes = fileGlob == null || fileGlob.trim().isEmpty
@@ -233,6 +235,7 @@ class SearchGrepHandler {
   String _resolveSearchRoot({
     required String workspaceRoot,
     required String? pathArgument,
+    required String? authorizedExternalRoot,
   }) {
     if (pathArgument == null ||
         pathArgument.trim().isEmpty ||
@@ -242,6 +245,7 @@ class SearchGrepHandler {
     return _pathResolver.resolveExistingPath(
       workspaceRoot: workspaceRoot,
       inputPath: pathArgument,
+      authorizedExternalRoot: authorizedExternalRoot,
     );
   }
 }
