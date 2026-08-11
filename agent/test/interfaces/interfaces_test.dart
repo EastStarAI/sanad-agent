@@ -2203,6 +2203,66 @@ Use the review skill.''',
   );
 
   test(
+    'stop completes cleanup when recovery cancellation surfaces from stream cancellation',
+    () async {
+      final orchestrator = getIt<SessionRunOrchestrator>();
+      final listening = Completer<void>();
+      final controller = StreamController<String>(
+        onListen: listening.complete,
+        onCancel: () => Future<void>.error(
+          const RuntimeRecoveryCancelled('session-stop-rate-limit'),
+        ),
+      );
+      addTearDown(() async {
+        if (!controller.isClosed) await controller.close();
+      });
+      when(
+        mockAgentRunner.streamMessage(
+          any,
+          runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+          providerId: anyNamed('providerId'),
+          model: anyNamed('model'),
+          thinkingMode: anyNamed('thinkingMode'),
+          receivedAt: anyNamed('receivedAt'),
+          onToolEvent: anyNamed('onToolEvent'),
+          onSteerContinuation: anyNamed('onSteerContinuation'),
+          onThoughtDelta: anyNamed('onThoughtDelta'),
+          onReasoningDelta: anyNamed('onReasoningDelta'),
+        ),
+      ).thenAnswer((_) => controller.stream);
+
+      final responses = <GatewayResponse>[];
+      final responseSubscription = orchestrator.responses.listen(responses.add);
+      addTearDown(responseSubscription.cancel);
+
+      unawaited(
+        orchestrator.handleEvent(
+          GatewayEvent(
+            sessionId: 'session-stop-rate-limit',
+            platformId: 'test-platform',
+            message: Message(role: MessageRole.user, content: 'Running'),
+          ),
+        ),
+      );
+      await listening.future;
+      expect(orchestrator.isSessionBusy('session-stop-rate-limit'), isTrue);
+
+      await orchestrator.requestStop('session-stop-rate-limit');
+      await Future<void>.delayed(Duration.zero);
+
+      expect(orchestrator.isSessionBusy('session-stop-rate-limit'), isFalse);
+      expect(orchestrator.hasSuspendedEvent('session-stop-rate-limit'), isFalse);
+      expect(
+        responses.where(
+          (response) =>
+              response.message.metadata?['canonical_event_type'] == 'stopped',
+        ),
+        hasLength(1),
+      );
+    },
+  );
+
+  test(
     'stop A preserves message B received while subscription cancellation waits',
     () async {
       final orchestrator = getIt<SessionRunOrchestrator>();

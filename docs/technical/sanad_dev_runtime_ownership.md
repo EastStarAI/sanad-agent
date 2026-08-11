@@ -89,7 +89,14 @@ inconsistent managed source and fails closed with a diagnostic. A manifest with 
 unsupported version or invalid shape remains fail-closed and is not mutated by
 the launcher. Polling reports an unchanged invalid on-disk revision only once;
 a replaced invalid revision can produce one new diagnostic, and a valid or
-absent manifest resets that suppression.
+absent manifest resets that suppression. Before submitting a new handoff, the
+CLI compares any active-status manifest with the validated live launcher id and
+runtime nonce. A matching owner remains active and blocks the new request. A
+mismatched owner proves the record belongs to a previous launcher, so the CLI
+atomically terminalizes it as `failed` without signaling any process and then
+continues normal switch preflight. `sanad-dev doctor --fix` applies the same
+identity check to repair an orphaned active-status handoff independently of a
+new switch request.
 
 For an Agent-origin command, the CLI emits a requester-bound deferred-result
 descriptor instead of treating `Switch accepted` as completion. The descriptor
