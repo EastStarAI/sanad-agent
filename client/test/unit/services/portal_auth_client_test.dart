@@ -34,6 +34,35 @@ void main() {
     expect(result.transactionId, 'transaction-1');
   });
 
+  test('adds only co-located enrollment request identity to PKCE start', () async {
+    late Map<String, dynamic> payload;
+    final client = PortalAuthClient(
+      postOverride: (_, data) async {
+        payload = data;
+        return {
+          'transaction_id': 'transaction-1',
+          'authorization_url': 'https://portal.test/authorize',
+          'expires_in': 300,
+        };
+      },
+    );
+
+    await client.createClientTransaction(
+      clientId: 'sanad_flutter_desktop',
+      redirectUri: 'http://127.0.0.1:49152/oauth/callback',
+      codeChallenge: 'challenge-value',
+      enrollmentRequestId: 'public-agent-request-1234567890',
+    );
+
+    expect(
+      payload['enrollment_request_id'],
+      'public-agent-request-1234567890',
+    );
+    expect(payload, isNot(contains('device_code')));
+    expect(payload, isNot(contains('device_credential')));
+    expect(payload, isNot(contains('access_token')));
+  });
+
   test('redeems the one-time code with the same verifier contract', () async {
     late Map<String, dynamic> payload;
     final client = PortalAuthClient(

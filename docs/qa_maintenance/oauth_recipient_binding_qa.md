@@ -12,7 +12,18 @@ description: "Public Client and Agent regression matrix for PKCE and key-bound D
 - Web popup accepts one authorization-code message only from the exact Portal
   origin and popup window source; Portal targets the exact app origin.
 - Desktop callback binds literal IPv4 loopback on an ephemeral port and fixed
-  path. Mobile accepts only configured claimed HTTPS links.
+  path. A valid callback returns a no-store, no-referrer completion page matching
+  the Portal Success card, animations, return action, and close guidance; wrong
+  paths and replay remain rejected. Mobile
+  accepts only configured claimed HTTPS links.
+- A Client-only User session does not initiate Agent cloud registration. An
+  `AUTH_INVALID_TOKEN` registration failure never calls User refresh, preventing
+  register/refresh feedback loops and Portal rate-limit exhaustion.
+- Desktop co-located login passes only a non-secret enrollment request identity
+  from Local Agent to Portal. The Agent retains device code/key/proof and redeems
+  the Device Credential itself. Query payloads, request-id mismatch, replay, and
+  headless lookup of a co-located request fail closed. UI remains `Completing
+  sign-in` until Agent redemption completes; absent Agent remains Client-only.
 - Wrong/missing verifier, callback state mismatch, and consumed/expired code do
   not persist a User session.
 - Agent creates/loads P-256 identity, prints no device code/private key, and

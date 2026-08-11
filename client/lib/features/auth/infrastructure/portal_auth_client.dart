@@ -102,12 +102,14 @@ class PortalAuthClient {
     required String clientId,
     required String redirectUri,
     required String codeChallenge,
+    String? enrollmentRequestId,
   }) async {
     final data = await _post('/auth/client/transactions', {
       'client_id': clientId,
       'redirect_uri': redirectUri,
       'code_challenge': codeChallenge,
       'code_challenge_method': 'S256',
+      if (enrollmentRequestId != null) 'enrollment_request_id': enrollmentRequestId,
     });
     return PortalClientTransaction.fromJson(data);
   }

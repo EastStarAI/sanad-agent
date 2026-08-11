@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/core/auth/auth_manager.dart';
+import 'package:sanad_agent/core/auth/colocated_auth_coupling.dart';
+import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
@@ -30,6 +32,10 @@ class _TransportTestConfig extends Config {
 class _ExchangeAuthManager extends AuthManager {
   final _controller = StreamController<void>.broadcast();
   int reloadCalls = 0;
+  String? cloudDeviceCredential;
+
+  @override
+  String? get deviceToken => cloudDeviceCredential;
 
   @override
   Stream<void> get changes => _controller.stream;
@@ -63,7 +69,8 @@ void main() {
     upgradeHook = null;
     port = await _reserveFreePort();
     getIt.registerSingleton<Config>(_TransportTestConfig(port));
-    authManager = _ExchangeAuthManager();
+    authManager = _ExchangeAuthManager()
+      ..cloudDeviceCredential = 'vault-only-device-credential';
     getIt.registerSingleton<AuthManager>(
       authManager,
       dispose: (manager) => authManager.close(),
@@ -71,6 +78,13 @@ void main() {
     getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
     getIt.registerSingleton<PlatformRuntimeBridge>(PlatformRuntimeBridge());
     platform = LocalDaemonServerPlatform(
+      authCoupling: ColocatedAuthCoupling(
+        authManager: authManager,
+        authorizationClient: DeviceAuthorizationClient(
+          portalUrl: 'https://portal.test',
+          authManager: authManager,
+        ),
+      ),
       security: LocalGatewaySecurity(
         config: LocalGatewaySecurityConfig(
           allowedPort: port,
@@ -130,6 +144,49 @@ void main() {
 
     expect(response.statusCode, HttpStatus.ok);
     expect(body['status'], 'ok');
+  });
+
+  test('co-located auth endpoint returns status without credentials', () async {
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    final request = await client.postUrl(
+      Uri.parse('http://127.0.0.1:$port/auth/coupling'),
+    );
+    request.headers.set(LocalGatewayCredentials.headerName, token.value);
+    final response = await request.close();
+    final bodyText = await response.transform(utf8.decoder).join();
+    final body = jsonDecode(bodyText) as Map<String, dynamic>;
+
+    expect(response.statusCode, HttpStatus.ok);
+    expect(body, {'status': 'already_authorized'});
+    expect(bodyText, isNot(contains('vault-only-device-credential')));
+    expect(bodyText, isNot(contains('access_token')));
+    expect(bodyText, isNot(contains('device_credential')));
+  });
+
+  test('co-located auth endpoint rejects query payloads', () async {
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    final request = await client.getUrl(
+      Uri.parse('http://127.0.0.1:$port/auth/coupling?token=forbidden'),
+    );
+    request.headers.set(LocalGatewayCredentials.headerName, token.value);
+    final response = await request.close();
+
+    expect(response.statusCode, HttpStatus.badRequest);
+  });
+
+  test('co-located auth endpoint rejects request bodies', () async {
+    final client = HttpClient();
+    addTearDown(() => client.close(force: true));
+    final request = await client.postUrl(
+      Uri.parse('http://127.0.0.1:$port/auth/coupling'),
+    );
+    request.headers.set(LocalGatewayCredentials.headerName, token.value);
+    request.write(jsonEncode({'access_token': 'forbidden'}));
+    final response = await request.close();
+
+    expect(response.statusCode, HttpStatus.badRequest);
   });
 
   test('HTTP rejects a loopback Host on the wrong port', () async {

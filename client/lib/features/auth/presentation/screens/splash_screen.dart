@@ -132,10 +132,26 @@ class _SplashScreenState extends State<SplashScreen> {
                       );
                     }
 
-                    if (state is AuthLoading) {
-                      return CircularProgressIndicator(
-                        color: theme.colorScheme.primary,
-                        strokeWidth: 3,
+                    if (state is AuthLoading || state is AuthCompleting) {
+                      return Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(
+                            color: theme.colorScheme.primary,
+                            strokeWidth: 3,
+                          ),
+                          if (state is AuthCompleting) ...[
+                            const SizedBox(height: 24),
+                            Text(
+                              'Completing sign-in...',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                color: theme.colorScheme.onSurface.withValues(
+                                  alpha: 0.7,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
                       );
                     }
 

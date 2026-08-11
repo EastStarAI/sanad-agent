@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -86,6 +87,25 @@ void main() {
       );
       final validResponse = await validRequest.close();
       expect(validResponse.statusCode, HttpStatus.ok);
+      expect(
+        validResponse.headers.value(HttpHeaders.cacheControlHeader),
+        'no-store',
+      );
+      expect(validResponse.headers.value('Referrer-Policy'), 'no-referrer');
+      expect(
+        validResponse.headers.value('Content-Security-Policy'),
+        allOf(
+          contains("default-src 'none'"),
+          contains('https://fonts.googleapis.com'),
+          contains('https://fonts.gstatic.com'),
+        ),
+      );
+      final successPage = await validResponse.transform(utf8.decoder).join();
+      expect(successPage, contains('Authentication Complete'));
+      expect(successPage, contains('success-container'));
+      expect(successPage, contains('Return to Sanad App'));
+      expect(successPage, contains('Sanad Portal • Secure Sync Completed'));
+      expect(successPage, contains('window.close()'));
       final result = await resultFuture;
       expect(result.code, 'one-time-code');
       expect(result.state, 'transaction-1');

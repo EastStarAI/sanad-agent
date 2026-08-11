@@ -127,6 +127,11 @@ class AuthManager {
   bool get isAuthenticated =>
       _accessToken != null || _deviceToken != null || hasPendingDevicePairing;
 
+  /// Whether this process has Agent authority suitable for cloud Gateway
+  /// registration. A `sanad_client` User session is intentionally excluded.
+  bool get canAuthenticateCloudAgent =>
+      _deviceToken != null || hasPendingDevicePairing;
+
   Future<void> saveDeviceToken(String token) {
     return _withAuthFileLock(() async {
       await _reloadUnlocked();

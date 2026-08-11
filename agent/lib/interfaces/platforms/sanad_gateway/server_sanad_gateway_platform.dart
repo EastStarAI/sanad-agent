@@ -115,8 +115,8 @@ class ServerSanadGatewayPlatform extends BasePlatform
     _authChangeSubscription ??= authManager.changes.listen((_) {
       unawaited(_synchronizeAuthentication());
     });
-    if (!authManager.isAuthenticated) {
-      _logger.info('Cloud Gateway remains offline until authentication.');
+    if (!authManager.canAuthenticateCloudAgent) {
+      _logger.info('Cloud Gateway remains offline until Agent authorization.');
       return;
     }
 
@@ -184,15 +184,9 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
       if (code == 'AUTH_INVALID_TOKEN' ||
           message.toLowerCase().contains('token')) {
-        _logger.info('Attempting to refresh token...');
-        final config = getIt<Config>();
-        final success = await authManager.refreshAccessToken(config.portalUrl);
-
-        if (success) {
-          _logger.info('Token refreshed successfully. Reauthenticating...');
-        } else {
-          _logger.severe('❌ Failed to refresh token. Please login again.');
-        }
+        _logger.warning(
+          'Agent credential was rejected. Reauthorize or pair this Agent.',
+        );
       }
     });
 
@@ -353,12 +347,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   Future<void> _synchronizeAuthenticationInternal() async {
     final authManager = getIt<AuthManager>();
-    if (!authManager.isAuthenticated) {
+    if (!authManager.canAuthenticateCloudAgent) {
       _registeredDeviceId = null;
       _socket?.disconnect();
       _socket?.dispose();
       _socket = null;
-      _logger.info('Cloud Gateway disconnected after authentication logout.');
+      _logger.info('Cloud Gateway disconnected without Agent authorization.');
       return;
     }
 

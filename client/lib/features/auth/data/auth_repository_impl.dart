@@ -20,8 +20,8 @@ class AuthRepositoryImpl implements IAuthRepository {
   }
 
   @override
-  Future<AuthSession?> login() async {
-    await _authService.login();
+  Future<AuthSession?> login({void Function()? onCompleting}) async {
+    await _authService.login(onCompleting: onCompleting);
     return _snapshot();
   }
 

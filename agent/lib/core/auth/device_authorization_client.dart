@@ -174,6 +174,28 @@ class DeviceAuthorizationChallenge {
   });
 }
 
+/// Private Agent-owned half of one Device Authorization transaction.
+///
+/// [transactionId] is safe to disclose as correlation identity. [deviceCode]
+/// is bearer-like delivery authority and must never leave the Agent process.
+class DeviceAuthorizationEnrollment {
+  const DeviceAuthorizationEnrollment({
+    required this.transactionId,
+    required this.deviceCode,
+    required this.expiresIn,
+    required this.interval,
+    required this.identity,
+    required this.challenge,
+  });
+
+  final String transactionId;
+  final String deviceCode;
+  final int expiresIn;
+  final int interval;
+  final DeviceKeyIdentity identity;
+  final DeviceAuthorizationChallenge challenge;
+}
+
 class DeviceAuthorizationClient {
   DeviceAuthorizationClient({
     required this.portalUrl,
@@ -199,13 +221,28 @@ class DeviceAuthorizationClient {
     required String platform,
     required void Function(DeviceAuthorizationChallenge challenge) onChallenge,
   }) async {
+    final enrollment = await startEnrollment(
+      clientId: 'sanad_agent_cli',
+      deviceName: deviceName,
+      platform: platform,
+    );
+    onChallenge(enrollment.challenge);
+    await redeemEnrollment(enrollment);
+    return enrollment.challenge;
+  }
+
+  Future<DeviceAuthorizationEnrollment> startEnrollment({
+    required String clientId,
+    required String deviceName,
+    required String platform,
+  }) async {
     final identity = await _identityLoader();
     final startUri = Uri.parse('$portalUrl/auth/device/transactions');
     final startResponse = await _httpClient.post(
       startUri,
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({
-        'client_id': 'sanad_agent_cli',
+        'client_id': clientId,
         'public_jwk': identity.publicJwk,
         'device_name': deviceName,
         'platform': platform,
@@ -215,34 +252,47 @@ class DeviceAuthorizationClient {
       throw StateError('Could not start Agent authorization.');
     }
     final started = jsonDecode(startResponse.body) as Map<String, dynamic>;
-    final deviceCode = started['device_code'] as String;
-    final expiresIn = (started['expires_in'] as num).toInt();
-    var interval = (started['interval'] as num).toInt();
-    final challenge = DeviceAuthorizationChallenge(
-      verificationUri: started['verification_uri'] as String,
-      userCode: started['user_code'] as String,
-      shortenedThumbprint: identity.thumbprint.substring(0, 12),
+    return DeviceAuthorizationEnrollment(
+      transactionId: started['transaction_id'] as String,
+      deviceCode: started['device_code'] as String,
+      expiresIn: (started['expires_in'] as num).toInt(),
+      interval: (started['interval'] as num).toInt(),
+      identity: identity,
+      challenge: DeviceAuthorizationChallenge(
+        verificationUri: started['verification_uri'] as String,
+        userCode: started['user_code'] as String,
+        shortenedThumbprint: identity.thumbprint.substring(0, 12),
+      ),
     );
-    onChallenge(challenge);
+  }
 
+  Future<void> redeemEnrollment(
+    DeviceAuthorizationEnrollment enrollment,
+  ) async {
+    var interval = enrollment.interval;
     final tokenUri = Uri.parse('$portalUrl/auth/device/token');
-    final deadline = DateTime.now().add(Duration(seconds: expiresIn));
+    final deadline = DateTime.now().add(
+      Duration(seconds: enrollment.expiresIn),
+    );
     while (DateTime.now().isBefore(deadline)) {
       await _delay(Duration(seconds: interval));
-      final proof = await identity.deviceTokenProof(tokenUri, deviceCode);
+      final proof = await enrollment.identity.deviceTokenProof(
+        tokenUri,
+        enrollment.deviceCode,
+      );
       final response = await _httpClient.post(
         tokenUri,
         headers: {'Content-Type': 'application/json', 'DPoP': proof},
         body: jsonEncode({
           'grant_type': 'urn:ietf:params:oauth:grant-type:device_code',
-          'device_code': deviceCode,
+          'device_code': enrollment.deviceCode,
         }),
       );
       final data = jsonDecode(response.body) as Map<String, dynamic>;
       if (response.statusCode == 200) {
         final credential = data['device_credential'] as String;
         await authManager.saveDeviceToken(credential);
-        return challenge;
+        return;
       }
       final detail = data['detail'];
       final error = detail is Map ? detail['error']?.toString() : null;

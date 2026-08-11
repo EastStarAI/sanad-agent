@@ -56,6 +56,7 @@ void main() {
       await authManager.initialize();
 
       expect(authManager.isAuthenticated, isTrue);
+      expect(authManager.canAuthenticateCloudAgent, isFalse);
       expect(authManager.accessToken, equals('test_access'));
       expect(authManager.refreshToken, equals('test_refresh'));
       expect(authManager.hardwareId, equals('test_hardware'));
@@ -75,6 +76,7 @@ void main() {
         await authManager.initialize();
 
         expect(authManager.deviceToken, 'legacy-device-credential');
+        expect(authManager.canAuthenticateCloudAgent, isTrue);
         expect(
           secrets.values[AuthManager.deviceCredentialKey],
           'legacy-device-credential',

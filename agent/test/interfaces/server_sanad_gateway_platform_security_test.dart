@@ -117,6 +117,8 @@ class FakeSocket implements socket_io.Socket {
 class FakeAuthManager extends AuthManager {
   final _controller = StreamController<void>.broadcast();
   bool authenticated = true;
+  bool cloudAuthorized = true;
+  int refreshAttempts = 0;
   String? token;
   String? pairing;
   String? pending;
@@ -140,13 +142,22 @@ class FakeAuthManager extends AuthManager {
   bool get isAuthenticated => authenticated;
 
   @override
+  bool get canAuthenticateCloudAgent => cloudAuthorized;
+
+  @override
   String get hardwareId => 'test-device-id';
 
   @override
   Future<bool> reload({bool notifyIfChanged = false}) async => false;
 
-  void setAuthenticated(bool value) {
-    authenticated = value;
+  @override
+  Future<bool> refreshAccessToken(String portalUrl) async {
+    refreshAttempts += 1;
+    return true;
+  }
+
+  void setCloudAuthorized(bool value) {
+    cloudAuthorized = value;
     _controller.add(null);
   }
 
@@ -332,22 +343,36 @@ void main() {
   });
 
   test(
-    'disconnects and reconnects cloud transport after auth changes',
+    'User session alone does not keep the Agent cloud transport online',
     () async {
       expect(platform.socket, same(socket));
       expect(socket.connected, isTrue);
+      expect(authManager.isAuthenticated, isTrue);
 
-      authManager.setAuthenticated(false);
+      authManager.setCloudAuthorized(false);
       await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(authManager.isAuthenticated, isTrue);
       expect(platform.socket, isNull);
       expect(socket.connected, isFalse);
 
-      authManager.setAuthenticated(true);
+      authManager.setCloudAuthorized(true);
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(platform.socket, same(socket));
       expect(socket.connected, isTrue);
     },
   );
+
+  test('invalid Agent credential never refreshes the User session', () async {
+    socket.emittedEvents.clear();
+
+    await socket.trigger('register_failed', {
+      'error': 'Invalid or missing agent token',
+      'code': 'AUTH_INVALID_TOKEN',
+    });
+
+    expect(authManager.refreshAttempts, 0);
+    expect(socket.emittedEvents, isEmpty);
+  });
 
   test(
     'key-bound registration requires and signs a Gateway challenge',

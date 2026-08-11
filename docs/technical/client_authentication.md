@@ -45,7 +45,10 @@ User credential.
 Web `postMessage` validates the exact Portal origin, popup source, message type,
 and payload. The Portal success page targets only the registered app origin;
 neither side uses `*`. Desktop binds only IPv4 loopback and rejects any other
-path. Mobile keeps `sanad://` as a general application deep-link namespace, but
+path. A valid desktop callback returns a no-store page matching the Portal
+Success design, with the same completion card, animated status, return action,
+and close fallback. External font loading is protected by `no-referrer` so the
+authorization-code callback URL cannot leave loopback. Mobile keeps `sanad://` as a general application deep-link namespace, but
 authentication rejects it and every unrelated claimed link; OAuth completion
 accepts only the exact registered HTTPS callback.
 
@@ -115,7 +118,17 @@ Only Flutter User sessions refresh through `/auth/refresh`. Refresh outcomes
 remain typed: a trusted `401` is terminal, while network and `5xx/503` failures
 retain credentials and cached state. Native desktop auth mutations retain the
 shared `auth.refresh.lock` and credential-free local exchange notification.
-Device Credentials do not enter this User refresh family.
+Device Credentials do not enter this User refresh family. A User login or token
+rotation does not make the local Agent eligible for cloud registration. On
+Desktop, the Client first asks the authenticated Local Gateway for a non-secret,
+key-bound enrollment request identity and includes only that identity in its
+normal PKCE transaction. Portal binds both issuance grants to the authenticated
+principal; the Client receives only Client credentials, while the Agent redeems
+its Device Credential with its private device code and P-256 proof. The UI stays
+`Completing sign-in` until the local status reports completion. No local Agent
+preserves Client-only login, and Web/Mobile never probe the Local Gateway.
+Likewise, Gateway rejection of an Agent credential never refreshes the User
+family.
 
 ## Secret boundaries
 

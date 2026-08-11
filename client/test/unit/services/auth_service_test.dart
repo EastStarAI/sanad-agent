@@ -59,6 +59,7 @@ class StubPortalAuthClient extends PortalAuthClient {
     required String clientId,
     required String redirectUri,
     required String codeChallenge,
+    String? enrollmentRequestId,
   }) async {
     return const PortalClientTransaction(
       transactionId: 'expected-transaction',

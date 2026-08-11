@@ -6,6 +6,83 @@ import 'package:sanad_client/utils/app_platform.dart';
 
 import 'auth_callback_contract.dart';
 
+const _desktopCallbackSuccessPage = r'''<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Authentication Successful - Sanad Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #1e1e1e;
+      --card-bg: rgba(23, 23, 23, 0.75);
+      --card-border: rgba(45, 45, 45, 0.8);
+      --primary-color: #60a5fa;
+      --on-primary-color: #0a0a0a;
+      --accent-success: #00e676;
+      --text-primary: #ffffff;
+      --text-secondary: #8f9cae;
+      --glow-color: rgba(0, 230, 118, 0.12);
+      --background-glow-strong: rgba(96, 165, 250, 0.55);
+      --background-glow-soft: rgba(96, 165, 250, 0.28);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Outfit', sans-serif; -webkit-font-smoothing: antialiased; }
+    body { background-color: var(--bg-color); color: var(--text-primary); min-height: 100vh; display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+    .background-glow { position: absolute; width: 100%; height: 100%; top: 0; left: 0; z-index: 1; overflow: hidden; }
+    .orb { position: absolute; border-radius: 50%; filter: blur(120px); opacity: 0.3; animation: float 20s infinite alternate ease-in-out; }
+    .orb-1 { width: 500px; height: 500px; background: radial-gradient(circle, var(--background-glow-strong) 0%, rgba(30,30,30,0) 70%); top: -10%; left: -10%; animation-duration: 25s; }
+    .orb-2 { width: 600px; height: 600px; background: radial-gradient(circle, var(--background-glow-soft) 0%, rgba(30,30,30,0) 70%); bottom: -20%; right: -10%; animation-duration: 30s; }
+    @keyframes float { 0% { transform: translate(0, 0) scale(1); } 100% { transform: translate(80px, 50px) scale(1.1); } }
+    .success-container { position: relative; z-index: 2; width: 100%; max-width: 440px; padding: 50px 40px; background: var(--card-bg); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid var(--card-border); border-radius: 24px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5), 0 0 40px var(--glow-color); text-align: center; animation: fadeIn 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards; opacity: 0; transform: translateY(20px); }
+    @keyframes fadeIn { to { opacity: 1; transform: translateY(0); } }
+    .success-icon-wrapper { width: 80px; height: 80px; margin: 0 auto 30px; border-radius: 50%; background: rgba(0, 230, 118, 0.1); border: 2px solid rgba(0, 230, 118, 0.2); display: flex; align-items: center; justify-content: center; box-shadow: 0 0 20px rgba(0, 230, 118, 0.2); position: relative; }
+    .success-icon-wrapper svg { width: 40px; height: 40px; color: var(--accent-success); }
+    .success-icon-wrapper svg path { stroke-dasharray: 100; stroke-dashoffset: 100; animation: dash 1s ease-in-out forwards 0.3s; }
+    @keyframes dash { to { stroke-dashoffset: 0; } }
+    .title { font-family: 'Georgia', serif; font-size: 28px; font-weight: 400; letter-spacing: -0.5px; margin-bottom: 16px; background: linear-gradient(to right, #ffffff, #b4c6ef); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .message { font-size: 15px; color: var(--text-secondary); line-height: 1.6; margin-bottom: 30px; }
+    .action-hint { font-size: 13px; color: var(--primary-color); background: rgba(96, 165, 250, 0.08); border: 1px solid rgba(96, 165, 250, 0.15); padding: 10px 16px; border-radius: 10px; display: inline-block; font-weight: 500; margin-top: 15px; }
+    .action-btn { font-size: 15px; color: var(--on-primary-color); background: linear-gradient(135deg, var(--accent-success), var(--primary-color)); border: none; padding: 14px 28px; border-radius: 12px; display: inline-block; font-weight: 600; text-decoration: none; box-shadow: 0 4px 15px rgba(0, 230, 118, 0.2); transition: all 0.3s ease; cursor: pointer; margin-top: 10px; }
+    .action-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0, 230, 118, 0.4); }
+    .return-section { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+    .footer-info { text-align: center; margin-top: 35px; font-size: 11px; color: rgba(255, 255, 255, 0.2); letter-spacing: 0.5px; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="background-glow">
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+  </div>
+  <div class="success-container">
+    <div class="success-icon-wrapper">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/>
+        <path d="M22 4L12 14.01l-3-3"/>
+      </svg>
+    </div>
+    <h1 class="title">Authentication Complete</h1>
+    <p class="message">You have successfully signed in. A one-time authorization code is being returned to the Sanad app.</p>
+    <div class="return-section">
+      <a class="action-btn" href="sanad://success">Return to Sanad App</a>
+      <span id="auto-hint" class="action-hint">Returning you to the Sanad app…</span>
+      <span id="manual-hint" class="action-hint hidden">You can safely close this browser window now</span>
+    </div>
+    <div class="footer-info">Sanad Portal • Secure Sync Completed</div>
+  </div>
+  <script>
+    setTimeout(function () {
+      try { window.close(); } catch (e) { /* browser fallback */ }
+      document.getElementById('auto-hint').classList.add('hidden');
+      document.getElementById('manual-hint').classList.remove('hidden');
+    }, 600);
+  </script>
+</body>
+</html>''';
+
 Future<AuthCallbackBinding> createPlatformAuthCallbackBinding() async {
   if (AppPlatform.isDesktop) {
     return createDesktopLoopbackAuthCallbackBinding();
@@ -54,10 +131,17 @@ class _DesktopLoopbackBinding implements AuthCallbackBinding {
     request.response
       ..statusCode = HttpStatus.ok
       ..headers.contentType = ContentType.html
-      ..write(
-        '<!doctype html><title>Sanad</title>'
-        'Authentication complete. You may close this window.',
-      );
+      ..headers.set(HttpHeaders.cacheControlHeader, 'no-store')
+      ..headers.set('Referrer-Policy', 'no-referrer')
+      ..headers.set('X-Content-Type-Options', 'nosniff')
+      ..headers.set(
+        'Content-Security-Policy',
+        "default-src 'none'; "
+            "style-src 'unsafe-inline' https://fonts.googleapis.com; "
+            'font-src https://fonts.gstatic.com; '
+            "script-src 'unsafe-inline'; base-uri 'none'; form-action 'none'",
+      )
+      ..write(_desktopCallbackSuccessPage);
     await request.response.close();
     _result.complete(AuthCallbackResult(code: code, state: state));
   }

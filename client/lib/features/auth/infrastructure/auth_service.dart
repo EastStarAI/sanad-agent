@@ -17,6 +17,7 @@ import 'package:sanad_client/infrastructure/web_auth_popup_service_stub.dart'
     if (dart.library.html) 'package:sanad_client/infrastructure/web_auth_popup_service.dart';
 import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
 import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dart';
+import 'package:sanad_client/features/auth/infrastructure/colocated_auth_coupling_client.dart';
 import 'package:sanad_client/features/auth/domain/user_display_name.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_callback_binding.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -52,6 +53,7 @@ class AuthService {
   final SanadSettingsStore _settingsStore;
   final SharedPreferences? _prefs;
   final PortalAuthClient _portalAuth;
+  final ColocatedAuthCouplingClient _colocatedCoupling;
   final Future<AuthCallbackBinding> Function() _callbackBindingFactory;
   final Future<bool> Function(Uri uri) _authorizationLauncher;
   final _accessTokenController = StreamController<String?>.broadcast();
@@ -85,6 +87,7 @@ class AuthService {
     SanadSettingsStore? settingsStore,
     SharedPreferences? prefs,
     PortalAuthClient? portalAuth,
+    ColocatedAuthCouplingClient? colocatedCoupling,
     Future<AuthCallbackBinding> Function()? callbackBindingFactory,
     Future<bool> Function(Uri uri)? authorizationLauncher,
   }) : _dio =
@@ -95,6 +98,7 @@ class AuthService {
        _settingsStore = settingsStore ?? const SanadSettingsStore(),
        _prefs = prefs,
        _portalAuth = portalAuth ?? PortalAuthClient(),
+       _colocatedCoupling = colocatedCoupling ?? ColocatedAuthCouplingClient(),
        _callbackBindingFactory = callbackBindingFactory ?? createAuthCallbackBinding,
        _authorizationLauncher = authorizationLauncher ?? _launchPortalAuthorization {
     _setupInterceptors();
@@ -335,13 +339,13 @@ class AuthService {
     _logger.info('Login flow cancelled by user.');
   }
 
-  Future<void> login() async {
+  Future<void> login({void Function()? onCompleting}) async {
     _isLoginCancelled = false;
     _isPolling = true;
     try {
       // Plan 23: a single unified portal-driven flow for all platforms. The
       // portal decides whether a user_code is needed (CLI/headless only).
-      await _loginViaPortal();
+      await _loginViaPortal(onCompleting: onCompleting);
     } catch (e) {
       _logger.severe('Login failed: $e');
       if (kIsWeb) {
@@ -363,9 +367,10 @@ class AuthService {
     }
   }
 
-  Future<void> _loginViaPortal() async {
+  Future<void> _loginViaPortal({void Function()? onCompleting}) async {
     final callback = await _callbackBindingFactory();
     try {
+      final enrollment = await _colocatedCoupling.start();
       final random = Random.secure();
       final verifierBytes = List<int>.generate(64, (_) => random.nextInt(256));
       final verifier = base64Url.encode(verifierBytes).replaceAll('=', '');
@@ -375,6 +380,7 @@ class AuthService {
         clientId: callback.clientId,
         redirectUri: callback.redirectUri,
         codeChallenge: challenge,
+        enrollmentRequestId: enrollment?.requestId,
       );
       _setLoginChallenge(
         AuthLoginChallenge(
@@ -423,6 +429,10 @@ class AuthService {
         await _settingsStore.withAuthFileLock(persistLogin);
       } else {
         await persistLogin();
+      }
+      if (enrollment != null) {
+        onCompleting?.call();
+        await _colocatedCoupling.waitForCompletion(enrollment);
       }
       _emitAuthenticationExchange();
       await fetchProfile();
