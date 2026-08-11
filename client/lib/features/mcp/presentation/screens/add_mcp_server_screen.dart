@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/mcp/data/mcp_runtime_client.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_runtime_models.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_server_config.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 
 enum _McpServerFormType { remote, stdio }
@@ -427,112 +430,283 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
-      appBar: AppBar(
-        title: Text(_isEditing ? 'Edit MCP server' : 'Add MCP server'),
-        actions: [
-          TextButton.icon(onPressed: _import, icon: const Icon(Icons.file_open_outlined), label: const Text('Import')),
-        ],
+      backgroundColor: theme.scaffoldBackgroundColor,
+      body: SafeArea(
+        child: Form(
+          key: _formKey,
+          child: Column(
+            children: [
+              Padding(
+                padding: EdgeInsets.only(
+                  left: 16,
+                  right: 16,
+                  top: AppPlatform.isMacOS ? 44 : 8,
+                  bottom: 8,
+                ),
+                child: Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.arrow_back_rounded),
+                      tooltip: 'Back',
+                      onPressed: () {
+                        if (context.canPop()) {
+                          context.pop();
+                        } else {
+                          context.go(AppRoutes.home);
+                        }
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _isEditing ? 'Edit MCP server' : 'Add MCP server',
+                      style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                    ),
+                    const Spacer(),
+                    TextButton.icon(
+                      onPressed: _import,
+                      icon: const Icon(Icons.file_open_outlined, size: 18),
+                      label: const Text('Import'),
+                    ),
+                  ],
+                ),
+              ),
+              Divider(
+                height: 1,
+                thickness: 1,
+                color: theme.colorScheme.outline.withValues(alpha: 0.12),
+              ),
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    if (constraints.maxWidth >= 900) {
+                      return _buildWideLayout(context);
+                    }
+                    return _buildCompactLayout(context);
+                  },
+                ),
+              ),
+              _buildBottomBar(theme),
+            ],
+          ),
+        ),
       ),
-      body: Form(
-        key: _formKey,
-        child: Column(
+    );
+  }
+
+  Widget _buildWideLayout(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          flex: 6,
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+            children: [
+              _buildFormFields(),
+            ],
+          ),
+        ),
+        VerticalDivider(
+          width: 1,
+          thickness: 1,
+          color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.15),
+        ),
+        Expanded(
+          flex: 5,
+          child: ListView(
+            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+            children: [
+              _buildInspectionSection(),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCompactLayout(BuildContext context) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 680),
+        child: ListView(
+          padding: const EdgeInsets.all(24),
           children: [
-            Expanded(
-              child: ListView(
-                padding: const EdgeInsets.all(24),
+            _buildFormFields(),
+            const SizedBox(height: 24),
+            _buildInspectionSection(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFormFields() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SegmentedButton<_McpServerFormType>(
+          segments: const [
+            ButtonSegment(
+              value: _McpServerFormType.remote,
+              label: Text('Remote server'),
+              icon: Icon(Icons.cloud_outlined),
+            ),
+            ButtonSegment(
+              value: _McpServerFormType.stdio,
+              label: Text('Local command'),
+              icon: Icon(Icons.terminal),
+            ),
+          ],
+          selected: {_serverType},
+          onSelectionChanged: (value) => setState(() {
+            _serverType = value.first;
+            _inspection = null;
+          }),
+        ),
+        const SizedBox(height: 20),
+        _field(_name, 'Name', enabled: !_isEditing, required: true),
+        const SizedBox(height: 12),
+        _field(_description, 'Description (optional)', maxLines: 2),
+        const SizedBox(height: 20),
+        if (_serverType == _McpServerFormType.remote) ..._remoteFields(),
+        if (_serverType == _McpServerFormType.stdio) ..._stdioFields(),
+      ],
+    );
+  }
+
+  Widget _buildInspectionSection() {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              'Inspection & Tools',
+              style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            FilledButton.icon(
+              onPressed: _isTesting ? null : _test,
+              icon: _isTesting
+                  ? const SizedBox.square(
+                      dimension: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.wifi_find, size: 18),
+              label: Text(
+                _isTesting
+                    ? 'Working…'
+                    : _authType == McpAuthType.oauth && widget.initialConfig?.oauthConfigured != true
+                    ? 'Authorize & Test'
+                    : 'Test Connection',
+              ),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        if (_oauthFlow != null) ...[
+          ListTile(
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8),
+              side: BorderSide(color: theme.colorScheme.outline.withValues(alpha: 0.2)),
+            ),
+            tileColor: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+            leading: const Icon(Icons.key_outlined),
+            title: Text('OAuth: ${_oauthFlow!.status.name}'),
+            subtitle: _oauthFlow!.error == null ? null : Text(_oauthFlow!.error!),
+            trailing: _oauthFlow!.isTerminal
+                ? null
+                : TextButton(onPressed: _cancelOAuth, child: const Text('Cancel')),
+          ),
+          const SizedBox(height: 16),
+        ],
+        if (_inspection != null) ...[
+          _reviewCard(_inspection!),
+        ] else if (!_isTesting) ...[
+          Card(
+            elevation: 0,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: BorderSide(color: theme.colorScheme.outline.withValues(alpha: 0.18)),
+            ),
+            color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.25),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+              child: Column(
                 children: [
-                  SegmentedButton<_McpServerFormType>(
-                    segments: const [
-                      ButtonSegment(
-                        value: _McpServerFormType.remote,
-                        label: Text('Remote server'),
-                        icon: Icon(Icons.cloud_outlined),
-                      ),
-                      ButtonSegment(
-                        value: _McpServerFormType.stdio,
-                        label: Text('Local command'),
-                        icon: Icon(Icons.terminal),
-                      ),
-                    ],
-                    selected: {_serverType},
-                    onSelectionChanged: (value) => setState(() {
-                      _serverType = value.first;
-                      _inspection = null;
-                    }),
+                  Icon(
+                    Icons.sensors_outlined,
+                    size: 36,
+                    color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
                   ),
-                  const SizedBox(height: 20),
-                  _field(_name, 'Name', enabled: !_isEditing, required: true),
                   const SizedBox(height: 12),
-                  _field(_description, 'Description (optional)', maxLines: 2),
-                  const SizedBox(height: 20),
-                  if (_serverType == _McpServerFormType.remote) ..._remoteFields(),
-                  if (_serverType == _McpServerFormType.stdio) ..._stdioFields(),
-                  const SizedBox(height: 20),
-                  FilledButton.icon(
-                    onPressed: _isTesting ? null : _test,
-                    icon: _isTesting
-                        ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                        : const Icon(Icons.wifi_find),
-                    label: Text(
-                      _isTesting
-                          ? 'Working…'
-                          : _authType == McpAuthType.oauth && widget.initialConfig?.oauthConfigured != true
-                          ? 'Authorize and test'
-                          : 'Test connection',
-                    ),
+                  Text(
+                    'No inspection results yet',
+                    style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
                   ),
-                  if (_oauthFlow != null) ...[
-                    const SizedBox(height: 16),
-                    ListTile(
-                      leading: const Icon(Icons.key_outlined),
-                      title: Text('OAuth: ${_oauthFlow!.status.name}'),
-                      subtitle: _oauthFlow!.error == null ? null : Text(_oauthFlow!.error!),
-                      trailing: _oauthFlow!.isTerminal
-                          ? null
-                          : TextButton(onPressed: _cancelOAuth, child: const Text('Cancel')),
-                    ),
-                  ],
-                  if (_inspection != null) ...[
-                    const SizedBox(height: 16),
-                    _reviewCard(_inspection!),
-                  ],
-                  const SizedBox(height: 20),
-                  CheckboxListTile(
-                    value: _acceptedRisks,
-                    onChanged: (value) => setState(() => _acceptedRisks = value ?? false),
-                    controlAffinity: ListTileControlAffinity.leading,
-                    title: const Text('I understand this server can access data and perform actions.'),
-                    subtitle: const Text('Only enable tools and servers you trust.'),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Test the server connection to discover available tools and verify communication.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: theme.colorScheme.onSurfaceVariant, fontSize: 12, height: 1.4),
                   ),
                 ],
               ),
             ),
-            SafeArea(
-              top: false,
-              child: Container(
-                padding: const EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Theme.of(context).colorScheme.surface,
-                  border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [
-                    TextButton(onPressed: _isSaving ? null : () => Navigator.pop(context), child: const Text('Cancel')),
-                    const SizedBox(width: 12),
-                    FilledButton(
-                      onPressed: _isSaving ? null : _save,
-                      child: Text(
-                        _isSaving
-                            ? 'Saving…'
-                            : _isEditing
-                            ? 'Save changes'
-                            : 'Add server',
-                      ),
-                    ),
-                  ],
-                ),
+          ),
+        ],
+        const SizedBox(height: 20),
+        CheckboxListTile(
+          value: _acceptedRisks,
+          onChanged: (value) => setState(() => _acceptedRisks = value ?? false),
+          controlAffinity: ListTileControlAffinity.leading,
+          contentPadding: EdgeInsets.zero,
+          title: const Text(
+            'I understand this server can access data and perform actions.',
+            style: TextStyle(fontSize: 13),
+          ),
+          subtitle: const Text('Only enable tools and servers you trust.', style: TextStyle(fontSize: 12)),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBottomBar(ThemeData theme) {
+    return SafeArea(
+      top: false,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.surface,
+          border: Border(top: BorderSide(color: theme.dividerColor)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.end,
+          children: [
+            TextButton(
+              onPressed: _isSaving ? null : () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            const SizedBox(width: 12),
+            FilledButton(
+              onPressed: _isSaving ? null : _save,
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              ),
+              child: Text(
+                _isSaving
+                    ? 'Saving…'
+                    : _isEditing
+                    ? 'Save changes'
+                    : 'Add server',
               ),
             ),
           ],
