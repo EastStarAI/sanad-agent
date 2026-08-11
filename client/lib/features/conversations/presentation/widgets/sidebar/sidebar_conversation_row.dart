@@ -170,6 +170,9 @@ class _SidebarConversationRowState extends State<SidebarConversationRow> {
                   ),
                   leading: leadingContainer,
                   onTap: widget.onSelected,
+                  onLongPress: () {
+                    _showMobileSessionOptions(context, widget.device, widget.session);
+                  },
                   trailing: _SidebarSessionTrailing(
                     device: widget.device,
                     session: widget.session,
@@ -206,6 +209,158 @@ class _SidebarConversationRowState extends State<SidebarConversationRow> {
   }
 }
 
+String formatCompactRelativeTime(DateTime dateTime) {
+  final now = DateTime.now();
+  final diff = now.difference(dateTime);
+
+  if (diff.isNegative || diff.inSeconds < 10) {
+    return 'now';
+  }
+  if (diff.inSeconds < 60) {
+    return '${diff.inSeconds}s';
+  }
+  if (diff.inMinutes < 60) {
+    return '${diff.inMinutes}m';
+  }
+  if (diff.inHours < 24) {
+    return '${diff.inHours}h';
+  }
+  if (diff.inDays < 7) {
+    return '${diff.inDays}d';
+  }
+  if (diff.inDays < 30) {
+    final weeks = (diff.inDays / 7).floor();
+    return '${weeks}w';
+  }
+  if (diff.inDays < 365) {
+    final months = (diff.inDays / 30).floor();
+    return '${months}mo';
+  }
+  final years = (diff.inDays / 365).floor();
+  return '${years}y';
+}
+
+void _showMobileSessionOptions(
+  BuildContext context,
+  DeviceConfig device,
+  Session session, [
+  Capability? capabilities,
+]) {
+  final caps = capabilities ?? context.read<DeviceCapabilitiesCubit>().state.getForAgent(device.id);
+  final hasOptions = caps.supportsUpdateSessionName || caps.supportsDeleteSession;
+  if (!hasOptions) return;
+
+  final sessionCubit = context.read<SessionCubit>();
+  final theme = Theme.of(context);
+
+  unawaited(
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: theme.colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (sheetContext) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                child: Text(
+                  session.title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
+                ),
+              ),
+              const Divider(height: 1),
+              if (caps.supportsUpdateSessionName)
+                ListTile(
+                  leading: Icon(Icons.edit_outlined, size: 20, color: theme.colorScheme.onSurface),
+                  title: const Text('Rename', style: TextStyle(fontSize: 14)),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _showRenameDialog(context, sessionCubit, device, session);
+                  },
+                ),
+              if (caps.supportsDeleteSession)
+                ListTile(
+                  leading: const Icon(Icons.delete_outline, size: 20, color: Colors.redAccent),
+                  title: const Text('Delete', style: TextStyle(fontSize: 14, color: Colors.redAccent)),
+                  onTap: () {
+                    Navigator.pop(sheetContext);
+                    _showDeleteConfirmation(context, sessionCubit, device, session);
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+void _showRenameDialog(BuildContext context, SessionCubit sessionCubit, DeviceConfig device, Session session) {
+  var titleText = session.title;
+  void onRename() {
+    final text = titleText.trim();
+    if (text.isNotEmpty) {
+      unawaited(sessionCubit.updateSessionTitle(agent: device, session: session, title: text));
+      Navigator.pop(context);
+    }
+  }
+
+  unawaited(
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename Session'),
+        content: TextFormField(
+          initialValue: session.title,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'New title'),
+          onChanged: (val) => titleText = val,
+          onFieldSubmitted: (_) => onRename(),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(onPressed: onRename, child: const Text('Rename')),
+        ],
+      ),
+    ),
+  );
+}
+
+void _showDeleteConfirmation(BuildContext context, SessionCubit sessionCubit, DeviceConfig device, Session session) {
+  unawaited(
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Session'),
+        content: Text('Are you sure you want to delete "${session.title}"? This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () async {
+              await sessionCubit.deleteSession(agent: device, session: session);
+              switch (context.mounted) {
+                case true:
+                  Navigator.pop(context);
+                case false:
+                  break;
+              }
+            },
+            child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
 class _SidebarSessionTrailing extends StatelessWidget {
   final DeviceConfig device;
   final Session session;
@@ -221,19 +376,42 @@ class _SidebarSessionTrailing extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final showOptions = AppPlatform.isMobile || isHovered;
+    final isMobile = AppPlatform.isMobile;
+    final theme = Theme.of(context);
+
     return BlocSelector<DeviceCapabilitiesCubit, DeviceCapabilitiesState, Capability>(
       selector: (state) => state.getForAgent(device.id),
       builder: (context, caps) {
         final hasOptions = caps.supportsUpdateSessionName || caps.supportsDeleteSession;
-        return Visibility(
-          visible: showOptions && hasOptions,
-          maintainState: true,
-          child: PopupMenuButton<String>(
+
+        if (isMobile) {
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () {
+              if (hasOptions) {
+                _showMobileSessionOptions(context, device, session, caps);
+              }
+            },
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+              child: Text(
+                formatCompactRelativeTime(session.updatedAt),
+                style: TextStyle(
+                  color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+                  fontSize: 10,
+                  fontWeight: FontWeight.w400,
+                ),
+              ),
+            ),
+          );
+        }
+
+        if (isHovered && hasOptions) {
+          return PopupMenuButton<String>(
             tooltip: '',
             icon: Icon(
               Icons.more_vert,
-              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+              color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
               size: 14,
             ),
             padding: EdgeInsets.zero,
@@ -245,9 +423,9 @@ class _SidebarSessionTrailing extends StatelessWidget {
               final sessionCubit = context.read<SessionCubit>();
               switch (value) {
                 case 'rename':
-                  _showRenameDialog(context, sessionCubit);
+                  _showRenameDialog(context, sessionCubit, device, session);
                 case 'delete':
-                  _showDeleteConfirmation(context, sessionCubit);
+                  _showDeleteConfirmation(context, sessionCubit, device, session);
               }
             },
             itemBuilder: (context) => [
@@ -258,11 +436,11 @@ class _SidebarSessionTrailing extends StatelessWidget {
                     height: 32,
                     child: Row(
                       children: [
-                        Icon(Icons.edit_outlined, size: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                        Icon(Icons.edit_outlined, size: 14, color: theme.colorScheme.onSurfaceVariant),
                         const SizedBox(width: 8),
                         Text(
                           'Rename',
-                          style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
+                          style: TextStyle(color: theme.colorScheme.onSurfaceVariant, fontSize: 12),
                         ),
                       ],
                     ),
@@ -278,8 +456,8 @@ class _SidebarSessionTrailing extends StatelessWidget {
                     child: Row(
                       children: [
                         Icon(Icons.delete_outline, size: 14, color: Colors.redAccent),
-                        SizedBox(width: 8),
-                        Text('Delete', style: TextStyle(color: Colors.redAccent, fontSize: 12)),
+                        const SizedBox(width: 8),
+                        const Text('Delete', style: TextStyle(color: Colors.redAccent, fontSize: 12)),
                       ],
                     ),
                   ),
@@ -287,67 +465,21 @@ class _SidebarSessionTrailing extends StatelessWidget {
                 false => const <PopupMenuItem<String>>[],
               },
             ],
+          );
+        }
+
+        return Padding(
+          padding: const EdgeInsets.only(right: 4),
+          child: Text(
+            formatCompactRelativeTime(session.updatedAt),
+            style: TextStyle(
+              color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
+              fontSize: 10,
+              fontWeight: FontWeight.w400,
+            ),
           ),
         );
       },
-    );
-  }
-
-  void _showRenameDialog(BuildContext context, SessionCubit sessionCubit) {
-    var titleText = session.title;
-    void onRename() {
-      final text = titleText.trim();
-      if (text.isNotEmpty) {
-        unawaited(sessionCubit.updateSessionTitle(agent: device, session: session, title: text));
-        Navigator.pop(context);
-      }
-    }
-
-    unawaited(
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Rename Session'),
-          content: TextFormField(
-            initialValue: session.title,
-            autofocus: true,
-            decoration: const InputDecoration(hintText: 'New title'),
-            onChanged: (val) => titleText = val,
-            onFieldSubmitted: (_) => onRename(),
-          ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            TextButton(onPressed: onRename, child: const Text('Rename')),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showDeleteConfirmation(BuildContext context, SessionCubit sessionCubit) {
-    unawaited(
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Delete Session'),
-          content: Text('Are you sure you want to delete "${session.title}"? This cannot be undone.'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            TextButton(
-              onPressed: () async {
-                await sessionCubit.deleteSession(agent: device, session: session);
-                switch (context.mounted) {
-                  case true:
-                    Navigator.pop(context);
-                  case false:
-                    break;
-                }
-              },
-              child: const Text('Delete', style: TextStyle(color: Colors.redAccent)),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

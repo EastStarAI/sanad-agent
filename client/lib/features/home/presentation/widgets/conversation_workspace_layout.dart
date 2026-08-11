@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
@@ -7,16 +8,20 @@ import 'package:sanad_client/core/navigation/conversation_destination.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/session_sidebar.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_composition.dart';
+import 'package:sanad_client/features/home/data/sidebar_preferences.dart';
 import 'package:sanad_client/utils/app_platform.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class ConversationWorkspaceLayout extends StatefulWidget {
   final Widget child;
   final bool showChrome;
+  final SidebarPreferences? sidebarPreferences;
 
   const ConversationWorkspaceLayout({
     super.key,
     required this.child,
     this.showChrome = true,
+    this.sidebarPreferences,
   });
 
   @override
@@ -30,12 +35,28 @@ class ConversationWorkspaceLayout extends StatefulWidget {
 class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout> {
   static const double _resizeHandleWidth = 10;
 
+  late final SidebarPreferences _sidebarPreferences;
   double _sidebarWidth = SidebarBreakpoints.desktopWidth;
   bool _isPinned = true;
   bool _isHovered = false;
   bool _isResizing = false;
 
   bool get isPinned => _isPinned;
+
+  @override
+  void initState() {
+    super.initState();
+    _sidebarPreferences = widget.sidebarPreferences ?? SidebarPreferences(getIt<SharedPreferences>());
+    final savedWidth = _sidebarPreferences.sidebarWidth;
+    if (savedWidth != null && savedWidth.isFinite) {
+      _sidebarWidth = savedWidth
+          .clamp(
+            SidebarBreakpoints.minWidth,
+            SidebarBreakpoints.maxWidth,
+          )
+          .toDouble();
+    }
+  }
 
   void togglePin() {
     setState(() {
@@ -75,6 +96,7 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
     setState(() {
       _isResizing = false;
     });
+    unawaited(_sidebarPreferences.setSidebarWidth(_sidebarWidth));
   }
 
   void _onDragCancel() {
@@ -189,7 +211,6 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
         Row(
           children: [
             permanentSidebar,
-            resizeHandle,
             Expanded(child: widget.child),
           ],
         ),
@@ -243,6 +264,13 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
             ),
           ),
         ),
+        if (_isPinned)
+          Positioned(
+            left: _sidebarWidth - (isMacOS ? 8 : 0) - (_resizeHandleWidth / 2),
+            top: 0,
+            bottom: 0,
+            child: resizeHandle,
+          ),
         Positioned(
           left: 0,
           top: 0,
