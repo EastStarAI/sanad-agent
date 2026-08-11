@@ -216,6 +216,10 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
         Row(
           children: [
             permanentSidebar,
+            Transform.translate(
+              offset: Offset(isMacOS ? -8 : -(_resizeHandleWidth / 2), 0),
+              child: resizeHandle,
+            ),
             Expanded(child: widget.child),
           ],
         ),
@@ -269,13 +273,6 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
             ),
           ),
         ),
-        if (_isPinned)
-          Positioned(
-            left: _sidebarWidth - (isMacOS ? 8 : 0) - (_resizeHandleWidth / 2),
-            top: 0,
-            bottom: 0,
-            child: resizeHandle,
-          ),
         Positioned(
           left: 0,
           top: 0,
