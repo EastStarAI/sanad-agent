@@ -239,7 +239,7 @@ Subscription عرض نافذتي الاستهلاك Session وWeekly المعت�
 يمكنك استخدام Sanad مع مزودين محليين أو مستضافين، وإضافة عدة حسابات للمزود
 نفسه.
 
-- [Free LLM API Resources](https://github.com/cheahjs/free-llm-api-resources) —
+- [Free LLM API Resources](https://github.com/nejib1/Free-LLM) —
   دليل مجتمعي لخدمات LLM التي توفر خططًا مجانية أو أرصدة تجريبية.
 
 هذا مورد خارجي مستقل وغير تابع لـSanad. قد تتغير النماذج والحصص والأسعار
