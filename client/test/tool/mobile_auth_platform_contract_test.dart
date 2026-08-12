@@ -34,12 +34,17 @@ void main() {
       contains('com.apple.developer.associated-domains'),
     );
     for (final domain in const [
-      'applinks:dev.portal.sanad.eaststarai.com',
-      'applinks:staging.portal.sanad.eaststarai.com',
-      'applinks:portal.sanad.eaststarai.com',
+      'applinks:dev.app.sanad.eaststarai.com',
+      'applinks:staging.app.sanad.eaststarai.com',
+      'applinks:app.sanad.eaststarai.com',
     ]) {
       expect(entitlements, contains(domain));
     }
+    expect(
+      entitlements,
+      isNot(contains('applinks:dev.portal.sanad.eaststarai.com')),
+      reason: 'The iOS callback must cross from Portal to the Client host.',
+    );
 
     final xcodeProject = File(
       'ios/Runner.xcodeproj/project.pbxproj',
@@ -62,7 +67,7 @@ void main() {
     final productionConfig = jsonDecode(File('config/prod.json').readAsStringSync()) as Map<String, dynamic>;
     expect(
       productionConfig['SANAD_IOS_AUTH_REDIRECT_URI'],
-      'https://portal.sanad.eaststarai.com/oauth/ios',
+      'https://app.sanad.eaststarai.com/oauth/ios',
     );
     expect(
       productionConfig['SANAD_ANDROID_AUTH_REDIRECT_URI'],

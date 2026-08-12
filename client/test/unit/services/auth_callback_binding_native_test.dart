@@ -7,7 +7,7 @@ import 'package:sanad_client/features/auth/infrastructure/auth_callback_binding_
 void main() {
   group('mobile claimed HTTPS callback matching', () {
     final expected = Uri.parse(
-      'https://portal.sanad.eaststarai.com/oauth/ios',
+      'https://app.sanad.eaststarai.com/oauth/ios',
     );
 
     test('accepts only the exact HTTPS origin path', () {
@@ -49,7 +49,7 @@ void main() {
       expect(
         isExpectedMobileAuthCallback(
           Uri.parse(
-            'https://portal.sanad.eaststarai.com/oauth/ios'
+            'https://app.sanad.eaststarai.com/oauth/ios'
             '?code=code&state=state#fragment',
           ),
           expected,

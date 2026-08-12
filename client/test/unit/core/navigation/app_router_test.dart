@@ -138,7 +138,7 @@ void main() {
       AppRouter.handleRedirect(
         AuthUnauthenticated(),
         uri: Uri.parse(
-          'https://dev.portal.sanad.eaststarai.com/oauth/ios'
+          'https://dev.app.sanad.eaststarai.com/oauth/ios'
           '?code=authorization-code-canary&state=state-canary',
         ),
         matchedLocation: '/oauth/ios',

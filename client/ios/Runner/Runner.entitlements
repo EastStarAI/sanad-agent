@@ -4,9 +4,9 @@
 <dict>
 	<key>com.apple.developer.associated-domains</key>
 	<array>
-		<string>applinks:dev.portal.sanad.eaststarai.com</string>
-		<string>applinks:staging.portal.sanad.eaststarai.com</string>
-		<string>applinks:portal.sanad.eaststarai.com</string>
+		<string>applinks:dev.app.sanad.eaststarai.com</string>
+		<string>applinks:staging.app.sanad.eaststarai.com</string>
+		<string>applinks:app.sanad.eaststarai.com</string>
 	</array>
 </dict>
 </plist>

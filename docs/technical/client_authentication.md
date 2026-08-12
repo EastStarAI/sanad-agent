@@ -59,14 +59,22 @@ accepts only the exact registered HTTPS callback.
 Android declares three verified HTTPS App Links, one for each Portal environment,
 all restricted to `/oauth/android`; `assetlinks.json` binds them to
 `com.eaststarai.sanad` and the environment-injected public SHA-256 signing
-certificate fingerprints. iOS uses `Runner.entitlements` Associated Domains for
-the same three hosts, while each host serves an AASA document binding
-`UC2824B99G.com.eaststarai.sanad` only to `/oauth/ios`. On iOS, `app_links` is
-the sole callback owner and `FlutterDeepLinkingEnabled` remains false so GoRouter
-cannot consume the OAuth URI as ordinary navigation before PKCE reconciliation.
-Navigation diagnostics retain only paths and never query, fragment, code, state,
-or a redirect carrying them. Missing Android
-fingerprints return `503` instead of publishing an unverified association.
+certificate fingerprints. iOS instead claims the matching Client hosts
+(`dev.app`, `staging.app`, and `app`) for `/oauth/ios`. Provider callbacks remain
+on Portal, so the final redirect crosses domains and is eligible to open the app;
+Apple intentionally retains a Universal Link in Safari when the current page and
+target share a domain. Each Client host serves the AASA document binding
+`UC2824B99G.com.eaststarai.sanad` only to `/oauth/ios`. If association fails and
+HTTP reaches that callback, the edge disables access logging and immediately
+redirects to a query-free, no-store failure page instead of forwarding callback
+parameters to Flutter Web or Portal. On iOS, `app_links` is the sole callback
+owner and `FlutterDeepLinkingEnabled` remains false so GoRouter cannot consume
+the OAuth URI as ordinary navigation before PKCE reconciliation. AppDelegate
+keeps Flutter's superclass lifecycle delegation, through which `app_links`
+receives both application and scene continuation callbacks. Navigation
+diagnostics retain only paths and never query, fragment, code, state, or a
+redirect carrying them. Missing Android fingerprints return `503` instead of
+publishing an unverified association.
 
 Production mobile builds receive the exact callback URIs through
 `client/config/prod.json`. Development and Staging test builds inject their
