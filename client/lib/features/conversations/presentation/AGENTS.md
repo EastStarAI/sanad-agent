@@ -38,7 +38,8 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Render permissions, clarifying questions, and runtime notices inline in the active conversation; do not use app-global approval dialogs.
 - Block normal sending only in the session with the pending suspension.
 - Preserve pending UI until authoritative resolution.
-- Permission-card language remains action-neutral so the same surface accurately covers commands, file access, and other permissioned tools.
+- Permission cards use action-specific titles and readable labeled fields for known command, file, search, and MCP actions; unknown tools fall back to action-neutral language. Render only daemon-provided display input and never reconstruct redacted arguments. Visually separate the darker request content from the prompt and choices.
+- A running tool row whose matching suspension awaits permission shows the permission shield instead of progress; `system_ask_user` shows the question icon while awaiting an answer. Unblocked running tools retain progress.
 - Keep background suspension and recovery state out of the active composer while surfacing its session-row attention state.
 
 ## Atomic Session Presentation

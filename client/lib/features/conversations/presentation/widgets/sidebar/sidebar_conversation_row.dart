@@ -12,6 +12,7 @@ import '../../../domain/models/session.dart';
 import '../../../domain/models/session_attention_state.dart';
 import '../../bloc/session_cubit.dart';
 import '../../bloc/session_state.dart';
+import '../../utils/text_utils.dart';
 
 enum _RowVisualState {
   permission,
@@ -78,6 +79,8 @@ class _SidebarConversationRowState extends State<SidebarConversationRow> {
         final theme = Theme.of(context);
 
         final visualState = _getVisualState(attention);
+        final displayTitle = widget.session.title.replaceAll(RegExp(r'\n'), ' ');
+        final titleDirection = TextUtils.getTextDirection(displayTitle);
 
         final leadingWidth = 16.0;
         final leadingSize = 14.0;
@@ -158,15 +161,20 @@ class _SidebarConversationRowState extends State<SidebarConversationRow> {
                     right: 0,
                   ),
                   minVerticalPadding: 2,
-                  title: Text(
-                    widget.session.title.replaceAll(RegExp(r'\n'), ' '),
-                    maxLines: 1,
-                    style: TextStyle(
-                      color: isSelected ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
-                      fontSize: 12,
-                      fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
+                  title: Align(
+                    alignment: AlignmentDirectional.centerStart,
+                    child: Text(
+                      displayTitle,
+                      textDirection: titleDirection,
+                      textAlign: TextAlign.start,
+                      maxLines: 1,
+                      style: TextStyle(
+                        color: isSelected ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
+                        fontSize: 12,
+                        fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
+                      ),
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    overflow: TextOverflow.ellipsis,
                   ),
                   leading: leadingContainer,
                   onTap: widget.onSelected,

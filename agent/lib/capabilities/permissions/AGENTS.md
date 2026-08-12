@@ -7,7 +7,7 @@ This contract applies to `agent/lib/capabilities/permissions/`.
 - `PermissionManager` is the sole authority for sensitive runtime and platform-tool approval enforcement.
 - UI and transports may present and return decisions but cannot bypass policy or own grant caches.
 - Persist workspace policy through the dedicated store and keep permission origin/scope explicit.
-- Apply once, session, and workspace decisions according to their exact scope.
+- Apply approval grants at once, session, and workspace scope. A denial rejects only the current invocation and never creates a durable or session-wide deny rule; explicit workspace policy deny entries remain authoritative configuration.
 - External workspace-file grants are keyed by tool plus canonical target path. Keep original arguments in the durable checkpoint for resume, but expose only sanitized action/path details in the permission payload.
 
 ## Durable Suspension

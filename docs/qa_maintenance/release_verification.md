@@ -74,6 +74,22 @@ collecting credentials. Windows 10 was not tested and is explicitly excluded
 from the `1.0.0` release gate by owner scope decision; no Windows 10 validation
 claim may be inferred from the shared x64 artifacts.
 
+## Single final approval gate
+
+Hosted release configuration must expose exactly one human decision after the
+candidate is complete. `apple-signing`, `apple-testflight`,
+`windows-update-signing`, and `android-signing` retain their separate secrets
+and exact custom release-ref policies but have no required reviewers.
+`release-publication` retains the repository owner as required reviewer and is
+reachable only after all builds, signing, notarization, tests, metadata,
+checksums, SBOM, attestations, and private Draft creation succeed.
+`client-downloads-production` remains non-interactive and tag-restricted so an
+approved Stable publication can deploy aliases and Production assets without a
+second human decision. Any missing signing ref restriction, reviewer on a
+signing or downstream Production Environment, or absent publication reviewer
+fails this gate. Live verification inspects Environment rule metadata only and
+never reads or exposes secret values.
+
 ## Protected publication rejection probe
 
 The dedicated `Probe release publication guard` workflow validates the

@@ -11,6 +11,8 @@ The local daemon is the only authority for MCP configuration persistence, secret
 
 Device and Workspace definitions remain independent. A Workspace definition with the same normalized name overrides the Device definition in the effective catalog.
 
+Discovered MCP tools join the per-turn catalog with sensitive approval metadata. `LocalRuntimeCatalog` must call `PermissionManager` before `McpRuntimeManager.executeTool`; rejection never reaches the MCP server, while once, session, workspace, and full-access behavior remain owned by the canonical permission policy.
+
 ## Form-first product contract
 
 The primary flow is:
@@ -44,7 +46,7 @@ Configuration documents contain non-secret values and opaque secret references o
 
 `mcp_secrets.json` under owner-protected Sanad Home is the single MCP secret owner. It uses the existing `SanadHomeBootstrap` atomic-write and owner-only permission boundary. Keys are opaque references scoped by configuration origin and server identity.
 
-Secrets include bearer tokens, secret custom-header values, secret environment values, OAuth access/refresh tokens, and OAuth client secrets. OAuth client IDs, endpoints, ordinary headers, and ordinary environment values are non-secret metadata.
+Secrets include bearer tokens, secret custom-header values, secret environment values, OAuth access/refresh tokens, OAuth client secrets, and STDIO argument values following recognized credential flags such as `--api-key` or `--token`. Secret argument positions retain a redacted placeholder plus opaque reference in configuration and resolve only when the daemon launches the server. OAuth client IDs, endpoints, ordinary arguments, ordinary headers, and ordinary environment values are non-secret metadata.
 
 Migration is idempotent:
 
