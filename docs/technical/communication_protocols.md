@@ -86,6 +86,14 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
     short-lived private route from that identifier to the originating app
     socket before dispatching the command. It does not broadcast a generic
     `device_command_echo` to the user's other interfaces.
+  - Before emitting `execute_command`, the Gateway strips command-origin aliases
+    from the envelope and nested payload and writes one `origin_client` v1 object
+    from the authenticated connection registry. The object contains only public
+    session/instance references and allowlisted kind/platform/display metadata.
+    Older authenticated connections receive the neutral display
+    `Authenticated Client`. The Agent parses this object only for bounded
+    lifecycle logging; it never changes authorization, execution, delivery, or
+    response routing, and malformed metadata cannot stop command processing.
 
 #### B.1. Workspace Policy Commands (Plan 25)
 - **Command: `workspace.get_policy`**
