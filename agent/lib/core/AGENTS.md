@@ -23,6 +23,7 @@ This contract applies to `agent/lib/core/`.
 - Persist Agent private keys and durable credentials through the OS vault abstraction: macOS Keychain, Linux Secret Service, or Windows DPAPI-protected ciphertext. Vault unavailability fails closed without plaintext fallback. Legacy files are removed only after a write/read verification succeeds. Device code and proof JWTs remain ephemeral and never enter auth.json, URLs, CLI arguments, or logs.
 - Every native `auth.json` mutation participates in the shared `auth.refresh.lock` transaction. Refresh must acquire the lock before re-reading credentials and must adopt a pair rotated by another process instead of submitting the old refresh credential again.
 - `AuthManager` publishes a credential-free process-local change signal only after a successful auth write or a meaningful external reload; credentials never enter that signal.
+- Desktop logout intent is non-secret shared auth metadata. `AuthManager` consumes it under `auth.refresh.lock` before cloud authorization, verifies deletion of durable and pending Agent credentials, clears stale pairing state, and preserves `hardware_id` plus any newer Client session. A later Client login never authorizes reuse of a prior account's Agent credential.
 - Provider credentials must never share Sanad identity storage.
 
 ## Provider Runtime

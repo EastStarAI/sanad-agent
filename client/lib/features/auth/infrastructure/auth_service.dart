@@ -47,6 +47,7 @@ Future<bool> _launchPortalAuthorization(Uri uri) async {
 class AuthService {
   static final _logger = Logger('AuthService');
   static const _authSessionKey = 'backend_auth_session_v1';
+  static const _pendingAgentLogoutKey = 'agent_logout_pending';
   bool _isLoginCancelled = false;
   bool _isPolling = false;
   final Dio _dio;
@@ -451,21 +452,31 @@ class AuthService {
   }
 
   Future<void> logout() async {
-    if (AppPlatform.isDesktop) {
-      await _settingsStore.withAuthFileLock(_logoutUnlocked);
-    } else {
-      await _logoutUnlocked();
-    }
-  }
+    var refreshToken = _backendRefreshToken;
+    var accessToken = _backendAccessToken;
 
-  Future<void> _logoutUnlocked() async {
     if (AppPlatform.isDesktop) {
-      final latest = await _settingsStore.readAuthDocument();
-      _backendAccessToken = latest['access_token']?.toString();
-      _backendRefreshToken = latest['refresh_token']?.toString();
+      try {
+        await _settingsStore.withAuthFileLock(() async {
+          final existing = await _settingsStore.readAuthDocument();
+          accessToken = existing['access_token']?.toString() ?? accessToken;
+          refreshToken = existing['refresh_token']?.toString() ?? refreshToken;
+          final next = Map<String, dynamic>.from(existing)
+            ..remove('access_token')
+            ..remove('refresh_token')
+            ..remove('device_token')
+            ..remove('pairing_token')
+            ..remove('pending_device_token')
+            ..[_pendingAgentLogoutKey] = true;
+          await _settingsStore.saveAuthDocument(next);
+        });
+        _emitAuthenticationExchange();
+      } catch (error) {
+        _logger.warning(
+          'Desktop logout file cleanup failed: ${error.runtimeType}',
+        );
+      }
     }
-    final refreshToken = _backendRefreshToken;
-    final accessToken = _backendAccessToken;
 
     _backendAccessToken = null;
     _backendRefreshToken = null;
@@ -479,24 +490,11 @@ class AuthService {
     await prefs.remove(_authSessionKey);
     await prefs.remove('backend_access_token');
     await prefs.remove('backend_refresh_token');
-
-    if (AppPlatform.isDesktop) {
-      try {
-        final existing = await _settingsStore.readAuthDocument();
-        final next = Map<String, dynamic>.from(existing)
-          ..remove('access_token')
-          ..remove('refresh_token')
-          ..remove('device_token')
-          ..remove('pairing_token')
-          ..remove('pending_device_token');
-        await _settingsStore.saveAuthDocument(next);
-        _emitAuthenticationExchange();
-      } catch (e) {
-        _logger.warning('Failed to clean auth file during logout: $e');
-      }
-    }
     _emitAccessToken();
 
+    if (AppPlatform.isDesktop) {
+      unawaited(_colocatedCoupling.logoutAgent());
+    }
     if (refreshToken != null || accessToken != null) {
       unawaited(
         _portalAuth.logout(

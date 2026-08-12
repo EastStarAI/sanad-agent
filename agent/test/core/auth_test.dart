@@ -258,7 +258,49 @@ void main() {
       expect(data['pairing_token'], isNull);
       expect(data['pending_device_token'], isNull);
       expect(data['hardware_id'], equals('test_hardware'));
+      expect(data[AuthManager.pendingAgentLogoutKey], isNull);
+      expect(secrets.values[AuthManager.deviceCredentialKey], isNull);
+      expect(secrets.values[AuthManager.pendingDeviceCredentialKey], isNull);
     });
+
+    test(
+      'startup consumes pending Agent logout without erasing newer Client login',
+      () async {
+        final authFile = File(p.join(tempDir.path, 'auth.json'));
+        await authFile.writeAsString(
+          jsonEncode({
+            'access_token': 'new-account-access',
+            'refresh_token': 'new-account-refresh',
+            'hardware_id': 'stable-hardware',
+            AuthManager.pendingAgentLogoutKey: true,
+            'pairing_token': 'stale-pairing',
+          }),
+        );
+        secrets.values[AuthManager.deviceCredentialKey] =
+            'old-account-device-credential';
+        secrets.values[AuthManager.pendingDeviceCredentialKey] =
+            'old-account-pending-credential';
+
+        await authManager.initialize();
+
+        expect(authManager.accessToken, 'new-account-access');
+        expect(authManager.refreshToken, 'new-account-refresh');
+        expect(authManager.hardwareId, 'stable-hardware');
+        expect(authManager.deviceToken, isNull);
+        expect(authManager.pairingToken, isNull);
+        expect(authManager.pendingDeviceToken, isNull);
+        expect(authManager.canAuthenticateCloudAgent, isFalse);
+        expect(secrets.values, isEmpty);
+
+        final persisted =
+            jsonDecode(await authFile.readAsString()) as Map<String, dynamic>;
+        expect(persisted['access_token'], 'new-account-access');
+        expect(persisted['refresh_token'], 'new-account-refresh');
+        expect(persisted['hardware_id'], 'stable-hardware');
+        expect(persisted[AuthManager.pendingAgentLogoutKey], isNull);
+        expect(persisted['pairing_token'], isNull);
+      },
+    );
 
     test(
       'writes auth.json with owner-only permissions on Unix-like systems',

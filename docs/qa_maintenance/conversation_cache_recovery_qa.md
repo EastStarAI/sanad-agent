@@ -36,6 +36,12 @@ description: "QA scenarios for persistent conversation snapshots, draft acceptan
 2. Restart the app.
 3. **Expected:** Workspace expansion, last selected session, and draft text are restored.
 
+### Agent-Late Client Restart
+
+1. Keep a local conversation selected, restart Agent then Client, and delay Agent availability until the Client has rendered the route with an offline `DeviceConfig` snapshot.
+2. Allow Local Gateway to reconnect and reach `ready`.
+3. **Expected:** The retained conversation client hydrates the authoritative session list and then the selected session history without requiring navigation or manual refresh. Stale `isOnline=false` metadata must not suppress reconnect hydration.
+
 ### User Message Reordering
 
 1. With multiple sessions listed, send a message in a session that is not at the top.
@@ -87,3 +93,4 @@ description: "QA scenarios for persistent conversation snapshots, draft acceptan
 | Persistor hydration/debounce/flush | `test/unit/persistence/conversation_cache_persistor_test.dart` |
 | Repository facade integration | `test/unit/repositories/conversation_cache_repository_test.dart` |
 | Production `SessionCubit` cache projection | `test/unit/bloc/session_cubit_test.dart` |
+| Agent-late reconnect active-history hydration | `test/unit/services/connection_registries_test.dart` |

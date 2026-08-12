@@ -385,10 +385,11 @@ class AppRouter {
     required String matchedLocation,
     required String reason,
   }) {
+    final redirectPath = redirect == null ? 'allow' : Uri.parse(redirect).path;
     _logger.info(
       'AppRouterRedirect: auth=${authState.runtimeType} '
       'desktop=${AppPlatform.isDesktop} location=$matchedLocation '
-      'uri=$uri redirect=${redirect ?? 'allow'} reason=$reason',
+      'uriPath=${uri.path} redirectPath=$redirectPath reason=$reason',
     );
     return redirect;
   }

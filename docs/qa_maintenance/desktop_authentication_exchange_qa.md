@@ -11,7 +11,11 @@ description: "Regression matrix for credential-free client-daemon authentication
 |---|---|
 | Flutter login | File is persisted before one exchange request; daemon reloads and can connect without restart. |
 | Flutter refresh | Peer adopts the rotated pair from the file; notification contains no credentials. |
-| Flutter logout | File credentials are removed, hardware identity remains, daemon cloud transport disconnects, Local Gateway remains. |
+| Flutter logout | Latest access/refresh are retained only for Portal revoke; Client credentials and pairing fields are removed, pending Agent logout is persisted, explicit local Agent logout is requested outside the file lock, and `hardware_id` remains. |
+| Running Agent logout | `AuthManager.logout()` deletes durable and pending credentials from Secret Store, cloud transport disconnects, Local Gateway remains healthy, and bounded payload/log canaries contain no credential. |
+| Absent/timeout Agent | Client logout and Portal revoke continue without waiting; pending logout survives for Agent startup. |
+| Offline logout then newer Client login | Startup consumes pending logout, preserves the newer Client pair and `hardware_id`, deletes the prior account Device Credential, and leaves Agent unauthorized; deferred enrollment is not claimed. |
+| Local logout admission | Only authenticated POST with no query/body succeeds; GET, query, body, transfer-encoded payload, and unauthenticated requests fail before logout. |
 | Daemon/CLI mutation | Running daemon reloads and broadcasts; Flutter updates `AuthCubit` without echoing. |
 | Missed notification | Local reconnect performs reconciliation and requests one peer reload. |
 | Malicious extra event field | Entire exchange is rejected before payload logging; no file reload or response occurs. |
@@ -25,7 +29,7 @@ description: "Regression matrix for credential-free client-daemon authentication
 
 ## Commands
 
-Run the shared lock package tests, including the real two-process contention fixture. Run focused agent tests for `AuthManager`, Local Gateway transport, and cloud platform authentication lifecycle. Run focused Flutter tests for `AuthService` and socket recovery, then both analyzers. Windows, Linux, and macOS release CI must execute the shared package test before release closure.
+Run the shared lock package tests, including the real two-process contention fixture. Run focused agent tests for `AuthManager`, Local Gateway transport, and cloud platform authentication lifecycle. Run focused Flutter tests for `AuthService` and socket recovery, plus the daemon-backed `Client logout reaches Local Gateway and deletes Agent vault authorization` case sequentially, then both analyzers. The integration case must use a temporary Sanad Home, migrate a synthetic Device Credential into the platform Secret Store, logout through the real Client adapter, restart the daemon, and prove authorization remains absent. Windows, Linux, and macOS release CI must execute the shared package test before release closure.
 
 ## Remaining Distributed Commit Risk
 

@@ -97,6 +97,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
   launcher lease and client identity to agree.
 - Native desktop authentication reconciliation is local-only. Accept exactly `{"type":"authentication_exchange"}` with no additional fields, reload owner-only `auth.json`, and broadcast no credentials. Reject unexpected fields before payload logging; never route this event through the cloud platform.
 - Automatic co-located coupling uses the authenticated loopback HTTP surface only. It may return bounded status, expiry, and non-secret enrollment request identity; it must never return or accept User tokens, Device Credentials, private device codes, proofs, or account identity. Query-bearing and unsupported-method requests fail closed.
+- Explicit Agent logout is admitted only as an authenticated local Desktop `POST /auth/logout` with no query or body. It delegates to `AuthManager.logout()`, returns bounded credential-free status, disconnects cloud authorization through the normal auth change signal, and never stops the Local Gateway.
 - Keep streaming events at fine/debug log level and lifecycle, command, and terminal events concise at info level.
 - Daemon restart and permanent stop use the shared restart coordinator so local HTTP and protocol callers preserve acknowledgment delay and supervisor exit semantics.
 - Long-running restart safety evaluation must not serialize local HTTP acceptance; health, stop, and unrelated WebSocket upgrades remain responsive while a restart waits.

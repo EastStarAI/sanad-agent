@@ -66,8 +66,10 @@ output or evidence.
   JOSE P-256 raw signature format (`r || s`) supported by the Portal verifier.
 - Mobile platform-contract tests now verify Android auto-verified hosts/path,
   preservation of the general `sanad://` scheme while auth rejects it, iOS
-  Associated Domains, Xcode entitlement
-  attachment, and Production callback defines. Portal tests verify exact AASA
+  Associated Domains, Xcode entitlement attachment, disabled Flutter Router
+  deep-link ownership, and Production callback defines. Router tests prove OAuth
+  query/fragment canaries and credential-bearing redirects never enter navigation
+  diagnostics. Portal tests verify exact AASA
   output and fail-closed Android association when certificate fingerprints are
   absent. Clean-device cold/warm claimed-link handling on physical Android/iOS
   and separate-browser Headless E2E remain manual/platform gates.

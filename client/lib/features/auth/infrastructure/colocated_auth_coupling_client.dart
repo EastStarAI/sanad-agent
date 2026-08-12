@@ -22,11 +22,13 @@ class ColocatedAuthCouplingClient {
     LocalGatewayCredentialProvider? credentialProvider,
     Future<void> Function(Duration duration)? delay,
     Future<Map<String, dynamic>> Function(String method)? requestOverride,
+    String? baseUrl,
     bool? isDesktop,
   }) : _dio = dio ?? Dio(),
        _credentialProvider = credentialProvider ?? const LocalGatewayCredentialProvider(),
        _delay = delay ?? Future<void>.delayed,
        _requestOverride = requestOverride,
+       _baseUrlOverride = baseUrl,
        _isDesktop = isDesktop ?? AppPlatform.isDesktop;
 
   static const _pollInterval = Duration(milliseconds: 500);
@@ -36,8 +38,14 @@ class ColocatedAuthCouplingClient {
   final LocalGatewayCredentialProvider _credentialProvider;
   final Future<void> Function(Duration duration) _delay;
   final Future<Map<String, dynamic>> Function(String method)? _requestOverride;
+  final String? _baseUrlOverride;
   final bool _isDesktop;
-  String get _url => '${AppConfig.localGatewayUrl.replaceAll(RegExp(r'/+$'), '')}/auth/coupling';
+  String get _gatewayBaseUrl => (_baseUrlOverride ?? AppConfig.localGatewayUrl).replaceAll(
+    RegExp(r'/+$'),
+    '',
+  );
+  String get _url => '$_gatewayBaseUrl/auth/coupling';
+  String get _logoutUrl => '$_gatewayBaseUrl/auth/logout';
 
   Future<Map<String, dynamic>> _request(String method) async {
     final override = _requestOverride;
@@ -51,6 +59,24 @@ class ColocatedAuthCouplingClient {
         ? await _dio.post<Map<String, dynamic>>(_url, options: options)
         : await _dio.get<Map<String, dynamic>>(_url, options: options);
     return response.data ?? const <String, dynamic>{};
+  }
+
+  Future<void> logoutAgent() async {
+    if (!_isDesktop) return;
+    try {
+      await _dio.post<void>(
+        _logoutUrl,
+        options: Options(
+          headers: await _credentialProvider.headers(),
+          sendTimeout: const Duration(seconds: 3),
+          receiveTimeout: const Duration(seconds: 3),
+        ),
+      );
+    } on Object {
+      // Client logout remains authoritative when the optional Local Agent is
+      // absent or temporarily unreachable. The persisted pending marker makes
+      // the old Agent credential fail closed on its next startup.
+    }
   }
 
   Future<ColocatedEnrollmentRequest?> start() async {

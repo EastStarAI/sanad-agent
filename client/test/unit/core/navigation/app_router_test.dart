@@ -12,6 +12,7 @@ import 'package:sanad_client/utils/app_platform.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:logging/logging.dart';
 
 GoRouter _goRouter(AppRouterSetup setup) => setup.router;
 
@@ -122,6 +123,33 @@ void main() {
         ),
         isNull,
       );
+    });
+
+    test('navigation diagnostics omit OAuth query and redirect credentials', () async {
+      final previousLevel = Logger.root.level;
+      Logger.root.level = Level.ALL;
+      final records = <LogRecord>[];
+      final subscription = Logger.root.onRecord.listen(records.add);
+      addTearDown(() async {
+        await subscription.cancel();
+        Logger.root.level = previousLevel;
+      });
+
+      AppRouter.handleRedirect(
+        AuthUnauthenticated(),
+        uri: Uri.parse(
+          'https://dev.portal.sanad.eaststarai.com/oauth/ios'
+          '?code=authorization-code-canary&state=state-canary',
+        ),
+        matchedLocation: '/oauth/ios',
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final output = records.map((record) => record.message).join('\n');
+      expect(output, contains('uriPath=/oauth/ios'));
+      expect(output, isNot(contains('authorization-code-canary')));
+      expect(output, isNot(contains('state-canary')));
+      expect(output, isNot(contains('from=')));
     });
 
     test('on desktop: keeps unauthenticated users on bootstrap before choosing local or onboarding', () {

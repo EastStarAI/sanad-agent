@@ -47,7 +47,9 @@ and payload. The Portal success page targets only the registered app origin;
 neither side uses `*`. Desktop binds only IPv4 loopback and rejects any other
 path. A valid desktop callback returns a no-store page matching the Portal
 Success design, with the same completion card, animated status, return action,
-and close fallback. External font loading is protected by `no-referrer` so the
+and close fallback. Its favicon is embedded as a base64 data URI using the
+canonical `sanad-portal/static/favicon.svg` artwork, so the loopback callback
+has no external icon request. External font loading is protected by `no-referrer` so the
 authorization-code callback URL cannot leave loopback. Mobile keeps `sanad://` as a general application deep-link namespace, but
 authentication rejects it and every unrelated claimed link; OAuth completion
 accepts only the exact registered HTTPS callback.
@@ -59,7 +61,11 @@ all restricted to `/oauth/android`; `assetlinks.json` binds them to
 `com.eaststarai.sanad` and the environment-injected public SHA-256 signing
 certificate fingerprints. iOS uses `Runner.entitlements` Associated Domains for
 the same three hosts, while each host serves an AASA document binding
-`UC2824B99G.com.eaststarai.sanad` only to `/oauth/ios`. Missing Android
+`UC2824B99G.com.eaststarai.sanad` only to `/oauth/ios`. On iOS, `app_links` is
+the sole callback owner and `FlutterDeepLinkingEnabled` remains false so GoRouter
+cannot consume the OAuth URI as ordinary navigation before PKCE reconciliation.
+Navigation diagnostics retain only paths and never query, fragment, code, state,
+or a redirect carrying them. Missing Android
 fingerprints return `503` instead of publishing an unverified association.
 
 Production mobile builds receive the exact callback URIs through
@@ -118,6 +124,12 @@ Only Flutter User sessions refresh through `/auth/refresh`. Refresh outcomes
 remain typed: a trusted `401` is terminal, while network and `5xx/503` failures
 retain credentials and cached state. Native desktop auth mutations retain the
 shared `auth.refresh.lock` and credential-free local exchange notification.
+Desktop logout snapshots User credentials for Portal revocation, persists
+credential-free pending Agent logout while preserving `hardware_id`, and then
+requests strict authenticated Local Gateway Agent logout outside the lock. Agent
+absence never prevents Client logout; startup deletes the prior Agent credential
+before cloud authorization. Deferred Agent enrollment after a Client login that
+completed while Agent was absent is intentionally a later account-bound flow.
 Device Credentials do not enter this User refresh family. A User login or token
 rotation does not make the local Agent eligible for cloud registration. On
 Desktop, the Client first asks the authenticated Local Gateway for a non-secret,

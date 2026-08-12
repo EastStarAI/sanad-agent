@@ -34,6 +34,10 @@
 	<string>Sanad uses your microphone</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- app_links is the sole OAuth Universal Link owner. Letting Flutter's
+	     Router also consume callbacks races PKCE state reconciliation. -->
+	<key>FlutterDeepLinkingEnabled</key>
+	<false/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>

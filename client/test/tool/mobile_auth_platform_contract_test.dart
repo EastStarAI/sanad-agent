@@ -49,6 +49,12 @@ void main() {
       hasLength(3),
     );
     final infoPlist = File('ios/Runner/Info.plist').readAsStringSync();
+    expect(infoPlist, contains('<key>FlutterDeepLinkingEnabled</key>'));
+    expect(
+      infoPlist,
+      contains('<key>FlutterDeepLinkingEnabled</key>\n\t<false/>'),
+      reason: 'app_links must be the sole iOS OAuth callback owner.',
+    );
     expect(infoPlist, contains('CFBundleURLSchemes'));
     expect(infoPlist, contains('<string>sanad</string>'));
     expect(infoPlist, isNot(contains('com.googleusercontent.apps.')));

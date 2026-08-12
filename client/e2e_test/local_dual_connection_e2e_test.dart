@@ -2,6 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:dio/dio.dart';
+import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
+import 'package:sanad_client/features/auth/infrastructure/colocated_auth_coupling_client.dart';
+import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
@@ -10,7 +14,17 @@ import 'package:sanad_client/features/conversations/domain/conversation_client.d
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client_impl.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/infrastructure/local_gateway/local_gateway_credential_provider.dart';
+import 'package:sanad_client/infrastructure/local_tools/sanad_settings_store.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+class _NoopPortalAuthClient extends PortalAuthClient {
+  _NoopPortalAuthClient() : super(dio: Dio());
+
+  @override
+  Future<void> logout({String? accessToken, String? refreshToken}) async {}
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -57,6 +71,114 @@ void main() {
       exchange = _waitForAuthenticationExchange(socket);
       socket.emit('authentication_exchange', const {});
       expect(await exchange, {'type': 'authentication_exchange'});
+    },
+    timeout: const Timeout(Duration(minutes: 2)),
+  );
+
+  test(
+    'Client logout reaches Local Gateway and deletes Agent vault authorization',
+    () async {
+      final previousHttpOverrides = HttpOverrides.current;
+      HttpOverrides.global = null;
+      addTearDown(() => HttpOverrides.global = previousHttpOverrides);
+      AppPlatform.overrideIsDesktop = true;
+      addTearDown(() => AppPlatform.overrideIsDesktop = null);
+      // E2E must isolate Client preferences from the installed application.
+      // ignore: invalid_use_of_visible_for_testing_member
+      SharedPreferences.setMockInitialValues({
+        'backend_access_token': 'client-access',
+        'backend_refresh_token': 'client-refresh',
+      });
+      final prefs = await SharedPreferences.getInstance();
+      final port = _pickPort();
+      final agentDir = Directory(
+        '${Directory.current.parent.path}${Platform.pathSeparator}agent',
+      );
+      final sanadHome = await Directory.systemTemp.createTemp(
+        'sanad-auth-logout-home-e2e-',
+      );
+      addTearDown(() async {
+        if (sanadHome.existsSync()) await sanadHome.delete(recursive: true);
+      });
+      final authFile = File(
+        '${sanadHome.path}${Platform.pathSeparator}auth.json',
+      );
+      await authFile.writeAsString(
+        jsonEncode({
+          'access_token': 'client-access',
+          'refresh_token': 'client-refresh',
+          'device_token': 'vault-migration-device-credential',
+          'pending_device_token': 'vault-migration-pending-credential',
+          'pairing_token': 'pending-pairing',
+          'hardware_id': 'stable-auth-logout-hardware',
+        }),
+        flush: true,
+      );
+
+      final daemon = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: port,
+        existingSanadHome: sanadHome,
+      );
+      addTearDown(daemon.stop);
+      final socket = _localSocket(
+        daemon,
+        url: 'http://127.0.0.1:$port',
+        hardwareId: 'stable-auth-logout-hardware',
+      );
+      addTearDown(socket.dispose);
+      await _waitForLocalSocket(socket);
+      final credentialProvider = LocalGatewayCredentialProvider(
+        sanadHomePath: sanadHome.path,
+      );
+      expect(
+        await _readCouplingStatus(port, credentialProvider),
+        'already_authorized',
+      );
+
+      final authService = AuthService(
+        prefs: prefs,
+        settingsStore: SanadSettingsStore(sanadHomePath: sanadHome.path),
+        portalAuth: _NoopPortalAuthClient(),
+        colocatedCoupling: ColocatedAuthCouplingClient(
+          baseUrl: 'http://127.0.0.1:$port',
+          credentialProvider: credentialProvider,
+          isDesktop: true,
+        ),
+      );
+      addTearDown(authService.dispose);
+
+      await authService.logout();
+      await _waitForPendingLogoutConsumption(authFile);
+
+      final loggedOut = jsonDecode(await authFile.readAsString()) as Map<String, dynamic>;
+      expect(loggedOut['access_token'], isNull);
+      expect(loggedOut['refresh_token'], isNull);
+      expect(loggedOut['pairing_token'], isNull);
+      expect(loggedOut['pending_device_token'], isNull);
+      expect(loggedOut['agent_logout_pending'], isNull);
+      expect(loggedOut['hardware_id'], 'stable-auth-logout-hardware');
+      expect(await _readCouplingStatus(port, credentialProvider), 'failed');
+
+      await daemon.stop();
+      final restartedPort = _pickPort();
+      final restarted = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: restartedPort,
+        existingSanadHome: sanadHome,
+      );
+      addTearDown(restarted.stop);
+      final restartedSocket = _localSocket(
+        restarted,
+        url: 'http://127.0.0.1:$restartedPort',
+        hardwareId: 'stable-auth-logout-hardware',
+      );
+      addTearDown(restartedSocket.dispose);
+      await _waitForLocalSocket(restartedSocket);
+      expect(
+        await _readCouplingStatus(restartedPort, credentialProvider),
+        'failed',
+      );
     },
     timeout: const Timeout(Duration(minutes: 2)),
   );
@@ -961,6 +1083,36 @@ class _ProviderUsageFixture {
     await _subscription?.cancel();
     await server.close(force: true);
   }
+}
+
+Future<String?> _readCouplingStatus(
+  int port,
+  LocalGatewayCredentialProvider credentialProvider,
+) async {
+  final client = HttpClient();
+  try {
+    final request = await client.getUrl(
+      Uri.parse('http://127.0.0.1:$port/auth/coupling'),
+    );
+    for (final entry in (await credentialProvider.headers()).entries) {
+      request.headers.set(entry.key, entry.value);
+    }
+    final response = await request.close();
+    final body = jsonDecode(await response.transform(utf8.decoder).join());
+    return body is Map ? body['status']?.toString() : null;
+  } finally {
+    client.close(force: true);
+  }
+}
+
+Future<void> _waitForPendingLogoutConsumption(File authFile) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 10));
+  while (DateTime.now().isBefore(deadline)) {
+    final data = jsonDecode(await authFile.readAsString()) as Map<String, dynamic>;
+    if (data['agent_logout_pending'] != true) return;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+  throw TimeoutException('Local Agent did not consume pending logout.');
 }
 
 Future<Map<String, dynamic>> _waitForAuthenticationExchange(

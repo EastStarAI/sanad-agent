@@ -29,7 +29,7 @@ This contract applies to `client/lib/features/conversations/data/`.
 ## Hydration and Event Parity
 - History repositories return canonical events directly; never round-trip them through legacy integer-id chat models.
 - Preserve opaque string event ids and log only redacted correlation when hydration fails.
-- Reconnect loads the active session history after session-list hydration so events emitted while disconnected become visible.
+- Reconnect loads the active session history after session-list hydration so events emitted while disconnected become visible. A transport transition to `ready` is sufficient to trigger this reconciliation; never gate it on the stale `DeviceConfig.isOnline` value captured while the daemon was absent.
 - Ignore a history response when navigation has moved to another requested session.
 - Reapply live events after history hydration with request-id deduplication; legacy rows may use bounded same-session text/timestamp matching.
 - Do not terminal-deduplicate running thinking events needed by later stream chunks.

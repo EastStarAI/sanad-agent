@@ -17,6 +17,7 @@ class AuthManager {
 
   static const deviceCredentialKey = 'device_credential';
   static const pendingDeviceCredentialKey = 'pending_device_credential';
+  static const pendingAgentLogoutKey = 'agent_logout_pending';
 
   final _logger = Logger('AuthManager');
   final NativeAuthFileLock? _authFileLock;
@@ -77,6 +78,20 @@ class AuthManager {
         // A malformed or temporarily unavailable file cannot authorize a
         // state transition. Keep the last valid in-memory snapshot.
       }
+    }
+
+    if (data?[pendingAgentLogoutKey] == true) {
+      await _deleteAgentCredentials();
+      _pairingToken = null;
+      data!
+        ..remove('device_token')
+        ..remove('pairing_token')
+        ..remove('pending_device_token')
+        ..remove(pendingAgentLogoutKey);
+      await boundary.writeSecretBytes(
+        'auth.json',
+        utf8.encode(jsonEncode(data)),
+      );
     }
 
     var storedCredential = await _secretStore.read(deviceCredentialKey);
@@ -307,8 +322,7 @@ class AuthManager {
       _deviceToken = null;
       _pairingToken = null;
       _pendingDeviceToken = null;
-      await _secretStore.delete(deviceCredentialKey);
-      await _secretStore.delete(pendingDeviceCredentialKey);
+      await _deleteAgentCredentials();
       final boundary = SanadHomeBootstrap.identity();
       if (boundary.fileExists('auth.json')) {
         try {
@@ -320,6 +334,7 @@ class AuthManager {
             data.remove('device_token');
             data.remove('pairing_token');
             data.remove('pending_device_token');
+            data.remove(pendingAgentLogoutKey);
             await boundary.writeSecretBytes(
               'auth.json',
               utf8.encode(jsonEncode(data)),
@@ -333,6 +348,17 @@ class AuthManager {
       }
       _notifyChanged();
     });
+  }
+
+  Future<void> _deleteAgentCredentials() async {
+    await _secretStore.delete(deviceCredentialKey);
+    await _secretStore.delete(pendingDeviceCredentialKey);
+    if (await _secretStore.read(deviceCredentialKey) != null ||
+        await _secretStore.read(pendingDeviceCredentialKey) != null) {
+      throw const AgentSecretStoreUnavailable(
+        'Agent credential deletion verification failed.',
+      );
+    }
   }
 
   Future<T> _withAuthFileLock<T>(Future<T> Function() operation) {

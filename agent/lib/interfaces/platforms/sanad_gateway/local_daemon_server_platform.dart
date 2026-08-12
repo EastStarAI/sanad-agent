@@ -206,6 +206,23 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       return;
     }
 
+    if (request.uri.path == '/auth/logout') {
+      final hasBody =
+          request.headers.contentLength > 0 ||
+          request.headers.value(HttpHeaders.transferEncodingHeader) != null;
+      if (request.method != 'POST' || request.uri.hasQuery || hasBody) {
+        await _writeJsonResponse(request.response, const {
+          'status': 'invalid_request',
+        }, statusCode: HttpStatus.badRequest);
+        return;
+      }
+      await getIt<AuthManager>().logout();
+      await _writeJsonResponse(request.response, const {
+        'status': 'logged_out',
+      });
+      return;
+    }
+
     if (request.uri.path == '/auth/coupling') {
       final hasBody =
           request.headers.contentLength > 0 ||

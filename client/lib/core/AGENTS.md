@@ -24,6 +24,7 @@ The canonical app composition flow must only go through:
 - Canonical routing configurations must live under `core/navigation/`.
 - Always define route configurations inside `AppRoutes` and routing logical handlers/redirects inside `AppRouter`.
 - Keep authentication-aware redirects and guards strictly centralized in `AppRouter`.
+- Navigation diagnostics log only route paths and bounded decisions. Query strings, fragments, OAuth authorization codes/state, and redirect values carrying them must never enter logs.
 - Treat `/` as the app bootstrap gate. It must render the bootstrap/loading screen and defer gateway/device readiness decisions to the centralized gateway state flow before `/home` is shown.
 - Full logout must clear app-wide, user-scoped ephemeral transport state such as cross-transport event deduplication before the next authenticated session starts.
 - An authenticated mobile/web session remains on the cached application surface while the cloud is transiently unavailable; route to login only after terminal session invalidation.
