@@ -15,7 +15,51 @@ void main() {
     expect(TextUtils.getTextDirection('\u08A0'), TextDirection.rtl);
   });
 
-  testWidgets('renders EventTile header for Arabic ask_user event as RTL', (tester) async {
+  test('uses the first strong English character even with later Arabic', () {
+    expect(
+      TextUtils.getTextDirection('This is an English sentence with "مرحبا".'),
+      TextDirection.ltr,
+    );
+  });
+
+  test('uses the first strong Arabic character even when English is the majority', () {
+    expect(
+      TextUtils.getTextDirection('مرحبا this sentence continues mostly in English for a long time.'),
+      TextDirection.rtl,
+    );
+  });
+
+  test('detects RTL for Arabic sentence containing a long English URL', () {
+    expect(
+      TextUtils.getTextDirection(
+        'يرجى زيارة الرابط التالي: https://github.com/flutter/flutter/issues/very/long/url/path',
+      ),
+      TextDirection.rtl,
+    );
+  });
+
+  test('ignores neutral Markdown and numbers before the first strong character', () {
+    expect(TextUtils.getTextDirection('1. # هذا title continues in English'), TextDirection.rtl);
+    expect(TextUtils.getTextDirection('- [ ] مهمة الجديدة remains pending'), TextDirection.rtl);
+    expect(TextUtils.getTextDirection('> 42... English ثم العربية'), TextDirection.ltr);
+  });
+
+  test('detects multi-line text direction based on first strong directional line', () {
+    const arabicFirst = 'مرحبا بك في المساعد الذكي\n```bash\ngit status\n```';
+    expect(TextUtils.getTextDirection(arabicFirst), TextDirection.rtl);
+
+    const englishFirst = 'Here is the command output:\nنجحت العملية بالكامل';
+    expect(TextUtils.getTextDirection(englishFirst), TextDirection.ltr);
+  });
+
+  test('defaults to LTR for empty, whitespace, and neutral punctuation/numbers', () {
+    expect(TextUtils.getTextDirection(null), TextDirection.ltr);
+    expect(TextUtils.getTextDirection(''), TextDirection.ltr);
+    expect(TextUtils.getTextDirection('   '), TextDirection.ltr);
+    expect(TextUtils.getTextDirection('12345!@#\$%^&*()'), TextDirection.ltr);
+  });
+
+  testWidgets('uses the first strong character for an ask_user event header', (tester) async {
     final event = CanonicalEvent(
       id: 'event-header-rtl',
       kind: EventKind.toolCall,
@@ -24,8 +68,8 @@ void main() {
         'name': 'system_ask_user',
         'input': {
           'questions': [
-            {'question': 'ما هو استفسارك؟'}
-          ]
+            {'question': 'ما هو استفسارك؟'},
+          ],
         },
       },
     );
@@ -39,12 +83,14 @@ void main() {
     );
 
     final headerDirectionality = tester.widget<Directionality>(
-      find.descendant(
-        of: find.byType(InkWell),
-        matching: find.byType(Directionality),
-      ).first,
+      find
+          .descendant(
+            of: find.byType(InkWell),
+            matching: find.byType(Directionality),
+          )
+          .first,
     );
-    expect(headerDirectionality.textDirection, TextDirection.rtl);
+    expect(headerDirectionality.textDirection, TextDirection.ltr);
 
     final richTexts = tester.widgetList<RichText>(
       find.descendant(
@@ -53,7 +99,7 @@ void main() {
       ),
     );
     expect(richTexts.isNotEmpty, isTrue);
-    expect(richTexts.first.textDirection, TextDirection.rtl);
+    expect(richTexts.first.textDirection, TextDirection.ltr);
   });
 
   testWidgets('resolves every clarifying question string direction independently', (tester) async {

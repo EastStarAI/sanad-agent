@@ -104,12 +104,20 @@ opening; users never need to close and reopen the menu to refresh it.
 
 ## Active work
 
+The account footer separates its navigation intents without changing other
+Settings deep links: selecting the avatar or display name opens Profile, while
+the dedicated gear opens General.
+
 The conversation timeline renders Markdown, code, reasoning summaries, tool
 activity, permission requests, recovery notices, and final responses. Multiline
-Markdown code blocks detect Arabic versus non-Arabic content for text direction:
-Arabic code is RTL and other code is LTR. The code viewport itself always uses
-an LTR horizontal scroll origin so long blocks open with their left edge visible. Skill
-loading uses the same compact path-and-content presentation as File Read, while
+Markdown code blocks keep programming languages and untyped `Code` content LTR,
+opening long lines from the left even when they contain Arabic strings. Fenced
+`text` blocks detect their own content direction and open from the right for
+Arabic-majority text or the left for English-majority text. A compact,
+background-free header keeps the language at the block's left edge and the copy
+action at its right edge without forcing short blocks to fill the message width.
+Skill loading uses the same compact path-and-content presentation as File Read,
+while
 the loaded `SKILL.md` body renders as selectable README-style Markdown rather
 than raw tool JSON. File Read results for `.md` and `.markdown` targets place a
 `Raw | MD` switch beside the target path, default to rendered Markdown, and

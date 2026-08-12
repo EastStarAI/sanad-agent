@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:sanad_client/core/theme/app_color_scheme.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
+import 'package:sanad_client/shared/widgets/copy_button.dart';
 
 /// Centralized helper for generating consistent Markdown style sheets and
 /// element builders across conversation widgets (e.g. UserMessageTile, EventTile).
@@ -61,45 +62,86 @@ class MarkdownStyleHelper {
   }
 }
 
-/// Renders a multiline Markdown code block with detected text direction.
+/// Renders a multiline Markdown code block with content-owned direction.
 ///
-/// The viewport intentionally remains LTR so horizontal offset zero always
-/// exposes the left edge. The code text gets its own detected direction.
+/// Programming and untyped code stays LTR. Plain `text` blocks detect their
+/// content direction, which also owns the horizontal viewport's leading edge.
 class AppCodeBlock extends StatelessWidget {
   final String codeText;
   final Color codeColor;
+  final String? language;
 
   const AppCodeBlock({
     super.key,
     required this.codeText,
     required this.codeColor,
+    this.language,
   });
 
   @override
   Widget build(BuildContext context) {
-    final codeDirection = TextUtils.getTextDirection(codeText);
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final normalizedLanguage = language?.trim().toLowerCase();
+    final codeDirection = normalizedLanguage == 'text' ? TextUtils.getTextDirection(codeText) : TextDirection.ltr;
+    final languageLabel = language?.trim().isNotEmpty == true ? language!.trim() : 'Code';
+
     return Container(
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.1)),
+        border: Border.all(color: colorScheme.outline.withValues(alpha: 0.1)),
       ),
-      padding: const EdgeInsets.all(16.0),
       child: Directionality(
         textDirection: TextDirection.ltr,
-        child: SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: Directionality(
-            textDirection: codeDirection,
-            child: Text(
-              codeText,
-              style: GoogleFonts.firaCode(
-                color: codeColor,
-                fontSize: 12,
-                height: 1.5,
+        child: Stack(
+          children: [
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsetsDirectional.fromSTEB(12, 8, 44, 8),
+                  child: Text(
+                    languageLabel,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: theme.textTheme.labelSmall?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Directionality(
+                    textDirection: codeDirection,
+                    child: SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: Text(
+                        codeText,
+                        textDirection: codeDirection,
+                        style: GoogleFonts.firaCode(
+                          color: codeColor,
+                          fontSize: 12,
+                          height: 1.5,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            PositionedDirectional(
+              top: 6,
+              end: 8,
+              child: CopyButton(
+                text: codeText,
+                successMessage: 'Code copied to clipboard',
               ),
             ),
-          ),
+          ],
         ),
       ),
     );
@@ -124,9 +166,15 @@ class AppInlineCodeBuilder extends MarkdownElementBuilder {
         codeText = codeText.substring(0, codeText.length - 1);
       }
 
+      final languageClass = element.attributes['class'];
+      final language = languageClass?.startsWith('language-') == true
+          ? languageClass!.substring('language-'.length)
+          : null;
+
       return AppCodeBlock(
         codeText: codeText,
         codeColor: codeColor,
+        language: language,
       );
     }
 
