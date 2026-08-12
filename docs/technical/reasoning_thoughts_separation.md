@@ -141,7 +141,12 @@ progressive Markdown dependency has been removed, so conversation content has
 only one Markdown implementation. There is no content-length threshold and no
 separate card, disclosure, measurement probe, bounded viewport, or nested
 scrollbar for streaming text.
-Long content grows naturally inside the conversation timeline.
+Long content grows naturally inside the conversation timeline. Programming and
+untyped code blocks are LTR and open their horizontal viewport from the left.
+Fenced `text` blocks detect their own content direction and use it for both text
+layout and the horizontal leading edge. Their shrink-wrapped header anchors the
+language label left and the block copy action right without widening short
+content to the message width.
 
 Final Answer may append response metadata below the shared renderer. The
 streaming `thinking` surface does not receive that metadata but keeps a copy
