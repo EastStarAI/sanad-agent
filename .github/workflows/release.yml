@@ -141,6 +141,7 @@ jobs:
         shell: bash
         run: |
           fvm dart pub get
+          fvm dart run tool/generate_bundled_skills.dart --check
           fvm dart analyze
           fvm dart test
       - name: Compile agent
@@ -159,6 +160,7 @@ jobs:
         shell: pwsh
         run: |
           fvm dart pub get
+          fvm dart run tool/generate_bundled_skills.dart --check
           fvm dart analyze
           fvm dart test test/core/update/release_manifest_test.dart
       - name: Compile Windows agent
@@ -168,6 +170,37 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path ../dist -Force | Out-Null
           fvm dart compile exe "-DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }}" bin/sanad_agent.dart -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
+      - name: Smoke-test embedded skills
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          agent="dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
+          home="$RUNNER_TEMP/sanad-bundled-skills-home"
+          SANAD_HOME="$home" "$agent" version >/dev/null
+          test -f "$home/skills/skill-creator/SKILL.md"
+          test -f "$home/skills/skill-creator/references/schemas.md"
+          test -f "$home/skills/find-skills/LICENSE.txt"
+          test -f "$home/skills/agent-browser/LICENSE.txt"
+      - name: Smoke-test embedded skills on Windows
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $agent = "dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
+          $home = Join-Path $env:RUNNER_TEMP "sanad-bundled-skills-home"
+          $env:SANAD_HOME = $home
+          & $agent version | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "Agent smoke test failed" }
+          @(
+            "skills/skill-creator/SKILL.md",
+            "skills/skill-creator/references/schemas.md",
+            "skills/find-skills/LICENSE.txt",
+            "skills/agent-browser/LICENSE.txt"
+          ) | ForEach-Object {
+            if (-not (Test-Path (Join-Path $home $_) -PathType Leaf)) {
+              throw "Missing extracted bundled skill file: $_"
+            }
+          }
       - name: Import Apple Developer ID
         if: matrix.platform == 'macos'
         shell: bash

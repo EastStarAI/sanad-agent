@@ -207,6 +207,168 @@ class SanadHomeBootstrap {
     file.deleteSync();
   }
 
+  Map<String, List<int>> readDirectoryBytesSync(String relative) {
+    final root = Directory(child(relative));
+    final type = FileSystemEntity.typeSync(root.path, followLinks: false);
+    if (type == FileSystemEntityType.notFound) return const {};
+    if (type != FileSystemEntityType.directory) {
+      throw const SanadHomeBoundaryViolation(
+        'non_directory',
+        'Sanad runtime directory access requires a directory.',
+      );
+    }
+    final files = <String, List<int>>{};
+    final entities = root.listSync(recursive: true, followLinks: false)
+      ..sort((a, b) => a.path.compareTo(b.path));
+    for (final entity in entities) {
+      final entityType = FileSystemEntity.typeSync(
+        entity.path,
+        followLinks: false,
+      );
+      if (entityType == FileSystemEntityType.link) {
+        throw const SanadHomeBoundaryViolation(
+          'symlink_target',
+          'Symbolic links are not allowed at the Sanad runtime boundary.',
+        );
+      }
+      if (entityType == FileSystemEntityType.directory) continue;
+      if (entityType != FileSystemEntityType.file) {
+        throw const SanadHomeBoundaryViolation(
+          'non_regular_file',
+          'Sanad runtime reads require regular files.',
+        );
+      }
+      final file = File(entity.path);
+      _enforceSecretOwnershipSync(file);
+      files[p.posix.joinAll(
+        p.split(p.relative(entity.path, from: root.path)),
+      )] = file
+          .readAsBytesSync();
+    }
+    return files;
+  }
+
+  void replaceDirectoryBytesSync(
+    String relative,
+    Map<String, List<int>> files, {
+    Set<String> executablePaths = const {},
+  }) {
+    if (files.isEmpty) {
+      throw const SanadHomeWriteFailure(
+        'empty_directory',
+        'A managed directory replacement requires at least one file.',
+      );
+    }
+    final destination = Directory(child(relative));
+    final parentRelative = p.dirname(relative);
+    final parent = Directory(
+      parentRelative == '.'
+          ? canonicalRoot()
+          : ensureDirectoryPathSync(parentRelative),
+    );
+    _secureParentsSync(parent);
+    final nonce = base64Url.encode(
+      List<int>.generate(18, (_) => Random.secure().nextInt(256)),
+    );
+    final stagingRelative = '$relative.sanad-stage-$nonce';
+    final backupRelative = '$relative.sanad-backup-$nonce';
+    final staging = Directory(child(stagingRelative));
+    final backup = Directory(child(backupRelative));
+    var movedOld = false;
+    try {
+      staging.createSync(recursive: true);
+      _enforceDirectoryOwnershipSync(staging);
+      for (final entry in files.entries) {
+        final normalized = p.posix.normalize(entry.key);
+        if (p.posix.isAbsolute(entry.key) ||
+            normalized != entry.key ||
+            p.posix
+                .split(normalized)
+                .any((part) => part == '..' || part.isEmpty)) {
+          throw const SanadHomeBoundaryViolation(
+            'invalid_path',
+            'Managed directory file paths must be safe relative paths.',
+          );
+        }
+        writeSecretBytesSync(
+          p.joinAll([stagingRelative, ...p.posix.split(normalized)]),
+          entry.value,
+        );
+        if (executablePaths.contains(normalized) && !Platform.isWindows) {
+          final file = File(
+            child(p.joinAll([stagingRelative, ...p.posix.split(normalized)])),
+          );
+          _chmodSync(file.path, '700', secretDirMode);
+        }
+      }
+      if (FileSystemEntity.typeSync(destination.path, followLinks: false) ==
+          FileSystemEntityType.link) {
+        throw const SanadHomeBoundaryViolation(
+          'symlink_target',
+          'Symbolic links are not allowed at the Sanad runtime boundary.',
+        );
+      }
+      if (destination.existsSync()) {
+        destination.renameSync(backup.path);
+        movedOld = true;
+      }
+      staging.renameSync(destination.path);
+      if (backup.existsSync()) _deleteStrictChildDirectorySync(backup);
+    } on SanadHomeBoundaryViolation {
+      if (movedOld && !destination.existsSync() && backup.existsSync()) {
+        backup.renameSync(destination.path);
+      }
+      rethrow;
+    } catch (_) {
+      if (destination.existsSync() && movedOld && backup.existsSync()) {
+        _deleteStrictChildDirectorySync(destination);
+      }
+      if (movedOld && backup.existsSync()) {
+        backup.renameSync(destination.path);
+      }
+      throw const SanadHomeWriteFailure(
+        'directory_replace_failed',
+        'The managed directory replacement failed.',
+      );
+    } finally {
+      if (staging.existsSync()) _deleteStrictChildDirectorySync(staging);
+      if (backup.existsSync() && destination.existsSync()) {
+        _deleteStrictChildDirectorySync(backup);
+      }
+    }
+  }
+
+  void deleteDirectorySync(String relative) {
+    final directory = Directory(child(relative));
+    if (!directory.existsSync()) return;
+    _deleteStrictChildDirectorySync(directory);
+  }
+
+  void _deleteStrictChildDirectorySync(Directory directory) {
+    final root = canonicalRoot();
+    final target = p.normalize(p.absolute(directory.path));
+    if (!p.isWithin(root, target) || p.equals(root, target)) {
+      throw const SanadHomeBoundaryViolation(
+        'delete_outside_home',
+        'Managed deletion requires a strict child of Sanad Home.',
+      );
+    }
+    final type = FileSystemEntity.typeSync(target, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      throw const SanadHomeBoundaryViolation(
+        'symlink_target',
+        'Symbolic links are not allowed at the Sanad runtime boundary.',
+      );
+    }
+    if (type != FileSystemEntityType.directory) {
+      throw const SanadHomeBoundaryViolation(
+        'non_directory',
+        'Managed deletion requires a directory.',
+      );
+    }
+    directory.deleteSync(recursive: true);
+  }
+
   /// SQLite exception boundary: call before opening `state.db`.
   Future<String> prepareDatabase() async {
     await prepare();

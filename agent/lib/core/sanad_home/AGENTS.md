@@ -23,6 +23,9 @@ no writer outside this helper reaches the filesystem.
 ## Critical Invariants
 - Every daemon-owned regular file under `SANAD_HOME` or `SANAD_STATE_HOME`
   MUST flow through the root-scoped `SanadHomeBootstrap` read/write boundary.
+  Managed directory replacement stages a complete strict-child tree, retains a
+  recoverable backup until commit, rejects symlinks, and permits recursive
+  deletion only for a canonical strict child of the configured root.
   SQLite is the sole exception: its owner brackets the native connection with
   `prepareDatabase` and `secureDatabaseFiles`.
 - Temp files are created with `0600` (Unix) or the current-user ACL

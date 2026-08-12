@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:sanad_agent/capabilities/skills/bundled_skill_manager.dart';
 import 'package:sanad_agent/core/app_config.dart';
 import 'package:sanad_agent/core/hot_restart_manager.dart';
 import 'package:sanad_agent/core/constants.dart';
@@ -28,6 +29,21 @@ void main(List<String> arguments) async {
   // are secured individually by their read/write owners; startup never walks
   // the complete Home tree.
   await SanadHomeBootstrap.prepareAll();
+  try {
+    final result = BundledSkillManager().reconcileSync();
+    if (!result.fastPath &&
+        (result.installed + result.updated + result.removed) > 0) {
+      stdout.writeln(
+        'Bundled skills synchronized: '
+        '${result.installed} installed, ${result.updated} updated, '
+        '${result.removed} removed.',
+      );
+    }
+  } catch (_) {
+    stderr.writeln(
+      'Warning: Bundled skills could not be synchronized; startup will continue.',
+    );
+  }
   if (!SanadHomeBootstrap.identity().fileExists('.env')) {
     try {
       await SanadHomeBootstrap.identity().writeConfigText(

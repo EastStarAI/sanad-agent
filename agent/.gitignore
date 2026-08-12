@@ -32,6 +32,7 @@ doc/api/
 /ios/Flutter/GeneratedPluginRegistrant.m
 /macos/Flutter/GeneratedPluginRegistrant.swift
 generated_*
+!lib/capabilities/skills/generated_bundled_skills.dart
 
 .DS_Store
 .vscode

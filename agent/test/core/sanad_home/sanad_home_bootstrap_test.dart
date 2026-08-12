@@ -127,6 +127,46 @@ void main() {
       expect(stragglers, isEmpty);
     });
 
+    test('directory replacement preserves the old tree until commit', () {
+      final boundary = SanadHomeBootstrap.identity();
+      boundary.replaceDirectoryBytesSync('skills/example', {
+        'SKILL.md': [0x6f, 0x6c, 0x64],
+        'references/guide.md': [0x67, 0x75, 0x69, 0x64, 0x65],
+      });
+      boundary.replaceDirectoryBytesSync('skills/example', {
+        'SKILL.md': [0x6e, 0x65, 0x77],
+      });
+
+      expect(
+        File(boundary.child('skills/example/SKILL.md')).readAsStringSync(),
+        'new',
+      );
+      expect(
+        File(boundary.child('skills/example/references/guide.md')).existsSync(),
+        isFalse,
+      );
+      expect(
+        Directory(
+          boundary.child('skills'),
+        ).listSync().where((entry) => entry.path.contains('.sanad-')),
+        isEmpty,
+      );
+    });
+
+    test('managed directory paths and delete root are refused', () {
+      final boundary = SanadHomeBootstrap.identity();
+      expect(
+        () => boundary.replaceDirectoryBytesSync('skills/example', {
+          '../escape': [0x41],
+        }),
+        throwsA(isA<SanadHomeBoundaryViolation>()),
+      );
+      expect(
+        () => boundary.deleteDirectorySync('.'),
+        throwsA(isA<SanadHomeBoundaryViolation>()),
+      );
+    });
+
     test('writeConfig creates a file with the expected bytes', () async {
       await SanadHomeBootstrap.writeConfig('note.txt', 'hello-world');
       final bytes = SanadHomeBootstrap.readSecret('note.txt');
