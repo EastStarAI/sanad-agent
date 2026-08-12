@@ -48,7 +48,9 @@ class AuthService {
   static final _logger = Logger('AuthService');
   static const _authSessionKey = 'backend_auth_session_v1';
   static const _pendingAgentLogoutKey = 'agent_logout_pending';
-  bool _isLoginCancelled = false;
+  int _loginAttempt = 0;
+  AuthCallbackBinding? _activeLoginCallback;
+  ColocatedEnrollmentRequest? _activeColocatedEnrollment;
   bool _isPolling = false;
   final Dio _dio;
   final SanadSettingsStore _settingsStore;
@@ -334,19 +336,35 @@ class AuthService {
     _emitAccessToken();
   }
 
-  void cancelLogin() {
-    _isLoginCancelled = true;
+  Future<void> cancelLogin() async {
+    _loginAttempt += 1;
+    final callback = _activeLoginCallback;
+    _activeLoginCallback = null;
     _setLoginChallenge(null);
+    await callback?.cancel();
+    final enrollment = _activeColocatedEnrollment;
+    _activeColocatedEnrollment = null;
+    if (enrollment != null) {
+      await _colocatedCoupling.cancel();
+    } else {
+      try {
+        await _colocatedCoupling.cancel();
+      } catch (_) {
+        // An absent optional Local Agent has no enrollment to invalidate.
+      }
+    }
     _logger.info('Login flow cancelled by user.');
   }
 
   Future<void> login({void Function()? onCompleting}) async {
-    _isLoginCancelled = false;
+    final attempt = ++_loginAttempt;
     _isPolling = true;
     try {
       // Plan 23: a single unified portal-driven flow for all platforms. The
       // portal decides whether a user_code is needed (CLI/headless only).
-      await _loginViaPortal(onCompleting: onCompleting);
+      await _loginViaPortal(attempt: attempt, onCompleting: onCompleting);
+    } on AuthLoginCancelledException {
+      return;
     } catch (e) {
       _logger.severe('Login failed: $e');
       if (kIsWeb) {
@@ -354,8 +372,10 @@ class AuthService {
       }
       rethrow;
     } finally {
-      _isPolling = false;
-      _setLoginChallenge(null);
+      if (attempt == _loginAttempt) {
+        _isPolling = false;
+        _setLoginChallenge(null);
+      }
       if (kIsWeb) {
         WebAuthPopupService.instance.dispose();
       } else if (!AppPlatform.isMobile) {
@@ -368,10 +388,20 @@ class AuthService {
     }
   }
 
-  Future<void> _loginViaPortal({void Function()? onCompleting}) async {
+  Future<void> _loginViaPortal({
+    required int attempt,
+    void Function()? onCompleting,
+  }) async {
     final callback = await _callbackBindingFactory();
+    if (attempt != _loginAttempt) {
+      await callback.dispose();
+      throw const AuthLoginCancelledException();
+    }
+    _activeLoginCallback = callback;
     try {
       final enrollment = await _colocatedCoupling.start();
+      _activeColocatedEnrollment = enrollment;
+      _ensureActiveLoginAttempt(attempt);
       final random = Random.secure();
       final verifierBytes = List<int>.generate(64, (_) => random.nextInt(256));
       final verifier = base64Url.encode(verifierBytes).replaceAll('=', '');
@@ -403,7 +433,7 @@ class AuthService {
       final result = await callback.waitForResult(
         Duration(seconds: transaction.expiresIn),
       );
-      if (_isLoginCancelled) throw StateError('Login cancelled by user.');
+      _ensureActiveLoginAttempt(attempt);
       if (result.state != transaction.transactionId) {
         throw StateError('Authentication callback state mismatch.');
       }
@@ -413,6 +443,7 @@ class AuthService {
         code: result.code,
         codeVerifier: verifier,
       );
+      _ensureActiveLoginAttempt(attempt);
 
       Future<void> persistLogin() async {
         _backendAccessToken = tokens.accessToken;
@@ -434,13 +465,32 @@ class AuthService {
       if (enrollment != null) {
         onCompleting?.call();
         await _colocatedCoupling.waitForCompletion(enrollment);
+        if (identical(_activeColocatedEnrollment, enrollment)) {
+          _activeColocatedEnrollment = null;
+        }
       }
       _emitAuthenticationExchange();
       await fetchProfile();
       _emitAccessToken();
       _setLoginChallenge(null);
+    } catch (_) {
+      final enrollment = _activeColocatedEnrollment;
+      if (enrollment != null && attempt == _loginAttempt) {
+        _activeColocatedEnrollment = null;
+        await _colocatedCoupling.cancel();
+      }
+      rethrow;
     } finally {
+      if (identical(_activeLoginCallback, callback)) {
+        _activeLoginCallback = null;
+      }
       await callback.dispose();
+    }
+  }
+
+  void _ensureActiveLoginAttempt(int attempt) {
+    if (attempt != _loginAttempt) {
+      throw const AuthLoginCancelledException();
     }
   }
 

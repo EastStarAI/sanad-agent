@@ -151,10 +151,10 @@ class DeviceKeyIdentity {
     return '$signingInput.${_b64(joseSignature)}';
   }
 
-  Future<String> deviceTokenProof(Uri tokenUri, String deviceCode) {
+  Future<String> deviceTokenProof(Uri endpointUri, String deviceCode) {
     return signProof({
       'htm': 'POST',
-      'htu': tokenUri.toString(),
+      'htu': endpointUri.toString(),
       'iat': DateTime.now().millisecondsSinceEpoch ~/ 1000,
       'jti': const Uuid().v4(),
       'ath': _b64(hashes.sha256.convert(utf8.encode(deviceCode)).bytes),
@@ -278,16 +278,38 @@ class DeviceAuthorizationClient {
     );
   }
 
-  Future<void> redeemEnrollment(
+  Future<void> cancelEnrollment(
     DeviceAuthorizationEnrollment enrollment,
   ) async {
+    final cancelUri = Uri.parse('$portalUrl/auth/device/cancel');
+    final proof = await enrollment.identity.deviceTokenProof(
+      cancelUri,
+      enrollment.deviceCode,
+    );
+    final response = await _httpClient.post(
+      cancelUri,
+      headers: {'Content-Type': 'application/json', 'DPoP': proof},
+      body: jsonEncode({'device_code': enrollment.deviceCode}),
+    );
+    if (response.statusCode != 200) {
+      throw StateError('Could not cancel Agent authorization.');
+    }
+  }
+
+  Future<void> redeemEnrollment(
+    DeviceAuthorizationEnrollment enrollment, {
+    bool Function()? isActive,
+  }) async {
+    bool active() => isActive?.call() ?? true;
     var interval = enrollment.interval;
     final tokenUri = Uri.parse('$portalUrl/auth/device/token');
     final deadline = DateTime.now().add(
       Duration(seconds: enrollment.expiresIn),
     );
     while (DateTime.now().isBefore(deadline)) {
+      if (!active()) return;
       await _delay(Duration(seconds: interval));
+      if (!active()) return;
       final proof = await enrollment.identity.deviceTokenProof(
         tokenUri,
         enrollment.deviceCode,
@@ -301,8 +323,10 @@ class DeviceAuthorizationClient {
         }),
       );
       final data = jsonDecode(response.body) as Map<String, dynamic>;
+      if (!active()) return;
       if (response.statusCode == 200) {
         final credential = data['device_credential'] as String;
+        if (!active()) return;
         await authManager.saveDeviceToken(credential);
         return;
       }

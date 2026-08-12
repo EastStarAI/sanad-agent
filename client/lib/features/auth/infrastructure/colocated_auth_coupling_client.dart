@@ -25,7 +25,8 @@ class ColocatedAuthCouplingClient {
     String? baseUrl,
     bool? isDesktop,
   }) : _dio = dio ?? Dio(),
-       _credentialProvider = credentialProvider ?? const LocalGatewayCredentialProvider(),
+       _credentialProvider =
+           credentialProvider ?? const LocalGatewayCredentialProvider(),
        _delay = delay ?? Future<void>.delayed,
        _requestOverride = requestOverride,
        _baseUrlOverride = baseUrl,
@@ -40,10 +41,8 @@ class ColocatedAuthCouplingClient {
   final Future<Map<String, dynamic>> Function(String method)? _requestOverride;
   final String? _baseUrlOverride;
   final bool _isDesktop;
-  String get _gatewayBaseUrl => (_baseUrlOverride ?? AppConfig.localGatewayUrl).replaceAll(
-    RegExp(r'/+$'),
-    '',
-  );
+  String get _gatewayBaseUrl => (_baseUrlOverride ?? AppConfig.localGatewayUrl)
+      .replaceAll(RegExp(r'/+$'), '');
   String get _url => '$_gatewayBaseUrl/auth/coupling';
   String get _logoutUrl => '$_gatewayBaseUrl/auth/logout';
 
@@ -53,11 +52,18 @@ class ColocatedAuthCouplingClient {
     final options = Options(
       headers: await _credentialProvider.headers(),
       sendTimeout: const Duration(seconds: 3),
-      receiveTimeout: method == 'POST' ? const Duration(seconds: 8) : const Duration(seconds: 5),
+      receiveTimeout: method == 'POST'
+          ? const Duration(seconds: 8)
+          : const Duration(seconds: 5),
     );
-    final response = method == 'POST'
-        ? await _dio.post<Map<String, dynamic>>(_url, options: options)
-        : await _dio.get<Map<String, dynamic>>(_url, options: options);
+    final response = switch (method) {
+      'POST' => await _dio.post<Map<String, dynamic>>(_url, options: options),
+      'DELETE' => await _dio.delete<Map<String, dynamic>>(
+        _url,
+        options: options,
+      ),
+      _ => await _dio.get<Map<String, dynamic>>(_url, options: options),
+    };
     return response.data ?? const <String, dynamic>{};
   }
 
@@ -98,9 +104,16 @@ class ColocatedAuthCouplingClient {
     }
   }
 
+  Future<void> cancel() async {
+    if (!_isDesktop) return;
+    await _request('DELETE');
+  }
+
   Future<void> waitForCompletion(ColocatedEnrollmentRequest request) async {
     final requested = Duration(seconds: request.expiresIn);
-    final timeout = requested < _maximumCompletionWait ? requested : _maximumCompletionWait;
+    final timeout = requested < _maximumCompletionWait
+        ? requested
+        : _maximumCompletionWait;
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
       final data = await _request('GET');

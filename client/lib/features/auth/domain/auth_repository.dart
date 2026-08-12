@@ -7,5 +7,5 @@ abstract class IAuthRepository {
   Future<void> logout();
   Future<AuthSession?> refreshSession();
   Future<AuthSession?> fetchCredits();
-  void cancelLogin();
+  Future<void> cancelLogin();
 }

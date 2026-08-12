@@ -172,6 +172,25 @@ void main() {
     expect(bodyText, isNot(contains('device_credential')));
   });
 
+  test(
+    'co-located auth endpoint accepts credential-free cancellation',
+    () async {
+      final client = HttpClient();
+      addTearDown(() => client.close(force: true));
+      final request = await client.deleteUrl(
+        Uri.parse('http://127.0.0.1:$port/auth/coupling'),
+      );
+      request.headers.set(LocalGatewayCredentials.headerName, token.value);
+      final response = await request.close();
+      final bodyText = await response.transform(utf8.decoder).join();
+
+      expect(response.statusCode, HttpStatus.ok);
+      expect(jsonDecode(bodyText), {'status': 'cancelled'});
+      expect(bodyText, isNot(contains('token')));
+      expect(bodyText, isNot(contains('device_code')));
+    },
+  );
+
   test('co-located auth endpoint rejects query payloads', () async {
     final client = HttpClient();
     addTearDown(() => client.close(force: true));

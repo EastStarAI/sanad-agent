@@ -59,7 +59,9 @@ class ColocatedAuthCoupling {
   final String platform;
 
   ColocatedCouplingSnapshot? _snapshot;
+  DeviceAuthorizationEnrollment? _enrollment;
   Future<ColocatedCouplingSnapshot>? _startFuture;
+  int _generation = 0;
 
   ColocatedCouplingSnapshot get snapshot {
     if (authManager.deviceToken != null) {
@@ -82,10 +84,19 @@ class ColocatedAuthCoupling {
     if (current != null && current.status == ColocatedCouplingStatus.pending) {
       return Future.value(current);
     }
-    return _startFuture ??= _start().whenComplete(() => _startFuture = null);
+    final activeStart = _startFuture;
+    if (activeStart != null) return activeStart;
+    final ownedStart = _start();
+    _startFuture = ownedStart;
+    return ownedStart.whenComplete(() {
+      if (identical(_startFuture, ownedStart)) {
+        _startFuture = null;
+      }
+    });
   }
 
   Future<ColocatedCouplingSnapshot> _start() async {
+    final generation = ++_generation;
     try {
       final enrollment = await authorizationClient.startEnrollment(
         clientId: clientId,
@@ -93,15 +104,21 @@ class ColocatedAuthCoupling {
         platform: platform,
         hardwareId: authManager.hardwareId,
       );
+      if (generation != _generation) {
+        await authorizationClient.cancelEnrollment(enrollment);
+        return snapshot;
+      }
       final pending = ColocatedCouplingSnapshot(
         status: ColocatedCouplingStatus.pending,
         enrollmentRequestId: enrollment.transactionId,
         expiresIn: enrollment.expiresIn,
       );
+      _enrollment = enrollment;
       _snapshot = pending;
-      unawaited(_redeem(enrollment));
+      unawaited(_redeem(enrollment, generation));
       return pending;
     } on Object {
+      if (generation != _generation) rethrow;
       return _snapshot = const ColocatedCouplingSnapshot(
         status: ColocatedCouplingStatus.failed,
         error: 'temporarily_unavailable',
@@ -109,14 +126,45 @@ class ColocatedAuthCoupling {
     }
   }
 
-  Future<void> _redeem(DeviceAuthorizationEnrollment enrollment) async {
+  Future<void> cancel() async {
+    final enrollment = _enrollment;
+    _generation += 1;
+    _startFuture = null;
+    _enrollment = null;
+    _snapshot = null;
+    if (enrollment != null) {
+      unawaited(_cancelEnrollment(enrollment));
+    }
+  }
+
+  Future<void> _cancelEnrollment(
+    DeviceAuthorizationEnrollment enrollment,
+  ) async {
     try {
-      await authorizationClient.redeemEnrollment(enrollment);
+      await authorizationClient.cancelEnrollment(enrollment);
+    } on Object {
+      // Local generation invalidation remains authoritative for this process.
+    }
+  }
+
+  Future<void> _redeem(
+    DeviceAuthorizationEnrollment enrollment,
+    int generation,
+  ) async {
+    try {
+      await authorizationClient.redeemEnrollment(
+        enrollment,
+        isActive: () => generation == _generation,
+      );
+      if (generation != _generation) return;
+      _enrollment = null;
       _snapshot = ColocatedCouplingSnapshot(
         status: ColocatedCouplingStatus.completed,
         enrollmentRequestId: enrollment.transactionId,
       );
     } on Object {
+      if (generation != _generation) return;
+      _enrollment = null;
       _snapshot = ColocatedCouplingSnapshot(
         status: ColocatedCouplingStatus.failed,
         enrollmentRequestId: enrollment.transactionId,
