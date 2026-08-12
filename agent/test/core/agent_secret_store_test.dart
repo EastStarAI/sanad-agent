@@ -27,6 +27,10 @@ class _UnavailableLinuxSecretServiceClient implements LinuxSecretServiceClient {
 }
 
 void main() {
+  final runRealLinuxSecretService =
+      Platform.isLinux &&
+      Platform.environment['SANAD_TEST_LINUX_SECRET_SERVICE_REAL'] == '1';
+
   group('Linux Secret Service', () {
     test('normalizes unavailable D-Bus service for every operation', () {
       final store = LinuxSecretServiceAgentSecretStore(
@@ -89,7 +93,7 @@ void main() {
           await store.delete(key);
         }
       },
-      skip: !Platform.isLinux,
+      skip: !runRealLinuxSecretService,
     );
 
     test(
@@ -130,7 +134,7 @@ void main() {
           await tempDir.delete(recursive: true);
         }
       },
-      skip: !Platform.isLinux,
+      skip: !runRealLinuxSecretService,
     );
   });
 
