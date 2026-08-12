@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_client/core/interfaces/socket_gateway.dart';
+import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/core/interfaces/socket_service.dart';
 import 'package:sanad_client/infrastructure/socket/event_deduplicator.dart';
 import 'package:sanad_client/infrastructure/socket/event_router.dart';
@@ -31,6 +32,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   WebSocket? _localSocket;
   final String _url;
   final String _hardwareId;
+  final String? _clientInstanceId;
+  final ClientDisplayMetadata? _clientMetadata;
   String get hardwareId => _hardwareId;
   String? _authToken;
   final SocketTransportMode _transportMode;
@@ -41,12 +44,16 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   int _reconnectAttempts = 0;
   bool _explicitDisconnect = false;
 
-  final _authSuccessController = StreamController<Map<String, dynamic>>.broadcast();
+  final _authSuccessController =
+      StreamController<Map<String, dynamic>>.broadcast();
   @override
-  Stream<Map<String, dynamic>> get onAuthSuccess => _authSuccessController.stream;
+  Stream<Map<String, dynamic>> get onAuthSuccess =>
+      _authSuccessController.stream;
 
-  final _authFailureController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get onAuthFailure => _authFailureController.stream;
+  final _authFailureController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onAuthFailure =>
+      _authFailureController.stream;
 
   final _eventsController = StreamController<Map<String, dynamic>>.broadcast();
   @override
@@ -77,8 +84,10 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   final _connectionStatusController = StreamController<bool>.broadcast();
   Stream<bool> get connectionStatusStream => _connectionStatusController.stream;
 
-  final _lifecycleStateController = StreamController<SocketLifecycleState>.broadcast();
-  Stream<SocketLifecycleState> get lifecycleStateStream => _lifecycleStateController.stream;
+  final _lifecycleStateController =
+      StreamController<SocketLifecycleState>.broadcast();
+  Stream<SocketLifecycleState> get lifecycleStateStream =>
+      _lifecycleStateController.stream;
 
   bool _isDisposed = false;
   Future<void>? _connectFuture;
@@ -88,35 +97,47 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   SanadSocketService({
     required String url,
     required String hardwareId,
+    String? clientInstanceId,
+    ClientDisplayMetadata? clientMetadata,
     String? startToken,
     SocketTransportMode transportMode = SocketTransportMode.cloudSocketIo,
     LocalGatewayCredentialProvider? localCredentialProvider,
     bool localTransportEnabled = true,
   }) : _url = url,
        _hardwareId = hardwareId,
+       _clientInstanceId = clientInstanceId,
+       _clientMetadata = clientMetadata,
        _authToken = startToken,
        _transportMode = transportMode,
        _localCredentialProvider =
            localCredentialProvider ??
-           (transportMode == SocketTransportMode.localWebSocket ? const LocalGatewayCredentialProvider() : null),
+           (transportMode == SocketTransportMode.localWebSocket
+               ? const LocalGatewayCredentialProvider()
+               : null),
        _localTransportEnabled = localTransportEnabled;
 
   factory SanadSocketService.local({
     required String url,
     required String hardwareId,
-    LocalGatewayCredentialProvider credentialProvider = const LocalGatewayCredentialProvider(),
+    String? clientInstanceId,
+    ClientDisplayMetadata? clientMetadata,
+    LocalGatewayCredentialProvider credentialProvider =
+        const LocalGatewayCredentialProvider(),
     bool enabled = true,
   }) {
     return SanadSocketService(
       url: url,
       hardwareId: hardwareId,
+      clientInstanceId: clientInstanceId,
+      clientMetadata: clientMetadata,
       transportMode: SocketTransportMode.localWebSocket,
       localCredentialProvider: credentialProvider,
       localTransportEnabled: enabled,
     );
   }
 
-  bool get isLocalTransport => _transportMode == SocketTransportMode.localWebSocket;
+  bool get isLocalTransport =>
+      _transportMode == SocketTransportMode.localWebSocket;
 
   @override
   void setAccessToken(String? token) {
@@ -197,9 +218,12 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     _logger.info('[${hashCode}]: Connecting to $_url');
     _socket = socket_io.io(
       _url,
-      socket_io.OptionBuilder().setTransports(['websocket']).enableForceNew().disableAutoConnect().setExtraHeaders({
-        'Authorization': 'Bearer $_authToken',
-      }).build(),
+      socket_io.OptionBuilder()
+          .setTransports(['websocket'])
+          .enableForceNew()
+          .disableAutoConnect()
+          .setExtraHeaders({'Authorization': 'Bearer $_authToken'})
+          .build(),
     );
 
     _socket!.onAny((event, data) {
@@ -219,6 +243,10 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         'token': _authToken,
         'hardware_id': _hardwareId,
         'platform': AppPlatform.name,
+        if (_clientInstanceId != null) 'client_instance_id': _clientInstanceId,
+        if (_clientMetadata != null) 'metadata': _clientMetadata.toJson(),
+        if (_clientInstanceId != null)
+          'capabilities': const ['account_sessions_v1'],
       };
       _logOutgoingSocketEvent('app_authenticate', authData);
       _socket?.emit('app_authenticate', authData);
@@ -227,7 +255,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     _socket!.onDisconnect((_) {
       _logger.info('[${hashCode}]: Disconnected');
       _setSocketConnected(false);
-      if (_lifecycleState != SocketLifecycleState.authFailed && _lifecycleState != SocketLifecycleState.error) {
+      if (_lifecycleState != SocketLifecycleState.authFailed &&
+          _lifecycleState != SocketLifecycleState.error) {
         _setLifecycleState(SocketLifecycleState.disconnected);
       }
     });
@@ -257,7 +286,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
 
     _socket!.on('capabilities', (data) {
       if (_isDisposed) return;
-      final payload = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+      final payload = data is Map
+          ? Map<String, dynamic>.from(data)
+          : <String, dynamic>{};
       _safeAdd({'type': 'capabilities', ...payload});
     });
 
@@ -321,6 +352,18 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         headers: headers,
       );
       _setSocketConnected(true);
+      if (_clientInstanceId != null) {
+        _localSocket!.add(
+          jsonEncode({
+            'type': 'client.hello',
+            'protocol': 'sanad.identity_presence',
+            'version': 1,
+            'client_instance_id': _clientInstanceId,
+            if (_clientMetadata != null) 'metadata': _clientMetadata.toJson(),
+            'capabilities': const ['account_sessions_v1'],
+          }),
+        );
+      }
 
       _localSocket!.listen(
         _handleLocalMessage,
@@ -449,8 +492,10 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     return null;
   }
 
-  final _remoteToolExecutionController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get remoteToolExecutionStream => _remoteToolExecutionController.stream;
+  final _remoteToolExecutionController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get remoteToolExecutionStream =>
+      _remoteToolExecutionController.stream;
 
   void _handleExecuteTool(dynamic data) {
     if (data is! Map<String, dynamic>) {
@@ -533,7 +578,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     }
     _logOutgoingSocketEvent(event, data);
     if (isLocalTransport) {
-      final payload = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{'payload': data};
+      final payload = data is Map
+          ? Map<String, dynamic>.from(data)
+          : <String, dynamic>{'payload': data};
       _localSocket?.add(jsonEncode({'type': event, ...payload}));
       return;
     }
@@ -596,7 +643,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     final payload = {
       'run_id': runId,
       'status': isError ? 'error' : 'success',
-      'output': isError ? (error ?? output ?? 'Tool execution failed') : (output ?? ''),
+      'output': isError
+          ? (error ?? output ?? 'Tool execution failed')
+          : (output ?? ''),
       'isError': isError,
       'hardware_id': _hardwareId,
     };
@@ -628,7 +677,10 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     Map<String, dynamic> data,
     void Function(Map<String, dynamic>) handler,
   ) async {
-    if (_socket == null || !_socket!.connected || !isReady || isLocalTransport) {
+    if (_socket == null ||
+        !_socket!.connected ||
+        !isReady ||
+        isLocalTransport) {
       return;
     }
 
@@ -791,7 +843,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         currentEventName = eventName.toString();
       }
 
-      if (currentEventName == 'thought_stream' || currentEventName == 'reasoning_stream') {
+      if (currentEventName == 'thought_stream' ||
+          currentEventName == 'reasoning_stream') {
         if (_lastIncomingEventName == currentEventName) {
           return;
         }
@@ -847,7 +900,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     if (data is Map) {
       return <String, dynamic>{
         for (final entry in data.entries)
-          entry.key.toString(): _isSensitiveLogKey(entry.key) ? '[REDACTED]' : _redactSensitiveLogData(entry.value),
+          entry.key.toString(): _isSensitiveLogKey(entry.key)
+              ? '[REDACTED]'
+              : _redactSensitiveLogData(entry.value),
       };
     }
 

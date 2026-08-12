@@ -24,6 +24,11 @@ This contract applies to `client/lib/features/auth/`.
 - Client login completed while the Agent is absent does not clear pending Agent logout or authorize reuse of an old account Device Credential. Deferred account-bound enrollment after that sequence is intentionally outside the current release slice.
 - Before Desktop PKCE login, the Client may ask the authenticated Local Gateway to start co-located enrollment and attach only its non-secret request identity to the Portal transaction. The Client never receives the Agent device code, key, proof, or Device Credential. Presentation stays `Completing sign-in` after Client credential persistence until the Local Agent reports completion; absent Local Agent preserves Client-only login. Web/mobile never probe this surface.
 
+## Client Instance Binding
+- One UUID v4 `client_instance_id` is stored in the active SharedPreferences namespace. It survives logout and upgrades, while reinstall, site-data deletion, or a different Sanad Home/preferences prefix creates a new id.
+- Send the id and allowlisted display metadata only at Portal transaction creation and authenticated Cloud/Local handshakes. Never repeat it in ordinary commands or treat it as a credential.
+- Display metadata is limited to client kind, normalized platform/OS/browser family, and app version. Do not collect hostname, personal device name, email, IP address, locale, advertising id, serial number, or free-form user agent.
+
 ## Secret Safety
 - Never log access, refresh, polling, device, or authorization tokens.
 - Send refresh tokens in request bodies, never query strings.

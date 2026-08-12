@@ -5,7 +5,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/devices/presentation/utils/device_ui_mapper.dart';
 
-enum SettingsDestination { profile, general, overview, providers, mcp, skills, workspace }
+enum SettingsDestination { profile, general, sessionsDevices, overview, providers, mcp, skills, workspace }
 
 class SettingsNavigation extends StatelessWidget {
   const SettingsNavigation({
@@ -79,6 +79,12 @@ class SettingsNavigation extends StatelessWidget {
             label: 'General',
             selected: selectedDestination == SettingsDestination.general,
             onTap: () => onSelectPersonal(SettingsDestination.general),
+          ),
+          NavigationTile(
+            icon: Icons.devices_other_outlined,
+            label: 'Sessions & Devices',
+            selected: selectedDestination == SettingsDestination.sessionsDevices,
+            onTap: () => onSelectPersonal(SettingsDestination.sessionsDevices),
           ),
           Row(
             children: [

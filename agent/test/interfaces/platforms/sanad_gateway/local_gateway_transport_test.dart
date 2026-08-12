@@ -311,6 +311,47 @@ void main() {
     await socket.close();
   });
 
+  test('authenticated client hello binds a valid instance identity', () async {
+    final socket = await WebSocket.connect(
+      'ws://127.0.0.1:$port/ws',
+      headers: {LocalGatewayCredentials.headerName: token.value},
+    );
+    final frames = StreamIterator<dynamic>(socket);
+    expect(await frames.moveNext(), isTrue); // register_success compatibility
+
+    socket.add(
+      jsonEncode({
+        'type': 'client.hello',
+        'protocol': 'sanad.identity_presence',
+        'version': 1,
+        'client_instance_id': '11111111-1111-4111-8111-111111111111',
+        'metadata': {'platform_family': 'macos'},
+      }),
+    );
+    expect(await frames.moveNext(), isTrue);
+    final accepted = jsonDecode(frames.current as String);
+    expect(accepted, {
+      'type': 'client.hello_ack',
+      'protocol': 'sanad.identity_presence',
+      'version': 1,
+    });
+
+    socket.add(
+      jsonEncode({
+        'type': 'client.hello',
+        'protocol': 'sanad.identity_presence',
+        'version': 1,
+        'client_instance_id': 'device-or-sid-substitution',
+      }),
+    );
+    expect(await frames.moveNext(), isTrue);
+    final rejected = jsonDecode(frames.current as String);
+    expect(rejected['code'], 'INVALID_CLIENT_INSTANCE');
+
+    await frames.cancel();
+    await socket.close();
+  });
+
   test(
     'authentication exchange reloads file state without returning credentials',
     () async {

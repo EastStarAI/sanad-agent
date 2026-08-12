@@ -64,6 +64,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   /// local sockets carry the daemon's hardware_id, which the local client's
   /// EventRouter has no listener for.
   final _socketDeviceIds = <WebSocket, String>{};
+  final _clientInstances = <WebSocket, String>{};
   final _voiceEngines = <VoiceEngine>[];
 
   HttpServer? _server;
@@ -534,6 +535,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       onDone: () {
         _clients.remove(socket);
         _socketDeviceIds.remove(socket);
+        _clientInstances.remove(socket);
         _platformRuntimeBridge.unregisterChannel(
           WebSocketSessionChannel(socket),
         );
@@ -569,6 +571,30 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
     final type = envelope['type'] as String?;
     _logger.fine('⬇️ [ws] Received message type: $type');
+    if (type == 'client.hello') {
+      final instanceId = envelope['client_instance_id']?.toString() ?? '';
+      final valid =
+          envelope['protocol'] == 'sanad.identity_presence' &&
+          envelope['version'] == 1 &&
+          RegExp(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+            caseSensitive: false,
+          ).hasMatch(instanceId);
+      if (!valid) {
+        _sendToSocket(socket, const {
+          'type': 'client.hello_rejected',
+          'code': 'INVALID_CLIENT_INSTANCE',
+        });
+        return;
+      }
+      _clientInstances[socket] = instanceId;
+      _sendToSocket(socket, const {
+        'type': 'client.hello_ack',
+        'protocol': 'sanad.identity_presence',
+        'version': 1,
+      });
+      return;
+    }
     if (type == 'authentication_exchange') {
       if (envelope.length != 1) {
         _logger.warning(

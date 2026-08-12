@@ -1,5 +1,6 @@
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/infrastructure/local_tools/sanad_settings_store.dart';
+import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -41,7 +42,8 @@ class SocketModule {
     Map<String, dynamic> authDoc,
     String hardwareId,
   ) async {
-    final nextAuthDoc = Map<String, dynamic>.from(authDoc)..['hardware_id'] = hardwareId;
+    final nextAuthDoc = Map<String, dynamic>.from(authDoc)
+      ..['hardware_id'] = hardwareId;
 
     await settingsStore.saveAuthDocument(nextAuthDoc);
     await prefs.setString(_hardwareIdKey, hardwareId);
@@ -49,21 +51,29 @@ class SocketModule {
 
   SanadSocketService socketService({
     required String hardwareId,
+    required String clientInstanceId,
+    required ClientDisplayMetadata clientMetadata,
     String? accessToken,
   }) {
     return SanadSocketService(
       url: AppConfig.backendUrl,
       hardwareId: hardwareId,
+      clientInstanceId: clientInstanceId,
+      clientMetadata: clientMetadata,
       startToken: accessToken,
     );
   }
 
   SanadSocketService localSocketService({
     required String hardwareId,
+    required String clientInstanceId,
+    required ClientDisplayMetadata clientMetadata,
   }) {
     return SanadSocketService.local(
       url: AppConfig.localGatewayUrl,
       hardwareId: hardwareId,
+      clientInstanceId: clientInstanceId,
+      clientMetadata: clientMetadata,
       credentialProvider: const LocalGatewayCredentialProvider(),
       enabled: AppPlatform.isDesktop,
     );

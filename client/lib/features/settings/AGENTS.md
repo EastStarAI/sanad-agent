@@ -25,6 +25,12 @@ This contract applies to `client/lib/features/settings/`.
 - Device MCP and Skills pages show device scope; workspace detail pages must label effective origins and precedence.
 - Provider setup embedded in Settings must reuse `ProviderSetupFlow` and its controller rather than implementing a second setup workflow.
 
+## Account Sessions and Devices
+- Sessions & Devices is account-scoped and consumes the Portal's authoritative account lifecycle projection through one repository/cubit owner.
+- Client-session current status comes from the verified credential family, never instance metadata. Presence renders `Online`, `Offline`, or `Status unavailable`; registry failure must not become false Offline.
+- Connected Agents reuse the existing `DeviceCubit` inventory and navigate to device Overview. Do not create another device store or `/agents` management surface.
+- Revoke is confirmed and per-row single-flight. Unknown outcomes retain the last snapshot and refetch; a confirmed current-session revoke delegates to the normal logout flow.
+
 ## Client-Owned Preferences
 - General application preferences such as theme remain client-owned and must not emit agent commands.
 - Settings-local UI state must not become a source of truth for runtime readiness, device connection, or conversation recovery.

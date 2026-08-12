@@ -2,6 +2,7 @@ import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'dart:async';
 
 import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
+import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_callback_contract.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 import 'package:sanad_client/features/auth/infrastructure/colocated_auth_coupling_client.dart';
@@ -66,6 +67,8 @@ class StubPortalAuthClient extends PortalAuthClient {
     required String redirectUri,
     required String codeChallenge,
     String? enrollmentRequestId,
+    String? clientInstanceId,
+    ClientDisplayMetadata? metadata,
   }) async {
     return const PortalClientTransaction(
       transactionId: 'expected-transaction',
@@ -207,20 +210,23 @@ void main() {
       },
     );
 
-    test('atomic auth session value overrides legacy credential mirrors', () async {
-      await prefs.setString(
-        'backend_auth_session_v1',
-        '{"access_token":"atomic-access","refresh_token":"atomic-refresh"}',
-      );
-      await prefs.setString('backend_access_token', 'legacy-access');
-      await prefs.setString('backend_refresh_token', 'legacy-refresh');
+    test(
+      'atomic auth session value overrides legacy credential mirrors',
+      () async {
+        await prefs.setString(
+          'backend_auth_session_v1',
+          '{"access_token":"atomic-access","refresh_token":"atomic-refresh"}',
+        );
+        await prefs.setString('backend_access_token', 'legacy-access');
+        await prefs.setString('backend_refresh_token', 'legacy-refresh');
 
-      await authService.init(fallbackDeviceId: 'device-1');
+        await authService.init(fallbackDeviceId: 'device-1');
 
-      expect(authService.accessToken, 'atomic-access');
-      expect(mockStore.authDocument['access_token'], 'atomic-access');
-      expect(mockStore.authDocument['refresh_token'], 'atomic-refresh');
-    });
+        expect(authService.accessToken, 'atomic-access');
+        expect(mockStore.authDocument['access_token'], 'atomic-access');
+        expect(mockStore.authDocument['refresh_token'], 'atomic-refresh');
+      },
+    );
 
     test(
       'init uses the canonical desktop hardware id when auth is restored from preferences',
