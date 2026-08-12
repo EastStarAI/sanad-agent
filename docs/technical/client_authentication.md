@@ -77,8 +77,16 @@ redirect carrying them. Missing Android fingerprints return `503` instead of
 publishing an unverified association.
 
 Production mobile builds receive the exact callback URIs through
-`client/config/prod.json`. Development and Staging test builds inject their
-matching URI explicitly. `app_links` subscribes before the system browser opens,
+`client/config/prod.json`. Development and Staging builds inject their matching
+URIs explicitly and must never reuse another environment's config. Development
+and Staging Home-screen/device-tool acceptance uses a signed Profile or reviewed
+release-candidate; Production acceptance uses the signed Release/archive artifact.
+A Debug iOS build is launched only through Flutter tooling or Xcode and is not a
+release gate. Before hosted promotion, inspect the built artifact for team
+`UC2824B99G`, bundle `com.eaststarai.sanad`, effective target Client-host
+Associated Domain, and embedded exact callback. The hosted private source must
+pin a public commit reachable from public `main`, not a content-equivalent PR
+head after squash merge. `app_links` subscribes before the system browser opens,
 accepts cold-start and warm-link events, and filters exact scheme, host, port,
 and path before code/state validation. Flutter's competing built-in Android
 deep-link handler is disabled to prevent duplicate callback delivery.

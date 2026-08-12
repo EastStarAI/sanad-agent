@@ -29,12 +29,28 @@ description: "Regression and physical-device gates for PKCE callback delivery th
 | AASA | Every Client host returns `200`, JSON, no redirect, exact app ID, and only `/oauth/ios`; Apple CDN matches. |
 | HTTP fallback | Exact callback location has `access_log off`, strips the query with a no-store redirect, and does not proxy to app-site or Portal. |
 
+## Environment promotion matrix
+
+| Environment | Portal/provider host | Exact iOS callback and AASA host | Android callback host | Accepted iOS artifact |
+|---|---|---|---|---|
+| Development | `dev.portal.sanad.eaststarai.com` | `https://dev.app.sanad.eaststarai.com/oauth/ios` | Development Portal | Signed Profile build with explicit Development defines. |
+| Staging | `staging.portal.sanad.eaststarai.com` | `https://staging.app.sanad.eaststarai.com/oauth/ios` | Staging Portal | Signed Profile or release-candidate build with explicit Staging defines; never Production or Development configuration. |
+| Production | `portal.sanad.eaststarai.com` | `https://app.sanad.eaststarai.com/oauth/ios` | Production Portal | Signed Release/archive build using `client/config/prod.json`. |
+
+The public commit consumed by a hosted environment must be reachable from public `main`; do not pin a content-equivalent PR-head SHA after squash merge. Every environment uses bundle `com.eaststarai.sanad` and team `UC2824B99G`, but environment callback inputs and evidence remain isolated.
+
+## Promotion gate
+
+For each environment, complete these checks in order:
+
+1. Confirm the source includes all three Client-host Associated Domains, `FlutterDeepLinkingEnabled=false`, Flutter superclass lifecycle delegation, and `app_links` as sole callback owner.
+2. Confirm the hosted Portal registers the exact environment callback, derives iOS from that environment's Client origin, keeps provider/Android callbacks on Portal, and rejects the old same-host iOS URI.
+3. Verify Client-host AASA origin independently from Apple's CDN inspection endpoint. Record CDN propagation separately; a CDN `404` is an open propagation result and must not be hidden by origin or device evidence.
+4. Inspect the built artifact—not only source files—for team, bundle, effective target Associated Domain, and embedded exact target callback. A Debug build may run only through Flutter tooling/Xcode; Home-screen or device-tool acceptance uses Profile for Development/Staging and Release for Production.
+5. Reinstall only with owner approval so iOS refreshes association registration. Complete real provider login on a physical iPhone and record only that Safari returned to Sanad, PKCE redemption completed, and authenticated socket startup succeeded.
+6. Treat Safari rendering either callback host, a `404`, a query-bearing fallback page, app termination, timeout, stale state, or Router navigation as a failed gate. Logs/evidence must never include query, fragment, code, state, verifier, access token, or refresh token.
+7. Run lower-environment regressions before accepting Staging or Production. A source merge, health response, stack deployment, AASA origin response, or edge reload alone is insufficient.
+
 ## Physical iPhone gate
 
-Use the owner-approved Development build and physical device. A restart or reinstall requires fresh owner approval.
-
-1. Confirm the built app is signed by team `UC2824B99G` and its effective entitlements contain `applinks:dev.app.sanad.eaststarai.com`.
-2. Verify origin and Apple CDN AASA responses without printing any authentication callback URL.
-3. Start login from the app, complete provider authentication, and record only that Safari returned to Sanad and the app became authenticated.
-4. Confirm callback redemption and authenticated socket startup using bounded, redacted logs. Search logs for key names/canaries only; do not print matching secret-bearing lines.
-5. Treat Safari rendering either callback host, a `404`, a query-bearing fallback page, timeout, stale state, or Router navigation as a failed gate.
+Use the owner-approved environment build and physical device. A restart or reinstall requires fresh owner approval. Development passed with a signed Profile build on 2026-08-12; Staging and Production require their own artifact and evidence and cannot inherit Development acceptance.
