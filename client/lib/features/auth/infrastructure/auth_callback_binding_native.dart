@@ -94,7 +94,8 @@ Future<AuthCallbackBinding> createPlatformAuthCallbackBinding() async {
   throw UnsupportedError('Interactive authentication is unsupported here.');
 }
 
-Future<AuthCallbackBinding> createDesktopLoopbackAuthCallbackBinding() => _DesktopLoopbackBinding.create();
+Future<AuthCallbackBinding> createDesktopLoopbackAuthCallbackBinding() =>
+    _DesktopLoopbackBinding.create();
 
 class _DesktopLoopbackBinding implements AuthCallbackBinding {
   _DesktopLoopbackBinding._(this._server);
@@ -149,7 +150,15 @@ class _DesktopLoopbackBinding implements AuthCallbackBinding {
   }
 
   @override
-  Future<AuthCallbackResult> waitForResult(Duration timeout) => _result.future.timeout(timeout);
+  Future<AuthCallbackResult> waitForResult(Duration timeout) =>
+      _result.future.timeout(timeout);
+
+  @override
+  Future<void> cancel() async {
+    if (!_result.isCompleted) {
+      _result.completeError(const AuthLoginCancelledException());
+    }
+  }
 
   @override
   Future<void> dispose() async {
@@ -217,13 +226,15 @@ class _MobileClaimedLinkBinding implements AuthCallbackBinding {
   }
 
   @override
-  String get clientId => AppPlatform.isAndroid ? 'sanad_flutter_android' : 'sanad_flutter_ios';
+  String get clientId =>
+      AppPlatform.isAndroid ? 'sanad_flutter_android' : 'sanad_flutter_ios';
 
   @override
   String get redirectUri => _expectedRedirect.toString();
 
   void _handle(Uri candidate) {
-    if (_result.isCompleted || !isExpectedMobileAuthCallback(candidate, _expectedRedirect)) {
+    if (_result.isCompleted ||
+        !isExpectedMobileAuthCallback(candidate, _expectedRedirect)) {
       return;
     }
     final code = candidate.queryParameters['code'];
@@ -235,7 +246,15 @@ class _MobileClaimedLinkBinding implements AuthCallbackBinding {
   }
 
   @override
-  Future<AuthCallbackResult> waitForResult(Duration timeout) => _result.future.timeout(timeout);
+  Future<AuthCallbackResult> waitForResult(Duration timeout) =>
+      _result.future.timeout(timeout);
+
+  @override
+  Future<void> cancel() async {
+    if (!_result.isCompleted) {
+      _result.completeError(const AuthLoginCancelledException());
+    }
+  }
 
   @override
   Future<void> dispose() async {

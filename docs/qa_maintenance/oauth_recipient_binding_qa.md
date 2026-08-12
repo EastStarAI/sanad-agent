@@ -21,9 +21,12 @@ description: "Public Client and Agent regression matrix for PKCE and key-bound D
   register/refresh feedback loops and Portal rate-limit exhaustion.
 - Desktop co-located login passes only a non-secret enrollment request identity
   from Local Agent to Portal. The Agent retains device code/key/proof and redeems
-  the Device Credential itself. Query payloads, request-id mismatch, replay, and
-  headless lookup of a co-located request fail closed. UI remains `Completing
-  sign-in` until Agent redemption completes; absent Agent remains Client-only.
+  the Device Credential itself. Cancel invalidates the callback owner and asks
+  the Local Agent to proof-cancel any pending enrollment before retry creates a
+  fresh request; stale callbacks cannot resume or clear newer attempt state.
+  Query payloads, request-id mismatch, replay, and headless lookup of a
+  co-located request fail closed. UI remains `Completing sign-in` until Agent
+  redemption completes; absent Agent remains Client-only.
 - Wrong/missing verifier, callback state mismatch, and consumed/expired code do
   not persist a User session.
 - Agent creates/loads P-256 identity, prints no device code/private key, and

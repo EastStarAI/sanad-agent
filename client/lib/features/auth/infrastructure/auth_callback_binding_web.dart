@@ -9,6 +9,8 @@ import 'auth_callback_contract.dart';
 Future<AuthCallbackBinding> createPlatformAuthCallbackBinding() async => _WebPopupBinding();
 
 class _WebPopupBinding implements AuthCallbackBinding {
+  bool _cancelled = false;
+
   @override
   String get clientId => 'sanad_flutter_web';
 
@@ -19,6 +21,7 @@ class _WebPopupBinding implements AuthCallbackBinding {
   Future<AuthCallbackResult> waitForResult(Duration timeout) async {
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
+      if (_cancelled) throw const AuthLoginCancelledException();
       final encoded = popup.takeAuthorizationMessage()?.toDart;
       if (encoded != null) {
         final decoded = jsonDecode(encoded);
@@ -32,6 +35,12 @@ class _WebPopupBinding implements AuthCallbackBinding {
       await Future<void>.delayed(const Duration(milliseconds: 100));
     }
     throw TimeoutException('Authentication callback timed out.');
+  }
+
+  @override
+  Future<void> cancel() async {
+    _cancelled = true;
+    popup.closePopup();
   }
 
   @override

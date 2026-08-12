@@ -202,6 +202,52 @@ void main() {
     expect(enrollment.transactionId, 'colocated-transaction');
   });
 
+  test('cancels an enrollment with a key-bound proof', () async {
+    late DeviceAuthorizationEnrollment enrollment;
+    final client = MockClient((request) async {
+      if (request.url.path == '/auth/device/transactions') {
+        return http.Response(
+          jsonEncode({
+            'transaction_id': 'cancelled-transaction',
+            'device_code': 'private-cancel-code',
+            'user_code': 'ABCD-EFGH',
+            'verification_uri': 'https://portal.test/device',
+            'expires_in': 600,
+            'interval': 5,
+          }),
+          200,
+        );
+      }
+      expect(request.url.path, '/auth/device/cancel');
+      expect(request.headers['DPoP'], isNotNull);
+      final payload = jsonDecode(request.body) as Map<String, dynamic>;
+      expect(payload, {'device_code': enrollment.deviceCode});
+      final proofPayload = _jwtPart(request.headers['DPoP']!, 1);
+      expect(proofPayload['htu'], 'https://portal.test/auth/device/cancel');
+      expect(proofPayload.toString(), isNot(contains(enrollment.deviceCode)));
+      return http.Response(jsonEncode({'status': 'cancelled'}), 200);
+    });
+    final auth = AuthManager(secretStore: secrets);
+    await auth.initialize();
+    final authorization = DeviceAuthorizationClient(
+      portalUrl: 'https://portal.test',
+      authManager: auth,
+      httpClient: client,
+      identityLoader: () =>
+          DeviceKeyIdentity.loadOrCreate(secretStore: secrets),
+    );
+    enrollment = await authorization.startEnrollment(
+      clientId: 'sanad_agent_colocated',
+      deviceName: 'Sanad Agent (macOS)',
+      platform: 'macos',
+      hardwareId: 'hardware-123',
+    );
+
+    await authorization.cancelEnrollment(enrollment);
+
+    expect(auth.deviceToken, isNull);
+  });
+
   test(
     'polls with fresh proofs, honors slow_down, and survives restart',
     () async {

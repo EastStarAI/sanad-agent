@@ -45,9 +45,7 @@ class AuthRepositoryImpl implements IAuthRepository {
   }
 
   @override
-  void cancelLogin() {
-    _authService.cancelLogin();
-  }
+  Future<void> cancelLogin() => _authService.cancelLogin();
 
   AuthSession? _snapshot() {
     final accessToken = _authService.accessToken;

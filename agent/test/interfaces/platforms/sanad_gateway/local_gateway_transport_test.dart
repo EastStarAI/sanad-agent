@@ -14,6 +14,8 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_br
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:test/test.dart';
 
+import '../../../support/memory_agent_secret_store.dart';
+
 class _TransportTestConfig extends Config {
   _TransportTestConfig(this._port);
 
@@ -30,6 +32,8 @@ class _TransportTestConfig extends Config {
 }
 
 class _ExchangeAuthManager extends AuthManager {
+  _ExchangeAuthManager() : super(secretStore: MemoryAgentSecretStore());
+
   final _controller = StreamController<void>.broadcast();
   int reloadCalls = 0;
   int logoutCalls = 0;
@@ -171,6 +175,25 @@ void main() {
     expect(bodyText, isNot(contains('access_token')));
     expect(bodyText, isNot(contains('device_credential')));
   });
+
+  test(
+    'co-located auth endpoint accepts credential-free cancellation',
+    () async {
+      final client = HttpClient();
+      addTearDown(() => client.close(force: true));
+      final request = await client.deleteUrl(
+        Uri.parse('http://127.0.0.1:$port/auth/coupling'),
+      );
+      request.headers.set(LocalGatewayCredentials.headerName, token.value);
+      final response = await request.close();
+      final bodyText = await response.transform(utf8.decoder).join();
+
+      expect(response.statusCode, HttpStatus.ok);
+      expect(jsonDecode(bodyText), {'status': 'cancelled'});
+      expect(bodyText, isNot(contains('token')));
+      expect(bodyText, isNot(contains('device_code')));
+    },
+  );
 
   test('co-located auth endpoint rejects query payloads', () async {
     final client = HttpClient();
