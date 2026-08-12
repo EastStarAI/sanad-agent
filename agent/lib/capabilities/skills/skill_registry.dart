@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+import '../../core/constants.dart';
 import 'skill_definition.dart';
 import 'skill_frontmatter.dart';
 import 'skill_inventory.dart';
@@ -133,6 +134,29 @@ class SkillRegistry {
     }
 
     final environment = _environment ?? Platform.environment;
+    final sanadHome = environment['SANAD_HOME']?.trim();
+    if (sanadHome != null && sanadHome.isNotEmpty) {
+      _pushRoot(
+        roots,
+        _SkillLookupRoot(
+          path: p.join(sanadHome, 'skills'),
+          scope: SkillSourceScope.user,
+          kind: SkillRootKind.sanadSkills,
+          precedence: precedence++,
+        ),
+      );
+    } else if (_environment == null) {
+      _pushRoot(
+        roots,
+        _SkillLookupRoot(
+          path: p.join(getSanadHome(), 'skills'),
+          scope: SkillSourceScope.user,
+          kind: SkillRootKind.sanadSkills,
+          precedence: precedence++,
+        ),
+      );
+    }
+
     final home = environment['HOME'] ?? environment['USERPROFILE'];
     if (home != null && home.trim().isNotEmpty) {
       precedence = _appendRootsForBase(
@@ -140,6 +164,7 @@ class SkillRegistry {
         basePath: home,
         scope: SkillSourceScope.user,
         precedenceStart: precedence,
+        includeSanad: sanadHome == null || sanadHome.isEmpty,
       );
     }
 
@@ -151,6 +176,7 @@ class SkillRegistry {
     required String basePath,
     required SkillSourceScope scope,
     required int precedenceStart,
+    bool includeSanad = true,
   }) {
     var precedence = precedenceStart;
 
@@ -165,8 +191,10 @@ class SkillRegistry {
       _pushRoot(roots, root);
     }
 
-    add('.sanad/skills', SkillRootKind.sanadSkills);
-    add('.sanad/commands', SkillRootKind.sanadLegacyCommands);
+    if (includeSanad) {
+      add('.sanad/skills', SkillRootKind.sanadSkills);
+      add('.sanad/commands', SkillRootKind.sanadLegacyCommands);
+    }
     add('.agent/skills', SkillRootKind.agentSkills);
     add('.agents/skills', SkillRootKind.agentsSkills);
     add('.codex/skills', SkillRootKind.codexSkills);

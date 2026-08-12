@@ -99,11 +99,29 @@ dispatch. This admission boundary does not alter per-turn catalog assembly:
 servers configured by the local user remain available for tool discovery and
 execution in both local and cloud-origin turns.
 
-Skills are discovered and loaded by the runtime skill registry. A successful
-`skill_load` result contains one source-path header followed by the original
-skill Markdown; model-visible results omit duplicated input, frontmatter,
-provenance, and shadowing diagnostics. The client does not inspect skill files
-to determine runtime availability.
+Skills are discovered and loaded by the runtime skill registry. Product skills
+share the repository's `.agents/skills/` source with development skills; a
+selective manifest chooses which complete packages are converted into
+compressed Dart data and compiled into the single Agent executable. On first
+run, or after the compiled bundle revision changes, the daemon reconciles those
+packages into `<SANAD_HOME>/skills/`. An unchanged start reads only the small
+managed-state revision and does not walk or hash skill directories.
+
+The lifecycle manager records the origin hash it installed. It updates or
+removes only content that still matches that origin, preserves collisions and
+user-modified packages as user-owned, and respects a user's deletion. Package
+replacement uses a staged directory and recoverable backup, while recursive
+delete requires a canonical strict child of Sanad Home. Reconciliation failure
+does not advance the bundle revision and does not prevent daemon startup.
+Source, standalone, worktree, and test runs use the same manager and differ only
+by their active `SANAD_HOME`.
+
+A successful `skill_load` result contains one source-path header followed by
+the original skill Markdown; model-visible results omit duplicated input,
+frontmatter, provenance, and shadowing diagnostics. The user-scope registry
+reads `<SANAD_HOME>/skills` before compatibility roots. Workspace roots retain
+higher precedence. The client does not inspect skill files to determine runtime
+availability.
 
 ## Platform Tools
 

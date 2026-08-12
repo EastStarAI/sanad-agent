@@ -74,6 +74,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Provider Account Usage Limits](docs/product/provider_account_usage_limits.md): Product behavior for instance-scoped provider usage windows, freshness, errors, and reset-credit controls.
 - [Settings Hub](docs/product/settings_hub.md): Information architecture, scope semantics, and device-management UX for Sanad's unified Settings destination.
 - [خارطة الجودة والدعم والصيانة](docs/qa_maintenance/MOC.md): فهرس وخارطة خطط الفحص وحالات الاختبار، أدلة حل المشكلات التقنية، ودعم التشغيل وصيانة المنصة.
+- [Bundled Product Skills QA](docs/qa_maintenance/bundled_product_skills_qa.md): Regression matrix for deterministic one-file skill embedding, SANAD_HOME installation, update, removal, customization safety, startup performance, and release artifacts.
 - [Clarifying Question RTL QA](docs/qa_maintenance/clarifying_question_rtl_qa.md): Verification matrix for Arabic directionality and platform-aware multiline behavior in clarifying questions.
 - [Community Governance QA](docs/qa_maintenance/community_governance_qa.md): Static and live verification matrix for labels, templates, contribution skills, protected CI, Discord routing, and public-repository governance.
 - [Conversation Cache and Draft Recovery QA](docs/qa_maintenance/conversation_cache_recovery_qa.md): QA scenarios for persistent conversation snapshots, draft acceptance, pagination recovery, cleanup, and lifecycle flush behavior.

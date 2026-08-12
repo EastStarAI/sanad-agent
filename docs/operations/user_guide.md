@@ -203,6 +203,19 @@ Unsupported providers do not display invented usage values.
 - Answer an agent question from its inline card by choosing a suggested answer
   or entering a custom response.
 
+## Included skills
+
+Every source or standalone Agent run installs the product-managed
+`skill-creator`, `find-skills`, and `agent-browser` packages into the active
+Sanad Home. The standalone download remains one executable and does not fetch
+these skills from the network. Worktree and test runs use their isolated Homes.
+
+Agent updates reconcile included skills only when the embedded bundle changes.
+An unmodified managed skill can be updated or removed by a later release. A
+skill edited by the user is preserved and becomes user-owned, and a skill the
+user deleted is not silently restored. Workspace skills continue to override
+user-level skills with the same name.
+
 ## Update Sanad
 
 Packaged macOS and Windows Clients check the Stable signed Appcast after startup
