@@ -59,7 +59,7 @@ void main() {
     expect(TextUtils.getTextDirection('12345!@#\$%^&*()'), TextDirection.ltr);
   });
 
-  testWidgets('uses the first strong character for an ask_user event header', (tester) async {
+  testWidgets('uses the question direction for an ask_user event header', (tester) async {
     final event = CanonicalEvent(
       id: 'event-header-rtl',
       kind: EventKind.toolCall,
@@ -90,7 +90,7 @@ void main() {
           )
           .first,
     );
-    expect(headerDirectionality.textDirection, TextDirection.ltr);
+    expect(headerDirectionality.textDirection, TextDirection.rtl);
 
     final richTexts = tester.widgetList<RichText>(
       find.descendant(
@@ -99,7 +99,7 @@ void main() {
       ),
     );
     expect(richTexts.isNotEmpty, isTrue);
-    expect(richTexts.first.textDirection, TextDirection.ltr);
+    expect(richTexts.first.textDirection, TextDirection.rtl);
   });
 
   testWidgets('resolves every clarifying question string direction independently', (tester) async {
