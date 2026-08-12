@@ -88,6 +88,7 @@ dependencies:
   audio_session: ^0.1.25
   mp_audio_stream: ^0.2.2
   diff_match_patch: ^0.4.1
+  desktop_drop: ^0.7.1
 dev_dependencies:
   flutter_test:
     sdk: flutter

@@ -97,6 +97,8 @@ thinking mode. A first-time user with no thinking preference starts at
 runtime has an authoritative provider/model route, the model selector is never
 left empty merely because only the provider half was restored.
 
+Dragging and dropping files of any type onto the composer area captures their full local paths and appends them directly to the message input field. During a drag-over action, the composer card displays a highlighted primary border and a matching subtle background tint for clear visual feedback.
+
 A workspace created elsewhere in the client appears on the selector's first
 opening; users never need to close and reopen the menu to refresh it.
 

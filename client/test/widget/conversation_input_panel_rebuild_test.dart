@@ -29,6 +29,7 @@ import 'package:sanad_client/features/provider_setup/data/provider_setup_client.
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:sanad_client/utils/workspace_picker_helper.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -868,6 +869,66 @@ void main() {
     expect(pickerCalled, isFalse);
     expect(conversationRepository.browseWorkspaceTreeRequests, isEmpty);
     expect(conversationRepository.createdWorkspaces, isEmpty);
+  });
+
+  testWidgets('appends dropped file paths to input field when files are dragged and dropped', (tester) async {
+    socket.setConnected(true);
+    agent = DeviceConfig(
+      id: 'agent-1',
+      name: 'SanadAgent',
+      isOnline: true,
+      metadata: const {'is_local_reachable': true},
+    );
+    agentRepository.seedAgents([agent], activeAgentId: agent.id);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: ConversationInputPanel(onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {}),
+    );
+    await tester.pumpAndSettle();
+
+    final dropTargetFinder = find.byType(DropTarget);
+    expect(dropTargetFinder, findsOneWidget);
+    final DropTarget dropTarget = tester.widget(dropTargetFinder);
+
+    // 1. Drop a single file on an empty input
+    dropTarget.onDragDone?.call(
+      DropDoneDetails(
+        files: [
+          DropItemFile('/path/to/first_file.txt'),
+        ],
+        localPosition: Offset.zero,
+        globalPosition: Offset.zero,
+      ),
+    );
+    await tester.pump();
+
+    // Verify input text is updated to the file path
+    final textFieldFinder = find.byKey(const Key('chat_input'));
+    expect(textFieldFinder, findsOneWidget);
+    final TextField textField1 = tester.widget(textFieldFinder);
+    expect(textField1.controller?.text, '/path/to/first_file.txt ');
+
+    // 2. Drop multiple files on a non-empty input
+    dropTarget.onDragDone?.call(
+      DropDoneDetails(
+        files: [
+          DropItemFile('/path/to/second_file.jpg'),
+          DropItemFile('/path/to/third_file.png'),
+        ],
+        localPosition: Offset.zero,
+        globalPosition: Offset.zero,
+      ),
+    );
+    await tester.pump();
+
+    final TextField textField2 = tester.widget(textFieldFinder);
+    expect(textField2.controller?.text, '/path/to/first_file.txt /path/to/second_file.jpg /path/to/third_file.png ');
   });
 }
 
