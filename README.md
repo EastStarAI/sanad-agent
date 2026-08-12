@@ -240,7 +240,7 @@ their authoritative Session and Weekly usage windows.
 Sanad can work with local or hosted providers and multiple accounts for the
 same provider.
 
-- [Free LLM API Resources](https://github.com/cheahjs/free-llm-api-resources) —
+- [Free LLM API Resources](https://github.com/nejib1/Free-LLM) —
   a community-maintained directory of LLM services offering free tiers or
   trial credits.
 
