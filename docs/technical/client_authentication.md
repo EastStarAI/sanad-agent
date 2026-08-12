@@ -114,19 +114,24 @@ deep-link handler is disabled to prevent duplicate callback delivery.
    the same P-256 key and sends credential plus proof in registration.
 
 The private key and durable Device Credential are separate OS-vault entries
-scoped by the canonical Sanad Home. macOS uses Keychain directly, Linux uses
-Secret Service through `secret-tool` without placing values in process
-arguments, and Windows stores only DPAPI ciphertext under the protected Home
-boundary. Linux command-launch failures and Windows DPAPI/library/filesystem
-failures are normalized as vault-unavailable outcomes. During startup, an
-unavailable vault disables Agent cloud authority while the local daemon remains
-available; pending logout and legacy migration bytes stay intact for a later
-verified retry. Startup migrates legacy `device_identity.json` and
-`auth.json.device_token` by writing and reading back the vault entry before
-deleting plaintext. An unavailable or unverifiable vault fails closed and
-preserves legacy bytes only for recovery; it never loads them as an active
-fallback credential. Explicit vault mutations still fail rather than claiming
-an unverified write or deletion.
+scoped by the canonical Sanad Home. macOS uses Keychain directly, Linux talks to
+the freedesktop.org Secret Service over the user session D-Bus, and Windows
+stores only DPAPI ciphertext under the protected Home boundary. The Linux path
+uses the protocol directly and has no runtime dependency on the external
+`secret-tool` executable. It opens a bounded non-interactive session, rejects
+locked collections or operations that require a prompt, and never places secret
+values in process arguments or environment variables.
+
+Linux D-Bus/service/locked-collection failures and Windows
+DPAPI/library/filesystem failures are normalized as vault-unavailable outcomes.
+During startup, an unavailable vault disables Agent cloud authority while the
+local daemon remains available; pending logout and legacy migration bytes stay
+intact for a later verified retry. Startup migrates legacy
+`device_identity.json` and `auth.json.device_token` by writing and reading back
+the vault entry before deleting plaintext. An unavailable or unverifiable vault
+fails closed and preserves legacy bytes only for recovery; it never loads them
+as an active fallback credential. Explicit vault mutations still fail rather
+than claiming an unverified write or deletion.
 
 ## Pairing boundary
 

@@ -30,6 +30,7 @@ dependencies:
   sanad_auth_lock:
     path: ../shared/auth_lock
   pointycastle: ^4.0.0
+  dbus: ^0.7.14
 
 
 

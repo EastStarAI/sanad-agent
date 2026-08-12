@@ -7,21 +7,11 @@ import 'package:crypto/crypto.dart';
 import 'package:ffi/ffi.dart';
 
 import '../sanad_home/sanad_home_bootstrap.dart';
+import 'agent_secret_store_contract.dart';
+import 'linux_secret_service.dart';
 
-abstract interface class AgentSecretStore {
-  Future<String?> read(String key);
-  Future<void> write(String key, String value);
-  Future<void> delete(String key);
-}
-
-class AgentSecretStoreUnavailable implements Exception {
-  const AgentSecretStoreUnavailable(this.message);
-
-  final String message;
-
-  @override
-  String toString() => 'AgentSecretStoreUnavailable: $message';
-}
+export 'agent_secret_store_contract.dart';
+export 'linux_secret_service.dart';
 
 AgentSecretStore createAgentSecretStore() {
   final scope = sha256
@@ -225,90 +215,6 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
         Void Function(Pointer<Void>),
         void Function(Pointer<Void>)
       >('CFRelease');
-}
-
-typedef SecretToolRun = Future<ProcessResult> Function(List<String> arguments);
-typedef SecretToolStart = Future<Process> Function(List<String> arguments);
-
-class LinuxSecretServiceAgentSecretStore implements AgentSecretStore {
-  LinuxSecretServiceAgentSecretStore({
-    required this.scope,
-    SecretToolRun? run,
-    SecretToolStart? start,
-  }) : _run = run ?? ((arguments) => Process.run('secret-tool', arguments)),
-       _start =
-           start ?? ((arguments) => Process.start('secret-tool', arguments));
-
-  final String scope;
-  final SecretToolRun _run;
-  final SecretToolStart _start;
-
-  @override
-  Future<String?> read(String key) async {
-    try {
-      final result = await _run([
-        'lookup',
-        'application',
-        'sanad-agent',
-        'home',
-        scope,
-        'entry',
-        key,
-      ]);
-      if (result.exitCode == 1) return null;
-      if (result.exitCode != 0) throw _failure('read');
-      return (result.stdout as String).replaceFirst(RegExp(r'\r?\n$'), '');
-    } on ProcessException {
-      throw _failure('read');
-    }
-  }
-
-  @override
-  Future<void> write(String key, String value) async {
-    try {
-      final process = await _start([
-        'store',
-        '--label=Sanad Agent credential',
-        'application',
-        'sanad-agent',
-        'home',
-        scope,
-        'entry',
-        key,
-      ]);
-      process.stdin.write(value);
-      await process.stdin.close();
-      if (await process.exitCode != 0) throw _failure('write');
-    } on ProcessException {
-      throw _failure('write');
-    }
-  }
-
-  @override
-  Future<void> delete(String key) async {
-    try {
-      final result = await _run([
-        'clear',
-        'application',
-        'sanad-agent',
-        'home',
-        scope,
-        'entry',
-        key,
-      ]);
-      if (result.exitCode != 0 && result.exitCode != 1) {
-        throw _failure('delete');
-      }
-    } on ProcessException {
-      throw _failure('delete');
-    }
-  }
-
-  AgentSecretStoreUnavailable _failure(String operation) =>
-      AgentSecretStoreUnavailable(
-        'Linux Secret Service $operation failed or is unavailable. Install '
-        '`secret-tool` and ensure a Secret Service session is available.',
-      );
 }
 
 final class _DataBlob extends Struct {
