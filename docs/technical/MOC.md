@@ -25,6 +25,7 @@ This directory owns the technical specifications of "HOW" the system is structur
 - **[Client Conversation Navigation Runtime](client_conversation_navigation.md):** Device-scoped sidebar projection, atomic history swaps, and deletion fallback.
 - **[Client Conversation Cache Schema](client_conversation_cache_schema.md):** Device-scoped local cache, drafts, destinations, and recovery data.
 - **[Device Runtime Settings Protocol](device_runtime_settings_protocol.md):** Client/daemon settings commands, ownership, validation, and synchronization.
+- **[Web Search Runtime](web_search_runtime.md):** Daemon-owned providers, DuckDuckGo redirect normalization, fallback behavior, and SSRF filtering.
 - **[Message Turn Replay Protocol](message_turn_replay_protocol.md):** Latest-turn identity, replay safety confirmation, authoritative idle boundary, history replacement, and route payload contract.
 - **[Run Cancellation and Process Ownership](run_cancellation_and_process_ownership.md):** Run-scoped Stop, provider/tool interruption, process containment, bounded cleanup, and live/history terminal parity.
 - **[Background Terminal Task Runtime](background_terminal_task_runtime.md):** Durable task ownership, atomic shell handoff, PTY supervision, cursor replay, typed wake admission, secure input, and lifecycle recovery.
