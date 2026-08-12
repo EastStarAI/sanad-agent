@@ -331,7 +331,7 @@ class SuspendedResumeService {
   ) async {
     final workspaceId = request.workspaceId;
     if (workspaceId == null || workspaceId.isEmpty) {
-      return null;
+      return _runtimeContextBuilder.buildWithoutWorkspace();
     }
 
     final workspace = await _workspaceRuntimeService.describeWorkspace(
@@ -339,7 +339,7 @@ class SuspendedResumeService {
     );
     final workspacePath = workspace?['path'] as String?;
     if (workspacePath == null || workspacePath.isEmpty) {
-      return null;
+      return _runtimeContextBuilder.buildWithoutWorkspace();
     }
 
     return _runtimeContextBuilder.build(

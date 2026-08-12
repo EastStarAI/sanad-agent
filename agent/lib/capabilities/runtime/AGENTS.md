@@ -17,6 +17,7 @@ This contract applies to `agent/lib/capabilities/runtime/`.
 - Apply head-plus-tail truncation when instruction content exceeds budget.
 - Omit tool inventories and per-turn timestamps from workspace context.
 - Skill summaries and workspace instructions come from daemon-owned registries/files, never client discovery.
+- When no valid workspace is attached, emit one concise context sentence stating that file and terminal tools are unavailable and direct workspace-dependent requests to the upper-left workspace control.
 
 ## Workspace Services
 - Use focused handlers for read, write, edit, glob, grep, and tree operations; do not recreate a monolithic workspace service.

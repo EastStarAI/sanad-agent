@@ -26,8 +26,11 @@ Workspace instructions, workspace-bound tools, merged MCP state, and platform
 contracts are rebuilt for each turn so mutable runtime configuration remains
 current. Runtime context loads the nearest workspace contracts first, sanitizes
 instruction content, omits tool inventory prose, and applies head-plus-tail
-truncation under prompt budget. Date/time belongs to the engine's volatile
-prompt tier rather than workspace context.
+truncation under prompt budget. When no valid workspace is attached, the context
+instead states concisely that file and terminal tools are unavailable and directs
+workspace-dependent requests to the workspace control in the upper-left corner.
+Date/time belongs to the engine's volatile prompt tier rather than workspace
+context.
 
 ## Tools
 

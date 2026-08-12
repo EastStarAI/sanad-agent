@@ -728,6 +728,82 @@ Use the review skill.''',
     },
   );
 
+  test(
+    'GatewayManager should provide concise context without a workspace',
+    () async {
+      final eventController = StreamController<GatewayEvent>();
+      when(mockPlatform.initialize()).thenAnswer((_) async => {});
+      when(mockPlatform.eventStream).thenAnswer((_) => eventController.stream);
+      when(mockPlatform.sendResponse(any)).thenAnswer((_) async => {});
+      when(
+        mockAgentRunner.streamMessage(
+          any,
+          runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+          providerId: anyNamed('providerId'),
+          model: anyNamed('model'),
+          thinkingMode: anyNamed('thinkingMode'),
+          receivedAt: anyNamed('receivedAt'),
+          onToolEvent: anyNamed('onToolEvent'),
+          onSteerContinuation: anyNamed('onSteerContinuation'),
+          onThoughtDelta: anyNamed('onThoughtDelta'),
+          onReasoningDelta: anyNamed('onReasoningDelta'),
+        ),
+      ).thenAnswer((_) => Stream.fromIterable(['Hello']));
+
+      gatewayManager.registerPlatform(mockPlatform);
+      await gatewayManager.start();
+      eventController.add(
+        GatewayEvent(
+          sessionId: 'no-workspace-context-session',
+          platformId: 'test-platform',
+          message: Message(role: MessageRole.user, content: 'Edit a file'),
+          turnRequest: AgentTurnRequest(
+            sessionId: 'no-workspace-context-session',
+            message: 'Edit a file',
+          ),
+        ),
+      );
+
+      await untilCalled(
+        mockAgentRunner.streamMessage(
+          any,
+          runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+          providerId: anyNamed('providerId'),
+          model: anyNamed('model'),
+          thinkingMode: anyNamed('thinkingMode'),
+          receivedAt: anyNamed('receivedAt'),
+          onToolEvent: anyNamed('onToolEvent'),
+          onSteerContinuation: anyNamed('onSteerContinuation'),
+          onThoughtDelta: anyNamed('onThoughtDelta'),
+          onReasoningDelta: anyNamed('onReasoningDelta'),
+        ),
+      );
+
+      final capturedPrompt =
+          verify(
+                mockAgentRunner.streamMessage(
+                  'Edit a file',
+                  runtimeSystemPrompt: captureAnyNamed('runtimeSystemPrompt'),
+                  providerId: anyNamed('providerId'),
+                  model: anyNamed('model'),
+                  thinkingMode: anyNamed('thinkingMode'),
+                  receivedAt: anyNamed('receivedAt'),
+                  onToolEvent: anyNamed('onToolEvent'),
+                  onSteerContinuation: anyNamed('onSteerContinuation'),
+                  onThoughtDelta: anyNamed('onThoughtDelta'),
+                  onReasoningDelta: anyNamed('onReasoningDelta'),
+                ),
+              ).captured.single
+              as String;
+      expect(
+        capturedPrompt,
+        equals(const RuntimeContextBuilder().buildWithoutWorkspace()),
+      );
+
+      await eventController.close();
+    },
+  );
+
   test('GatewayManager should handle internet disconnection errors', () async {
     final eventController = StreamController<GatewayEvent>();
     when(mockPlatform.initialize()).thenAnswer((_) async => {});
