@@ -629,7 +629,8 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 50));
 
-    expect(find.text('Allow this tool action?'), findsOneWidget);
+    expect(find.text('Allow Sanad to run this command?'), findsOneWidget);
+    expect(find.textContaining('Command: '), findsNothing);
     expect(find.textContaining('echo hello'), findsOneWidget);
     expect(find.byKey(const Key('chat_input')), findsNothing);
   });

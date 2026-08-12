@@ -142,11 +142,11 @@ When the agent calls the user-question tool, the composer area displays an
 inline question card with the prompt, suggested answers, and a custom-answer
 option. Submitting the answer resumes the same suspended turn.
 
-Permission cards show the requested tool action and the available approval
-scope. For file access outside the selected workspace, the card shows the
-canonical target path without exposing write or edit content. Permission
-decisions remain owned by the workspace and are distinct from ordinary
-clarification answers.
+Permission cards ask whether Sanad may perform the specific command, file,
+search, or MCP action. The primary command, path, or `server / tool` identity
+appears without a redundant label; only secondary inputs use readable labels.
+Unknown tools retain a generic fallback prompt. The request content uses a darker surface than the prompt and choices. For file access outside the selected workspace, the card shows
+the canonical target path without exposing write or edit content. Approval grants may cover once, session, or workspace; denial stops only the current invocation so a later request can ask again. Permission decisions remain distinct from ordinary clarification answers. While suspended, the matching running tool row shows a permission shield, or a question icon for `system_ask_user`, instead of indefinite progress.
 
 ## Providers and models
 

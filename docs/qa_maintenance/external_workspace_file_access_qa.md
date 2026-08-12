@@ -28,4 +28,4 @@ description: "Regression matrix for permission-aware file and search access outs
 - `agent/test/capabilities/runtime_catalog_test.dart`
 - `agent/test/capabilities/permission_manager_test.dart`
 
-The permission-card copy is verified with the focused client analyzer and widget surface review; it must remain action-neutral rather than command-specific.
+The permission-card copy is verified with focused client tests: known file actions use action-specific prompts and labeled canonical paths, unknown actions retain a generic fallback, and write/edit content remains absent from the display payload.

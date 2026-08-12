@@ -8,6 +8,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../../../../../utils/app_platform.dart';
 import '../../../domain/models/device_suspended_request.dart';
 import '../../bloc/conversation_input_cubit.dart';
+import 'permission_request_presentation.dart';
 
 class PermissionRequestCard extends StatefulWidget {
   final DeviceSuspendedRequest request;
@@ -85,10 +86,18 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
     if (character == '3' || character == '٣') return 2;
     if (character == '4' || character == '٤') return 3;
 
-    if (logicalKey == LogicalKeyboardKey.digit1 || logicalKey == LogicalKeyboardKey.numpad1) return 0;
-    if (logicalKey == LogicalKeyboardKey.digit2 || logicalKey == LogicalKeyboardKey.numpad2) return 1;
-    if (logicalKey == LogicalKeyboardKey.digit3 || logicalKey == LogicalKeyboardKey.numpad3) return 2;
-    if (logicalKey == LogicalKeyboardKey.digit4 || logicalKey == LogicalKeyboardKey.numpad4) return 3;
+    if (logicalKey == LogicalKeyboardKey.digit1 || logicalKey == LogicalKeyboardKey.numpad1) {
+      return 0;
+    }
+    if (logicalKey == LogicalKeyboardKey.digit2 || logicalKey == LogicalKeyboardKey.numpad2) {
+      return 1;
+    }
+    if (logicalKey == LogicalKeyboardKey.digit3 || logicalKey == LogicalKeyboardKey.numpad3) {
+      return 2;
+    }
+    if (logicalKey == LogicalKeyboardKey.digit4 || logicalKey == LogicalKeyboardKey.numpad4) {
+      return 3;
+    }
 
     return null;
   }
@@ -112,7 +121,9 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    final commandPreview = widget.request.commandPreview ?? widget.request.toolInput.toString();
+    final presentation = PermissionRequestPresentation.fromRequest(
+      widget.request,
+    );
     final showNumbers = !AppPlatform.isMobile;
 
     final cardContent = Column(
@@ -123,7 +134,7 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
             Icon(Icons.shield_outlined, size: 16, color: colorScheme.tertiary),
             const SizedBox(width: 8),
             Text(
-              'Allow this tool action?',
+              presentation.title,
               style: GoogleFonts.inter(
                 color: colorScheme.onSurface,
                 fontSize: 15,
@@ -137,18 +148,40 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
           width: double.infinity,
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
           decoration: BoxDecoration(
-            color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.4),
+            color: Color.alphaBlend(
+              colorScheme.onSurface.withValues(alpha: 0.07),
+              colorScheme.surfaceContainerHighest,
+            ),
             borderRadius: BorderRadius.circular(10),
             border: Border.all(color: widget.borderColor),
           ),
-          child: Text(
-            commandPreview,
-            style: TextStyle(
-              color: colorScheme.onSurface,
-              fontSize: 13,
-              height: 1.45,
-              fontFamily: 'monospace',
-            ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var index = 0; index < presentation.details.length; index++) ...[
+                if (index > 0) const SizedBox(height: 8),
+                SelectableText.rich(
+                  TextSpan(
+                    style: TextStyle(
+                      color: colorScheme.onSurface,
+                      fontSize: 13,
+                      height: 1.45,
+                    ),
+                    children: [
+                      if (presentation.details[index].label != null)
+                        TextSpan(
+                          text: '${presentation.details[index].label}: ',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
+                      TextSpan(
+                        text: presentation.details[index].value,
+                        style: const TextStyle(fontFamily: 'monospace'),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
           ),
         ),
         const SizedBox(height: 12),
@@ -193,7 +226,9 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
               hintText: 'Tell the agent what to do instead (optional)',
               hintStyle: GoogleFonts.inter(fontSize: 13),
               filled: true,
-              fillColor: colorScheme.surfaceContainerHighest.withValues(alpha: 0.25),
+              fillColor: colorScheme.surfaceContainerHighest.withValues(
+                alpha: 0.25,
+              ),
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(10),
                 borderSide: BorderSide(color: widget.borderColor),
