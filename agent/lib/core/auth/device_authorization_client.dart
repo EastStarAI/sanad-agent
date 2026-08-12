@@ -13,6 +13,16 @@ import 'auth_manager.dart';
 
 String _b64(List<int> bytes) => base64Url.encode(bytes).replaceAll('=', '');
 
+String defaultAgentDeviceName(String platform) {
+  final osName = switch (platform.toLowerCase()) {
+    'macos' => 'macOS',
+    'windows' => 'Windows',
+    'linux' => 'Linux',
+    _ => 'Unknown OS',
+  };
+  return 'Sanad Agent ($osName)';
+}
+
 Uint8List _bigIntBytes(BigInt value, {int length = 32}) {
   final result = Uint8List(length);
   var remaining = value;

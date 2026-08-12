@@ -49,17 +49,7 @@ class ColocatedAuthCoupling {
   }) : platform = platform ?? Platform.operatingSystem,
        deviceName =
            deviceName ??
-           _defaultDeviceName(platform ?? Platform.operatingSystem);
-
-  static String _defaultDeviceName(String platform) {
-    final osName = switch (platform.toLowerCase()) {
-      'macos' => 'macOS',
-      'windows' => 'Windows',
-      'linux' => 'Linux',
-      _ => platform,
-    };
-    return 'Sanad Agent ($osName)';
-  }
+           defaultAgentDeviceName(platform ?? Platform.operatingSystem);
 
   static const clientId = 'sanad_agent_colocated';
 

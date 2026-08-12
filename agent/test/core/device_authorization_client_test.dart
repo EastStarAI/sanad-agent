@@ -53,6 +53,13 @@ Map<String, dynamic> _jwtPart(String proof, int index) {
 }
 
 void main() {
+  test('default Agent display names never expose hostnames or addresses', () {
+    expect(defaultAgentDeviceName('macos'), 'Sanad Agent (macOS)');
+    expect(defaultAgentDeviceName('linux'), 'Sanad Agent (Linux)');
+    expect(defaultAgentDeviceName('windows'), 'Sanad Agent (Windows)');
+    expect(defaultAgentDeviceName('other'), 'Sanad Agent (Unknown OS)');
+  });
+
   late Directory home;
   late MemoryAgentSecretStore secrets;
 

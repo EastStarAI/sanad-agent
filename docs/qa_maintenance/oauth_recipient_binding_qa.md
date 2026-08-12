@@ -27,7 +27,9 @@ description: "Public Client and Agent regression matrix for PKCE and key-bound D
 - Wrong/missing verifier, callback state mismatch, and consumed/expired code do
   not persist a User session.
 - Agent creates/loads P-256 identity, prints no device code/private key, and
-  signs each token poll with fresh JTI and device-code hash.
+  signs each token poll with fresh JTI and device-code hash. Headless and
+  co-located enrollment use the privacy-preserving `Sanad Agent (<OS name>)`
+  display default and never expose a hostname or local IP address.
 - Agent stores only Device Credential after Headless approval; no User refresh
   token is created by this flow. The P-256 private key and Device Credential are
   OS-vault entries, and migration deletes legacy plaintext only after verified

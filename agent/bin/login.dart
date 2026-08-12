@@ -87,7 +87,7 @@ Future<void> main(List<String> args) async {
       authManager: authManager,
     );
     await authorization.authorize(
-      deviceName: Platform.localHostname,
+      deviceName: defaultAgentDeviceName(platform),
       platform: platform,
       onChallenge: (challenge) {
         print('\nOpen this fixed Portal address on any trusted device:');
