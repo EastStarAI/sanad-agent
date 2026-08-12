@@ -2,7 +2,6 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'package:test/test.dart';
-import 'package:sanad_agent/core/auth/agent_secret_store.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:path/path.dart' as p;
@@ -88,24 +87,28 @@ void main() {
       },
     );
 
-    test('keeps legacy credential when the vault is unavailable', () async {
-      final authFile = File(p.join(tempDir.path, 'auth.json'));
-      await authFile.writeAsString(
-        jsonEncode({'device_token': 'legacy-device-credential'}),
-      );
-      secrets.available = false;
+    test(
+      'starts fail-closed and keeps legacy credential when vault is unavailable',
+      () async {
+        final authFile = File(p.join(tempDir.path, 'auth.json'));
+        await authFile.writeAsString(
+          jsonEncode({
+            'device_token': 'legacy-device-credential',
+            'hardware_id': 'stable-hardware',
+          }),
+        );
+        secrets.available = false;
 
-      await expectLater(
-        authManager.initialize(),
-        throwsA(isA<AgentSecretStoreUnavailable>()),
-      );
+        await authManager.initialize();
 
-      expect(
-        await authFile.readAsString(),
-        contains('legacy-device-credential'),
-      );
-      expect(authManager.deviceToken, isNull);
-    });
+        expect(
+          await authFile.readAsString(),
+          contains('legacy-device-credential'),
+        );
+        expect(authManager.deviceToken, isNull);
+        expect(authManager.canAuthenticateCloudAgent, isFalse);
+      },
+    );
 
     test('handles missing auth.json gracefully', () async {
       await authManager.initialize();
@@ -262,6 +265,39 @@ void main() {
       expect(secrets.values[AuthManager.deviceCredentialKey], isNull);
       expect(secrets.values[AuthManager.pendingDeviceCredentialKey], isNull);
     });
+
+    test(
+      'startup defers pending Agent logout while vault is unavailable',
+      () async {
+        final authFile = File(p.join(tempDir.path, 'auth.json'));
+        await authFile.writeAsString(
+          jsonEncode({
+            'access_token': 'new-account-access',
+            'hardware_id': 'stable-hardware',
+            AuthManager.pendingAgentLogoutKey: true,
+            'pairing_token': 'stale-pairing',
+          }),
+        );
+        secrets.available = false;
+
+        await authManager.initialize();
+
+        final persisted =
+            jsonDecode(await authFile.readAsString()) as Map<String, dynamic>;
+        expect(persisted[AuthManager.pendingAgentLogoutKey], isTrue);
+        expect(persisted['pairing_token'], 'stale-pairing');
+        expect(authManager.accessToken, 'new-account-access');
+        expect(authManager.pairingToken, isNull);
+        expect(authManager.canAuthenticateCloudAgent, isFalse);
+
+        secrets.available = true;
+        await authManager.reload();
+        final reconciled =
+            jsonDecode(await authFile.readAsString()) as Map<String, dynamic>;
+        expect(reconciled[AuthManager.pendingAgentLogoutKey], isNull);
+        expect(reconciled['pairing_token'], isNull);
+      },
+    );
 
     test(
       'startup consumes pending Agent logout without erasing newer Client login',

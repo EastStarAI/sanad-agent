@@ -24,6 +24,9 @@ description: "Regression matrix for credential-free client-daemon authentication
 | Concurrent login/logout/pairing mutation | The complete read-modify-write transaction is serialized and cannot overwrite a peer rotation. |
 | Lock owner exits or throws | The operating-system lock is released and the next waiter proceeds. |
 | Lock held past acquisition bound | The caller preserves credentials and reports a transient recovery outcome rather than logging out. |
+| Linux vault unavailable | Missing `secret-tool` or an unavailable Secret Service becomes a typed vault-unavailable outcome; daemon startup remains available locally, Agent cloud authority is absent, and pending logout/legacy migration state remains retryable. |
+| Windows vault unavailable | DPAPI, native-library, or protected-file failure becomes a typed vault-unavailable outcome; startup follows the same fail-closed local-availability behavior and never treats ciphertext as plaintext. |
+| Windows DPAPI round trip | A temporary-home write/read/delete round trip succeeds on the Windows runner and the persisted vault file does not contain the synthetic plaintext. |
 | Windows/Linux/macOS | The same stable lock file and native advisory-lock contract pass on each release runner. |
 | Web/mobile | No Local Gateway exchange or native auth lock is started; existing independent Portal lifecycle remains unchanged. |
 

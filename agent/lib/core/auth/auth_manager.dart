@@ -80,58 +80,69 @@ class AuthManager {
       }
     }
 
-    if (data?[pendingAgentLogoutKey] == true) {
-      await _deleteAgentCredentials();
-      _pairingToken = null;
-      data!
-        ..remove('device_token')
-        ..remove('pairing_token')
-        ..remove('pending_device_token')
-        ..remove(pendingAgentLogoutKey);
-      await boundary.writeSecretBytes(
-        'auth.json',
-        utf8.encode(jsonEncode(data)),
-      );
-    }
-
-    var storedCredential = await _secretStore.read(deviceCredentialKey);
-    final legacyCredential = data?['device_token'] as String?;
-    if (storedCredential == null && legacyCredential != null) {
-      await _secretStore.write(deviceCredentialKey, legacyCredential);
-      storedCredential = await _secretStore.read(deviceCredentialKey);
-      if (storedCredential != legacyCredential) {
-        throw const AgentSecretStoreUnavailable(
-          'Device Credential migration verification failed.',
+    try {
+      if (data?[pendingAgentLogoutKey] == true) {
+        await _deleteAgentCredentials();
+        _pairingToken = null;
+        data!
+          ..remove('device_token')
+          ..remove('pairing_token')
+          ..remove('pending_device_token')
+          ..remove(pendingAgentLogoutKey);
+        await boundary.writeSecretBytes(
+          'auth.json',
+          utf8.encode(jsonEncode(data)),
         );
       }
-    }
-    _deviceToken = storedCredential;
 
-    var pendingCredential = await _secretStore.read(pendingDeviceCredentialKey);
-    final legacyPendingCredential = data?['pending_device_token'] as String?;
-    if (pendingCredential == null && legacyPendingCredential != null) {
-      await _secretStore.write(
+      var storedCredential = await _secretStore.read(deviceCredentialKey);
+      final legacyCredential = data?['device_token'] as String?;
+      if (storedCredential == null && legacyCredential != null) {
+        await _secretStore.write(deviceCredentialKey, legacyCredential);
+        storedCredential = await _secretStore.read(deviceCredentialKey);
+        if (storedCredential != legacyCredential) {
+          throw const AgentSecretStoreUnavailable(
+            'Device Credential migration verification failed.',
+          );
+        }
+      }
+      _deviceToken = storedCredential;
+
+      var pendingCredential = await _secretStore.read(
         pendingDeviceCredentialKey,
-        legacyPendingCredential,
       );
-      pendingCredential = await _secretStore.read(pendingDeviceCredentialKey);
-      if (pendingCredential != legacyPendingCredential) {
-        throw const AgentSecretStoreUnavailable(
-          'Pending Device Credential migration verification failed.',
+      final legacyPendingCredential = data?['pending_device_token'] as String?;
+      if (pendingCredential == null && legacyPendingCredential != null) {
+        await _secretStore.write(
+          pendingDeviceCredentialKey,
+          legacyPendingCredential,
+        );
+        pendingCredential = await _secretStore.read(pendingDeviceCredentialKey);
+        if (pendingCredential != legacyPendingCredential) {
+          throw const AgentSecretStoreUnavailable(
+            'Pending Device Credential migration verification failed.',
+          );
+        }
+      }
+      _pendingDeviceToken = pendingCredential;
+
+      if (data != null &&
+          (data.containsKey('device_token') ||
+              data.containsKey('pending_device_token'))) {
+        data.remove('device_token');
+        data.remove('pending_device_token');
+        await boundary.writeSecretBytes(
+          'auth.json',
+          utf8.encode(jsonEncode(data)),
         );
       }
-    }
-    _pendingDeviceToken = pendingCredential;
-
-    if (data != null &&
-        (data.containsKey('device_token') ||
-            data.containsKey('pending_device_token'))) {
-      data.remove('device_token');
-      data.remove('pending_device_token');
-      await boundary.writeSecretBytes(
-        'auth.json',
-        utf8.encode(jsonEncode(data)),
-      );
+    } on AgentSecretStoreUnavailable {
+      // Keep the local daemon available, but never authorize cloud access from
+      // plaintext or stale memory while the operating-system vault is down.
+      // Deferred logout and migration fields stay on disk for a verified retry.
+      _deviceToken = null;
+      _pendingDeviceToken = null;
+      _pairingToken = null;
     }
 
     final changed = before != _fingerprint;

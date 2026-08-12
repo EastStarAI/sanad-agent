@@ -227,61 +227,87 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
       >('CFRelease');
 }
 
+typedef SecretToolRun = Future<ProcessResult> Function(List<String> arguments);
+typedef SecretToolStart = Future<Process> Function(List<String> arguments);
+
 class LinuxSecretServiceAgentSecretStore implements AgentSecretStore {
-  LinuxSecretServiceAgentSecretStore({required this.scope});
+  LinuxSecretServiceAgentSecretStore({
+    required this.scope,
+    SecretToolRun? run,
+    SecretToolStart? start,
+  }) : _run = run ?? ((arguments) => Process.run('secret-tool', arguments)),
+       _start =
+           start ?? ((arguments) => Process.start('secret-tool', arguments));
 
   final String scope;
+  final SecretToolRun _run;
+  final SecretToolStart _start;
 
   @override
   Future<String?> read(String key) async {
-    final result = await Process.run('secret-tool', [
-      'lookup',
-      'application',
-      'sanad-agent',
-      'home',
-      scope,
-      'entry',
-      key,
-    ]);
-    if (result.exitCode == 1) return null;
-    if (result.exitCode != 0) throw _failure('read');
-    return (result.stdout as String).replaceFirst(RegExp(r'\r?\n$'), '');
+    try {
+      final result = await _run([
+        'lookup',
+        'application',
+        'sanad-agent',
+        'home',
+        scope,
+        'entry',
+        key,
+      ]);
+      if (result.exitCode == 1) return null;
+      if (result.exitCode != 0) throw _failure('read');
+      return (result.stdout as String).replaceFirst(RegExp(r'\r?\n$'), '');
+    } on ProcessException {
+      throw _failure('read');
+    }
   }
 
   @override
   Future<void> write(String key, String value) async {
-    final process = await Process.start('secret-tool', [
-      'store',
-      '--label=Sanad Agent credential',
-      'application',
-      'sanad-agent',
-      'home',
-      scope,
-      'entry',
-      key,
-    ]);
-    process.stdin.write(value);
-    await process.stdin.close();
-    if (await process.exitCode != 0) throw _failure('write');
+    try {
+      final process = await _start([
+        'store',
+        '--label=Sanad Agent credential',
+        'application',
+        'sanad-agent',
+        'home',
+        scope,
+        'entry',
+        key,
+      ]);
+      process.stdin.write(value);
+      await process.stdin.close();
+      if (await process.exitCode != 0) throw _failure('write');
+    } on ProcessException {
+      throw _failure('write');
+    }
   }
 
   @override
   Future<void> delete(String key) async {
-    final result = await Process.run('secret-tool', [
-      'clear',
-      'application',
-      'sanad-agent',
-      'home',
-      scope,
-      'entry',
-      key,
-    ]);
-    if (result.exitCode != 0 && result.exitCode != 1) throw _failure('delete');
+    try {
+      final result = await _run([
+        'clear',
+        'application',
+        'sanad-agent',
+        'home',
+        scope,
+        'entry',
+        key,
+      ]);
+      if (result.exitCode != 0 && result.exitCode != 1) {
+        throw _failure('delete');
+      }
+    } on ProcessException {
+      throw _failure('delete');
+    }
   }
 
   AgentSecretStoreUnavailable _failure(String operation) =>
       AgentSecretStoreUnavailable(
-        'Linux Secret Service $operation failed or is unavailable.',
+        'Linux Secret Service $operation failed or is unavailable. Install '
+        '`secret-tool` and ensure a Secret Service session is available.',
       );
 }
 
@@ -294,17 +320,19 @@ final class _DataBlob extends Struct {
 
 class WindowsDpapiAgentSecretStore implements AgentSecretStore {
   WindowsDpapiAgentSecretStore({required this.scope, DynamicLibrary? library})
-    : _crypt32 = library ?? DynamicLibrary.open('crypt32.dll');
+    : _providedLibrary = library;
 
   static const _uiForbidden = 0x1;
   final String scope;
-  final DynamicLibrary _crypt32;
+  final DynamicLibrary? _providedLibrary;
+  late final DynamicLibrary _crypt32 =
+      _providedLibrary ?? DynamicLibrary.open('crypt32.dll');
 
   String _fileName(String key) =>
       'agent_vault_${sha256.convert(utf8.encode('$scope:$key'))}.bin';
 
   @override
-  Future<String?> read(String key) async {
+  Future<String?> read(String key) => _guard('read', () async {
     final boundary = SanadHomeBootstrap.identity();
     final fileName = _fileName(key);
     if (!boundary.fileExists(fileName)) return null;
@@ -328,10 +356,10 @@ class WindowsDpapiAgentSecretStore implements AgentSecretStore {
       if (output.ref.data != nullptr) _localFree(output.ref.data.cast());
       calloc.free(output);
     }
-  }
+  });
 
   @override
-  Future<void> write(String key, String value) async {
+  Future<void> write(String key, String value) => _guard('write', () async {
     final plain = Uint8List.fromList(utf8.encode(value));
     final input = _blob(plain);
     final output = calloc<_DataBlob>();
@@ -358,11 +386,23 @@ class WindowsDpapiAgentSecretStore implements AgentSecretStore {
       if (output.ref.data != nullptr) _localFree(output.ref.data.cast());
       calloc.free(output);
     }
-  }
+  });
 
   @override
-  Future<void> delete(String key) =>
-      SanadHomeBootstrap.identity().deleteFile(_fileName(key));
+  Future<void> delete(String key) => _guard(
+    'delete',
+    () => SanadHomeBootstrap.identity().deleteFile(_fileName(key)),
+  );
+
+  Future<T> _guard<T>(String operation, Future<T> Function() action) async {
+    try {
+      return await action();
+    } on AgentSecretStoreUnavailable {
+      rethrow;
+    } catch (_) {
+      throw _failure(operation);
+    }
+  }
 
   Pointer<_DataBlob> _blob(List<int> bytes) {
     final blob = calloc<_DataBlob>();
