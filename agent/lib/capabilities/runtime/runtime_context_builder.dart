@@ -21,6 +21,9 @@ class RuntimeContextBuilder {
   }) : _pathResolver = pathResolver,
        _skillRegistry = skillRegistry;
 
+  String buildWithoutWorkspace() =>
+      'No workspace is attached, so file and terminal tools are unavailable. If the user requests them, ask them to select an existing workspace or create one from the workspace control in the upper-left corner.';
+
   Future<String?> build({
     required String workspacePath,
     String? workspaceName,

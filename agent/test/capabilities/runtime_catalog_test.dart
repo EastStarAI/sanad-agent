@@ -580,6 +580,17 @@ Use the review skill.''');
       },
     );
 
+    test('builds concise guidance when no workspace is attached', () {
+      final context = const RuntimeContextBuilder().buildWithoutWorkspace();
+
+      expect(
+        context,
+        equals(
+          'No workspace is attached, so file and terminal tools are unavailable. If the user requests them, ask them to select an existing workspace or create one from the workspace control in the upper-left corner.',
+        ),
+      );
+    });
+
     test(
       'builds runtime context from workspace instructions, skills, and tools',
       () async {
