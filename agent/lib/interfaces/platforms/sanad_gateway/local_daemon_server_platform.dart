@@ -6,6 +6,8 @@ import 'package:logging/logging.dart';
 import 'package:sanad_release_contract/release_contract.dart';
 import 'package:sanad_agent/core/app_config.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
+import 'package:sanad_agent/core/auth/colocated_auth_coupling.dart';
+import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
@@ -38,6 +40,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   /// otherwise initialization loads the owner-only local credential before
   /// the server binds. There is no tokenless fallback.
   LocalGatewaySecurity? _security;
+  ColocatedAuthCoupling? _authCoupling;
   final Future<void> Function()? beforeUpgradeAuthentication;
 
   @override
@@ -91,8 +94,10 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
   LocalDaemonServerPlatform({
     LocalGatewaySecurity? security,
+    ColocatedAuthCoupling? authCoupling,
     this.beforeUpgradeAuthentication,
-  }) : _security = security;
+  }) : _security = security,
+       _authCoupling = authCoupling;
 
   @override
   Future<void> initialize() async {
@@ -198,6 +203,49 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         _security!.releaseUpgrade(peerKey);
       }
       await _writeAuthFailure(request.response, gate);
+      return;
+    }
+
+    if (request.uri.path == '/auth/logout') {
+      final hasBody =
+          request.headers.contentLength > 0 ||
+          request.headers.value(HttpHeaders.transferEncodingHeader) != null;
+      if (request.method != 'POST' || request.uri.hasQuery || hasBody) {
+        await _writeJsonResponse(request.response, const {
+          'status': 'invalid_request',
+        }, statusCode: HttpStatus.badRequest);
+        return;
+      }
+      await getIt<AuthManager>().logout();
+      await _writeJsonResponse(request.response, const {
+        'status': 'logged_out',
+      });
+      return;
+    }
+
+    if (request.uri.path == '/auth/coupling') {
+      final hasBody =
+          request.headers.contentLength > 0 ||
+          request.headers.value(HttpHeaders.transferEncodingHeader) != null;
+      if (request.uri.hasQuery ||
+          hasBody ||
+          (request.method != 'GET' && request.method != 'POST')) {
+        await _writeJsonResponse(request.response, {
+          'status': 'invalid_request',
+        }, statusCode: HttpStatus.badRequest);
+        return;
+      }
+      final coupling = _authCoupling ??= ColocatedAuthCoupling(
+        authManager: getIt<AuthManager>(),
+        authorizationClient: DeviceAuthorizationClient(
+          portalUrl: _config.portalUrl,
+          authManager: getIt<AuthManager>(),
+        ),
+      );
+      final snapshot = request.method == 'POST'
+          ? await coupling.start()
+          : coupling.snapshot;
+      await _writeJsonResponse(request.response, snapshot.toJson());
       return;
     }
 

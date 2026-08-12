@@ -1,10 +1,9 @@
-import 'dart:convert';
 import 'dart:io';
-import 'package:http/http.dart' as http;
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
-import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
+import 'package:sanad_agent/core/auth/device_authorization_client.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_authentication_exchange_notifier.dart';
 
 Future<void> main(List<String> args) async {
   try {
@@ -74,98 +73,34 @@ Future<void> main(List<String> args) async {
     return;
   }
 
-  // Plan 23: sanad login must use sanad-portal only. It sends platform + capabilities to /auth/start,
-  // never naming a provider or a flow. The portal decides whether a user_code is required (CLI/headless).
   final portalUrl = config.portalUrl;
-  print('Starting portal auth session via: $portalUrl');
-
+  final platform = Platform.isLinux
+      ? 'linux'
+      : Platform.isMacOS
+      ? 'macos'
+      : Platform.isWindows
+      ? 'windows'
+      : 'unknown';
   try {
-    final startUrl = Uri.parse('$portalUrl/auth/start');
-    final startResponse = await http.post(
-      startUrl,
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'platform': 'cli',
-        'capabilities': const ['headless', 'system_browser'],
-      }),
+    final authorization = DeviceAuthorizationClient(
+      portalUrl: portalUrl,
+      authManager: authManager,
     );
-
-    if (startResponse.statusCode != 200) {
-      print(
-        '❌ Failed to start login session: HTTP ${startResponse.statusCode}',
-      );
-      print(startResponse.body);
-      exit(1);
-    }
-
-    final startData = jsonDecode(startResponse.body) as Map<String, dynamic>;
-    final authSessionId = startData['auth_session_id'] as String;
-    final pollingToken = startData['polling_token'] as String;
-    final authUrl = startData['auth_url'] as String;
-    final userCode = startData['user_code'] as String?;
-    final intervalSeconds = (startData['interval'] as num?)?.toInt() ?? 2;
-    final expiresIn = (startData['expires_in'] as num?)?.toInt() ?? 300;
-
-    print('\nPlease open the following link in your web browser:');
-    print('─────────────────────────────────────────────────────────');
-    print(authUrl);
-    print('─────────────────────────────────────────────────────────');
-    if (userCode != null && userCode.isNotEmpty) {
-      print('Then enter this code when prompted on the portal page:');
-      print('─────────────────────────────────────────────────────────');
-      print(userCode);
-      print('─────────────────────────────────────────────────────────\n');
-    } else {
-      print('Sign-in is handled by the portal page directly.\n');
-    }
-    print('Waiting for authentication to complete (Ctrl+C to abort)...');
-
-    // Polling Loop
-    var attempts = 0;
-    final maxAttempts = (expiresIn / intervalSeconds).ceil();
-
-    while (attempts < maxAttempts) {
-      await Future.delayed(Duration(seconds: intervalSeconds));
-      attempts++;
-
-      final statusResponse = await http.post(
-        Uri.parse('$portalUrl/auth/status'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'auth_session_id': authSessionId,
-          'polling_token': pollingToken,
-        }),
-      );
-      if (statusResponse.statusCode != 200) {
-        continue;
-      }
-
-      final statusData =
-          jsonDecode(statusResponse.body) as Map<String, dynamic>;
-      final statusStr = statusData['status'] as String;
-
-      if (statusStr == 'completed') {
-        final accessToken = statusData['access_token'] as String;
-        final refreshToken = statusData['refresh_token'] as String?;
-
-        print('\nSaving tokens...');
-        await authManager.saveUserTokens(accessToken, refreshToken ?? '');
-        await _notifyRunningDaemon(config);
-        print('✓ Login successful! Session tokens stored in auth.json.');
-        return;
-      } else if (statusStr == 'expired') {
-        print('\n❌ Login session has expired. Please run "sanad login" again.');
-        exit(1);
-      } else if (statusStr == 'cancelled') {
-        print('\n❌ Login cancelled.');
-        exit(1);
-      }
-    }
-
-    print('\n❌ Login timed out. Please try again.');
-    exit(1);
-  } catch (e) {
-    print('❌ Connection error: $e');
+    await authorization.authorize(
+      deviceName: defaultAgentDeviceName(platform),
+      platform: platform,
+      onChallenge: (challenge) {
+        print('\nOpen this fixed Portal address on any trusted device:');
+        print(challenge.verificationUri);
+        print('\nEnter this code: ${challenge.userCode}');
+        print('Verify Agent key: ${challenge.shortenedThumbprint}');
+        print('\nWaiting for explicit approval (Ctrl+C to abort)...');
+      },
+    );
+    await _notifyRunningDaemon(config);
+    print('✓ Agent authorized with a key-bound device credential.');
+  } catch (error) {
+    print('❌ Agent authorization failed: ${error.runtimeType}');
     exit(1);
   }
 }
@@ -188,17 +123,14 @@ Future<void> runLogout() async {
 }
 
 Future<void> _notifyRunningDaemon(Config config) async {
-  try {
-    final credential = await LocalGatewayCredentials.loadOrCreate();
-    final base = Uri.parse(config.localGatewayUrl);
-    await http
-        .post(
-          base.replace(path: '/authentication-exchange', query: null),
-          headers: {LocalGatewayCredentials.headerName: credential.value},
-        )
-        .timeout(const Duration(milliseconds: 750));
-  } catch (_) {
-    // The daemon may be stopped. It will load auth.json on its next startup.
+  final outcome = await LocalAuthenticationExchangeNotifier().notify(
+    config.localGatewayUrl,
+  );
+  if (outcome == LocalAuthenticationExchangeOutcome.daemonRejected) {
+    stderr.writeln(
+      'Authentication state was saved, but the running Sanad service did not '
+      'reload it. Run: sanad service restart',
+    );
   }
 }
 

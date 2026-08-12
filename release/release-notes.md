@@ -1,3 +1,19 @@
+# Unreleased security compatibility notice
+
+- Client authentication now requires Authorization Code + S256 PKCE. Legacy
+  `/auth/start`, `/auth/status`, `/auth/cancel`, and `/handoff` polling clients
+  are intentionally unsupported and must update before the hosted cutover.
+- Headless Agent authorization now returns a `sanad_agent` Device Credential
+  bound to its vault-backed P-256 key; it no longer receives User access/refresh
+  tokens. Existing pre-binding refresh families are revoked at migration and
+  users must sign in again through the bound flow.
+- One-command pairing remains a separate Client-started flow, but its final
+  Device Credential also requires a fresh Gateway nonce proof from the bound
+  P-256 key. A copied pairing result or durable credential is not sufficient.
+- macOS uses Keychain, Linux uses Secret Service, and Windows uses DPAPI for the
+  Agent private key and Device Credential. If the platform vault is unavailable,
+  authorization fails closed rather than writing a plaintext fallback.
+
 # Sanad 1.0.2
 
 Sanad 1.0.2 is a patch release focusing on cross-process authentication safety, local-first onboarding, UI fidelity and theme contrast, macOS native icon presentation, and Web/PWA theme harmonization.

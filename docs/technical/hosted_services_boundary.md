@@ -38,15 +38,18 @@ limits server-side.
 
 ## Public Authentication Surface
 
-Open-source clients use the Portal-owned lifecycle:
+Open-source clients use flow-specific Portal contracts:
 
-- `POST /auth/start`
-- `POST /auth/status`
-- `POST /auth/cancel`
-- `POST /auth/refresh`
-- `POST /auth/logout`
+- Flutter: `POST /auth/client/transactions` and `POST /auth/client/token` with
+  S256 PKCE and a registered callback.
+- Headless Agent: `POST /auth/device/transactions` and
+  `POST /auth/device/token` with P-256 proof-of-possession.
+- User session maintenance: `POST /auth/refresh` and `POST /auth/logout`.
 
-Provider-specific login implementation remains hosted. Polling, access, refresh, device, and provider credentials never become public configuration and must follow the secret boundaries in `client_authentication.md`.
+Provider-specific login implementation remains hosted. Generic bearer-result
+polling is unsupported. Access, refresh, device, PKCE, proof, and provider
+credentials never become public configuration and follow the secret boundaries
+in `client_authentication.md`.
 
 Remote device creation returns one initial pairing token to the authenticated
 client. The public agent persists that token only with a distinct durable

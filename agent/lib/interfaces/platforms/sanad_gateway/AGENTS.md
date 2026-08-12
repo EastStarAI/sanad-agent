@@ -79,6 +79,12 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Platform-provided tools use canonical platform call/result and remain distinct from daemon-local execution.
 - Permission resolution is first-writer-wins and resumed execution reapplies the persisted decision before invoking the gated tool.
 
+## Cloud Device Authentication
+- A key-bound `sanad_agent` Device Credential never registers by bearer possession alone. Request a one-use Gateway challenge, then send an ES256 proof over `SOCKET`, the canonical Gateway registration target, nonce, bounded issue time, and fresh JTI.
+- The registration proof uses the same Agent-owned P-256 key approved during Device Authorization. Never send the private key, device code, or proof through logs or durable protocol state.
+- One-command pairing is a separate provisioning grant but has the same final possession boundary: request a challenge before claim, send pairing token plus public JWK and proof, and retain the same key/credential for fresh-proof lost-response recovery.
+- User `sanad_client` access credentials are not an Agent registration fallback for new key-bound enrollment. Their login or rotation must not start Agent registration, and an Agent registration rejection must never refresh the User credential family.
+
 ## Logging and Restart
 - Local Gateway binds only to loopback and authenticates every HTTP request and
   WebSocket upgrade before route handling. The credential is owner-only in the
@@ -89,7 +95,9 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
   runtime nonce only as local ownership evidence; neither value is an
   authentication credential, and managed mutation still requires the complete
   launcher lease and client identity to agree.
-- Native desktop authentication reconciliation is local-only. Accept exactly `{"type":"authentication_exchange"}` with no additional fields, reload owner-only `auth.json`, and broadcast no credentials. Reject unexpected fields before payload logging; never route this event through the cloud platform.
+- Native desktop authentication reconciliation is local-only. Accept exactly `{"type":"authentication_exchange"}` with no additional fields, reload owner-only `auth.json`, and broadcast no credentials. Reject unexpected fields before payload logging; never route this event through the cloud platform. CLI writers retry the authenticated HTTP trigger within a strict bound, require an explicit credential-free acknowledgment, treat an absent daemon as expected, and surface a restart instruction when a reachable daemon does not reconcile.
+- Automatic co-located coupling uses the authenticated loopback HTTP surface only. It may return bounded status, expiry, and non-secret enrollment request identity; it must never return or accept User tokens, Device Credentials, private device codes, proofs, or account identity. Query-bearing and unsupported-method requests fail closed.
+- Explicit Agent logout is admitted only as an authenticated local Desktop `POST /auth/logout` with no query or body. It delegates to `AuthManager.logout()`, returns bounded credential-free status, disconnects cloud authorization through the normal auth change signal, and never stops the Local Gateway.
 - Keep streaming events at fine/debug log level and lifecycle, command, and terminal events concise at info level.
 - Daemon restart and permanent stop use the shared restart coordinator so local HTTP and protocol callers preserve acknowledgment delay and supervisor exit semantics.
 - Long-running restart safety evaluation must not serialize local HTTP acceptance; health, stop, and unrelated WebSocket upgrades remain responsive while a restart waits.

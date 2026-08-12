@@ -6,6 +6,7 @@ import 'package:meta/meta.dart';
 import 'package:logging/logging.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
 import 'package:sanad_agent/core/auth/auth_manager.dart';
+import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
@@ -59,8 +60,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   final _logger = Logger('ServerSanadGatewayPlatform');
   final io.Socket Function(String uri, dynamic options)? socketFactory;
+  final Future<DeviceKeyIdentity> Function() identityLoader;
 
-  ServerSanadGatewayPlatform({this.socketFactory});
+  ServerSanadGatewayPlatform({
+    this.socketFactory,
+    Future<DeviceKeyIdentity> Function()? identityLoader,
+  }) : identityLoader = identityLoader ?? DeviceKeyIdentity.loadOrCreate;
 
   @override
   Logger get logger => _logger;
@@ -110,8 +115,8 @@ class ServerSanadGatewayPlatform extends BasePlatform
     _authChangeSubscription ??= authManager.changes.listen((_) {
       unawaited(_synchronizeAuthentication());
     });
-    if (!authManager.isAuthenticated) {
-      _logger.info('Cloud Gateway remains offline until authentication.');
+    if (!authManager.canAuthenticateCloudAgent) {
+      _logger.info('Cloud Gateway remains offline until Agent authorization.');
       return;
     }
 
@@ -133,6 +138,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
     _socket!.onConnect((_) async {
       _logger.info('⚡ Connected to Sanad Gateway');
       await _register();
+    });
+
+    _socket!.on('device_challenge', (data) async {
+      final nonce = toMap(data)['nonce']?.toString();
+      if (nonce == null || nonce.isEmpty) return;
+      await _register(challengeNonce: nonce);
     });
 
     _socket!.onDisconnect((reason) {
@@ -173,15 +184,9 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
       if (code == 'AUTH_INVALID_TOKEN' ||
           message.toLowerCase().contains('token')) {
-        _logger.info('Attempting to refresh token...');
-        final config = getIt<Config>();
-        final success = await authManager.refreshAccessToken(config.portalUrl);
-
-        if (success) {
-          _logger.info('Token refreshed successfully. Reauthenticating...');
-        } else {
-          _logger.severe('❌ Failed to refresh token. Please login again.');
-        }
+        _logger.warning(
+          'Agent credential was rejected. Reauthorize or pair this Agent.',
+        );
       }
     });
 
@@ -342,12 +347,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   Future<void> _synchronizeAuthenticationInternal() async {
     final authManager = getIt<AuthManager>();
-    if (!authManager.isAuthenticated) {
+    if (!authManager.canAuthenticateCloudAgent) {
       _registeredDeviceId = null;
       _socket?.disconnect();
       _socket?.dispose();
       _socket = null;
-      _logger.info('Cloud Gateway disconnected after authentication logout.');
+      _logger.info('Cloud Gateway disconnected without Agent authorization.');
       return;
     }
 
@@ -451,23 +456,34 @@ class ServerSanadGatewayPlatform extends BasePlatform
     }
   }
 
-  Future<void> _register() async {
+  Future<void> _register({String? challengeNonce}) async {
     final targetSocket = _socket;
     if (targetSocket == null) return;
     final authManager = getIt<AuthManager>();
     await authManager.reload();
+    final isPairing = authManager.hasPendingDevicePairing;
+    final requiresKeyProof = authManager.deviceToken != null || isPairing;
+    if (requiresKeyProof && challengeNonce == null) {
+      targetSocket.emit('request_device_challenge');
+      return;
+    }
+    final identity = requiresKeyProof ? await identityLoader() : null;
+    final deviceProof = identity != null
+        ? await identity.gatewayProof(challengeNonce!)
+        : null;
     final capabilities = await loadSanadCapabilities();
     if (!identical(_socket, targetSocket) || !targetSocket.connected) return;
 
-    final isPairing = authManager.hasPendingDevicePairing;
     final payload = {
       if (isPairing) ...{
         'pairing_token': authManager.pairingToken,
         'proposed_device_token': authManager.pendingDeviceToken,
+        'public_jwk': identity!.publicJwk,
+        'device_proof': deviceProof,
       } else ...{
-        if (authManager.accessToken != null) 'token': authManager.accessToken,
         if (authManager.deviceToken != null)
           'device_token': authManager.deviceToken,
+        'device_proof': ?deviceProof,
       },
       'hardware_id': authManager.hardwareId,
       'platform': _getPlatformName(),

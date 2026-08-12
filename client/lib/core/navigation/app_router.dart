@@ -226,7 +226,10 @@ class AppRouter {
     // cloud authentication is absent. If bootstrap previously fell back to an
     // unauthenticated surface, route refresh must recover to Home without a
     // manual Run Local action.
-    if (authState is! AuthAuthenticated && isLocalReady && (isSplash || isLoggingIn || isOnboarding)) {
+    if (authState is! AuthAuthenticated &&
+        authState is! AuthCompleting &&
+        isLocalReady &&
+        (isSplash || isLoggingIn || isOnboarding)) {
       final requestedLocation = currentUri.queryParameters['from'];
       return _debugRedirect(
         requestedLocation != null && requestedLocation.isNotEmpty
@@ -306,7 +309,7 @@ class AppRouter {
     }
 
     // 3. Unauthenticated / Loading / Initial without Local Gateway
-    if (authState is AuthInitial || authState is AuthLoading) {
+    if (authState is AuthInitial || authState is AuthLoading || authState is AuthCompleting) {
       if (isSplash || isLoggingIn || (AppPlatform.isDesktop && isOnboarding)) {
         return _debugRedirect(
           null,
@@ -382,10 +385,11 @@ class AppRouter {
     required String matchedLocation,
     required String reason,
   }) {
+    final redirectPath = redirect == null ? 'allow' : Uri.parse(redirect).path;
     _logger.info(
       'AppRouterRedirect: auth=${authState.runtimeType} '
       'desktop=${AppPlatform.isDesktop} location=$matchedLocation '
-      'uri=$uri redirect=${redirect ?? 'allow'} reason=$reason',
+      'uriPath=${uri.path} redirectPath=$redirectPath reason=$reason',
     );
     return redirect;
   }

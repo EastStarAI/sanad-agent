@@ -22,3 +22,9 @@ external bool isPopupClosed();
 /// Closes the popup window if it exists
 @JS('closePopup')
 external void closePopup();
+
+@JS('takeAuthorizationMessage')
+external JSString? takeAuthorizationMessage();
+
+@JS('appOrigin')
+external JSString appOrigin();

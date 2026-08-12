@@ -15,7 +15,7 @@ The exchange exists only between a native desktop client and the authenticated l
 {"type":"authentication_exchange"}
 ```
 
-No additional field is accepted, returned, broadcast, or logged. Receiving this notification grants no authentication state: the receiver reloads the owner-only `auth.json` and derives login, refreshed credentials, device pairing, or logout from that file alone.
+No additional field is accepted, returned, broadcast, or logged. Receiving this notification grants no authentication state: the receiver reloads the owner-only `auth.json` and derives login, refreshed credentials, device pairing, or logout from that file alone. The credential-free `agent_logout_pending: true` file marker is durable desired cleanup state, not an exchange assertion or credential.
 
 ## Lifecycle
 
@@ -25,7 +25,10 @@ No additional field is accepted, returned, broadcast, or logged. Receiving this 
 - The daemon starts, re-registers, or disconnects its cloud gateway projection when `AuthManager` changes. The Local Gateway remains available after logout.
 - Reconciliation caused by a received notification does not emit another notification.
 - Native Flutter publishes one exchange after Local Gateway readiness, and also reconciles locally, so state converges after a notification was missed while either process was stopped.
-- CLI login, pairing, and logout notify a running daemon through the authenticated local `/authentication-exchange` trigger. If no daemon is running, startup reload remains authoritative.
+- CLI login and pairing notify a running daemon through the authenticated local `/authentication-exchange` trigger. The notifier retries transient delivery within a strict bound and accepts only HTTP `200` with `{"success":true}`. An absent daemon remains expected because service installation may follow login; if a reachable daemon does not acknowledge reconciliation, the CLI preserves the stored authentication and tells the operator to run `sanad service restart`.
+- Desktop Client logout first snapshots the latest User access/refresh pair under `auth.refresh.lock`, clears Client/pairing fields, preserves `hardware_id`, and persists `agent_logout_pending: true`. It then clears presentation/session state immediately, invokes Portal revocation with the snapshot, and best-effort calls authenticated `POST /auth/logout` outside the lock.
+- `POST /auth/logout` accepts no query or body and delegates to `AuthManager.logout()`. The Agent verifies deletion of durable and pending Device Credentials, clears pairing state, emits its normal auth change signal so cloud transport disconnects, removes the pending marker, and leaves Local Gateway running.
+- If the Agent is absent, Client logout still completes. Agent startup consumes the marker before cloud authorization while preserving any newer Client access/refresh pair and the stable `hardware_id`. A Client login completed while Agent remains absent does not authorize the old account credential; startup leaves Agent unauthorized. Automatic deferred enrollment for that sequence is outside this release.
 
 ## Refresh Boundary
 
@@ -40,4 +43,5 @@ An operating-system lock is released automatically when its process exits. A cra
 - The Local Gateway credential authenticates the loopback request; it is never part of the event.
 - Access, refresh, device, pairing, and Local Gateway credentials never cross this exchange.
 - Unexpected WebSocket fields are rejected before payload diagnostic logging.
-- An admitted local caller can request only a reload of the owner-only file. It cannot assert login/logout state or retrieve credentials.
+- An admitted local caller can request a reload of the owner-only file and may separately request explicit Agent logout through the strict local POST endpoint. The exchange notification still cannot assert login/logout state or retrieve credentials.
+- Logout responses are bounded status only. Access, refresh, Device Credential, pending credential, pairing authority, and Local Gateway credential never enter the URL, body, response, event, or logs.

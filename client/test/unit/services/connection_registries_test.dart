@@ -184,6 +184,92 @@ void main() {
   });
 
   test(
+    'offline local snapshot rehydrates active history when daemon becomes ready',
+    () async {
+      final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1')..setConnected(true);
+      final localSocket = FakeSanadSocketService(hardwareId: 'device-1');
+      final resolver = DeviceConnectionCoordinator(
+        cloudSocketService: cloudSocket,
+        localSocketService: localSocket,
+        currentDeviceId: 'device-1',
+      );
+      final capabilitiesStore = DeviceCapabilitiesStore(resolver);
+      final conversationRegistry = ConversationClientRegistryImpl(
+        resolver,
+        capabilitiesStore,
+      );
+      final staleOfflineAgent = DeviceConfig(
+        id: 'agent-1',
+        name: 'SanadAgent',
+        hardwareId: 'device-1',
+        isOnline: false,
+      );
+      final client = conversationRegistry.getOrCreateConversationClientForAgent(staleOfflineAgent);
+      client.activateSession('session-1');
+
+      localSocket.setConnected(true);
+      await Future<void>.delayed(Duration.zero);
+
+      final sessionsCommand = localSocket.capturedCommands.where((entry) => entry['command'] == 'get_sessions').single;
+      final sessionsRequestId = (sessionsCommand['payload'] as Map)['request_id'] as String;
+      localSocket.eventRouter.routeEvent({
+        'device_id': staleOfflineAgent.id,
+        'event': 'sessions_list',
+        'request_id': sessionsRequestId,
+        'payload': {
+          'request_id': sessionsRequestId,
+          'sessions': [
+            {
+              'id': 'session-1',
+              'device_id': staleOfflineAgent.id,
+              'title': 'Restored after daemon restart',
+            },
+          ],
+        },
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      final historyCommand = localSocket.capturedCommands
+          .where((entry) => entry['command'] == 'get_session_history')
+          .single;
+      final historyRequestId = (historyCommand['payload'] as Map)['request_id'] as String;
+      localSocket.eventRouter.routeEvent({
+        'device_id': staleOfflineAgent.id,
+        'event': 'session_history',
+        'request_id': historyRequestId,
+        'payload': {
+          'request_id': historyRequestId,
+          'messages': [
+            {
+              'id': 'event-after-reconnect',
+              'sender': 'ai',
+              'type': 'final_answer',
+              'content': 'Visible after local reconnect',
+              'created_at': '2026-08-11T23:55:11Z',
+            },
+          ],
+        },
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(client.currentMessages, hasLength(1));
+      expect(client.currentMessages.single.text, 'Visible after local reconnect');
+      expect(
+        cloudSocket.capturedCommands.where(
+          (entry) => entry['command'] == 'get_sessions',
+        ),
+        isEmpty,
+      );
+
+      conversationRegistry.dispose();
+      capabilitiesStore.dispose();
+      resolver.dispose();
+      cloudSocket.dispose();
+      localSocket.dispose();
+    },
+  );
+
+  test(
     'conversation registry keeps a local client pinned during daemon restart grace',
     () async {
       final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1')..setConnected(true);

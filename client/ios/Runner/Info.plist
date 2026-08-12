@@ -34,6 +34,10 @@
 	<string>Sanad uses your microphone</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<!-- app_links is the sole OAuth Universal Link owner. Letting Flutter's
+	     Router also consume callbacks races PKCE state reconciliation. -->
+	<key>FlutterDeepLinkingEnabled</key>
+	<false/>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>audio</string>
@@ -53,16 +57,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<!-- General Sanad application deep link. OAuth callbacks remain restricted
+	     to the claimed HTTPS Universal Links in Runner.entitlements. -->
 	<key>CFBundleURLTypes</key>
 	<array>
-		<dict>
-			<key>CFBundleTypeRole</key>
-			<string>Editor</string>
-			<key>CFBundleURLSchemes</key>
-			<array>
-				<string>com.googleusercontent.apps.119145029104-70qll2uk3f4htecah879o17fg0ifn2i8</string>
-			</array>
-		</dict>
 		<dict>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>

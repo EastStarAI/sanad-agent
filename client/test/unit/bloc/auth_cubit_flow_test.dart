@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:sanad_client/features/auth/domain/auth_repository.dart';
 import 'package:sanad_client/features/auth/domain/auth_session.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
@@ -23,6 +25,28 @@ void main() {
     expect(cubit.state, isA<AuthUnauthenticated>());
     expect(repository.loggedOut, isTrue);
 
+    await cubit.close();
+  });
+
+  test('shows completing state until co-located login finishes', () async {
+    final release = Completer<void>();
+    final repository = _FakeAuthRepository(
+      completingRelease: release.future,
+    );
+    final cubit = AuthCubit(authRepository: repository);
+    final states = <AuthState>[];
+    final subscription = cubit.stream.listen(states.add);
+
+    final login = cubit.login();
+    await Future<void>.delayed(Duration.zero);
+    expect(cubit.state, isA<AuthCompleting>());
+
+    release.complete();
+    await login;
+    expect(cubit.state, isA<AuthAuthenticated>());
+    expect(states.whereType<AuthCompleting>(), hasLength(1));
+
+    await subscription.cancel();
     await cubit.close();
   });
 
@@ -62,6 +86,9 @@ void main() {
 }
 
 class _FakeAuthRepository implements IAuthRepository {
+  _FakeAuthRepository({this.completingRelease});
+
+  final Future<void>? completingRelease;
   bool loggedOut = false;
   bool loginCancelled = false;
 
@@ -72,15 +99,22 @@ class _FakeAuthRepository implements IAuthRepository {
   Future<AuthSession?> synchronizeExternalSession() async => login();
 
   @override
-  Future<AuthSession?> login() async => const AuthSession(
-    username: 'ahmedattia',
-    displayName: 'Ahmed Attia',
-    email: 'test@example.com',
-    userId: 'user-1',
-    accessToken: 'access-token',
-    userCredits: 10,
-    totalCredits: 20,
-  );
+  Future<AuthSession?> login({void Function()? onCompleting}) async {
+    final release = completingRelease;
+    if (release != null) {
+      onCompleting?.call();
+      await release;
+    }
+    return const AuthSession(
+      username: 'ahmedattia',
+      displayName: 'Ahmed Attia',
+      email: 'test@example.com',
+      userId: 'user-1',
+      accessToken: 'access-token',
+      userCredits: 10,
+      totalCredits: 20,
+    );
+  }
 
   @override
   Future<void> logout() async {

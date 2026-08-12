@@ -1,3 +1,5 @@
 {
-  "ENVIRONMENT": "prod"
+  "ENVIRONMENT": "prod",
+  "SANAD_IOS_AUTH_REDIRECT_URI": "https://app.sanad.eaststarai.com/oauth/ios",
+  "SANAD_ANDROID_AUTH_REDIRECT_URI": "https://portal.sanad.eaststarai.com/oauth/android"
 }

@@ -1,5 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
+
+import 'package:crypto/crypto.dart';
 
 import 'package:dio/dio.dart';
 import 'package:sanad_auth_lock/sanad_auth_lock.dart';
@@ -14,7 +17,9 @@ import 'package:sanad_client/infrastructure/web_auth_popup_service_stub.dart'
     if (dart.library.html) 'package:sanad_client/infrastructure/web_auth_popup_service.dart';
 import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
 import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dart';
+import 'package:sanad_client/features/auth/infrastructure/colocated_auth_coupling_client.dart';
 import 'package:sanad_client/features/auth/domain/user_display_name.dart';
+import 'package:sanad_client/features/auth/infrastructure/auth_callback_binding.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class AuthLoginChallenge {
@@ -32,15 +37,26 @@ class AuthLoginChallenge {
   });
 }
 
+Future<bool> _launchPortalAuthorization(Uri uri) async {
+  if (kIsWeb) {
+    return WebAuthPopupService.instance.openAuthPopup(uri.toString());
+  }
+  return launchUrl(uri, mode: LaunchMode.externalApplication);
+}
+
 class AuthService {
   static final _logger = Logger('AuthService');
   static const _authSessionKey = 'backend_auth_session_v1';
+  static const _pendingAgentLogoutKey = 'agent_logout_pending';
   bool _isLoginCancelled = false;
   bool _isPolling = false;
   final Dio _dio;
   final SanadSettingsStore _settingsStore;
   final SharedPreferences? _prefs;
   final PortalAuthClient _portalAuth;
+  final ColocatedAuthCouplingClient _colocatedCoupling;
+  final Future<AuthCallbackBinding> Function() _callbackBindingFactory;
+  final Future<bool> Function(Uri uri) _authorizationLauncher;
   final _accessTokenController = StreamController<String?>.broadcast();
   final _authenticationExchangeController = StreamController<void>.broadcast();
   final _loginChallengeController = StreamController<AuthLoginChallenge?>.broadcast();
@@ -50,8 +66,6 @@ class AuthService {
   String? _backendRefreshToken;
   String? _hardwareId;
   AuthLoginChallenge? _loginChallenge;
-  String? _activeAuthSessionId;
-  String? _activePollingToken;
   String? username;
   String? displayName;
   String? email;
@@ -74,6 +88,9 @@ class AuthService {
     SanadSettingsStore? settingsStore,
     SharedPreferences? prefs,
     PortalAuthClient? portalAuth,
+    ColocatedAuthCouplingClient? colocatedCoupling,
+    Future<AuthCallbackBinding> Function()? callbackBindingFactory,
+    Future<bool> Function(Uri uri)? authorizationLauncher,
   }) : _dio =
            dio ??
            (Dio()
@@ -81,7 +98,10 @@ class AuthService {
              ..options.receiveTimeout = const Duration(seconds: 3)),
        _settingsStore = settingsStore ?? const SanadSettingsStore(),
        _prefs = prefs,
-       _portalAuth = portalAuth ?? PortalAuthClient() {
+       _portalAuth = portalAuth ?? PortalAuthClient(),
+       _colocatedCoupling = colocatedCoupling ?? ColocatedAuthCouplingClient(),
+       _callbackBindingFactory = callbackBindingFactory ?? createAuthCallbackBinding,
+       _authorizationLauncher = authorizationLauncher ?? _launchPortalAuthorization {
     _setupInterceptors();
   }
 
@@ -170,22 +190,6 @@ class AuthService {
         },
       ),
     );
-  }
-
-  /// Platform hint passed to the portal. The portal decides the UX based on
-  /// this plus [capabilities]. The client never names a flow or provider.
-  String get _platformHint {
-    if (kIsWeb) return 'web';
-    if (AppPlatform.isMobile) return AppPlatform.isAndroid ? 'android' : 'ios';
-    if (AppPlatform.isDesktop) return 'desktop';
-    return 'cli';
-  }
-
-  List<String> get _capabilityHints {
-    final caps = <String>['system_browser'];
-    if (kIsWeb) caps.add('popup');
-    if (AppPlatform.isMobile) caps.add('deep_link');
-    return caps;
   }
 
   Future<void> init({String? fallbackDeviceId}) async {
@@ -332,27 +336,17 @@ class AuthService {
 
   void cancelLogin() {
     _isLoginCancelled = true;
-    final sessionId = _activeAuthSessionId;
-    final pollingToken = _activePollingToken;
-    if (sessionId != null && pollingToken != null) {
-      unawaited(
-        _portalAuth.cancel(
-          authSessionId: sessionId,
-          pollingToken: pollingToken,
-        ),
-      );
-    }
     _setLoginChallenge(null);
     _logger.info('Login flow cancelled by user.');
   }
 
-  Future<void> login() async {
+  Future<void> login({void Function()? onCompleting}) async {
     _isLoginCancelled = false;
     _isPolling = true;
     try {
       // Plan 23: a single unified portal-driven flow for all platforms. The
       // portal decides whether a user_code is needed (CLI/headless only).
-      await _loginViaPortal();
+      await _loginViaPortal(onCompleting: onCompleting);
     } catch (e) {
       _logger.severe('Login failed: $e');
       if (kIsWeb) {
@@ -361,8 +355,6 @@ class AuthService {
       rethrow;
     } finally {
       _isPolling = false;
-      _activeAuthSessionId = null;
-      _activePollingToken = null;
       _setLoginChallenge(null);
       if (kIsWeb) {
         WebAuthPopupService.instance.dispose();
@@ -376,124 +368,80 @@ class AuthService {
     }
   }
 
-  Future<void> _loginViaPortal() async {
-    _logger.info('Starting portal auth session (platform=$_platformHint)...');
-    final start = await _portalAuth.start(
-      platform: _platformHint,
-      capabilities: _capabilityHints,
-    );
-    _activeAuthSessionId = start.authSessionId;
-    _activePollingToken = start.pollingToken;
+  Future<void> _loginViaPortal({void Function()? onCompleting}) async {
+    final callback = await _callbackBindingFactory();
+    try {
+      final enrollment = await _colocatedCoupling.start();
+      final random = Random.secure();
+      final verifierBytes = List<int>.generate(64, (_) => random.nextInt(256));
+      final verifier = base64Url.encode(verifierBytes).replaceAll('=', '');
+      final challenge = base64Url.encode(sha256.convert(utf8.encode(verifier)).bytes).replaceAll('=', '');
 
-    if (start.userCode != null && start.userCode!.isNotEmpty) {
-      _setLoginChallenge(
-        AuthLoginChallenge(
-          userCode: start.userCode!,
-          authUrl: start.authUrl,
-          expiresIn: start.expiresIn,
-        ),
+      final transaction = await _portalAuth.createClientTransaction(
+        clientId: callback.clientId,
+        redirectUri: callback.redirectUri,
+        codeChallenge: challenge,
+        enrollmentRequestId: enrollment?.requestId,
       );
-    } else {
       _setLoginChallenge(
         AuthLoginChallenge(
           userCode: '',
-          authUrl: start.authUrl,
-          expiresIn: start.expiresIn,
+          authUrl: transaction.authorizationUrl,
+          expiresIn: transaction.expiresIn,
         ),
       );
-    }
-    _logger.info('Portal auth session started.');
 
-    // Open the portal page in the platform-appropriate browser surface. The
-    // portal chooses the identity provider inside its own page; the client
-    // never passes or knows the provider name.
-    if (kIsWeb) {
-      final popupService = WebAuthPopupService.instance;
-      final opened = popupService.openAuthPopup(start.authUrl);
-      if (!opened) {
-        throw Exception(
-          'Popup blocker detected. Please allow popups for this site to log in.',
-        );
-      }
-      _logger.info('Popup authentication initiated');
-    } else {
-      final authUri = Uri.parse(start.authUrl);
-      final launched = await launchUrl(
-        authUri,
-        mode: LaunchMode.externalApplication,
+      final launched = await _authorizationLauncher(
+        Uri.parse(transaction.authorizationUrl),
       );
       if (!launched) {
-        throw Exception('Could not launch auth URL: ${start.authUrl}');
-      }
-    }
-
-    // Poll the portal until the session completes. The private
-    // `polling_token` stays inside AuthService; it is never put into URLs,
-    // the browser, or storage.
-    //
-    // NOTE (Plan 23): on Web the success.html page auto-closes itself once
-    // the portal has stored the tokens. The popup closing is therefore NOT a
-    // reliable cancellation signal — it can fire ~immediately after success
-    // but before our next poll returns "completed". The portal's
-    // `/auth/status` is the source of truth: we keep polling until it reports
-    // `completed`, `expired`, or `cancelled`, or the user explicitly hits the
-    // Cancel button (which sets `_isLoginCancelled`).
-    final maxAttempts = (start.expiresIn / start.interval).ceil();
-    for (var attempt = 0; attempt < maxAttempts; attempt++) {
-      if (_isLoginCancelled) {
-        throw Exception('Login cancelled by user');
-      }
-      await Future.delayed(Duration(seconds: start.interval));
-      if (_isLoginCancelled) {
-        throw Exception('Login cancelled by user');
+        throw StateError(
+          kIsWeb ? 'Popup was blocked. Allow popups and try again.' : 'Could not open the system browser.',
+        );
       }
 
-      final st = await _portalAuth.status(
-        authSessionId: start.authSessionId,
-        pollingToken: start.pollingToken,
+      final result = await callback.waitForResult(
+        Duration(seconds: transaction.expiresIn),
       );
-      if (st.status == 'completed') {
-        if (st.accessToken == null) {
-          throw Exception('Login completed but no access token was returned.');
-        }
-        final completedAccessToken = st.accessToken!;
-        final completedRefreshToken = st.refreshToken;
-        _backendAccessToken = completedAccessToken;
-        _backendRefreshToken = completedRefreshToken;
-        _logger.info('Login successful.');
-
-        if (kIsWeb) {
-          WebAuthPopupService.instance.closePopup();
-        }
-
-        Future<void> persistLogin() async {
-          _backendAccessToken = completedAccessToken;
-          _backendRefreshToken = completedRefreshToken;
-          final prefs = await _getPrefs();
-          await _persistAuthPair(
-            prefs,
-            accessToken: completedAccessToken,
-            refreshToken: completedRefreshToken,
-          );
-          await _syncAuthToFileUnlocked();
-        }
-
-        if (AppPlatform.isDesktop) {
-          await _settingsStore.withAuthFileLock(persistLogin);
-        } else {
-          await persistLogin();
-        }
-        _emitAuthenticationExchange();
-        await fetchProfile();
-        _emitAccessToken();
-        _setLoginChallenge(null);
-        return;
-      } else if (st.status == 'expired' || st.status == 'cancelled') {
-        throw Exception('Authentication session ${st.status}');
+      if (_isLoginCancelled) throw StateError('Login cancelled by user.');
+      if (result.state != transaction.transactionId) {
+        throw StateError('Authentication callback state mismatch.');
       }
-    }
+      final tokens = await _portalAuth.redeemAuthorizationCode(
+        clientId: callback.clientId,
+        redirectUri: callback.redirectUri,
+        code: result.code,
+        codeVerifier: verifier,
+      );
 
-    throw Exception('Login timed out');
+      Future<void> persistLogin() async {
+        _backendAccessToken = tokens.accessToken;
+        _backendRefreshToken = tokens.refreshToken;
+        final prefs = await _getPrefs();
+        await _persistAuthPair(
+          prefs,
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+        );
+        await _syncAuthToFileUnlocked();
+      }
+
+      if (AppPlatform.isDesktop) {
+        await _settingsStore.withAuthFileLock(persistLogin);
+      } else {
+        await persistLogin();
+      }
+      if (enrollment != null) {
+        onCompleting?.call();
+        await _colocatedCoupling.waitForCompletion(enrollment);
+      }
+      _emitAuthenticationExchange();
+      await fetchProfile();
+      _emitAccessToken();
+      _setLoginChallenge(null);
+    } finally {
+      await callback.dispose();
+    }
   }
 
   void _setLoginChallenge(AuthLoginChallenge? challenge) {
@@ -504,21 +452,31 @@ class AuthService {
   }
 
   Future<void> logout() async {
-    if (AppPlatform.isDesktop) {
-      await _settingsStore.withAuthFileLock(_logoutUnlocked);
-    } else {
-      await _logoutUnlocked();
-    }
-  }
+    var refreshToken = _backendRefreshToken;
+    var accessToken = _backendAccessToken;
 
-  Future<void> _logoutUnlocked() async {
     if (AppPlatform.isDesktop) {
-      final latest = await _settingsStore.readAuthDocument();
-      _backendAccessToken = latest['access_token']?.toString();
-      _backendRefreshToken = latest['refresh_token']?.toString();
+      try {
+        await _settingsStore.withAuthFileLock(() async {
+          final existing = await _settingsStore.readAuthDocument();
+          accessToken = existing['access_token']?.toString() ?? accessToken;
+          refreshToken = existing['refresh_token']?.toString() ?? refreshToken;
+          final next = Map<String, dynamic>.from(existing)
+            ..remove('access_token')
+            ..remove('refresh_token')
+            ..remove('device_token')
+            ..remove('pairing_token')
+            ..remove('pending_device_token')
+            ..[_pendingAgentLogoutKey] = true;
+          await _settingsStore.saveAuthDocument(next);
+        });
+        _emitAuthenticationExchange();
+      } catch (error) {
+        _logger.warning(
+          'Desktop logout file cleanup failed: ${error.runtimeType}',
+        );
+      }
     }
-    final refreshToken = _backendRefreshToken;
-    final accessToken = _backendAccessToken;
 
     _backendAccessToken = null;
     _backendRefreshToken = null;
@@ -532,24 +490,11 @@ class AuthService {
     await prefs.remove(_authSessionKey);
     await prefs.remove('backend_access_token');
     await prefs.remove('backend_refresh_token');
-
-    if (AppPlatform.isDesktop) {
-      try {
-        final existing = await _settingsStore.readAuthDocument();
-        final next = Map<String, dynamic>.from(existing)
-          ..remove('access_token')
-          ..remove('refresh_token')
-          ..remove('device_token')
-          ..remove('pairing_token')
-          ..remove('pending_device_token');
-        await _settingsStore.saveAuthDocument(next);
-        _emitAuthenticationExchange();
-      } catch (e) {
-        _logger.warning('Failed to clean auth file during logout: $e');
-      }
-    }
     _emitAccessToken();
 
+    if (AppPlatform.isDesktop) {
+      unawaited(_colocatedCoupling.logoutAgent());
+    }
     if (refreshToken != null || accessToken != null) {
       unawaited(
         _portalAuth.logout(

@@ -48,7 +48,7 @@ class ConversationClientRegistryImpl implements ManagedConversationClientRegistr
         _scopeByAgentId[config.id] = endpoint.scope;
         _lastConnectedState[config.id] = isNowConnected;
 
-        if (config.isOnline && isNowConnected) {
+        if (isNowConnected) {
           unawaited(
             client.synchronizeAfterReconnect().catchError((Object error) {
               // Reconnect reconciliation is best-effort; retained snapshots

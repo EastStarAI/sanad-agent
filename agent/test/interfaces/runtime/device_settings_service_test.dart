@@ -35,7 +35,7 @@ void main() {
   DeviceSettingsService createService({Map<String, String>? environment}) {
     final envPath = '${home.path}/.env';
     return DeviceSettingsService(
-      config: Config(environment: environment),
+      config: Config(environment: environment ?? const {}),
       envFileService: EnvFileService(envPath: envPath),
       runtimeRecovery: recovery,
     );

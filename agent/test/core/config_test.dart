@@ -43,7 +43,7 @@ LLM_BASE_URL=http://127.0.0.1:11434
 LLM_MODEL=gemma:2b
 ''');
 
-    final config = Config();
+    final config = Config(environment: const {});
 
     expect(config.enableLocalGateway, isTrue);
     expect(config.localGatewayPort, equals(59123));
@@ -67,7 +67,7 @@ LOCAL_GATEWAY_HOST=::1
 LOCAL_GATEWAY_PORT=59123
 ''');
 
-    expect(Config().localGatewayUrl, 'http://[::1]:59123');
+    expect(Config(environment: const {}).localGatewayUrl, 'http://[::1]:59123');
   });
 
   test(
@@ -88,7 +88,7 @@ LLM_BASE_URL=http://127.0.0.1:11434
 LLM_MODEL=llama3
 ''');
 
-    final config = Config();
+    final config = Config(environment: const {});
 
     expect(config.llmApiKey, isEmpty);
     expect(config.usesLikelyLocalLlm, isTrue);
@@ -126,7 +126,7 @@ LOG_COLOR=false
 LOG_MAX_LENGTH=1000
 ''');
 
-    final config = Config();
+    final config = Config(environment: const {});
 
     expect(config.logLevel, equals('ALL'));
     expect(config.logColor, isFalse);
@@ -164,7 +164,7 @@ LOCAL_GATEWAY_PORT=55555
 LLM_MODEL=local-model
 ''');
 
-      final config = Config();
+      final config = Config(environment: const {});
 
       // The global LLM_MODEL should be loaded; local should be ignored.
       expect(config.llmModel, equals('global-model'));
@@ -181,7 +181,7 @@ OPENROUTER_API_KEY=sk-or-testkey
 LLM_API_KEY=sk-openai-fallback
 ''');
 
-      final config = Config();
+      final config = Config(environment: const {});
       expect(config.activeProvider, equals('openrouter'));
       expect(config.resolveProviderName(), equals('openrouter'));
       expect(config.llmApiKey, equals('sk-or-testkey'));
@@ -196,7 +196,7 @@ ACTIVE_PROVIDER=openrouter
 LLM_API_KEY=sk-openai-fallback
 ''');
 
-        final config = Config();
+        final config = Config(environment: const {});
         expect(config.activeProvider, equals('openrouter'));
         expect(config.llmApiKey, equals('sk-openai-fallback'));
       },
@@ -210,7 +210,7 @@ LLM_API_KEY=sk-openai-fallback
 ACTIVE_PROVIDER=deepseek
 ''');
 
-        final config = Config();
+        final config = Config(environment: const {});
         expect(config.resolveProviderName(), equals('deepseek'));
         expect(config.llmBaseUrl, equals('https://api.deepseek.com'));
       },
@@ -225,7 +225,7 @@ ACTIVE_PROVIDER=deepseek
 LLM_BASE_URL=https://custom-deepseek-proxy.internal
 ''');
 
-        final config = Config();
+        final config = Config(environment: const {});
         expect(
           config.llmBaseUrl,
           equals('https://custom-deepseek-proxy.internal'),
@@ -241,7 +241,7 @@ LLM_BASE_URL=https://custom-deepseek-proxy.internal
 LLM_BASE_URL=https://openrouter.ai/api/v1
 ''');
 
-        final config = Config();
+        final config = Config(environment: const {});
         expect(config.resolveProviderName(), equals('openrouter'));
       },
     );
@@ -258,7 +258,7 @@ LLM_MODEL=gpt-3.5-turbo
 LLM_BASE_URL=https://generic-api.com/v1
 ''');
 
-        final config = Config();
+        final config = Config(environment: const {});
         expect(config.llmModel, equals('gpt-4o-latest'));
         expect(config.llmBaseUrl, equals('https://custom-openai-proxy.com/v1'));
       },
@@ -275,7 +275,7 @@ ACTIVE_PROVIDER=openai
 LLM_MODEL=gpt-4o
 ''');
 
-        final config = Config();
+        final config = Config(environment: const {});
         expect(config.activeProvider, equals('openai'));
         expect(config.llmModel, equals('gpt-4o'));
 
@@ -301,7 +301,7 @@ ACTIVE_PROVIDER=openai
 LLM_MODEL=gpt-4o
 ''');
 
-        final config = Config();
+        final config = Config(environment: const {});
         final firstModel = config.llmModel;
         // Read again immediately — no disk change → same value, no reload.
         final secondModel = config.llmModel;
@@ -317,7 +317,7 @@ ACTIVE_PROVIDER=openai
 LLM_MODEL=gpt-4o
 ''');
 
-      final config = Config();
+      final config = Config(environment: const {});
       expect(config.llmModel, equals('gpt-4o'));
 
       // Rewrite with the same mtime bucket (no forced delay) and call reload().

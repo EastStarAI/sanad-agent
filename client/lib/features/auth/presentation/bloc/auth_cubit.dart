@@ -43,7 +43,9 @@ class AuthCubit extends Cubit<AuthState> {
   Future<void> login() async {
     emit(AuthLoading());
     try {
-      final session = await _authRepository.login();
+      final session = await _authRepository.login(
+        onCompleting: () => emit(AuthCompleting()),
+      );
       if (session == null) {
         emit(AuthUnauthenticated());
       } else {

@@ -76,6 +76,36 @@ void main() {
     expect(devices.single.metadata?['cloud_device_id'], 'cloud-device');
   });
 
+  test('pins the local device first then orders cloud inventory oldest to newest', () {
+    AppPlatform.overrideIsDesktop = true;
+    final localSocket = FakeSanadSocketService(hardwareId: 'device-1')..setConnected(true);
+    final merger = createMerger(localSocket: localSocket);
+
+    final devices = merger.merge([
+      DeviceConfig(
+        id: 'newest',
+        name: 'Newest',
+        hardwareId: 'device-3',
+        createdAt: DateTime.utc(2026, 3, 3),
+      ),
+      DeviceConfig(
+        id: 'current-cloud',
+        name: 'Current',
+        hardwareId: 'device-1',
+        createdAt: DateTime.utc(2026, 2, 2),
+      ),
+      DeviceConfig(
+        id: 'oldest',
+        name: 'Oldest',
+        hardwareId: 'device-2',
+        createdAt: DateTime.utc(2026, 1, 1),
+      ),
+    ]);
+
+    expect(devices.map((device) => device.id), [DeviceInventoryIds.localDevice, 'oldest', 'newest']);
+    expect(devices.first.cloudDeviceId, 'current-cloud');
+  });
+
   test('keeps local identity while the matching local daemon restarts', () {
     AppPlatform.overrideIsDesktop = true;
     final localSocket = FakeSanadSocketService(hardwareId: 'device-1')..setConnected(false);

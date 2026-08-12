@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:get_it/get_it.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
+import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
@@ -13,6 +16,8 @@ import 'package:sanad_agent/interfaces/runtime/platform_session_channel.dart';
 import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 import 'package:socket_io_client/src/manager.dart';
 import 'package:test/test.dart';
+
+import '../support/memory_agent_secret_store.dart';
 
 const blockedWorkspaceCommands = <String>[
   CanonicalEventTypes.createWorkspace,
@@ -112,12 +117,32 @@ class FakeSocket implements socket_io.Socket {
 class FakeAuthManager extends AuthManager {
   final _controller = StreamController<void>.broadcast();
   bool authenticated = true;
+  bool cloudAuthorized = true;
+  int refreshAttempts = 0;
+  String? token;
+  String? pairing;
+  String? pending;
 
   @override
   Stream<void> get changes => _controller.stream;
 
   @override
+  String? get deviceToken => token;
+
+  @override
+  String? get pairingToken => pairing;
+
+  @override
+  String? get pendingDeviceToken => pending;
+
+  @override
+  bool get hasPendingDevicePairing => pairing != null && pending != null;
+
+  @override
   bool get isAuthenticated => authenticated;
+
+  @override
+  bool get canAuthenticateCloudAgent => cloudAuthorized;
 
   @override
   String get hardwareId => 'test-device-id';
@@ -125,8 +150,14 @@ class FakeAuthManager extends AuthManager {
   @override
   Future<bool> reload({bool notifyIfChanged = false}) async => false;
 
-  void setAuthenticated(bool value) {
-    authenticated = value;
+  @override
+  Future<bool> refreshAccessToken(String portalUrl) async {
+    refreshAttempts += 1;
+    return true;
+  }
+
+  void setCloudAuthorized(bool value) {
+    cloudAuthorized = value;
     _controller.add(null);
   }
 
@@ -257,6 +288,12 @@ class TrackingWorkspaceRuntimeService extends LocalWorkspaceRuntimeService {
   }
 }
 
+Map<String, dynamic> _proofPayload(String proof) {
+  final encoded = proof.split('.')[1];
+  return jsonDecode(utf8.decode(base64Url.decode(base64Url.normalize(encoded))))
+      as Map<String, dynamic>;
+}
+
 void main() {
   final getIt = GetIt.instance;
   late Directory tempDir;
@@ -265,11 +302,14 @@ void main() {
   late TrackingPlatformRuntimeBridge runtimeBridge;
   late TrackingWorkspaceRuntimeService workspaceRuntime;
   late ServerSanadGatewayPlatform platform;
+  late MemoryAgentSecretStore secrets;
 
   setUp(() async {
     getIt.allowReassignment = true;
     tempDir = await Directory.systemTemp.createTemp('sanad-platform-test');
+    setSanadHomeOverride(tempDir.path);
     socket = FakeSocket();
+    secrets = MemoryAgentSecretStore();
     runtimeBridge = TrackingPlatformRuntimeBridge();
     workspaceRuntime = TrackingWorkspaceRuntimeService(
       sanadHomePath: tempDir.path,
@@ -282,7 +322,11 @@ void main() {
     getIt.registerSingleton<PlatformRuntimeBridge>(runtimeBridge);
     getIt.registerSingleton<LocalWorkspaceRuntimeService>(workspaceRuntime);
 
-    platform = ServerSanadGatewayPlatform(socketFactory: (_, _) => socket);
+    platform = ServerSanadGatewayPlatform(
+      socketFactory: (_, _) => socket,
+      identityLoader: () =>
+          DeviceKeyIdentity.loadOrCreate(secretStore: secrets),
+    );
     await platform.initialize();
     await socket.trigger('register_success', {'device_id': 'test-device-id'});
     socket.emittedEvents.clear();
@@ -291,6 +335,7 @@ void main() {
   tearDown(() async {
     await platform.dispose();
     await authManager.close();
+    setSanadHomeOverride(null);
     if (tempDir.existsSync()) {
       await tempDir.delete(recursive: true);
     }
@@ -298,20 +343,107 @@ void main() {
   });
 
   test(
-    'disconnects and reconnects cloud transport after auth changes',
+    'User session alone does not keep the Agent cloud transport online',
     () async {
       expect(platform.socket, same(socket));
       expect(socket.connected, isTrue);
+      expect(authManager.isAuthenticated, isTrue);
 
-      authManager.setAuthenticated(false);
+      authManager.setCloudAuthorized(false);
       await Future<void>.delayed(const Duration(milliseconds: 20));
+      expect(authManager.isAuthenticated, isTrue);
       expect(platform.socket, isNull);
       expect(socket.connected, isFalse);
 
-      authManager.setAuthenticated(true);
+      authManager.setCloudAuthorized(true);
       await Future<void>.delayed(const Duration(milliseconds: 20));
       expect(platform.socket, same(socket));
       expect(socket.connected, isTrue);
+    },
+  );
+
+  test('invalid Agent credential never refreshes the User session', () async {
+    socket.emittedEvents.clear();
+
+    await socket.trigger('register_failed', {
+      'error': 'Invalid or missing agent token',
+      'code': 'AUTH_INVALID_TOKEN',
+    });
+
+    expect(authManager.refreshAttempts, 0);
+    expect(socket.emittedEvents, isEmpty);
+  });
+
+  test(
+    'key-bound registration requires and signs a Gateway challenge',
+    () async {
+      authManager.token = 'sanad_device_synthetic-credential';
+      socket.emittedEvents.clear();
+
+      await socket.trigger('connect', null);
+
+      expect(socket.emittedEvents, [
+        {'event': 'request_device_challenge', 'data': null},
+      ]);
+
+      socket.emittedEvents.clear();
+      await socket.trigger('device_challenge', {'nonce': 'gateway-nonce-1'});
+
+      final registration = socket.emittedEvents.singleWhere(
+        (event) =>
+            event['event'] == 'register_device' &&
+            event['data'] is Map &&
+            (event['data'] as Map).containsKey('device_proof'),
+      );
+
+      final payload = Map<String, dynamic>.from(registration['data'] as Map);
+      expect(payload['device_token'], 'sanad_device_synthetic-credential');
+      expect(payload, isNot(contains('pairing_token')));
+      expect(payload, isNot(contains('proposed_device_token')));
+      final proof = payload['device_proof'] as String;
+      final claims = _proofPayload(proof);
+      expect(claims['htm'], 'SOCKET');
+      expect(claims['htu'], 'sanad-gateway:register_device');
+      expect(claims['nonce'], 'gateway-nonce-1');
+      expect(claims['jti'], isNotEmpty);
+      expect(payload.toString(), isNot(contains('private_key')));
+    },
+  );
+
+  test(
+    'pairing registration is challenged and carries the same public key proof',
+    () async {
+      authManager.pairing = 'synthetic-pairing-token';
+      authManager.pending = 'sanad_synthetic-pending-credential';
+      socket.emittedEvents.clear();
+
+      await socket.trigger('connect', null);
+      expect(socket.emittedEvents, [
+        {'event': 'request_device_challenge', 'data': null},
+      ]);
+
+      socket.emittedEvents.clear();
+      await socket.trigger('device_challenge', {'nonce': 'pairing-nonce-1'});
+
+      final registration = socket.emittedEvents.singleWhere(
+        (event) =>
+            event['event'] == 'register_device' &&
+            event['data'] is Map &&
+            (event['data'] as Map)['pairing_token'] ==
+                'synthetic-pairing-token',
+      );
+      final payload = Map<String, dynamic>.from(registration['data'] as Map);
+      expect(payload['pairing_token'], 'synthetic-pairing-token');
+      expect(
+        payload['proposed_device_token'],
+        'sanad_synthetic-pending-credential',
+      );
+      expect(payload['public_jwk'], isA<Map>());
+      final proof = payload['device_proof'] as String;
+      final claims = _proofPayload(proof);
+      expect(claims['nonce'], 'pairing-nonce-1');
+      expect(claims['htu'], 'sanad-gateway:register_device');
+      expect(payload.toString(), isNot(contains('private_key')));
     },
   );
 

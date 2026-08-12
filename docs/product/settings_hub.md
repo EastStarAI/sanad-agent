@@ -14,7 +14,7 @@ Settings is the single place to manage the Sanad client, account, installed agen
 
 ## Navigation
 
-The primary Settings navigation contains Profile and General, followed by devices. Selecting a device reveals Overview, Providers, MCP Servers, Skills, and its Workspaces. Up to six workspaces are visible initially; Show all and Show less expand or collapse the remainder.
+The primary Settings navigation contains Profile and General, followed by devices. On desktop, the current local device is pinned first; remaining devices are oldest-to-newest. Web and mobile show the complete device list oldest-to-newest. Selecting a device reveals Overview, Providers, MCP Servers, Skills, and its Workspaces. Up to six workspaces are visible initially; Show all and Show less expand or collapse the remainder.
 
 Selecting a device changes only the Settings inspection target. The conversation device changes only through Set as active in Overview.
 

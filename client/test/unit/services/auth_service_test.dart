@@ -1,6 +1,10 @@
 import 'package:sanad_auth_lock/sanad_auth_lock.dart';
+import 'dart:async';
+
 import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
+import 'package:sanad_client/features/auth/infrastructure/auth_callback_contract.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
+import 'package:sanad_client/features/auth/infrastructure/colocated_auth_coupling_client.dart';
 import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dart';
 import 'package:sanad_client/infrastructure/local_tools/sanad_settings_store.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -49,8 +53,41 @@ class StubPortalAuthClient extends PortalAuthClient {
   PortalAuthRefresh? response;
   Object? error;
   int refreshCalls = 0;
+  int redemptionCalls = 0;
+  int logoutCalls = 0;
+  String? logoutAccessToken;
+  String? logoutRefreshToken;
 
   StubPortalAuthClient() : super(dio: MockDio());
+
+  @override
+  Future<PortalClientTransaction> createClientTransaction({
+    required String clientId,
+    required String redirectUri,
+    required String codeChallenge,
+    String? enrollmentRequestId,
+  }) async {
+    return const PortalClientTransaction(
+      transactionId: 'expected-transaction',
+      authorizationUrl: 'https://portal.test/authorize',
+      expiresIn: 30,
+    );
+  }
+
+  @override
+  Future<PortalAuthTokens> redeemAuthorizationCode({
+    required String clientId,
+    required String redirectUri,
+    required String code,
+    required String codeVerifier,
+  }) async {
+    redemptionCalls += 1;
+    return const PortalAuthTokens(
+      accessToken: 'synthetic-access',
+      refreshToken: 'synthetic-refresh',
+      tokenType: 'bearer',
+    );
+  }
 
   @override
   Future<PortalAuthRefresh> refresh({required String refreshToken}) async {
@@ -61,7 +98,45 @@ class StubPortalAuthClient extends PortalAuthClient {
   }
 
   @override
-  Future<void> logout({String? accessToken, String? refreshToken}) async {}
+  Future<void> logout({String? accessToken, String? refreshToken}) async {
+    logoutCalls += 1;
+    logoutAccessToken = accessToken;
+    logoutRefreshToken = refreshToken;
+  }
+}
+
+class StubColocatedAuthCouplingClient extends ColocatedAuthCouplingClient {
+  StubColocatedAuthCouplingClient() : super(dio: MockDio(), isDesktop: true);
+
+  int logoutCalls = 0;
+  Future<void>? logoutResult;
+
+  @override
+  Future<void> logoutAgent() {
+    logoutCalls += 1;
+    return logoutResult ?? Future<void>.value();
+  }
+}
+
+class StubCallbackBinding implements AuthCallbackBinding {
+  StubCallbackBinding(this.result);
+
+  final AuthCallbackResult result;
+  bool disposed = false;
+
+  @override
+  String get clientId => 'sanad_flutter_desktop';
+
+  @override
+  String get redirectUri => 'http://127.0.0.1:49152/oauth/callback';
+
+  @override
+  Future<AuthCallbackResult> waitForResult(Duration timeout) async => result;
+
+  @override
+  Future<void> dispose() async {
+    disposed = true;
+  }
 }
 
 void main() {
@@ -70,16 +145,19 @@ void main() {
   late AuthService authService;
   late MockSanadSettingsStore mockStore;
   late SharedPreferences prefs;
+  late StubColocatedAuthCouplingClient colocatedCoupling;
 
   setUp(() async {
     AppPlatform.overrideIsDesktop = true;
     SharedPreferences.setMockInitialValues({});
     prefs = await SharedPreferences.getInstance();
     mockStore = MockSanadSettingsStore();
+    colocatedCoupling = StubColocatedAuthCouplingClient();
     authService = AuthService(
       dio: MockDio(),
       prefs: prefs,
       settingsStore: mockStore,
+      colocatedCoupling: colocatedCoupling,
     );
   });
 
@@ -164,29 +242,90 @@ void main() {
       },
     );
 
-    test('login updates both auth.json and SharedPreferences', () async {
-      // Note: testing login might require mocking the profile request if it triggers it.
-      // But we can test the internal state if we can trigger it.
+    test('wrong callback state is rejected before code redemption', () async {
+      final portal = StubPortalAuthClient();
+      final callback = StubCallbackBinding(
+        const AuthCallbackResult(
+          code: 'copied-code',
+          state: 'attacker-transaction',
+        ),
+      );
+      authService.dispose();
+      authService = AuthService(
+        dio: MockDio(),
+        prefs: prefs,
+        settingsStore: mockStore,
+        portalAuth: portal,
+        callbackBindingFactory: () async => callback,
+        authorizationLauncher: (_) async => true,
+      );
+
+      await expectLater(authService.login(), throwsStateError);
+
+      expect(portal.redemptionCalls, 0);
+      expect(authService.accessToken, isNull);
+      expect(callback.disposed, isTrue);
+      expect(prefs.getString('backend_access_token'), isNull);
     });
 
-    test('logout clears tokens but preserves hardware_id', () async {
+    test(
+      'logout requests Agent logout, preserves revoke tokens, and keeps hardware_id',
+      () async {
+        final portal = StubPortalAuthClient();
+        authService.dispose();
+        authService = AuthService(
+          dio: MockDio(),
+          prefs: prefs,
+          settingsStore: mockStore,
+          portalAuth: portal,
+          colocatedCoupling: colocatedCoupling,
+        );
+        mockStore.authDocument = {
+          'access_token': 'test_token',
+          'refresh_token': 'test_refresh',
+          'device_token': 'legacy-device',
+          'pairing_token': 'test-pairing',
+          'pending_device_token': 'legacy-pending',
+          'hardware_id': 'test_hardware',
+        };
+        await prefs.setString('backend_access_token', 'stale-pref-token');
+        await prefs.setString('backend_refresh_token', 'stale-pref-refresh');
+        final exchange = authService.authenticationExchangeStream.first;
+
+        await authService.logout();
+        await exchange;
+        await Future<void>.delayed(Duration.zero);
+
+        expect(colocatedCoupling.logoutCalls, 1);
+        expect(portal.logoutCalls, 1);
+        expect(portal.logoutAccessToken, 'test_token');
+        expect(portal.logoutRefreshToken, 'test_refresh');
+        expect(mockStore.authDocument['access_token'], isNull);
+        expect(mockStore.authDocument['refresh_token'], isNull);
+        expect(mockStore.authDocument['device_token'], isNull);
+        expect(mockStore.authDocument['pairing_token'], isNull);
+        expect(mockStore.authDocument['pending_device_token'], isNull);
+        expect(mockStore.authDocument['agent_logout_pending'], isTrue);
+        expect(mockStore.authDocument['hardware_id'], equals('test_hardware'));
+        expect(prefs.getString('backend_access_token'), isNull);
+        expect(prefs.getString('backend_refresh_token'), isNull);
+      },
+    );
+
+    test('unreachable Agent does not delay or fail Client logout', () async {
+      colocatedCoupling.logoutResult = Completer<void>().future;
       mockStore.authDocument = {
         'access_token': 'test_token',
         'refresh_token': 'test_refresh',
         'hardware_id': 'test_hardware',
       };
-      await prefs.setString('backend_access_token', 'test_token');
-      await prefs.setString('backend_refresh_token', 'test_refresh');
-      final exchange = authService.authenticationExchangeStream.first;
 
-      await authService.logout();
-      await exchange;
+      await authService.logout().timeout(const Duration(seconds: 1));
 
-      expect(mockStore.authDocument['access_token'], isNull);
-      expect(mockStore.authDocument['refresh_token'], isNull);
-      expect(mockStore.authDocument['hardware_id'], equals('test_hardware'));
-      expect(prefs.getString('backend_access_token'), isNull);
-      expect(prefs.getString('backend_refresh_token'), isNull);
+      expect(authService.accessToken, isNull);
+      expect(colocatedCoupling.logoutCalls, 1);
+      expect(mockStore.authDocument['agent_logout_pending'], isTrue);
+      expect(mockStore.authDocument['hardware_id'], 'test_hardware');
     });
 
     test(
