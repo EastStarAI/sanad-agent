@@ -153,6 +153,47 @@ void main() {
     addTearDown(tester.view.reset);
   }
 
+  testWidgets('session titles follow their first strong character', (tester) async {
+    final arabicFirst = Session(
+      id: 's-arabic-direction',
+      title: 'مرحبا this title continues mostly in English',
+      deviceId: device.id,
+      createdAt: DateTime(2026, 1, 3),
+      updatedAt: DateTime(2026, 1, 3),
+    );
+    final englishFirst = Session(
+      id: 's-english-direction',
+      title: 'Hello هذا العنوان يكمل باللغة العربية',
+      deviceId: device.id,
+      createdAt: DateTime(2026, 1, 4),
+      updatedAt: DateTime(2026, 1, 4),
+    );
+    cacheStore.applySessionCreated(device.id, arabicFirst);
+    cacheStore.applySessionCreated(device.id, englishFirst);
+
+    await pumpSidebar(tester);
+    await tester.pump();
+
+    final arabicFinder = find.text(arabicFirst.title);
+    final englishFinder = find.text(englishFirst.title);
+    final arabicTitle = tester.widget<Text>(arabicFinder);
+    final englishTitle = tester.widget<Text>(englishFinder);
+    expect(arabicTitle.textDirection, TextDirection.rtl);
+    expect(arabicTitle.textAlign, TextAlign.start);
+    expect(englishTitle.textDirection, TextDirection.ltr);
+    expect(englishTitle.textAlign, TextAlign.start);
+
+    final arabicAlign = tester.widget<Align>(
+      find.ancestor(of: arabicFinder, matching: find.byType(Align)).first,
+    );
+    final englishAlign = tester.widget<Align>(
+      find.ancestor(of: englishFinder, matching: find.byType(Align)).first,
+    );
+    expect(arabicAlign.alignment, AlignmentDirectional.centerStart);
+    expect(englishAlign.alignment, AlignmentDirectional.centerStart);
+    expect(tester.getTopLeft(arabicFinder).dx, closeTo(tester.getTopLeft(englishFinder).dx, 0.1));
+  });
+
   testWidgets('device selector header is always present and dropdown exposes Device Settings', (tester) async {
     await pumpSidebar(tester);
     expect(find.textContaining('Sanad Desktop'), findsOneWidget);
