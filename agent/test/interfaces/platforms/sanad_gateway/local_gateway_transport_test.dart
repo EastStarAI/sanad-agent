@@ -14,6 +14,8 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_br
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:test/test.dart';
 
+import '../../../support/memory_agent_secret_store.dart';
+
 class _TransportTestConfig extends Config {
   _TransportTestConfig(this._port);
 
@@ -30,6 +32,8 @@ class _TransportTestConfig extends Config {
 }
 
 class _ExchangeAuthManager extends AuthManager {
+  _ExchangeAuthManager() : super(secretStore: MemoryAgentSecretStore());
+
   final _controller = StreamController<void>.broadcast();
   int reloadCalls = 0;
   int logoutCalls = 0;
