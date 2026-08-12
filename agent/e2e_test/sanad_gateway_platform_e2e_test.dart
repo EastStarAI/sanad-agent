@@ -45,6 +45,8 @@ import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 
+import 'support/local_gateway_test_support.dart';
+
 class MockAuthManager extends AuthManager {
   @override
   bool get isAuthenticated => true;
@@ -488,15 +490,19 @@ void main() {
       final platform = LocalDaemonServerPlatform();
       await platform.initialize();
 
-      final healthResponse = await HttpClient().getUrl(
+      final healthRequest = await HttpClient().getUrl(
         Uri.parse('http://127.0.0.1:$port/health'),
       );
-      final health = await (await healthResponse.close())
+      authorizeLocalGatewayTestRequest(healthRequest, tempSanadHome.path);
+      final health = await (await healthRequest.close())
           .transform(utf8.decoder)
           .join();
       expect(jsonDecode(health)['status'], equals('ok'));
 
-      final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+      final socket = await connectAuthenticatedLocalGateway(
+        port: port,
+        sanadHomePath: tempSanadHome.path,
+      );
       final frames = StreamIterator(socket);
       await frames.moveNext();
       final firstFrame =
@@ -536,6 +542,7 @@ void main() {
       'sanad-agent-gateway-test',
     );
     setSanadHomeOverride(tempSanadHome.path);
+    getIt.registerSingleton<AuthManager>(AuthManager());
     getIt.registerSingleton<Config>(TestLocalConfig(port));
     getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
     getIt.registerSingleton<PlatformRuntimeBridge>(PlatformRuntimeBridge());
@@ -549,12 +556,14 @@ void main() {
     final restartRequest = await client.postUrl(
       Uri.parse('http://127.0.0.1:$port/restart?timeout_seconds=60'),
     );
+    authorizeLocalGatewayTestRequest(restartRequest, tempSanadHome.path);
     final restartResponse = restartRequest.close();
     await restartCoordinator.started.future;
 
     final healthRequest = await client.getUrl(
       Uri.parse('http://127.0.0.1:$port/health'),
     );
+    authorizeLocalGatewayTestRequest(healthRequest, tempSanadHome.path);
     final healthResponse = await healthRequest.close().timeout(
       const Duration(seconds: 1),
     );
@@ -612,7 +621,10 @@ void main() {
         Message(role: MessageRole.assistant, content: 'Old answer'),
       ]);
 
-      final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+      final socket = await connectAuthenticatedLocalGateway(
+        port: port,
+        sanadHomePath: tempSanadHome.path,
+      );
       final frames = StreamIterator<dynamic>(socket);
       await _nextFrame(frames);
       socket.add(
@@ -701,7 +713,10 @@ void main() {
     final platform = LocalDaemonServerPlatform();
     await platform.initialize();
 
-    final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+    final socket = await connectAuthenticatedLocalGateway(
+      port: port,
+      sanadHomePath: tempSanadHome.path,
+    );
     final frames = StreamIterator(socket);
     await frames.moveNext();
     expect(
@@ -797,7 +812,10 @@ void main() {
       final platform = LocalDaemonServerPlatform();
       await platform.initialize();
 
-      final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+      final socket = await connectAuthenticatedLocalGateway(
+        port: port,
+        sanadHomePath: tempSanadHome.path,
+      );
       final frames = StreamIterator(socket);
       await frames.moveNext();
       jsonDecode(frames.current as String);
@@ -903,7 +921,10 @@ void main() {
         adapter: adapter,
       );
 
-      final firstSocket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+      final firstSocket = await connectAuthenticatedLocalGateway(
+        port: port,
+        sanadHomePath: tempSanadHome.path,
+      );
       final firstFrames = StreamIterator<dynamic>(firstSocket);
       await _nextFrame(firstFrames);
 
@@ -966,7 +987,10 @@ void main() {
         adapter: adapter,
       );
 
-      final secondSocket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+      final secondSocket = await connectAuthenticatedLocalGateway(
+        port: port,
+        sanadHomePath: tempSanadHome.path,
+      );
       final secondFrames = StreamIterator<dynamic>(secondSocket);
       await _nextFrame(secondFrames);
 

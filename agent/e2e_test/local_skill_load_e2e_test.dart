@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
-const _requiredOllamaModel = 'gemma4:e2b';
+import 'support/local_gateway_test_support.dart';
 
 void main() {
   test(
@@ -12,14 +12,11 @@ void main() {
     () async {
       final port = _pickPort();
       final sanadagentLocalDir = Directory.current;
-      final ollamaBaseUrl = _normalizeOllamaBaseUrl(
-        Platform.environment['LLM_BASE_URL'] ??
-            Platform.environment['SANADAGENT_LLM_BASE_URL'] ??
-            'http://127.0.0.1:11434',
-      );
-      final configuredModel = await _resolveInstalledOllamaModel(ollamaBaseUrl);
       final sanadHome = await Directory.systemTemp.createTemp(
         'sanad-agent-skill-e2e-home',
+      );
+      final sanadStateHome = await Directory.systemTemp.createTemp(
+        'sanad-agent-skill-e2e-state',
       );
       final workspaceDir = Directory('${sanadHome.path}/workspace')
         ..createSync(recursive: true);
@@ -27,6 +24,9 @@ void main() {
       addTearDown(() async {
         if (sanadHome.existsSync()) {
           await sanadHome.delete(recursive: true);
+        }
+        if (sanadStateHome.existsSync()) {
+          await sanadStateHome.delete(recursive: true);
         }
       });
 
@@ -48,9 +48,8 @@ Use the review skill for workspace audits.
       final daemon = await _startDaemon(
         sanadagentLocalDir: sanadagentLocalDir,
         sanadHome: sanadHome,
+        sanadStateHome: sanadStateHome,
         port: port,
-        configuredModel: configuredModel,
-        configuredBaseUrl: ollamaBaseUrl,
       );
       addTearDown(() async {
         daemon.kill(ProcessSignal.sigterm);
@@ -63,9 +62,12 @@ Use the review skill for workspace audits.
         );
       });
 
-      await _waitForHealth(port);
+      await _waitForHealth(port, sanadHome.path);
 
-      final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+      final socket = await connectAuthenticatedLocalGateway(
+        port: port,
+        sanadHomePath: sanadHome.path,
+      );
       addTearDown(() async {
         await socket.close();
       });
@@ -89,11 +91,9 @@ Use the review skill for workspace audits.
             'request_id': requestId,
             'session_id': sessionId,
             'workspace_id': workspaceDir.path,
-            'model': 'ollama/$configuredModel',
-            'message':
-                'You must call the tool named skill_load exactly once as your first action with skill="review" and args="--focus docs". '
-                'Do not answer from memory and do not skip the tool call. '
-                'After the tool returns, answer with exactly OK.',
+            'provider_instance_id': 'e2e-provider',
+            'model': 'e2e-model',
+            'message': '__SANAD_E2E_SKILL_LOAD__',
           },
         }),
       );
@@ -163,8 +163,11 @@ Use the review skill for workspace audits.
         toolResultFrame!['payload'] as Map,
       );
       final toolOutput = toolResultPayload['output']?.toString() ?? '';
-      expect(toolOutput, contains('"skill": "review"'));
-      expect(toolOutput, contains('"args": "--focus docs"'));
+      expect(toolOutput, startsWith('Skill source: '));
+      expect(
+        toolOutput,
+        contains('/workspace/.sanad/skills/review/SKILL.md\n\n'),
+      );
       expect(
         toolOutput,
         contains('Use the review skill for workspace audits.'),
@@ -190,18 +193,19 @@ int _pickPort() {
 Future<Process> _startDaemon({
   required Directory sanadagentLocalDir,
   required Directory sanadHome,
+  required Directory sanadStateHome,
   required int port,
-  required String configuredModel,
-  required String configuredBaseUrl,
 }) async {
   final environment = <String, String>{
     ...Platform.environment,
     'SANAD_HOME': sanadHome.path,
+    'SANAD_STATE_HOME': sanadStateHome.path,
+    'SANAD_E2E_TEST_MODE': 'true',
     'ENABLE_GATEWAY': 'false',
     'ENABLE_LOCAL_GATEWAY': 'true',
     'LOCAL_GATEWAY_PORT': '$port',
-    'LLM_BASE_URL': configuredBaseUrl,
-    'LLM_MODEL': configuredModel,
+    'LLM_BASE_URL': 'http://127.0.0.1/e2e',
+    'LLM_MODEL': 'e2e-model',
   };
 
   final process = await Process.start(
@@ -229,7 +233,7 @@ Future<Process> _startDaemon({
   return process;
 }
 
-Future<void> _waitForHealth(int port) async {
+Future<void> _waitForHealth(int port, String sanadHomePath) async {
   final client = HttpClient();
   final deadline = DateTime.now().add(const Duration(seconds: 20));
   Object? lastError;
@@ -240,6 +244,7 @@ Future<void> _waitForHealth(int port) async {
         final request = await client.getUrl(
           Uri.parse('http://127.0.0.1:$port/health'),
         );
+        authorizeLocalGatewayTestRequest(request, sanadHomePath);
         final response = await request.close();
         final body = await response.transform(utf8.decoder).join();
         if (response.statusCode == 200) {
@@ -262,48 +267,4 @@ Future<void> _waitForHealth(int port) async {
   throw StateError(
     'Local daemon health endpoint did not become ready: $lastError',
   );
-}
-
-String _normalizeOllamaBaseUrl(String raw) {
-  final trimmed = raw.trim();
-  if (trimmed.endsWith('/v1')) {
-    return trimmed.substring(0, trimmed.length - 3);
-  }
-  return trimmed;
-}
-
-Future<String> _resolveInstalledOllamaModel(String baseUrl) async {
-  final client = HttpClient();
-  try {
-    final request = await client.getUrl(Uri.parse('$baseUrl/api/tags'));
-    final response = await request.close();
-    final body = await response.transform(utf8.decoder).join();
-    if (response.statusCode != 200) {
-      throw StateError('Ollama tags request failed: $body');
-    }
-
-    final decoded = jsonDecode(body) as Map<String, dynamic>;
-    final rawModels = (decoded['models'] as List<dynamic>? ?? const [])
-        .whereType<Map>()
-        .map((entry) => Map<String, dynamic>.from(entry))
-        .toList(growable: false);
-    if (rawModels.isEmpty) {
-      throw StateError('No Ollama models are installed.');
-    }
-
-    final installedNames = rawModels
-        .map((entry) => entry['name']?.toString() ?? '')
-        .where((name) => name.isNotEmpty)
-        .toList(growable: false);
-    if (!installedNames.contains(_requiredOllamaModel)) {
-      throw StateError(
-        'Required Ollama model $_requiredOllamaModel is not installed. '
-        'Installed models: ${installedNames.join(', ')}',
-      );
-    }
-
-    return _requiredOllamaModel;
-  } finally {
-    client.close(force: true);
-  }
 }

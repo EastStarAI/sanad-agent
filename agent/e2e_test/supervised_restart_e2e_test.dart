@@ -4,6 +4,8 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
+import 'support/local_gateway_test_support.dart';
+
 void main() {
   test(
     'source daemon supervisor relaunches the child after POST /restart',
@@ -43,6 +45,8 @@ Future<void> _verifySupervisedRestart({
   final port = probe.port;
   await probe.close();
 
+  final sanadHomePath = '${tempHome.path}${Platform.pathSeparator}home';
+  final sanadStateHomePath = '${tempHome.path}${Platform.pathSeparator}state';
   final logs = <String>[];
   Process? supervisor;
   var stopped = false;
@@ -53,8 +57,8 @@ Future<void> _verifySupervisedRestart({
       workingDirectory: Directory.current.path,
       environment: {
         ...Platform.environment,
-        'SANAD_HOME': tempHome.path,
-        'SANAD_STATE_HOME': '${tempHome.path}${Platform.pathSeparator}state',
+        'SANAD_HOME': sanadHomePath,
+        'SANAD_STATE_HOME': sanadStateHomePath,
         'ENABLE_LOCAL_GATEWAY': 'true',
         'LOCAL_GATEWAY_HOST': '127.0.0.1',
         'LOCAL_GATEWAY_PORT': '$port',
@@ -77,16 +81,17 @@ Future<void> _verifySupervisedRestart({
           .asFuture<void>(),
     );
 
-    await _waitForHealth(port, logs: logs);
+    await _waitForHealth(port, sanadHomePath, logs: logs);
     final invalidTimeout = await _post(
       port,
+      sanadHomePath,
       '/restart?timeout_seconds=0',
       expectedStatus: HttpStatus.badRequest,
     );
     expect(invalidTimeout['outcome'], 'invalid_timeout');
-    await _waitForHealth(port, logs: logs);
+    await _waitForHealth(port, sanadHomePath, logs: logs);
 
-    final restart = await _post(port, '/restart');
+    final restart = await _post(port, sanadHomePath, '/restart');
     expect(restart['outcome'], 'safe');
 
     final supervisorExited = await Future.any<bool>([
@@ -99,9 +104,9 @@ Future<void> _verifySupervisedRestart({
       reason:
           'The supervisor exited instead of replacing its daemon child.\n${logs.join('\n')}',
     );
-    await _waitForHealth(port, logs: logs);
+    await _waitForHealth(port, sanadHomePath, logs: logs);
 
-    await _post(port, '/stop');
+    await _post(port, sanadHomePath, '/stop');
     final exitCode = await supervisor.exitCode.timeout(
       const Duration(seconds: 10),
     );
@@ -110,7 +115,7 @@ Future<void> _verifySupervisedRestart({
   } finally {
     if (!stopped) {
       try {
-        await _post(port, '/stop');
+        await _post(port, sanadHomePath, '/stop');
       } catch (_) {}
       supervisor?.kill(ProcessSignal.sigterm);
     }
@@ -120,7 +125,11 @@ Future<void> _verifySupervisedRestart({
   }
 }
 
-Future<void> _waitForHealth(int port, {required List<String> logs}) async {
+Future<void> _waitForHealth(
+  int port,
+  String sanadHomePath, {
+  required List<String> logs,
+}) async {
   final deadline = DateTime.now().add(const Duration(seconds: 25));
   while (DateTime.now().isBefore(deadline)) {
     final client = HttpClient();
@@ -128,6 +137,7 @@ Future<void> _waitForHealth(int port, {required List<String> logs}) async {
       final request = await client
           .getUrl(Uri.parse('http://127.0.0.1:$port/health'))
           .timeout(const Duration(milliseconds: 500));
+      authorizeLocalGatewayTestRequest(request, sanadHomePath);
       final response = await request.close().timeout(
         const Duration(milliseconds: 500),
       );
@@ -144,6 +154,7 @@ Future<void> _waitForHealth(int port, {required List<String> logs}) async {
 
 Future<Map<String, dynamic>> _post(
   int port,
+  String sanadHomePath,
   String path, {
   int expectedStatus = HttpStatus.ok,
 }) async {
@@ -152,6 +163,7 @@ Future<Map<String, dynamic>> _post(
     final request = await client.postUrl(
       Uri.parse('http://127.0.0.1:$port$path'),
     );
+    authorizeLocalGatewayTestRequest(request, sanadHomePath);
     final response = await request.close();
     final body = await response.transform(utf8.decoder).join();
     expect(response.statusCode, expectedStatus);

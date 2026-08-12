@@ -41,6 +41,44 @@ void main() {
     expect(restored?.status, 'requested');
   });
 
+  test('active switch ownership distinguishes live and stale launchers', () {
+    final request = RuntimeSwitchRequest(
+      id: 'request-active',
+      agentPort: 58091,
+      targetRepositoryRoot: Directory.systemTemp.path,
+      targetWorkspaceHash: 'abcd1234',
+      targetWorktreeName: 'feature-a',
+      targetBranch: 'feature/a',
+      targetIsLinkedWorktree: true,
+      requestedAt: DateTime.utc(2026, 7, 28),
+      launcherId: 'launcher-old',
+      runtimeNonce: 'nonce-old',
+      status: 'starting',
+    );
+
+    expect(isActiveRuntimeSwitch(request), isTrue);
+    expect(
+      isRuntimeSwitchOwnedByLauncher(
+        request,
+        launcherId: 'launcher-old',
+        runtimeNonce: 'nonce-old',
+      ),
+      isTrue,
+    );
+    expect(
+      isRuntimeSwitchOwnedByLauncher(
+        request,
+        launcherId: 'launcher-new',
+        runtimeNonce: 'nonce-new',
+      ),
+      isFalse,
+    );
+    expect(
+      isActiveRuntimeSwitch(request.copyWith(status: 'failed')),
+      isFalse,
+    );
+  });
+
   test('switch target must contain both agent and client source roots', () {
     final request = RuntimeSwitchRequest(
       id: 'request-1',

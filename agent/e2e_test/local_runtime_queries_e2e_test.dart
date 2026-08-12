@@ -4,7 +4,7 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 
-const _requiredOllamaModel = 'gemma4:e2b';
+import 'support/local_gateway_test_support.dart';
 
 void main() {
   test(
@@ -15,12 +15,18 @@ void main() {
       final sanadHome = await Directory.systemTemp.createTemp(
         'sanad-agent-e2e-home',
       );
+      final sanadStateHome = await Directory.systemTemp.createTemp(
+        'sanad-agent-e2e-state',
+      );
       final workspaceDir = Directory('${sanadHome.path}/workspace')
         ..createSync(recursive: true);
 
       addTearDown(() async {
         if (sanadHome.existsSync()) {
           await sanadHome.delete(recursive: true);
+        }
+        if (sanadStateHome.existsSync()) {
+          await sanadStateHome.delete(recursive: true);
         }
       });
 
@@ -42,6 +48,7 @@ Use the review skill for workspace audits.
       final daemon = await _startDaemon(
         sanadagentLocalDir: sanadagentLocalDir,
         sanadHome: sanadHome,
+        sanadStateHome: sanadStateHome,
         port: port,
       );
       addTearDown(() async {
@@ -55,9 +62,12 @@ Use the review skill for workspace audits.
         );
       });
 
-      await _waitForHealth(port);
+      await _waitForHealth(port, sanadHome.path);
 
-      final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+      final socket = await connectAuthenticatedLocalGateway(
+        port: port,
+        sanadHomePath: sanadHome.path,
+      );
       addTearDown(() async {
         await socket.close();
       });
@@ -117,16 +127,18 @@ int _pickPort() {
 Future<Process> _startDaemon({
   required Directory sanadagentLocalDir,
   required Directory sanadHome,
+  required Directory sanadStateHome,
   required int port,
 }) async {
   final environment = <String, String>{
     ...Platform.environment,
     'SANAD_HOME': sanadHome.path,
+    'SANAD_STATE_HOME': sanadStateHome.path,
     'ENABLE_GATEWAY': 'false',
     'ENABLE_LOCAL_GATEWAY': 'true',
     'LOCAL_GATEWAY_PORT': '$port',
     'LLM_BASE_URL': 'http://127.0.0.1:11434',
-    'LLM_MODEL': _requiredOllamaModel,
+    'LLM_MODEL': 'e2e-model',
   };
 
   final process = await Process.start(
@@ -154,7 +166,7 @@ Future<Process> _startDaemon({
   return process;
 }
 
-Future<void> _waitForHealth(int port) async {
+Future<void> _waitForHealth(int port, String sanadHomePath) async {
   final client = HttpClient();
   final deadline = DateTime.now().add(const Duration(seconds: 20));
   Object? lastError;
@@ -165,6 +177,7 @@ Future<void> _waitForHealth(int port) async {
         final request = await client.getUrl(
           Uri.parse('http://127.0.0.1:$port/health'),
         );
+        authorizeLocalGatewayTestRequest(request, sanadHomePath);
         final response = await request.close();
         final body = await response.transform(utf8.decoder).join();
         if (response.statusCode == 200) {

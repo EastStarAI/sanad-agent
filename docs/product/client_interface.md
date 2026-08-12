@@ -26,7 +26,9 @@ configuration, and runtime state displayed by the client. It does not create a
 new conversation.
 
 The compact Home gateway/status bar is a native-desktop surface. Web and mobile
-never render it, regardless of browser or viewport width.
+never render it, regardless of browser or viewport width. Its gateway and
+optional worktree badge consume only the expandable leading region; desktop
+mode and `SanadAgent` remain anchored to the trailing edge.
 
 Desktop onboarding is local-first: installing the agent on the current computer
 is the primary card action, while signing in or connecting a remote device is a
@@ -56,8 +58,10 @@ temporarily unavailable. Recent user activity moves a conversation to the top
 of its section without losing the current selection or scroll position.
 
 On wide desktop and tablet layouts, navigation appears as a persistent,
-resizable sidebar. On mobile and narrow layouts, it becomes a drawer that
-closes after a destination is selected.
+resizable sidebar. The resize target follows the sidebar's visible edge,
+including the macOS shell margin, and the selected desktop width is restored
+from local client preferences on the next launch. On mobile and narrow layouts,
+it becomes a drawer that closes after a destination is selected.
 
 Opening a conversation with active work shows its latest event so current
 progress is immediately visible. An idle conversation resumes from the event
@@ -99,8 +103,22 @@ opening; users never need to close and reopen the menu to refresh it.
 ## Active work
 
 The conversation timeline renders Markdown, code, reasoning summaries, tool
-activity, permission requests, recovery notices, and final responses. Dynamic
-event titles resolve their own text direction; Arabic ask-user headers mirror
+activity, permission requests, recovery notices, and final responses. Multiline
+Markdown code blocks detect Arabic versus non-Arabic content for text direction:
+Arabic code is RTL and other code is LTR. The code viewport itself always uses
+an LTR horizontal scroll origin so long blocks open with their left edge visible. Skill
+loading uses the same compact path-and-content presentation as File Read, while
+the loaded `SKILL.md` body renders as selectable README-style Markdown rather
+than raw tool JSON. File Read results for `.md` and `.markdown` targets place a
+`Raw | MD` switch beside the target path, default to rendered Markdown, and
+preserve the existing line-numbered source view under Raw. Both modes share one
+fixed-height scrollable viewport so switching never moves the surrounding
+timeline. The compact 8px-radius selector marks the active mode with the
+application primary color at 20% opacity and reuses the tool-surface border at
+5% on-surface opacity. Other file types keep the raw
+presentation without a switch. Dynamic event titles resolve their own
+text direction;
+Arabic ask-user headers mirror
 the complete header row while English headers remain left-to-right. Event
 runtime metadata uses milliseconds below one second, seconds below one minute,
 minutes plus seconds below one hour, and hours plus minutes thereafter.
@@ -122,9 +140,11 @@ When the agent calls the user-question tool, the composer area displays an
 inline question card with the prompt, suggested answers, and a custom-answer
 option. Submitting the answer resumes the same suspended turn.
 
-Permission cards show the requested action and the available approval scope.
-Permission decisions remain owned by the workspace and are distinct from
-ordinary clarification answers.
+Permission cards show the requested tool action and the available approval
+scope. For file access outside the selected workspace, the card shows the
+canonical target path without exposing write or edit content. Permission
+decisions remain owned by the workspace and are distinct from ordinary
+clarification answers.
 
 ## Providers and models
 

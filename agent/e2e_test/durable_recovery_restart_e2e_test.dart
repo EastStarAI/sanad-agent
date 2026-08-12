@@ -29,6 +29,8 @@ import 'dart:io';
 import 'dart:math';
 
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
+
+import 'support/local_gateway_test_support.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
@@ -681,14 +683,20 @@ class _RecoveryHarness {
   Future<_TestClient> startFirstDaemon() async {
     final proc = await _spawnDaemon();
     _firstDaemon = proc;
-    final client = await _TestClient.connect(port: gatewayPort);
+    final client = await _TestClient.connect(
+      port: gatewayPort,
+      sanadHomePath: sanadHome.path,
+    );
     return client;
   }
 
   Future<_TestClient> startSecondDaemon() async {
     final proc = await _spawnDaemon();
     _secondDaemon = proc;
-    final client = await _TestClient.connect(port: gatewayPort);
+    final client = await _TestClient.connect(
+      port: gatewayPort,
+      sanadHomePath: sanadHome.path,
+    );
     return client;
   }
 
@@ -730,7 +738,7 @@ class _RecoveryHarness {
           .listen((line) => stderr.writeln('[daemon!] $line'))
           .asFuture<void>(),
     );
-    await _waitForHealth(gatewayPort);
+    await _waitForHealth(gatewayPort, sanadHome.path);
     return proc;
   }
 
@@ -758,9 +766,7 @@ class _RecoveryHarness {
     if (proc == null) return;
     proc.kill(ProcessSignal.sigkill);
     try {
-      await proc.exitCode.timeout(
-        const Duration(seconds: 6),
-      );
+      await proc.exitCode.timeout(const Duration(seconds: 6));
     } catch (_) {}
   }
 
@@ -1215,8 +1221,14 @@ class _TestClient {
   final StreamIterator<dynamic> frames;
   final int port;
 
-  static Future<_TestClient> connect({required int port}) async {
-    final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws');
+  static Future<_TestClient> connect({
+    required int port,
+    required String sanadHomePath,
+  }) async {
+    final socket = await connectAuthenticatedLocalGateway(
+      port: port,
+      sanadHomePath: sanadHomePath,
+    );
     final frames = StreamIterator<dynamic>(socket);
     if (!await frames.moveNext()) {
       throw StateError('Local daemon did not send a register_success frame');
@@ -1504,7 +1516,7 @@ class _RuntimeNotice {
 int _unique() =>
     DateTime.now().microsecondsSinceEpoch ^ Random().nextInt(1 << 20);
 
-Future<void> _waitForHealth(int port) async {
+Future<void> _waitForHealth(int port, String sanadHomePath) async {
   final client = HttpClient();
   final deadline = DateTime.now().add(const Duration(seconds: 25));
   Object? lastError;
@@ -1514,6 +1526,7 @@ Future<void> _waitForHealth(int port) async {
         final request = await client.getUrl(
           Uri.parse('http://127.0.0.1:$port/health'),
         );
+        authorizeLocalGatewayTestRequest(request, sanadHomePath);
         final response = await request.close();
         final body = await response.transform(utf8.decoder).join();
         if (response.statusCode == 200) {

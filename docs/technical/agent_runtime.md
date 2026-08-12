@@ -243,6 +243,10 @@ also makes the session busy. If another connection wins the active-row race,
 admission retries as queued rather than exposing a SQLite uniqueness error.
 An unexpected platform command Future is contained by `GatewayManager`, which
 returns one controlled command error while keeping the daemon event loop live.
+During Stop, an expected recovery transition surfaced by stream cancellation is
+contained inside `SessionRunOrchestrator`; Stop remains authoritative and
+continues cancelling durable work so the execution snapshot reaches `idle`
+instead of remaining at `stopping`.
 
 ### 5.1.1. Authoritative queue and pending-steer ownership (Task 36)
 

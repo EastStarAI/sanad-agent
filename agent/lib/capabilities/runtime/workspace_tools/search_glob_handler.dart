@@ -10,8 +10,9 @@ class SearchGlobHandler {
 
   Future<String> execute(
     Map<String, dynamic> arguments,
-    String workspacePath,
-  ) async {
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
     final pattern = arguments['pattern']?.toString() ?? '';
     if (pattern.trim().isEmpty) {
       throw const FormatException('pattern is required.');
@@ -21,6 +22,7 @@ class SearchGlobHandler {
     final searchRoot = _resolveSearchRoot(
       workspaceRoot: workspaceRoot,
       pathArgument: arguments['path']?.toString(),
+      authorizedExternalRoot: authorizedExternalRoot,
     );
     final filenames = <String>[];
     var truncated = false;
@@ -56,6 +58,7 @@ class SearchGlobHandler {
       final absolute = _pathResolver.resolveExistingPath(
         workspaceRoot: workspaceRoot,
         inputPath: relative,
+        authorizedExternalRoot: authorizedExternalRoot,
       );
       fileStats[relative] = File(absolute).statSync().modified;
     }
@@ -78,6 +81,7 @@ class SearchGlobHandler {
   String _resolveSearchRoot({
     required String workspaceRoot,
     required String? pathArgument,
+    required String? authorizedExternalRoot,
   }) {
     if (pathArgument == null ||
         pathArgument.trim().isEmpty ||
@@ -87,6 +91,7 @@ class SearchGlobHandler {
     return _pathResolver.resolveExistingPath(
       workspaceRoot: workspaceRoot,
       inputPath: pathArgument,
+      authorizedExternalRoot: authorizedExternalRoot,
     );
   }
 }

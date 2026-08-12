@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -15,6 +16,8 @@ import 'package:diff_match_patch/diff_match_patch.dart';
 import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/app_markdown_renderer.dart';
+import 'package:sanad_client/utils/link_utils.dart';
 
 class FileToolTile extends StatefulWidget {
   final CanonicalEvent event;
@@ -31,6 +34,8 @@ class FileToolTile extends StatefulWidget {
 }
 
 class _FileToolTileState extends State<FileToolTile> {
+  static const double _readViewportHeight = 350;
+
   static final Highlight _highlight = Highlight()
     ..registerLanguage('dart', langDart)
     ..registerLanguage('json', langJson)
@@ -46,6 +51,7 @@ class _FileToolTileState extends State<FileToolTile> {
   TextSpan? _cachedCodeBlockSpan;
   final Map<String, List<TextSpan>> _highlightCache = {};
   static final Set<String> _loggedEvents = {};
+  bool _showMarkdown = true;
 
   @override
   void didChangeDependencies() {
@@ -60,6 +66,9 @@ class _FileToolTileState extends State<FileToolTile> {
   @override
   void didUpdateWidget(covariant FileToolTile oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (widget.event.id != oldWidget.event.id) {
+      _showMarkdown = true;
+    }
     if (widget.event.id != oldWidget.event.id ||
         widget.event.toolOutput != oldWidget.event.toolOutput ||
         widget.isFullyExpanded != oldWidget.isFullyExpanded) {
@@ -311,20 +320,110 @@ class _FileToolTileState extends State<FileToolTile> {
       startLine = (int.tryParse(offsetVal) ?? 0) + 1;
     }
 
+    final isMarkdown = _isMarkdownPath(path.toString());
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (path.toString().isNotEmpty) ...[
-          _buildInfoRow(context, 'Target Path', _toRelativePath(context, path.toString())),
+          Row(
+            children: [
+              Expanded(
+                child: _buildInfoRow(
+                  context,
+                  'Target Path',
+                  _toRelativePath(context, path.toString()),
+                ),
+              ),
+              if (isMarkdown) ...[
+                const SizedBox(width: 12),
+                _buildReadViewSwitch(context),
+              ],
+            ],
+          ),
           const SizedBox(height: 8),
         ],
-        _buildCodeBlock(
-          context,
-          code: content,
-          filePath: path.toString(),
-          startLine: startLine,
+        SizedBox(
+          key: const Key('file_read_content_viewport'),
+          width: double.infinity,
+          height: _readViewportHeight,
+          child: isMarkdown && _showMarkdown
+              ? SingleChildScrollView(
+                  key: const Key('file_read_markdown_body'),
+                  child: AppMarkdownRenderer(
+                    data: content,
+                    isFinal: true,
+                    onTapLink: (text, href, title) {
+                      unawaited(openExternalUrl(href));
+                    },
+                  ),
+                )
+              : KeyedSubtree(
+                  key: const Key('file_read_raw_body'),
+                  child: _buildCodeBlock(
+                    context,
+                    code: content,
+                    filePath: path.toString(),
+                    startLine: startLine,
+                  ),
+                ),
         ),
       ],
+    );
+  }
+
+  bool _isMarkdownPath(String path) {
+    final normalized = path.toLowerCase();
+    return normalized.endsWith('.md') || normalized.endsWith('.markdown');
+  }
+
+  Widget _buildReadViewSwitch(BuildContext context) {
+    final colors = Theme.of(context).colorScheme;
+
+    return SegmentedButton<bool>(
+      segments: const [
+        ButtonSegment<bool>(
+          value: false,
+          label: Text('Raw', key: Key('file_read_raw_toggle')),
+        ),
+        ButtonSegment<bool>(
+          value: true,
+          label: Text('MD', key: Key('file_read_md_toggle')),
+        ),
+      ],
+      selected: {_showMarkdown},
+      showSelectedIcon: false,
+      onSelectionChanged: (selection) {
+        setState(() {
+          _showMarkdown = selection.first;
+        });
+      },
+      style: ButtonStyle(
+        visualDensity: VisualDensity.compact,
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+        shape: WidgetStatePropertyAll(
+          RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        ),
+        backgroundColor: WidgetStateProperty.resolveWith((states) {
+          return states.contains(WidgetState.selected)
+              ? colors.primary.withValues(alpha: 0.2)
+              : Colors.transparent;
+        }),
+        foregroundColor: WidgetStateProperty.resolveWith((states) {
+          return states.contains(WidgetState.selected)
+              ? colors.primary
+              : colors.onSurfaceVariant;
+        }),
+        side: WidgetStatePropertyAll(
+          BorderSide(color: colors.onSurface.withValues(alpha: 0.05)),
+        ),
+        padding: const WidgetStatePropertyAll(
+          EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+        ),
+        textStyle: WidgetStatePropertyAll(
+          GoogleFonts.roboto(fontSize: 11, fontWeight: FontWeight.w600),
+        ),
+      ),
     );
   }
 
@@ -333,7 +432,7 @@ class _FileToolTileState extends State<FileToolTile> {
     required String code,
     required String filePath,
     required int startLine,
-    double height = 350,
+    double height = _readViewportHeight,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final defaultStyle = GoogleFonts.firaCode(

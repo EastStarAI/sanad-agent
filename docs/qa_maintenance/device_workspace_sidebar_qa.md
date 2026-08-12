@@ -97,8 +97,12 @@ description: "Focused QA coverage for the Plan 32c device-scoped sidebar, includ
 1. Validate on wide desktop width.
 2. Validate on narrow tablet/mobile width.
 3. **Expected desktop:** Fixed/resizable sidebar layout and its toggle, Back, and Forward header controls render without overflow on macOS, Linux, and Windows.
-4. **Expected mobile/drawer:** Sidebar actions have comfortable touch targets and the drawer closes after selecting a conversation.
-5. **Expected macOS:** Traffic-light spacing remains visually clear in the fixed sidebar shell.
+4. Drag the sidebar's visible right boundary to several widths.
+5. **Expected:** The resize cursor and drag target are centered on the visible boundary, including the macOS shell margin; the sidebar follows the pointer without a gap.
+6. Restart the client.
+7. **Expected:** The last desktop sidebar width is restored and remains within the supported bounds.
+8. **Expected mobile/drawer:** Sidebar actions have comfortable touch targets and the drawer closes after selecting a conversation.
+9. **Expected macOS:** Traffic-light spacing remains visually clear in the fixed sidebar shell.
 
 ### 10. Accessibility checks
 1. Inspect the sidebar using accessibility tooling or semantics debugging.
