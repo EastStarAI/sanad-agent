@@ -152,48 +152,49 @@ void main() {
       },
     );
 
-    test('persists workspace deny decisions and rejects later calls', () async {
-      bridge.nextDecision = const {'allowed': false, 'scope': 'workspace'};
-      final context = ToolContext(
-        sessionId: 'thread-2',
-        toolCallId: 'call-2',
-        metadata: {
-          'workspace': {
-            'id': workspaceDir.path,
-            'name': 'workspace',
-            'path': workspaceDir.path,
+    test(
+      'denial rejects only the current call and prompts again later',
+      () async {
+        bridge.nextDecision = const {'allowed': false, 'scope': 'workspace'};
+        final context = ToolContext(
+          sessionId: 'thread-2',
+          toolCallId: 'call-2',
+          metadata: {
+            'workspace': {
+              'id': workspaceDir.path,
+              'name': 'workspace',
+              'path': workspaceDir.path,
+            },
           },
-        },
-      );
+        );
 
-      await expectLater(
-        manager.ensureAuthorized(
+        await expectLater(
+          manager.ensureAuthorized(
+            tool: shellTool,
+            arguments: {'command': 'rm -rf build'},
+            context: context,
+          ),
+          throwsA(isA<Exception>()),
+        );
+
+        final policy = await store.readPolicy(workspaceDir.path);
+        expect(policy.permissions.deny, isEmpty);
+        expect(bridge.requestCount, equals(1));
+        expect(
+          checkpointStore.byRequestId.values.single.status,
+          equals('denied'),
+        );
+
+        bridge.nextDecision = const {'allowed': true, 'scope': 'once'};
+        await manager.ensureAuthorized(
           tool: shellTool,
           arguments: {'command': 'rm -rf build'},
           context: context,
-        ),
-        throwsA(isA<Exception>()),
-      );
+        );
 
-      final policy = await store.readPolicy(workspaceDir.path);
-      expect(policy.permissions.deny, contains('shell_execute::rm -rf build'));
-      expect(bridge.requestCount, equals(1));
-      expect(
-        checkpointStore.byRequestId.values.single.status,
-        equals('denied'),
-      );
-
-      await expectLater(
-        manager.ensureAuthorized(
-          tool: shellTool,
-          arguments: {'command': 'rm -rf build'},
-          context: context,
-        ),
-        throwsA(isA<Exception>()),
-      );
-
-      expect(bridge.requestCount, equals(1));
-    });
+        expect(bridge.requestCount, equals(2));
+      },
+    );
 
     test(
       'uses explicit approval keys with sanitized display arguments',

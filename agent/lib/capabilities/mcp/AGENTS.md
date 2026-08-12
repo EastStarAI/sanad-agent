@@ -8,7 +8,7 @@ This contract applies to `agent/lib/capabilities/mcp/`.
 - Persist client-requested mutations through the same settings owner used by runtime discovery.
 - Clients consume refreshed daemon snapshots and never become configuration truth.
 - Keep secret values out of snapshots, logs, protocol errors, export, and Advanced JSON.
-- Store MCP credentials only through the owner-protected `McpSecretStore`; configuration files contain opaque references and non-secret metadata.
+- Store MCP credentials only through the owner-protected `McpSecretStore`; configuration files contain opaque references and non-secret metadata, including secret STDIO argument values associated with recognized credential flags.
 - Import is preview-first and bounded; Advanced JSON is one-server-only with a reviewed revision before mutation.
 
 ## Runtime Manager

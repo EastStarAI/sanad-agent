@@ -278,12 +278,18 @@ class McpRuntimeManager {
       return true;
     }
     return jsonEncode(oldConfig.args) != jsonEncode(newConfig.args) ||
+        jsonEncode(_encodableSecretArgs(oldConfig.secretArgs)) !=
+            jsonEncode(_encodableSecretArgs(newConfig.secretArgs)) ||
         jsonEncode(oldConfig.env) != jsonEncode(newConfig.env) ||
         jsonEncode(oldConfig.secretEnv) != jsonEncode(newConfig.secretEnv) ||
         jsonEncode(oldConfig.headers) != jsonEncode(newConfig.headers) ||
         jsonEncode(oldConfig.secretHeaders) !=
             jsonEncode(newConfig.secretHeaders);
   }
+
+  Map<String, String> _encodableSecretArgs(Map<int, String> values) => {
+    for (final entry in values.entries) entry.key.toString(): entry.value,
+  };
 
   Future<void> _closeConnection(String serverName) async {
     final client = _activeClients.remove(serverName);
@@ -346,7 +352,7 @@ class McpRuntimeManager {
         config: clientConfig,
         transportConfig: TransportConfig.stdio(
           command: config.command!,
-          arguments: config.args,
+          arguments: _settingsStore.resolveArguments(config),
           environment: _buildSafeEnvironment(
             resolvedEnvironment ?? _settingsStore.resolveEnvironment(config),
           ),

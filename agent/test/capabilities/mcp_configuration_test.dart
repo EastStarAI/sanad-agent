@@ -132,6 +132,7 @@ void main() {
             },
             'stdio': {
               'command': 'node',
+              'args': ['server', '--api-key', 'argument-value'],
               'env': {'MODE': 'safe', 'API_KEY': 'env-value'},
             },
           },
@@ -148,10 +149,20 @@ void main() {
         'client-value',
         'header-value',
         'env-value',
+        'argument-value',
       ]) {
         expect(serialized, isNot(contains(secret)));
       }
       expect(serialized, contains('mcp-secret://'));
+      final stdio = settings
+          .parseMcpServersDocument(first)
+          .singleWhere((server) => server.name == 'stdio');
+      expect(stdio.args, ['server', '--api-key', '<secret>']);
+      expect(settings.resolveArguments(stdio), [
+        'server',
+        '--api-key',
+        'argument-value',
+      ]);
       final snapshot = settings.encodeMcpSnapshotDocument(
         settings.parseMcpServersDocument(first),
       );

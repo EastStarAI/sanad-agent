@@ -196,6 +196,22 @@ class SanadSettingsStore {
   String? resolveOAuthClientSecret(McpServerConfig config) =>
       _secrets.resolve(config.oauthClientSecretRef);
 
+  List<String> resolveArguments(McpServerConfig config) {
+    if (config.secretArgs.isEmpty) return config.args;
+    final resolved = List<String>.from(config.args);
+    for (final entry in config.secretArgs.entries) {
+      if (entry.key < 0 || entry.key >= resolved.length) {
+        throw StateError('MCP secret argument index ${entry.key} is invalid.');
+      }
+      final value = _secrets.resolve(entry.value);
+      if (value == null) {
+        throw StateError('MCP secret argument ${entry.key} is unavailable.');
+      }
+      resolved[entry.key] = value;
+    }
+    return resolved;
+  }
+
   Map<String, String> resolveEnvironment(McpServerConfig config) => {
     ...config.env,
     ..._secrets.resolveMany(config.secretEnv),
@@ -302,6 +318,32 @@ class SanadSettingsStore {
         server.remove('env');
       }
       if (secretEnv.isNotEmpty) server['secretEnv'] = secretEnv;
+
+      final args = _stringList(server['args']).toList(growable: false);
+      final secretArgs = _indexedStringMap(server['secretArgs']);
+      for (var index = 0; index < args.length - 1; index++) {
+        if (!_secretArgumentFlags.contains(args[index].toLowerCase())) continue;
+        final valueIndex = index + 1;
+        final rawValue = args[valueIndex];
+        if (rawValue.isEmpty ||
+            rawValue == '<secret>' ||
+            McpSecretStore.isReference(rawValue)) {
+          continue;
+        }
+        secretArgs[valueIndex] = await _secrets.put(
+          rawValue,
+          existingRef: secretArgs[valueIndex],
+        );
+        args[valueIndex] = '<secret>';
+        changed = true;
+      }
+      if (args.isNotEmpty) server['args'] = args;
+      if (secretArgs.isNotEmpty) {
+        server['secretArgs'] = {
+          for (final item in secretArgs.entries)
+            item.key.toString(): item.value,
+        };
+      }
 
       migrated[entry.key.toString()] = server;
     }
@@ -410,6 +452,28 @@ class SanadSettingsStore {
   static List<String> _stringList(Object? value) => value is List
       ? value.map((item) => item.toString()).toList(growable: false)
       : const [];
+
+  static Map<int, String> _indexedStringMap(Object? value) {
+    if (value is! Map) return <int, String>{};
+    final result = <int, String>{};
+    for (final entry in value.entries) {
+      final index = int.tryParse(entry.key.toString());
+      if (index != null) result[index] = entry.value.toString();
+    }
+    return result;
+  }
+
+  static const _secretArgumentFlags = {
+    '--api-key',
+    '--apikey',
+    '--api_key',
+    '--token',
+    '--access-token',
+    '--access_token',
+    '--client-secret',
+    '--client_secret',
+    '--password',
+  };
 
   static final RegExp _likelySecretKey = RegExp(
     r'(token|secret|password|passwd|api[_-]?key|credential)',
