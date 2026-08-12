@@ -16,7 +16,7 @@ description: "Regression matrix for credential-free client-daemon authentication
 | Absent/timeout Agent | Client logout and Portal revoke continue without waiting; pending logout survives for Agent startup. |
 | Offline logout then newer Client login | Startup consumes pending logout, preserves the newer Client pair and `hardware_id`, deletes the prior account Device Credential, and leaves Agent unauthorized; deferred enrollment is not claimed. |
 | Local logout admission | Only authenticated POST with no query/body succeeds; GET, query, body, transfer-encoded payload, and unauthenticated requests fail before logout. |
-| Daemon/CLI mutation | Running daemon reloads and broadcasts; Flutter updates `AuthCubit` without echoing. |
+| Daemon/CLI mutation | CLI retries transient authenticated HTTP delivery, requires an explicit credential-free acknowledgment, and the running daemon reloads and broadcasts so Flutter updates `AuthCubit` without echoing. A stopped daemon is silent/expected; a reachable non-acknowledging daemon yields a bounded service-restart instruction. |
 | Missed notification | Local reconnect performs reconciliation and requests one peer reload. |
 | Malicious extra event field | Entire exchange is rejected before payload logging; no file reload or response occurs. |
 | Portal timeout/503 | Existing transient outcome retains credentials and does not publish logout. |

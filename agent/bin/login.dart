@@ -1,10 +1,9 @@
 import 'dart:io';
-import 'package:http/http.dart' as http;
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/auth/device_authorization_client.dart';
-import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_authentication_exchange_notifier.dart';
 
 Future<void> main(List<String> args) async {
   try {
@@ -124,17 +123,14 @@ Future<void> runLogout() async {
 }
 
 Future<void> _notifyRunningDaemon(Config config) async {
-  try {
-    final credential = await LocalGatewayCredentials.loadOrCreate();
-    final base = Uri.parse(config.localGatewayUrl);
-    await http
-        .post(
-          base.replace(path: '/authentication-exchange', query: null),
-          headers: {LocalGatewayCredentials.headerName: credential.value},
-        )
-        .timeout(const Duration(milliseconds: 750));
-  } catch (_) {
-    // The daemon may be stopped. It will load auth.json on its next startup.
+  final outcome = await LocalAuthenticationExchangeNotifier().notify(
+    config.localGatewayUrl,
+  );
+  if (outcome == LocalAuthenticationExchangeOutcome.daemonRejected) {
+    stderr.writeln(
+      'Authentication state was saved, but the running Sanad service did not '
+      'reload it. Run: sanad service restart',
+    );
   }
 }
 
