@@ -399,7 +399,12 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   Widget _buildEventHeader(bool canExpand) {
     final bool isError = widget.event.status == EventStatus.error;
     final titleText = ToolPresentationHelper.getEventTitle(widget.event);
-    final textDirection = TextUtils.getTextDirection(titleText);
+    final titleDetail = widget.event.kind == EventKind.toolCall
+        ? ToolPresentationHelper.getToolDetailSuffix(widget.event)
+        : '';
+    final textDirection = TextUtils.getTextDirection(
+      titleDetail.isNotEmpty ? titleDetail : titleText,
+    );
 
     final Widget header = InkWell(
       onTap: canExpand ? _toggleExpanded : null,

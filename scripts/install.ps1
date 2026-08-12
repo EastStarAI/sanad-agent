@@ -38,6 +38,7 @@ $Backup = "$Target.rollback"
 $ExistingService = Get-ScheduledTask -TaskName "SanadAgent" -ErrorAction SilentlyContinue
 $ServiceWasInstalled = $null -ne $ExistingService
 $ServiceWasRunning = $ServiceWasInstalled -and $ExistingService.State -eq "Running"
+$ServiceInstalledThisRun = $false
 $TempDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("sanad-install-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $TempDirectory | Out-Null
 
@@ -80,7 +81,7 @@ try {
     if ($ActualHash -ne $Artifact.sha256.ToLowerInvariant()) {
         throw "Downloaded artifact SHA-256 verification failed."
     }
-    Write-Warning "Sanad 1.0.1 for Windows is intentionally unsigned. Origin, manifest URL, size, and SHA-256 were verified; Windows may display Defender or SmartScreen warnings."
+    Write-Warning "Sanad $($Manifest.version) for Windows is intentionally unsigned. Origin, manifest URL, size, and SHA-256 were verified; Windows may display Defender or SmartScreen warnings."
 
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
     if (Test-Path -LiteralPath $Backup) { Remove-Item -LiteralPath $Backup -Force }
@@ -107,16 +108,25 @@ try {
         }
         & $Target service install
         if ($LASTEXITCODE -ne 0) { throw "Service installation failed." }
+        $ServiceInstalledThisRun = -not $ServiceWasInstalled
         if ($ServiceWasRunning) {
             & $Target service restart
             if ($LASTEXITCODE -ne 0) { throw "Existing service refresh failed." }
         }
     } catch {
+        $Failure = $_
+        if ($ServiceInstalledThisRun) {
+            try {
+                Unregister-ScheduledTask -TaskName "SanadAgent" -Confirm:$false -ErrorAction Stop
+            } catch {
+                Write-Warning "Failed to remove the partially installed SanadAgent task."
+            }
+        }
         if (Test-Path -LiteralPath $Target) { Remove-Item -LiteralPath $Target -Force }
         if (Test-Path -LiteralPath $Backup) {
             Move-Item -LiteralPath $Backup -Destination $Target -Force
         }
-        throw "Installation failed; rollback completed. $($_.Exception.Message)"
+        throw "Installation failed; rollback completed. $($Failure.Exception.Message)"
     }
 
     Write-Host "Sanad Agent installed successfully." -ForegroundColor Green

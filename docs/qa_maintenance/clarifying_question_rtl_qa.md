@@ -5,6 +5,11 @@ description: "Verification matrix for Arabic directionality and platform-aware m
 
 # Clarifying Question RTL QA
 
+The timeline tool header resolves direction from the question/detail text rather
+than the fixed English `Ask:` prefix. An Arabic question therefore places the
+question icon and full mixed-language title in RTL order, while an English
+question remains LTR.
+
 ## Scope
 
 This matrix covers text direction in the active `system_ask_user` suspension card, completed ask-user tool results, and conversation event headers.

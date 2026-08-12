@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:get_it/get_it.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/core/config.dart';
@@ -326,6 +328,11 @@ void main() {
       socketFactory: (_, _) => socket,
       identityLoader: () =>
           DeviceKeyIdentity.loadOrCreate(secretStore: secrets),
+      httpClient: MockClient(
+        (_) async => http.Response('', 200, headers: {
+          'date': HttpDate.format(DateTime.now().toUtc()),
+        }),
+      ),
     );
     await platform.initialize();
     await socket.trigger('register_success', {'device_id': 'test-device-id'});
