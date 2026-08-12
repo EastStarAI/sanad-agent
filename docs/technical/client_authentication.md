@@ -116,8 +116,14 @@ deep-link handler is disabled to prevent duplicate callback delivery.
 The private key and durable Device Credential are separate OS-vault entries
 scoped by the canonical Sanad Home. macOS uses Keychain directly, Linux talks to
 the freedesktop.org Secret Service over the user session D-Bus, and Windows
-stores only DPAPI ciphertext under the protected Home boundary. The Linux path
-uses the protocol directly and has no runtime dependency on the external
+stores only DPAPI ciphertext under the protected Home boundary. DPoP and Gateway
+proofs require a fresh `iat`; when the local clock differs materially, the Agent
+calibrates against the HTTPS Portal response `Date`, verifies and persists only
+the non-secret offset through the same vault boundary. Each Gateway registration
+refreshes that calibration so later operating-system clock corrections replace a
+stale offset before signing. Non-HTTPS or malformed time responses are never
+trusted.
+The Linux path uses the protocol directly and has no runtime dependency on the external
 `secret-tool` executable. It opens a bounded non-interactive session, rejects
 locked collections or operations that require a prompt, and never places secret
 values in process arguments or environment variables.

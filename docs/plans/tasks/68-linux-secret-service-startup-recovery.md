@@ -205,6 +205,73 @@ from Linux-hosted tests.
 Reading Windows code is not platform verification, and Task 68 cannot be closed
 until that separately approved Windows phase passes.
 
+## Windows Implementation Gates
+
+### Gate W1 — Reproduction and product contract
+
+- Run the real DPAPI write/read/delete test on Windows under an isolated Sanad
+  Home and prove the persisted file contains no plaintext. **Complete.**
+- Reproduce verified legacy `auth.json` migration and corrupt/unreadable DPAPI
+  ciphertext behavior on Windows. **Complete.**
+- Audit clean install, reinstall, upgrade, rollback, Scheduled Task restart, and
+  uninstall behavior without modifying the normal user Sanad Home or service.
+- Record package and lifecycle gaps before changing product code. **Complete.**
+
+Initial Windows triage found that native DPAPI round-trip succeeds on Windows 11
+under the current user and the owner-only Sanad Home boundary. The remaining W1
+work must prove process/restart persistence, verified migration, fail-closed
+corruption, and product lifecycle behavior. The canonical PowerShell installer
+also contains a version-specific warning string instead of deriving the version
+from the verified manifest, and its rollback path requires explicit proof that a
+newly registered Scheduled Task cannot remain after a later installation failure.
+The installer now derives its warning version from the verified manifest and
+removes a Scheduled Task created by a failed first-install attempt before
+restoring the prior executable. Static installer guards and PowerShell parsing
+pass; no normal user task or installed binary was replaced during this worktree
+verification.
+
+The live Windows 11 reproduction also exposed a three-hour workstation clock
+skew. DPAPI successfully restored the P-256 key, but Portal rejected its DPoP
+`iat` as `invalid_dpop_proof` before issuing a Device Credential. The Agent now
+calibrates from the authenticated HTTPS Portal `Date`, vault-persists only the
+non-secret offset after verification, and applies it to Portal and Gateway
+proofs. Co-located login then persisted a second DPAPI ciphertext entry; after a
+daemon restart, the Agent recovered both credential and offset and the Cloud
+Gateway accepted registration.
+
+### Gate W2 — DPAPI identity and recovery
+
+- Prove separate-process persistence for Agent private-key and Device Credential
+  entries under the same Windows user and Sanad Home.
+- Prove legacy plaintext is deleted only after DPAPI write/read verification.
+- Prove corrupt, unreadable, or wrong-user DPAPI ciphertext leaves local startup
+  healthy, clears cloud authority, and preserves retryable migration/logout state.
+- Prove delete and logout remain absent after daemon restart.
+
+**Complete.** Real Windows DPAPI covered ciphertext-only write/read/delete,
+verified legacy migration, corrupt-ciphertext startup containment, real
+co-located Device Authorization, and credential/offset recovery through daemon
+restart. Existing logout and pending-logout tests cover deletion persistence.
+
+### Gate W3 — Windows package and lifecycle
+
+- Build and exercise the official Windows Agent artifact and Client installer on
+  an isolated Windows profile or clean VM with platform protection enabled.
+- Prove clean install, reinstall, upgrade, failed-update rollback, reboot startup,
+  and uninstall while retaining the documented Sanad Home boundary.
+- Verify no partial Scheduled Task or installed application remains after a
+  failed first install or uninstall, and no plaintext secret appears in process
+  arguments, logs, temporary files, package metadata, or diagnostics.
+
+### Gate W4 — Windows completion review
+
+- Run bounded Agent analysis and focused authentication, DPAPI, service, update,
+  and installer verification.
+- Record real Windows version, package identity, lifecycle checkpoints, and
+  sanitized evidence in the Windows QA documentation.
+- Update technical, operational, user, QA, release, and task documentation to
+  match the verified behavior before closing Task 68.
+
 ## Verification Matrix
 
 - Linux desktop: Secret Service available, absent, locked, and recovered.
@@ -234,11 +301,14 @@ machine reproduction.
   required.
 - Headless Linux secure unattended cloud: explicitly deferred to a later
   release; current behavior is stable local-only and cloud-fail-closed.
-- Windows implementation and real-platform verification: next authorized phase.
+- Windows DPAPI implementation and real source-runtime verification: complete.
+- Windows packaged clean-machine candidate lifecycle: remains a release-artifact
+  gate and is not claimed by this source worktree verification.
 
-**Current Task 68 remaining: 30%.** Linux current-release work is complete; the
-remaining work is the separately verified Windows phase. Deferred Headless Linux
-is tracked as later-release scope and does not block this release.
+**Current Task 68 implementation remaining: 0%.** Linux desktop and Windows vault
+behavior are complete for the current release. Deferred Headless Linux is tracked
+as later-release scope and does not block this release. A future candidate still
+runs the existing Windows clean-machine release gate before publication.
 
 ## Definition of Done
 

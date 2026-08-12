@@ -159,6 +159,59 @@ void main() {
     }
   }, skip: !Platform.isWindows);
 
+  test('Windows DPAPI verifies legacy migration before deletion', () async {
+    final tempDir = await Directory.systemTemp.createTemp(
+      'sanad-dpapi-migration',
+    );
+    final authFile = File(p.join(tempDir.path, 'auth.json'));
+    final store = WindowsDpapiAgentSecretStore(scope: const Uuid().v4());
+    const legacyCredential = 'synthetic-windows-legacy-credential';
+    setSanadHomeOverride(tempDir.path);
+    try {
+      await authFile.writeAsString(
+        jsonEncode({
+          'hardware_id': 'synthetic-windows-hardware',
+          'device_token': legacyCredential,
+        }),
+      );
+
+      final auth = AuthManager(secretStore: store);
+      await auth.initialize();
+
+      expect(auth.deviceToken, legacyCredential);
+      expect(
+        await store.read(AuthManager.deviceCredentialKey),
+        legacyCredential,
+      );
+      expect(await authFile.readAsString(), isNot(contains(legacyCredential)));
+    } finally {
+      setSanadHomeOverride(null);
+      await tempDir.delete(recursive: true);
+    }
+  }, skip: !Platform.isWindows);
+
+  test('corrupt Windows DPAPI ciphertext keeps startup fail-closed', () async {
+    final tempDir = await Directory.systemTemp.createTemp('sanad-dpapi-corrupt');
+    final store = WindowsDpapiAgentSecretStore(scope: const Uuid().v4());
+    setSanadHomeOverride(tempDir.path);
+    try {
+      await store.write(AuthManager.deviceCredentialKey, 'synthetic-secret');
+      final vaultFile =
+          await tempDir.list().where((entity) => entity is File).single as File;
+      await vaultFile.writeAsBytes(const [1, 2, 3, 4], flush: true);
+
+      final auth = AuthManager(secretStore: store);
+      await auth.initialize();
+
+      expect(auth.hardwareId, isNotEmpty);
+      expect(auth.deviceToken, isNull);
+      expect(auth.canAuthenticateCloudAgent, isFalse);
+    } finally {
+      setSanadHomeOverride(null);
+      await tempDir.delete(recursive: true);
+    }
+  }, skip: !Platform.isWindows);
+
   test('macOS Keychain round trip stores no plaintext file', () async {
     final scope = 'sec01e-test-${const Uuid().v4()}';
     const key = 'synthetic-entry';

@@ -161,6 +161,32 @@ separate stale `SanadAgent` Scheduled Task discovered after reboot was removed
 only after its action proved it targeted the ordinary user Home; the Home and its
 Agent binary remain untouched.
 
+## Task 68 Windows vault verification — 2026-08-12
+
+Source-runtime verification on Windows 11 Pro x64 build 22621 used the current
+user Sanad Home and the managed worktree runtime; it did not replace the normal
+installed Agent, Client, or Scheduled Task:
+
+- native DPAPI write/read/delete stored ciphertext only;
+- verified legacy Device Credential migration removed plaintext only after
+  read-back, while corrupt ciphertext kept local startup healthy and cloud
+  authority absent;
+- co-located Portal login initially failed before credential storage because the
+  workstation clock was three hours behind the HTTPS Portal `Date`, causing
+  `invalid_dpop_proof`;
+- authenticated Portal-time calibration allowed Device Authorization to finish,
+  created separate DPAPI ciphertext entries for the P-256 identity, Device
+  Credential, and non-secret time offset, and exposed no secret in logs;
+- after daemon restart, DPAPI recovery succeeded and the Cloud Gateway accepted
+  the nonce-bound registration proof;
+- PowerShell installer parsing and static guards passed for manifest-derived
+  version messaging and failed-first-install Scheduled Task cleanup.
+
+This is real Windows vault and source lifecycle evidence, not a new packaged
+clean-machine pass. The existing release clean-machine procedure remains the
+authority for a future candidate artifact's Defender, SmartScreen, install,
+upgrade, reboot, rollback, and uninstall evidence.
+
 ## Acceptance criteria
 
 The Windows target passes only when:

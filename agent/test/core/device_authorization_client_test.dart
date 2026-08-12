@@ -103,6 +103,14 @@ void main() {
       expect(tokenPayload['htu'], 'https://portal.test/auth/device/token');
       expect(tokenPayload['ath'], isNotEmpty);
       expect(tokenPayload.toString(), isNot(contains('synthetic-device-code')));
+      final tokenSignature = base64Url.decode(
+        base64Url.normalize(tokenProof.split('.')[2]),
+      );
+      expect(
+        _bytesBigInt(tokenSignature.sublist(32)),
+        lessThanOrEqualTo(ECDomainParameters('prime256v1').n >> 1),
+        reason: 'ES256 proofs must use canonical low-S signatures.',
+      );
 
       final gatewayProof = await second.gatewayProof('synthetic-nonce');
       expect(_verifies(gatewayProof, second.publicJwk), isTrue);
@@ -180,6 +188,11 @@ void main() {
           'interval': 5,
         }),
         200,
+        headers: {
+          'date': HttpDate.format(
+            DateTime.now().toUtc().add(const Duration(hours: 3)),
+          ),
+        },
       );
     });
     final auth = AuthManager(secretStore: secrets);
@@ -200,6 +213,24 @@ void main() {
     );
 
     expect(enrollment.transactionId, 'colocated-transaction');
+    expect(
+      enrollment.serverTimeOffset,
+      greaterThan(const Duration(hours: 2, minutes: 59)),
+    );
+    expect(
+      int.parse(secrets.values[DeviceKeyIdentity.serverTimeOffsetEntry]!),
+      greaterThan(const Duration(hours: 2, minutes: 59).inSeconds),
+    );
+    final reloadedIdentity = await DeviceKeyIdentity.loadOrCreate(
+      secretStore: secrets,
+    );
+    final gatewayProof = await reloadedIdentity.gatewayProof('clock-skew-nonce');
+    final gatewayPayload = _jwtPart(gatewayProof, 1);
+    expect(
+      (gatewayPayload['iat'] as int) -
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      greaterThan(const Duration(hours: 2, minutes: 59).inSeconds),
+    );
   });
 
   test('cancels an enrollment with a key-bound proof', () async {
