@@ -187,8 +187,8 @@ jobs:
         shell: pwsh
         run: |
           $agent = "dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
-          $home = Join-Path $env:RUNNER_TEMP "sanad-bundled-skills-home"
-          $env:SANAD_HOME = $home
+          $sanadHome = Join-Path $env:RUNNER_TEMP "sanad-bundled-skills-home"
+          $env:SANAD_HOME = $sanadHome
           & $agent version | Out-Null
           if ($LASTEXITCODE -ne 0) { throw "Agent smoke test failed" }
           @(
@@ -197,7 +197,7 @@ jobs:
             "skills/find-skills/LICENSE.txt",
             "skills/agent-browser/LICENSE.txt"
           ) | ForEach-Object {
-            if (-not (Test-Path (Join-Path $home $_) -PathType Leaf)) {
+            if (-not (Test-Path (Join-Path $sanadHome $_) -PathType Leaf)) {
               throw "Missing extracted bundled skill file: $_"
             }
           }
