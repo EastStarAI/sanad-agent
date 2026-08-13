@@ -114,12 +114,24 @@ class DuckDuckGoProvider implements WebSearchProvider {
   }
 
   String? _decodeDdgRedirect(String url) {
-    if (!url.startsWith('/l/?')) {
-      return url;
+    // DuckDuckGo currently emits both `/l/?...` and protocol-relative
+    // `//duckduckgo.com/l/?...` redirect URLs. Normalize both before parsing;
+    // otherwise the latter has no scheme and is rejected by SSRF validation.
+    final normalizedUrl = url.startsWith('//')
+        ? 'https:$url'
+        : url.startsWith('/l/?')
+        ? 'https://duckduckgo.com$url'
+        : url;
+    final uri = Uri.tryParse(normalizedUrl);
+    if (uri == null || uri.path != '/l/' || !uri.hasQuery) {
+      return url.startsWith('//') ? null : url;
     }
 
-    final uri = Uri.tryParse('https://duckduckgo.com$url');
-    final uddg = uri?.queryParameters['uddg'];
-    return uddg == null || uddg.isEmpty ? null : Uri.decodeComponent(uddg);
+    // Uri.queryParameters already percent-decodes `uddg` exactly once. A
+    // second decode would corrupt legitimate percent-encoded path segments.
+    final redirectedUrl = uri.queryParameters['uddg'];
+    return redirectedUrl == null || redirectedUrl.isEmpty
+        ? null
+        : redirectedUrl;
   }
 }

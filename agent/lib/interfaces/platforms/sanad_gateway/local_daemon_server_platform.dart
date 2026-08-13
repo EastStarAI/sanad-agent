@@ -230,7 +230,9 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
           request.headers.value(HttpHeaders.transferEncodingHeader) != null;
       if (request.uri.hasQuery ||
           hasBody ||
-          (request.method != 'GET' && request.method != 'POST')) {
+          (request.method != 'GET' &&
+              request.method != 'POST' &&
+              request.method != 'DELETE')) {
         await _writeJsonResponse(request.response, {
           'status': 'invalid_request',
         }, statusCode: HttpStatus.badRequest);
@@ -243,6 +245,13 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
           authManager: getIt<AuthManager>(),
         ),
       );
+      if (request.method == 'DELETE') {
+        await coupling.cancel();
+        await _writeJsonResponse(request.response, const {
+          'status': 'cancelled',
+        });
+        return;
+      }
       final snapshot = request.method == 'POST'
           ? await coupling.start()
           : coupling.snapshot;

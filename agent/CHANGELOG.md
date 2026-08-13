@@ -1,3 +1,14 @@
+## 1.0.4
+
+- Corrected the Windows release smoke gate so PowerShell uses a writable Sanad Home variable instead of the reserved `$HOME` variable.
+- Supersedes the unpublished v1.0.3 candidate; no v1.0.3 GitHub Release or Production asset was created.
+
+## 1.0.3
+
+- Replaced transferable OAuth polling with S256 PKCE for Client sign-in and P-256 proof-bound Device Authorization for headless Agents.
+- Bound one-command pairing and Gateway registration to fresh key-possession proofs, with vault-backed Agent credentials and fail-closed legacy-token rejection.
+- Added verified mobile callback ownership, safer runtime recovery, external-workspace permission gates, and the latest Client navigation and interaction improvements.
+
 ## 1.0.2
 
 - Serialized native desktop authentication and token refresh with cross-process OS file locks (`shared/auth_lock`).

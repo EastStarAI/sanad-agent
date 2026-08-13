@@ -18,6 +18,8 @@ import 'package:sanad_client/features/conversations/presentation/widgets/tools/s
 import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/app_markdown_renderer.dart';
 
+enum ToolWaitingIndicator { none, permission, question }
+
 class EventTile extends StatefulWidget {
   final CanonicalEvent event;
   final bool? isExpanded;
@@ -32,6 +34,7 @@ class EventTile extends StatefulWidget {
   final VoidCallback? onCancelEdit;
   final Future<void> Function()? onSubmitEdit;
   final Future<void> Function()? onRetry;
+  final ToolWaitingIndicator waitingIndicator;
 
   const EventTile({
     super.key,
@@ -48,6 +51,7 @@ class EventTile extends StatefulWidget {
     this.onCancelEdit,
     this.onSubmitEdit,
     this.onRetry,
+    this.waitingIndicator = ToolWaitingIndicator.none,
   });
 
   @override
@@ -395,7 +399,12 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   Widget _buildEventHeader(bool canExpand) {
     final bool isError = widget.event.status == EventStatus.error;
     final titleText = ToolPresentationHelper.getEventTitle(widget.event);
-    final textDirection = TextUtils.getTextDirection(titleText);
+    final titleDetail = widget.event.kind == EventKind.toolCall
+        ? ToolPresentationHelper.getToolDetailSuffix(widget.event)
+        : '';
+    final textDirection = TextUtils.getTextDirection(
+      titleDetail.isNotEmpty ? titleDetail : titleText,
+    );
 
     final Widget header = InkWell(
       onTap: canExpand ? _toggleExpanded : null,
@@ -491,6 +500,18 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   }
 
   Widget _buildStatusIndicator() {
+    if (widget.waitingIndicator != ToolWaitingIndicator.none) {
+      final isQuestion = widget.waitingIndicator == ToolWaitingIndicator.question;
+      return Semantics(
+        label: isQuestion ? 'Waiting for your answer' : 'Waiting for permission',
+        child: Icon(
+          isQuestion ? Icons.help_outline_rounded : Icons.shield_outlined,
+          key: Key(isQuestion ? 'tool_waiting_question_icon' : 'tool_waiting_permission_icon'),
+          size: 18,
+          color: Theme.of(context).colorScheme.tertiary,
+        ),
+      );
+    }
     if (widget.event.status == EventStatus.running && widget.event.toolName != 'system_ask_user') {
       return Padding(
         padding: const EdgeInsets.all(2),
@@ -498,6 +519,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
           width: 14,
           height: 14,
           child: CircularProgressIndicator(
+            key: const Key('tool_running_progress_indicator'),
             strokeWidth: 2,
             color: Theme.of(context).colorScheme.primary,
           ),

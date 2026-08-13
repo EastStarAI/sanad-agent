@@ -10,6 +10,8 @@ description: "Security, form, import/export, OAuth, lifecycle, and regression ch
 - Device and Workspace management commands succeed only through the authenticated local gateway; every import, export, Advanced JSON, inspection, and OAuth command remains rejected on the cloud management path.
 - Device and Workspace snapshots preserve same-name Workspace precedence and contain configured markers only, never bearer, header, environment, OAuth access/refresh, or client-secret values.
 - Draft inspection uses entered credentials ephemerally and leaves neither configuration nor secret-store files behind.
+- Every sensitive discovered MCP tool requests canonical permission before server execution. Denial produces no MCP call and no persisted deny rule, so a later invocation asks again; approval executes once, and repeated exact input honors session/workspace grants and full-access bypass.
+- Legacy STDIO credential arguments following recognized flags migrate idempotently to `McpSecretStore`; configuration and snapshots never retain or expose the value, while runtime launch resolves the original argument.
 - Export and Advanced initial JSON omit every credential shape. Errors and OAuth status snapshots do not echo response bodies or tokens.
 
 ## Form and cards

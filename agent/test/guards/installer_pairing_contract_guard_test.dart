@@ -29,6 +29,16 @@ void main() {
       expect(windows, contains('service install'));
       expect(windows, contains('service restart'));
       expect(windows, contains('\$ServiceWasRunning'));
+      expect(windows, contains('\$ServiceInstalledThisRun'));
+      expect(
+        windows,
+        contains(
+          'Unregister-ScheduledTask -TaskName "SanadAgent" '
+          '-Confirm:\$false',
+        ),
+      );
+      expect(windows, contains('Sanad \$(\$Manifest.version) for Windows'));
+      expect(windows, isNot(contains('Sanad 1.0.1 for Windows')));
 
       expect(login, contains("args.contains('--portal')"));
       expect(login, contains('Choose either --portal or --token'));

@@ -7,6 +7,7 @@ This contract applies to `agent/lib/capabilities/runtime/`.
 - Build workspace-bound, MCP-bound, skill, web, and explicit platform tool context for every turn.
 - Do not cache mutable workspace/MCP catalogs across turns without an identity/fingerprint invalidation boundary.
 - Preserve local tool source, execution target, approval, workspace, availability, and replay metadata.
+- Every sensitive MCP tool executes through `PermissionManager` before `McpRuntimeManager`; denial prevents the server call, and once/session/workspace grants use the canonical approval owner.
 - Return the assembled catalog to the engine; do not execute the model loop here.
 
 ## Runtime Context
@@ -16,6 +17,7 @@ This contract applies to `agent/lib/capabilities/runtime/`.
 - Apply head-plus-tail truncation when instruction content exceeds budget.
 - Omit tool inventories and per-turn timestamps from workspace context.
 - Skill summaries and workspace instructions come from daemon-owned registries/files, never client discovery.
+- When no valid workspace is attached, emit one concise context sentence stating that file and terminal tools are unavailable and direct workspace-dependent requests to the upper-left workspace control.
 
 ## Workspace Services
 - Use focused handlers for read, write, edit, glob, grep, and tree operations; do not recreate a monolithic workspace service.

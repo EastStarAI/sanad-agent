@@ -25,6 +25,7 @@ import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_state
 import 'package:sanad_client/features/voice/presentation/widgets/voice_stream_panel.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_context_chips.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
+import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
@@ -75,6 +76,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
   bool _isRestoringDraftContext = false;
   String? _boundDeviceId;
   String? _observedPendingRequestId;
+  bool _isDragging = false;
 
   @override
   void initState() {
@@ -581,29 +583,61 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
 
     final isBlurEnabled = widget.showBlur;
     final decoration = BoxDecoration(
-      color: isBlurEnabled ? theme.colorScheme.surface.withValues(alpha: 0.35) : theme.colorScheme.surface,
+      color: _isDragging
+          ? theme.colorScheme.primary.withValues(alpha: 0.1)
+          : (isBlurEnabled ? theme.colorScheme.surface.withValues(alpha: 0.35) : theme.colorScheme.surface),
       borderRadius: BorderRadius.circular(12),
       border: Border.all(
-        color: theme.colorScheme.outline.withValues(alpha: 0.30),
+        color: _isDragging
+            ? theme.colorScheme.primary
+            : theme.colorScheme.outline.withValues(alpha: 0.30),
+        width: 1.0,
       ),
     );
 
-    final borderCard = Container(
-      margin: const EdgeInsets.only(left: 8, right: 8, bottom: 8),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(12),
-        child: isBlurEnabled
-            ? BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
-                child: Container(
+    final borderCard = DropTarget(
+      onDragEntered: (details) {
+        setState(() {
+          _isDragging = true;
+        });
+      },
+      onDragExited: (details) {
+        setState(() {
+          _isDragging = false;
+        });
+      },
+      onDragDone: (details) {
+        setState(() {
+          _isDragging = false;
+        });
+        if (details.files.isNotEmpty) {
+          final droppedPaths = details.files.map((file) => file.path).join(' ');
+          final currentText = _chatController.text;
+          if (currentText.isEmpty) {
+            _chatController.text = '$droppedPaths ';
+          } else {
+            final separator = currentText.endsWith(' ') ? '' : ' ';
+            _chatController.text = '$currentText$separator$droppedPaths ';
+          }
+        }
+      },
+      child: Container(
+        margin: const EdgeInsets.only(left: 8, right: 8, bottom: 8),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: isBlurEnabled
+              ? BackdropFilter(
+                  filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                  child: Container(
+                    decoration: decoration,
+                    child: mainContent,
+                  ),
+                )
+              : Container(
                   decoration: decoration,
                   child: mainContent,
                 ),
-              )
-            : Container(
-                decoration: decoration,
-                child: mainContent,
-              ),
+        ),
       ),
     );
 

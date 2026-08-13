@@ -298,7 +298,108 @@ Use the review skill.''');
           .execute({'path': 'notes.txt'});
       expect(mcpResult, contains('mcp__filesystem__read_file'));
       expect(fakeMcpManager.lastArguments?['path'], equals('notes.txt'));
-      expect(fakePlatformBridge.permissionRequestCount, equals(0));
+      expect(fakePlatformBridge.permissionRequestCount, equals(1));
+      expect(
+        fakePlatformBridge.lastPermissionPayload?['tool_name'],
+        equals('mcp__filesystem__read_file'),
+      );
+      expect(fakePlatformBridge.lastPermissionPayload?['tool_input'], {
+        'path': 'notes.txt',
+      });
+      expect(
+        fakePlatformBridge.lastPermissionPayload?['tool'],
+        containsPair('server_name', 'filesystem'),
+      );
+    });
+
+    test('MCP denial prevents execution', () async {
+      fakePlatformBridge.nextDecision = const {
+        'allowed': false,
+        'scope': 'once',
+      };
+      final tools = await catalog.buildTools(
+        registry: registry,
+        request: AgentTurnRequest(
+          sessionId: 'thread-mcp-denied',
+          message: 'Read through MCP',
+          workspaceId: workspaceDir.path,
+        ),
+      );
+      registry.registerTools(tools);
+
+      await expectLater(
+        registry.getTool('mcp__filesystem__read_file')!.execute({
+          'path': 'notes.txt',
+        }),
+        throwsA(isA<Exception>()),
+      );
+
+      expect(fakePlatformBridge.permissionRequestCount, equals(1));
+      expect(fakeMcpManager.lastToolName, isNull);
+      expect(fakeMcpManager.lastArguments, isNull);
+    });
+
+    test(
+      'MCP session approval suppresses repeated prompts for exact input',
+      () async {
+        fakePlatformBridge.nextDecision = const {
+          'allowed': true,
+          'scope': 'session',
+        };
+        final tools = await catalog.buildTools(
+          registry: registry,
+          request: AgentTurnRequest(
+            sessionId: 'thread-mcp-session',
+            message: 'Read through MCP twice',
+            workspaceId: workspaceDir.path,
+          ),
+        );
+        registry.registerTools(tools);
+        final tool = registry.getTool('mcp__filesystem__read_file')!;
+
+        await tool.execute({'path': 'notes.txt'});
+        await tool.execute({'path': 'notes.txt'});
+
+        expect(fakePlatformBridge.permissionRequestCount, equals(1));
+        expect(fakeMcpManager.lastArguments?['path'], equals('notes.txt'));
+      },
+    );
+
+    test('MCP workspace approval persists through workspace policy', () async {
+      fakePlatformBridge.nextDecision = const {
+        'allowed': true,
+        'scope': 'workspace',
+      };
+      final request = AgentTurnRequest(
+        sessionId: 'thread-mcp-workspace',
+        message: 'Read through MCP',
+        workspaceId: workspaceDir.path,
+      );
+      var tools = await catalog.buildTools(
+        registry: registry,
+        request: request,
+      );
+      registry.registerTools(tools);
+      await registry.getTool('mcp__filesystem__read_file')!.execute({
+        'path': 'notes.txt',
+      });
+      expect(fakePlatformBridge.permissionRequestCount, equals(1));
+
+      final nextRegistry = ToolsRegistry();
+      tools = await catalog.buildTools(
+        registry: nextRegistry,
+        request: AgentTurnRequest(
+          sessionId: 'thread-mcp-workspace-next',
+          message: 'Read through MCP from another session',
+          workspaceId: workspaceDir.path,
+        ),
+      );
+      nextRegistry.registerTools(tools);
+      await nextRegistry.getTool('mcp__filesystem__read_file')!.execute({
+        'path': 'notes.txt',
+      });
+
+      expect(fakePlatformBridge.permissionRequestCount, equals(1));
     });
 
     test(
@@ -478,6 +579,17 @@ Use the review skill.''');
         );
       },
     );
+
+    test('builds concise guidance when no workspace is attached', () {
+      final context = const RuntimeContextBuilder().buildWithoutWorkspace();
+
+      expect(
+        context,
+        equals(
+          'No workspace is attached, so file and terminal tools are unavailable. If the user requests them, ask them to select an existing workspace or create one from the workspace control in the upper-left corner.',
+        ),
+      );
+    });
 
     test(
       'builds runtime context from workspace instructions, skills, and tools',

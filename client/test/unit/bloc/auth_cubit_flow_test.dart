@@ -30,9 +30,7 @@ void main() {
 
   test('shows completing state until co-located login finishes', () async {
     final release = Completer<void>();
-    final repository = _FakeAuthRepository(
-      completingRelease: release.future,
-    );
+    final repository = _FakeAuthRepository(completingRelease: release.future);
     final cubit = AuthCubit(authRepository: repository);
     final states = <AuthState>[];
     final subscription = cubit.stream.listen(states.add);
@@ -60,29 +58,35 @@ void main() {
     await cubit.close();
   });
 
-  test('cancelLogin emits AuthUnauthenticated and cancels session login', () async {
-    final repository = _FakeAuthRepository();
-    final cubit = AuthCubit(authRepository: repository);
+  test(
+    'cancelLogin emits AuthUnauthenticated and cancels session login',
+    () async {
+      final repository = _FakeAuthRepository();
+      final cubit = AuthCubit(authRepository: repository);
 
-    cubit.cancelLogin();
+    await cubit.cancelLogin();
     expect(cubit.state, isA<AuthUnauthenticated>());
-    expect(repository.loginCancelled, isTrue);
+      expect(repository.loginCancelled, isTrue);
 
-    await cubit.close();
-  });
+      await cubit.close();
+    },
+  );
 
-  test('terminal session invalidation updates presentation without a second logout', () async {
-    final repository = _FakeAuthRepository();
-    final cubit = AuthCubit(authRepository: repository);
+  test(
+    'terminal session invalidation updates presentation without a second logout',
+    () async {
+      final repository = _FakeAuthRepository();
+      final cubit = AuthCubit(authRepository: repository);
 
-    await cubit.login();
-    cubit.invalidateRejectedSession();
+      await cubit.login();
+      cubit.invalidateRejectedSession();
 
-    expect(cubit.state, isA<AuthUnauthenticated>());
-    expect(repository.loggedOut, isFalse);
+      expect(cubit.state, isA<AuthUnauthenticated>());
+      expect(repository.loggedOut, isFalse);
 
-    await cubit.close();
-  });
+      await cubit.close();
+    },
+  );
 }
 
 class _FakeAuthRepository implements IAuthRepository {
@@ -128,7 +132,7 @@ class _FakeAuthRepository implements IAuthRepository {
   Future<AuthSession?> fetchCredits() async => null;
 
   @override
-  void cancelLogin() {
+  Future<void> cancelLogin() async {
     loginCancelled = true;
   }
 }

@@ -33,6 +33,7 @@ class McpServerConfig {
     this.disabledTools = const [],
     this.command,
     this.args = const [],
+    this.secretArgs = const {},
     this.env = const {},
     this.secretEnv = const {},
     this.headers = const {},
@@ -59,6 +60,7 @@ class McpServerConfig {
   final List<String> disabledTools;
   final String? command;
   final List<String> args;
+  final Map<int, String> secretArgs;
   final Map<String, String> env;
   final Map<String, String> secretEnv;
   final Map<String, String> headers;
@@ -88,6 +90,12 @@ class McpServerConfig {
     if (transport == McpTransportType.stdio) {
       json['command'] = command;
       if (args.isNotEmpty) json['args'] = args;
+      if (secretArgs.isNotEmpty) {
+        json['secretArgs'] = {
+          for (final entry in secretArgs.entries)
+            entry.key.toString(): entry.value,
+        };
+      }
       if (env.isNotEmpty) json['env'] = env;
       if (secretEnv.isNotEmpty) json['secretEnv'] = secretEnv;
     } else {
@@ -117,6 +125,12 @@ class McpServerConfig {
     if (bearerTokenRef != null) {
       json.remove('bearerTokenRef');
       json['bearerConfigured'] = true;
+    }
+    if (secretArgs.isNotEmpty) {
+      json['secretArgs'] = {
+        for (final index in secretArgs.keys)
+          index.toString(): const {'configured': true},
+      };
     }
     if (secretEnv.isNotEmpty) {
       json['secretEnv'] = {
@@ -159,6 +173,7 @@ class McpServerConfig {
       disabledTools: _stringList(json['disabledTools']),
       command: _string(json['command']),
       args: _stringList(json['args']),
+      secretArgs: _secretArgRefMap(json['secretArgs']),
       env: _stringMap(json['env']),
       secretEnv: _secretRefMap(json['secretEnv']),
       headers: _stringMap(json['headers']),
@@ -195,6 +210,7 @@ class McpServerConfig {
     List<String>? disabledTools,
     String? command,
     List<String>? args,
+    Map<int, String>? secretArgs,
     Map<String, String>? env,
     Map<String, String>? secretEnv,
     Map<String, String>? headers,
@@ -220,6 +236,7 @@ class McpServerConfig {
     disabledTools: disabledTools ?? this.disabledTools,
     command: command ?? this.command,
     args: args ?? this.args,
+    secretArgs: secretArgs ?? this.secretArgs,
     env: env ?? this.env,
     secretEnv: secretEnv ?? this.secretEnv,
     headers: headers ?? this.headers,
@@ -295,6 +312,18 @@ class McpServerConfig {
 
   static Map<String, dynamic> _stringMapDynamic(Object? value) =>
       value is Map ? Map<String, dynamic>.from(value) : const {};
+
+  static Map<int, String> _secretArgRefMap(Object? value) {
+    if (value is! Map) return const {};
+    final result = <int, String>{};
+    for (final entry in value.entries) {
+      final index = int.tryParse(entry.key.toString());
+      if (index != null && entry.value is String) {
+        result[index] = entry.value as String;
+      }
+    }
+    return result;
+  }
 
   static Map<String, String> _secretRefMap(Object? value) {
     if (value is! Map) return const {};

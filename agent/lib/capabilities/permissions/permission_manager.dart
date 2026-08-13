@@ -143,14 +143,6 @@ class PermissionManager {
       status: isAllowed ? 'approved' : 'denied',
     );
     if (!isAllowed) {
-      await _persistDecision(
-        allowed: false,
-        scope: scope,
-        approvalKey: approvalKey,
-        sessionId: context.sessionId,
-        workspacePath: workspacePath,
-        currentPolicy: workspacePolicy,
-      );
       final denyComment = decision['comment']?.toString().trim();
       if (denyComment != null && denyComment.isNotEmpty) {
         throw Exception(
@@ -195,7 +187,10 @@ class PermissionManager {
         ? null
         : await _policyStore.readPolicy(workspacePath);
 
-    if (allowed && scope == 'once' && sessionId.isNotEmpty) {
+    if (!allowed) {
+      return;
+    }
+    if (scope == 'once' && sessionId.isNotEmpty) {
       _oneShotAllow.putIfAbsent(sessionId, () => <String>{}).add(approvalKey);
       return;
     }

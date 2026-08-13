@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "skills": [
+    {
+      "id": "skill-creator",
+      "source": ".agents/skills/skill-creator",
+      "upstream": "https://github.com/anthropics/skills",
+      "upstream_revision": "f17010c9bb483898c1d9c9f42dde2b3a98889434",
+      "license": "Apache-2.0",
+      "license_file": "LICENSE.txt",
+      "executable_files": [
+        "scripts/aggregate_benchmark.py",
+        "scripts/generate_report.py",
+        "scripts/improve_description.py",
+        "scripts/package_skill.py",
+        "scripts/quick_validate.py",
+        "scripts/run_eval.py",
+        "scripts/run_loop.py"
+      ]
+    },
+    {
+      "id": "find-skills",
+      "source": ".agents/skills/find-skills",
+      "upstream": "https://github.com/vercel-labs/skills",
+      "upstream_revision": "c6f69c631292444cc541ac6d91e2226b0ff247da",
+      "license": "MIT",
+      "license_file": "LICENSE.txt"
+    },
+    {
+      "id": "agent-browser",
+      "source": ".agents/skills/agent-browser",
+      "upstream": "https://github.com/vercel-labs/agent-browser",
+      "upstream_revision": "548b159b30eef119ccf6846c8bc807d0eaa3f6f8",
+      "license": "Apache-2.0",
+      "license_file": "LICENSE.txt"
+    }
+  ]
+}

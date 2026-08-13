@@ -99,6 +99,12 @@ stdio, Server-Sent Events, and streamable HTTP transports. Compatible
 third-party marketing, video, data, or development tools can be connected
 through MCP without being hard-coded into Sanad.
 
+Sanad includes `skill-creator`, `find-skills`, and `agent-browser` with the
+Agent installation. Their complete packages are embedded in the single Agent
+executable and installed automatically into the active Sanad Home; no separate
+skill download is required. A later Agent release can safely add, update, or
+remove its managed copies while preserving skills the user changed or deleted.
+
 Skills can also be installed globally for the user or locally for a workspace.
 The agent discovers supported `SKILL.md` formats and loads the selected skill
 when it is needed instead of injecting every skill into every prompt.

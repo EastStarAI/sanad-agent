@@ -103,6 +103,14 @@ void main() {
       expect(tokenPayload['htu'], 'https://portal.test/auth/device/token');
       expect(tokenPayload['ath'], isNotEmpty);
       expect(tokenPayload.toString(), isNot(contains('synthetic-device-code')));
+      final tokenSignature = base64Url.decode(
+        base64Url.normalize(tokenProof.split('.')[2]),
+      );
+      expect(
+        _bytesBigInt(tokenSignature.sublist(32)),
+        lessThanOrEqualTo(ECDomainParameters('prime256v1').n >> 1),
+        reason: 'ES256 proofs must use canonical low-S signatures.',
+      );
 
       final gatewayProof = await second.gatewayProof('synthetic-nonce');
       expect(_verifies(gatewayProof, second.publicJwk), isTrue);
@@ -180,6 +188,11 @@ void main() {
           'interval': 5,
         }),
         200,
+        headers: {
+          'date': HttpDate.format(
+            DateTime.now().toUtc().add(const Duration(hours: 3)),
+          ),
+        },
       );
     });
     final auth = AuthManager(secretStore: secrets);
@@ -200,6 +213,70 @@ void main() {
     );
 
     expect(enrollment.transactionId, 'colocated-transaction');
+    expect(
+      enrollment.serverTimeOffset,
+      greaterThan(const Duration(hours: 2, minutes: 59)),
+    );
+    expect(
+      int.parse(secrets.values[DeviceKeyIdentity.serverTimeOffsetEntry]!),
+      greaterThan(const Duration(hours: 2, minutes: 59).inSeconds),
+    );
+    final reloadedIdentity = await DeviceKeyIdentity.loadOrCreate(
+      secretStore: secrets,
+    );
+    final gatewayProof = await reloadedIdentity.gatewayProof('clock-skew-nonce');
+    final gatewayPayload = _jwtPart(gatewayProof, 1);
+    expect(
+      (gatewayPayload['iat'] as int) -
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000),
+      greaterThan(const Duration(hours: 2, minutes: 59).inSeconds),
+    );
+  });
+
+  test('cancels an enrollment with a key-bound proof', () async {
+    late DeviceAuthorizationEnrollment enrollment;
+    final client = MockClient((request) async {
+      if (request.url.path == '/auth/device/transactions') {
+        return http.Response(
+          jsonEncode({
+            'transaction_id': 'cancelled-transaction',
+            'device_code': 'private-cancel-code',
+            'user_code': 'ABCD-EFGH',
+            'verification_uri': 'https://portal.test/device',
+            'expires_in': 600,
+            'interval': 5,
+          }),
+          200,
+        );
+      }
+      expect(request.url.path, '/auth/device/cancel');
+      expect(request.headers['DPoP'], isNotNull);
+      final payload = jsonDecode(request.body) as Map<String, dynamic>;
+      expect(payload, {'device_code': enrollment.deviceCode});
+      final proofPayload = _jwtPart(request.headers['DPoP']!, 1);
+      expect(proofPayload['htu'], 'https://portal.test/auth/device/cancel');
+      expect(proofPayload.toString(), isNot(contains(enrollment.deviceCode)));
+      return http.Response(jsonEncode({'status': 'cancelled'}), 200);
+    });
+    final auth = AuthManager(secretStore: secrets);
+    await auth.initialize();
+    final authorization = DeviceAuthorizationClient(
+      portalUrl: 'https://portal.test',
+      authManager: auth,
+      httpClient: client,
+      identityLoader: () =>
+          DeviceKeyIdentity.loadOrCreate(secretStore: secrets),
+    );
+    enrollment = await authorization.startEnrollment(
+      clientId: 'sanad_agent_colocated',
+      deviceName: 'Sanad Agent (macOS)',
+      platform: 'macos',
+      hardwareId: 'hardware-123',
+    );
+
+    await authorization.cancelEnrollment(enrollment);
+
+    expect(auth.deviceToken, isNull);
   });
 
   test(

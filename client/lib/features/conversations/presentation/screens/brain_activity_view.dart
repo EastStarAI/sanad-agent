@@ -10,6 +10,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/event_t
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../widgets/sidebar/sidebar_composition.dart';
@@ -796,39 +797,45 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   Widget _buildEventTile(CanonicalEvent event) {
     final latestUserIndex = _lastUserMessageIndex(_messages);
     final canReplay = latestUserIndex >= 0 && _messages[latestUserIndex].id == event.id && event.requestId != null;
-    return EventTile(
-      key: ValueKey(event.id),
-      event: event,
-      isExpanded: _expandedEventIds.contains(event.id),
-      onToggleExpanded: (expanded) {
-        if (expanded) {
-          _expandedEventIds.add(event.id);
-        } else {
-          _expandedEventIds.remove(event.id);
-        }
-      },
-      onCancelPendingSteer: (requestId) =>
-          context.read<ConversationInputCubit>().cancelPendingSteer(requestId: requestId),
-      isCancellingPendingSteer:
-          event.requestId != null && widget.pendingSteerCancellationRequestIds.contains(event.requestId),
-      canReplay: canReplay,
-      isEditing: _editingEventId == event.id,
-      isReplayPending: _replayPendingEventId == event.id,
-      editController: _editingEventId == event.id ? _editController : null,
-      onBeginEdit: canReplay ? () => _beginInlineEdit(event) : null,
-      onCancelEdit: _cancelInlineEdit,
-      onSubmitEdit: canReplay
-          ? () async {
-              final text = _editController?.text.trim() ?? '';
-              if (text.isEmpty) return;
-              await _replayTurn(
-                event,
-                action: TurnReplayAction.edit,
-                message: text,
-              );
-            }
-          : null,
-      onRetry: canReplay ? () => _replayTurn(event, action: TurnReplayAction.retry) : null,
+    return BlocSelector<ConversationInputCubit, ConversationInputState, String?>(
+      selector: (state) => state.pendingSuspendedRequest?.toolName,
+      builder: (context, pendingToolName) => EventTile(
+        key: ValueKey(event.id),
+        event: event,
+        waitingIndicator: event.status == EventStatus.running && pendingToolName == event.toolName
+            ? (event.toolName == 'system_ask_user' ? ToolWaitingIndicator.question : ToolWaitingIndicator.permission)
+            : ToolWaitingIndicator.none,
+        isExpanded: _expandedEventIds.contains(event.id),
+        onToggleExpanded: (expanded) {
+          if (expanded) {
+            _expandedEventIds.add(event.id);
+          } else {
+            _expandedEventIds.remove(event.id);
+          }
+        },
+        onCancelPendingSteer: (requestId) =>
+            context.read<ConversationInputCubit>().cancelPendingSteer(requestId: requestId),
+        isCancellingPendingSteer:
+            event.requestId != null && widget.pendingSteerCancellationRequestIds.contains(event.requestId),
+        canReplay: canReplay,
+        isEditing: _editingEventId == event.id,
+        isReplayPending: _replayPendingEventId == event.id,
+        editController: _editingEventId == event.id ? _editController : null,
+        onBeginEdit: canReplay ? () => _beginInlineEdit(event) : null,
+        onCancelEdit: _cancelInlineEdit,
+        onSubmitEdit: canReplay
+            ? () async {
+                final text = _editController?.text.trim() ?? '';
+                if (text.isEmpty) return;
+                await _replayTurn(
+                  event,
+                  action: TurnReplayAction.edit,
+                  message: text,
+                );
+              }
+            : null,
+        onRetry: canReplay ? () => _replayTurn(event, action: TurnReplayAction.retry) : null,
+      ),
     );
   }
 }

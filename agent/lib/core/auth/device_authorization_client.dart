@@ -1,10 +1,12 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' as hashes;
 import 'package:pointycastle/export.dart';
 import 'package:http/http.dart' as http;
+import 'package:logging/logging.dart';
 import 'package:uuid/uuid.dart';
 
 import '../sanad_home/sanad_home_bootstrap.dart';
@@ -52,14 +54,23 @@ FortunaRandom _secureRandom() {
 }
 
 class DeviceKeyIdentity {
-  DeviceKeyIdentity._(this._keyPair, this.publicJwk, this.thumbprint);
+  DeviceKeyIdentity._(
+    this._keyPair,
+    this.publicJwk,
+    this.thumbprint,
+    this._secretStore,
+    this._serverTimeOffset,
+  );
 
   static const _legacyFileName = 'device_identity.json';
   static const privateKeyEntry = 'device_private_key';
+  static const serverTimeOffsetEntry = 'trusted_server_time_offset_seconds';
   static final _domain = ECDomainParameters('prime256v1');
   final ECPrivateKey _keyPair;
   final Map<String, String> publicJwk;
   final String thumbprint;
+  final AgentSecretStore _secretStore;
+  Duration _serverTimeOffset;
 
   static Future<DeviceKeyIdentity> loadOrCreate({
     AgentSecretStore? secretStore,
@@ -111,7 +122,16 @@ class DeviceKeyIdentity {
       'x': _b64(_bigIntBytes(publicPoint.x!.toBigInteger()!)),
       'y': _b64(_bigIntBytes(publicPoint.y!.toBigInteger()!)),
     };
-    return DeviceKeyIdentity._(privateKey, publicJwk, _thumbprint(publicJwk));
+    final storedOffset = int.tryParse(
+      await store.read(serverTimeOffsetEntry) ?? '',
+    );
+    return DeviceKeyIdentity._(
+      privateKey,
+      publicJwk,
+      _thumbprint(publicJwk),
+      store,
+      Duration(seconds: storedOffset ?? 0),
+    );
   }
 
   static String _thumbprint(Map<String, String> jwk) {
@@ -144,28 +164,50 @@ class DeviceKeyIdentity {
     final signature =
         signer.generateSignature(Uint8List.fromList(utf8.encode(signingInput)))
             as ECSignature;
+    final halfOrder = _domain.n >> 1;
+    final canonicalS = signature.s > halfOrder
+        ? _domain.n - signature.s
+        : signature.s;
     final joseSignature = Uint8List.fromList([
       ..._bigIntBytes(signature.r),
-      ..._bigIntBytes(signature.s),
+      ..._bigIntBytes(canonicalS),
     ]);
     return '$signingInput.${_b64(joseSignature)}';
   }
 
-  Future<String> deviceTokenProof(Uri tokenUri, String deviceCode) {
+  Future<String> deviceTokenProof(
+    Uri endpointUri,
+    String deviceCode, {
+    DateTime? issuedAt,
+  }) {
     return signProof({
       'htm': 'POST',
-      'htu': tokenUri.toString(),
-      'iat': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      'htu': endpointUri.toString(),
+      'iat': (issuedAt ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000,
       'jti': const Uuid().v4(),
       'ath': _b64(hashes.sha256.convert(utf8.encode(deviceCode)).bytes),
     });
+  }
+
+  Future<void> rememberServerTimeOffset(Duration offset) async {
+    await _secretStore.write(serverTimeOffsetEntry, '${offset.inSeconds}');
+    if (await _secretStore.read(serverTimeOffsetEntry) != '${offset.inSeconds}') {
+      throw const AgentSecretStoreUnavailable(
+        'Trusted server time offset write verification failed.',
+      );
+    }
+    _serverTimeOffset = offset;
   }
 
   Future<String> gatewayProof(String nonce) {
     return signProof({
       'htm': 'SOCKET',
       'htu': 'sanad-gateway:register_device',
-      'iat': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      'iat': DateTime.now()
+              .toUtc()
+              .add(_serverTimeOffset)
+              .millisecondsSinceEpoch ~/
+          1000,
       'jti': const Uuid().v4(),
       'nonce': nonce,
     });
@@ -196,6 +238,7 @@ class DeviceAuthorizationEnrollment {
     required this.interval,
     required this.identity,
     required this.challenge,
+    this.serverTimeOffset = Duration.zero,
   });
 
   final String transactionId;
@@ -204,6 +247,7 @@ class DeviceAuthorizationEnrollment {
   final int interval;
   final DeviceKeyIdentity identity;
   final DeviceAuthorizationChallenge challenge;
+  final Duration serverTimeOffset;
 }
 
 class DeviceAuthorizationClient {
@@ -220,6 +264,7 @@ class DeviceAuthorizationClient {
   static const _slowDownIncrementSeconds = 5;
   static const _maximumPollIntervalSeconds = 30;
 
+  final _logger = Logger('DeviceAuthorizationClient');
   final String portalUrl;
   final AuthManager authManager;
   final http.Client _httpClient;
@@ -261,15 +306,30 @@ class DeviceAuthorizationClient {
       }),
     );
     if (startResponse.statusCode != 200) {
+      _logger.warning(
+        'Agent authorization start rejected (HTTP ${startResponse.statusCode}).',
+      );
       throw StateError('Could not start Agent authorization.');
     }
     final started = jsonDecode(startResponse.body) as Map<String, dynamic>;
+    final serverTimeOffset = trustedServerTimeOffset(
+      startUri,
+      startResponse.headers['date'],
+    );
+    if (serverTimeOffset.inSeconds.abs() > 300) {
+      _logger.warning(
+        'Local clock differs from the Portal; Agent proofs will use the '
+        'authenticated Portal time.',
+      );
+    }
+    await identity.rememberServerTimeOffset(serverTimeOffset);
     return DeviceAuthorizationEnrollment(
       transactionId: started['transaction_id'] as String,
       deviceCode: started['device_code'] as String,
       expiresIn: (started['expires_in'] as num).toInt(),
       interval: (started['interval'] as num).toInt(),
       identity: identity,
+      serverTimeOffset: serverTimeOffset,
       challenge: DeviceAuthorizationChallenge(
         verificationUri: started['verification_uri'] as String,
         userCode: started['user_code'] as String,
@@ -278,19 +338,58 @@ class DeviceAuthorizationClient {
     );
   }
 
-  Future<void> redeemEnrollment(
+  static Duration trustedServerTimeOffset(
+    Uri endpoint,
+    String? dateHeader,
+  ) {
+    if (endpoint.scheme != 'https' || dateHeader == null) return Duration.zero;
+    try {
+      return HttpDate.parse(dateHeader).difference(DateTime.now().toUtc());
+    } on Object {
+      return Duration.zero;
+    }
+  }
+
+  DateTime _proofTime(DeviceAuthorizationEnrollment enrollment) =>
+      DateTime.now().toUtc().add(enrollment.serverTimeOffset);
+
+  Future<void> cancelEnrollment(
     DeviceAuthorizationEnrollment enrollment,
   ) async {
+    final cancelUri = Uri.parse('$portalUrl/auth/device/cancel');
+    final proof = await enrollment.identity.deviceTokenProof(
+      cancelUri,
+      enrollment.deviceCode,
+      issuedAt: _proofTime(enrollment),
+    );
+    final response = await _httpClient.post(
+      cancelUri,
+      headers: {'Content-Type': 'application/json', 'DPoP': proof},
+      body: jsonEncode({'device_code': enrollment.deviceCode}),
+    );
+    if (response.statusCode != 200) {
+      throw StateError('Could not cancel Agent authorization.');
+    }
+  }
+
+  Future<void> redeemEnrollment(
+    DeviceAuthorizationEnrollment enrollment, {
+    bool Function()? isActive,
+  }) async {
+    bool active() => isActive?.call() ?? true;
     var interval = enrollment.interval;
     final tokenUri = Uri.parse('$portalUrl/auth/device/token');
     final deadline = DateTime.now().add(
       Duration(seconds: enrollment.expiresIn),
     );
     while (DateTime.now().isBefore(deadline)) {
+      if (!active()) return;
       await _delay(Duration(seconds: interval));
+      if (!active()) return;
       final proof = await enrollment.identity.deviceTokenProof(
         tokenUri,
         enrollment.deviceCode,
+        issuedAt: _proofTime(enrollment),
       );
       final response = await _httpClient.post(
         tokenUri,
@@ -300,10 +399,31 @@ class DeviceAuthorizationClient {
           'device_code': enrollment.deviceCode,
         }),
       );
-      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      Map<String, dynamic> data;
+      try {
+        data = jsonDecode(response.body) as Map<String, dynamic>;
+      } on Object {
+        _logger.warning(
+          'Agent authorization token response was not valid JSON '
+          '(HTTP ${response.statusCode}).',
+        );
+        if (response.statusCode >= 500) continue;
+        throw StateError('Agent authorization failed.');
+      }
+      if (!active()) return;
       if (response.statusCode == 200) {
         final credential = data['device_credential'] as String;
-        await authManager.saveDeviceToken(credential);
+        if (!active()) return;
+        try {
+          await authManager.saveDeviceToken(credential);
+        } on Object catch (error) {
+          _logger.warning(
+            'Agent authorization credential persistence failed '
+            '(${error.runtimeType}).',
+          );
+          rethrow;
+        }
+        _logger.info('Agent authorization credential persisted.');
         return;
       }
       final detail = data['detail'];
@@ -317,9 +437,20 @@ class DeviceAuthorizationClient {
         continue;
       }
       if (error == 'access_denied' || error == 'expired_token') {
+        _logger.warning('Agent authorization ended with $error.');
         throw StateError('Agent authorization $error.');
       }
-      if (response.statusCode >= 500) continue;
+      if (response.statusCode >= 500) {
+        _logger.warning(
+          'Agent authorization token endpoint unavailable '
+          '(HTTP ${response.statusCode}).',
+        );
+        continue;
+      }
+      _logger.warning(
+        'Agent authorization token rejected '
+        '(HTTP ${response.statusCode}, error=${error ?? 'unknown'}).',
+      );
       throw StateError('Agent authorization failed.');
     }
     throw StateError('Agent authorization expired.');

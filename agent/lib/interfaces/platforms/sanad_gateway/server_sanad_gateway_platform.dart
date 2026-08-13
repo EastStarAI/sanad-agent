@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:http/http.dart' as http;
 import 'package:meta/meta.dart';
 
 import 'package:logging/logging.dart';
@@ -61,11 +62,14 @@ class ServerSanadGatewayPlatform extends BasePlatform
   final _logger = Logger('ServerSanadGatewayPlatform');
   final io.Socket Function(String uri, dynamic options)? socketFactory;
   final Future<DeviceKeyIdentity> Function() identityLoader;
+  final http.Client _httpClient;
 
   ServerSanadGatewayPlatform({
     this.socketFactory,
     Future<DeviceKeyIdentity> Function()? identityLoader,
-  }) : identityLoader = identityLoader ?? DeviceKeyIdentity.loadOrCreate;
+    http.Client? httpClient,
+  }) : identityLoader = identityLoader ?? DeviceKeyIdentity.loadOrCreate,
+       _httpClient = httpClient ?? http.Client();
 
   @override
   Logger get logger => _logger;
@@ -456,6 +460,31 @@ class ServerSanadGatewayPlatform extends BasePlatform
     }
   }
 
+  Future<void> _calibrateIdentityTime(DeviceKeyIdentity identity) async {
+    final portalUri = Uri.parse(getIt<Config>().portalUrl);
+    if (portalUri.scheme != 'https') return;
+    try {
+      final response = await _httpClient
+          .head(portalUri)
+          .timeout(const Duration(seconds: 5));
+      if (response.statusCode < 200 || response.statusCode >= 500) return;
+      final offset = DeviceAuthorizationClient.trustedServerTimeOffset(
+        portalUri,
+        response.headers['date'],
+      );
+      await identity.rememberServerTimeOffset(offset);
+      if (offset.inSeconds.abs() > 300) {
+        _logger.warning(
+          'Local clock differs from the Portal; Gateway proofs will use the '
+          'authenticated Portal time.',
+        );
+      }
+    } on Object {
+      // A missing calibration response does not replace the normal signed
+      // registration failure path or authorize an untrusted time source.
+    }
+  }
+
   Future<void> _register({String? challengeNonce}) async {
     final targetSocket = _socket;
     if (targetSocket == null) return;
@@ -468,6 +497,9 @@ class ServerSanadGatewayPlatform extends BasePlatform
       return;
     }
     final identity = requiresKeyProof ? await identityLoader() : null;
+    if (identity != null) {
+      await _calibrateIdentityTime(identity);
+    }
     final deviceProof = identity != null
         ? await identity.gatewayProof(challengeNonce!)
         : null;

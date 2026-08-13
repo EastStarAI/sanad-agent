@@ -53,7 +53,7 @@ jobs:
           cat "$RUNNER_TEMP/changed"
           agent=false; client=false; docs=false; release=false; security=false
           while IFS= read -r path; do
-            case "$path" in agent/*|shared/auth_lock/*|release/contract/*|release/release-contract.json) agent=true ;; esac
+            case "$path" in agent/*|.agents/skills/*|shared/auth_lock/*|release/contract/*|release/release-contract.json) agent=true ;; esac
             case "$path" in client/*|shared/auth_lock/*|release/contract/*|release/release-contract.json) client=true ;; esac
             case "$path" in *.md|docs/*|.vscode/*|.agents/*|.github/ISSUE_TEMPLATE/*|.github/DISCUSSION_TEMPLATE/*|.github/labels.yml|.github/CODEOWNERS|.github/PULL_REQUEST_TEMPLATE.md|scripts/community/*) docs=true ;; esac
             case "$path" in .github/workflows/*|release/*|client/release/*|agent/tool/release_tool.dart|scripts/install.sh|scripts/install.ps1) release=true ;; esac
@@ -125,6 +125,9 @@ jobs:
           reject --tag "v${version}" --channel stable
           jq '.version = "99.99.99" | .tag = "v99.99.99"' "$backup" > "$contract"
           reject --tag "v99.99.99" --channel stable
+      - name: Validate embedded product skills
+        working-directory: agent
+        run: fvm dart run tool/generate_bundled_skills.dart --check
       - name: Analyze agent
         working-directory: agent
         run: fvm dart analyze

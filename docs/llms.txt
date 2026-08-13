@@ -74,6 +74,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Provider Account Usage Limits](docs/product/provider_account_usage_limits.md): Product behavior for instance-scoped provider usage windows, freshness, errors, and reset-credit controls.
 - [Settings Hub](docs/product/settings_hub.md): Information architecture, scope semantics, and device-management UX for Sanad's unified Settings destination.
 - [خارطة الجودة والدعم والصيانة](docs/qa_maintenance/MOC.md): فهرس وخارطة خطط الفحص وحالات الاختبار، أدلة حل المشكلات التقنية، ودعم التشغيل وصيانة المنصة.
+- [Bundled Product Skills QA](docs/qa_maintenance/bundled_product_skills_qa.md): Regression matrix for deterministic one-file skill embedding, SANAD_HOME installation, update, removal, customization safety, startup performance, and release artifacts.
 - [Clarifying Question RTL QA](docs/qa_maintenance/clarifying_question_rtl_qa.md): Verification matrix for Arabic directionality and platform-aware multiline behavior in clarifying questions.
 - [Community Governance QA](docs/qa_maintenance/community_governance_qa.md): Static and live verification matrix for labels, templates, contribution skills, protected CI, Discord routing, and public-repository governance.
 - [Conversation Cache and Draft Recovery QA](docs/qa_maintenance/conversation_cache_recovery_qa.md): QA scenarios for persistent conversation snapshots, draft acceptance, pagination recovery, cleanup, and lifecycle flush behavior.
@@ -118,6 +119,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [مواصفات نظام التصميم والمكونات المرئية للمشاريع](docs/technical/design_system.md): توثيق شامل للألوان، الخطوط، الهيكل البنائي والواجهات التفاعلية المشتركة لمشاريع Sanad (التطبيق الرئيسي، صفحة الهبوط، ولوحة التحكم).
 - [Desktop Authentication Exchange](docs/technical/desktop_authentication_exchange.md): Credential-free live authentication reconciliation between a native Flutter client and its local Dart daemon.
 - [Device Runtime Settings Protocol](docs/technical/device_runtime_settings_protocol.md): Unified local/cloud protocol commands, validation, persistence, and secret-handling rules for device settings.
+- [Web Search Runtime](docs/technical/web_search_runtime.md): Daemon-owned search providers, DuckDuckGo redirect normalization, fallback behavior, and SSRF filtering.
 - [Hosted Services Boundary](docs/technical/hosted_services_boundary.md): Ownership and compatibility boundary between the open-source Sanad Agent clients and EastStar AI hosted services.
 - [MCP Server Configuration, Secrets, and Inspection](docs/technical/mcp_server_configuration.md): Daemon-owned MCP configuration, secret handling, inspection, OAuth, import/export, and runtime isolation architecture.
 - [Message Turn Replay Protocol](docs/technical/message_turn_replay_protocol.md): Technical specification and protocols governing historical message turn replay and recovery.

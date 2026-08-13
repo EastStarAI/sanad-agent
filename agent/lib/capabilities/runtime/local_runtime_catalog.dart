@@ -87,6 +87,30 @@ class LocalRuntimeCatalog {
         CallbackTool(
           toolSpec: spec,
           onExecute: (args, {context}) async {
+            final existingWorkspace = context?.metadata['workspace'] is Map
+                ? Map<String, dynamic>.from(
+                    context!.metadata['workspace'] as Map,
+                  )
+                : <String, dynamic>{};
+            final toolContext = ToolContext(
+              sessionId: context?.sessionId ?? request.sessionId,
+              toolCallId: context?.toolCallId,
+              metadata: {
+                ...request.toMetadata(),
+                ...?context?.metadata,
+                if (workspacePath != null)
+                  'workspace': {
+                    ...existingWorkspace,
+                    'id': existingWorkspace['id'] ?? request.workspaceId,
+                    'path': workspacePath,
+                  },
+              },
+            );
+            await _permissionManager.ensureAuthorized(
+              tool: spec,
+              arguments: args,
+              context: toolContext,
+            );
             return _mcpRuntimeManager.executeTool(
               spec.name,
               args,

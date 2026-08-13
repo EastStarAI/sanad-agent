@@ -54,8 +54,10 @@ class StubPortalAuthClient extends PortalAuthClient {
   PortalAuthRefresh? response;
   Object? error;
   int refreshCalls = 0;
+  int transactionCalls = 0;
   int redemptionCalls = 0;
   int logoutCalls = 0;
+  final enrollmentRequestIds = <String?>[];
   String? logoutAccessToken;
   String? logoutRefreshToken;
 
@@ -70,9 +72,11 @@ class StubPortalAuthClient extends PortalAuthClient {
     String? clientInstanceId,
     ClientDisplayMetadata? metadata,
   }) async {
-    return const PortalClientTransaction(
-      transactionId: 'expected-transaction',
-      authorizationUrl: 'https://portal.test/authorize',
+    transactionCalls += 1;
+    enrollmentRequestIds.add(enrollmentRequestId);
+    return PortalClientTransaction(
+      transactionId: 'expected-transaction-$transactionCalls',
+      authorizationUrl: 'https://portal.test/authorize/$transactionCalls',
       expiresIn: 30,
     );
   }
@@ -111,8 +115,24 @@ class StubPortalAuthClient extends PortalAuthClient {
 class StubColocatedAuthCouplingClient extends ColocatedAuthCouplingClient {
   StubColocatedAuthCouplingClient() : super(dio: MockDio(), isDesktop: true);
 
+  int startCalls = 0;
+  int cancelCalls = 0;
   int logoutCalls = 0;
   Future<void>? logoutResult;
+
+  @override
+  Future<ColocatedEnrollmentRequest?> start() async {
+    startCalls += 1;
+    return ColocatedEnrollmentRequest(
+      requestId: 'enrollment-$startCalls-abcdefghijklmnop',
+      expiresIn: 30,
+    );
+  }
+
+  @override
+  Future<void> cancel() async {
+    cancelCalls += 1;
+  }
 
   @override
   Future<void> logoutAgent() {
@@ -121,10 +141,39 @@ class StubColocatedAuthCouplingClient extends ColocatedAuthCouplingClient {
   }
 }
 
+class PendingCallbackBinding implements AuthCallbackBinding {
+  final Completer<AuthCallbackResult> _result = Completer<AuthCallbackResult>();
+  bool cancelled = false;
+  bool disposed = false;
+
+  @override
+  String get clientId => 'sanad_flutter_desktop';
+
+  @override
+  String get redirectUri => 'http://127.0.0.1:49152/oauth/callback';
+
+  @override
+  Future<AuthCallbackResult> waitForResult(Duration timeout) => _result.future;
+
+  @override
+  Future<void> cancel() async {
+    cancelled = true;
+    if (!_result.isCompleted) {
+      _result.completeError(const AuthLoginCancelledException());
+    }
+  }
+
+  @override
+  Future<void> dispose() async {
+    disposed = true;
+  }
+}
+
 class StubCallbackBinding implements AuthCallbackBinding {
   StubCallbackBinding(this.result);
 
   final AuthCallbackResult result;
+  bool cancelled = false;
   bool disposed = false;
 
   @override
@@ -135,6 +184,11 @@ class StubCallbackBinding implements AuthCallbackBinding {
 
   @override
   Future<AuthCallbackResult> waitForResult(Duration timeout) async => result;
+
+  @override
+  Future<void> cancel() async {
+    cancelled = true;
+  }
 
   @override
   Future<void> dispose() async {
@@ -247,6 +301,52 @@ void main() {
         );
       },
     );
+
+    test('cancelled login releases callback and starts with a fresh enrollment', () async {
+      final portal = StubPortalAuthClient();
+      final callbacks = [PendingCallbackBinding(), PendingCallbackBinding()];
+      var callbackIndex = 0;
+      final launchedUrls = <Uri>[];
+      authService.dispose();
+      authService = AuthService(
+        dio: MockDio(),
+        prefs: prefs,
+        settingsStore: mockStore,
+        portalAuth: portal,
+        colocatedCoupling: colocatedCoupling,
+        callbackBindingFactory: () async => callbacks[callbackIndex++],
+        authorizationLauncher: (uri) async {
+          launchedUrls.add(uri);
+          return true;
+        },
+      );
+
+      final firstLogin = authService.login();
+      while (launchedUrls.isEmpty) {
+        await Future<void>.delayed(Duration.zero);
+      }
+      await authService.cancelLogin();
+      await firstLogin;
+
+      final secondLogin = authService.login();
+      while (launchedUrls.length < 2) {
+        await Future<void>.delayed(Duration.zero);
+      }
+
+      expect(callbacks.first.cancelled, isTrue);
+      expect(callbacks.first.disposed, isTrue);
+      expect(colocatedCoupling.cancelCalls, 1);
+      expect(colocatedCoupling.startCalls, 2);
+      expect(portal.transactionCalls, 2);
+      expect(portal.enrollmentRequestIds, [
+        'enrollment-1-abcdefghijklmnop',
+        'enrollment-2-abcdefghijklmnop',
+      ]);
+      expect(launchedUrls[0], isNot(launchedUrls[1]));
+
+      await authService.cancelLogin();
+      await secondLogin;
+    });
 
     test('wrong callback state is rejected before code redemption', () async {
       final portal = StubPortalAuthClient();

@@ -176,7 +176,7 @@ class LocalRuntimeOrchestrator {
   ) async {
     final workspaceId = request.workspaceId;
     if (workspaceId == null || workspaceId.isEmpty) {
-      return null;
+      return _runtimeContextBuilder.buildWithoutWorkspace();
     }
 
     final workspace = await _workspaceRuntimeService.describeWorkspace(
@@ -184,7 +184,7 @@ class LocalRuntimeOrchestrator {
     );
     final workspacePath = workspace?['path'] as String?;
     if (workspacePath == null || workspacePath.isEmpty) {
-      return null;
+      return _runtimeContextBuilder.buildWithoutWorkspace();
     }
 
     final workspaceName = workspace?['name'] as String?;

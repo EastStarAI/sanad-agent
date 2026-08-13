@@ -97,17 +97,27 @@ thinking mode. A first-time user with no thinking preference starts at
 runtime has an authoritative provider/model route, the model selector is never
 left empty merely because only the provider half was restored.
 
+Dragging and dropping files of any type onto the composer area captures their full local paths and appends them directly to the message input field. During a drag-over action, the composer card displays a highlighted primary border and a matching subtle background tint for clear visual feedback.
+
 A workspace created elsewhere in the client appears on the selector's first
 opening; users never need to close and reopen the menu to refresh it.
 
 ## Active work
 
+The account footer separates its navigation intents without changing other
+Settings deep links: selecting the avatar or display name opens Profile, while
+the dedicated gear opens General.
+
 The conversation timeline renders Markdown, code, reasoning summaries, tool
 activity, permission requests, recovery notices, and final responses. Multiline
-Markdown code blocks detect Arabic versus non-Arabic content for text direction:
-Arabic code is RTL and other code is LTR. The code viewport itself always uses
-an LTR horizontal scroll origin so long blocks open with their left edge visible. Skill
-loading uses the same compact path-and-content presentation as File Read, while
+Markdown code blocks keep programming languages and untyped `Code` content LTR,
+opening long lines from the left even when they contain Arabic strings. Fenced
+`text` blocks detect their own content direction and open from the right for
+Arabic-majority text or the left for English-majority text. A compact,
+background-free header keeps the language at the block's left edge and the copy
+action at its right edge without forcing short blocks to fill the message width.
+Skill loading uses the same compact path-and-content presentation as File Read,
+while
 the loaded `SKILL.md` body renders as selectable README-style Markdown rather
 than raw tool JSON. File Read results for `.md` and `.markdown` targets place a
 `Raw | MD` switch beside the target path, default to rendered Markdown, and
@@ -140,11 +150,11 @@ When the agent calls the user-question tool, the composer area displays an
 inline question card with the prompt, suggested answers, and a custom-answer
 option. Submitting the answer resumes the same suspended turn.
 
-Permission cards show the requested tool action and the available approval
-scope. For file access outside the selected workspace, the card shows the
-canonical target path without exposing write or edit content. Permission
-decisions remain owned by the workspace and are distinct from ordinary
-clarification answers.
+Permission cards ask whether Sanad may perform the specific command, file,
+search, or MCP action. The primary command, path, or `server / tool` identity
+appears without a redundant label; only secondary inputs use readable labels.
+Unknown tools retain a generic fallback prompt. The request content uses a darker surface than the prompt and choices. For file access outside the selected workspace, the card shows
+the canonical target path without exposing write or edit content. Approval grants may cover once, session, or workspace; denial stops only the current invocation so a later request can ask again. Permission decisions remain distinct from ordinary clarification answers. While suspended, the matching running tool row shows a permission shield, or a question icon for `system_ask_user`, instead of indefinite progress.
 
 ## Providers and models
 
