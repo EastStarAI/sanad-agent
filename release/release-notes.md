@@ -1,6 +1,6 @@
-# Sanad 1.0.3
+# Sanad 1.0.4
 
-Sanad 1.0.3 is a security-focused compatibility release that binds OAuth results to the Client or Agent that initiated authorization, while also delivering the latest runtime, permission, navigation, and interaction improvements from public `main`.
+Sanad 1.0.4 is a security-focused compatibility release that binds OAuth results to the Client or Agent that initiated authorization, while also delivering the latest runtime, permission, navigation, and interaction improvements from public `main`.
 
 ## Security and compatibility
 
@@ -20,9 +20,9 @@ Sanad 1.0.3 is a security-focused compatibility release that binds OAuth results
 This release was built from tagged public source by the protected Sanad release workflow. Verify downloads against `SHA256SUMS`, `release-manifest.json`, and GitHub build provenance before installation.
 
 > [!WARNING]
-> **Unsigned Windows build:** Sanad Agent and Sanad Client `1.0.3` artifacts for Windows x64 intentionally do not carry Authenticode signatures. Windows Defender or SmartScreen may show an unknown-publisher warning. Download only from this official `EastStarAI/sanad-agent` release, verify the manifest, file size, SHA-256, and GitHub provenance, and do not disable platform protection. Windows release gates run on Windows 11; Windows 10 has not been validated. The Client update package remains signed separately with WinSparkle DSA; that update signature is not Authenticode and does not establish a Windows publisher.
+> **Unsigned Windows build:** Sanad Agent and Sanad Client `1.0.4` artifacts for Windows x64 intentionally do not carry Authenticode signatures. Windows Defender or SmartScreen may show an unknown-publisher warning. Download only from this official `EastStarAI/sanad-agent` release, verify the manifest, file size, SHA-256, and GitHub provenance, and do not disable platform protection. Windows release gates run on Windows 11; Windows 10 has not been validated. The Client update package remains signed separately with WinSparkle DSA; that update signature is not Authenticode and does not establish a Windows publisher.
 
 macOS and Android artifacts use their documented platform signatures. Linux and Windows artifacts are bound to the release through checksums, the immutable manifest, SBOM, and GitHub attestations.
 
 > [!NOTE]
-> **iOS Internal TestFlight only:** The iOS artifact for `1.0.3` is distributed exclusively to internal TestFlight testers of the `NanoSoft LY LLC` team. It is not included in public downloads and is not available through the public App Store. Build number `4` corresponds to marketing version `1.0.3`.
+> **iOS Internal TestFlight only:** The iOS artifact for `1.0.4` is distributed exclusively to internal TestFlight testers of the `NanoSoft LY LLC` team. It is not included in public downloads and is not available through the public App Store. Build number `5` corresponds to marketing version `1.0.4`.
