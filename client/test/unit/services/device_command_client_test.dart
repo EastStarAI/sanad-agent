@@ -62,12 +62,15 @@ void main() {
       expectedEvent: 'device.settings.snapshot',
     );
     await Future<void>.delayed(Duration.zero);
-    final cloudPayload = cloud.capturedCommands.single['payload'] as Map<String, dynamic>;
+    final cloudCommand = cloud.capturedCommands.singleWhere(
+      (entry) => entry['command'] == 'device.settings.get',
+    );
+    final cloudPayload = cloudCommand['payload'] as Map<String, dynamic>;
     cloud.debugEmitEvent({
       'event': 'device.settings.snapshot',
       'payload': {'request_id': cloudPayload['request_id'], 'route': 'cloud'},
     });
     expect((await cloudFuture)['route'], 'cloud');
-    expect(cloud.capturedCommands.single['device_id'], cloudDevice.id);
+    expect(cloudCommand['device_id'], cloudDevice.id);
   });
 }

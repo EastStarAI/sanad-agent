@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'sanad_protocol_bridge.dart';
+import 'protocol/authenticated_command_origin.dart';
 import 'protocol/canonical_events.dart';
 
 /// A mixin that provides shared behavior for Sanad Gateway platforms
@@ -22,9 +23,6 @@ mixin SanadGatewayBehavior {
     Map<String, dynamic>? envelope,
   }) async {
     logger.info('⬇️ [$transportName] Received protocol_event: ${event.type}');
-    if (envelope != null) {
-      logger.fine('⬇️ [$transportName] Protocol event payload: $envelope');
-    }
     if (runtimeBridge.handleProtocolEvent(event)) {
       return;
     }
@@ -40,8 +38,11 @@ mixin SanadGatewayBehavior {
     onResponse,
   }) async {
     final commandName = envelope['command']?.toString() ?? 'unknown';
-    logger.info('⬇️ [$transportName] Received execute_command: $commandName');
-    logger.fine('⬇️ [$transportName] Command payload: $envelope');
+    final origin = AuthenticatedCommandOrigin.fromEnvelope(envelope);
+    logger.info(
+      '⬇️ [$transportName] Received execute_command: $commandName '
+      'from ${origin.safeDisplay}',
+    );
 
     final rawPayload = envelope['payload'];
     final payload = rawPayload is Map

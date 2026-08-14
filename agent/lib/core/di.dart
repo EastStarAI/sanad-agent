@@ -30,6 +30,7 @@ import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/plugins/plugin_manager.dart';
 import 'package:sanad_agent/engine/context_engine.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
@@ -339,11 +340,18 @@ void setupDI() {
       permissionManager: getIt<PermissionManager>(),
     ),
   );
+  getIt.registerLazySingleton<DeliveryPresenceController>(
+    () => DeliveryPresenceController(),
+  );
   getIt.registerLazySingleton<ServerSanadGatewayPlatform>(
-    () => ServerSanadGatewayPlatform(),
+    () => ServerSanadGatewayPlatform(
+      deliveryPresence: getIt<DeliveryPresenceController>(),
+    ),
   );
   getIt.registerLazySingleton<LocalDaemonServerPlatform>(
-    () => LocalDaemonServerPlatform(),
+    () => LocalDaemonServerPlatform(
+      deliveryPresence: getIt<DeliveryPresenceController>(),
+    ),
   );
 
   getIt.registerLazySingleton<PluginManager>(() => PluginManager());

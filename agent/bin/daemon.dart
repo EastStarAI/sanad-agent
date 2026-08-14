@@ -9,6 +9,7 @@ import 'package:sanad_agent/interfaces/gateway_manager.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
 import 'package:sanad_agent/evolution/title_service.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
@@ -57,7 +58,10 @@ Future<void> main(List<String> args) async {
       expectedToken: credential,
     );
     gatewayManager.registerPlatform(
-      LocalDaemonServerPlatform(security: security),
+      LocalDaemonServerPlatform(
+        security: security,
+        deliveryPresence: getIt<DeliveryPresenceController>(),
+      ),
     );
   } else {
     print('Local Gateway Platform is disabled via configuration.');

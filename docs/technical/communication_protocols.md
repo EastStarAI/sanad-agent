@@ -38,6 +38,25 @@ Sanad supports two separate routes for client-to-agent communication to balance 
                                                 └────────────────────────┘
 ```
 
+### 1.1 Cross-transport delivery presence
+
+A desktop Client keeps its authenticated Cloud Socket connected while using a
+same-device Local route. It publishes its complete authoritative set of account
+`device_id` interests through replace-set `delivery_presence_interest`; adding
+or selecting one device must not remove other inventory devices. It requests a short-lived
+`local_presence_assertion`, and includes that opaque assertion in the
+authenticated Local `client.hello`. The Agent tracks every assertion-bearing
+Local socket and publishes a full monotonic `agent_local_presence` snapshot on
+membership changes, Cloud reconnect, and bounded renewal.
+
+Gateway returns `cloud_delivery_interest` with a monotonic revision, recipient
+count, and lease. The Agent suppresses Cloud work before canonical response
+serialization only when the supported lease is fresh and count is zero. A
+missing, malformed, stale, unsupported, disconnected, or expired lease enables
+Cloud egress. Local delivery remains independent. The Client applies the first
+copy of a canonical `event_id` across Local and Cloud only as transition-race
+protection; routing and interest state remain the steady-state policy.
+
 ---
 
 ## 2. Socket.IO Event Schema
@@ -86,6 +105,14 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
     short-lived private route from that identifier to the originating app
     socket before dispatching the command. It does not broadcast a generic
     `device_command_echo` to the user's other interfaces.
+  - Before emitting `execute_command`, the Gateway strips command-origin aliases
+    from the envelope and nested payload and writes one `origin_client` v1 object
+    from the authenticated connection registry. The object contains only public
+    session/instance references and allowlisted kind/platform/display metadata.
+    Older authenticated connections receive the neutral display
+    `Authenticated Client`. The Agent parses this object only for bounded
+    lifecycle logging; it never changes authorization, execution, delivery, or
+    response routing, and malformed metadata cannot stop command processing.
 
 #### B.1. Workspace Policy Commands (Plan 25)
 - **Command: `workspace.get_policy`**
@@ -141,6 +168,9 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
 #### A. Registration
 - **Event: `register_device` (Daemon → Backend)**
   - Registers the running local agent with the Gateway.
+  - Payload keeps the device-runtime `capabilities` object separate from the
+    `transport_capabilities` negotiation list; `delivery_presence_v1` belongs
+    only to the latter and must not replace the runtime capability object.
   - Payload contains the system's unique `hardware_id` (obtained from `auth.json`).
   - First pairing sends `pairing_token` plus an agent-generated and
     pre-persisted `proposed_device_token`. The Gateway atomically binds
@@ -625,7 +655,7 @@ External families (`telegram`/`whatsapp`/`cli`) use `origin` delivery and never 
 
 ### 6.4. Event Identity & Deduplication
 - `event_id` is minted once at event creation as a UUID-backed identifier and preserved across all local/cloud copies. It is NOT regenerated per transport, NOT derived from content/timestamp alone, and NOT reused.
-- The Flutter client currently applies a temporary mitigation that deduplicates by `event_id + transport` via a shared `EventDeduplicator` injected into both transports by `DeviceConnectionCoordinator`. This still blocks repeated deliveries on the same transport while allowing one cloud copy and one local copy of the same logical event.
+- The Flutter client applies transition-race deduplication by canonical `event_id` via one shared `EventDeduplicator` injected into both transports by `DeviceConnectionCoordinator`. The first Local or Cloud copy is applied and every later copy of that logical event is dropped regardless of transport.
 - Incoming `device_event` debug logging happens after this check, so a dropped transport copy is not reported as a second applied event.
 - The dedupe cache is bounded (LRU + age), in-memory only, independent of the durable conversation log, and cleared on full logout — NOT on a same-device transport switch.
 - Events without `event_id` are still processed (backward compat) but producers are expected to stamp it.
@@ -638,7 +668,7 @@ External families (`telegram`/`whatsapp`/`cli`) use `origin` delivery and never 
 | Local platform | Resolves the scope to concrete sockets (origin socket, all sanad_client sockets, or hardware-matched sockets) and stamps each outgoing copy with the recipient socket's registered `device_id` |
 | Cloud platform | Forwards the canonical envelope to Sanad Gateway; rewrites `device_id`/`hardware_id` from registration state |
 | Backend | Validates the `delivery` envelope, rejects non-`sanad_client` families, and routes by scope (origin → request registry, platform_family → user room, hardware → matched app connections) WITHOUT inspecting the event `name` |
-| Flutter client | Deduplicates by `event_id + transport` (temporary mitigation), routes by `device_id`/`session_id`, updates background session state without switching the open conversation |
+| Flutter client | Deduplicates globally by canonical `event_id` across Local/Cloud, routes by `device_id`/`session_id`, updates background session state without switching the open conversation |
 
 ### 6.6. Failure Handling
 - **Cloud down:** local keeps receiving runtime events; cloud does not accumulate unbounded copies. On cloud return, history and durable state are re-hydrated; no live stream is replayed as new.

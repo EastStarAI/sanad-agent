@@ -31,6 +31,9 @@ class FakeSanadSocketService extends SanadSocketService {
   bool _fakeReady = false;
   SocketLifecycleState _fakeLifecycleState = SocketLifecycleState.disconnected;
   Map<String, dynamic> autoCapabilitiesPayload = const <String, dynamic>{};
+  String? presenceAssertion;
+  String? appliedLocalPresenceAssertion;
+  int localHelloRefreshes = 0;
 
   FakeSanadSocketService({String hardwareId = 'test-device-id'})
     : super(url: 'http://localhost:8000', hardwareId: hardwareId);
@@ -102,6 +105,25 @@ class FakeSanadSocketService extends SanadSocketService {
         'hardware_id': hardwareId,
       },
     });
+  }
+
+  @override
+  Future<String?> requestLocalPresenceAssertion(String deviceId) async {
+    _capturedCommands.add({
+      'event': 'request_local_presence_assertion',
+      'data': {'device_id': deviceId},
+    });
+    return presenceAssertion;
+  }
+
+  @override
+  void setLocalPresenceAssertion(String? assertion) {
+    appliedLocalPresenceAssertion = assertion;
+  }
+
+  @override
+  Future<void> refreshLocalHello() async {
+    localHelloRefreshes += 1;
   }
 
   @override

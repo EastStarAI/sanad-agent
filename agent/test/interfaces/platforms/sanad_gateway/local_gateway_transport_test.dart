@@ -7,6 +7,7 @@ import 'package:sanad_agent/core/auth/colocated_auth_coupling.dart';
 import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
@@ -72,6 +73,7 @@ Future<int> _reserveFreePort() async {
 void main() {
   const token = LocalGatewayCredential('transport-test-token');
   late LocalDaemonServerPlatform platform;
+  late DeliveryPresenceController deliveryPresence;
   late _ExchangeAuthManager authManager;
   late int port;
   Future<void> Function()? upgradeHook;
@@ -89,7 +91,9 @@ void main() {
     );
     getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
     getIt.registerSingleton<PlatformRuntimeBridge>(PlatformRuntimeBridge());
+    deliveryPresence = DeliveryPresenceController();
     platform = LocalDaemonServerPlatform(
+      deliveryPresence: deliveryPresence,
       authCoupling: ColocatedAuthCoupling(
         authManager: authManager,
         authorizationClient: DeviceAuthorizationClient(
@@ -113,6 +117,7 @@ void main() {
 
   tearDown(() async {
     await platform.dispose();
+    await deliveryPresence.dispose();
     await getIt.reset();
   });
 
@@ -332,6 +337,54 @@ void main() {
 
     expect(firstFrame['type'], 'register_success');
     await socket.close();
+  });
+
+  test('authenticated client hello binds a valid instance identity', () async {
+    final socket = await WebSocket.connect(
+      'ws://127.0.0.1:$port/ws',
+      headers: {LocalGatewayCredentials.headerName: token.value},
+    );
+    final frames = StreamIterator<dynamic>(socket);
+    expect(await frames.moveNext(), isTrue); // register_success compatibility
+
+    socket.add(
+      jsonEncode({
+        'type': 'client.hello',
+        'protocol': 'sanad.identity_presence',
+        'version': 1,
+        'client_instance_id': '11111111-1111-4111-8111-111111111111',
+        'metadata': {'platform_family': 'macos'},
+        'local_presence_assertion': 'opaque-assertion',
+      }),
+    );
+    expect(await frames.moveNext(), isTrue);
+    final accepted = jsonDecode(frames.current as String);
+    expect(accepted, {
+      'type': 'client.hello_ack',
+      'protocol': 'sanad.identity_presence',
+      'version': 1,
+    });
+    expect(
+      deliveryPresence.localSnapshot.members.single.clientInstanceId,
+      '11111111-1111-4111-8111-111111111111',
+    );
+
+    socket.add(
+      jsonEncode({
+        'type': 'client.hello',
+        'protocol': 'sanad.identity_presence',
+        'version': 1,
+        'client_instance_id': 'device-or-sid-substitution',
+      }),
+    );
+    expect(await frames.moveNext(), isTrue);
+    final rejected = jsonDecode(frames.current as String);
+    expect(rejected['code'], 'INVALID_CLIENT_INSTANCE');
+
+    await frames.cancel();
+    await socket.close();
+    await Future<void>.delayed(Duration.zero);
+    expect(deliveryPresence.localSnapshot.members, isEmpty);
   });
 
   test(

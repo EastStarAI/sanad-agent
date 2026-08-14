@@ -25,6 +25,7 @@ import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 
 import 'capabilities_loader.dart';
+import 'delivery_presence_controller.dart';
 import 'sanad_protocol_bridge.dart';
 import 'protocol/canonical_events.dart';
 import 'channels/websocket_session_channel.dart';
@@ -42,6 +43,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   LocalGatewaySecurity? _security;
   ColocatedAuthCoupling? _authCoupling;
   final Future<void> Function()? beforeUpgradeAuthentication;
+  final DeliveryPresenceController? deliveryPresence;
 
   @override
   Logger get logger => _logger;
@@ -64,6 +66,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   /// local sockets carry the daemon's hardware_id, which the local client's
   /// EventRouter has no listener for.
   final _socketDeviceIds = <WebSocket, String>{};
+  final _clientInstances = <WebSocket, String>{};
   final _voiceEngines = <VoiceEngine>[];
 
   HttpServer? _server;
@@ -96,6 +99,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     LocalGatewaySecurity? security,
     ColocatedAuthCoupling? authCoupling,
     this.beforeUpgradeAuthentication,
+    this.deliveryPresence,
   }) : _security = security,
        _authCoupling = authCoupling;
 
@@ -543,6 +547,8 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       onDone: () {
         _clients.remove(socket);
         _socketDeviceIds.remove(socket);
+        _clientInstances.remove(socket);
+        deliveryPresence?.removeLocalMember(socket);
         _platformRuntimeBridge.unregisterChannel(
           WebSocketSessionChannel(socket),
         );
@@ -578,6 +584,41 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
     final type = envelope['type'] as String?;
     _logger.fine('⬇️ [ws] Received message type: $type');
+    if (type == 'client.hello') {
+      final instanceId = envelope['client_instance_id']?.toString() ?? '';
+      final valid =
+          envelope['protocol'] == 'sanad.identity_presence' &&
+          envelope['version'] == 1 &&
+          RegExp(
+            r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+            caseSensitive: false,
+          ).hasMatch(instanceId);
+      if (!valid) {
+        _sendToSocket(socket, const {
+          'type': 'client.hello_rejected',
+          'code': 'INVALID_CLIENT_INSTANCE',
+        });
+        return;
+      }
+      _clientInstances[socket] = instanceId;
+      final presenceAssertion = envelope['local_presence_assertion']
+          ?.toString();
+      if (presenceAssertion != null && presenceAssertion.isNotEmpty) {
+        deliveryPresence?.updateLocalMember(
+          socket,
+          clientInstanceId: instanceId,
+          presenceAssertion: presenceAssertion,
+        );
+      } else {
+        deliveryPresence?.removeLocalMember(socket);
+      }
+      _sendToSocket(socket, const {
+        'type': 'client.hello_ack',
+        'protocol': 'sanad.identity_presence',
+        'version': 1,
+      });
+      return;
+    }
     if (type == 'authentication_exchange') {
       if (envelope.length != 1) {
         _logger.warning(
@@ -591,7 +632,6 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       return;
     }
 
-    _logger.fine('⬇️ [ws] Message payload: $envelope');
     _rememberSocketIdentity(socket, envelope);
 
     if (type == 'get_capabilities') {
@@ -777,7 +817,6 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     } else {
       _logger.info('⬆️ [ws] Sending device_event: $eventType');
     }
-    _logger.fine('⬆️ [ws] Device event payload: $payload');
     await _sendToSocket(socket, payload);
   }
 
@@ -863,6 +902,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
   @override
   Future<void> sendResponse(GatewayResponse response) async {
+    deliveryPresence?.recordLocalEvent();
     final canonicalEnvelope = _protocolBridge.buildAgentEventEnvelope(
       _protocolBridge.translateResponse(response),
     );
@@ -885,7 +925,6 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     } else {
       _logger.info('⬆️ [ws] Sending device_event response: $eventType');
     }
-    _logger.fine('⬆️ [ws] Response payload: $envelope');
 
     // Phase 27 — delivery-aware local routing. The runtime sets the scope;
     // the platform resolves it to concrete sockets.

@@ -205,6 +205,12 @@ void main() {
       final formatted = service.debugFormatData({
         'token': 'raw-access-token',
         'hardware_id': 'hardware-1',
+        'client_instance_id': 'instance-private',
+        'event_id': 'event-private',
+        'email': 'person@example.test',
+        'hostname': 'private-host',
+        'presence_assertion': 'assertion-private',
+        'origin_client': {'display': 'private-name'},
         'payload': {
           'refresh_token': 'raw-refresh-token',
           'accessToken': 'raw-camel-case-token',
@@ -215,14 +221,24 @@ void main() {
         },
       });
 
-      expect(formatted, isNot(contains('raw-access-token')));
-      expect(formatted, isNot(contains('raw-refresh-token')));
-      expect(formatted, isNot(contains('raw-camel-case-token')));
-      expect(formatted, isNot(contains('raw-bearer-token')));
-      expect(formatted, isNot(contains('raw-client-secret')));
+      for (final privateValue in [
+        'raw-access-token',
+        'raw-refresh-token',
+        'raw-camel-case-token',
+        'raw-bearer-token',
+        'raw-client-secret',
+        'instance-private',
+        'event-private',
+        'person@example.test',
+        'private-host',
+        'assertion-private',
+        'private-name',
+        'ready',
+      ]) {
+        expect(formatted, isNot(contains(privateValue)));
+      }
       expect(formatted, contains('[REDACTED]'));
       expect(formatted, contains('hardware-1'));
-      expect(formatted, contains('ready'));
     });
   });
 

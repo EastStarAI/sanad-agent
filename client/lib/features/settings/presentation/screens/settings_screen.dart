@@ -13,12 +13,15 @@ import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dar
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
+import 'package:sanad_client/features/settings/data/account_lifecycle_repository.dart';
+import 'package:sanad_client/features/settings/presentation/bloc/account_lifecycle_cubit.dart';
 
 import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/mcp/presentation/screens/mcp_server_management_screen.dart';
 
 import '../widgets/settings_navigation.dart';
 import '../widgets/settings_pages.dart';
+import '../widgets/sessions_devices_page.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -34,6 +37,21 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _selectedWorkspaceId;
   bool _showAllWorkspaces = false;
   bool _appliedRouteIntent = false;
+  late final AccountLifecycleCubit _accountLifecycleCubit;
+
+  @override
+  void initState() {
+    super.initState();
+    _accountLifecycleCubit = AccountLifecycleCubit(
+      getIt<AccountLifecycleRepository>(),
+    );
+  }
+
+  @override
+  void dispose() {
+    unawaited(_accountLifecycleCubit.close());
+    super.dispose();
+  }
 
   @override
   void didChangeDependencies() {
@@ -188,106 +206,117 @@ class _SettingsScreenState extends State<SettingsScreen> {
         final activeDevice = state is DeviceActive ? state.activeAgent : null;
         final selected = devices.where((device) => device.id == _selectedDeviceId).firstOrNull;
 
-        return StreamBuilder<DeviceConversationCacheSnapshot>(
-          stream: _cache.snapshotStream,
-          initialData: _cache.snapshot,
-          builder: (context, cacheSnapshot) {
-            final workspaces = selected == null
-                ? const <DeviceWorkspace>[]
-                : cacheSnapshot.data?.contexts[selected.id]?.workspaces.workspaces ?? const <DeviceWorkspace>[];
-            final selectedWorkspace = workspaces.where((workspace) => workspace.id == _selectedWorkspaceId).firstOrNull;
+        return BlocProvider.value(
+          value: _accountLifecycleCubit,
+          child: StreamBuilder<DeviceConversationCacheSnapshot>(
+            stream: _cache.snapshotStream,
+            initialData: _cache.snapshot,
+            builder: (context, cacheSnapshot) {
+              final workspaces = selected == null
+                  ? const <DeviceWorkspace>[]
+                  : cacheSnapshot.data?.contexts[selected.id]?.workspaces.workspaces ?? const <DeviceWorkspace>[];
+              final selectedWorkspace = workspaces
+                  .where((workspace) => workspace.id == _selectedWorkspaceId)
+                  .firstOrNull;
 
-            return LayoutBuilder(
-              builder: (context, constraints) {
-                final compact = constraints.maxWidth < 820;
-                final navigation = SettingsNavigation(
-                  devices: devices,
-                  activeDeviceId: activeDevice?.id,
-                  selectedDevice: selected,
-                  selectedDestination: _destination,
-                  workspaces: workspaces,
-                  selectedWorkspaceId: _selectedWorkspaceId,
-                  showAllWorkspaces: _showAllWorkspaces,
-                  onSelectPersonal: (dest) {
-                    _selectPersonal(dest);
-                    if (compact) Navigator.of(context).pop();
-                  },
-                  onSelectDevice: (device) {
-                    _selectDevice(device);
-                    if (compact) Navigator.of(context).pop();
-                  },
-                  onSelectDeviceSection: (destination) {
-                    setState(() {
-                      _destination = destination;
-                      _selectedWorkspaceId = null;
-                    });
-                    if (compact) Navigator.of(context).pop();
-                  },
-                  onSelectWorkspace: (workspace) {
-                    setState(() {
-                      _selectedWorkspaceId = workspace.id;
-                      _destination = SettingsDestination.workspace;
-                    });
-                    if (compact) Navigator.of(context).pop();
-                  },
-                  onToggleWorkspaces: () => setState(() => _showAllWorkspaces = !_showAllWorkspaces),
-                );
-                final content = _buildContent(context, selected, activeDevice, selectedWorkspace);
+              return LayoutBuilder(
+                builder: (context, constraints) {
+                  final compact = constraints.maxWidth < 820;
+                  final navigation = SettingsNavigation(
+                    devices: devices,
+                    activeDeviceId: activeDevice?.id,
+                    selectedDevice: selected,
+                    selectedDestination: _destination,
+                    workspaces: workspaces,
+                    selectedWorkspaceId: _selectedWorkspaceId,
+                    showAllWorkspaces: _showAllWorkspaces,
+                    onSelectPersonal: (dest) {
+                      _selectPersonal(dest);
+                      if (compact) Navigator.of(context).pop();
+                    },
+                    onSelectDevice: (device) {
+                      _selectDevice(device);
+                      if (compact) Navigator.of(context).pop();
+                    },
+                    onSelectDeviceSection: (destination) {
+                      setState(() {
+                        _destination = destination;
+                        _selectedWorkspaceId = null;
+                      });
+                      if (compact) Navigator.of(context).pop();
+                    },
+                    onSelectWorkspace: (workspace) {
+                      setState(() {
+                        _selectedWorkspaceId = workspace.id;
+                        _destination = SettingsDestination.workspace;
+                      });
+                      if (compact) Navigator.of(context).pop();
+                    },
+                    onToggleWorkspaces: () => setState(() => _showAllWorkspaces = !_showAllWorkspaces),
+                  );
+                  final content = _buildContent(
+                    context,
+                    devices,
+                    selected,
+                    activeDevice,
+                    selectedWorkspace,
+                  );
 
-                if (compact) {
-                  return Scaffold(
-                    appBar: AppBar(
-                      title: const Text('Settings'),
-                      leading: IconButton(
-                        icon: const Icon(Icons.arrow_back_rounded),
-                        tooltip: 'Back to conversations',
-                        onPressed: () {
-                          if (context.canPop()) {
-                            context.pop();
-                          } else {
-                            context.go(AppRoutes.home);
-                          }
-                        },
-                      ),
-                      actions: [
-                        Builder(
-                          builder: (context) {
-                            return IconButton(
-                              icon: const Icon(Icons.menu_rounded),
-                              tooltip: 'Open settings menu',
-                              onPressed: () => Scaffold.of(context).openDrawer(),
-                            );
+                  if (compact) {
+                    return Scaffold(
+                      appBar: AppBar(
+                        title: const Text('Settings'),
+                        leading: IconButton(
+                          icon: const Icon(Icons.arrow_back_rounded),
+                          tooltip: 'Back to conversations',
+                          onPressed: () {
+                            if (context.canPop()) {
+                              context.pop();
+                            } else {
+                              context.go(AppRoutes.home);
+                            }
                           },
                         ),
-                      ],
-                    ),
-                    drawer: Drawer(child: SafeArea(child: navigation)),
-                    body: content,
-                  );
-                }
-                return Scaffold(
-                  body: SafeArea(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Container(
-                          width: 300,
-                          margin: EdgeInsets.all(AppPlatform.isMacOS ? 8 : 0),
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.surface,
-                            border: Border.all(color: Theme.of(context).colorScheme.outline),
-                            borderRadius: BorderRadius.circular(12),
+                        actions: [
+                          Builder(
+                            builder: (context) {
+                              return IconButton(
+                                icon: const Icon(Icons.menu_rounded),
+                                tooltip: 'Open settings menu',
+                                onPressed: () => Scaffold.of(context).openDrawer(),
+                              );
+                            },
                           ),
-                          child: navigation,
-                        ),
-                        Expanded(child: content),
-                      ],
+                        ],
+                      ),
+                      drawer: Drawer(child: SafeArea(child: navigation)),
+                      body: content,
+                    );
+                  }
+                  return Scaffold(
+                    body: SafeArea(
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 300,
+                            margin: EdgeInsets.all(AppPlatform.isMacOS ? 8 : 0),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.surface,
+                              border: Border.all(color: Theme.of(context).colorScheme.outline),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: navigation,
+                          ),
+                          Expanded(child: content),
+                        ],
+                      ),
                     ),
-                  ),
-                );
-              },
-            );
-          },
+                  );
+                },
+              );
+            },
+          ),
         );
       },
     );
@@ -295,12 +324,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Widget _buildContent(
     BuildContext context,
+    List<DeviceConfig> devices,
     DeviceConfig? selected,
     DeviceConfig? activeDevice,
     DeviceWorkspace? workspace,
   ) {
     if (_destination == SettingsDestination.profile) return const ProfilePage();
     if (_destination == SettingsDestination.general) return const GeneralPage();
+    if (_destination == SettingsDestination.sessionsDevices) {
+      return SessionsDevicesPage(
+        devices: devices,
+        onOpenDevice: _selectDevice,
+      );
+    }
     if (selected == null) return const EmptyDevicePage();
 
     return switch (_destination) {

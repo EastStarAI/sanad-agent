@@ -9,6 +9,8 @@ import 'package:sanad_client/utils/app_platform.dart';
 
 enum ConnectionScope { cloud, local }
 
+const deliveryPresenceRenewalInterval = Duration(seconds: 20);
+
 class ResolvedAgentEndpoint {
   final DeviceConfig agent;
   final ConnectionScope scope;
@@ -42,6 +44,10 @@ class DeviceConnectionCoordinator {
   StreamSubscription? _localLifecycleSubscription;
   bool _isDisposed = false;
   Future<void>? _localConnectionFuture;
+  Timer? _deliveryPresenceRenewalTimer;
+  DeviceConfig? _deliveryPresenceDevice;
+  final Set<String> _cloudInterestDeviceIds = {};
+  String? _lastPublishedCloudInterestSignature;
 
   DeviceConnectionCoordinator({
     required SanadSocketService cloudSocketService,
@@ -53,7 +59,13 @@ class DeviceConnectionCoordinator {
        _localSocketService = localSocketService,
        _currentDeviceId = currentDeviceId,
        _serviceManager = daemonController ?? const StandaloneDaemonController() {
-    _cloudLifecycleSubscription = _cloudSocketService.lifecycleStateStream.listen((_) => _emitChange());
+    _cloudLifecycleSubscription = _cloudSocketService.lifecycleStateStream.listen((state) {
+      if (state == SocketLifecycleState.ready) {
+        _lastPublishedCloudInterestSignature = null;
+        _publishCloudInterests();
+      }
+      _emitChange();
+    });
     _localLifecycleSubscription = _localSocketService.lifecycleStateStream.listen((_) => _emitChange());
     // Phase 27 — share one deduplicator across both transports.
     _cloudSocketService.eventDeduplicator = _eventDeduplicator;
@@ -144,6 +156,7 @@ class DeviceConnectionCoordinator {
   Future<ResolvedAgentEndpoint> ensureConnectedEndpointForAgent(
     DeviceConfig agent,
   ) async {
+    await synchronizeDeliveryPresence(agent);
     await ensureLocalConnection();
     var endpoint = resolve(agent);
     if (!endpoint.socketService.isConnected) {
@@ -153,6 +166,67 @@ class DeviceConnectionCoordinator {
       endpoint = resolve(agent);
     }
     return endpoint;
+  }
+
+  Future<void> synchronizeDeliveryPresence(DeviceConfig agent) async {
+    _deliveryPresenceDevice = agent;
+    await _synchronizeDeliveryPresence(agent);
+  }
+
+  /// Replaces the Gateway interest set with every account device currently in
+  /// the authoritative inventory. Per-device route synchronization may add an
+  /// entry before inventory hydration, but it must never remove other devices.
+  void synchronizeCloudInterests(Iterable<DeviceConfig> devices) {
+    _cloudInterestDeviceIds
+      ..clear()
+      ..addAll(
+        devices.map((device) => device.accountDeviceId).whereType<String>().where((deviceId) => deviceId.isNotEmpty),
+      );
+    if (_cloudSocketService.isConnected) {
+      _publishCloudInterests();
+    }
+  }
+
+  void _publishCloudInterests() {
+    final deviceIds = _cloudInterestDeviceIds.toList()..sort();
+    final signature = deviceIds.join('\u0000');
+    if (deviceIds.isEmpty && _lastPublishedCloudInterestSignature == null) return;
+    if (_lastPublishedCloudInterestSignature == signature) return;
+    _cloudSocketService.emit('delivery_presence_interest', {
+      'device_ids': deviceIds,
+    });
+    _lastPublishedCloudInterestSignature = signature;
+  }
+
+  Future<void> _synchronizeDeliveryPresence(DeviceConfig agent) async {
+    final deviceId = agent.accountDeviceId;
+    if (deviceId == null || deviceId.isEmpty) return;
+
+    _cloudInterestDeviceIds.add(deviceId);
+    if (_cloudSocketService.isConnected) {
+      _publishCloudInterests();
+    }
+    if (!isLocalCandidate(agent) || !_cloudSocketService.isConnected) return;
+
+    final assertion = await _cloudSocketService.requestLocalPresenceAssertion(
+      deviceId,
+    );
+    _localSocketService.setLocalPresenceAssertion(assertion);
+    if (assertion == null) {
+      _deliveryPresenceRenewalTimer?.cancel();
+      _deliveryPresenceRenewalTimer = null;
+      return;
+    }
+    _deliveryPresenceRenewalTimer ??= Timer.periodic(
+      deliveryPresenceRenewalInterval,
+      (_) {
+        final device = _deliveryPresenceDevice;
+        if (device != null) unawaited(_synchronizeDeliveryPresence(device));
+      },
+    );
+    if (_localSocketService.isConnected) {
+      await _localSocketService.refreshLocalHello();
+    }
   }
 
   Future<SanadSocketService?> ensureConnectedLocalRuntimeSocket() async {
@@ -215,6 +289,10 @@ class DeviceConnectionCoordinator {
 
   void dispose() {
     _isDisposed = true;
+    _deliveryPresenceRenewalTimer?.cancel();
+    _deliveryPresenceRenewalTimer = null;
+    _deliveryPresenceDevice = null;
+    _cloudInterestDeviceIds.clear();
     final cloudSubscription = _cloudLifecycleSubscription;
     if (cloudSubscription != null) {
       unawaited(cloudSubscription.cancel());

@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_client/core/interfaces/socket_gateway.dart';
+import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/core/interfaces/socket_service.dart';
 import 'package:sanad_client/infrastructure/socket/event_deduplicator.dart';
 import 'package:sanad_client/infrastructure/socket/event_router.dart';
@@ -31,6 +32,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   WebSocket? _localSocket;
   final String _url;
   final String _hardwareId;
+  final String? _clientInstanceId;
+  final ClientDisplayMetadata? _clientMetadata;
   String get hardwareId => _hardwareId;
   String? _authToken;
   final SocketTransportMode _transportMode;
@@ -84,16 +87,22 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   Future<void>? _connectFuture;
   Completer<void>? _readyCompleter;
   String? _lastIncomingEventName;
+  String? _localPresenceAssertion;
+  final Map<String, Completer<String?>> _presenceAssertionRequests = {};
 
   SanadSocketService({
     required String url,
     required String hardwareId,
+    String? clientInstanceId,
+    ClientDisplayMetadata? clientMetadata,
     String? startToken,
     SocketTransportMode transportMode = SocketTransportMode.cloudSocketIo,
     LocalGatewayCredentialProvider? localCredentialProvider,
     bool localTransportEnabled = true,
   }) : _url = url,
        _hardwareId = hardwareId,
+       _clientInstanceId = clientInstanceId,
+       _clientMetadata = clientMetadata,
        _authToken = startToken,
        _transportMode = transportMode,
        _localCredentialProvider =
@@ -104,12 +113,16 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   factory SanadSocketService.local({
     required String url,
     required String hardwareId,
+    String? clientInstanceId,
+    ClientDisplayMetadata? clientMetadata,
     LocalGatewayCredentialProvider credentialProvider = const LocalGatewayCredentialProvider(),
     bool enabled = true,
   }) {
     return SanadSocketService(
       url: url,
       hardwareId: hardwareId,
+      clientInstanceId: clientInstanceId,
+      clientMetadata: clientMetadata,
       transportMode: SocketTransportMode.localWebSocket,
       localCredentialProvider: credentialProvider,
       localTransportEnabled: enabled,
@@ -219,6 +232,13 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         'token': _authToken,
         'hardware_id': _hardwareId,
         'platform': AppPlatform.name,
+        if (_clientInstanceId != null) 'client_instance_id': _clientInstanceId,
+        if (_clientMetadata != null) 'metadata': _clientMetadata.toJson(),
+        if (_clientInstanceId != null)
+          'capabilities': const [
+            'account_sessions_v1',
+            'delivery_presence_v1',
+          ],
       };
       _logOutgoingSocketEvent('app_authenticate', authData);
       _socket?.emit('app_authenticate', authData);
@@ -263,6 +283,30 @@ class SanadSocketService implements ISocketService, ISocketGateway {
 
     _socket!.on('device_event', _handleCloudDeviceEvent);
 
+    _socket!.on('local_presence_assertion', (data) {
+      final payload = _asMap(data);
+      final deviceId = payload?['device_id']?.toString();
+      final assertion = payload?['presence_assertion']?.toString();
+      final completer = deviceId == null ? null : _presenceAssertionRequests.remove(deviceId);
+      if (assertion != null && assertion.isNotEmpty) {
+        completer?.complete(assertion);
+      } else {
+        completer?.complete(null);
+      }
+    });
+    _socket!.on('local_presence_assertion_error', (data) {
+      final payload = _asMap(data);
+      final deviceId = payload?['device_id']?.toString();
+      if (deviceId != null) {
+        _presenceAssertionRequests.remove(deviceId)?.complete(null);
+      } else {
+        for (final completer in _presenceAssertionRequests.values) {
+          if (!completer.isCompleted) completer.complete(null);
+        }
+        _presenceAssertionRequests.clear();
+      }
+    });
+
     _socket!.on('voice_audio_chunk_relay', (data) {
       if (_isDisposed) return;
       if (data is Map) {
@@ -304,6 +348,50 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     }
   }
 
+  Future<String?> requestLocalPresenceAssertion(String deviceId) async {
+    if (isLocalTransport || !isReady || deviceId.isEmpty) return null;
+    final existing = _presenceAssertionRequests[deviceId];
+    if (existing != null) return existing.future;
+    final completer = Completer<String?>();
+    _presenceAssertionRequests[deviceId] = completer;
+    _socket?.emit('request_local_presence_assertion', {'device_id': deviceId});
+    try {
+      return await completer.future.timeout(const Duration(seconds: 5));
+    } on TimeoutException {
+      return null;
+    } finally {
+      _presenceAssertionRequests.remove(deviceId);
+    }
+  }
+
+  void setLocalPresenceAssertion(String? assertion) {
+    if (!isLocalTransport) return;
+    _localPresenceAssertion = assertion;
+  }
+
+  Future<void> refreshLocalHello() async {
+    if (!isLocalTransport || !isReady || _localSocket == null) return;
+    _sendLocalHello();
+  }
+
+  void _sendLocalHello() {
+    if (_localSocket == null || _clientInstanceId == null) return;
+    _localSocket!.add(
+      jsonEncode({
+        'type': 'client.hello',
+        'protocol': 'sanad.identity_presence',
+        'version': 1,
+        'client_instance_id': _clientInstanceId,
+        if (_clientMetadata != null) 'metadata': _clientMetadata.toJson(),
+        'capabilities': const [
+          'account_sessions_v1',
+          'delivery_presence_v1',
+        ],
+        if (_localPresenceAssertion != null) 'local_presence_assertion': _localPresenceAssertion,
+      }),
+    );
+  }
+
   Future<void> _connectLocalWebSocket() async {
     if (_localSocket != null) {
       await _localSocket!.close();
@@ -321,6 +409,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         headers: headers,
       );
       _setSocketConnected(true);
+      _sendLocalHello();
 
       _localSocket!.listen(
         _handleLocalMessage,
@@ -417,8 +506,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     final eventId = event['event_id'] as String?;
     if (!dedup.shouldProcess(eventId, transport: transport)) {
       _logger.fine(
-        '↪️ Dropping duplicate device_event (event_id=$eventId, '
-        'transport=$transport) already seen on the same transport.',
+        'Dropping duplicate device_event on $transport transport.',
       );
       return false;
     }
@@ -877,9 +965,20 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         normalized == 'credentials' ||
         normalized == 'secret' ||
         normalized == 'api_key' ||
+        normalized == 'client_instance_id' ||
+        normalized == 'event_id' ||
+        normalized == 'email' ||
+        normalized == 'hostname' ||
+        normalized == 'content' ||
+        normalized == 'payload' ||
+        normalized == 'origin_client' ||
+        normalized == 'local_presence_assertion' ||
+        normalized == 'presence_assertion' ||
         normalized.endsWith('_token') ||
         normalized.endsWith('_secret') ||
         normalized.endsWith('_password') ||
-        normalized.endsWith('_api_key');
+        normalized.endsWith('_api_key') ||
+        normalized.endsWith('_proof') ||
+        normalized.endsWith('_thumbprint');
   }
 }

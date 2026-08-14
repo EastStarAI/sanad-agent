@@ -174,6 +174,7 @@ not silently substitute a different model.
 
 Settings distinguish:
 
+- account Client sessions and connected Agent devices, including current session, authoritative presence, Last active, and confirmed revoke;
 - application preferences, such as appearance;
 - device-level provider, MCP, skill, and runtime configuration;
 - workspace-specific context, capabilities, and permissions.

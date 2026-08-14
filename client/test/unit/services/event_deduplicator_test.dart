@@ -21,12 +21,11 @@ void main() {
       expect(d.shouldProcess('evt_3', transport: 'local'), isTrue);
     });
 
-    test('same event_id is allowed once per transport', () {
+    test('same event_id is applied once across transports', () {
       final d = EventDeduplicator();
       expect(d.shouldProcess('evt_1', transport: 'cloud'), isTrue);
-      expect(d.shouldProcess('evt_1', transport: 'local'), isTrue);
-      expect(d.shouldProcess('evt_1', transport: 'cloud'), isFalse);
       expect(d.shouldProcess('evt_1', transport: 'local'), isFalse);
+      expect(d.shouldProcess('evt_1', transport: 'cloud'), isFalse);
     });
 
     test('null or empty event_id is always processed (backward compat)', () {

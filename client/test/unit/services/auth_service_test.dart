@@ -2,6 +2,7 @@ import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'dart:async';
 
 import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
+import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_callback_contract.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 import 'package:sanad_client/features/auth/infrastructure/colocated_auth_coupling_client.dart';
@@ -68,6 +69,8 @@ class StubPortalAuthClient extends PortalAuthClient {
     required String redirectUri,
     required String codeChallenge,
     String? enrollmentRequestId,
+    String? clientInstanceId,
+    ClientDisplayMetadata? metadata,
   }) async {
     transactionCalls += 1;
     enrollmentRequestIds.add(enrollmentRequestId);

@@ -329,9 +329,11 @@ void main() {
       identityLoader: () =>
           DeviceKeyIdentity.loadOrCreate(secretStore: secrets),
       httpClient: MockClient(
-        (_) async => http.Response('', 200, headers: {
-          'date': HttpDate.format(DateTime.now().toUtc()),
-        }),
+        (_) async => http.Response(
+          '',
+          200,
+          headers: {'date': HttpDate.format(DateTime.now().toUtc())},
+        ),
       ),
     );
     await platform.initialize();
@@ -405,6 +407,8 @@ void main() {
 
       final payload = Map<String, dynamic>.from(registration['data'] as Map);
       expect(payload['device_token'], 'sanad_device_synthetic-credential');
+      expect(payload['capabilities'], isA<Map<String, dynamic>>());
+      expect(payload['transport_capabilities'], ['delivery_presence_v1']);
       expect(payload, isNot(contains('pairing_token')));
       expect(payload, isNot(contains('proposed_device_token')));
       final proof = payload['device_proof'] as String;
