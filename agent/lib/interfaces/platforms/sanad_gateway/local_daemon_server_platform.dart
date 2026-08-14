@@ -632,7 +632,6 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       return;
     }
 
-    _logger.fine('⬇️ [ws] Message payload: $envelope');
     _rememberSocketIdentity(socket, envelope);
 
     if (type == 'get_capabilities') {
@@ -818,7 +817,6 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     } else {
       _logger.info('⬆️ [ws] Sending device_event: $eventType');
     }
-    _logger.fine('⬆️ [ws] Device event payload: $payload');
     await _sendToSocket(socket, payload);
   }
 
@@ -927,7 +925,6 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     } else {
       _logger.info('⬆️ [ws] Sending device_event response: $eventType');
     }
-    _logger.fine('⬆️ [ws] Response payload: $envelope');
 
     // Phase 27 — delivery-aware local routing. The runtime sets the scope;
     // the platform resolves it to concrete sockets.

@@ -823,10 +823,12 @@ void main() {
       final instance = await client.createInstance(
         templateId: 'openai-codex',
         displayName: 'Fixture ChatGPT',
-        authMethod: 'api_key',
+        authMethod: 'device_code',
         baseUrl: '${fixture.baseUrl}/backend-api/codex',
         agent: agent,
       );
+      // Seed a deterministic bearer inside the isolated test Home without
+      // invoking the live device-code provider.
       await client.updateCredential(
         providerInstanceId: instance.id,
         action: 'replace',

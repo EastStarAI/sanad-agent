@@ -2327,7 +2327,10 @@ Use the review skill.''',
       await Future<void>.delayed(Duration.zero);
 
       expect(orchestrator.isSessionBusy('session-stop-rate-limit'), isFalse);
-      expect(orchestrator.hasSuspendedEvent('session-stop-rate-limit'), isFalse);
+      expect(
+        orchestrator.hasSuspendedEvent('session-stop-rate-limit'),
+        isFalse,
+      );
       expect(
         responses.where(
           (response) =>
@@ -3063,7 +3066,7 @@ Use the review skill.''',
         platformId: 'test-platform',
         message: Message(
           role: MessageRole.user,
-          content: 'token=abc123def456ghi789',
+          content: 'token=fixture-value',
         ),
         metadata: {
           'authorization': 'Bearer secret-token-123456',

@@ -103,4 +103,4 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Keep streaming events at fine/debug log level and lifecycle, command, and terminal events concise at info level. Command lifecycle logs may format only the typed Gateway-authored `origin_client` kind/platform display; malformed or absent origin falls back to `authenticated client`, and ids, free-form metadata, command envelopes, and payloads never enter logs.
 - Daemon restart and permanent stop use the shared restart coordinator so local HTTP and protocol callers preserve acknowledgment delay and supervisor exit semantics.
 - Long-running restart safety evaluation must not serialize local HTTP acceptance; health, stop, and unrelated WebSocket upgrades remain responsive while a restart waits.
-- Never log secrets, raw recovery text, pending steer text, or full sensitive tool payloads.
+- Never log secrets, raw recovery text, pending steer text, Client instance ids, event ids, presence assertions, origin projections, command/event content, or full envelopes/tool payloads.

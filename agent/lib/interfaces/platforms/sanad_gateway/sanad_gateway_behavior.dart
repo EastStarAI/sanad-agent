@@ -23,9 +23,6 @@ mixin SanadGatewayBehavior {
     Map<String, dynamic>? envelope,
   }) async {
     logger.info('⬇️ [$transportName] Received protocol_event: ${event.type}');
-    if (envelope != null) {
-      logger.fine('⬇️ [$transportName] Protocol event payload: $envelope');
-    }
     if (runtimeBridge.handleProtocolEvent(event)) {
       return;
     }

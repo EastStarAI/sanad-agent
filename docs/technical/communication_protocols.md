@@ -655,7 +655,7 @@ External families (`telegram`/`whatsapp`/`cli`) use `origin` delivery and never 
 
 ### 6.4. Event Identity & Deduplication
 - `event_id` is minted once at event creation as a UUID-backed identifier and preserved across all local/cloud copies. It is NOT regenerated per transport, NOT derived from content/timestamp alone, and NOT reused.
-- The Flutter client currently applies a temporary mitigation that deduplicates by `event_id + transport` via a shared `EventDeduplicator` injected into both transports by `DeviceConnectionCoordinator`. This still blocks repeated deliveries on the same transport while allowing one cloud copy and one local copy of the same logical event.
+- The Flutter client applies transition-race deduplication by canonical `event_id` via one shared `EventDeduplicator` injected into both transports by `DeviceConnectionCoordinator`. The first Local or Cloud copy is applied and every later copy of that logical event is dropped regardless of transport.
 - Incoming `device_event` debug logging happens after this check, so a dropped transport copy is not reported as a second applied event.
 - The dedupe cache is bounded (LRU + age), in-memory only, independent of the durable conversation log, and cleared on full logout — NOT on a same-device transport switch.
 - Events without `event_id` are still processed (backward compat) but producers are expected to stamp it.
@@ -668,7 +668,7 @@ External families (`telegram`/`whatsapp`/`cli`) use `origin` delivery and never 
 | Local platform | Resolves the scope to concrete sockets (origin socket, all sanad_client sockets, or hardware-matched sockets) and stamps each outgoing copy with the recipient socket's registered `device_id` |
 | Cloud platform | Forwards the canonical envelope to Sanad Gateway; rewrites `device_id`/`hardware_id` from registration state |
 | Backend | Validates the `delivery` envelope, rejects non-`sanad_client` families, and routes by scope (origin → request registry, platform_family → user room, hardware → matched app connections) WITHOUT inspecting the event `name` |
-| Flutter client | Deduplicates by `event_id + transport` (temporary mitigation), routes by `device_id`/`session_id`, updates background session state without switching the open conversation |
+| Flutter client | Deduplicates globally by canonical `event_id` across Local/Cloud, routes by `device_id`/`session_id`, updates background session state without switching the open conversation |
 
 ### 6.6. Failure Handling
 - **Cloud down:** local keeps receiving runtime events; cloud does not accumulate unbounded copies. On cloud return, history and durable state are re-hydrated; no live stream is replayed as new.

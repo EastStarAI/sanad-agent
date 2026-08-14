@@ -32,3 +32,11 @@ description: "Regression matrix for assertion-bound Local presence, Agent Cloud-
   event loop.
 - Deduplication uses only canonical `event_id`, never content, timestamps, or
   run ids.
+- Debug diagnostics retain bounded event/transport names only. They redact
+  Client instance ids, event ids, assertions, origin projections, email/host
+  metadata, and command/event content or payloads; Agent adapters never log
+  complete protocol envelopes.
+- Release review runs both daemon-backed boundaries sequentially with isolated
+  Sanad Homes and ports: the Agent Gateway platform E2E and the Client dual-
+  connection E2E. Provider fixtures used by the latter must select an auth
+  method supported by the authoritative provider template.

@@ -225,7 +225,6 @@ class ServerSanadGatewayPlatform extends BasePlatform
       _logger.info(
         '⬇️ [socket] Received execute_tool: ${envelope['tool_name']}',
       );
-      _logger.fine('⬇️ [socket] execute_tool payload: $envelope');
       // TODO: Implement tool execution mapping to agent tools
     });
 
@@ -610,7 +609,6 @@ class ServerSanadGatewayPlatform extends BasePlatform
     } else {
       _logger.info('⬆️ [socket] Emitting device_event: $eventType');
     }
-    _logger.fine('⬆️ [socket] Device event payload: $canonicalEnvelope');
 
     _socket!.emit('device_event', canonicalEnvelope);
   }

@@ -506,8 +506,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     final eventId = event['event_id'] as String?;
     if (!dedup.shouldProcess(eventId, transport: transport)) {
       _logger.fine(
-        '↪️ Dropping duplicate device_event (event_id=$eventId, '
-        'transport=$transport) already seen on the same transport.',
+        'Dropping duplicate device_event on $transport transport.',
       );
       return false;
     }
@@ -966,9 +965,20 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         normalized == 'credentials' ||
         normalized == 'secret' ||
         normalized == 'api_key' ||
+        normalized == 'client_instance_id' ||
+        normalized == 'event_id' ||
+        normalized == 'email' ||
+        normalized == 'hostname' ||
+        normalized == 'content' ||
+        normalized == 'payload' ||
+        normalized == 'origin_client' ||
+        normalized == 'local_presence_assertion' ||
+        normalized == 'presence_assertion' ||
         normalized.endsWith('_token') ||
         normalized.endsWith('_secret') ||
         normalized.endsWith('_password') ||
-        normalized.endsWith('_api_key');
+        normalized.endsWith('_api_key') ||
+        normalized.endsWith('_proof') ||
+        normalized.endsWith('_thumbprint');
   }
 }
