@@ -25,6 +25,7 @@ import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 
 import 'capabilities_loader.dart';
+import 'delivery_presence_controller.dart';
 import 'sanad_protocol_bridge.dart';
 import 'protocol/canonical_events.dart';
 import 'channels/websocket_session_channel.dart';
@@ -42,6 +43,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   LocalGatewaySecurity? _security;
   ColocatedAuthCoupling? _authCoupling;
   final Future<void> Function()? beforeUpgradeAuthentication;
+  final DeliveryPresenceController? deliveryPresence;
 
   @override
   Logger get logger => _logger;
@@ -97,6 +99,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     LocalGatewaySecurity? security,
     ColocatedAuthCoupling? authCoupling,
     this.beforeUpgradeAuthentication,
+    this.deliveryPresence,
   }) : _security = security,
        _authCoupling = authCoupling;
 
@@ -545,6 +548,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         _clients.remove(socket);
         _socketDeviceIds.remove(socket);
         _clientInstances.remove(socket);
+        deliveryPresence?.removeLocalMember(socket);
         _platformRuntimeBridge.unregisterChannel(
           WebSocketSessionChannel(socket),
         );
@@ -597,6 +601,17 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         return;
       }
       _clientInstances[socket] = instanceId;
+      final presenceAssertion = envelope['local_presence_assertion']
+          ?.toString();
+      if (presenceAssertion != null && presenceAssertion.isNotEmpty) {
+        deliveryPresence?.updateLocalMember(
+          socket,
+          clientInstanceId: instanceId,
+          presenceAssertion: presenceAssertion,
+        );
+      } else {
+        deliveryPresence?.removeLocalMember(socket);
+      }
       _sendToSocket(socket, const {
         'type': 'client.hello_ack',
         'protocol': 'sanad.identity_presence',
@@ -889,6 +904,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
   @override
   Future<void> sendResponse(GatewayResponse response) async {
+    deliveryPresence?.recordLocalEvent();
     final canonicalEnvelope = _protocolBridge.buildAgentEventEnvelope(
       _protocolBridge.translateResponse(response),
     );

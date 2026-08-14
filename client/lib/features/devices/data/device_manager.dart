@@ -271,6 +271,7 @@ class DeviceManager {
 
   void _rebuildInventory() {
     _agents = _inventoryMerger.merge(_cloudAgents);
+    _connectionCoordinator.synchronizeCloudInterests(_cloudAgents);
   }
 
   bool get _isCloudGatewayReady => !_socket.isLocalTransport && _socket.lifecycleState == SocketLifecycleState.ready;

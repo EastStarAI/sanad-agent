@@ -33,7 +33,10 @@ void main() {
 
     final thinkCommand = localSocket.capturedCommands.where((entry) => entry['command'] == 'think').single;
     expect(thinkCommand['command'], 'think');
-    expect(cloudSocket.capturedCommands, isEmpty);
+    expect(
+      cloudSocket.capturedCommands.where((entry) => entry['command'] != null),
+      isEmpty,
+    );
     expect(agent.isLocalReachable, isTrue);
 
     localSocket.debugEmitEvent({

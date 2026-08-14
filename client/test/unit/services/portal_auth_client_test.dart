@@ -97,7 +97,10 @@ void main() {
       'os_family': 'macos',
       'app_version': '1.2.3',
     });
-    expect(payload['capabilities'], ['account_sessions_v1']);
+    expect(payload['capabilities'], [
+      'account_sessions_v1',
+      'delivery_presence_v1',
+    ]);
     expect(payload, isNot(contains('hostname')));
   });
 

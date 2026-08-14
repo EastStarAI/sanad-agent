@@ -115,7 +115,11 @@ class PortalAuthClient {
       if (enrollmentRequestId != null) 'enrollment_request_id': enrollmentRequestId,
       if (clientInstanceId != null) 'client_instance_id': clientInstanceId,
       if (metadata != null) 'metadata': metadata.toJson(),
-      if (clientInstanceId != null) 'capabilities': const ['account_sessions_v1'],
+      if (clientInstanceId != null)
+        'capabilities': const [
+          'account_sessions_v1',
+          'delivery_presence_v1',
+        ],
     });
     return PortalClientTransaction.fromJson(data);
   }

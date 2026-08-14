@@ -44,16 +44,12 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   int _reconnectAttempts = 0;
   bool _explicitDisconnect = false;
 
-  final _authSuccessController =
-      StreamController<Map<String, dynamic>>.broadcast();
+  final _authSuccessController = StreamController<Map<String, dynamic>>.broadcast();
   @override
-  Stream<Map<String, dynamic>> get onAuthSuccess =>
-      _authSuccessController.stream;
+  Stream<Map<String, dynamic>> get onAuthSuccess => _authSuccessController.stream;
 
-  final _authFailureController =
-      StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get onAuthFailure =>
-      _authFailureController.stream;
+  final _authFailureController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get onAuthFailure => _authFailureController.stream;
 
   final _eventsController = StreamController<Map<String, dynamic>>.broadcast();
   @override
@@ -84,15 +80,15 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   final _connectionStatusController = StreamController<bool>.broadcast();
   Stream<bool> get connectionStatusStream => _connectionStatusController.stream;
 
-  final _lifecycleStateController =
-      StreamController<SocketLifecycleState>.broadcast();
-  Stream<SocketLifecycleState> get lifecycleStateStream =>
-      _lifecycleStateController.stream;
+  final _lifecycleStateController = StreamController<SocketLifecycleState>.broadcast();
+  Stream<SocketLifecycleState> get lifecycleStateStream => _lifecycleStateController.stream;
 
   bool _isDisposed = false;
   Future<void>? _connectFuture;
   Completer<void>? _readyCompleter;
   String? _lastIncomingEventName;
+  String? _localPresenceAssertion;
+  final Map<String, Completer<String?>> _presenceAssertionRequests = {};
 
   SanadSocketService({
     required String url,
@@ -111,9 +107,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
        _transportMode = transportMode,
        _localCredentialProvider =
            localCredentialProvider ??
-           (transportMode == SocketTransportMode.localWebSocket
-               ? const LocalGatewayCredentialProvider()
-               : null),
+           (transportMode == SocketTransportMode.localWebSocket ? const LocalGatewayCredentialProvider() : null),
        _localTransportEnabled = localTransportEnabled;
 
   factory SanadSocketService.local({
@@ -121,8 +115,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     required String hardwareId,
     String? clientInstanceId,
     ClientDisplayMetadata? clientMetadata,
-    LocalGatewayCredentialProvider credentialProvider =
-        const LocalGatewayCredentialProvider(),
+    LocalGatewayCredentialProvider credentialProvider = const LocalGatewayCredentialProvider(),
     bool enabled = true,
   }) {
     return SanadSocketService(
@@ -136,8 +129,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     );
   }
 
-  bool get isLocalTransport =>
-      _transportMode == SocketTransportMode.localWebSocket;
+  bool get isLocalTransport => _transportMode == SocketTransportMode.localWebSocket;
 
   @override
   void setAccessToken(String? token) {
@@ -218,12 +210,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     _logger.info('[${hashCode}]: Connecting to $_url');
     _socket = socket_io.io(
       _url,
-      socket_io.OptionBuilder()
-          .setTransports(['websocket'])
-          .enableForceNew()
-          .disableAutoConnect()
-          .setExtraHeaders({'Authorization': 'Bearer $_authToken'})
-          .build(),
+      socket_io.OptionBuilder().setTransports(['websocket']).enableForceNew().disableAutoConnect().setExtraHeaders({
+        'Authorization': 'Bearer $_authToken',
+      }).build(),
     );
 
     _socket!.onAny((event, data) {
@@ -246,7 +235,10 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         if (_clientInstanceId != null) 'client_instance_id': _clientInstanceId,
         if (_clientMetadata != null) 'metadata': _clientMetadata.toJson(),
         if (_clientInstanceId != null)
-          'capabilities': const ['account_sessions_v1'],
+          'capabilities': const [
+            'account_sessions_v1',
+            'delivery_presence_v1',
+          ],
       };
       _logOutgoingSocketEvent('app_authenticate', authData);
       _socket?.emit('app_authenticate', authData);
@@ -255,8 +247,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     _socket!.onDisconnect((_) {
       _logger.info('[${hashCode}]: Disconnected');
       _setSocketConnected(false);
-      if (_lifecycleState != SocketLifecycleState.authFailed &&
-          _lifecycleState != SocketLifecycleState.error) {
+      if (_lifecycleState != SocketLifecycleState.authFailed && _lifecycleState != SocketLifecycleState.error) {
         _setLifecycleState(SocketLifecycleState.disconnected);
       }
     });
@@ -286,13 +277,35 @@ class SanadSocketService implements ISocketService, ISocketGateway {
 
     _socket!.on('capabilities', (data) {
       if (_isDisposed) return;
-      final payload = data is Map
-          ? Map<String, dynamic>.from(data)
-          : <String, dynamic>{};
+      final payload = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
       _safeAdd({'type': 'capabilities', ...payload});
     });
 
     _socket!.on('device_event', _handleCloudDeviceEvent);
+
+    _socket!.on('local_presence_assertion', (data) {
+      final payload = _asMap(data);
+      final deviceId = payload?['device_id']?.toString();
+      final assertion = payload?['presence_assertion']?.toString();
+      final completer = deviceId == null ? null : _presenceAssertionRequests.remove(deviceId);
+      if (assertion != null && assertion.isNotEmpty) {
+        completer?.complete(assertion);
+      } else {
+        completer?.complete(null);
+      }
+    });
+    _socket!.on('local_presence_assertion_error', (data) {
+      final payload = _asMap(data);
+      final deviceId = payload?['device_id']?.toString();
+      if (deviceId != null) {
+        _presenceAssertionRequests.remove(deviceId)?.complete(null);
+      } else {
+        for (final completer in _presenceAssertionRequests.values) {
+          if (!completer.isCompleted) completer.complete(null);
+        }
+        _presenceAssertionRequests.clear();
+      }
+    });
 
     _socket!.on('voice_audio_chunk_relay', (data) {
       if (_isDisposed) return;
@@ -335,6 +348,50 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     }
   }
 
+  Future<String?> requestLocalPresenceAssertion(String deviceId) async {
+    if (isLocalTransport || !isReady || deviceId.isEmpty) return null;
+    final existing = _presenceAssertionRequests[deviceId];
+    if (existing != null) return existing.future;
+    final completer = Completer<String?>();
+    _presenceAssertionRequests[deviceId] = completer;
+    _socket?.emit('request_local_presence_assertion', {'device_id': deviceId});
+    try {
+      return await completer.future.timeout(const Duration(seconds: 5));
+    } on TimeoutException {
+      return null;
+    } finally {
+      _presenceAssertionRequests.remove(deviceId);
+    }
+  }
+
+  void setLocalPresenceAssertion(String? assertion) {
+    if (!isLocalTransport) return;
+    _localPresenceAssertion = assertion;
+  }
+
+  Future<void> refreshLocalHello() async {
+    if (!isLocalTransport || !isReady || _localSocket == null) return;
+    _sendLocalHello();
+  }
+
+  void _sendLocalHello() {
+    if (_localSocket == null || _clientInstanceId == null) return;
+    _localSocket!.add(
+      jsonEncode({
+        'type': 'client.hello',
+        'protocol': 'sanad.identity_presence',
+        'version': 1,
+        'client_instance_id': _clientInstanceId,
+        if (_clientMetadata != null) 'metadata': _clientMetadata.toJson(),
+        'capabilities': const [
+          'account_sessions_v1',
+          'delivery_presence_v1',
+        ],
+        if (_localPresenceAssertion != null) 'local_presence_assertion': _localPresenceAssertion,
+      }),
+    );
+  }
+
   Future<void> _connectLocalWebSocket() async {
     if (_localSocket != null) {
       await _localSocket!.close();
@@ -352,18 +409,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         headers: headers,
       );
       _setSocketConnected(true);
-      if (_clientInstanceId != null) {
-        _localSocket!.add(
-          jsonEncode({
-            'type': 'client.hello',
-            'protocol': 'sanad.identity_presence',
-            'version': 1,
-            'client_instance_id': _clientInstanceId,
-            if (_clientMetadata != null) 'metadata': _clientMetadata.toJson(),
-            'capabilities': const ['account_sessions_v1'],
-          }),
-        );
-      }
+      _sendLocalHello();
 
       _localSocket!.listen(
         _handleLocalMessage,
@@ -492,10 +538,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     return null;
   }
 
-  final _remoteToolExecutionController =
-      StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get remoteToolExecutionStream =>
-      _remoteToolExecutionController.stream;
+  final _remoteToolExecutionController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get remoteToolExecutionStream => _remoteToolExecutionController.stream;
 
   void _handleExecuteTool(dynamic data) {
     if (data is! Map<String, dynamic>) {
@@ -578,9 +622,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     }
     _logOutgoingSocketEvent(event, data);
     if (isLocalTransport) {
-      final payload = data is Map
-          ? Map<String, dynamic>.from(data)
-          : <String, dynamic>{'payload': data};
+      final payload = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{'payload': data};
       _localSocket?.add(jsonEncode({'type': event, ...payload}));
       return;
     }
@@ -643,9 +685,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     final payload = {
       'run_id': runId,
       'status': isError ? 'error' : 'success',
-      'output': isError
-          ? (error ?? output ?? 'Tool execution failed')
-          : (output ?? ''),
+      'output': isError ? (error ?? output ?? 'Tool execution failed') : (output ?? ''),
       'isError': isError,
       'hardware_id': _hardwareId,
     };
@@ -677,10 +717,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     Map<String, dynamic> data,
     void Function(Map<String, dynamic>) handler,
   ) async {
-    if (_socket == null ||
-        !_socket!.connected ||
-        !isReady ||
-        isLocalTransport) {
+    if (_socket == null || !_socket!.connected || !isReady || isLocalTransport) {
       return;
     }
 
@@ -843,8 +880,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         currentEventName = eventName.toString();
       }
 
-      if (currentEventName == 'thought_stream' ||
-          currentEventName == 'reasoning_stream') {
+      if (currentEventName == 'thought_stream' || currentEventName == 'reasoning_stream') {
         if (_lastIncomingEventName == currentEventName) {
           return;
         }
@@ -900,9 +936,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     if (data is Map) {
       return <String, dynamic>{
         for (final entry in data.entries)
-          entry.key.toString(): _isSensitiveLogKey(entry.key)
-              ? '[REDACTED]'
-              : _redactSensitiveLogData(entry.value),
+          entry.key.toString(): _isSensitiveLogKey(entry.key) ? '[REDACTED]' : _redactSensitiveLogData(entry.value),
       };
     }
 

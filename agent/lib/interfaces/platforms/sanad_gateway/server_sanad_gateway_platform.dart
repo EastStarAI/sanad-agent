@@ -15,6 +15,7 @@ import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
 
 import 'capabilities_loader.dart';
+import 'delivery_presence_controller.dart';
 import 'sanad_protocol_bridge.dart';
 import 'protocol/canonical_events.dart';
 import 'channels/cloud_session_channel.dart';
@@ -63,11 +64,15 @@ class ServerSanadGatewayPlatform extends BasePlatform
   final io.Socket Function(String uri, dynamic options)? socketFactory;
   final Future<DeviceKeyIdentity> Function() identityLoader;
   final http.Client _httpClient;
+  final DeliveryPresenceController? deliveryPresence;
+  StreamSubscription<LocalPresenceSnapshot>? _localPresenceSubscription;
+  Timer? _localPresenceRenewalTimer;
 
   ServerSanadGatewayPlatform({
     this.socketFactory,
     Future<DeviceKeyIdentity> Function()? identityLoader,
     http.Client? httpClient,
+    this.deliveryPresence,
   }) : identityLoader = identityLoader ?? DeviceKeyIdentity.loadOrCreate,
        _httpClient = httpClient ?? http.Client();
 
@@ -115,6 +120,15 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   @override
   Future<void> initialize() async {
+    _localPresenceSubscription ??= deliveryPresence?.localChanges.listen(
+      _publishLocalPresence,
+    );
+    if (deliveryPresence != null) {
+      _localPresenceRenewalTimer ??= Timer.periodic(
+        deliveryPresenceRenewalInterval,
+        (_) => deliveryPresence!.renewLocalSnapshot(),
+      );
+    }
     final authManager = getIt<AuthManager>();
     _authChangeSubscription ??= authManager.changes.listen((_) {
       unawaited(_synchronizeAuthentication());
@@ -152,6 +166,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
     _socket!.onDisconnect((reason) {
       _registeredDeviceId = null;
+      deliveryPresence?.clearInterest();
       _logger.info('🔌 Disconnected from Sanad Gateway (reason: $reason)');
     });
 
@@ -170,6 +185,17 @@ class ServerSanadGatewayPlatform extends BasePlatform
       _logger.info(
         '⚡ Successfully registered with Sanad Gateway as device $_registeredDeviceId',
       );
+      deliveryPresence?.renewLocalSnapshot();
+    });
+
+    _socket!.on('cloud_delivery_interest', (data) {
+      final accepted = deliveryPresence?.acceptInterest(toMap(data)) ?? false;
+      if (accepted) {
+        _socket?.emit('cloud_delivery_interest_ack', {
+          'version': deliveryPresenceVersion,
+          'revision': toMap(data)['revision'],
+        });
+      }
     });
 
     _socket!.on('register_failed', (data) async {
@@ -520,6 +546,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
       'hardware_id': authManager.hardwareId,
       'platform': _getPlatformName(),
       ...capabilities.toJson(),
+      'transport_capabilities': const [deliveryPresenceCapability],
     };
 
     _logger.info(
@@ -530,7 +557,34 @@ class ServerSanadGatewayPlatform extends BasePlatform
     targetSocket.emit('register_device', payload);
   }
 
-  Future<void> _emitAgentEvent(Map<String, dynamic> envelope) async {
+  void _publishLocalPresence(LocalPresenceSnapshot? snapshot) {
+    final targetSocket = _socket;
+    final deviceId = _registeredDeviceId;
+    if (snapshot == null ||
+        targetSocket == null ||
+        !targetSocket.connected ||
+        deviceId == null ||
+        deviceId.isEmpty) {
+      return;
+    }
+    targetSocket.emit('agent_local_presence', {
+      'protocol': deliveryPresenceProtocol,
+      'version': deliveryPresenceVersion,
+      'type': 'agent.local_presence',
+      'device_id': deviceId,
+      'revision': snapshot.revision,
+      'local_clients': snapshot.members
+          .map((member) => member.toJson())
+          .toList(growable: false),
+      'capabilities': const [deliveryPresenceCapability],
+    });
+  }
+
+  Future<void> _emitAgentEvent(
+    Map<String, dynamic> envelope, {
+    bool egressClaimed = false,
+  }) async {
+    if (!egressClaimed && deliveryPresence?.claimCloudEgress() == false) return;
     if (_socket == null || !_socket!.connected) {
       return;
     }
@@ -570,14 +624,21 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   @override
   Future<void> sendResponse(GatewayResponse response) async {
+    // The interest gate precedes canonical translation/serialization.
+    if (deliveryPresence?.claimCloudEgress() == false) return;
     final canonicalEvent = _protocolBridge.translateResponse(response);
     await _emitAgentEvent(
       _protocolBridge.buildAgentEventEnvelope(canonicalEvent),
+      egressClaimed: true,
     );
   }
 
   @override
   Future<void> dispose() async {
+    _localPresenceRenewalTimer?.cancel();
+    _localPresenceRenewalTimer = null;
+    await _localPresenceSubscription?.cancel();
+    _localPresenceSubscription = null;
     await _authChangeSubscription?.cancel();
     _authChangeSubscription = null;
     await _eventController.close();

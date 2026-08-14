@@ -38,6 +38,25 @@ Sanad supports two separate routes for client-to-agent communication to balance 
                                                 └────────────────────────┘
 ```
 
+### 1.1 Cross-transport delivery presence
+
+A desktop Client keeps its authenticated Cloud Socket connected while using a
+same-device Local route. It publishes its complete authoritative set of account
+`device_id` interests through replace-set `delivery_presence_interest`; adding
+or selecting one device must not remove other inventory devices. It requests a short-lived
+`local_presence_assertion`, and includes that opaque assertion in the
+authenticated Local `client.hello`. The Agent tracks every assertion-bearing
+Local socket and publishes a full monotonic `agent_local_presence` snapshot on
+membership changes, Cloud reconnect, and bounded renewal.
+
+Gateway returns `cloud_delivery_interest` with a monotonic revision, recipient
+count, and lease. The Agent suppresses Cloud work before canonical response
+serialization only when the supported lease is fresh and count is zero. A
+missing, malformed, stale, unsupported, disconnected, or expired lease enables
+Cloud egress. Local delivery remains independent. The Client applies the first
+copy of a canonical `event_id` across Local and Cloud only as transition-race
+protection; routing and interest state remain the steady-state policy.
+
 ---
 
 ## 2. Socket.IO Event Schema
@@ -149,6 +168,9 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
 #### A. Registration
 - **Event: `register_device` (Daemon → Backend)**
   - Registers the running local agent with the Gateway.
+  - Payload keeps the device-runtime `capabilities` object separate from the
+    `transport_capabilities` negotiation list; `delivery_presence_v1` belongs
+    only to the latter and must not replace the runtime capability object.
   - Payload contains the system's unique `hardware_id` (obtained from `auth.json`).
   - First pairing sends `pairing_token` plus an agent-generated and
     pre-persisted `proposed_device_token`. The Gateway atomically binds
