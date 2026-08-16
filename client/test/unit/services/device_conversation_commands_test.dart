@@ -564,6 +564,58 @@ void main() {
     expect(store.isCurrentConversationProcessing, isTrue);
   });
 
+  test('loadSessionHistory preserves a live terminal tool over stale running history', () async {
+    final future = commands.loadSessionHistory('session-1');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+
+    store.apply(
+      CanonicalEvent(
+        id: 'tool_call-1',
+        kind: EventKind.toolCall,
+        status: EventStatus.done,
+        tool: const {
+          'name': 'file_read',
+          'output': 'fresh completed output',
+        },
+        timestamp: DateTime.parse('2026-08-14T12:00:01Z'),
+        sessionId: 'session-1',
+        runId: 'run-1',
+        toolCallId: 'call-1',
+      ),
+    );
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'messages': [
+          {
+            'id': 1,
+            'type': 'tool_call',
+            'status': 'running',
+            'tool_call_id': 'call-1',
+            'run_id': 'run-1',
+            'session_id': 'session-1',
+            'tool': {
+              'name': 'file_read',
+              'input': {'path': 'README.md'},
+            },
+            'created_at': '2026-08-14T12:00:00Z',
+          },
+        ],
+      },
+    });
+
+    await future;
+
+    expect(store.currentMessages, hasLength(1));
+    final tool = store.currentMessages.single;
+    expect(tool.status, EventStatus.done);
+    expect(tool.toolInput, {'path': 'README.md'});
+    expect(tool.toolOutput, 'fresh completed output');
+  });
+
   test('loadSessionHistory does not duplicate a live user message already persisted', () async {
     final sentAt = DateTime.parse('2026-07-12T04:48:20Z');
     store.activateSession('session-1');

@@ -14,6 +14,7 @@ import 'package:sanad_client/features/conversations/presentation/bloc/composer_s
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/composer_text_editing.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
@@ -95,6 +96,16 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     );
     _chatController.addListener(_handleComposerChanged);
     _initDraftBinding();
+    _focusNewConversationComposer();
+  }
+
+  void _focusNewConversationComposer() {
+    if (widget.sessionId?.isNotEmpty == true) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_chatFocusNode.hasFocus) {
+        _chatFocusNode.requestFocus();
+      }
+    });
   }
 
   @override
@@ -109,6 +120,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
         );
       }
       _initDraftBinding();
+      _focusNewConversationComposer();
     }
   }
 
@@ -460,6 +472,13 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     _isSettingDraftText = false;
   }
 
+  void _insertDroppedPaths(Iterable<String> paths) {
+    final next = insertDroppedPathsAtSelection(_chatController.value, paths);
+    if (next == _chatController.value) return;
+    _chatController.value = next;
+    _chatFocusNode.requestFocus();
+  }
+
   String? _deviceIdFromState(DeviceState deviceState) {
     if (deviceState is DeviceActive) return deviceState.activeAgent.id;
     return null;
@@ -588,9 +607,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
           : (isBlurEnabled ? theme.colorScheme.surface.withValues(alpha: 0.35) : theme.colorScheme.surface),
       borderRadius: BorderRadius.circular(12),
       border: Border.all(
-        color: _isDragging
-            ? theme.colorScheme.primary
-            : theme.colorScheme.outline.withValues(alpha: 0.30),
+        color: _isDragging ? theme.colorScheme.primary : theme.colorScheme.outline.withValues(alpha: 0.30),
         width: 1.0,
       ),
     );
@@ -610,16 +627,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
         setState(() {
           _isDragging = false;
         });
-        if (details.files.isNotEmpty) {
-          final droppedPaths = details.files.map((file) => file.path).join(' ');
-          final currentText = _chatController.text;
-          if (currentText.isEmpty) {
-            _chatController.text = '$droppedPaths ';
-          } else {
-            final separator = currentText.endsWith(' ') ? '' : ' ';
-            _chatController.text = '$currentText$separator$droppedPaths ';
-          }
-        }
+        _insertDroppedPaths(details.files.map((file) => file.path));
       },
       child: Container(
         margin: const EdgeInsets.only(left: 8, right: 8, bottom: 8),

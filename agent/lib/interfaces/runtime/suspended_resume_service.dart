@@ -115,6 +115,12 @@ class SuspendedResumeService {
         workItemId: resumeOwner.workItemId,
         generation: resumeOwner.generation,
       );
+      final persistedWork = _persistedState?.findWorkItem(
+        resumeOwner.workItemId,
+      );
+      if (persistedWork != null) {
+        agentRunner.runStartTime = persistedWork.createdAt;
+      }
       _clearStaleRecoveryNotice(checkpoint.sessionId);
     }
     final tools = await _runtimeCatalog.buildTools(

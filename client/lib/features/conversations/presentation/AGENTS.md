@@ -7,7 +7,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Cubits translate user intent into repository operations and project domain state; they must not parse socket events or own duplicate stores.
 - Keep large conversation entry widgets as orchestration boundaries and extract stateless/presentational slices.
 - Extract user message rendering into `UserMessageTile`; user messages exceeding 5 lines default to a 5-line collapsed height with a bubble-wide tap toggle ("Read more" / "See less") and smooth height animation.
-- The parent composer owns long-lived text controllers, focus nodes, and inline suspension coordination.
+- The parent composer owns long-lived text controllers, focus nodes, and inline suspension coordination. New Conversation requests input focus on first presentation, and blank non-control composer taps delegate focus to the same node without intercepting child controls.
 
 ## New Conversation and Composer
 - `ConversationInputPanel` is the single composer for New Conversation and existing sessions; do not fork an editor or draft lifecycle into another view.
@@ -21,6 +21,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Do not eagerly hydrate history for a session created locally for its first outgoing turn.
 - Block normal message dispatch before session creation when either the provider instance or model selection is absent.
 - Slash queries run only on explicit composer intent and use the daemon query surface, never local skill discovery or mount-time prefetch.
+- Desktop file drops insert paths at the current valid editor selection, replace selected text, and leave the caret immediately after the inserted paths; only an invalid selection falls back to the end.
 - Route every workspace-path picker entry through the shared picker helper. Use
   the native folder picker only for a confirmed same-desktop local device;
   remote selection shows the security notice and sends no filesystem command.
@@ -39,7 +40,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Block normal sending only in the session with the pending suspension.
 - Preserve pending UI until authoritative resolution.
 - Permission cards use action-specific titles and readable labeled fields for known command, file, search, and MCP actions; unknown tools fall back to action-neutral language. Render only daemon-provided display input and never reconstruct redacted arguments. Visually separate the darker request content from the prompt and choices.
-- A running tool row whose matching suspension awaits permission shows the permission shield instead of progress; `system_ask_user` shows the question icon while awaiting an answer. Unblocked running tools retain progress.
+- A running tool row whose matching suspension awaits permission shows the permission shield instead of progress. Running `system_ask_user` timeline rows remain hidden because the composer owns the active question; completed question/answer content renders without generic tool-header chrome. Unblocked running tools retain progress.
 - Keep background suspension and recovery state out of the active composer while surfacing its session-row attention state.
 
 ## Atomic Session Presentation
@@ -55,9 +56,13 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Choose a session's opening timeline anchor once: authoritative active work opens at the latest event; otherwise restore the persisted manual-scroll event when valid, then fall back to the latest user message.
 - Record viewport anchors only after user-driven scrolling settles; programmatic positioning, follow-tail, and layout growth must not overwrite the saved reading position.
 - Keep follow eligibility separate from active tail follow: only active-tail opening or a manual return to the bottom grants eligibility, and active follow begins only when eligible content reaches the composer boundary.
+- The trailing conversation-activity row projects the daemon execution snapshot's elapsed baseline as `Working for …`; widgets may tick that baseline locally but must not infer the turn start from mount time or require the conversation to remain open.
 - Never bottom-align a short Timeline with an empty upper viewport. Resolve active opening before paint: top-align complete short content, otherwise keep the lazy tail opening.
 - Manual movement away clears both follow states immediately. Agent events must preserve the offset while ineligible.
-- Mutation or growth of an existing thinking, reasoning, or final-answer row preserves the exact offset while follow is ineligible; while actively following, it may use only the minimum direct reveal needed when its bottom crosses behind the composer.
+- Mutation or growth of an existing thinking, reasoning, final-answer, or completed tool-group row preserves the exact offset while follow is ineligible; while actively following, it may use only the minimum direct reveal needed when its bottom crosses behind the composer.
+- A new user row keeps the minimum animation-free reveal behavior and grants follow eligibility for subsequent streamed growth; manual upward scrolling still revokes follow immediately.
+- Project a contiguous tool run into one collapsible row from the second tool onward, including every running call; one tool remains standalone, while `system_ask_user` and non-tool events remain hard boundaries. Aggregate MCP title metrics by server rather than individual MCP operation. Show at most one non-expandable conversation-activity row at the current timeline tail—not beneath a historical group—and only while authoritative attention is running/resuming. Debounce candidates for one stable second, retain the last confirmed row through same-round tool transitions (including the temporary first standalone call), expose only the latest stable real tool detail, and remove the row immediately for boundaries, user attention, stopping, interruption, or errors. Never reserve a blank placeholder. When debounced Activity content becomes laid out, notify only the outer timeline owner so active/eligible conversation follow reveals it; manual outer scrolling remains the only opt-out, and group/tool inner controllers remain untouched. Group-internal scrolling owns a separate controller and follow state capped by the existing 500px tool-body viewport.
+- Keep grouped child tools collapsed by default and persist group, child, and standalone expansion in the timeline owner. Do not build a collapsed group body or repeat the aggregate title inside the expanded body; keep aggregate objects stable so virtualization cannot replay number animations.
 - Give structurally new agent events a paint-only entrance transition; never animate history opening, user insertion, or repeated updates to an existing event id. Remove opacity/transform composition after entrance completion and do not add per-event repaint boundaries.
 - ScrollController animation is allowed only for a structurally new agent event received while active tail follow was already set; use the centralized 280ms ease-out duration. Opening, user minimal reveal, followed same-id growth, composer correction, and eligible-but-inactive boundary activation remain direct.
 - In a non-empty timeline, reveal a new user row only when needed and only by the minimum direct, animation-free offset that clears the composer; this must not mutate follow eligibility or rebuild the opening anchor.
@@ -74,7 +79,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Keep the legacy `SessionSidebar` as a forwarding compatibility shell only; do not add state or behavior to it.
 - Unscoped changes must not rebuild the workspace section; processing, suspension, and selection changes should rebuild only affected rows.
 - Cached content remains visible through offline, refresh, and stale-error states.
-- Preserve labeled, keyboard-focusable controls and 44px-class primary drawer/mobile targets.
+- Preserve labeled, keyboard-focusable controls and 44px-class primary drawer/mobile targets. On macOS, drawer-mode sidebar content starts below the native traffic-light region.
 - Presentation must not synthesize missing cache capabilities; extend the domain/data owner instead.
 
 ## Navigation and Deletion
@@ -95,3 +100,4 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Provider chips render daemon-owned display names and model names, never raw provider UUIDs. Session display metadata is valid only when its provider identity matches the active or staged provider route.
 - Context-usage UI shows only the latest active-session snapshot, includes cached input only when available, and never displays cache-write usage.
 - Composer controls remain horizontally bounded on narrow layouts and expose Material semantics, labels, and keyboard focus.
+- Narrow conversation headers share one navigation/window-action surface across New Conversation and active sessions; native-desktop actions reuse the wide-header geometry and neutral color, and macOS reserves the leading title-bar region for native traffic-light controls.

@@ -9,6 +9,7 @@ import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_attention_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_visual_state.dart';
@@ -673,7 +674,10 @@ class _MainContent extends StatelessWidget {
     final viewportAnchorEventId = presentedDeviceId == null || sessionId == null
         ? null
         : cacheRepository.sessionViewportAnchor(presentedDeviceId, sessionId);
-    final followLatestOnOpen = messagesState.executionSnapshot?.hasActiveWork ?? messagesState.isProcessing;
+    final hasActiveWork = messagesState.executionSnapshot?.hasActiveWork ?? messagesState.isProcessing;
+    final activityEligible =
+        messagesState.error == null &&
+        messagesState.attentionState?.visualState == SessionAttentionVisualState.runningOrResuming;
 
     return BrainActivityView(
       key: ValueKey(sessionId),
@@ -682,7 +686,9 @@ class _MainContent extends StatelessWidget {
       sessionId: sessionId,
       composerSessionId: composerSessionId,
       initialViewportAnchorEventId: viewportAnchorEventId,
-      followLatestOnOpen: followLatestOnOpen,
+      followLatestOnOpen: hasActiveWork,
+      activityEligible: activityEligible,
+      executionSnapshot: messagesState.executionSnapshot,
       onViewportAnchorChanged: presentedDeviceId == null || sessionId == null
           ? null
           : (eventId) => cacheRepository.recordSessionViewportAnchor(

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -7,11 +8,44 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 class WindowManagerService with WindowListener {
+  static const Size minimumWindowSize = Size(500, 600);
+  static const Size compactWindowSize = Size(500, 874);
+
   static final WindowManagerService _instance = WindowManagerService._();
+  static final ValueNotifier<bool> _isCompactMode = ValueNotifier(false);
+  static final ValueNotifier<bool> _isMaximizedOrFullScreen = ValueNotifier(
+    false,
+  );
   WindowManagerService._();
 
   static bool _isInitialized = false;
   static Timer? _saveTimer;
+  static Rect? _restoreBounds;
+  static bool _isApplyingBounds = false;
+
+  static ValueListenable<bool> get compactModeListenable => _isCompactMode;
+  static ValueListenable<bool> get maximizedOrFullScreenListenable => _isMaximizedOrFullScreen;
+
+  static Future<void> toggleMaximized() async {
+    if (!AppPlatform.isDesktop || !_isInitialized) return;
+
+    if (await windowManager.isFullScreen()) {
+      await windowManager.setFullScreen(false);
+    } else if (await windowManager.isMaximized()) {
+      await windowManager.unmaximize();
+    } else {
+      await windowManager.maximize();
+    }
+    await _instance._refreshMaximizedOrFullScreenState();
+  }
+
+  @visibleForTesting
+  static Rect compactBoundsFor(Rect currentBounds) => Rect.fromLTWH(
+    currentBounds.left,
+    currentBounds.top,
+    compactWindowSize.width,
+    compactWindowSize.height,
+  );
 
   static Future<void> initialize() async {
     if (!AppPlatform.isDesktop) return;
@@ -29,9 +63,13 @@ class WindowManagerService with WindowListener {
     final bool isMaximized = prefs.getBool('window_is_maximized') ?? false;
 
     // Use default values if nothing is saved
-    final Size windowSize = (savedWidth != null && savedHeight != null)
+    final Size savedWindowSize = (savedWidth != null && savedHeight != null)
         ? Size(savedWidth, savedHeight)
         : const Size(1470, 800);
+    final Size windowSize = Size(
+      savedWindowSize.width < minimumWindowSize.width ? minimumWindowSize.width : savedWindowSize.width,
+      savedWindowSize.height < minimumWindowSize.height ? minimumWindowSize.height : savedWindowSize.height,
+    );
 
     // Determine if we should center the window
     final bool hasCentered = prefs.getBool('has_centered_window') ?? false;
@@ -39,6 +77,7 @@ class WindowManagerService with WindowListener {
 
     final WindowOptions windowOptions = WindowOptions(
       size: windowSize,
+      minimumSize: minimumWindowSize,
       center: shouldCenter,
       backgroundColor: Colors.transparent,
       skipTaskbar: false,
@@ -47,6 +86,7 @@ class WindowManagerService with WindowListener {
     );
 
     await windowManager.waitUntilReadyToShow(windowOptions, () async {
+      await windowManager.setMinimumSize(minimumWindowSize);
       if (savedX != null && savedY != null && !isMaximized) {
         await windowManager.setPosition(Offset(savedX, savedY));
       }
@@ -58,20 +98,58 @@ class WindowManagerService with WindowListener {
         await windowManager.maximize();
       }
 
+      // Mark as initialized so subsequent events are tracked.
+      _isInitialized = true;
+      await _instance._refreshMaximizedOrFullScreenState();
+
       if (shouldCenter) {
         await prefs.setBool('has_centered_window', true);
       }
-
-      // Mark as initialized so subsequent events are tracked
-      _isInitialized = true;
     });
+  }
+
+  static Future<void> toggleCompactMode() async {
+    if (!AppPlatform.isDesktop || !_isInitialized) return;
+
+    if (_isCompactMode.value) {
+      final restoreBounds = _restoreBounds;
+      if (restoreBounds != null) {
+        await _setBounds(restoreBounds);
+      }
+      _restoreBounds = null;
+      _isCompactMode.value = false;
+      _instance._saveWindowState();
+      return;
+    }
+
+    if (await windowManager.isFullScreen()) {
+      await windowManager.setFullScreen(false);
+    }
+    if (await windowManager.isMaximized()) {
+      await windowManager.unmaximize();
+    }
+
+    final currentBounds = await windowManager.getBounds();
+    _restoreBounds = currentBounds;
+    final compactBounds = compactBoundsFor(currentBounds);
+    await _setBounds(compactBounds);
+    _isCompactMode.value = true;
+  }
+
+  static Future<void> _setBounds(Rect bounds) async {
+    _isApplyingBounds = true;
+    try {
+      await windowManager.setBounds(bounds, animate: true);
+    } finally {
+      _isApplyingBounds = false;
+    }
   }
 
   // Helper method to save state with a 500ms debounce
   void _saveWindowState() {
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 500), () async {
-      if (!_isInitialized) return;
+      if (!_isInitialized || _isCompactMode.value) return;
 
       final isMaximized = await windowManager.isMaximized();
       final prefs = await SharedPreferences.getInstance();
@@ -87,11 +165,29 @@ class WindowManagerService with WindowListener {
     });
   }
 
+  Future<void> _refreshMaximizedOrFullScreenState() async {
+    if (!_isInitialized) return;
+    _isMaximizedOrFullScreen.value = await windowManager.isMaximized() || await windowManager.isFullScreen();
+  }
+
   // WindowListener implementation overrides
 
   @override
   void onWindowResized() {
-    if (!_isInitialized) return;
+    if (!_isInitialized || _isApplyingBounds) return;
+    unawaited(_reconcileCompactModeAfterManualResize());
+  }
+
+  Future<void> _reconcileCompactModeAfterManualResize() async {
+    if (_isCompactMode.value) {
+      final size = await windowManager.getSize();
+      final leftCompactMode =
+          (size.width - compactWindowSize.width).abs() > 1 || (size.height - compactWindowSize.height).abs() > 1;
+      if (leftCompactMode) {
+        _restoreBounds = null;
+        _isCompactMode.value = false;
+      }
+    }
     _saveWindowState();
   }
 
@@ -104,6 +200,7 @@ class WindowManagerService with WindowListener {
   @override
   void onWindowMaximize() async {
     if (!_isInitialized) return;
+    _isMaximizedOrFullScreen.value = true;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('window_is_maximized', true);
   }
@@ -111,8 +208,24 @@ class WindowManagerService with WindowListener {
   @override
   void onWindowUnmaximize() async {
     if (!_isInitialized) return;
+    await _refreshMaximizedOrFullScreenState();
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool('window_is_maximized', false);
     _saveWindowState();
+  }
+
+  @override
+  void onWindowRestore() {
+    unawaited(_refreshMaximizedOrFullScreenState());
+  }
+
+  @override
+  void onWindowEnterFullScreen() {
+    _isMaximizedOrFullScreen.value = true;
+  }
+
+  @override
+  void onWindowLeaveFullScreen() {
+    unawaited(_refreshMaximizedOrFullScreenState());
   }
 }

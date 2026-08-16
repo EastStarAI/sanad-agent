@@ -14,8 +14,10 @@ class MainFlutterWindow: NSWindow {
         let savedX = defaults.object(forKey: "flutter.window_x") as? Double
         let savedY = defaults.object(forKey: "flutter.window_y") as? Double
         
-        let width = savedWidth > 0 ? CGFloat(savedWidth) : 1470
-        let height = savedHeight > 0 ? CGFloat(savedHeight) : 800
+        let minimumWidth: CGFloat = 500
+        let minimumHeight: CGFloat = 600
+        let width = max(savedWidth > 0 ? CGFloat(savedWidth) : 1470, minimumWidth)
+        let height = max(savedHeight > 0 ? CGFloat(savedHeight) : 800, minimumHeight)
         
         var rect = NSRect(x: windowFrame.origin.x, y: windowFrame.origin.y, width: width, height: height)
         
@@ -28,6 +30,7 @@ class MainFlutterWindow: NSWindow {
         }
         
         setFrame(rect, display: true)
+        self.contentMinSize = NSSize(width: minimumWidth, height: minimumHeight)
         self.titleVisibility = .hidden
         self.titlebarAppearsTransparent = true
         self.styleMask.insert(.fullSizeContentView)

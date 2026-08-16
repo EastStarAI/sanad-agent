@@ -73,7 +73,7 @@ class DeviceWorkspaceSidebar extends StatelessWidget {
               SidebarBreakpoints.minWidth,
               isDrawerMode ? mediaQuery.size.width : SidebarBreakpoints.maxWidth,
             );
-    final isMacOS = AppPlatform.isMacOS && !isDrawerMode;
+    final isMacOS = AppPlatform.isMacOS;
     final theme = Theme.of(context);
 
     Widget buildDeviceHeader() {
@@ -117,7 +117,11 @@ class DeviceWorkspaceSidebar extends StatelessWidget {
                 if (!isDrawerMode)
                   SizedBox(height: isMacOS ? SidebarBreakpoints.macOSTrafficLightsHeight : 32)
                 else if (isMacOS)
-                  const SizedBox(height: SidebarBreakpoints.macOSTrafficLightsHeight),
+                  const SizedBox(
+                    key: Key('macos_drawer_traffic_lights_spacer'),
+                    height: SidebarBreakpoints.macOSTrafficLightsHeight + SidebarBreakpoints.macOSDrawerTopGap,
+                  ),
+
                 buildDeviceHeader(),
                 Expanded(
                   child: BlocSelector<DeviceCubit, DeviceState, ({DeviceConfig? active, List<DeviceConfig> devices})>(

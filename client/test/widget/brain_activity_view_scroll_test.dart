@@ -368,7 +368,7 @@ void main() {
     expect(_timelineController(tester).position.isScrollingNotifier.value, isFalse);
   });
 
-  testWidgets('a user message below the viewport is revealed without following later events', (tester) async {
+  testWidgets('a user message is minimally revealed then grants follow for streamed growth', (tester) async {
     final messages = [
       _event('anchor-user', EventKind.userMessage, 'reading starts here'),
       for (var i = 0; i < 18; i += 1)
@@ -407,7 +407,11 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(controller.offset, moreOrLessEquals(revealOffset, epsilon: 1));
+    expect(controller.offset, greaterThan(revealOffset));
+    expect(
+      controller.offset,
+      moreOrLessEquals(controller.position.maxScrollExtent, epsilon: 1),
+    );
     expect(controller.position.isScrollingNotifier.value, isFalse);
   });
 

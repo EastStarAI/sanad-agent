@@ -165,6 +165,24 @@ String resolveClientDirectoryForLaunchProfile({
   final worktreeMarker = '${separator}.agent${separator}worktrees${separator}';
   final markerIndex = normalizedRoot.indexOf(worktreeMarker);
   final primaryRepositoryRoot = markerIndex >= 0 ? normalizedRoot.substring(0, markerIndex) : normalizedRoot;
+
+  if (profile.target != null) {
+    final targetPath = profile.target!;
+    final isAbsolute = targetPath.startsWith('/') ||
+        targetPath.startsWith('\\') ||
+        (targetPath.length > 2 && targetPath[1] == ':' && (targetPath[2] == '/' || targetPath[2] == '\\'));
+    if (isAbsolute) {
+      final canonicalTarget = _canonicalClientPath(targetPath);
+      final canonicalRoot = _canonicalClientPath(primaryRepositoryRoot);
+      final targetLower = canonicalTarget.toLowerCase().replaceAll('\\', '/');
+      final rootLower = canonicalRoot.toLowerCase().replaceAll('\\', '/');
+      final rootPrefix = rootLower.endsWith('/') ? rootLower : '$rootLower/';
+      if (targetLower != rootLower && !targetLower.startsWith(rootPrefix)) {
+        return '';
+      }
+    }
+  }
+
   final profileWorktreeName = profile.define('SANAD_DEV_WORKTREE_NAME');
   if (profileWorktreeName == null || profileWorktreeName.isEmpty) {
     if (runtimeIsLinkedWorktree && markerIndex < 0) return '';

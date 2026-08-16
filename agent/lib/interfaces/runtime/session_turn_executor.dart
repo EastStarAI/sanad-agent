@@ -176,6 +176,14 @@ class SessionTurnExecutor {
         if (!bound) {
           return;
         }
+        if (isResume) {
+          final persistedWork = persistedState.findWorkItem(
+            activeRun.workItemId!,
+          );
+          if (persistedWork != null) {
+            agentRunner.runStartTime = persistedWork.createdAt;
+          }
+        }
       }
 
       if (!isResume) {

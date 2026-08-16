@@ -78,7 +78,44 @@ Use an isolated Git worktree for parallel work, broad or risky changes, PR-bound
   git worktree remove .agent/worktrees/<plan_id>-<branch_name>
   ```
 
-## 2. Runtime Control and Diagnostics (`sanad-dev`)
+## 2. Task Plan Contract
+
+Before implementation, align the task in `docs/plans/tasks/` when the repository contract or task scope requires a tracked plan. Keep the plan machine-checkable and useful during execution rather than writing a narrative progress log.
+
+Every task file must include:
+
+1. **Goal:** one bounded statement of the user-visible or system outcome.
+2. **Locked decisions and scope:** confirmed behavior, boundaries, and exclusions needed to prevent ambiguity.
+3. **Execution gates:** ordered Markdown sections containing `- [ ]` checklist items. Each gate groups work that can be completed and reviewed together.
+4. **Acceptance criteria:** explicit `- [ ]` checks describing observable, testable outcomes. Criteria may be global or attached to a gate, but they must be more precise than implementation activities.
+5. **Definition of Done:** analyzer/tests, documentation, graph maintenance, live verification when requested, and delivery constraints relevant to the task.
+6. **Current status:** frontmatter or a compact status section with the current gate and remaining-work estimate when the user requests progress tracking.
+
+Use this minimal shape:
+
+```markdown
+## Goal
+...
+
+## Gates
+
+### G0 — Discovery
+- [ ] ...
+
+### G1 — Implementation
+- [ ] ...
+
+## Acceptance Criteria
+- [ ] Given ..., when ..., then ...
+- [ ] Automated coverage proves ...
+
+## Definition of Done
+- [ ] ...
+```
+
+Update the current gate, completed checkboxes, and remaining estimate whenever a gate closes. A gate closes only when its acceptance evidence exists; writing code alone is not completion.
+
+## 3. Runtime Control and Diagnostics (`sanad-dev`)
 
 `sanad-dev` is the canonical interface for launching, selecting, observing, and controlling the matched Sanad agent/client runtime.
 
@@ -139,7 +176,7 @@ Before invoking source handoff:
 
 Manual daemon/client commands are a diagnostic fallback only when debugging `sanad-dev` itself or one process in isolation. Preserve the current unified-home model: set one appropriate absolute `SANAD_HOME`, remove inherited `SANAD_STATE_HOME`, and pass ports inline without editing tracked configuration.
 
-## 3. Flagged Lifecycle Tracing
+## 4. Flagged Lifecycle Tracing
 
 Use this procedure when a disconnect, reconnect, restart, race, or device switch cannot be explained from static inspection or existing tests:
 
@@ -160,7 +197,7 @@ Use this procedure when a disconnect, reconnect, restart, race, or device switch
 9. Convert the sequence into focused automated regression coverage.
 10. Remove temporary logs and rerun analysis and tests.
 
-## 4. Pull Request Delivery
+## 5. Pull Request Delivery
 
 For review-bound work:
 

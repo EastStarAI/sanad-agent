@@ -199,9 +199,12 @@ void main() {
         requestId: 'request-contract',
         revision: 7,
         updatedAt: DateTime.utc(2026, 7, 15, 12),
+        turnStartedAt: DateTime.utc(2026, 7, 15, 11, 30),
       );
 
-      final parsed = SessionExecutionSnapshot.fromPayload(snapshot.toPayload());
+      final parsed = SessionExecutionSnapshot.fromPayload(
+        snapshot.toPayload(observedAt: DateTime.utc(2026, 7, 15, 12)),
+      );
 
       expect(parsed.sessionId, snapshot.sessionId);
       expect(parsed.state, snapshot.state);
@@ -209,6 +212,13 @@ void main() {
       expect(parsed.requestId, snapshot.requestId);
       expect(parsed.revision, snapshot.revision);
       expect(parsed.updatedAt, snapshot.updatedAt);
+      expect(parsed.turnStartedAt, snapshot.turnStartedAt);
+      expect(
+        snapshot.toPayload(
+          observedAt: DateTime.utc(2026, 7, 15, 12),
+        )['elapsed_ms'],
+        const Duration(minutes: 30).inMilliseconds,
+      );
       expect(
         () => SessionExecutionSnapshot.fromPayload({
           ...snapshot.toPayload(),
@@ -346,6 +356,10 @@ void main() {
         expect(emitted.single.state, SessionExecutionState.queued);
         expect(emitted.single.workItemId, 'work-head');
         expect(emitted.single.revision, 1);
+        expect(
+          emitted.single.turnStartedAt,
+          workItems.findWorkItem('work-head')!.createdAt.toUtc(),
+        );
       },
     );
 

@@ -60,8 +60,23 @@ of its section without losing the current selection or scroll position.
 On wide desktop and tablet layouts, navigation appears as a persistent,
 resizable sidebar. The resize target follows the sidebar's visible edge,
 including the macOS shell margin, and the selected desktop width is restored
-from local client preferences on the next launch. On mobile and narrow layouts,
-it becomes a drawer that closes after a destination is selected.
+from local client preferences on the next launch. The native-desktop header also
+provides a phone-size toggle beside the sidebar pin control. A fresh normal
+window prefers `1470 × 800`; the toggle changes it to a `500 × 874` logical
+viewport, preserving its top-left screen origin
+so only the right and bottom edges move, and restores the previous normal bounds
+when pressed again. The minimum supported macOS, Windows, and Linux window size
+is `500 × 600`, allowing users on short desktop displays to reduce the height
+without narrowing below the responsive design floor. Manually enlarging the window exits compact mode and updates
+the toggle. In narrow native-desktop layout, the same restore action remains
+beside navigation in both active-session and New Conversation headers; true
+mobile and web builds never expose desktop window controls. On macOS these
+application actions begin after the native traffic-light controls rather than
+overlapping their title-bar region. Narrow native-desktop actions retain the
+same neutral gray treatment as the wide sidebar controls. On Windows and Linux,
+the custom maximize caption observes native maximize and full-screen changes,
+switches to the restore glyph while either state is active, and restores rather
+than requesting maximize again.
 
 Opening a conversation with active work shows its latest event so current
 progress is immediately visible. An idle conversation resumes from the event
@@ -79,10 +94,13 @@ Long active conversations may open at their latest event. New agent events enter
 with a short visual fade-and-slide transition. If the user is already actively
 following the tail, the page follows that new event with a brief smooth scroll;
 otherwise the event animation does not move the reading position. Opening active
-work at the tail or manually returning to the bottom grants follow eligibility. While following, a growing thinking, reasoning, or
-final-answer bubble moves the page only by the amount needed to keep its bottom
-above the composer. Scrolling away revokes eligibility immediately, after which
-streaming growth and later activity preserve the reading position.
+work at the tail, sending a new user message, or manually returning to the bottom
+grants follow eligibility. Sending still performs only the existing minimum,
+animation-free reveal; it does not jump the page to the tail immediately. While
+following, a growing thinking, reasoning, final-answer, or grouped-tool row moves
+the page only by the amount needed to keep its bottom above the composer.
+Scrolling away revokes eligibility immediately, after which streaming growth and
+later activity preserve the reading position.
 
 ## New conversations
 
@@ -97,7 +115,7 @@ thinking mode. A first-time user with no thinking preference starts at
 runtime has an authoritative provider/model route, the model selector is never
 left empty merely because only the provider half was restored.
 
-Dragging and dropping files of any type onto the composer area captures their full local paths and appends them directly to the message input field. During a drag-over action, the composer card displays a highlighted primary border and a matching subtle background tint for clear visual feedback.
+Dragging and dropping files of any type onto the composer area captures their full local paths and inserts them at the current caret, replacing an active text selection and leaving the caret after the inserted paths. During a drag-over action, the composer card displays a highlighted primary border and a matching subtle background tint for clear visual feedback. A newly presented New Conversation focuses the message field automatically, and clicking any blank non-control area of the composer transfers focus to that field so typing can begin without targeting the text line precisely.
 
 A workspace created elsewhere in the client appears on the selector's first
 opening; users never need to close and reopen the menu to refresh it.
@@ -132,6 +150,36 @@ Arabic ask-user headers mirror
 the complete header row while English headers remain left-to-right. Event
 runtime metadata uses milliseconds below one second, seconds below one minute,
 minutes plus seconds below one hour, and hours plus minutes thereafter.
+
+Tool activity is compacted as soon as at least two tool calls are contiguous.
+Every call, including the latest running call in a parallel batch, enters the
+group; one tool remains standalone. The icon-free collapsed title lists
+skill loads first, then other non-file operations and file searches/reads, then the deduplicated
+modified-file count, with green added-line and red removed-line totals last. It
+uses no `Tool uses:` prefix and repeats the same transparent operation summary
+inside the expanded body. The title reuses the existing tool typography,
+spacing, border, and adjacent chevron without introducing new visual language.
+Expanding the group does not expand its child tools: every child starts
+collapsed and preserves its own expansion state, as does the group and
+standalone tools when virtualized by scrolling. The collapsed body is not
+built, and cached totals do not replay their animation when a row re-enters the
+viewport. Every changed number animates over 750ms; added/removed values retain
+the compact file-edit-title spacing, and the chevron matches the gray title.
+Expanded content remains capped at 500 logical pixels with independent follow
+behavior. One non-expandable conversation-activity row may appear only at the
+current tail while authoritative attention is running/resuming. Its real
+reasoning/tool candidate must remain latest for one full second before replacing
+the text directly, without an Activity entrance or text-transition animation;
+burst intermediates never render, while the last confirmed
+text remains visible during same-round debounce until the stable replacement is
+ready. The generic provider/tool gap reads `Working…`, while an explicit reasoning preview retains `Thinking:`. A standalone tool gets no duplicate. The row's trailing edge shows the authoritative elapsed wall time as `Working for 25s`, `Working for 1m, 25s`, or `Working for 1h, 35m`; seconds update below one hour and minutes update thereafter. The elapsed baseline belongs to session execution state, so leaving and reopening an active conversation resumes at the current value rather than restarting from zero.
+Ask-user and non-tool events are hard placement boundaries, so later activity
+never reappears under an old group. User attention, waiting, blocked/fatal,
+stopping, interruption/idle, errors, ordinary answer text, and terminal state
+remove the activity immediately, and no blank placeholder is reserved. When debounced Activity content becomes visible, the outer conversation follow reveals it only if follow remains active or eligible; manual conversation scrolling is the opt-out, and nested tool/group scrolling remains independent.
+Clarifying questions divide groups: the running ask-user call remains hidden
+while the composer presents the question, and completed question/answer content
+appears without a redundant generic tool header.
 
 While the agent is working:
 

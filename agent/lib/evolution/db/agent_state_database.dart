@@ -483,8 +483,21 @@ class AgentStateDatabase {
         request_id TEXT,
         revision INTEGER NOT NULL CHECK (revision > 0),
         updated_at TEXT NOT NULL,
+        turn_started_at TEXT,
         FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE
       );
+    ''');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_execution_snapshots ADD COLUMN turn_started_at TEXT',
+    );
+    db.execute('''
+      UPDATE session_execution_snapshots
+      SET turn_started_at = (
+        SELECT created_at FROM session_work_items
+        WHERE session_work_items.work_item_id = session_execution_snapshots.work_item_id
+      )
+      WHERE turn_started_at IS NULL AND work_item_id IS NOT NULL;
     ''');
 
     // ── Task 31: durable route transition audit ─────────────────────────

@@ -157,12 +157,20 @@ action below its own content.
 - The streaming `EventKind.thinking` surface renders **without any header
   label or icon** — it looks exactly like the final answer body, minus the
   metadata footer. (The transient `Thinking`/`Thoughts` labels were removed.)
-- `EventKind.reasoning` never renders as a Markdown bubble. While running it
-  renders a single compact, tool-style row: a small spinner, a dim
-  `Thinking:` prefix, then the first five words of the streamed reasoning
-  content. It has no copy action, no disclosure, and no Markdown body. Once a
-  successor event arrives it is removed from state (see State Reconciliation),
-  so it is never seen after the live stream or from history.
+- `EventKind.reasoning` never renders as a Markdown bubble or independent event
+  tile. While running it feeds one compact, non-expandable
+  `ConversationActivityTile`: a small spinner, a dim `Thinking:` prefix, then
+  the first five words of the streamed reasoning content. The candidate must
+  remain latest for one full second before replacing the text directly; Activity
+  never receives the generic event-entrance or a text-transition animation, and
+  burst intermediates never render. The tile is projected only at the current
+  timeline tail while authoritative attention is running/resuming. Ask-user and
+  non-tool boundaries prevent later reasoning from being inserted beneath an
+  older group, and unsafe/non-executing states remove it immediately. A
+  standalone tool never gets a duplicate activity row. It has no copy action,
+  disclosure, or Markdown body. Once a successor event arrives, reasoning is
+  removed from state (see State Reconciliation), so it is never seen after the
+  live stream or from history.
 
 Final Answer has no stream label.
 
@@ -195,9 +203,10 @@ adopts those principles without a nested reasoning viewport.
 - Distinct Codex reasoning-summary parts retain a valid Markdown boundary.
 - `thinking` (Thoughts) and Final Answer share one primary Markdown renderer;
   reasoning never renders as a Markdown bubble.
-- `thinking` renders with no header label or icon; reasoning renders only as a
-  transient, single-line, tool-style row (`spinner + "Thinking:" + first five
-  words`) while running.
+- `thinking` renders with no header label or icon; reasoning feeds only the
+  transient, single-line `ConversationActivityTile` (`spinner + "Thinking:" +
+  first five words`) while running and never creates an independent timeline
+  row.
 - `thinking` never receives Final Answer metadata but retains its own copy
   action; the transient reasoning row has no copy action.
 - Reasoning is removed from state when any successor turn event arrives and is
