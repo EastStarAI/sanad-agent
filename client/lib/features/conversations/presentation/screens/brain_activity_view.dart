@@ -3,10 +3,14 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'dart:async';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_execution_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_visual_state.dart';
 import 'package:sanad_client/features/home/presentation/widgets/new_chat_view.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input_panel.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_activity_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/tools/tool_group_tile.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
@@ -37,6 +41,8 @@ class BrainActivityView extends StatefulWidget {
   final bool followLatestOnOpen;
   final ValueChanged<String>? onViewportAnchorChanged;
   final ConversationVisualState visualState;
+  final bool activityEligible;
+  final SessionExecutionSnapshot? executionSnapshot;
   final Set<String> pendingSteerCancellationRequestIds;
 
   const BrainActivityView({
@@ -51,6 +57,8 @@ class BrainActivityView extends StatefulWidget {
     this.followLatestOnOpen = false,
     this.onViewportAnchorChanged,
     this.visualState = ConversationVisualState.newConversation,
+    this.activityEligible = false,
+    this.executionSnapshot,
     this.pendingSteerCancellationRequestIds = const {},
   });
 
@@ -76,6 +84,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   bool _hasPendingManualScrollAnchor = false;
   bool _isOpeningSession = true;
   List<CanonicalEvent> _messages = [];
+  List<ConversationTimelineItem> _timelineItems = [];
   StreamSubscription<List<CanonicalEvent>>? _messagesSubscription;
   final Set<String> _expandedEventIds = {};
   final Set<String> _pendingEntranceEventIds = {};
@@ -93,8 +102,12 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   void initState() {
     super.initState();
     _messages = List.from(widget.initialMessages);
+    _timelineItems = projectConversationTimeline(
+      _messages,
+      activityEligible: widget.activityEligible,
+    );
     _prepareInitialSessionPosition();
-    _isOpeningSession = _messages.isEmpty;
+    _isOpeningSession = _timelineItems.isEmpty;
     _subscribeToMessages();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _updateComposerHeight();
@@ -157,7 +170,8 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       _cancelInlineEdit(notify: false);
     }
     final messagesChanged = !listEquals(oldWidget.initialMessages, widget.initialMessages);
-    if (sessionChanged || messagesChanged) {
+    final activityChanged = oldWidget.activityEligible != widget.activityEligible;
+    if (sessionChanged || messagesChanged || activityChanged) {
       _applyMessages(
         widget.initialMessages,
         isOpeningSession: sessionChanged || _isOpeningSession,
@@ -176,9 +190,28 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     final containsNewUserMessage = newEvents.any((message) => message.kind == EventKind.userMessage);
     final containsNewAgentEvent = newEvents.any((message) => message.kind != EventKind.userMessage);
     final newUserIndex = containsNewUserMessage ? _lastUserMessageIndex(messages) : -1;
+    final nextTimelineItems = projectConversationTimeline(
+      messages,
+      previousItems: _timelineItems,
+      activityEligible: widget.activityEligible,
+    );
+    final previousAnchorEventIds = _openAnchorIndex >= 0 && _openAnchorIndex < _timelineItems.length
+        ? _timelineItems[_openAnchorIndex].events.map((event) => event.id).toSet()
+        : const <String>{};
 
     setState(() {
       _messages = List.from(messages);
+      _timelineItems = nextTimelineItems;
+      if (!isOpeningSession && newUserIndex < 0 && _timelineItems.isNotEmpty) {
+        final projectedAnchor = _timelineItems.indexWhere(
+          (item) => item.events.any(
+            (event) => previousAnchorEventIds.contains(event.id),
+          ),
+        );
+        _openAnchorIndex = projectedAnchor >= 0
+            ? projectedAnchor
+            : _openAnchorIndex.clamp(0, _timelineItems.length - 1).toInt();
+      }
       if (!isOpeningSession) {
         _pendingEntranceEventIds.addAll(
           newEvents.where((event) => event.kind != EventKind.userMessage).map((event) => event.id),
@@ -190,17 +223,21 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       } else if (newUserIndex >= 0) {
         if (previousWasEmpty) {
           _openAtTail = false;
-          _openAnchorIndex = newUserIndex;
+          _openAnchorIndex = _timelineItems.indexWhere(
+            (item) => item.containsEventId(messages[newUserIndex].id),
+          );
+          if (_openAnchorIndex < 0) _openAnchorIndex = 0;
           _openingTailAnchorPixels = null;
           _hasResolvedOpeningTailAlignment = true;
         }
-        // User insertion ends active following, but preserves eligibility.
-        // Non-empty timelines receive only a post-layout minimal reveal.
+        // Sending reveals only the user row, but grants follow eligibility for
+        // subsequent streamed growth until the user manually scrolls away.
+        _autoFollowEligible = true;
         _isFollowingTail = false;
       }
     });
 
-    if (isOpeningSession || messages.isEmpty) return;
+    if (isOpeningSession || _timelineItems.isEmpty) return;
 
     if (containsNewUserMessage) {
       _awaitingLocalUserMessage = false;
@@ -217,7 +254,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     // growth first reaches the composer boundary.
     if (!containsNewAgentEvent) {
       if (wasFollowingTail) {
-        _revealFollowedEvent(messages.last.id);
+        _revealFollowedEvent(_timelineItems.last.id);
       } else if (_autoFollowEligible) {
         _activateTailFollowAtBoundary();
       } else {
@@ -248,43 +285,62 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     _hasResolvedOpeningTailAlignment = true;
     _autoFollowEligible = false;
     _isFollowingTail = false;
-    if (_messages.isEmpty) {
+    if (_timelineItems.isEmpty) {
       _openAnchorIndex = 0;
       return;
     }
-    if (_openAtTail && _messages.last.kind == EventKind.userMessage) {
+    if (_openAtTail &&
+        _timelineItems.last.events.length == 1 &&
+        _timelineItems.last.event.kind == EventKind.userMessage) {
       _openAtTail = false;
-      _openAnchorIndex = _messages.length - 1;
+      _openAnchorIndex = _timelineItems.length - 1;
       return;
     }
     if (_openAtTail) {
       _hasResolvedOpeningTailAlignment = false;
       _autoFollowEligible = true;
       // Keep older history in the upward-growing sliver, but place the latest
-      // mutable event after the center so streamed text grows downward without
-      // moving already rendered content. Its hidden opening pass resolves the
-      // exact bottom edge above the composer.
-      _openAnchorIndex = _messages.length - 1;
+      // projected item after the center so streamed content grows downward.
+      _openAnchorIndex = _timelineItems.length - 1;
       return;
     }
     final restoredIndex = widget.initialViewportAnchorEventId == null
         ? -1
-        : _messages.indexWhere((message) => message.id == widget.initialViewportAnchorEventId);
+        : _timelineItems.indexWhere(
+            (item) => item.containsEventId(
+              widget.initialViewportAnchorEventId!,
+            ),
+          );
     if (restoredIndex >= 0) {
       _openAnchorIndex = restoredIndex;
       return;
     }
-    final userMessageIndex = _lastUserMessageIndex(_messages);
-    _openAnchorIndex = userMessageIndex == -1 ? _messages.length - 1 : userMessageIndex;
+    final userMessageIndex = _lastUserTimelineItemIndex();
+    _openAnchorIndex = userMessageIndex == -1 ? _timelineItems.length - 1 : userMessageIndex;
+  }
+
+  int _lastUserTimelineItemIndex() {
+    for (var index = _timelineItems.length - 1; index >= 0; index--) {
+      if (_timelineItems[index].events.any(
+        (event) => event.kind == EventKind.userMessage,
+      )) {
+        return index;
+      }
+    }
+    return -1;
   }
 
   void _resolveOpeningTailAlignment() {
-    if (!mounted || !_openAtTail || _hasResolvedOpeningTailAlignment || !_hasMeasuredComposer || _messages.isEmpty) {
+    if (!mounted ||
+        !_openAtTail ||
+        _hasResolvedOpeningTailAlignment ||
+        !_hasMeasuredComposer ||
+        _timelineItems.isEmpty) {
       return;
     }
 
     final viewport = _scrollViewportKey.currentContext?.findRenderObject() as RenderBox?;
-    final latestBox = _eventViewportKeys[_messages.last.id]?.currentContext?.findRenderObject() as RenderBox?;
+    final latestBox = _eventViewportKeys[_timelineItems.last.id]?.currentContext?.findRenderObject() as RenderBox?;
     if (viewport == null || !viewport.attached || latestBox == null || !latestBox.attached) {
       return;
     }
@@ -297,7 +353,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     final tailCorrection = latestBottom - visibleBottom;
     final tailAnchorPixels = bottomAnchorPixels - tailCorrection;
 
-    final firstBox = _eventViewportKeys[_messages.first.id]?.currentContext?.findRenderObject() as RenderBox?;
+    final firstBox = _eventViewportKeys[_timelineItems.first.id]?.currentContext?.findRenderObject() as RenderBox?;
     final firstTopAfterTailCorrection = firstBox == null || !firstBox.attached
         ? null
         : firstBox.localToGlobal(Offset.zero).dy - tailCorrection;
@@ -349,8 +405,8 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     String? topEventId;
     double? topEventPosition;
 
-    for (final message in _messages) {
-      final eventBox = _eventViewportKeys[message.id]?.currentContext?.findRenderObject() as RenderBox?;
+    for (final item in _timelineItems) {
+      final eventBox = _eventViewportKeys[item.id]?.currentContext?.findRenderObject() as RenderBox?;
       if (eventBox == null || !eventBox.attached) continue;
       final eventTop = eventBox.localToGlobal(Offset.zero).dy;
       final eventBottom = eventTop + eventBox.size.height;
@@ -358,7 +414,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       final visibleTop = eventTop < viewportTop ? viewportTop : eventTop;
       if (topEventPosition == null || visibleTop < topEventPosition) {
         topEventPosition = visibleTop;
-        topEventId = message.id;
+        topEventId = item.id;
       }
     }
 
@@ -384,6 +440,15 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       remainingFrames: 3,
       probedForLayout: false,
     );
+  }
+
+  void _handleConversationActivityDisplayed(String eventId) {
+    if (!mounted) return;
+    if (_isFollowingTail) {
+      _revealFollowedEvent(eventId);
+    } else if (_autoFollowEligible) {
+      _activateTailFollowAtBoundary();
+    }
   }
 
   void _scheduleEventReveal(
@@ -449,7 +514,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   }
 
   void _animateToBottomForNewAgentEvent() {
-    if (!mounted || _messages.isEmpty) return;
+    if (!mounted || _timelineItems.isEmpty) return;
     final generation = ++_scrollGeneration;
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted || generation != _scrollGeneration || !_scrollController.hasClients) {
@@ -474,7 +539,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   }
 
   void _scrollToBottom({int remainingFrames = 3}) {
-    if (!mounted || _messages.isEmpty) return;
+    if (!mounted || _timelineItems.isEmpty) return;
     final generation = ++_scrollGeneration;
     _scheduleBottomSettle(generation, remainingFrames);
   }
@@ -500,7 +565,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         !_autoFollowEligible ||
         _isFollowingTail ||
         (_openAtTail && !_hasResolvedOpeningTailAlignment) ||
-        _messages.isEmpty) {
+        _timelineItems.isEmpty) {
       return;
     }
 
@@ -513,16 +578,16 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       }
       if (reachedBoundary != true) return;
       _isFollowingTail = true;
-      _revealFollowedEvent(_messages.last.id);
+      _revealFollowedEvent(_timelineItems.last.id);
     });
   }
 
   bool? _latestContentReachedComposerBoundary() {
-    if (_messages.isEmpty) return false;
+    if (_timelineItems.isEmpty) return false;
     final viewport = _scrollViewportKey.currentContext?.findRenderObject() as RenderBox?;
     if (viewport == null || !viewport.attached) return null;
 
-    final latestBox = _eventViewportKeys[_messages.last.id]?.currentContext?.findRenderObject() as RenderBox?;
+    final latestBox = _eventViewportKeys[_timelineItems.last.id]?.currentContext?.findRenderObject() as RenderBox?;
     if (latestBox != null && latestBox.attached) {
       final viewportBottom = viewport.localToGlobal(Offset.zero).dy + viewport.size.height - _visibleContentBottomInset;
       final latestBottom = latestBox.localToGlobal(Offset.zero).dy + latestBox.size.height;
@@ -663,7 +728,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       child: Stack(
         children: [
           Positioned.fill(
-            child: !_hasMeasuredComposer || _messages.isEmpty
+            child: !_hasMeasuredComposer || _timelineItems.isEmpty
                 ? const SizedBox.shrink()
                 : Opacity(
                     opacity: !_openAtTail || _hasResolvedOpeningTailAlignment ? 1 : 0,
@@ -713,13 +778,14 @@ class _BrainActivityViewState extends State<BrainActivityView> {
                                       sliver: SliverList.builder(
                                         itemCount: _openAnchorIndex,
                                         itemBuilder: (context, index) {
-                                          final event = _messages[_openAnchorIndex - index - 1];
+                                          final itemIndex = _openAnchorIndex - index - 1;
+                                          final item = _timelineItems[itemIndex];
                                           return Center(
                                             child: ConstrainedBox(
                                               constraints: const BoxConstraints(
                                                 maxWidth: SidebarBreakpoints.maxConversationWidth,
                                               ),
-                                              child: _buildViewportTrackedEvent(event),
+                                              child: _buildViewportTrackedItem(item),
                                             ),
                                           );
                                         },
@@ -729,15 +795,16 @@ class _BrainActivityViewState extends State<BrainActivityView> {
                                       key: _conversationAnchorKey,
                                       padding: EdgeInsets.fromLTRB(8, 8, 8, bottomPadding),
                                       sliver: SliverList.builder(
-                                        itemCount: _messages.length - _openAnchorIndex,
+                                        itemCount: _timelineItems.length - _openAnchorIndex,
                                         itemBuilder: (context, index) {
-                                          final event = _messages[_openAnchorIndex + index];
+                                          final itemIndex = _openAnchorIndex + index;
+                                          final item = _timelineItems[itemIndex];
                                           return Center(
                                             child: ConstrainedBox(
                                               constraints: const BoxConstraints(
                                                 maxWidth: SidebarBreakpoints.maxConversationWidth,
                                               ),
-                                              child: _buildViewportTrackedEvent(event),
+                                              child: _buildViewportTrackedItem(item),
                                             ),
                                           );
                                         },
@@ -781,18 +848,62 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     );
   }
 
-  Widget _buildViewportTrackedEvent(CanonicalEvent event) {
-    final animateEntrance = event.kind != EventKind.userMessage && _pendingEntranceEventIds.remove(event.id);
+  Widget _buildViewportTrackedItem(ConversationTimelineItem item) {
+    final entranceEvent = item.isActivity ? item.activity!.event : item.events.first;
+    final animateEntrance =
+        entranceEvent != null &&
+        entranceEvent.kind != EventKind.userMessage &&
+        _pendingEntranceEventIds.remove(entranceEvent.id) &&
+        !item.isActivity;
+    for (final event in item.events.skip(1)) {
+      _pendingEntranceEventIds.remove(event.id);
+    }
     return SizedBox(
-      key: _eventViewportKeys.putIfAbsent(event.id, () => GlobalKey()),
+      key: _eventViewportKeys.putIfAbsent(item.id, () => GlobalKey()),
       width: double.infinity,
       child: _AgentEventEntrance(
-        key: ValueKey('agent-event-entrance:${event.id}'),
+        key: ValueKey('agent-event-entrance:${item.id}'),
         animate: animateEntrance,
-        child: _buildEventTile(event),
+        child: item.isActivity
+            ? ConversationActivityTile(
+                activity: item.activity!,
+                executionSnapshot: widget.executionSnapshot,
+                onDisplayed: () => _handleConversationActivityDisplayed(
+                  item.id,
+                ),
+              )
+            : item.isToolGroup
+            ? ToolGroupTile(
+                key: ValueKey('tool-group:${item.id}'),
+                item: item,
+                isExpanded: _expandedEventIds.contains(
+                  _toolGroupExpansionId(item),
+                ),
+                onToggleExpanded: (expanded) {
+                  setState(() {
+                    final id = _toolGroupExpansionId(item);
+                    if (expanded) {
+                      _expandedEventIds.add(id);
+                    } else {
+                      _expandedEventIds.remove(id);
+                    }
+                  });
+                },
+                expandedChildEventIds: _expandedEventIds,
+                onChildToggleExpanded: (eventId, expanded) {
+                  if (expanded) {
+                    _expandedEventIds.add(eventId);
+                  } else {
+                    _expandedEventIds.remove(eventId);
+                  }
+                },
+              )
+            : _buildEventTile(item.event),
       ),
     );
   }
+
+  String _toolGroupExpansionId(ConversationTimelineItem item) => 'tool-group:${item.id}';
 
   Widget _buildEventTile(CanonicalEvent event) {
     final latestUserIndex = _lastUserMessageIndex(_messages);

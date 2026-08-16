@@ -638,6 +638,7 @@ class SessionExecutionStateCoordinator {
         workItemId: representative?.workItemId,
         requestId: representative?.requestId,
         transaction: tx,
+        turnStartedAt: representative?.createdAt,
       );
     });
     _publish(change);
@@ -724,6 +725,7 @@ class SessionExecutionStateCoordinator {
         workItemId: active.workItemId,
         requestId: active.requestId,
         transaction: transaction,
+        turnStartedAt: active.createdAt,
       );
     }
     final queued = _workItems.findQueuedWorkItems(sessionId);
@@ -735,6 +737,7 @@ class SessionExecutionStateCoordinator {
         workItemId: head.workItemId,
         requestId: head.requestId,
         transaction: transaction,
+        turnStartedAt: head.createdAt,
       );
     }
     return _snapshots.updateSnapshot(

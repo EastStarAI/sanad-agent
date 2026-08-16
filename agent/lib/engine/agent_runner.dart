@@ -399,7 +399,7 @@ class AgentRunner {
   }) async {
     _stopRequested = false;
     memoryStore.resetConsolidationFailures();
-    _metricsTracker = MetricsTracker();
+    _metricsTracker = MetricsTracker(startTime: receivedAt);
     final effectiveRequestId = requestId ?? _turnRoute.turnRequestId;
     _turnRoute.configureTurn(
       providerId: providerId,
@@ -1152,7 +1152,7 @@ class AgentRunner {
     if (_stopRequested) return;
     _stopRequested = false;
     memoryStore.resetConsolidationFailures();
-    _metricsTracker = MetricsTracker();
+    _metricsTracker = MetricsTracker(startTime: receivedAt);
     final effectiveRequestId = requestId ?? _turnRoute.turnRequestId;
     _turnRoute.configureTurn(
       providerId: providerId,

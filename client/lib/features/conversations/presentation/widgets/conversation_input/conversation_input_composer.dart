@@ -329,7 +329,12 @@ class _UnifiedComposerContainer extends StatelessWidget {
       ),
     );
 
-    return composerCard;
+    return GestureDetector(
+      key: const Key('composer_focus_surface'),
+      behavior: HitTestBehavior.opaque,
+      onTap: chatFocusNode.requestFocus,
+      child: composerCard,
+    );
   }
 
   Widget _buildBottomRow(BuildContext context) {

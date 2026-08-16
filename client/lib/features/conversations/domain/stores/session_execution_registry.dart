@@ -3,6 +3,7 @@ import 'package:sanad_client/features/conversations/domain/models/session_execut
 
 enum SessionExecutionApplyDisposition {
   applied,
+  refreshedObservation,
   idempotent,
   rejectedStaleRevision,
   rejectedConflictingRevision,
@@ -23,8 +24,11 @@ class SessionExecutionApplyResult extends Equatable {
 
   bool get accepted =>
       disposition == SessionExecutionApplyDisposition.applied ||
+      disposition == SessionExecutionApplyDisposition.refreshedObservation ||
       disposition == SessionExecutionApplyDisposition.idempotent;
-  bool get changed => disposition == SessionExecutionApplyDisposition.applied;
+  bool get changed =>
+      disposition == SessionExecutionApplyDisposition.applied ||
+      disposition == SessionExecutionApplyDisposition.refreshedObservation;
 
   @override
   List<Object?> get props => [disposition, current, incoming, diagnostic];
@@ -57,6 +61,16 @@ class SessionExecutionRegistry {
           current: current,
           incoming: incoming,
           diagnostic: 'Execution revision ${incoming.revision} for ${incoming.sessionId} is an identical replay.',
+        );
+      }
+      if (incoming.hasSameAuthorityAs(current) && (incoming.elapsedMs ?? -1) >= (current.elapsedMs ?? -1)) {
+        _snapshotsBySessionId[incoming.sessionId] = incoming;
+        return SessionExecutionApplyResult(
+          disposition: SessionExecutionApplyDisposition.refreshedObservation,
+          current: incoming,
+          incoming: incoming,
+          diagnostic:
+              'Refreshed elapsed observation for execution revision ${incoming.revision} of ${incoming.sessionId}.',
         );
       }
       return SessionExecutionApplyResult(

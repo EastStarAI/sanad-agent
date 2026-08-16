@@ -110,6 +110,25 @@ void main() {
     await getIt.reset();
   });
 
+  testWidgets('new conversation composer requests focus on first presentation', (
+    tester,
+  ) async {
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: ConversationInputPanel(
+        onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+      ),
+    );
+    await tester.pump();
+
+    final editable = tester.widget<EditableText>(find.byType(EditableText));
+    expect(editable.focusNode.hasFocus, isTrue);
+  });
+
   testWidgets('typing in the draft does not rebuild bottom actions', (tester) async {
     var bottomActionBuilds = 0;
     ConversationInputPanel.debugOnBottomActionsBuild = () => bottomActionBuilds += 1;

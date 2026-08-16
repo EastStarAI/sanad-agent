@@ -741,13 +741,28 @@ class ConversationCommands {
     List<CanonicalEvent> history,
     Set<String> historyIdentityKeys,
   ) {
+    final transientIdentityKeys = _reconciliationIdentityKeys(transient).toSet();
+    final isRepresented = transientIdentityKeys.any(historyIdentityKeys.contains);
+
+    // A live tool result can arrive while the history request is in flight.
+    // The returned snapshot may still contain the matching tool as running, so
+    // identity alone is not enough: reapply the terminal live event to merge
+    // its output and advance the stale history row.
+    if (transient.kind == EventKind.toolCall && transient.status != EventStatus.running && isRepresented) {
+      final matchingHistoryIsRunning = history.any((persisted) {
+        if (persisted.kind != EventKind.toolCall || persisted.status != EventStatus.running) {
+          return false;
+        }
+        return _reconciliationIdentityKeys(
+          persisted,
+        ).any(transientIdentityKeys.contains);
+      });
+      if (matchingHistoryIsRunning) return false;
+    }
+
     // Running thinking chunks may be newer than the persisted in-flight
     // snapshot and must still merge into it.
-    if (transient.kind != EventKind.thinking &&
-        transient.kind != EventKind.reasoning &&
-        _reconciliationIdentityKeys(
-          transient,
-        ).any(historyIdentityKeys.contains)) {
+    if (transient.kind != EventKind.thinking && transient.kind != EventKind.reasoning && isRepresented) {
       return true;
     }
     if (transient.kind != EventKind.userMessage) return false;

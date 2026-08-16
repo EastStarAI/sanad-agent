@@ -42,6 +42,6 @@ This contract applies to `client/lib/features/conversations/domain/`.
 
 ## Snapshot and Attention Safety
 - Apply execution, attention, suspension, route, queue, and runtime-notice updates only to their matching session.
-- Equal revisions are idempotent only when payloads agree; reject stale or conflicting snapshots.
+- Equal revisions are idempotent only when authoritative payloads agree; a newer elapsed-time observation may refresh the same execution revision without becoming competing execution state. Reject stale or otherwise conflicting snapshots.
 - Provider/model route confirmation changes only from the daemon-rebroadcast authoritative session preference.
 - Context usage is a latest typed snapshot, not an accumulated total; preserve cached-input reporting and never synthesize cache-write usage.

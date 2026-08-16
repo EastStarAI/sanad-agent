@@ -227,13 +227,24 @@ payload is the complete authoritative snapshot:
   "work_item_id": "nullable-work-item-id",
   "request_id": "nullable-request-id",
   "revision": 4,
-  "updated_at": "2026-07-15T12:00:00.000Z"
+  "updated_at": "2026-07-15T12:00:00.000Z",
+  "turn_started_at": "2026-07-15T11:58:35.000Z",
+  "elapsed_ms": 85000
 }
 ```
 
-Actual changes to `(state, work_item_id, request_id)` advance the per-session
-revision once. An idempotent recomputation neither advances the revision nor
-publishes another event. Delivery uses `platform_family=sanad_client`; the
+`turn_started_at` is the stable accepted-work timestamp for the representative
+work item and survives queued, running, waiting, blocked, resuming, and stopping
+transitions. `elapsed_ms` is an observation computed when the payload is
+serialized. It lets a client anchor a local display ticker without comparing
+the client clock to the daemon clock. Reopening or reconnecting receives a fresh
+observation through the existing session query snapshot.
+
+Actual changes to `(state, work_item_id, request_id, turn_started_at)` advance
+the per-session revision once. An idempotent recomputation neither advances the
+revision nor publishes another event. A later query may return a greater
+`elapsed_ms` for the same revision; clients treat that value as a refreshed
+observation, not conflicting execution authority. Delivery uses `platform_family=sanad_client`; the
 runtime mints one `event_id` before GatewayManager fan-out, and local and cloud
 copies retain that same identity and payload.
 

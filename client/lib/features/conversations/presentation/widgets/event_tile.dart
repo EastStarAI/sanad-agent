@@ -383,8 +383,12 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   }
 
   Widget _buildCollapsibleEvent(BuildContext context) {
+    if (widget.event.toolName == 'system_ask_user') {
+      return _buildEventBody();
+    }
+
     final bool isToolLike = widget.event.kind == EventKind.toolCall || widget.event.kind == EventKind.plan;
-    final bool canExpand = isToolLike && widget.event.toolName != 'system_ask_user';
+    final bool canExpand = isToolLike;
 
     return Column(
       children: [

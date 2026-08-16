@@ -18,6 +18,7 @@ class SessionExecutionSnapshot {
   final String? requestId;
   final int revision;
   final DateTime updatedAt;
+  final DateTime? turnStartedAt;
 
   const SessionExecutionSnapshot({
     required this.sessionId,
@@ -26,6 +27,7 @@ class SessionExecutionSnapshot {
     required this.requestId,
     required this.revision,
     required this.updatedAt,
+    this.turnStartedAt,
   });
 
   factory SessionExecutionSnapshot.virtualIdle(String sessionId) {
@@ -36,6 +38,7 @@ class SessionExecutionSnapshot {
       requestId: null,
       revision: 0,
       updatedAt: virtualIdleUpdatedAt,
+      turnStartedAt: null,
     );
   }
 
@@ -47,6 +50,7 @@ class SessionExecutionSnapshot {
       requestId: row['request_id'] as String?,
       revision: row['revision']! as int,
       updatedAt: DateTime.parse(row['updated_at']! as String).toUtc(),
+      turnStartedAt: _parseOptionalDateTime(row['turn_started_at']),
     );
   }
 
@@ -87,6 +91,7 @@ class SessionExecutionSnapshot {
     if (requestId != null && requestId is! String) {
       throw const FormatException('execution snapshot request_id is invalid');
     }
+    final turnStartedAt = _parseOptionalDateTime(payload['turn_started_at']);
     return SessionExecutionSnapshot(
       sessionId: sessionId,
       state: parsedState,
@@ -94,17 +99,43 @@ class SessionExecutionSnapshot {
       requestId: requestId as String?,
       revision: revision,
       updatedAt: parsedUpdatedAt.toUtc(),
+      turnStartedAt: turnStartedAt,
     );
   }
 
-  Map<String, dynamic> toPayload() => {
-    'session_id': sessionId,
-    'state': state.name,
-    'work_item_id': workItemId,
-    'request_id': requestId,
-    'revision': revision,
-    'updated_at': updatedAt.toUtc().toIso8601String(),
-  };
+  int? elapsedMsAt(DateTime observedAt) {
+    final startedAt = turnStartedAt;
+    if (startedAt == null) return null;
+    final elapsed = observedAt.toUtc().difference(startedAt).inMilliseconds;
+    return elapsed < 0 ? 0 : elapsed;
+  }
+
+  Map<String, dynamic> toPayload({DateTime? observedAt}) {
+    final observation = (observedAt ?? DateTime.now()).toUtc();
+    return {
+      'session_id': sessionId,
+      'state': state.name,
+      'work_item_id': workItemId,
+      'request_id': requestId,
+      'revision': revision,
+      'updated_at': updatedAt.toUtc().toIso8601String(),
+      if (turnStartedAt != null) ...{
+        'turn_started_at': turnStartedAt!.toUtc().toIso8601String(),
+        'elapsed_ms': elapsedMsAt(observation),
+      },
+    };
+  }
+
+  static DateTime? _parseOptionalDateTime(Object? value) {
+    if (value == null) return null;
+    final parsed = DateTime.tryParse(value.toString());
+    if (parsed == null) {
+      throw const FormatException(
+        'execution snapshot turn_started_at is invalid',
+      );
+    }
+    return parsed.toUtc();
+  }
 }
 
 class SessionExecutionSnapshotChange {

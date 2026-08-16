@@ -4,6 +4,8 @@ import 'package:sanad_client/features/conversations/domain/models/device_workspa
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_visual_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_state.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_app_bar.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_composition.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 
 void main() {
   test('an existing empty session is active while a null session is new', () {
@@ -61,8 +63,46 @@ void main() {
     );
 
     expect(find.text('Unscoped session'), findsOneWidget);
+    expect(find.byKey(const Key('mobile_compact_window_btn')), findsOneWidget);
     expect(find.byTooltip('Open navigation menu'), findsOneWidget);
     expect(find.byType(Text), findsOneWidget);
+  });
+
+  testWidgets('narrow desktop actions use neutral color and macOS alignment', (
+    tester,
+  ) async {
+    const scheme = ColorScheme.dark();
+    await tester.pumpWidget(
+      MaterialApp(
+        theme: ThemeData(colorScheme: scheme),
+        home: Scaffold(
+          body: ConversationAppBar(
+            sessionTitle: 'Conversation',
+            isMobile: true,
+            onMenuPressed: () {},
+          ),
+        ),
+      ),
+    );
+
+    final actionIcons = tester.widgetList<Icon>(
+      find.descendant(
+        of: find.byKey(const Key('conversation_header_actions_alignment')),
+        matching: find.byType(Icon),
+      ),
+    );
+    expect(actionIcons, isNotEmpty);
+    for (final icon in actionIcons) {
+      expect(icon.color, scheme.onSurface.withValues(alpha: 0.6));
+    }
+
+    final alignment = tester.widget<Transform>(
+      find.byKey(const Key('conversation_header_actions_alignment')),
+    );
+    expect(
+      alignment.transform.getTranslation().y,
+      AppPlatform.isMacOS ? SidebarBreakpoints.macOSHeaderActionsVerticalOffset : 0,
+    );
   });
 
   testWidgets('app bar applies RTL text direction for Arabic titles in desktop layout', (

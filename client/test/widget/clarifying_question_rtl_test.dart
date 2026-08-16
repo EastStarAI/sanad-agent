@@ -59,7 +59,7 @@ void main() {
     expect(TextUtils.getTextDirection('12345!@#\$%^&*()'), TextDirection.ltr);
   });
 
-  testWidgets('uses the question direction for an ask_user event header', (tester) async {
+  testWidgets('completed ask_user omits the generic event header', (tester) async {
     final event = CanonicalEvent(
       id: 'event-header-rtl',
       kind: EventKind.toolCall,
@@ -71,6 +71,9 @@ void main() {
             {'question': 'ما هو استفسارك؟'},
           ],
         },
+        'output': jsonEncode([
+          {'question': 'ما هو استفسارك؟', 'answer': 'هذه إجابتي'},
+        ]),
       },
     );
 
@@ -82,24 +85,20 @@ void main() {
       ),
     );
 
-    final headerDirectionality = tester.widget<Directionality>(
-      find
-          .descendant(
-            of: find.byType(InkWell),
-            matching: find.byType(Directionality),
-          )
-          .first,
+    expect(find.byType(InkWell), findsNothing);
+    expect(find.textContaining('Ask'), findsNothing);
+    _expectDirection(
+      tester,
+      'ما هو استفسارك؟',
+      TextDirection.rtl,
+      TextAlign.right,
     );
-    expect(headerDirectionality.textDirection, TextDirection.rtl);
-
-    final richTexts = tester.widgetList<RichText>(
-      find.descendant(
-        of: find.byType(InkWell),
-        matching: find.byType(RichText),
-      ),
+    _expectDirection(
+      tester,
+      'هذه إجابتي',
+      TextDirection.rtl,
+      TextAlign.right,
     );
-    expect(richTexts.isNotEmpty, isTrue);
-    expect(richTexts.first.textDirection, TextDirection.rtl);
   });
 
   testWidgets('resolves every clarifying question string direction independently', (tester) async {

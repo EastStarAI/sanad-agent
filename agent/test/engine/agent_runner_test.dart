@@ -1768,6 +1768,23 @@ void main() {
       expect(runner.history[2].content, 'tool result');
     });
 
+    test('runtime starts from the authoritative received time', () async {
+      final adapter = MockAdapter([
+        AgentResponse(
+          message: Message(role: MessageRole.assistant, content: 'Done'),
+        ),
+      ]);
+      final runner = AgentRunner(adapter, registry, sessionManager);
+      final receivedAt = DateTime.now().subtract(const Duration(minutes: 35));
+
+      await runner.streamMessage('Work', receivedAt: receivedAt).toList();
+
+      expect(
+        runner.runtimeMs,
+        greaterThanOrEqualTo(const Duration(minutes: 35).inMilliseconds),
+      );
+    });
+
     test(
       'delivers steer after the active tool batch and before the next model call',
       () async {

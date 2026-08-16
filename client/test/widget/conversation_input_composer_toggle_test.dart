@@ -113,6 +113,28 @@ void main() {
     );
   }
 
+  testWidgets('clicking blank composer surface focuses the text input', (
+    tester,
+  ) async {
+    await pumpComposer(
+      tester,
+      capabilities: const Capability(),
+      inputSlice: idleSlice(),
+      agentSlice: onlineAgentSlice,
+    );
+    await tester.pump();
+    focusNode.unfocus();
+    await tester.pump();
+    expect(focusNode.hasFocus, isFalse);
+
+    final surface = find.byKey(const Key('composer_focus_surface'));
+    final rect = tester.getRect(surface);
+    await tester.tapAt(Offset(rect.right - 12, rect.top + 12));
+    await tester.pump();
+
+    expect(focusNode.hasFocus, isTrue);
+  });
+
   testWidgets('shows voice button when input is empty and supportsVoiceCall is true', (tester) async {
     await pumpComposer(
       tester,

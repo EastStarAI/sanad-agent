@@ -25,6 +25,7 @@ This contract applies to `agent/lib/evolution/db/runtime/`.
 
 ## Queue, Steer, and Recovery
 - Queue promotion/deletion, route rewrite, pending-steer creation, and execution-snapshot recomputation commit through aggregate ownership.
+- Every non-idle execution snapshot preserves the representative work item's accepted-turn start across queued, running, waiting, blocked, resuming, and stopping states; payload observations derive elapsed wall time from that stable start without revising authoritative state.
 - Queue-to-steer promotion never creates a second active work item.
 - Pending-steer revisions validate run and generation; only delivery failure may return delivering to pending.
 - Restart treats a delivering steer as delivered only when durable history contains its raw request id; otherwise pending/delivering becomes draft recovery.

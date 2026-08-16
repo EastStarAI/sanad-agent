@@ -5,8 +5,10 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_header_actions.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input_panel.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 
 class NewChatView extends StatefulWidget {
   final void Function(String, {MessageDeliveryIntent intent}) onSendMessage;
@@ -119,12 +121,10 @@ class _NewChatViewState extends State<NewChatView> {
         children: [
           mainContent,
           Positioned(
-            top: MediaQuery.paddingOf(context).top + 8,
-            left: 12,
-            child: IconButton(
-              icon: Icon(Icons.menu, color: theme.colorScheme.onSurface),
-              tooltip: 'Open navigation menu',
-              onPressed: () => Scaffold.of(context).openDrawer(),
+            top: AppPlatform.isMacOS ? 12 : MediaQuery.paddingOf(context).top + 8,
+            left: 0,
+            child: ConversationHeaderActions(
+              onMenuPressed: () => Scaffold.of(context).openDrawer(),
             ),
           ),
         ],

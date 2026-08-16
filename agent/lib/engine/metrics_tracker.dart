@@ -26,7 +26,10 @@ class MetricsTracker {
   MetricsTracker({DateTime? startTime})
     : runStartTime = startTime ?? DateTime.now();
 
-  int get runtimeMs => DateTime.now().difference(runStartTime).inMilliseconds;
+  int get runtimeMs {
+    final elapsed = DateTime.now().difference(runStartTime).inMilliseconds;
+    return elapsed < 0 ? 0 : elapsed;
+  }
 
   void beginInvocation() => lastUsage.clear();
 
