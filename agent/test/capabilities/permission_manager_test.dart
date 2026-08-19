@@ -1,5 +1,7 @@
 import 'dart:io';
 
+import 'dart:async';
+
 import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
@@ -29,6 +31,50 @@ class FakePlatformRuntimeBridge extends PlatformRuntimeBridge {
     lastPermissionPayload = payload;
     return nextDecision;
   }
+}
+
+class BlockingPlatformRuntimeBridge extends PlatformRuntimeBridge {
+  final List<Completer<Map<String, dynamic>>> _decisions = [];
+  final StreamController<int> _requestCounts = StreamController<int>.broadcast(
+    sync: true,
+  );
+  int requestCount = 0;
+  int activeRequestCount = 0;
+  int maxActiveRequestCount = 0;
+
+  @override
+  Future<Map<String, dynamic>> requestToolPermission({
+    required String sessionId,
+    required Map<String, dynamic> payload,
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
+    final decision = Completer<Map<String, dynamic>>();
+    _decisions.add(decision);
+    requestCount++;
+    activeRequestCount++;
+    if (activeRequestCount > maxActiveRequestCount) {
+      maxActiveRequestCount = activeRequestCount;
+    }
+    _requestCounts.add(requestCount);
+    try {
+      return await decision.future;
+    } finally {
+      activeRequestCount--;
+    }
+  }
+
+  Future<void> waitForRequestCount(int expected) async {
+    if (requestCount >= expected) return;
+    await _requestCounts.stream
+        .firstWhere((count) => count >= expected)
+        .timeout(const Duration(seconds: 2));
+  }
+
+  void resolveRequest(int index, {bool allowed = true, String scope = 'once'}) {
+    _decisions[index].complete({'allowed': allowed, 'scope': scope});
+  }
+
+  Future<void> close() => _requestCounts.close();
 }
 
 class FakeCheckpointStore extends SuspendedCheckpointStore {
@@ -259,6 +305,243 @@ void main() {
         expect(bridge.requestCount, equals(1));
       },
     );
+
+    test(
+      'serializes concurrent permission requests within one session',
+      () async {
+        final blockingBridge = BlockingPlatformRuntimeBridge();
+        final concurrentCheckpoints = FakeCheckpointStore();
+        final concurrentManager = PermissionManager(
+          policyStore: store,
+          platformRuntimeBridge: blockingBridge,
+          checkpointStore: concurrentCheckpoints,
+        );
+        final context = ToolContext(
+          sessionId: 'thread-concurrent',
+          metadata: {
+            'workspace': {
+              'id': workspaceDir.path,
+              'name': 'workspace',
+              'path': workspaceDir.path,
+            },
+          },
+        );
+
+        final authorizations = List<Future<void>>.generate(
+          5,
+          (index) => concurrentManager.ensureAuthorized(
+            tool: shellTool,
+            arguments: {'command': 'read-external-$index'},
+            context: ToolContext(
+              sessionId: context.sessionId,
+              toolCallId: 'call-$index',
+              metadata: context.metadata,
+            ),
+          ),
+        );
+
+        await blockingBridge.waitForRequestCount(1);
+        expect(blockingBridge.requestCount, 1);
+        expect(blockingBridge.maxActiveRequestCount, 1);
+        expect(concurrentCheckpoints.byRequestId, hasLength(1));
+
+        for (var index = 0; index < authorizations.length; index++) {
+          blockingBridge.resolveRequest(index);
+          if (index + 1 < authorizations.length) {
+            await blockingBridge.waitForRequestCount(index + 2);
+            expect(blockingBridge.activeRequestCount, 1);
+            expect(blockingBridge.maxActiveRequestCount, 1);
+          }
+        }
+
+        await Future.wait(authorizations);
+        expect(blockingBridge.requestCount, 5);
+        expect(
+          concurrentCheckpoints.byRequestId.values.map(
+            (checkpoint) => checkpoint.status,
+          ),
+          everyElement('approved'),
+        );
+        await blockingBridge.close();
+      },
+    );
+
+    test('queued authorization re-evaluates a new session grant', () async {
+      final blockingBridge = BlockingPlatformRuntimeBridge();
+      final grantManager = PermissionManager(
+        policyStore: store,
+        platformRuntimeBridge: blockingBridge,
+        checkpointStore: FakeCheckpointStore(),
+      );
+      final metadata = {
+        'workspace': {
+          'id': workspaceDir.path,
+          'name': 'workspace',
+          'path': workspaceDir.path,
+        },
+      };
+      final authorizations = [
+        grantManager.ensureAuthorized(
+          tool: shellTool,
+          arguments: {'command': 'shared-command'},
+          context: ToolContext(
+            sessionId: 'thread-shared-grant',
+            toolCallId: 'call-first',
+            metadata: metadata,
+          ),
+        ),
+        grantManager.ensureAuthorized(
+          tool: shellTool,
+          arguments: {'command': 'shared-command'},
+          context: ToolContext(
+            sessionId: 'thread-shared-grant',
+            toolCallId: 'call-second',
+            metadata: metadata,
+          ),
+        ),
+      ];
+
+      await blockingBridge.waitForRequestCount(1);
+      blockingBridge.resolveRequest(0, scope: 'session');
+      await Future.wait(authorizations);
+
+      expect(blockingBridge.requestCount, 1);
+      expect(blockingBridge.maxActiveRequestCount, 1);
+      await blockingBridge.close();
+    });
+
+    test(
+      'denial releases the next permission request in the session',
+      () async {
+        final blockingBridge = BlockingPlatformRuntimeBridge();
+        final denialManager = PermissionManager(
+          policyStore: store,
+          platformRuntimeBridge: blockingBridge,
+          checkpointStore: FakeCheckpointStore(),
+        );
+        final metadata = {
+          'workspace': {
+            'id': workspaceDir.path,
+            'name': 'workspace',
+            'path': workspaceDir.path,
+          },
+        };
+        final denied = denialManager.ensureAuthorized(
+          tool: shellTool,
+          arguments: {'command': 'first'},
+          context: ToolContext(
+            sessionId: 'thread-denial-queue',
+            toolCallId: 'call-denied',
+            metadata: metadata,
+          ),
+        );
+        final deniedExpectation = expectLater(
+          denied,
+          throwsA(isA<Exception>()),
+        );
+        final allowed = denialManager.ensureAuthorized(
+          tool: shellTool,
+          arguments: {'command': 'second'},
+          context: ToolContext(
+            sessionId: 'thread-denial-queue',
+            toolCallId: 'call-allowed',
+            metadata: metadata,
+          ),
+        );
+
+        await blockingBridge.waitForRequestCount(1);
+        blockingBridge.resolveRequest(0, allowed: false);
+        await deniedExpectation;
+        await blockingBridge.waitForRequestCount(2);
+        blockingBridge.resolveRequest(1);
+        await allowed;
+
+        expect(blockingBridge.maxActiveRequestCount, 1);
+        await blockingBridge.close();
+      },
+    );
+
+    test(
+      'permission requests in different sessions remain concurrent',
+      () async {
+        final blockingBridge = BlockingPlatformRuntimeBridge();
+        final independentManager = PermissionManager(
+          policyStore: store,
+          platformRuntimeBridge: blockingBridge,
+          checkpointStore: FakeCheckpointStore(),
+        );
+        final metadata = {
+          'workspace': {
+            'id': workspaceDir.path,
+            'name': 'workspace',
+            'path': workspaceDir.path,
+          },
+        };
+        final authorizations = [
+          independentManager.ensureAuthorized(
+            tool: shellTool,
+            arguments: {'command': 'session-a'},
+            context: ToolContext(
+              sessionId: 'thread-a',
+              toolCallId: 'call-a',
+              metadata: metadata,
+            ),
+          ),
+          independentManager.ensureAuthorized(
+            tool: shellTool,
+            arguments: {'command': 'session-b'},
+            context: ToolContext(
+              sessionId: 'thread-b',
+              toolCallId: 'call-b',
+              metadata: metadata,
+            ),
+          ),
+        ];
+
+        await blockingBridge.waitForRequestCount(2);
+        expect(blockingBridge.activeRequestCount, 2);
+        blockingBridge.resolveRequest(0);
+        blockingBridge.resolveRequest(1);
+        await Future.wait(authorizations);
+
+        expect(blockingBridge.maxActiveRequestCount, 2);
+        await blockingBridge.close();
+      },
+    );
+
+    test('non-sensitive tools do not enter the permission queue', () async {
+      final blockingBridge = BlockingPlatformRuntimeBridge();
+      final safeManager = PermissionManager(
+        policyStore: store,
+        platformRuntimeBridge: blockingBridge,
+        checkpointStore: FakeCheckpointStore(),
+      );
+      const safeTool = LocalToolSpec(
+        name: 'safe_read',
+        displayName: 'Safe Read',
+        description: 'Reads an already authorized resource.',
+        inputSchema: {'type': 'object'},
+        source: {'type': 'builtin_local', 'id': 'sanad-agent'},
+        category: 'core',
+        workspaceRequired: false,
+        approval: {'mode': 'default', 'sensitive': false},
+        execution: {'target': 'local_runtime'},
+      );
+
+      await Future.wait(
+        List.generate(
+          5,
+          (index) => safeManager.ensureAuthorized(
+            tool: safeTool,
+            arguments: {'index': index},
+            context: ToolContext(sessionId: 'thread-safe'),
+          ),
+        ),
+      );
+
+      expect(blockingBridge.requestCount, 0);
+      await blockingBridge.close();
+    });
 
     test('uses full_access workspace mode without prompting', () async {
       await store.savePolicy(
