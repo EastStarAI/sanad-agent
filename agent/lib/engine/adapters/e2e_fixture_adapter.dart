@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../../capabilities/models/tool_schema.dart';
 import '../../core/models/agent_response.dart';
 import '../../core/models/message.dart';
@@ -17,6 +19,10 @@ class E2eFixtureAdapter implements LLMAdapter {
   static const permissionToolName = 'system_screenshot';
   static const permissionToolCallId = 'e2e-permission-tool-call';
   static const permissionResponseText = 'SCREEN_OK';
+  static const parallelExternalReadPromptPrefix =
+      '__SANAD_E2E_PARALLEL_EXTERNAL_READS__';
+  static const parallelExternalReadResponseText = 'EXTERNAL_READS_OK';
+  static const parallelExternalReadToolName = 'file_read';
   static const memoryToolName = 'memory';
   static const memoryAddPrompt = '__SANAD_E2E_MEMORY_ADD__';
   static const memoryReadPrompt = '__SANAD_E2E_MEMORY_READ__';
@@ -140,6 +146,55 @@ class E2eFixtureAdapter implements LLMAdapter {
           content: memoryToolCallId == memoryAddToolCallId
               ? 'MEMORY_STORED'
               : 'MEMORY_READ',
+        ),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
+    final isParallelExternalReadScenario =
+        latestUserContent?.startsWith(parallelExternalReadPromptPrefix) ??
+        false;
+    final hasParallelExternalReadTool =
+        tools?.any((tool) => tool.name == parallelExternalReadToolName) ??
+        false;
+    if (isParallelExternalReadScenario && hasParallelExternalReadTool) {
+      final encodedPaths = latestUserContent!.substring(
+        parallelExternalReadPromptPrefix.length,
+      );
+      final paths = (jsonDecode(encodedPaths) as List<dynamic>)
+          .map((path) => path.toString())
+          .toList(growable: false);
+      final toolCalls = [
+        for (var index = 0; index < paths.length; index++)
+          ToolCall(
+            id: 'e2e-external-file-read-$index',
+            name: parallelExternalReadToolName,
+            arguments: {'path': paths[index]},
+          ),
+      ];
+      final completedToolCallIds = history
+          .where((message) => message.role == MessageRole.tool)
+          .map((message) => message.toolCallId)
+          .whereType<String>()
+          .toSet();
+      final hasAllResults = toolCalls.every(
+        (toolCall) => completedToolCallIds.contains(toolCall.id),
+      );
+      if (!hasAllResults) {
+        return AgentResponse(
+          message: Message(role: MessageRole.assistant, toolCalls: toolCalls),
+          isToolCall: true,
+          model: modelId,
+          provider: providerId,
+          finishReason: LLMFinishReason.toolCalls,
+        );
+      }
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: parallelExternalReadResponseText,
         ),
         model: modelId,
         provider: providerId,
