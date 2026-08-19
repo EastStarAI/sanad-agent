@@ -153,7 +153,7 @@ class _ToolGroupTileState extends State<ToolGroupTile> with SingleTickerProvider
         ),
         SizeTransition(
           sizeFactor: _expansionAnimation,
-          axisAlignment: -1,
+          alignment: AlignmentDirectional.topStart,
           child: widget.isExpanded || !_expansionController.isDismissed
               ? Container(
                   key: Key('tool_group_body_${widget.item.id}'),

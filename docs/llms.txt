@@ -48,6 +48,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [AGENTS](./client/lib/features/settings/AGENTS.md): Rules governing ./client/lib/features/settings.
 - [AGENTS](./client/lib/features/voice/AGENTS.md): Rules governing ./client/lib/features/voice.
 - [AGENTS](./client/lib/infrastructure/AGENTS.md): Rules governing ./client/lib/infrastructure.
+- [AGENTS](./scripts/flutter_driver_cli/AGENTS.md): Rules governing ./scripts/flutter_driver_cli.
 - [AGENTS](./scripts/sanad_dev/AGENTS.md): Rules governing ./scripts/sanad_dev.
 - [AGENTS](./shared/auth_lock/AGENTS.md): Rules governing ./shared/auth_lock.
 
@@ -83,6 +84,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Conversation Navigation — QA Recovery Matrix](docs/qa_maintenance/conversation_navigation_recovery_matrix.md): QA verification and recovery scenarios for conversation navigation, history, and deletion.
 - [Desktop Authentication Exchange QA](docs/qa_maintenance/desktop_authentication_exchange_qa.md): Regression matrix for credential-free client-daemon authentication reconciliation.
 - [External Workspace File Access QA](docs/qa_maintenance/external_workspace_file_access_qa.md): Regression matrix for canonical external-path classification, permission scopes, full-access bypass, and sanitized approval payloads.
+- [Flutter VM Driver CLI QA Matrix](docs/qa_maintenance/flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
 - [Device Name Editing QA](docs/qa_maintenance/device_name_editing_qa.md): QA scenarios and test matrices for verifying device renaming.
 - [Device Workspace Sidebar QA](docs/qa_maintenance/device_workspace_sidebar_qa.md): Focused QA coverage for the Plan 32c device-scoped sidebar, including pagination, cache-first rendering, responsive layout, accessibility, and live ordering.
 - [Live Context Usage Indicator QA](docs/qa_maintenance/live_context_usage_indicator_qa.md): Regression matrix for latest provider usage, cached-input visibility, tool-loop updates, and history restoration.
@@ -120,6 +122,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [مواصفات نظام التصميم والمكونات المرئية للمشاريع](docs/technical/design_system.md): توثيق شامل للألوان، الخطوط، الهيكل البنائي والواجهات التفاعلية المشتركة لمشاريع Sanad (التطبيق الرئيسي، صفحة الهبوط، ولوحة التحكم).
 - [Desktop Authentication Exchange](docs/technical/desktop_authentication_exchange.md): Credential-free live authentication reconciliation between a native Flutter client and its local Dart daemon.
 - [Device Runtime Settings Protocol](docs/technical/device_runtime_settings_protocol.md): Unified local/cloud protocol commands, validation, persistence, and secret-handling rules for device settings.
+- [Flutter VM Driver CLI Architecture](docs/technical/flutter_vm_driver_cli.md): Driver-enabled Client instrumentation, standalone CLI boundaries, deterministic UI selectors, and VM Service safety.
 - [Web Search Runtime](docs/technical/web_search_runtime.md): Daemon-owned search providers, DuckDuckGo redirect normalization, fallback behavior, and SSRF filtering.
 - [Hosted Services Boundary](docs/technical/hosted_services_boundary.md): Ownership and compatibility boundary between the open-source Sanad Agent clients and EastStar AI hosted services.
 - [MCP Server Configuration, Secrets, and Inspection](docs/technical/mcp_server_configuration.md): Daemon-owned MCP configuration, secret handling, inspection, OAuth, import/export, and runtime isolation architecture.

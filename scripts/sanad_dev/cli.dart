@@ -6,13 +6,16 @@ void main(List<String> args) async {
     exit(1);
   }
 
-  if (args.length == 1 && (args.first == '-h' || args.first == '--help' || args.first == 'help')) {
+  if (args.length == 1 &&
+      (args.first == '-h' || args.first == '--help' || args.first == 'help')) {
     printUsage();
     exit(0);
   }
 
   final command = args[0].toLowerCase();
-  if (args.skip(1).any((arg) => arg == '-h' || arg == '--help')) {
+  if (command != 'driver' &&
+      command != 'ui' &&
+      args.skip(1).any((arg) => arg == '-h' || arg == '--help')) {
     printUsage();
     return;
   }
@@ -104,7 +107,9 @@ void main(List<String> args) async {
 
   if (command == 'run') {
     final homeOptionIndex = args.indexOf('--home');
-    if (homeOptionIndex >= 0 && (homeOptionIndex + 1 >= args.length || args[homeOptionIndex + 1].startsWith('-'))) {
+    if (homeOptionIndex >= 0 &&
+        (homeOptionIndex + 1 >= args.length ||
+            args[homeOptionIndex + 1].startsWith('-'))) {
       stderr.writeln('--home requires "user" or an absolute path.');
       exitCode = 64;
       return;
@@ -222,6 +227,8 @@ void main(List<String> args) async {
       print('Unknown target: $target. Supported targets: client');
       exit(1);
     }
+  } else if (command == 'driver' || command == 'ui') {
+    await handleUiDriverCommand(args.sublist(1));
   } else {
     print('Unknown command: $command');
     printUsage();
@@ -265,11 +272,16 @@ void printUsage() {
   print(
     '  inspect [client]          Open Flutter DevTools / Inspector for the client.',
   );
+  print(
+    '  ui / driver <command>     Interact with client (snapshot, find, tap, enter-text, scroll, wait-for, screenshot, batch).',
+  );
   print('');
   print('Options:');
   print('  -f, --follow              Stream logs live in real-time.');
   print('  --wait                    Wait for a managed component journal.');
-  print('  --agent-port <port>       Select the journal group for a Client watcher.');
+  print(
+    '  --agent-port <port>       Select the journal group for a Client watcher.',
+  );
   print(
     '  -n, --tail <lines>        Output only the last <lines> log entries.',
   );
@@ -319,9 +331,11 @@ String _defaultDesktopDevice() {
   return 'macos';
 }
 
-String get _callerDirectory => Platform.environment['SANAD_DEV_CALLER_DIR'] ?? Directory.current.path;
+String get _callerDirectory =>
+    Platform.environment['SANAD_DEV_CALLER_DIR'] ?? Directory.current.path;
 
-Future<SanadDevRuntime> _currentRuntime() => discoverSanadDevRuntime(callerDirectory: _callerDirectory);
+Future<SanadDevRuntime> _currentRuntime() =>
+    discoverSanadDevRuntime(callerDirectory: _callerDirectory);
 
 Future<int?> _recordedPortForTarget(String target) async {
   try {

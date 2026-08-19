@@ -292,7 +292,7 @@ class StandaloneDaemonController implements LocalDaemonController {
       await backup.rename(target.path);
       final chmod = await Process.run('chmod', ['700', target.path]);
       if (chmod.exitCode != 0) return false;
-      return startDaemon();
+      return await startDaemon();
     } catch (error) {
       _logger.severe(
         'Could not restore the previous agent after failed health: $error',

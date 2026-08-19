@@ -241,6 +241,7 @@ class SidebarUnscopedConversationsSection extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
             child: TextButton.icon(
+              key: const ValueKey('unscoped-load-more'),
               onPressed: onLoadMore,
               iconAlignment: IconAlignment.end,
               icon: Icon(Icons.expand_more, size: 16, color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5)),

@@ -15,6 +15,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 
 ## Active Specifications
 
+- [Flutter VM Driver CLI QA](flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
 - [Bundled Product Skills QA](bundled_product_skills_qa.md): Deterministic one-file embedding, SANAD_HOME install/update/remove, customization safety, fast startup, and release-artifact coverage.
 - [Local Gateway and Sanad Home Security QA](local_gateway_and_sanad_home_security_qa.md): Authentication, Host/Origin rejection, secure writes, legacy migration, restart, Windows ACL, and worktree isolation coverage.
 - [Memory Tool Reliability QA](memory_tool_reliability.md): Regression coverage for compact results, atomic batches, drift recovery, bounded retries, content safety, and frozen snapshots.

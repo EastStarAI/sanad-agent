@@ -478,7 +478,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
 
     return SizeTransition(
       sizeFactor: _expansionAnimation,
-      axisAlignment: -1.0,
+      alignment: AlignmentDirectional.topStart,
       child: isClosed
           ? const SizedBox.shrink()
           : Container(

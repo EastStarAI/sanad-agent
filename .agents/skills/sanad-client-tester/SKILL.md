@@ -6,6 +6,8 @@ description: Comprehensive testing and interactive verification protocol for the
 
 This guide defines the unified interactive testing and verification protocol for `client`, designed to let AI agents verify interfaces, debug logic, and run integration tests inside isolated Git worktrees.
 
+The CLI is platform-neutral, but it is not an accessibility crawler for arbitrary Flutter applications: the target Sanad Client must be launched through `client/lib/driver_main.dart` so the required Flutter Driver and Sanad service extensions are registered. `sanad-dev ui` owns desktop/worktree discovery. Mobile and web targets require a reachable explicit `--vm-url` (or `VM_SERVICE_URL`) and the same driver entry point.
+
 ---
 
 ## 1. Testing Methods & Priority Rules
@@ -89,24 +91,48 @@ To inspect the application's interface dynamically without rendering heavy exter
     sanad-dev status
     ```
 
-4. **Inspect UI Structure:** From `client`, inspect the active widget tree. The crawler automatically reads the VM service endpoint recorded for the current worktree; `VM_SERVICE_URL` remains an explicit override:
+4. **Inspect UI Structure:** From the repository root, prefer the worktree-scoped `sanad-dev` entry point. It resolves only the active driver-enabled client recorded for the current worktree:
 
     ```bash
-    fvm dart test/interactive/inspect_ui.dart
+    sanad-dev ui snapshot
     ```
 
-   For linked worktrees, confirm that `worktree_runtime_badge` is present and shows the current worktree directory name. This is the visible guard that the inspected client belongs to the isolated runtime.
-
-5. **Simulate Interactions:** Write a custom target script or use the interaction template. Obtain the endpoint from `sanad-dev status` when the script requires an explicit `VM_SERVICE_URL`:
+   The standalone entry point requires an explicit package configuration and either `--vm-url` or `VM_SERVICE_URL`:
 
     ```bash
-    VM_SERVICE_URL="http://127.0.0.1:PORT/TOKEN/" fvm dart test/interactive/send_message_example.dart
+    fvm dart --packages=client/.dart_tool/package_config.json scripts/flutter_driver_cli.dart snapshot --vm-url <url>
     ```
 
-6. **Visual Layout Verification (Optional):** Capture a screenshot of the current viewport only when strictly needed to verify layout issues or upon explicit request (to conserve the agent's context token window):
+   Use `--filter <query>` to search for specific elements or `--json` for machine parsing. For linked worktrees, confirm that `worktree_runtime_badge` is present and shows the current worktree directory name before performing actions.
+
+5. **Interact with the Client Dynamically:** Execute driver actions command-by-command without writing custom Dart scripts:
 
     ```bash
-    VM_SERVICE_URL="http://127.0.0.1:PORT/TOKEN/" fvm dart test/interactive/take_screenshot.dart
+    # Find widgets
+    sanad-dev ui find --key chat_input
+    sanad-dev ui find --text "Load more"
+
+    # Tap elements (by key, text, index, or coordinates)
+    sanad-dev ui tap --key send_message_btn
+    sanad-dev ui tap --text "Load more" --index 0
+
+    # Type text into input fields
+    sanad-dev ui enter-text --key chat_input --text "Hello Sanad"
+
+    # Scroll scrollable areas
+    sanad-dev ui scroll --key device_workspace_sidebar_scroll --dy -300
+
+    # Wait for elements to appear/disappear
+    sanad-dev ui wait-for --key chat_input --timeout 10
+
+    # Execute a declarative recipe JSON file
+    sanad-dev ui batch --file client/test/interactive/sample_recipe.json
+    ```
+
+6. **Visual Layout Verification (Optional):** Capture a screenshot only when layout evidence is needed or explicitly requested:
+
+    ```bash
+    sanad-dev ui screenshot --out client/test/interactive/screenshots/my_screen.png
     ```
 
 7. **Clean Up Only a Runtime Launched for This Test:** Do not stop the active current-checkout daemon during live in-place self-development. When this procedure launched a disposable matched runtime, stop it from the same worktree:
@@ -119,9 +145,10 @@ To inspect the application's interface dynamically without rendering heavy exter
 
 These general-purpose tools are permanently located in the workspace:
 
-* **UI Crawler:** [inspect_ui.dart](client/test/interactive/inspect_ui.dart) - Reads the widget tree, extracting Keys and runtime textual contents.
-* **Screenshot Taker:** [take_screenshot.dart](client/test/interactive/take_screenshot.dart) - Captures the layout view and saves it as a PNG file.
-* **Interaction Template:** [send_message_example.dart](client/test/interactive/send_message_example.dart) - Pre-configured template simulating custom clicks and text input sequences.
+* **Unified UI CLI & Engine:** [flutter_driver_cli.dart](scripts/flutter_driver_cli.dart) and [flutter_driver_cli](scripts/flutter_driver_cli/) - Full suite for snapshotting, finding, tapping, typing, scrolling, waiting, screenshots, and batch recipes.
+* **UI Crawler (Legacy):** [inspect_ui.dart](client/test/interactive/inspect_ui.dart) - Standalone legacy inspection script.
+* **Screenshot Taker (Legacy):** [take_screenshot.dart](client/test/interactive/take_screenshot.dart) - Standalone legacy screenshot utility.
+* **Interaction Template (Legacy):** [send_message_example.dart](client/test/interactive/send_message_example.dart) - Sample driver test script.
 
 ### C. Non-Negotiable Driver Rules
 
@@ -223,7 +250,7 @@ Launch with `sanad-dev run --driver --cloud`. If the scenario requires toggling 
 
 ## 5. Best Practices & Rules for AI Agents
 
-1. **Inspect Before Acting:** Always run `inspect_ui.dart` first to analyze the active screen layout and verify that all target Keys are present before writing or executing a driver script.
+1. **Inspect Before Acting:** Always run `sanad-dev ui snapshot` first, verify the worktree badge and target keys, then execute UI actions. Use the legacy `inspect_ui.dart` only as a diagnostic fallback.
 2. **Sequential Test Runs:** Only E2E or integration tests binding to system ports must run sequentially using `--concurrency=1` to prevent address collision.
 3. **Scenario-Specific Test Integration (Promote Successful Tests):** When writing custom interactive scripts that successfully test a scenario, do not delete them. Promote them into automated integration tests inside the `integration_test/` directory to become part of the permanent CI/CD pipeline.
 4. **Verification Double-Check:** Do not rely solely on daemon console output; programmatically check that the generated text or widgets appear in the UI layout.

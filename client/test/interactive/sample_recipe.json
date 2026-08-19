@@ -1,0 +1,21 @@
+[
+  {
+    "action": "wait_for",
+    "key": "chat_input",
+    "timeout": 5
+  },
+  {
+    "action": "enter_text",
+    "key": "chat_input",
+    "text": "Batch execution verification step 1",
+    "delay_ms": 300
+  },
+  {
+    "action": "sleep",
+    "ms": 500
+  },
+  {
+    "action": "screenshot",
+    "out": "test/interactive/screenshots/batch_step1.png"
+  }
+]
