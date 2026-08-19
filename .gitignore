@@ -56,6 +56,9 @@ refrence_projects/
 # Graphify files
 graphify-out/
 
+# Interactive driver evidence
+client/test/interactive/screenshots/
+
 # Local Sanad agent permissions
 /.sanad/settings.json
 
