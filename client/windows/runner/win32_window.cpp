@@ -17,7 +17,7 @@ namespace {
 #endif
 
 constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
-constexpr int kMinimumWindowWidth = 500;
+constexpr int kMinimumWindowWidth = 450;
 constexpr int kMinimumWindowHeight = 600;
 
 /// Registry key for app theme preference.
