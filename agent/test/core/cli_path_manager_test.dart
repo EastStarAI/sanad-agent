@@ -32,9 +32,11 @@ void main() {
       if (!Platform.isWindows) {
         expect(modified, isTrue);
 
-        final zshrc = File(p.join(tempHome.path, '.zshrc'));
-        expect(zshrc.existsSync(), isTrue);
-        final content = await zshrc.readAsString();
+        final targetProfile = File(
+          p.join(tempHome.path, Platform.isMacOS ? '.zshrc' : '.bashrc'),
+        );
+        expect(targetProfile.existsSync(), isTrue);
+        final content = await targetProfile.readAsString();
         expect(content, contains('export PATH="${tempBin.path}:\$PATH"'));
 
         // Running a second time should not duplicate the line
@@ -44,7 +46,7 @@ void main() {
         );
         expect(modifiedAgain, isFalse);
 
-        final contentAgain = await zshrc.readAsString();
+        final contentAgain = await targetProfile.readAsString();
         final occurrences = 'export PATH="${tempBin.path}:\$PATH"'
             .allMatches(contentAgain)
             .length;
