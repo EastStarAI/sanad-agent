@@ -128,9 +128,14 @@ class AuthManager {
 
       if (data != null &&
           (data.containsKey('device_token') ||
-              data.containsKey('pending_device_token'))) {
-        data.remove('device_token');
-        data.remove('pending_device_token');
+              data.containsKey('pending_device_token') ||
+              data.containsKey('access_token') ||
+              data.containsKey('refresh_token'))) {
+        data
+          ..remove('device_token')
+          ..remove('pending_device_token')
+          ..remove('access_token')
+          ..remove('refresh_token');
         await boundary.writeSecretBytes(
           'auth.json',
           utf8.encode(jsonEncode(data)),
