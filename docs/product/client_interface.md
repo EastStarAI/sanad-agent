@@ -62,11 +62,11 @@ resizable sidebar. The resize target follows the sidebar's visible edge,
 including the macOS shell margin, and the selected desktop width is restored
 from local client preferences on the next launch. The native-desktop header also
 provides a phone-size toggle beside the sidebar pin control. A fresh normal
-window prefers `1470 × 800`; the toggle changes it to a `500 × 874` logical
+window prefers `1400 × 900`; the toggle changes it to a `450 × 900` logical
 viewport, preserving its top-left screen origin
 so only the right and bottom edges move, and restores the previous normal bounds
 when pressed again. The minimum supported macOS, Windows, and Linux window size
-is `500 × 600`, allowing users on short desktop displays to reduce the height
+is `450 × 600`, allowing users on short desktop displays to reduce the height
 without narrowing below the responsive design floor. Manually enlarging the window exits compact mode and updates
 the toggle. In narrow native-desktop layout, the same restore action remains
 beside navigation in both active-session and New Conversation headers; true

@@ -14,10 +14,10 @@ class MainFlutterWindow: NSWindow {
         let savedX = defaults.object(forKey: "flutter.window_x") as? Double
         let savedY = defaults.object(forKey: "flutter.window_y") as? Double
         
-        let minimumWidth: CGFloat = 500
+        let minimumWidth: CGFloat = 450
         let minimumHeight: CGFloat = 600
-        let width = max(savedWidth > 0 ? CGFloat(savedWidth) : 1470, minimumWidth)
-        let height = max(savedHeight > 0 ? CGFloat(savedHeight) : 800, minimumHeight)
+        let width = max(savedWidth > 0 ? CGFloat(savedWidth) : 1400, minimumWidth)
+        let height = max(savedHeight > 0 ? CGFloat(savedHeight) : 900, minimumHeight)
         
         var rect = NSRect(x: windowFrame.origin.x, y: windowFrame.origin.y, width: width, height: height)
         

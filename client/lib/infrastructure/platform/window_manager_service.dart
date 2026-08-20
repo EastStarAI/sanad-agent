@@ -8,8 +8,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 class WindowManagerService with WindowListener {
-  static const Size minimumWindowSize = Size(500, 600);
-  static const Size compactWindowSize = Size(500, 874);
+  static const Size minimumWindowSize = Size(450, 600);
+  static const Size compactWindowSize = Size(450, 900);
+  static const Size defaultWindowSize = Size(1400, 900);
 
   static final WindowManagerService _instance = WindowManagerService._();
   static final ValueNotifier<bool> _isCompactMode = ValueNotifier(false);
@@ -40,12 +41,31 @@ class WindowManagerService with WindowListener {
   }
 
   @visibleForTesting
+  static bool isCompactWidth(double width) => width <= compactWindowSize.width + 1.0;
+
+  @visibleForTesting
   static Rect compactBoundsFor(Rect currentBounds) => Rect.fromLTWH(
     currentBounds.left,
     currentBounds.top,
     compactWindowSize.width,
     compactWindowSize.height,
   );
+
+  @visibleForTesting
+  static Rect restoreBoundsFor(Rect? previousBounds, {Rect? currentBounds}) {
+    final origin = previousBounds ?? currentBounds ?? Rect.zero;
+    if (previousBounds == null ||
+        previousBounds.width < defaultWindowSize.width ||
+        previousBounds.height < defaultWindowSize.height) {
+      return Rect.fromLTWH(
+        origin.left,
+        origin.top,
+        defaultWindowSize.width,
+        defaultWindowSize.height,
+      );
+    }
+    return previousBounds;
+  }
 
   static Future<void> initialize() async {
     if (!AppPlatform.isDesktop) return;
@@ -65,7 +85,7 @@ class WindowManagerService with WindowListener {
     // Use default values if nothing is saved
     final Size savedWindowSize = (savedWidth != null && savedHeight != null)
         ? Size(savedWidth, savedHeight)
-        : const Size(1470, 800);
+        : defaultWindowSize;
     final Size windowSize = Size(
       savedWindowSize.width < minimumWindowSize.width ? minimumWindowSize.width : savedWindowSize.width,
       savedWindowSize.height < minimumWindowSize.height ? minimumWindowSize.height : savedWindowSize.height,
@@ -100,6 +120,9 @@ class WindowManagerService with WindowListener {
 
       // Mark as initialized so subsequent events are tracked.
       _isInitialized = true;
+      if (!isMaximized) {
+        _isCompactMode.value = isCompactWidth(windowSize.width);
+      }
       await _instance._refreshMaximizedOrFullScreenState();
 
       if (shouldCenter) {
@@ -112,10 +135,9 @@ class WindowManagerService with WindowListener {
     if (!AppPlatform.isDesktop || !_isInitialized) return;
 
     if (_isCompactMode.value) {
-      final restoreBounds = _restoreBounds;
-      if (restoreBounds != null) {
-        await _setBounds(restoreBounds);
-      }
+      final currentBounds = await windowManager.getBounds();
+      final targetBounds = restoreBoundsFor(_restoreBounds, currentBounds: currentBounds);
+      await _setBounds(targetBounds);
       _restoreBounds = null;
       _isCompactMode.value = false;
       _instance._saveWindowState();
@@ -179,14 +201,13 @@ class WindowManagerService with WindowListener {
   }
 
   Future<void> _reconcileCompactModeAfterManualResize() async {
-    if (_isCompactMode.value) {
-      final size = await windowManager.getSize();
-      final leftCompactMode =
-          (size.width - compactWindowSize.width).abs() > 1 || (size.height - compactWindowSize.height).abs() > 1;
-      if (leftCompactMode) {
-        _restoreBounds = null;
-        _isCompactMode.value = false;
-      }
+    final size = await windowManager.getSize();
+    final isCompact = isCompactWidth(size.width);
+    if (_isCompactMode.value && !isCompact) {
+      _restoreBounds = null;
+      _isCompactMode.value = false;
+    } else if (!_isCompactMode.value && isCompact) {
+      _isCompactMode.value = true;
     }
     _saveWindowState();
   }
