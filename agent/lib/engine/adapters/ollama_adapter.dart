@@ -74,6 +74,8 @@ class OllamaAdapter extends BaseOpenAIAdapter {
                 return 0;
               });
             }
+            setAvailableModelsSource('live');
+            setLastModelsException(null);
             return options;
           }
         } else {

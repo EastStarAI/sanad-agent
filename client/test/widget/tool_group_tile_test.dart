@@ -90,6 +90,13 @@ void main() {
     expect(find.textContaining('first 79'), findsNothing);
     final body = find.byKey(const Key('tool_group_body_terminal-1'));
     expect(body, findsOneWidget);
+    final contentPadding = tester.widget<Padding>(
+      find.byKey(const Key('tool_group_content_padding_terminal-1')),
+    );
+    expect(
+      contentPadding.padding,
+      const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+    );
     final scrollFinder = find.byKey(
       const Key('tool_group_scroll_terminal-1'),
     );
@@ -208,6 +215,75 @@ void main() {
     );
   });
 
+  testWidgets('terminal header reflects running and completed status', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(
+        EventTile(
+          event: _tool(
+            'terminal-running',
+            'shell_execute',
+            status: EventStatus.running,
+            input: const {'command': 'pwd'},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Running: pwd', findRichText: true), findsOneWidget);
+    expect(find.text('Ran: pwd', findRichText: true), findsNothing);
+
+    await tester.pumpWidget(
+      _app(
+        EventTile(
+          event: _tool(
+            'terminal-done',
+            'shell_execute',
+            input: const {'command': 'pwd'},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('Running: pwd', findRichText: true), findsNothing);
+    expect(find.text('Ran: pwd', findRichText: true), findsOneWidget);
+  });
+
+  testWidgets('modified file and line impact wrap as one unit', (
+    tester,
+  ) async {
+    final item = projectConversationTimeline([
+      _tool(
+        'read-1',
+        'file_read',
+        input: const {'path': 'lib/a.dart'},
+      ),
+      _tool(
+        'edit-1',
+        'file_edit',
+        input: const {
+          'path': 'lib/b.dart',
+          'old_string': 'old',
+          'new_string': 'new',
+        },
+      ),
+    ]).single;
+
+    await tester.pumpWidget(_toolGroupApp(item, width: 360));
+    await tester.pumpAndSettle();
+
+    final exploreTop = tester.getTopLeft(find.text('1 file explore')).dy;
+    final modifiedTop = tester.getTopLeft(find.text('1 file modified')).dy;
+    final addedTop = tester.getTopLeft(find.text('+1')).dy;
+    final removedTop = tester.getTopLeft(find.text('-1')).dy;
+
+    expect(modifiedTop, greaterThan(exploreTop));
+    expect(addedTop, modifiedTop);
+    expect(removedTop, modifiedTop);
+  });
+
   testWidgets('group title animates cached file and line metrics', (
     tester,
   ) async {
@@ -230,7 +306,7 @@ void main() {
 
     await tester.pumpWidget(_toolGroupApp(firstItem));
     await tester.pumpAndSettle();
-    expect(find.text('1 file read'), findsOneWidget);
+    expect(find.text('1 file explore'), findsOneWidget);
     expect(find.text('1 file modified'), findsOneWidget);
     expect(find.textContaining('Tool uses:'), findsNothing);
     expect(find.text('+1'), findsOneWidget);
@@ -267,12 +343,13 @@ void main() {
   });
 }
 
-Widget _app(Widget child) => MaterialApp(
+Widget _app(Widget child, {double width = 800}) => MaterialApp(
   home: Scaffold(
-    body: SizedBox(width: 800, height: 700, child: child),
+    body: SizedBox(width: width, height: 700, child: child),
   ),
 );
-Widget _toolGroupApp(ConversationTimelineItem item) => _app(_ToolGroupHarness(item: item));
+Widget _toolGroupApp(ConversationTimelineItem item, {double width = 800}) =>
+    _app(_ToolGroupHarness(item: item), width: width);
 
 class _ToolGroupHarness extends StatefulWidget {
   const _ToolGroupHarness({required this.item});

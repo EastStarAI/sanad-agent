@@ -36,8 +36,11 @@ class _ConversationActivityTileState extends State<ConversationActivityTile> {
   @override
   void initState() {
     super.initState();
-    _queue(widget.activity);
+    _displayedText = _ActivityText.fromActivity(widget.activity);
     _startElapsedTimer();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) widget.onDisplayed?.call();
+    });
   }
 
   @override

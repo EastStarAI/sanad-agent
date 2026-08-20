@@ -6,7 +6,7 @@ import 'package:sanad_client/features/conversations/presentation/utils/conversat
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_activity_tile.dart';
 
 void main() {
-  testWidgets('debounces burst updates and keeps the confirmed row visible', (
+  testWidgets('shows initial activity immediately then debounces updates', (
     tester,
   ) async {
     var displayedCount = 0;
@@ -21,7 +21,8 @@ void main() {
     await tester.pumpWidget(
       _app(reasoning, onDisplayed: () => displayedCount++),
     );
-    expect(find.textContaining('Thinking:'), findsNothing);
+    expect(find.textContaining('Thinking:'), findsOneWidget);
+    expect(displayedCount, 1);
 
     await tester.pump(const Duration(seconds: 1));
     await tester.pump();

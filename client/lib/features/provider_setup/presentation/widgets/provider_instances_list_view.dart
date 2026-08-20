@@ -45,6 +45,7 @@ class _ProviderInstancesListViewState extends State<ProviderInstancesListView> {
                   ),
                 ),
                 ElevatedButton.icon(
+                  key: const Key('add_provider_btn'),
                   onPressed: () => context.read<ProviderSetupCubit>().backToPicker(),
                   icon: const Icon(Icons.add, size: 16),
                   label: const Text('Add Provider'),
@@ -95,19 +96,7 @@ class _ProviderInstancesListViewState extends State<ProviderInstancesListView> {
       return !isOAuth;
     }).toList();
 
-    // Sort: Accounts first, then ready-before-not-ready, then name (Plan 29
-    // §6.1, criterion 31). This ordering is display-only and never changes
-    // the default instance or actual routing.
-    filtered.sort((a, b) {
-      final aAccount = _kAccountMethods.contains(a.authMethod) ? 0 : 1;
-      final bAccount = _kAccountMethods.contains(b.authMethod) ? 0 : 1;
-      if (aAccount != bAccount) return aAccount.compareTo(bAccount);
-      final aReady = a.status == 'ready' ? 0 : 1;
-      final bReady = b.status == 'ready' ? 0 : 1;
-      if (aReady != bReady) return aReady.compareTo(bReady);
-      return a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase());
-    });
-
+    // Preserve the daemon order (newest first).
     if (filtered.isEmpty) {
       return Center(
         child: Text(
@@ -135,6 +124,7 @@ class _ProviderInstancesListViewState extends State<ProviderInstancesListView> {
             .map((template) => template.displayName)
             .firstOrNull;
         return _InstanceCard(
+          key: Key('provider_instance_card_${inst.id}'),
           instance: inst,
           providerName: providerName ?? 'Provider',
           agent: agent,
@@ -153,6 +143,7 @@ class _InstanceCard extends StatelessWidget {
   final DeviceConfig? agent;
 
   const _InstanceCard({
+    super.key,
     required this.instance,
     required this.providerName,
     this.agent,
@@ -170,6 +161,7 @@ class _InstanceCard extends StatelessWidget {
     final busy = operation != null;
 
     return Container(
+      key: Key('provider_instance_${instance.id}'),
       decoration: BoxDecoration(
         color: theme.colorScheme.surfaceContainer,
         borderRadius: BorderRadius.circular(14),
@@ -195,6 +187,7 @@ class _InstanceCard extends StatelessWidget {
                         Expanded(
                           child: Text(
                             instance.displayName,
+                            key: Key('provider_instance_name_${instance.id}'),
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               fontSize: 16,
@@ -279,6 +272,7 @@ class _InstanceCard extends StatelessWidget {
                     ),
                     child: Text(
                       instance.status.toUpperCase(),
+                      key: Key('provider_instance_status_${instance.id}'),
                       style: TextStyle(
                         fontSize: 10,
                         fontWeight: FontWeight.bold,
@@ -328,6 +322,7 @@ class _InstanceCard extends StatelessWidget {
             children: [
               if (!instance.isDefault && !isDraft)
                 TextButton.icon(
+                  key: Key('provider_instance_make_default_${instance.id}'),
                   onPressed: isReady && !busy
                       ? () => unawaited(
                           context.read<ProviderSetupCubit>().setInstanceDefault(instance.id),
@@ -338,6 +333,7 @@ class _InstanceCard extends StatelessWidget {
                 ),
               if (!isDraft)
                 TextButton.icon(
+                  key: Key('provider_instance_test_${instance.id}'),
                   onPressed: busy
                       ? null
                       : () => unawaited(
@@ -347,6 +343,7 @@ class _InstanceCard extends StatelessWidget {
                   label: const Text('Test'),
                 ),
               TextButton.icon(
+                key: Key(isDraft ? 'provider_instance_resume_${instance.id}' : 'provider_instance_edit_${instance.id}'),
                 onPressed: busy
                     ? null
                     : () {
@@ -360,6 +357,7 @@ class _InstanceCard extends StatelessWidget {
                 label: Text(isDraft ? 'Resume setup' : 'Edit'),
               ),
               TextButton.icon(
+                key: Key('provider_instance_delete_${instance.id}'),
                 onPressed: busy ? null : () => _confirmDelete(context),
                 icon: const Icon(Icons.delete_outline, size: 16),
                 label: const Text('Delete'),
@@ -391,6 +389,7 @@ class _InstanceCard extends StatelessWidget {
               child: const Text('Cancel'),
             ),
             TextButton(
+              key: const Key('confirm_delete_provider_button'),
               onPressed: () {
                 Navigator.pop(dialogCtx);
                 unawaited(context.read<ProviderSetupCubit>().removeInstance(instance.id));
