@@ -531,6 +531,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
     }();
 
     return ListTile(
+      key: Key('model_item_${group.providerId}_$model'),
       dense: true,
       selected: isSelected,
       title: Text(model, style: const TextStyle(fontSize: 13)),

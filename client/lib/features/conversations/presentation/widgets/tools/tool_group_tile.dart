@@ -173,7 +173,11 @@ class _ToolGroupTileState extends State<ToolGroupTile> with SingleTickerProvider
                     ),
                   ),
                   child: Padding(
-                    padding: const EdgeInsets.all(12),
+                    key: Key('tool_group_content_padding_${widget.item.id}'),
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 8,
+                      horizontal: 4,
+                    ),
                     child: SelectionArea(
                       child: ConstrainedBox(
                         constraints: const BoxConstraints(
@@ -242,46 +246,71 @@ class _ToolGroupTileState extends State<ToolGroupTile> with SingleTickerProvider
       color: isDark ? Colors.red.shade300 : Colors.red.shade900,
     );
     final metrics = summary.headerMetrics;
+    final modifiedFileMetric = metrics.where((metric) => metric.key == 'modified-files').firstOrNull;
+    final regularMetrics = metrics.where((metric) => metric.key != 'modified-files').toList(growable: false);
     final hasLineImpact = summary.addedLines > 0 || summary.removedLines > 0;
+
+    Widget buildLineImpact() => Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (summary.addedLines > 0)
+          _AnimatedMetric(
+            key: const ValueKey('added-lines'),
+            metricKey: 'added-lines',
+            value: summary.addedLines,
+            prefix: '+',
+            style: addedStyle,
+          ),
+        if (summary.addedLines > 0 && summary.removedLines > 0) const SizedBox(width: 2),
+        if (summary.removedLines > 0)
+          _AnimatedMetric(
+            key: const ValueKey('removed-lines'),
+            metricKey: 'removed-lines',
+            value: summary.removedLines,
+            prefix: '-',
+            style: removedStyle,
+          ),
+      ],
+    );
 
     return Wrap(
       spacing: 6,
       runSpacing: 2,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
-        for (var index = 0; index < metrics.length; index++) ...[
+        for (var index = 0; index < regularMetrics.length; index++) ...[
           if (index > 0) Text('·', style: baseStyle),
           _AnimatedMetric(
-            key: ValueKey(metrics[index].key),
-            metricKey: metrics[index].key,
-            value: metrics[index].value,
-            suffix: metrics[index].suffix,
+            key: ValueKey(regularMetrics[index].key),
+            metricKey: regularMetrics[index].key,
+            value: regularMetrics[index].value,
+            suffix: regularMetrics[index].suffix,
             style: baseStyle,
           ),
         ],
-        if (hasLineImpact)
-          Wrap(
-            spacing: 2,
-            crossAxisAlignment: WrapCrossAlignment.center,
+        if (modifiedFileMetric != null)
+          Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
-              if (summary.addedLines > 0)
-                _AnimatedMetric(
-                  key: const ValueKey('added-lines'),
-                  metricKey: 'added-lines',
-                  value: summary.addedLines,
-                  prefix: '+',
-                  style: addedStyle,
-                ),
-              if (summary.removedLines > 0)
-                _AnimatedMetric(
-                  key: const ValueKey('removed-lines'),
-                  metricKey: 'removed-lines',
-                  value: summary.removedLines,
-                  prefix: '-',
-                  style: removedStyle,
-                ),
+              if (regularMetrics.isNotEmpty) ...[
+                Text('·', style: baseStyle),
+                const SizedBox(width: 6),
+              ],
+              _AnimatedMetric(
+                key: ValueKey(modifiedFileMetric.key),
+                metricKey: modifiedFileMetric.key,
+                value: modifiedFileMetric.value,
+                suffix: modifiedFileMetric.suffix,
+                style: baseStyle,
+              ),
+              if (hasLineImpact) ...[
+                const SizedBox(width: 6),
+                buildLineImpact(),
+              ],
             ],
-          ),
+          )
+        else if (hasLineImpact)
+          buildLineImpact(),
         if (metrics.isEmpty && !hasLineImpact) Text('Tools', style: baseStyle),
       ],
     );

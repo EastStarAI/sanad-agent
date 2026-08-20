@@ -335,8 +335,8 @@ class ToolGroupSummary {
         ToolGroupCountMetric(
           key: 'file-read',
           value: fileReads,
-          singularLabel: 'file read',
-          pluralLabel: 'file reads',
+          singularLabel: 'file explore',
+          pluralLabel: 'file explores',
         ),
       );
     }

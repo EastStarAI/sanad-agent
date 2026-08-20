@@ -79,14 +79,14 @@ class ProviderInstanceRepository {
 
   List<ProviderInstance> findAll() {
     final rows = _db.select(
-      'SELECT * FROM provider_instances ORDER BY created_at ASC',
+      'SELECT * FROM provider_instances ORDER BY created_at DESC',
     );
     return rows.map(_rowToInstance).toList(growable: false);
   }
 
   List<ProviderInstance> findByTemplate(String templateId) {
     final rows = _db.select(
-      'SELECT * FROM provider_instances WHERE template_id = ? ORDER BY created_at ASC',
+      'SELECT * FROM provider_instances WHERE template_id = ? ORDER BY created_at DESC',
       [templateId],
     );
     return rows.map(_rowToInstance).toList(growable: false);

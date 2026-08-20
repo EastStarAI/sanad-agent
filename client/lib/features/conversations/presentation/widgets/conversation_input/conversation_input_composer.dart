@@ -636,6 +636,7 @@ class _ModelChipState extends State<_ModelChip> {
 
     Widget buildChip(BuildContext context, double? progress, Color? progressColor) {
       return InkWell(
+        key: const Key('model_selector_btn'),
         onTap: () => _openModelPicker(context),
         borderRadius: BorderRadius.circular(8),
         child: _buildModelChip(context, currentModel, contextUsage, progress, progressColor),

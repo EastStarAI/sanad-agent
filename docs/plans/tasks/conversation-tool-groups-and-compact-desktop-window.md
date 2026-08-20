@@ -1,7 +1,7 @@
 ---
 title: "Conversation Tool Groups and Compact Desktop Window"
 status: "in_review"
-current_gate: "user_diff_review_before_commit"
+current_gate: "user_visual_review_before_commit"
 remaining_percent: 0
 ---
 
@@ -18,11 +18,11 @@ Improve dense tool activity without weakening live conversation performance, fix
 - A single tool remains standalone. As soon as a second contiguous tool arrives, every tool in the run—including the latest running tool—enters one group without multi-row flashing.
 - Error tools group like successful tools without a separate error count.
 - A running `system_ask_user` timeline event is completely hidden. Its completed question/answer content appears without the generic icon/Ask/title header.
-- Group titles use normal font weight and expose the operation summary without a leading icon or `Tool uses:` prefix. MCP calls aggregate by server as `<count> <server> tool(s)` rather than listing each MCP operation. Skill loads appear first, followed by other non-file operations; file searches/reads and the deduplicated modified-file count appear last, followed by green added-line and red removed-line totals as the final metrics. Repeated writes/edits of one canonical path count that modified file once. The expanded body starts directly with its child tools and does not repeat the aggregate title.
+- Group titles use normal font weight and expose the operation summary without a leading icon or `Tool uses:` prefix. MCP calls aggregate by server as `<count> <server> tool(s)` rather than listing each MCP operation. Skill loads appear first, followed by other non-file operations; file searches and File Read calls labeled as `file explore(s)` appear before the deduplicated modified-file count. The modified-file count and its green added-line/red removed-line totals form one wrapping unit so they always remain on the same line. Repeated writes/edits of one canonical path count that modified file once. The expanded body starts directly with its child tools and does not repeat the aggregate title.
 - Every numeric group-title metric is cached by stable projected identity and animates over 750ms only when its value changes; virtualization and expansion do not replay it. Added/removed metrics use the compact spacing from a file-edit title, and the group chevron uses the same gray as the title.
 - The group introduces no new visual language: header typography, colors, spacing, borders, chevron, and surfaces reuse the current tool component values, including the current `Read:` / `Grep:` title color.
 - Expanded groups reuse existing tool presentations, have the existing tool-body maximum height of 500 logical pixels, and scroll internally. The aggregate title remains only in the outer group header and is not repeated as the expanded body's first row. Group content is absent from the widget tree while collapsed; expanding the group does not expand its child tools, whose default and restored state is independently collapsed/expanded.
-- One non-expandable `ConversationActivityTile` may appear only at the current timeline tail while authoritative attention is `runningOrResuming`. Candidates use a one-second trailing debounce: the last confirmed row remains visible within the same active round, burst intermediates never render, and only the latest stable real detail—such as `Running: fvm flutter test …`—replaces it directly without any Activity entrance or text-transition animation. The generic provider/tool gap reads `Working…`, while explicit reasoning retains `Thinking: <preview>`. Reasoning may create the tile without a group; a temporary first standalone tool may retain the prior confirmed activity but never creates a duplicate activity for itself. Ask-user and every non-tool boundary prevent any later activity from being inserted under a historical group. User attention, waiting, blocked/fatal, stopping, interruption/idle, and errors remove the tile immediately, with no placeholder.
+- One non-expandable `ConversationActivityTile` may appear only at the current timeline tail while authoritative attention is `runningOrResuming`. The current authoritative Activity appears immediately when an active conversation opens; later candidates use a one-second trailing debounce: the last confirmed row remains visible within the same active round, burst intermediates never render, and only the latest stable real detail—such as `Running: fvm flutter test …`—replaces it directly without any Activity entrance or text-transition animation. The generic provider/tool gap reads `Working…`, while explicit reasoning retains `Thinking: <preview>`. Reasoning may create the tile without a group; a temporary first standalone tool may retain the prior confirmed activity but never creates a duplicate activity for itself. Ask-user and every non-tool boundary prevent any later activity from being inserted under a historical group. User attention, waiting, blocked/fatal, stopping, interruption/idle, and errors remove the tile immediately, with no placeholder.
 - Group-scroll follow starts enabled, follows appended/completed children, disables on user scrolling away, and re-enables when the user returns to its bottom.
 - Group-scroll and timeline-scroll controllers/state are strictly independent.
 - Sending a new user message preserves the current minimal reveal behavior but grants timeline follow eligibility. Later streamed growth follows unless the user scrolls away; manually returning to the bottom restores follow.
@@ -139,6 +139,19 @@ Improve dense tool activity without weakening live conversation performance, fix
 - [x] Render elapsed digits with tabular figures so same-length second updates do not shift the trailing timer horizontally.
 - [x] Add focused style coverage, run the Client analyzer and Activity widget test, and refresh Graphify.
 
+### G11 — Group Copy and Terminal Status
+
+- [x] Rename grouped File Read metrics to `file explore(s)` without changing the underlying tool identity.
+- [x] Keep the modified-file metric and its added/removed line totals together as one wrapping unit.
+- [x] Render a running terminal header as `Running:` and a completed terminal header as `Ran:`.
+- [x] Add focused projection/widget regressions, update documentation, analyze the Client, and refresh Graphify.
+
+### G12 — Immediate Activity and Compact Group Padding
+
+- [x] Show the current authoritative Activity on the first frame when opening an active conversation while retaining debounce for later changes.
+- [x] Reduce expanded tool-group body padding to 4px horizontally and 8px vertically.
+- [x] Add focused widget regressions, update documentation, analyze the Client, refresh Graphify, and reload the main-worktree Client.
+
 ## Acceptance Criteria
 
 - [x] Given one completed/error tool, it renders with the existing standalone presentation; when a second contiguous completed/error tool arrives, both render as one collapsible group.
@@ -156,6 +169,8 @@ Improve dense tool activity without weakening live conversation performance, fix
 - [x] macOS, Windows, and Linux reject resize attempts below `500 × 600` while compact mode prefers `500 × 874`; mobile and web do not render the compact control or initialize desktop window APIs.
 - [x] Focused automated tests prove grouping, aggregation, reconciliation, both scroll state machines, compact/restore intent, and platform guards.
 - [x] Given an active turn that waits, resumes, reconnects, or is reopened later, its execution snapshot and final response retain one accepted-turn origin and the visible timer resumes from a fresh elapsed baseline.
+- [x] Given an already-active conversation is opened, its current Activity and elapsed duration render on the first frame; only later Activity changes wait for the debounce.
+- [x] Given a tool group is expanded, its body uses 4px horizontal and 8px vertical internal padding.
 - [x] Given elapsed work below one hour, Activity shows seconds; at one hour or more it shows hours/minutes without visible second churn.
 - [x] Given a desktop file drop at a caret or selection, paths insert at that selection, replace selected text, and leave the caret after the inserted paths.
 
@@ -185,3 +200,4 @@ Improve dense tool activity without weakening live conversation performance, fix
 - 2026-08-16 — G10 stable timer digits complete. The elapsed label uses OpenType tabular figures (`tnum`), preventing proportional digit-width jitter during same-format second updates. The focused Activity widget suite (4 tests), Client analyzer, diff check, and Graphify update pass. Implementation remaining: 0%; the uncommitted diff awaits user review before commit authorization.
 - 2026-08-16 — G10 short desktop minimum complete. Normal startup remains `1470 × 800`, compact mode uses `500 × 874`, and Dart plus all native runners enforce only `500 × 600` as the resize floor. Client analysis and 25 focused desktop-window/sidebar tests pass; Graphify is current. Implementation remaining: 0%; no commit or push performed.
 - 2026-08-16 — Group-title typography follow-up complete. All aggregate title text, including colored added/removed line metrics, now uses normal font weight. Six focused widget tests and client analysis pass; Graphify is current. Implementation remaining: 0%; no commit or push performed.
+- 2026-08-19 — G11/G12 copy and presentation follow-up complete. Grouped reads now say `file explore(s)`; modified-file and line totals wrap atomically; terminal headers distinguish `Running:` from `Ran:`; active-conversation Activity renders immediately on mount while later changes remain debounced; and expanded group content uses 4px horizontal/8px vertical padding. Twenty-three focused tests and Client analysis pass, Graphify is current, and the main-worktree Client was hot reloaded and reassembled. Implementation remaining: 0%; no commit or push performed.
