@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/setup/cli_path_manager.dart';
 
 class ServiceManager {
   static String get _instance {
@@ -125,7 +126,11 @@ class ServiceManager {
         // Load service
         await Process.run('launchctl', ['unload', configPath]);
         final result = await Process.run('launchctl', ['load', configPath]);
-        return result.exitCode == 0;
+        if (result.exitCode == 0) {
+          await CliPathManager.ensureOnPath();
+          return true;
+        }
+        return false;
       } else if (Platform.isLinux) {
         final configPath = getServiceConfigPath();
         final serviceContent =
@@ -161,7 +166,11 @@ WantedBy=default.target
           '--now',
           serviceName,
         ]);
-        return result.exitCode == 0;
+        if (result.exitCode == 0) {
+          await CliPathManager.ensureOnPath();
+          return true;
+        }
+        return false;
       } else if (Platform.isWindows) {
         final daemonCommand = buildWindowsDaemonCommand(
           executable: finalExec,
@@ -182,7 +191,11 @@ WantedBy=default.target
           '-EncodedCommand',
           encodePowerShellCommand(registrationCommand),
         ]);
-        return result.exitCode == 0;
+        if (result.exitCode == 0) {
+          await CliPathManager.ensureOnPath();
+          return true;
+        }
+        return false;
       }
     } catch (_) {
       return false;

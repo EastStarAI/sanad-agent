@@ -330,8 +330,8 @@ void main() {
 
         final persisted =
             jsonDecode(await authFile.readAsString()) as Map<String, dynamic>;
-        expect(persisted['access_token'], 'new-account-access');
-        expect(persisted['refresh_token'], 'new-account-refresh');
+        expect(persisted['access_token'], isNull);
+        expect(persisted['refresh_token'], isNull);
         expect(persisted['hardware_id'], 'stable-hardware');
         expect(persisted[AuthManager.pendingAgentLogoutKey], isNull);
         expect(persisted['pairing_token'], isNull);

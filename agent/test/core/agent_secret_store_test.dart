@@ -224,10 +224,40 @@ void main() {
       expect(await store.read(key), isNull);
       await store.write(key, 'synthetic-secret-value');
       expect(await store.read(key), 'synthetic-secret-value');
+      // Overwrite/update existing key
+      await store.write(key, 'updated-secret-value-12345');
+      expect(await store.read(key), 'updated-secret-value-12345');
       await store.delete(key);
       expect(await store.read(key), isNull);
     } finally {
       await store.delete(key);
+    }
+  }, skip: !Platform.isMacOS);
+
+  test('macOS Keychain handles multiple keys and special characters', () async {
+    final scope = 'sec01e-multi-${const Uuid().v4()}';
+    final store = MacOsKeychainAgentSecretStore(scope: scope);
+    const key1 = 'device_credential';
+    const key2 = 'provider:openai_api_key';
+    const value1 = 'token_abc123!@#\$%^&*()_+~`|}{[]:;?><,./';
+    const value2 = '{"type":"json_secret","nested":{"field":123}}';
+
+    try {
+      await store.write(key1, value1);
+      await store.write(key2, value2);
+
+      expect(await store.read(key1), value1);
+      expect(await store.read(key2), value2);
+
+      await store.delete(key1);
+      expect(await store.read(key1), isNull);
+      expect(await store.read(key2), value2);
+
+      await store.delete(key2);
+      expect(await store.read(key2), isNull);
+    } finally {
+      await store.delete(key1);
+      await store.delete(key2);
     }
   }, skip: !Platform.isMacOS);
 }
