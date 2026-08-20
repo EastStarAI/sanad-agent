@@ -109,7 +109,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
+          - runner: macos-26
             platform: macos
             architecture: arm64
             extension: ''
@@ -400,7 +400,7 @@ jobs:
 
   client-macos:
     needs: validate
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     environment: apple-signing
     steps:
@@ -522,7 +522,7 @@ jobs:
 
   client-ios:
     needs: validate
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     environment: apple-testflight
     steps:
