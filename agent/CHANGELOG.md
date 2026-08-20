@@ -1,3 +1,10 @@
+## 1.0.5
+
+- Upgraded macOS Keychain backend to Apple `SecItem` API, sanitized auth storage serialization, and automated CLI PATH configuration (#102).
+- Serialized concurrent Agent permission prompts per session to prevent approval race conditions (#99).
+- Added Flutter VM driver CLI for automated UI diagnostics and testing (#98).
+- Updated macOS release CI runner to macos-26 for Xcode 26 support (#101).
+
 ## 1.0.4
 
 - Corrected the Windows release smoke gate so PowerShell uses a writable Sanad Home variable instead of the reserved `$HOME` variable.
