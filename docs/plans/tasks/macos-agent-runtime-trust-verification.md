@@ -1,8 +1,8 @@
 ---
 title: "macOS Agent Runtime Trust Verification"
-status: ready_for_pr
-current_gate: complete
-remaining_estimate: 0%
+status: in_review
+current_gate: G3
+remaining_estimate: 10%
 ---
 
 # macOS Agent Runtime Trust Verification
@@ -27,6 +27,10 @@ Allow a verified raw macOS Agent executable to install without relying on the no
 ### G2 — Verification
 - [x] Pass analyzers, focused tests, shell validation, diff review, and Graphify update.
 
+### G3 — Pull Request Review
+- [x] Commit, push, and open the focused pull request.
+- [ ] Pass hosted checks and receive the required protected reviews before merge.
+
 ## Acceptance Criteria
 - [x] Correct Apple-anchored NanoSoft artifacts pass without a runtime notarization-ticket lookup.
 - [x] Invalid signatures, non-Apple chains, wrong Team IDs, and wrong publisher names fail closed.
@@ -34,4 +38,6 @@ Allow a verified raw macOS Agent executable to install without relying on the no
 
 ## Definition of Done
 - [x] Code, tests, and owning documentation are consistent.
-- [x] No commit, push, release, or runtime switch is performed.
+- [x] The focused change is committed, pushed, and opened for review.
+- [ ] Hosted checks and protected reviews pass before merge.
+- [x] No release or runtime switch is performed.
