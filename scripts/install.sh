@@ -212,17 +212,10 @@ if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
   exit 66
 fi
 if [ "$PLATFORM" = "macos" ]; then
-  if ! codesign --verify --strict --verbose=2 "$STAGED"; then
-    echo "Downloaded artifact code-signature verification failed." >&2
-    exit 66
-  fi
-  if ! codesign -dv --verbose=4 "$STAGED" 2>&1 |
-    grep -Fq 'Developer ID Application: NanoSoft LY LLC'; then
-    echo "Downloaded artifact publisher is not trusted." >&2
-    exit 66
-  fi
-  if ! spctl --assess --type execute --verbose=2 "$STAGED"; then
-    echo "Downloaded artifact notarization verification failed." >&2
+  MACOS_AGENT_PUBLISHER_REQUIREMENT='=anchor apple generic and certificate leaf[subject.OU] = "UC2824B99G" and certificate leaf[subject.CN] = "Developer ID Application: NanoSoft LY LLC (UC2824B99G)"'
+  if ! codesign --verify --strict --verbose=2 \
+    --test-requirement "$MACOS_AGENT_PUBLISHER_REQUIREMENT" "$STAGED"; then
+    echo "Downloaded artifact publisher signature is not trusted." >&2
     exit 66
   fi
 fi

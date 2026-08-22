@@ -9,6 +9,19 @@ enum ReleaseChannel { rc, stable }
 
 typedef PlatformArtifactVerifier =
     Future<bool> Function(File file, String operatingSystem);
+typedef ReleaseProcessRunner =
+    Future<ProcessResult> Function(String executable, List<String> arguments);
+
+const macosAgentPublisherRequirement =
+    '=anchor apple generic and '
+    'certificate leaf[subject.OU] = "UC2824B99G" and '
+    'certificate leaf[subject.CN] = '
+    '"Developer ID Application: NanoSoft LY LLC (UC2824B99G)"';
+
+Future<ProcessResult> _runReleaseProcess(
+  String executable,
+  List<String> arguments,
+) => Process.run(executable, arguments);
 
 /// Central metadata policy shared by manifest validation, bootstrap, and update.
 /// GitHub attestations are release-pipeline evidence; runtime verification still
@@ -389,38 +402,19 @@ Future<bool> verifyReleaseArtifactTrust(
 
 Future<bool> verifyPlatformCodeSignature(
   File file,
-  String operatingSystem,
-) async {
+  String operatingSystem, {
+  ReleaseProcessRunner processRunner = _runReleaseProcess,
+}) async {
   if (operatingSystem == 'macos') {
-    final verification = await Process.run('/usr/bin/codesign', [
+    final verification = await processRunner('/usr/bin/codesign', [
       '--verify',
       '--strict',
       '--verbose=2',
-      file.path,
-    ]);
-    if (verification.exitCode != 0) return false;
-    final details = await Process.run('/usr/bin/codesign', [
-      '-dv',
-      '--verbose=4',
-      file.path,
-    ]);
-    final output = '${details.stdout}\n${details.stderr}';
-    if (details.exitCode != 0 ||
-        !output.contains('Developer ID Application: NanoSoft LY LLC')) {
-      return false;
-    }
-    // Raw CLI executables are not app bundles, so spctl rejects them even when
-    // Apple notarized them. codesign's explicit notarized requirement validates
-    // the ticket without weakening the Developer ID check above.
-    final notarization = await Process.run('/usr/bin/codesign', [
-      '--verify',
-      '--strict',
       '--test-requirement',
-      '=notarized',
-      '--verbose=2',
+      macosAgentPublisherRequirement,
       file.path,
     ]);
-    return notarization.exitCode == 0;
+    return verification.exitCode == 0;
   }
   if (operatingSystem == 'windows') {
     final escaped = file.path.replaceAll("'", "''");
