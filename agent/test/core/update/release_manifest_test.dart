@@ -168,6 +168,56 @@ void main() {
     });
   });
 
+  group('macOS platform trust', () {
+    test(
+      'uses the exact Apple-anchored NanoSoft publisher requirement',
+      () async {
+        String? executable;
+        List<String>? arguments;
+
+        final trusted = await verifyPlatformCodeSignature(
+          File('/tmp/sanad-agent-candidate'),
+          'macos',
+          processRunner: (command, commandArguments) async {
+            executable = command;
+            arguments = commandArguments;
+            return ProcessResult(1, 0, '', '');
+          },
+        );
+
+        expect(trusted, isTrue);
+        expect(executable, '/usr/bin/codesign');
+        expect(arguments, [
+          '--verify',
+          '--strict',
+          '--verbose=2',
+          '--test-requirement',
+          macosAgentPublisherRequirement,
+          '/tmp/sanad-agent-candidate',
+        ]);
+        expect(
+          macosAgentPublisherRequirement,
+          allOf(
+            contains('anchor apple generic'),
+            contains('certificate leaf[subject.OU] = "UC2824B99G"'),
+            contains('Developer ID Application: NanoSoft LY LLC (UC2824B99G)'),
+            isNot(contains('notarized')),
+          ),
+        );
+      },
+    );
+
+    test('fails closed when the publisher requirement is rejected', () async {
+      final trusted = await verifyPlatformCodeSignature(
+        File('/tmp/untrusted-agent-candidate'),
+        'macos',
+        processRunner: (_, _) async => ProcessResult(1, 3, '', 'rejected'),
+      );
+
+      expect(trusted, isFalse);
+    });
+  });
+
   group('AgentUpdateService', () {
     late Directory temporaryDirectory;
 

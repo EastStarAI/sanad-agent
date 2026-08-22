@@ -65,6 +65,13 @@ alternative.
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
 | Client Web | analyzer, startup contract test, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
 
+For raw macOS Agent installation, runtime verification must accept the exact
+Apple-anchored NanoSoft Developer ID requirement (Team ID `UC2824B99G`) after
+size and SHA-256 verification, reject any signature or publisher mismatch, and
+must not depend on `spctl --type execute` or the local `=notarized` ticket cache.
+Release CI remains the authority for accepted notarization and exact ticket
+architecture/`cdhash` matching.
+
 Windows 11 evidence follows the dedicated
 [Windows Release Clean-Machine Validation](windows_release_clean_machine.md)
 procedure. Its harness downloads the private validation-only candidate, pins
