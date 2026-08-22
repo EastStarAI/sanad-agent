@@ -19,6 +19,14 @@ void main() {
       expect(posix, contains('service install'));
       expect(posix, contains('service restart'));
       expect(posix, contains('SERVICE_WAS_RUNNING'));
+      expect(posix, contains('anchor apple generic'));
+      expect(posix, contains('certificate leaf[subject.OU] = "UC2824B99G"'));
+      expect(
+        posix,
+        contains('Developer ID Application: NanoSoft LY LLC (UC2824B99G)'),
+      );
+      expect(posix, isNot(contains("--test-requirement '=notarized'")));
+      expect(posix, isNot(contains('spctl --assess --type execute')));
 
       expect(windows, contains('[string]\$PairingToken'));
       expect(windows, contains('[switch]\$Login'));

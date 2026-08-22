@@ -148,7 +148,7 @@ void main() {
     expect(File(target).readAsBytesSync(), bytes);
   });
 
-  test('macOS rejects an invalid Developer ID or notarization result', () async {
+  test('macOS keeps the existing agent when publisher trust fails', () async {
     final bytes = utf8.encode('candidate');
     final artifactFile = File('${temporaryDirectory.path}/candidate')..writeAsBytesSync(bytes);
     final manifest = _manifest(
