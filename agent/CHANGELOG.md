@@ -1,3 +1,8 @@
+## 1.0.6
+
+- Hardened macOS Agent runtime trust verification to enforce Developer ID publisher requirements (#105).
+- Strengthened installer pairing contract guards and release manifest verification (#105).
+
 ## 1.0.5
 
 - Upgraded macOS Keychain backend to Apple `SecItem` API, sanitized auth storage serialization, and automated CLI PATH configuration (#102).

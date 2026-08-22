@@ -1020,7 +1020,7 @@ packages:
       path: "../release/contract"
       relative: true
     source: path
-    version: "1.0.5"
+    version: "1.0.6"
   screen_retriever:
     dependency: transitive
     description:
