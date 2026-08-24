@@ -53,6 +53,12 @@ alternative.
 
 ## Platform matrix
 
+Until `flutter/flutter#185394` is fixed in a stable Flutter engine and passes a
+macOS foreground/resize soak, the macOS Client release must set
+`FLTEnableImpeller` to `false` in its resolved application `Info.plist`. Release
+verification must inspect the built `.app`, not only the source plist, so a
+build-setting override cannot silently re-enable the affected Metal path.
+
 | Target | Local evidence | Hosted or clean-machine evidence still required |
 |---|---|---|
 | Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification, accepted notary log with exact architecture/`cdhash` ticket match | both hosted runners, clean install, real upgrade and rollback |
