@@ -85,6 +85,18 @@ void main() {
     expect(titleBar, contains('WindowManagerService.toggleMaximized'));
   });
 
+  test('macOS deployment disables Impeller while the upstream crash remains unresolved', () {
+    final infoPlist = File('macos/Runner/Info.plist').readAsStringSync();
+
+    final releaseScript = File(
+      'release/macos/build_macos_dmg.sh',
+    ).readAsStringSync();
+
+    expect(infoPlist, contains('<key>FLTEnableImpeller</key>\n\t<false/>'));
+    expect(releaseScript, contains("-c 'Print :FLTEnableImpeller'"));
+    expect(releaseScript, contains(r'if [ "$IMPELLER_SETTING" != "false" ]'));
+  });
+
   test('supported native runners enforce the same minimum dimensions', () {
     final macOS = File('macos/Runner/MainFlutterWindow.swift').readAsStringSync();
     final windows = File('windows/runner/win32_window.cpp').readAsStringSync();
