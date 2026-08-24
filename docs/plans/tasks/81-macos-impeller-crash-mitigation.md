@@ -12,7 +12,7 @@ path for installed macOS users.
 - [x] **G2 — Regression Contract:** Add a focused source-level test that fails if the deployment opt-out is removed accidentally.
 - [x] **G3 — Documentation:** Record the temporary macOS release invariant and the condition for re-enabling Impeller.
 - [x] **G4 — Local Verification:** Pass the focused test and Flutter static analysis.
-- [ ] **G5 — Delivery:** Open a focused pull request, require hosted checks to pass, and merge it through the protected repository workflow.
+- [x] **G5 — Hosted PR Verification:** Open a focused pull request and require all hosted checks to pass before merge.
 - [ ] **G6 — Post-Merge Soak and Release:** Before preparing a patch release, run the macOS Client for approximately one day across resize, compact/restore, background/foreground, and sleep/wake transitions without recurrence.
 
 ## Acceptance Criteria
