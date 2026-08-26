@@ -28,6 +28,7 @@ This directory owns the technical specifications of "HOW" the system is structur
 - **[Web Search Runtime](web_search_runtime.md):** Daemon-owned providers, DuckDuckGo redirect normalization, fallback behavior, and SSRF filtering.
 - **[Message Turn Replay Protocol](message_turn_replay_protocol.md):** Latest-turn identity, replay safety confirmation, authoritative idle boundary, history replacement, and route payload contract.
 - **[Run Cancellation and Process Ownership](run_cancellation_and_process_ownership.md):** Run-scoped Stop, provider/tool interruption, process containment, bounded cleanup, and live/history terminal parity.
+- **[Multimodal Tool Results and View Image](multimodal_tool_results_and_view_image.md):** Typed text/image tool results, secure workspace image loading, provider translation, durability, pruning, and binary-safety boundaries.
 - **[Background Terminal Task Runtime](background_terminal_task_runtime.md):** Durable task ownership, atomic shell handoff, PTY supervision, cursor replay, typed wake admission, secure input, and lifecycle recovery.
 - **[Remote Workspace Folder Mutation Protocol](workspace_folder_mutation_protocol.md):** Daemon-owned create, rename, and recursive-delete commands used by the remote workspace picker, including validation and failure semantics.
 - **[Workspace Identity, Rename, and Change Path Protocol](workspace_identity_protocol.md):** Stable UUID identity, missing-folder projection, scoped Settings routing, display rename, and path repair.

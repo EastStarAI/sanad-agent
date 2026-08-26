@@ -55,6 +55,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 
 - [خارطة محرك ومنطق الوكلاء](docs/agent_engine/MOC.md): فهرس وخارطة وثائق منطق وهندسة الوكلاء، سجل الأوامر النظامية، ومواصفات أدوات الذكاء الاصطناعي.
 - [Capability Runtime Architecture](docs/agent_engine/capability_runtime.md): Architecture of tool specifications, runtime catalog assembly, permissions, MCP, workspace/web services, skills, and platform tools.
+- [Multimodal Tool Results and View Image](docs/technical/multimodal_tool_results_and_view_image.md): Provider-neutral rich tool-result, workspace image loading, provider translation, durability, and binary-safety contract.
 - [Codex Responses Runtime Design](docs/agent_engine/codex_responses_runtime_design.md): تصميم codec وحالة الاستمرارية والبث والاستكمال لمحول Codex Responses في Sanad.
 - [LLM Adapter Runtime Contract](docs/agent_engine/llm_adapter_runtime_contract.md): عقد خيارات طلب النموذج، reasoning القابل للعرض، وحالة المزود اللازمة للاستكمال.
 - [خارطة العمليات والأتمتة والنشر](docs/operations/MOC.md): فهرس وخارطة وثائق مسارات الأتمتة n8n، إعدادات الحاويات Docker، ومخططات النشر والتشغيل.
@@ -89,6 +90,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [MCP Server Configuration QA](docs/qa_maintenance/mcp_server_configuration_qa.md): Security, form, import/export, OAuth, lifecycle, and regression checks for daemon-owned MCP server configuration.
 - [SEC-01E Mobile OAuth Callback QA](docs/qa_maintenance/mobile_oauth_callback_qa.md): Regression and physical-device gates for PKCE callback delivery through Android App Links and iOS Universal Links.
 - [Memory Tool Reliability QA](docs/qa_maintenance/memory_tool_reliability.md): Regression matrix for compact memory results, atomic batches, file safety, bounded recovery, and frozen prompt snapshots.
+- [View Image Tool QA](docs/qa_maintenance/view_image_tool_qa.md): Regression matrix for image loading, multimodal tool results, provider codecs, restart recovery, and binary safety.
 - [Message Edit and Retry QA Matrix](docs/qa_maintenance/message_edit_retry_qa.md): Quality Assurance matrix and test cases for the message edit and retry flow.
 - [Mobile Session and Resume Recovery QA](docs/qa_maintenance/mobile_session_resume_recovery_qa.md): Regression matrix for typed refresh outcomes, foreground resume, stale cache continuity, and authoritative conversation resynchronization.
 - [OAuth Recipient Binding QA](docs/qa_maintenance/oauth_recipient_binding_qa.md): Public Client and Agent regression matrix for S256 PKCE, exact callback ownership, P-256 Device Authorization, and Gateway nonce proof.
