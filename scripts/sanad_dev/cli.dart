@@ -134,7 +134,10 @@ void main(List<String> args) async {
   }
 
   if (command == 'status') {
-    await handleRuntimeStatus(portOverride: portOverride);
+    await handleRuntimeStatus(
+      portOverride: portOverride,
+      sanadHomePath: sanadHomePath,
+    );
     return;
   }
 
@@ -197,7 +200,11 @@ void main(List<String> args) async {
     }
   } else if (command == 'restart') {
     if (target == 'client') {
-      await handleClientAttachAction('R', portOverride); // R = Hot Restart
+      await handleClientAttachAction(
+        'R',
+        portOverride,
+        sanadHomePath: sanadHomePath,
+      ); // R = Hot Restart
     } else if (target == 'agent') {
       if (restartTimeoutSeconds < 1 || restartTimeoutSeconds > 3600) {
         stderr.writeln('--timeout must be between 1 and 3600 seconds.');
@@ -208,6 +215,7 @@ void main(List<String> args) async {
         portOverride,
         force: forceRestart,
         timeoutSeconds: restartTimeoutSeconds,
+        sanadHomePath: sanadHomePath,
       );
     } else {
       print('Unknown target: $target. Supported targets: client, agent');
@@ -215,7 +223,11 @@ void main(List<String> args) async {
     }
   } else if (command == 'reload') {
     if (target == 'client') {
-      await handleClientAttachAction('r', portOverride); // r = Hot Reload
+      await handleClientAttachAction(
+        'r',
+        portOverride,
+        sanadHomePath: sanadHomePath,
+      ); // r = Hot Reload
     } else {
       print('Unknown target: $target. Supported targets: client');
       exit(1);
