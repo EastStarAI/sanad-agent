@@ -57,8 +57,9 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
-	<!-- General Sanad application deep link. OAuth callbacks remain restricted
-	     to the claimed HTTPS Universal Links in Runner.entitlements. -->
+	<!-- General Sanad application deep link. Profile and Release OAuth callbacks
+	     remain restricted to claimed HTTPS Universal Links; iOS Debug may use the
+	     exact Development-only callback enforced by the Client and Portal. -->
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
