@@ -5,6 +5,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart'
 import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
+import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
@@ -121,6 +122,33 @@ class SessionRecoveryRestorer {
             fromState: SessionWorkState.running,
             toState: SessionWorkState.waiting,
           );
+          continue;
+        }
+
+        if (checkpointKind ==
+            ContinuationCheckpointCoordinator
+                .checkpointKindModelRequestInFlight) {
+          _logger.warning(
+            'Provider request outcome is unknown for work item '
+            '${running.workItemId}; blocking automatic replay.',
+          );
+          store.transitionWorkItemState(
+            workItemId: running.workItemId,
+            fromState: SessionWorkState.running,
+            toState: SessionWorkState.blocked,
+          );
+          if (getIt.isRegistered<RuntimeRecoveryService>()) {
+            getIt<RuntimeRecoveryService>().reportFailure(
+              sessionId: sessionId,
+              reason: RuntimeFailureReason.unknown,
+              requestId: running.requestId,
+              providerInstanceId: running.providerInstanceId,
+              title: 'Provider request was interrupted',
+              message:
+                  'The provider request outcome is unknown and it will not be sent again automatically. Retry, change provider, or stop the session.',
+              forceBlocked: true,
+            );
+          }
           continue;
         }
 

@@ -132,6 +132,78 @@ void main() {
   );
 
   test(
+    'provider-only timeout cancels the request and permits restart without force',
+    () async {
+      int? exitCode;
+      final blocker = const ControlledRestartBlocker(
+        sessionId: 'provider-session',
+        toolCallIds: [],
+        checkpointRecognized: true,
+        providerRequestInFlight: true,
+      );
+      final orchestrator = _BoundaryOrchestrator(
+        result: ControlledRestartCheckpointResult(
+          isSafe: false,
+          blockers: [blocker],
+        ),
+      );
+      final coordinator = DaemonRestartCoordinator(
+        sessionOrchestrator: orchestrator,
+        exitDaemon: (code) => exitCode = code,
+      );
+
+      final preparation = await coordinator.prepareRestart(
+        timeout: const Duration(seconds: 7),
+      );
+
+      expect(preparation.accepted, isTrue);
+      expect(preparation.force, isFalse);
+      expect(preparation.outcome, 'provider_requests_interrupted');
+      expect(orchestrator.interruptedBlockers, [blocker]);
+      expect(orchestrator.drainCancelled, isFalse);
+      expect(exitCode, isNull);
+
+      await coordinator.completePreparedRestart(preparation);
+      expect(exitCode, 0);
+    },
+  );
+
+  test(
+    'mixed provider and tool timeout remains rejected without force',
+    () async {
+      final orchestrator = _BoundaryOrchestrator(
+        result: const ControlledRestartCheckpointResult(
+          isSafe: false,
+          blockers: [
+            ControlledRestartBlocker(
+              sessionId: 'provider-session',
+              toolCallIds: [],
+              checkpointRecognized: true,
+              providerRequestInFlight: true,
+            ),
+            ControlledRestartBlocker(
+              sessionId: 'tool-session',
+              toolCallIds: ['unsafe-tool'],
+              checkpointRecognized: true,
+            ),
+          ],
+        ),
+      );
+      final coordinator = DaemonRestartCoordinator(
+        sessionOrchestrator: orchestrator,
+        exitDaemon: (_) {},
+      );
+
+      final preparation = await coordinator.prepareRestart();
+
+      expect(preparation.accepted, isFalse);
+      expect(preparation.outcome, 'timeout');
+      expect(orchestrator.interruptedBlockers, isEmpty);
+      expect(orchestrator.drainCancelled, isTrue);
+    },
+  );
+
+  test(
     'concurrent restart is rejected until active preparation completes',
     () async {
       final coordinator = DaemonRestartCoordinator(
@@ -269,6 +341,14 @@ class _BoundaryOrchestrator extends SessionRunOrchestrator {
   bool drainStarted = false;
   bool drainCancelled = false;
   bool stopAllRequested = false;
+  final List<ControlledRestartBlocker> interruptedBlockers = [];
+
+  @override
+  Future<void> interruptProviderRequestsForRestart(
+    Iterable<ControlledRestartBlocker> blockers,
+  ) async {
+    interruptedBlockers.addAll(blockers);
+  }
 
   @override
   Future<void> requestStopAll() async {

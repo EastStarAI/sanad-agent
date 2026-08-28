@@ -64,9 +64,20 @@ class AgentRunner {
   int _currentTurnStartIndex = 0;
   bool _stopRequested = false;
   bool _allowManualAmbiguousToolRecovery = false;
+  bool _providerRequestInFlight = false;
   Completer<void>? _restartDrainRelease;
 
   bool get stopRequested => _stopRequested;
+  bool get providerRequestInFlight => _providerRequestInFlight;
+
+  void markProviderResponseTerminalCommitted() {
+    _settleProviderRequest();
+  }
+
+  void _settleProviderRequest() {
+    _checkpointCoordinator.markModelRequestSettled(ctx: _checkpointCtx);
+    _providerRequestInFlight = false;
+  }
 
   /// Allows one explicit user recovery command to continue past an ambiguous
   /// non-idempotent tool without replaying its side effect. Automatic startup
@@ -97,6 +108,7 @@ class AgentRunner {
 
   void requestStop() {
     _stopRequested = true;
+    _providerRequestInFlight = false;
     cancelControlledRestartDrain();
   }
 
@@ -1017,12 +1029,25 @@ class AgentRunner {
     while (true) {
       try {
         final route = _turnRoute.routeForTurn();
-        response = await route.adapter.generateResponse(
-          effectiveHistory,
-          tools: tools,
-          modelOverride: route.modelOverride,
-          options: _requestOptionsForTurn(provider),
+        await _waitForControlledRestartDrain();
+        if (_stopRequested) return Message(role: MessageRole.assistant);
+        _checkpointCoordinator.saveCheckpoint(
+          ctx: _checkpointCtx,
+          checkpointKind: ContinuationCheckpointCoordinator
+              .checkpointKindModelRequestInFlight,
+          resumeHistoryLength: history.length,
         );
+        _providerRequestInFlight = true;
+        try {
+          response = await route.adapter.generateResponse(
+            effectiveHistory,
+            tools: tools,
+            modelOverride: route.modelOverride,
+            options: _requestOptionsForTurn(provider),
+          );
+        } finally {
+          if (_stopRequested) _providerRequestInFlight = false;
+        }
         _lastSuccessfulLlmRoute = LLMRouteSnapshot(
           adapter: _providerAdapterForBackground(route.adapter),
           providerInstanceId: provider,
@@ -1031,6 +1056,7 @@ class AgentRunner {
         _clearResumingOnProviderProgress();
         break;
       } catch (e) {
+        _settleProviderRequest();
         _turnRoute.invalidateResolvedRoute();
         if (LLMRequestDumper.isEnabled) {
           await LLMRequestDumper.recordError(e);
@@ -1087,10 +1113,9 @@ class AgentRunner {
       await pluginManager.runPostExecution(responseMessage);
       _saveHistory();
     }
-
     if (responseMessage.toolCalls?.isNotEmpty ?? false) {
       final toolCalls = responseMessage.toolCalls!;
-      await _waitForControlledRestartDrain();
+      _settleProviderRequest();
       await _toolExecutionCoordinator.executeToolCalls(
         toolCalls,
         parallel: shouldParallelizeToolBatch(toolCalls),
@@ -1104,6 +1129,7 @@ class AgentRunner {
     }
 
     if (_steerCoordinator.hasPendingSteers) {
+      _settleProviderRequest();
       _steerCoordinator.markLastAssistantSupersededBySteer(
         _RunnerSteerCallbacks(this),
       );
@@ -1118,12 +1144,16 @@ class AgentRunner {
 
     if (responseMessage.finishReason == LLMFinishReason.incomplete &&
         continuation.claimIncompleteContinuation()) {
+      _settleProviderRequest();
       return await _getNextResponse(
         runtimeSystemPrompt: runtimeSystemPrompt,
         continuation: continuation,
       );
     }
 
+    if (_authoritativeRunId == null) {
+      markProviderResponseTerminalCommitted();
+    }
     _logger.info('🏁 [Agent] Final Answer: ${responseMessage.content ?? ''}');
     return responseMessage;
   }
@@ -1365,55 +1395,68 @@ class AgentRunner {
       if (_stopRequested) return;
       try {
         final route = _turnRoute.routeForTurn();
-        await for (final response in route.adapter.generateStream(
-          effectiveHistory,
-          tools: tools,
-          modelOverride: route.modelOverride,
-          options: _requestOptionsForTurn(provider),
-        )) {
-          if (_stopRequested) return;
-          _clearResumingOnProviderProgress();
-          // Any provider event makes a transparent retry unsafe: reasoning,
-          // metadata, or a partial tool call may already be visible or carry
-          // state even when no final-content text has arrived yet.
-          streamStarted = true;
-          _updateMetrics(response);
-          lastMessage = response.message;
-          if (response.finishReason != LLMFinishReason.unknown) {
-            finishReason = response.finishReason;
-          }
-          if (response.message.toolCalls?.isNotEmpty ?? false) {
-            isToolCall = true;
-            accumulatedToolCalls ??= [];
-            accumulatedToolCalls.addAll(response.message.toolCalls!);
-          }
+        await _waitForControlledRestartDrain();
+        if (_stopRequested) return;
+        _checkpointCoordinator.saveCheckpoint(
+          ctx: _checkpointCtx,
+          checkpointKind: ContinuationCheckpointCoordinator
+              .checkpointKindModelRequestInFlight,
+          resumeHistoryLength: history.length,
+        );
+        _providerRequestInFlight = true;
+        try {
+          await for (final response in route.adapter.generateStream(
+            effectiveHistory,
+            tools: tools,
+            modelOverride: route.modelOverride,
+            options: _requestOptionsForTurn(provider),
+          )) {
+            if (_stopRequested) return;
+            _clearResumingOnProviderProgress();
+            // Any provider event makes a transparent retry unsafe: reasoning,
+            // metadata, or a partial tool call may already be visible or carry
+            // state even when no final-content text has arrived yet.
+            streamStarted = true;
+            _updateMetrics(response);
+            lastMessage = response.message;
+            if (response.finishReason != LLMFinishReason.unknown) {
+              finishReason = response.finishReason;
+            }
+            if (response.message.toolCalls?.isNotEmpty ?? false) {
+              isToolCall = true;
+              accumulatedToolCalls ??= [];
+              accumulatedToolCalls.addAll(response.message.toolCalls!);
+            }
 
-          if (response.message.thought != null) {
-            final thoughtDelta = response.message.thought!;
-            thought = (thought ?? '') + thoughtDelta;
-            if (thoughtDelta.isNotEmpty && onThoughtDelta != null) {
-              await onThoughtDelta(thoughtDelta);
+            if (response.message.thought != null) {
+              final thoughtDelta = response.message.thought!;
+              thought = (thought ?? '') + thoughtDelta;
+              if (thoughtDelta.isNotEmpty && onThoughtDelta != null) {
+                await onThoughtDelta(thoughtDelta);
+              }
+            }
+            if (response.message.reasoning != null) {
+              final reasoningDelta = response.message.reasoning!;
+              reasoning = (reasoning ?? '') + reasoningDelta;
+              if (reasoningDelta.isNotEmpty && onReasoningDelta != null) {
+                await onReasoningDelta(reasoningDelta);
+              }
+            }
+            if (response.message.providerState != null) {
+              providerState = response.message.providerState;
+            }
+            if (response.message.metadata != null) {
+              accumulatedMessageMetadata.addAll(response.message.metadata!);
+            }
+
+            final chunk = response.message.content ?? '';
+            fullContent += chunk;
+            if (chunk.isNotEmpty) {
+              yield chunk;
             }
           }
-          if (response.message.reasoning != null) {
-            final reasoningDelta = response.message.reasoning!;
-            reasoning = (reasoning ?? '') + reasoningDelta;
-            if (reasoningDelta.isNotEmpty && onReasoningDelta != null) {
-              await onReasoningDelta(reasoningDelta);
-            }
-          }
-          if (response.message.providerState != null) {
-            providerState = response.message.providerState;
-          }
-          if (response.message.metadata != null) {
-            accumulatedMessageMetadata.addAll(response.message.metadata!);
-          }
-
-          final chunk = response.message.content ?? '';
-          fullContent += chunk;
-          if (chunk.isNotEmpty) {
-            yield chunk;
-          }
+        } finally {
+          if (_stopRequested) _providerRequestInFlight = false;
         }
         _lastSuccessfulLlmRoute = LLMRouteSnapshot(
           adapter: _providerAdapterForBackground(route.adapter),
@@ -1423,6 +1466,7 @@ class AgentRunner {
         if (_stopRequested) return;
         break;
       } catch (e) {
+        _settleProviderRequest();
         _turnRoute.invalidateResolvedRoute();
         if (LLMRequestDumper.isEnabled) {
           await LLMRequestDumper.recordError(e);
@@ -1491,11 +1535,10 @@ class AgentRunner {
         await pluginManager.runPostExecution(assistantMessage);
         _saveHistory();
       }
-
       if (isToolCall && assistantMessage.toolCalls != null) {
         if (_stopRequested) return;
         final toolCalls = assistantMessage.toolCalls!;
-        await _waitForControlledRestartDrain();
+        _settleProviderRequest();
         if (_stopRequested) return;
         await _toolExecutionCoordinator.executeToolCalls(
           toolCalls,
@@ -1515,6 +1558,7 @@ class AgentRunner {
         );
       } else {
         if (_steerCoordinator.hasPendingSteers) {
+          _settleProviderRequest();
           _steerCoordinator.markLastAssistantSupersededBySteer(
             _RunnerSteerCallbacks(this),
           );
@@ -1534,6 +1578,7 @@ class AgentRunner {
         }
         if (assistantMessage.finishReason == LLMFinishReason.incomplete &&
             continuation.claimIncompleteContinuation()) {
+          _settleProviderRequest();
           yield* _streamNextResponse(
             runtimeSystemPrompt: runtimeSystemPrompt,
             onToolEvent: onToolEvent,
@@ -1543,6 +1588,9 @@ class AgentRunner {
             onReasoningDelta: onReasoningDelta,
           );
           return;
+        }
+        if (_authoritativeRunId == null) {
+          _settleProviderRequest();
         }
         _logger.info('🏁 [Agent] Final Answer: $fullContent');
       }
@@ -1560,7 +1608,11 @@ class AgentRunner {
       await pluginManager.notifyMessage(assistantMessage);
       await pluginManager.runPostExecution(assistantMessage);
       _saveHistory();
+      if (_authoritativeRunId == null) {
+        _settleProviderRequest();
+      }
       if (_steerCoordinator.hasPendingSteers) {
+        _settleProviderRequest();
         _steerCoordinator.markLastAssistantSupersededBySteer(
           _RunnerSteerCallbacks(this),
         );

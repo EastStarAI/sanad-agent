@@ -22,6 +22,8 @@ import 'deferred_tool_result.dart';
 /// All public methods are no-ops when no `PersistedRuntimeStateRepository` is
 /// registered in DI (e.g. isolated unit tests that don't test durability).
 class ContinuationCheckpointCoordinator {
+  static const String checkpointKindModelRequestInFlight =
+      'model_request_in_flight';
   static const String checkpointKindInitialModelRequest =
       'initial_model_request';
   static const String checkpointKindAfterToolResult = 'after_tool_result';
@@ -79,6 +81,12 @@ class ContinuationCheckpointCoordinator {
       meta['model_step_id'] = ctx.currentModelStepId;
     }
     if (checkpointKind != null) {
+      if (checkpointKind == checkpointKindModelRequestInFlight &&
+          meta['checkpoint_kind'] != checkpointKindModelRequestInFlight) {
+        meta['checkpoint_before_model_request'] = meta['checkpoint_kind'];
+      } else if (checkpointKind != checkpointKindModelRequestInFlight) {
+        meta.remove('checkpoint_before_model_request');
+      }
       meta['checkpoint_kind'] = checkpointKind;
     }
     if (resumeHistoryLength != null) {
@@ -141,6 +149,39 @@ class ContinuationCheckpointCoordinator {
       meta['tool_replay_safety'] = replaySafety;
     }
 
+    repo.transitionWorkItemState(
+      workItemId: activeItem.workItemId,
+      fromState: activeItem.state,
+      toState: activeItem.state,
+      continuationMetadata: meta,
+    );
+  }
+
+  /// Restores the checkpoint that owned progression before the provider call.
+  ///
+  /// This is valid after either a durable provider response or a known request
+  /// failure. A restart-timeout interruption keeps the in-flight marker so its
+  /// unknown provider outcome cannot be mistaken for replay-safe work.
+  void markModelRequestSettled({required CheckpointContext ctx}) {
+    final repo = _repo;
+    if (repo == null) return;
+    final activeItem = repo.findActiveWorkItem(sessionId);
+    if (activeItem == null) return;
+    final meta = Map<String, dynamic>.from(activeItem.continuationMetadata);
+    if (meta['checkpoint_kind'] != checkpointKindModelRequestInFlight ||
+        meta['restart_interrupted_provider_request'] == true) {
+      return;
+    }
+    final previousKind = meta
+        .remove('checkpoint_before_model_request')
+        ?.toString();
+    meta['checkpoint_kind'] = previousKind == checkpointKindAfterToolResult
+        ? checkpointKindAfterToolResult
+        : checkpointKindInitialModelRequest;
+    meta['currentTurnStartIndex'] = ctx.currentTurnStartIndex;
+    if (ctx.currentModelStepId != null) {
+      meta['model_step_id'] = ctx.currentModelStepId;
+    }
     repo.transitionWorkItemState(
       workItemId: activeItem.workItemId,
       fromState: activeItem.state,

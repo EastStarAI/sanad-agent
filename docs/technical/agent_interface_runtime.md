@@ -49,10 +49,21 @@ side effect.
 Controlled restart establishes a global drain across every active session.
 New turns are queued durably, while queued successors, restored work, retries,
 and automatic resumes cannot claim execution until the drain is cancelled or
-the replacement process restores them.
+the replacement process restores them. A provider request already in flight is
+a restart blocker: the daemon waits for it to complete and persist. If every
+remaining blocker at timeout is a provider request, the daemon revalidates the
+exact work-item, run, and generation owner before cancelling that stream,
+records blocked recovery, and proceeds with restart. A stale timeout snapshot
+cannot cancel a request that already completed. Startup never replays an
+interrupted request automatically. The durable `model_request_in_flight` marker
+makes an unexpected crash or forced exit fail closed rather than silently
+replaying an unknown provider outcome; a definitive live failure such as rate
+limit restores the preceding safe checkpoint and retains its normal recovery
+policy. Retry or Change Provider is explicit.
 The default safety timeout is 60 seconds and callers may provide
-`timeout_seconds` between 1 and 3600. A timeout fails without exiting unless
-`force=true` was explicitly supplied.
+`timeout_seconds` between 1 and 3600. A provider-only timeout follows the
+bounded cancellation policy above. Any other timeout fails without exiting
+unless `force=true` was explicitly supplied.
 
 The restart endpoint emits one response. For ordinary callers it waits until
 all active work is restart-safe, flushes the success response, then exits. If

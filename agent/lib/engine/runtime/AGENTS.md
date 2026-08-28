@@ -18,7 +18,7 @@ This contract applies to `agent/lib/engine/runtime/`.
 ## Continuation Checkpoints
 - `ContinuationCheckpointCoordinator` owns checkpoint schema and read/write orchestration for the active work item.
 - Receive history/current-turn values through an immutable context and return restored values; do not own them.
-- Persist checkpoint kind, completed results, executing tools, replay safety, model step, and owner identity.
+- Persist checkpoint kind, completed results, executing tools, replay safety, model step, and owner identity. A provider invocation is durably marked `model_request_in_flight` until its response is saved or the live process receives a definitive request failure; known failures restore the previous safe checkpoint, while startup blocks a genuinely interrupted unknown outcome instead of replaying it automatically.
 - Persist sequential tool completion and executing-marker removal together.
 - A typed deferred tool result may keep one non-idempotent tool executing only
   when its requester-bound descriptor is durable. Startup resolves that
