@@ -1,7 +1,7 @@
 ---
 title: "Plan 50: Run-Scoped Cancellation and Stop Parity"
 description: "خطة مظلة لجعل Stop يقطع طلبات المزود والأدوات والعمليات الفرعية فورًا، ويثبت terminal events متطابقة بين البث الحي والتاريخ المستعاد."
-status: "pending"
+status: "complete"
 priority: "critical"
 related_to: "Plan 54 durable background terminal tasks and session wakeups"
 reference_grounding: "required for tasks 50a-50f"
@@ -11,7 +11,7 @@ reference_grounding: "required for tasks 50a-50f"
 
 ## 1. الحالة والهدف
 
-- الحالة: `pending` — الخطة جاهزة للمراجعة قبل بدء 50a.
+- الحالة: `complete` — Plan 50 مغلق على فرع التجميع `feat/plan-50-run-cancellation`.
 - الأولوية: حرجة؛ الخلل قد يترك session في `stopping` وعمليات خارجية orphan.
 - النطاق: Sanad Agent runtime، provider transports، tool execution، shell process trees، canonical events، وFlutter conversation projection.
 - أسلوب التنفيذ: خطة مظلة تنجز عبر المهام `50a` إلى `50f` في `docs/plans/tasks/`.
@@ -79,7 +79,7 @@ Stop accepted
 | 50c Tool/Shell Cancellation | `complete` | closed | 14 | اكتمال 50a |
 | 50d Terminal Event Durability | `complete` | closed | 14 | اكتمال 50a و50c |
 | 50e Client Live/History Parity | `complete` | closed | 14 | اكتمال 50d |
-| 50f Integration QA | `pending` | Waiting | 10 | اكتمال 50b–50e |
+| 50f Integration QA | `complete` | closed | 10 | اكتمال 50b–50e |
 
 ## 2. قرارات التصميم الحاكمة
 

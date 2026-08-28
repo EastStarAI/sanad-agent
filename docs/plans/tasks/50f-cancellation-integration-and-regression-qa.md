@@ -1,8 +1,8 @@
 ---
 title: "Task 50f: Cancellation Integration and Regression QA"
 description: "إغلاق اختبارات النظام الحقيقي للإلغاء عبر المزود والأدوات والعميل والتعافي، وتوثيق نتائج Plan 50 النهائية."
-status: "pending"
-current_gate: "Waiting for 50b-50e"
+status: "complete"
+current_gate: "F4 complete"
 priority: "high"
 depends_on: "50b, 50c, 50d, 50e"
 file_budget: 10
