@@ -27,7 +27,8 @@ Allow any Debug iOS build targeting Development—including Simulator and physic
 - [x] Preserve claimed HTTPS callbacks for non-Debug builds.
 - [x] Add focused selection, callback, and platform contract tests.
 - [x] Pass formatting, analysis, and focused tests.
-- [ ] Merge the private Portal registration and complete a real Development login.
+- [x] Merge the private Portal registration and pin the merged public Client commit.
+- [ ] Complete a real Development login from an iOS Debug build.
 
 ## Definition of Done
 
