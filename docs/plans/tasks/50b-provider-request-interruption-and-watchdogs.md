@@ -1,8 +1,8 @@
 ---
 title: "Task 50b: Provider Request Interruption and Watchdogs"
 description: "جعل اتصالات المزود قابلة للقطع بالـrun cancellation أثناء connect/send/SSE مع timeouts مرحلية ومنع retry بعد user stop."
-status: "pending"
-current_gate: "Waiting for 50a"
+status: "complete"
+current_gate: "closed"
 priority: "critical"
 depends_on: "50a"
 file_budget: 14
@@ -17,82 +17,87 @@ design_contract: "docs/technical/run_cancellation_and_process_ownership.md"
 
 قطع طلب المزود فورًا عند Stop سواء كان معلقًا قبل headers أو أثناء stream، دون إغلاق طلبات جلسات أخرى أو تصنيف الإلغاء كفشل شبكة قابل لإعادة المحاولة.
 
+### قاعدة التسليم
+
+- التنفيذ داخل worktree معزول على فرع تجميعي `feat/plan-50-run-cancellation`.
+- لا دمج على `main` حتى اكتمال Plan 50 بالكامل (50a–50f) والتحقق النهائي.
+
 ## Gate R0 — External Reference Grounding
 
-- [ ] حل `evidence_id` عبر workflow التأصيل الخارجي والتحقق من freshness.
-- [ ] قراءة implementations والاختبارات الإلزامية وتسجيل مصفوفة
+- [x] حل `evidence_id` عبر workflow التأصيل الخارجي والتحقق من freshness.
+- [x] قراءة implementations والاختبارات الإلزامية وتسجيل مصفوفة
       `Adopt / Adapt / Reject` محلية ومحايدة المصدر.
-- [ ] تحويل القرارات المقبولة إلى invariants واختبارات صريحة لهذه المهمة.
-- [ ] عند غياب الحزمة أو قدمها، تشغيل authoring/refresh حتى تصبح `ready`.
-- [ ] عدم بدء B0 قبل `ready`؛ لا تسجل `blocked` إلا لمانع غير قابل للتعافي.
+- [x] تحويل القرارات المقبولة إلى invariants واختبارات صريحة لهذه المهمة.
+- [x] عند غياب الحزمة أو قدمها، تشغيل authoring/refresh حتى تصبح `ready`.
+- [x] عدم بدء B0 قبل `ready`؛ لا تسجل `blocked` إلا لمانع غير قابل للتعافي.
 
 ### R0 Exit
 
-- [ ] سجل التأصيل يحمل fingerprint والرموز والاختبارات المتحققة والقرارات.
-- [ ] لا يحتوي أي ملف متتبع هوية المصدر الخارجي أو مساره؛ يبقى العقد سلوكيًا.
+- [x] سجل التأصيل يحمل fingerprint والرموز والاختبارات المتحققة والقرارات.
+- [x] لا يحتوي أي ملف متتبع هوية المصدر الخارجي أو مساره؛ يبقى العقد سلوكيًا.
 
 ## 2. Gate B0 — Transport ownership contract
 
-- [ ] تحديد request-owned cancel handle يستهلك `RunCancellationScope` من options.
-- [ ] منع إغلاق HTTP client مشتركة بين runs.
-- [ ] تعريف exception/result typed للإلغاء اليدوي منفصل عن timeout/network.
-- [ ] تثبيت مراحل watchdog: connect/headers، first byte، stream idle، وtotal الاختيارية.
+- [x] تحديد request-owned cancel handle يستهلك `RunCancellationScope` من options.
+- [x] منع إغلاق HTTP client مشتركة بين runs.
+- [x] تعريف exception/result typed للإلغاء اليدوي منفصل عن timeout/network.
+- [x] تثبيت مراحل watchdog: connect/headers، first byte، stream idle، وtotal الاختيارية.
 
 ### B0 Exit
 
-- [ ] كل adapter تستطيع قطع request واحدة دون التأثير على غيرها.
-- [ ] قيم watchdog مركزية وقابلة للتهيئة وليست literals موزعة.
+- [x] كل adapter تستطيع قطع requestًا دون التأثير على غيرها.
+- [x] قيم watchdog مركزية وقابلة للتهيئة وليست literals موزعة.
 
 ## 3. Gate B1 — OpenAI-compatible وCodex Responses
 
-- [ ] قطع `send` المعلقة عند cancellation.
-- [ ] قطع SSE byte stream عند cancellation أو stream-idle timeout.
-- [ ] ضمان إغلاق transport في success/error/cancel paths.
-- [ ] منع request dump أو accumulated response المتأخر من تغيير run الملغاة.
-- [ ] الحفاظ على provider state semantics في Codex Responses.
+- [x] قطع `send` المعلقة عند cancellation.
+- [x] قطع SSE byte stream عند cancellation أو stream-idle timeout.
+- [x] ضمان إغلاق transport في success/error/cancel paths.
+- [x] منع request dump أو accumulated response المتأخر من تغيير run الملغاة.
+- [x] الحفاظ على provider state semantics في Codex Responses.
 
 ### B1 Exit
 
-- [ ] fake transport قبل headers وأثناء SSE ينتهي فور Stop.
-- [ ] cancellation لا تتحول إلى retry أو runtime network notice.
+- [x] fake transport قبل headers وأثناء SSE ينتهي فور Stop.
+- [x] cancellation لا تتحول إلى retry أو runtime network notice.
 
 ## 4. Gate B2 — Anthropic-compatible وOllama
 
-- [ ] تطبيق نفس transport contract دون تكرار منطق cancellation.
-- [ ] توحيد parsing behavior الحالي مع إغلاق stream الآمن.
-- [ ] التأكد من أن inherited/overridden paths كلها تستهلك scope.
+- [x] تطبيق نفس transport contract دون تكرار منطق cancellation.
+- [x] توحيد parsing behavior الحالي مع إغلاق stream الآمن.
+- [x] التأكد من أن inherited/overridden paths كلها تستهلك scope.
 
 ### B2 Exit
 
-- [ ] جميع adapters الإنتاجية تتبع العقد نفسه.
-- [ ] adapter لا تدعم الإلغاء لا يمكن تسجيلها صامتًا كproduction-ready.
+- [x] جميع adapters الإنتاجية تتبع العقد نفسه.
+- [x] adapter لا تدعم الإلغاء لا يمكن تسجيلها صامتًا كproduction-ready.
 
 ## 5. Gate B3 — Recovery/rate-limit integration
 
-- [ ] دمج cancel token الحالي للـrate-limit مع scope الموحدة أو تفويضه لها.
-- [ ] منع auto retry/failover بعد `userStop`.
-- [ ] إبقاء network retry المشروع مستقلًا عن cancellation.
-- [ ] رفض أي progress متأخر لا تملكه run الحالية.
+- [x] دمج cancel token الحالي للـrate-limit مع scope الموحدة أو تفويضه لها.
+- [x] منع auto retry/failover بعد `userStop`.
+- [x] إبقاء network retry المشروع مستقلًا عن cancellation.
+- [x] رفض أي progress متأخر لا تملكه run الحالية.
 
 ### B3 Exit
 
-- [ ] user stop لا يولد provider recovery notice جديدة.
-- [ ] rate-limit waits القديمة لا تستأنف run ملغاة.
+- [x] user stop لا يولد provider recovery notice جديدة.
+- [x] rate-limit waits القديمة لا تستأنف run ملغاة.
 
 ## 6. Gate B4 — التحقق والتوثيق
 
-- [ ] اختبارات send لا تنتهي، headers بلا body، stream يتوقف، وlate chunk.
-- [ ] اختبار عزل طلبين متوازيين وإلغاء أحدهما فقط.
-- [ ] اختبارات adapters الحالية وprovider-state تمر دون تراجع.
-- [ ] تحديث engine contract وprovider/runtime QA.
+- [x] اختبارات send لا تنتهي، headers بلا body، stream يتوقف، وlate chunk.
+- [x] اختبار عزل طلبين متوازيين وإلغاء أحدهما فقط.
+- [x] اختبارات adapters الحالية وprovider-state تمر دون تراجع.
+- [x] تحديث engine contract وprovider/runtime QA.
 
 ### B4 Exit / Definition of Done
 
-- [ ] Stop يقطع كل provider path إنتاجية دون انتظار server response.
-- [ ] لا leak لاتصال ولا retry/failover بعد user cancellation.
-- [ ] Reference parity audit يثبت أن التنفيذ والاختبارات يحققان كل قرار
+- [x] Stop يقطع كل provider path إنتاجية دون انتظار server response.
+- [x] لا leak لاتصال ولا retry/failover بعد user cancellation.
+- [x] Reference parity audit يثبت أن التنفيذ والاختبارات يحققان كل قرار
       `Adopt/Adapt` مسجل، أو يعيد أي deviation إلى تصميم المهمة.
-- [ ] المهمة داخل file budget.
+- [x] المهمة داخل file budget.
 
 ## 7. الملفات المتوقعة
 
@@ -115,10 +120,13 @@ design_contract: "docs/technical/run_cancellation_and_process_ownership.md"
 ## 9. سجل التقدم
 
 ```text
-Date:
-Gate/status:
-Files changed:
-Verification:
-Findings:
-Next gate:
+Date: 2026-08-29
+Gate/status: complete / closed
+Files changed: ProviderRequestTransport + watchdogs + cancelled exception;
+  BaseOpenAI/Anthropic/Codex/Ollama + RateLimitedLLMAdapter + AgentRunner;
+  tests; engine AGENTS; provider_protocol; plan/task docs
+Verification: fvm dart analyze clean; provider_request_transport +
+  llm_request_options + run_cancellation_scope + adapters_test (50) passed
+Findings: none blocking
+Next gate: 50c
 ```

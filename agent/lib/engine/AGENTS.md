@@ -36,3 +36,4 @@ This contract applies to `agent/lib/engine/`.
 - `AgentRunner` attaches to the active scope for the authoritative turn and must not publish run-scoped output after scope invalidation.
 - `release()` on a registration handle is idempotent and removes a resource from future cleanup without cancelling it.
 - Stop acceptance invalidates publication synchronously; cleanup is parallel, bounded, and reports a typed terminal outcome.
+- Provider turns register request-owned HTTP transport on `RunCancellationScope`; shared adapter clients must not be closed by another run's cancellation.

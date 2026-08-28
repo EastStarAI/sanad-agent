@@ -15,6 +15,7 @@ import 'provider_profile.dart';
 import 'models_dev_service.dart';
 import 'llm_http_exception.dart';
 import 'llm_request_options.dart';
+import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 import '../llm_request_dumper.dart';
 
@@ -433,16 +434,20 @@ class BaseOpenAIAdapter implements LLMAdapter {
       );
     }
 
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     late http.Response response;
     try {
-      response = await _withTimeout(
-        httpClient.post(url, headers: headers, body: jsonEncode(body)),
-        options.timeout,
+      response = await transport.post(
+        url,
+        headers: headers,
+        body: jsonEncode(body),
+        operation: 'generateResponse',
       );
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
 
     _logger.info('LLM Response status: ${response.statusCode}');
@@ -508,8 +513,10 @@ class BaseOpenAIAdapter implements LLMAdapter {
   }) async* {
     final url = Uri.parse('$_baseUrl/chat/completions');
     final resolvedModel = _resolveModel(modelOverride);
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     final request = http.Request('POST', url);
     request.headers.addAll(_requestHeaders());
     final body = await _buildRequestBody(
@@ -531,9 +538,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
     request.body = jsonEncode(body);
     late http.StreamedResponse response;
     try {
-      response = await _withTimeout(httpClient.send(request), options.timeout);
+      response = await transport.send(request, operation: 'generateStream');
     } catch (_) {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
       rethrow;
     }
 
@@ -564,10 +571,11 @@ class BaseOpenAIAdapter implements LLMAdapter {
       var emittedProviderState = false;
 
       try {
-        await for (final line
-            in response.stream
-                .transform(utf8.decoder)
-                .transform(const LineSplitter())) {
+        await for (final line in transport.decodeSseLines(
+          response.stream,
+          operation: 'generateStream',
+        )) {
+          transport.throwIfCancelled(operation: 'generateStream');
           accumulatedStreamLines.add(line);
           if (line.trim().isEmpty) continue;
 
@@ -769,7 +777,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
         );
       }
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
   }
 

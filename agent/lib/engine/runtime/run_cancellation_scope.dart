@@ -103,6 +103,7 @@ class RunCancellationScope {
   RunCancellationReason? _reason;
   DateTime? _acceptedAt;
   RunCancellationReport? _report;
+  final Completer<void> _cancelledSignal = Completer<void>();
 
   final Map<String, _ResourceRegistration> _registrations = {};
   final Map<String, RunCancellationResourceReport> _resourceReports = {};
@@ -120,6 +121,9 @@ class RunCancellationScope {
   RunCancellationReason? get reason => _reason;
   RunCancellationReport? get report => _report;
 
+  /// Completes when publication is invalidated or cancel starts.
+  Future<void> get whenCancelled => _cancelledSignal.future;
+
   bool get isPublicationOpen =>
       _publicationOpen && _state == RunCancellationState.active;
 
@@ -133,6 +137,9 @@ class RunCancellationScope {
     _publicationOpen = false;
     _reason ??= reason;
     _acceptedAt ??= DateTime.now();
+    if (!_cancelledSignal.isCompleted) {
+      _cancelledSignal.complete();
+    }
   }
 
   /// Registers a cleanup callback. Late registration after cancellation starts

@@ -33,6 +33,7 @@ import 'history_healer.dart';
 import 'metrics_tracker.dart';
 import 'tool_concurrency_evaluator.dart';
 import 'adapters/llm_http_exception.dart';
+import 'adapters/provider_request_cancelled_exception.dart';
 import 'adapters/rate_limited_llm_adapter.dart';
 import 'adapters/provider_state_rejected_exception.dart';
 import 'runtime/continuation_checkpoint_coordinator.dart';
@@ -504,6 +505,7 @@ class AgentRunner {
       requestId: _turnRoute.turnRequestId,
       providerInstanceId: providerInstanceId,
       thinkingMode: _turnRoute.effectiveThinkingMode,
+      cancellationScope: _cancellationScope,
     );
   }
 
@@ -798,7 +800,7 @@ class AgentRunner {
     required bool streamStarted,
     required Set<String> failedProviderInstanceIds,
   }) async {
-    if (error is RateLimitCancelled) {
+    if (error is RateLimitCancelled || error is ProviderRequestCancelledException) {
       throw RuntimeRecoveryCancelled(sessionId);
     }
     final recovery = _recoveryService;
