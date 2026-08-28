@@ -16,6 +16,9 @@ Status: verified in aggregation branch `feat/plan-50-run-cancellation`
 | Scenario | Expected | Evidence |
 |---|---|---|
 | User Stop during provider hang | Request-owned transport closes; no retry | `provider_request_transport_test.dart` |
+| No first byte after headers | Stream fails with a typed timeout and cancels upstream | `provider_request_transport_test.dart` |
+| Stream stalls after data | Idle watchdog fails the stream instead of reporting normal completion | `provider_request_transport_test.dart` |
+| Active stream exceeds optional total bound | One total deadline spans connect and streaming | `provider_request_transport_test.dart` |
 | Cancelled scope | `ProviderRequestCancelledException` maps to recovery cancelled | `agent_runner.dart` |
 
 ## Tool / shell cancellation (50c)

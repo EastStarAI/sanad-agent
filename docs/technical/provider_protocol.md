@@ -371,7 +371,11 @@ through `ProviderRequestTransport`:
   failures. `AgentRunner` maps it to `RuntimeRecoveryCancelled` and must not
   start retry/failover.
 - Watchdog defaults live in `ProviderWatchdogConfig` (connect, first-byte, and
-  stream-idle bounds). A timeout is not treated as proof of cleanup by itself.
+  stream-idle bounds, plus an optional total bound). First-byte and idle
+  expiry fail the stream with `TimeoutException` and cancel its upstream
+  subscription; they never masquerade as a successful end-of-stream. The
+  optional total deadline spans connect and streaming rather than restarting
+  for each phase. A timeout is not treated as proof of cleanup by itself.
 - Rate-limit waits observe `RunCancellationScope.whenCancelled` in addition to
   the recovery cancel token, so Stop aborts a wait without inventing a network
   notice.
