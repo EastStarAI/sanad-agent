@@ -35,3 +35,5 @@ Snapshot output is a flat list of typed elements with optional key, text, hint, 
 The interface is available only in driver builds and is not shipped as a production remote-control endpoint. VM Service access is equivalent to development-process control and must remain local or explicitly tunneled by the operator. No Local Gateway credential is sent to the VM Service.
 
 The host CLI supports macOS, Windows, and Linux through Dart/FVM. Flutter platform support depends on the target exposing a reachable VM Service and launching the driver entry point; `sanad-dev` automatic discovery is limited to its managed worktree clients.
+
+The repository-level Dart analyzer excludes `scripts/flutter_driver_cli/` because that controller intentionally resolves Flutter Driver dependencies through the Client package configuration rather than a root Dart package. Its source remains covered through the explicit Client-configured CLI and focused test paths.

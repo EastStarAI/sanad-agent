@@ -36,7 +36,10 @@ description: "Regression matrix for completed-tool grouping, nested and timeline
 | Scroll isolation | Scroll inside an expanded tool/group while conversation follow is active | Inner controllers and follow state remain independent and never opt the outer conversation timeline in or out |
 | Isolation | Scroll the group and the timeline separately | Each controller and follow state changes independently |
 | Desktop header | Native desktop vs mobile/web | Compact control appears only on desktop and matches pin geometry; the macOS narrow drawer begins below native traffic lights |
-| Window bounds | Compact, restore, then manual minimum resize | Compact uses `500 × 874`, top-left origin is preserved, previous bounds restore, and resizing stops at `500 × 600` |
+| Window bounds | Compact, restore, then manual minimum resize | Compact uses `450 × 900`, previous expanded bounds restore, and resizing stops at `450 × 600` |
+| Window positions | Move expanded and compact modes to different screen coordinates, toggle repeatedly, then relaunch | Each mode restores its own last position; existing legacy `window_x/window_y` values seed the expanded position and the first compact position |
+| Compact menu-button hover | In native desktop compact-window mode, move the pointer from content onto the navigation menu button, into the drawer, then back to content | Menu-button entry opens the drawer; crossing between button and drawer does not close it; leaving both closes it after the short handoff delay |
+| Hover platform guard | Repeat at a narrow viewport on mobile/web or outside compact-window mode | Hover automation is absent; existing menu click/touch behavior remains authoritative |
 | Window state | Enlarge manually from compact mode | Compact state clears and both wide/narrow toggle icons update |
 | Composer focus | Open New Conversation, then click blank composer padding | Input starts focused and blank clicks restore focus without stealing button actions |
 | Composer file drop | Drop one or more files with a collapsed caret, an active selection, and an invalid selection | Paths insert at the caret, replace the selected range, preserve separator spacing, and fall back to the end only for invalid selection |
@@ -64,7 +67,8 @@ Run the client analyzer and these focused suites through FVM:
 2. Confirm the collapsed title uses the existing tool title color and component styling.
 3. Expand the group, verify the 500px cap, and exercise independent nested follow.
 4. Confirm an active ask-user question appears only in the composer and its completed answer has no generic header.
-5. Press the desktop phone-size button, verify `500 × 874` while the top-left origin stays fixed, then use the narrow-header button to restore the prior bounds.
-6. On macOS, confirm the narrow header's Menu and restore actions begin after the native traffic lights; open New Conversation and confirm both actions remain available there.
-7. Attempt to resize below the minimum on the current desktop platform.
-8. Send a new message while not at the full tail; verify only the user row is revealed, then verify subsequent streamed growth follows until manual upward scrolling.
+5. Move the expanded window, enter compact mode, move it elsewhere, then toggle twice and relaunch; verify each mode returns to its own saved position and compact remains `450 × 900`.
+6. While compact, hover only the navigation menu button, move into the opened drawer, then leave both; verify other app-bar areas do not open it, the drawer stays open during the button-to-drawer handoff, and it closes after exit.
+7. On macOS, confirm the narrow header's Menu and restore actions begin after the native traffic lights; open New Conversation and confirm both actions remain available there.
+8. Attempt to resize below the minimum on the current desktop platform.
+9. Send a new message while not at the full tail; verify only the user row is revealed, then verify subsequent streamed growth follows until manual upward scrolling.

@@ -25,7 +25,7 @@ void main() {
     expect(WindowManagerService.defaultWindowSize, const Size(1400, 900));
   });
 
-  test('compact bounds preserve the window top-left origin', () {
+  test('compact bounds preserve the current origin without a saved position', () {
     final bounds = WindowManagerService.compactBoundsFor(
       const Rect.fromLTWH(120, 80, 1400, 900),
     );
@@ -33,6 +33,16 @@ void main() {
     expect(bounds.left, 120);
     expect(bounds.top, 80);
     expect(bounds.size, const Size(450, 900));
+  });
+
+  test('compact bounds restore the independently saved compact position', () {
+    final bounds = WindowManagerService.compactBoundsFor(
+      const Rect.fromLTWH(120, 80, 1400, 900),
+      savedPosition: const Offset(680, 110),
+    );
+
+    expect(bounds.topLeft, const Offset(680, 110));
+    expect(bounds.size, WindowManagerService.compactWindowSize);
   });
 
   test('restore bounds preserves previous bounds when at least default window size', () {
@@ -65,6 +75,46 @@ void main() {
     expect(restored.left, 80);
     expect(restored.top, 40);
     expect(restored.size, WindowManagerService.defaultWindowSize);
+  });
+
+  test('restore bounds uses the independently saved expanded position after restart', () {
+    final restored = WindowManagerService.restoreBoundsFor(
+      null,
+      currentBounds: const Rect.fromLTWH(80, 40, 450, 900),
+      savedPosition: const Offset(40, 220),
+    );
+
+    expect(restored.topLeft, const Offset(40, 220));
+    expect(restored.size, WindowManagerService.defaultWindowSize);
+  });
+
+  test('window state declares separate compact and expanded position keys', () {
+    final service = File(
+      'lib/infrastructure/platform/window_manager_service.dart',
+    ).readAsStringSync();
+
+    expect(service, contains("'window_compact_x'"));
+    expect(service, contains("'window_compact_y'"));
+    expect(service, contains("'window_expanded_x'"));
+    expect(service, contains("'window_expanded_y'"));
+  });
+
+  test('compact desktop menu hover drawer is gated and tracks both hover regions', () {
+    final homeScreen = File(
+      'lib/features/home/presentation/screens/home_screen.dart',
+    ).readAsStringSync();
+
+    expect(
+      homeScreen,
+      contains('AppPlatform.isDesktop && !isDesktop && isCompactWindow'),
+    );
+    final headerActions = File(
+      'lib/features/conversations/presentation/widgets/conversation_header_actions.dart',
+    ).readAsStringSync();
+    expect(headerActions, contains("Key('conversation_menu_hover_region')"));
+    expect(homeScreen, contains("Key('compact_sidebar_hover_region')"));
+    expect(homeScreen, contains('_isMenuButtonHovered || _isDrawerHovered'));
+    expect(homeScreen, contains('scaffold!.closeDrawer()'));
   });
 
   test('custom caption tracks maximize and full-screen lifecycle events', () {

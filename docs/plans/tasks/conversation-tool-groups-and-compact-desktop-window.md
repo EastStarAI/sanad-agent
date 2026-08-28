@@ -27,8 +27,8 @@ Improve dense tool activity without weakening live conversation performance, fix
 - Group-scroll and timeline-scroll controllers/state are strictly independent.
 - Sending a new user message preserves the current minimal reveal behavior but grants timeline follow eligibility. Later streamed growth follows unless the user scrolls away; manually returning to the bottom restores follow.
 - The desktop-only compact-window button sits beside the sidebar pin button with the same 24px-class geometry.
-- The preferred compact size is `500 × 874` logical pixels, while the desktop minimum is `500 × 600`; the shared width remains the smallest supported by the responsive design, while the lower minimum height lets short desktop work areas resize safely.
-- The first compact toggle records the current normal window bounds and preserves its top-left `x/y`; resizing occurs only toward the right and bottom. The second restores the prior bounds. Maximized/full-screen state is exited safely before compacting, and manual enlargement clears compact mode so every compact/restore button updates.
+- The preferred compact size is `450 × 900` logical pixels, while the desktop minimum is `450 × 600`; the shared width remains the smallest supported by the responsive design, while the lower minimum height lets short desktop work areas resize safely.
+- Compact and expanded desktop modes persist independent `x/y` positions. The first compact toggle without a compact position inherits the current expanded origin; later toggles and relaunches restore each mode to its own last position. Legacy `window_x/window_y` preferences seed the expanded position during migration. Maximized/full-screen state is exited safely before compacting, and manual enlargement clears compact mode so every compact/restore button updates.
 - The compact/restore action remains visible in the narrow desktop conversation header beside the workspace/session identity after the wide sidebar header disappears.
 - A new-conversation composer requests focus on first presentation; clicking any non-control blank area of the composer focuses the text field.
 - Minimum-size enforcement applies in Dart and the native macOS, Windows, and Linux runners.
@@ -75,7 +75,7 @@ Improve dense tool activity without weakening live conversation performance, fix
 
 - [x] Add desktop-only compact/restore control beside sidebar pin.
 - [x] Add `WindowManagerService` compact/restore and saved-bounds behavior.
-- [x] Enforce the original `500 × 874` compact viewport in Dart and macOS/Windows/Linux native runners.
+- [x] Enforce the current `450 × 900` compact viewport in Dart and macOS/Windows/Linux native runners.
 - [x] Add service/widget/native contract tests where practical.
 
 ### G5 — Documentation, Verification, and Live Review
@@ -94,7 +94,7 @@ Improve dense tool activity without weakening live conversation performance, fix
 - [x] Remove collapsed group bodies from the widget tree and prevent cached metrics from replaying on scroll.
 - [x] Keep the aggregate operation/file/line summary only in the gray outer title, omit it from the expanded body, and place the chevron beside it.
 - [x] Collapse parallel running batches into a group plus only the latest standalone running tool.
-- [x] Preserve top-left window origin, adopt `500 × 874`, expose narrow-header restore, and reconcile manual enlargement.
+- [x] Preserve top-left window origin, adopt the compact viewport, expose narrow-header restore, and reconcile manual enlargement.
 - [x] Focus new-conversation input initially and focus it from blank composer clicks.
 - [x] Add focused regression coverage and pass analyzer/focused suites.
 - [x] Hot restart the client after the state-shape change and verify clean bounded startup logs.
@@ -152,6 +152,23 @@ Improve dense tool activity without weakening live conversation performance, fix
 - [x] Reduce expanded tool-group body padding to 4px horizontally and 8px vertically.
 - [x] Add focused widget regressions, update documentation, analyze the Client, refresh Graphify, and reload the main-worktree Client.
 
+### G13 — Independent Desktop Window Positions
+
+- [x] Persist separate compact and expanded `x/y` coordinates while retaining expanded dimensions.
+- [x] Restore the destination mode's saved position on toggle and on application relaunch.
+- [x] Migrate legacy `window_x/window_y` values without discarding an existing user position.
+- [x] Add focused bounds/persistence contract coverage and update product/QA documentation.
+- [x] Complete analyzer, focused tests, and Graphify refresh.
+
+### G14 — Compact Menu-Button Hover Sidebar
+
+- [x] Open the drawer when a desktop compact-window pointer enters the navigation menu button only.
+- [x] Keep the drawer open while the pointer is over either the menu button or drawer.
+- [x] Close the hover-opened drawer only after the pointer leaves both regions.
+- [x] Preserve click/touch drawer behavior outside native desktop compact mode.
+- [x] Add focused widget coverage, update product/QA docs, analyze, and refresh Graphify.
+- [x] User confirms the live compact menu-button → drawer → outside hover flow.
+
 ## Acceptance Criteria
 
 - [x] Given one completed/error tool, it renders with the existing standalone presentation; when a second contiguous completed/error tool arrives, both render as one collapsible group.
@@ -165,13 +182,15 @@ Improve dense tool activity without weakening live conversation performance, fix
 - [x] Scrolling the group never changes timeline follow state, and scrolling the timeline never changes group follow state.
 - [x] Given a stale running history row and a newer matching terminal live event, hydration retains the terminal status/output and the visible row updates immediately.
 - [x] Sending a user message performs only the existing minimal reveal, grants timeline follow eligibility, follows later streamed growth, and manual upward scrolling revokes follow until returning to bottom.
-- [x] On native desktop only, the compact button changes the window to `500 × 874` while preserving top-left origin; the narrow-header button restores prior bounds, and manual enlargement clears compact state.
-- [x] macOS, Windows, and Linux reject resize attempts below `500 × 600` while compact mode prefers `500 × 874`; mobile and web do not render the compact control or initialize desktop window APIs.
+- [x] On native desktop only, the compact button changes the window to the compact viewport; compact and expanded modes each restore their own last screen position, and manual enlargement clears compact state.
+- [x] macOS, Windows, and Linux reject resize attempts below `450 × 600` while compact mode prefers `450 × 900`; mobile and web do not render the compact control or initialize desktop window APIs.
 - [x] Focused automated tests prove grouping, aggregation, reconciliation, both scroll state machines, compact/restore intent, and platform guards.
 - [x] Given an active turn that waits, resumes, reconnects, or is reopened later, its execution snapshot and final response retain one accepted-turn origin and the visible timer resumes from a fresh elapsed baseline.
 - [x] Given an already-active conversation is opened, its current Activity and elapsed duration render on the first frame; only later Activity changes wait for the debounce.
 - [x] Given a tool group is expanded, its body uses 4px horizontal and 8px vertical internal padding.
 - [x] Given elapsed work below one hour, Activity shows seconds; at one hour or more it shows hours/minutes without visible second churn.
+- [x] Given different saved desktop coordinates for compact and expanded modes, toggling or relaunching and then selecting either mode restores that mode's own position without overwriting the other.
+- [x] Given native desktop compact-window mode, only menu-button hover opens the drawer, crossing into the drawer keeps it open, and leaving both closes it without changing mobile/web or click behavior.
 - [x] Given a desktop file drop at a caret or selection, paths insert at that selection, replace selected text, and leave the caret after the inserted paths.
 
 ## Definition of Done
@@ -181,7 +200,7 @@ Improve dense tool activity without weakening live conversation performance, fix
 - [x] Ask-user history has no generic tool header and never shows while running.
 - [x] Active-history hydration cannot regress a completed tool to running.
 - [x] Nested and timeline follow behavior pass independent regression tests.
-- [x] Desktop compact/restore preserves top-left origin and no supported desktop platform can resize below `500 × 600`.
+- [x] Desktop compact/restore persists independent compact and expanded positions; no supported desktop platform can resize below its native minimum.
 - [x] Analyzer and relevant tests pass; documentation and Graphify are current after final reload.
 - [x] No commit or push is performed without explicit user approval.
 
@@ -201,3 +220,5 @@ Improve dense tool activity without weakening live conversation performance, fix
 - 2026-08-16 — G10 short desktop minimum complete. Normal startup remains `1470 × 800`, compact mode uses `500 × 874`, and Dart plus all native runners enforce only `500 × 600` as the resize floor. Client analysis and 25 focused desktop-window/sidebar tests pass; Graphify is current. Implementation remaining: 0%; no commit or push performed.
 - 2026-08-16 — Group-title typography follow-up complete. All aggregate title text, including colored added/removed line metrics, now uses normal font weight. Six focused widget tests and client analysis pass; Graphify is current. Implementation remaining: 0%; no commit or push performed.
 - 2026-08-19 — G11/G12 copy and presentation follow-up complete. Grouped reads now say `file explore(s)`; modified-file and line totals wrap atomically; terminal headers distinguish `Running:` from `Ran:`; active-conversation Activity renders immediately on mount while later changes remain debounced; and expanded group content uses 4px horizontal/8px vertical padding. Twenty-three focused tests and Client analysis pass, Graphify is current, and the main-worktree Client was hot reloaded and reassembled. Implementation remaining: 0%; no commit or push performed.
+- 2026-08-28 — G13 complete. Desktop compact and expanded modes now persist separate screen coordinates, toggle into the destination mode's saved position, retain legacy expanded-position migration, and preserve the existing startup-size behavior. Thirteen focused window tests and Client analysis pass; product/QA docs and Graphify are current. Implementation remaining: 0%; no commit or push performed.
+- 2026-08-28 — G14 implementation complete. Native desktop compact mode now opens the drawer only from navigation-menu-button hover, preserves it across the button/drawer pointer handoff, and closes only after leaving both; other app-bar areas, platforms, and manual drawer behavior remain unchanged. Client analysis and 21 focused tests pass, Graphify is current, Hot Restart completed with clean startup logs, and the user approved the live behavior plus PR delivery. Remaining estimate: 0%; PR preparation authorized.

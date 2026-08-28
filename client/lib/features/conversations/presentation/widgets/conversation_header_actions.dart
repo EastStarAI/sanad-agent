@@ -10,10 +10,14 @@ import 'package:sanad_client/utils/app_platform.dart';
 /// application actions begin after that reserved platform-owned area.
 class ConversationHeaderActions extends StatelessWidget {
   final VoidCallback? onMenuPressed;
+  final VoidCallback? onMenuHoverEnter;
+  final VoidCallback? onMenuHoverExit;
 
   const ConversationHeaderActions({
     super.key,
     this.onMenuPressed,
+    this.onMenuHoverEnter,
+    this.onMenuHoverExit,
   });
 
   @override
@@ -35,19 +39,24 @@ class ConversationHeaderActions extends StatelessWidget {
           textDirection: TextDirection.ltr,
           children: [
             if (onMenuPressed != null)
-              IconButton(
-                key: const Key('conversation_header_menu_btn'),
-                icon: Icon(
-                  AppPlatform.isDesktop ? Symbols.dock_to_right : Icons.menu,
-                  size: AppPlatform.isDesktop ? 16 : null,
-                  color: AppPlatform.isDesktop
-                      ? theme.colorScheme.onSurface.withValues(alpha: 0.6)
-                      : theme.colorScheme.onSurface,
+              MouseRegion(
+                key: const Key('conversation_menu_hover_region'),
+                onEnter: (_) => onMenuHoverEnter?.call(),
+                onExit: (_) => onMenuHoverExit?.call(),
+                child: IconButton(
+                  key: const Key('conversation_header_menu_btn'),
+                  icon: Icon(
+                    AppPlatform.isDesktop ? Symbols.dock_to_right : Icons.menu,
+                    size: AppPlatform.isDesktop ? 16 : null,
+                    color: AppPlatform.isDesktop
+                        ? theme.colorScheme.onSurface.withValues(alpha: 0.6)
+                        : theme.colorScheme.onSurface,
+                  ),
+                  constraints: AppPlatform.isDesktop ? const BoxConstraints(minWidth: 24, minHeight: 24) : null,
+                  padding: AppPlatform.isDesktop ? EdgeInsets.zero : null,
+                  onPressed: onMenuPressed,
+                  tooltip: 'Open navigation menu',
                 ),
-                constraints: AppPlatform.isDesktop ? const BoxConstraints(minWidth: 24, minHeight: 24) : null,
-                padding: AppPlatform.isDesktop ? EdgeInsets.zero : null,
-                onPressed: onMenuPressed,
-                tooltip: 'Open navigation menu',
               ),
             if (onMenuPressed != null && AppPlatform.isDesktop) const SizedBox(width: 4),
             if (AppPlatform.isDesktop)
