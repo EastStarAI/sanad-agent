@@ -43,14 +43,18 @@ class BaseAnthropicAdapter implements LLMAdapter {
   }
 
   String get _baseUrl {
-    if (baseUrlOverride != null) return baseUrlOverride!;
-    final resolved = config.baseUrlFor(profile);
-    if (resolved.isNotEmpty &&
-        resolved != 'https://api.openai.com/v1' &&
-        resolved != 'https://api.anthropic.com/v1') {
-      return resolved;
-    }
-    return profile.defaultBaseUrl ?? 'https://api.anthropic.com';
+    final resolved = baseUrlOverride != null
+        ? baseUrlOverride!
+        : () {
+            final configured = config.baseUrlFor(profile);
+            if (configured.isNotEmpty &&
+                configured != 'https://api.openai.com/v1' &&
+                configured != 'https://api.anthropic.com/v1') {
+              return configured;
+            }
+            return profile.defaultBaseUrl ?? 'https://api.anthropic.com';
+          }();
+    return ProviderEndpointResolver.normalizeBaseUrl(resolved);
   }
 
   String get _apiKey => apiKeyOverride ?? config.apiKeyFor(profile);
@@ -89,10 +93,16 @@ class BaseAnthropicAdapter implements LLMAdapter {
 
   Future<List<ModelOption>> _fetchLiveModels() async {
     _lastModelsException = null;
-    final modelsEndpoint = ProviderEndpointResolver.resolveModelsEndpoint(
-      _baseUrl,
-      profile.effectiveProtocol,
-    );
+    final Uri modelsEndpoint;
+    try {
+      modelsEndpoint = ProviderEndpointResolver.resolveModelsEndpoint(
+        _baseUrl,
+        profile.effectiveProtocol,
+      );
+    } catch (error) {
+      _lastModelsException = error;
+      return const [];
+    }
     for (final headers in _modelFetchHeaderCandidates()) {
       try {
         final response = await (client ?? http.Client()).get(

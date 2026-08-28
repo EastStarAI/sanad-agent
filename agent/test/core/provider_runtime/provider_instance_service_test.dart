@@ -116,6 +116,33 @@ void main() {
       expect(inst.baseUrl, equals('https://gw.example.com/v1'));
     });
 
+    test('normalizes copied URL labels before persistence', () {
+      final inst = instanceService.create(
+        templateId: 'custom',
+        displayName: 'Cursor',
+        authMethod: ProviderAuthMethod.apiKey,
+        protocol: ProviderProtocol.openaiCompatible,
+        baseUrl: 'url https://api.cursor.com/v1/',
+      );
+
+      expect(inst.baseUrl, equals('https://api.cursor.com/v1'));
+    });
+
+    test('rejects invalid or unsupported base URLs', () {
+      for (final value in ['not a url', 'file:///tmp/models']) {
+        expect(
+          () => instanceService.create(
+            templateId: 'custom',
+            displayName: 'Invalid $value',
+            authMethod: ProviderAuthMethod.apiKey,
+            protocol: ProviderProtocol.openaiCompatible,
+            baseUrl: value,
+          ),
+          throwsFormatException,
+        );
+      }
+    });
+
     test('unknown template is rejected', () {
       expect(
         () => instanceService.create(

@@ -31,6 +31,32 @@ void main() {
         ProviderEndpointResolver.normalizeBaseUrl('http://localhost:11434///'),
         equals('http://localhost:11434'),
       );
+      expect(
+        ProviderEndpointResolver.normalizeBaseUrl(
+          'url https://api.cursor.com/v1',
+        ),
+        equals('https://api.cursor.com/v1'),
+      );
+    });
+
+    test('rejects malformed or unsupported base URLs', () {
+      for (final value in ['not a url', 'file:///tmp/models']) {
+        expect(
+          () => ProviderEndpointResolver.resolveOpenAiModelsEndpointCandidates(
+            value,
+          ),
+          throwsFormatException,
+        );
+      }
+    });
+
+    test('does not duplicate v1 in model endpoint candidates', () {
+      expect(
+        ProviderEndpointResolver.resolveOpenAiModelsEndpointCandidates(
+          'https://api.cursor.com/v1',
+        ).map((uri) => uri.toString()),
+        equals(['https://api.cursor.com/v1/models']),
+      );
     });
 
     test('resolves models endpoint', () {

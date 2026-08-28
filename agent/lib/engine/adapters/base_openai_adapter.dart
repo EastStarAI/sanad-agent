@@ -9,6 +9,7 @@ import '../../core/models/tool_call.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
 import '../../core/models/model_metadata.dart';
+import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 import '../../core/provider_runtime/provider_model_id.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
@@ -41,7 +42,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
     this.defaultModelOverride,
   });
 
-  String get _baseUrl => baseUrlOverride ?? config.baseUrlFor(profile);
+  String get _baseUrl => ProviderEndpointResolver.normalizeBaseUrl(
+    baseUrlOverride ?? config.baseUrlFor(profile),
+  );
   String get _apiKey => apiKeyOverride ?? config.apiKeyFor(profile);
 
   // Public accessors for subclasses (Strategy Pattern)
@@ -63,7 +66,15 @@ class BaseOpenAIAdapter implements LLMAdapter {
   @override
   Future<List<ModelOption>> getAvailableModels() async {
     _lastModelsException = null;
-    for (final url in _modelsEndpointCandidates()) {
+    final List<Uri> candidates;
+    try {
+      candidates = _modelsEndpointCandidates();
+    } catch (error) {
+      _lastModelsException = error;
+      _availableModelsSource = 'fallback';
+      return _fallbackModelOptions();
+    }
+    for (final url in candidates) {
       try {
         final response = await _get(
           url,
@@ -225,15 +236,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
   }
 
   List<Uri> _modelsEndpointCandidates() {
-    final normalized = _baseUrl.endsWith('/')
-        ? _baseUrl.substring(0, _baseUrl.length - 1)
-        : _baseUrl;
-    final primary = Uri.parse('$normalized/models');
-    final fallback = Uri.parse('$normalized/v1/models');
-    if (primary.toString() == fallback.toString()) {
-      return [primary];
-    }
-    return [primary, fallback];
+    return ProviderEndpointResolver.resolveOpenAiModelsEndpointCandidates(
+      _baseUrl,
+    );
   }
 
   String _formatModelLabel(String name) {
