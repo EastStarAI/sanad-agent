@@ -309,6 +309,42 @@ OPENROUTER_API_KEY=sk-or-test
     expect(first['models'], isA<List>());
   });
 
+  test(
+    'model.refresh emits failed after started for a refresh error',
+    () async {
+      final bridge = getIt<SanadProtocolBridge>();
+      final terminal = Completer<Map<String, dynamic>>();
+      final statuses = <String>[];
+
+      await bridge.handleCommand(
+        {
+          'command': 'model.refresh',
+          'payload': {
+            'request_id': 'req-refresh-failed',
+            'provider_instance_id': 'missing-instance',
+            'manual': true,
+          },
+          'device_id': 'test-device',
+          'hardware_id': 'test-hw',
+        },
+        (envelope) async {
+          final payload = (envelope['payload'] as Map).cast<String, dynamic>();
+          final status = payload['status']?.toString();
+          if (status == null) return;
+          statuses.add(status);
+          if (status == 'failed' && !terminal.isCompleted) {
+            terminal.complete(payload);
+          }
+        },
+      );
+
+      final failed = await terminal.future.timeout(const Duration(seconds: 1));
+      expect(statuses, equals(['started', 'failed']));
+      expect(failed['request_id'], equals('req-refresh-failed'));
+      expect(failed['error'], contains('Instance not found'));
+    },
+  );
+
   test('provider.runtime_check returns readiness with request_id', () async {
     final repo = getIt<ProviderInstanceRepository>();
     final secretStore = getIt<SecretStore>();
