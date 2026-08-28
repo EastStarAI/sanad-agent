@@ -1,35 +1,36 @@
 /// Canonical terminal status for one tool call.
-enum ToolTerminalStatus {
-  running,
-  done,
-  error,
-  cancelled,
-}
+enum ToolTerminalStatus { running, done, error, cancelled }
 
 /// Shared payload for live tool events and durable checkpoint/history records.
 class ToolTerminalRecord {
+  final String sessionId;
   final String toolCallId;
   final String toolName;
   final String runId;
+  final String? modelStepId;
   final int generation;
   final int revision;
   final ToolTerminalStatus status;
   final String reason;
   final String message;
   final bool isError;
+  final DateTime startedAt;
   final DateTime terminalAt;
   final String? cleanupOutcome;
 
   const ToolTerminalRecord({
+    required this.sessionId,
     required this.toolCallId,
     required this.toolName,
     required this.runId,
+    this.modelStepId,
     required this.generation,
     required this.revision,
     required this.status,
     required this.reason,
     required this.message,
     required this.isError,
+    required this.startedAt,
     required this.terminalAt,
     this.cleanupOutcome,
   });
@@ -37,26 +38,33 @@ class ToolTerminalRecord {
   static const cancelledMessage = 'Command cancelled by user.';
 
   factory ToolTerminalRecord.cancelled({
+    required String sessionId,
     required String toolCallId,
     required String toolName,
     required String runId,
+    String? modelStepId,
     required int generation,
     int? revision,
     String reason = 'user_stop',
     String message = cancelledMessage,
     String? cleanupOutcome,
+    DateTime? startedAt,
   }) {
+    final terminalAt = DateTime.now().toUtc();
     return ToolTerminalRecord(
+      sessionId: sessionId,
       toolCallId: toolCallId,
       toolName: toolName,
       runId: runId,
+      modelStepId: modelStepId,
       generation: generation,
       revision: revision ?? DateTime.now().microsecondsSinceEpoch,
       status: ToolTerminalStatus.cancelled,
       reason: reason,
       message: message,
       isError: true,
-      terminalAt: DateTime.now().toUtc(),
+      startedAt: startedAt?.toUtc() ?? terminalAt,
+      terminalAt: terminalAt,
       cleanupOutcome: cleanupOutcome,
     );
   }
@@ -65,6 +73,7 @@ class ToolTerminalRecord {
     required Map<String, dynamic> arguments,
   }) {
     return {
+      'session_id': sessionId,
       'tool_call_id': toolCallId,
       'tool_name': toolName,
       'arguments': arguments,
@@ -74,8 +83,10 @@ class ToolTerminalRecord {
       'status': status.name,
       'reason': reason,
       'run_id': runId,
+      if (modelStepId != null) 'model_step_id': modelStepId,
       'generation': generation,
       'revision': revision,
+      'started_at': startedAt.toIso8601String(),
       'terminal_at': terminalAt.toIso8601String(),
       if (cleanupOutcome != null) 'cleanup_outcome': cleanupOutcome,
     };
@@ -83,6 +94,7 @@ class ToolTerminalRecord {
 
   Map<String, dynamic> toHistoryMetadata({String? modelStepId}) {
     return {
+      'session_id': sessionId,
       'tool_call_id': toolCallId,
       'run_id': runId,
       'generation': generation,
@@ -90,8 +102,9 @@ class ToolTerminalRecord {
       'status': status.name,
       'reason': reason,
       'is_error': isError,
+      'started_at': startedAt.toIso8601String(),
       'terminal_at': terminalAt.toIso8601String(),
-      'model_step_id': ?modelStepId,
+      'model_step_id': ?(modelStepId ?? this.modelStepId),
       'cleanup_outcome': ?cleanupOutcome,
     };
   }
@@ -108,9 +121,11 @@ class ToolTerminalRecord {
           : ToolTerminalStatus.done,
     );
     return ToolTerminalRecord(
+      sessionId: raw['session_id']?.toString() ?? '',
       toolCallId: toolCallId,
       toolName: raw['tool_name']?.toString() ?? 'unknown_tool',
       runId: raw['run_id']?.toString() ?? '',
+      modelStepId: raw['model_step_id']?.toString(),
       generation: raw['generation'] is int
           ? raw['generation'] as int
           : int.tryParse(raw['generation']?.toString() ?? '') ?? 0,
@@ -121,7 +136,12 @@ class ToolTerminalRecord {
       reason: raw['reason']?.toString() ?? '',
       message: raw['result']?.toString() ?? '',
       isError: raw['is_error'] == true,
-      terminalAt: DateTime.tryParse(raw['terminal_at']?.toString() ?? '') ??
+      startedAt:
+          DateTime.tryParse(raw['started_at']?.toString() ?? '') ??
+          DateTime.tryParse(raw['terminal_at']?.toString() ?? '') ??
+          DateTime.now().toUtc(),
+      terminalAt:
+          DateTime.tryParse(raw['terminal_at']?.toString() ?? '') ??
           DateTime.now().toUtc(),
       cleanupOutcome: raw['cleanup_outcome']?.toString(),
     );

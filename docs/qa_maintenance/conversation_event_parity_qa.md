@@ -33,7 +33,7 @@ All items share one `run_id`. The three assistant segments have distinct `model_
 14. A late steer completes the pre-steer running row as a visible thought before the steer continuation starts, and history hydration reproduces the same order.
 15. Running thought Markdown is exercised through the progressive renderer in widget tests; tests do not silently replace it with the completed-document renderer.
 16. Live and history tool execution events maintain identical error status parity (a tool failing with an error in the live run is hydrated as a tool error event in history).
-17. User Stop during a running tool publishes `tool_result.status = cancelled` live and hydrates the same status after reload; `stopped` defensively closes any same-run tool that missed the terminal packet without leaving a spinner.
+17. User Stop during a running tool publishes `tool_result.status = cancelled` live and hydrates the same run/generation/revision, reason, cleanup outcome, start time, and terminal time after reload; repeated Stop or late success does not add a second terminal revision, and `stopped` defensively closes any same-run tool that missed the terminal packet without leaving a spinner.
 
 ## Automated ownership
 

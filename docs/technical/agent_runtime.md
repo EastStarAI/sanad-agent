@@ -536,11 +536,17 @@ calls `release()` so a later Stop cannot target a reused PID.
 
 Stop terminalizes every `currently_executing_tools` entry into one
 `ToolTerminalRecord` with `status: cancelled` before emitting `stopped`.
-`ToolTerminalizationService` persists the canonical payload to checkpoint and
-session history, then `SessionRunOrchestrator` publishes matching
-`tool_result` events with `isToolCancelled`.
+`ToolTerminalizationService` submits the canonical checkpoint output and tool
+history message to `SessionExecutionStateCoordinator`, which validates the
+exact work item, run, generation, and non-terminal tool state and commits both
+records in one SQLite transaction. Only records returned as newly committed
+are appended to live runner history and published by `SessionRunOrchestrator`.
+Repeated calls, a stale owner, or a tool that already has a terminal result are
+no-ops and do not mint another revision.
 
-Late tool completions consult `_lockedCancelledResult` in
-`ToolExecutionCoordinator` so a cancelled terminal cannot be replaced by a
-timeout/success race. History hydration exposes the same `status` field used by
-live canonical events.
+The execution checkpoint records each tool's start time when its executing
+marker is created. Cancellation persists that time together with terminal
+time, revision, reason, and cleanup outcome. Late tool completions are consumed
+behind the synchronously closed publication gate and cannot reach checkpoint or
+history writes. Live translation and history hydration expose the same durable
+terminal identity fields.

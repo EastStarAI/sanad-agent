@@ -59,6 +59,7 @@ class AgentToCanonical {
       };
     } else if (response.isToolResult) {
       type = 'tool_result';
+      final terminalMetadata = response.message.metadata;
       payload = {
         'tool': response.toolName,
         'output': response.message.content,
@@ -69,6 +70,18 @@ class AgentToCanonical {
         if (response.runId != null) 'run_id': response.runId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,
         if (response.toolCallId != null) 'tool_call_id': response.toolCallId,
+        if (terminalMetadata?['generation'] != null)
+          'generation': terminalMetadata!['generation'],
+        if (terminalMetadata?['revision'] != null)
+          'revision': terminalMetadata!['revision'],
+        if (terminalMetadata?['reason'] != null)
+          'reason': terminalMetadata!['reason'],
+        if (terminalMetadata?['started_at'] != null)
+          'started_at': terminalMetadata!['started_at'],
+        if (terminalMetadata?['terminal_at'] != null)
+          'terminal_at': terminalMetadata!['terminal_at'],
+        if (terminalMetadata?['cleanup_outcome'] != null)
+          'cleanup_outcome': terminalMetadata!['cleanup_outcome'],
       };
     } else if (response.isComplete) {
       type = CanonicalEventTypes.finalAnswer;

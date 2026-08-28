@@ -672,4 +672,12 @@ A model step begins before each LLM invocation. Deltas merge only within that st
 
 `tool_use` also carries the `model_step_id` that produced the call and closes that thought projection as completed. An active-run `stopped` event carries `run_id + model_step_id`; the client removes only that unfinished projection. Recovery-only Stop may omit `model_step_id` and must preserve every stored thought because it has no active model projection to cancel.
 
+A cancelled `tool_result` is published only after its durable owner transaction
+commits. Live delivery and `get_session_history` both expose the same
+`tool_call_id`, `run_id`, `model_step_id`, `generation`, `revision`, `status`,
+`reason`, `started_at`, `terminal_at`, and optional `cleanup_outcome`. Repeated
+Stop or a late success/timeout cannot advance the revision or replace that
+terminal. The event envelope keeps the session and opaque event identities;
+the payload does not duplicate tool output in `content`.
+
 `get_session_history` emits these same identities and ordering. Legacy rows without a model-step identity use deterministic message/segment order. Canonical history is consumed directly and is never converted through a legacy model that requires numeric IDs; route-transition UUIDs therefore remain valid.

@@ -213,6 +213,18 @@ class SessionQueryHandler {
             'model_step_id': resolvedToolContext.modelStepId,
           if (resolvedToolContext.toolCallId != null)
             'tool_call_id': resolvedToolContext.toolCallId,
+          if (message.metadata?['generation'] != null)
+            'generation': message.metadata!['generation'],
+          if (message.metadata?['revision'] != null)
+            'revision': message.metadata!['revision'],
+          if (message.metadata?['reason'] != null)
+            'reason': message.metadata!['reason'],
+          if (message.metadata?['started_at'] != null)
+            'started_at': message.metadata!['started_at'],
+          if (message.metadata?['terminal_at'] != null)
+            'terminal_at': message.metadata!['terminal_at'],
+          if (message.metadata?['cleanup_outcome'] != null)
+            'cleanup_outcome': message.metadata!['cleanup_outcome'],
           'created_at': msgTime,
           'session_id': sessionId,
         });

@@ -500,17 +500,21 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         );
       }
     }
-    if (activeRun != null) {
+    if (activeRun != null && activeRun.workItemId != null) {
+      final cleanupReport = activeRun.cancellationScope.report;
       final terminalRecords =
           ToolTerminalizationService(
             repository: persistedState,
-            sessionManager: getIt<SessionManager>(),
           ).terminalizeExecutingTools(
             sessionId: sessionId,
             agentRunner: activeRun.agentRunner,
+            workItemId: activeRun.workItemId!,
             runId: activeRun.runId,
             generation: activeRun.generation,
             modelStepId: stoppedModelStepId,
+            cleanupOutcome:
+                cleanupReport?.finalState.name ??
+                activeRun.cancellationScope.state.name,
           );
       for (final record in terminalRecords) {
         _emitResponse(

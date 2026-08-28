@@ -31,5 +31,5 @@ This contract applies to `agent/lib/interfaces/`.
   per-turn capability runtime for both local and cloud-origin turns.
 
 ## Run Cancellation
-- `requestStop` terminalizes executing tools through `ToolTerminalizationService` before emitting `stopped`.
-- Canonical `tool_result` events expose `status: cancelled` for durable terminal parity with history hydration.
+- `requestStop` terminalizes executing tools through an owner-validated durable transaction before emitting `stopped`.
+- Canonical cancelled `tool_result` events and history hydration expose the same run/generation/revision, reason, cleanup outcome, and start/terminal timestamps.

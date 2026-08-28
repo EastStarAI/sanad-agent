@@ -135,8 +135,22 @@ class ContinuationCheckpointCoordinator {
     if (currentlyExecutingToolCallIds != null &&
         currentlyExecutingToolCallIds.isNotEmpty) {
       meta['currently_executing_tools'] = currentlyExecutingToolCallIds;
+      final startedAt = Map<String, dynamic>.from(
+        meta['tool_started_at'] as Map? ?? const {},
+      );
+      final now = DateTime.now().toUtc().toIso8601String();
+      for (final toolCallId in currentlyExecutingToolCallIds) {
+        startedAt.putIfAbsent(toolCallId, () => now);
+      }
+      startedAt.removeWhere(
+        (toolCallId, _) => !currentlyExecutingToolCallIds.contains(toolCallId),
+      );
+      meta['tool_started_at'] = startedAt;
     } else {
       meta.remove('currently_executing_tools');
+      if (currentlyExecutingToolCallIds != null) {
+        meta.remove('tool_started_at');
+      }
     }
 
     final replaySafety = Map<String, dynamic>.from(
