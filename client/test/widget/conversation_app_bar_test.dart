@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -103,6 +104,46 @@ void main() {
       alignment.transform.getTranslation().y,
       AppPlatform.isMacOS ? SidebarBreakpoints.macOSHeaderActionsVerticalOffset : 0,
     );
+  });
+
+  testWidgets('compact menu button reports pointer entry and exit', (tester) async {
+    var enterCount = 0;
+    var exitCount = 0;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Align(
+            alignment: Alignment.topCenter,
+            child: SizedBox(
+              height: 80,
+              child: ConversationAppBar(
+                sessionTitle: 'Conversation',
+                isMobile: true,
+                onMenuPressed: () {},
+                onMenuHoverEnter: () => enterCount += 1,
+                onMenuHoverExit: () => exitCount += 1,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: const Offset(400, 400));
+    await gesture.moveTo(
+      tester.getCenter(
+        find.byKey(const Key('conversation_menu_hover_region')),
+      ),
+    );
+    await tester.pump();
+    expect(enterCount, 1);
+    expect(exitCount, 0);
+
+    await gesture.moveTo(const Offset(400, 400));
+    await tester.pump();
+    expect(exitCount, 1);
+    await gesture.removePointer();
   });
 
   testWidgets('app bar applies RTL text direction for Arabic titles in desktop layout', (

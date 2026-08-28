@@ -9,12 +9,13 @@ import 'package:window_manager/window_manager.dart';
 
 import 'sidebar/sidebar_composition.dart';
 
-class ConversationAppBar extends StatelessWidget
-    implements PreferredSizeWidget {
+class ConversationAppBar extends StatelessWidget implements PreferredSizeWidget {
   final String? sessionTitle;
   final DeviceWorkspace? workspace;
   final bool isMobile;
   final VoidCallback? onMenuPressed;
+  final VoidCallback? onMenuHoverEnter;
+  final VoidCallback? onMenuHoverExit;
 
   const ConversationAppBar({
     super.key,
@@ -22,6 +23,8 @@ class ConversationAppBar extends StatelessWidget
     this.workspace,
     this.isMobile = false,
     this.onMenuPressed,
+    this.onMenuHoverEnter,
+    this.onMenuHoverExit,
   });
 
   @override
@@ -42,9 +45,7 @@ class ConversationAppBar extends StatelessWidget
           filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
           child: Container(
             padding: EdgeInsets.only(
-              top: alignsWithMacOSTitleBar
-                  ? 3
-                  : MediaQuery.of(context).padding.top + 8,
+              top: alignsWithMacOSTitleBar ? 3 : MediaQuery.of(context).padding.top + 8,
               left: alignsWithMacOSTitleBar ? 0 : (isMobile ? 4 : 16),
               right: 16,
               bottom: 8,
@@ -56,9 +57,7 @@ class ConversationAppBar extends StatelessWidget
                 color: theme.colorScheme.outline.withValues(alpha: 0.3),
               ),
             ),
-            child: isMobile
-                ? _buildMobileLayout(theme)
-                : _buildDesktopLayout(theme),
+            child: isMobile ? _buildMobileLayout(theme) : _buildDesktopLayout(theme),
           ),
         ),
       ),
@@ -81,12 +80,8 @@ class ConversationAppBar extends StatelessWidget
   Widget _buildDesktopLayout(ThemeData theme) {
     final hasWorkspace = workspace != null;
     final titleDirection = TextUtils.getTextDirection(sessionTitle);
-    final workspaceDirection = hasWorkspace
-        ? TextUtils.getTextDirection(workspace!.name)
-        : TextDirection.ltr;
-    final isRtl =
-        titleDirection == TextDirection.rtl ||
-        workspaceDirection == TextDirection.rtl;
+    final workspaceDirection = hasWorkspace ? TextUtils.getTextDirection(workspace!.name) : TextDirection.ltr;
+    final isRtl = titleDirection == TextDirection.rtl || workspaceDirection == TextDirection.rtl;
 
     return Row(
       // textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
@@ -134,32 +129,28 @@ class ConversationAppBar extends StatelessWidget
 
   Widget _buildMobileLayout(ThemeData theme) {
     final titleDirection = TextUtils.getTextDirection(sessionTitle);
-    final workspaceDirection = workspace != null
-        ? TextUtils.getTextDirection(workspace!.name)
-        : TextDirection.ltr;
-    final isRtl =
-        titleDirection == TextDirection.rtl ||
-        workspaceDirection == TextDirection.rtl;
+    final workspaceDirection = workspace != null ? TextUtils.getTextDirection(workspace!.name) : TextDirection.ltr;
+    final isRtl = titleDirection == TextDirection.rtl || workspaceDirection == TextDirection.rtl;
 
     return Row(
       textDirection: TextDirection.ltr,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        ConversationHeaderActions(onMenuPressed: onMenuPressed),
+        ConversationHeaderActions(
+          onMenuPressed: onMenuPressed,
+          onMenuHoverEnter: onMenuHoverEnter,
+          onMenuHoverExit: onMenuHoverExit,
+        ),
         const SizedBox(width: 4),
         Expanded(
           child: Column(
-            crossAxisAlignment: isRtl
-                ? CrossAxisAlignment.end
-                : CrossAxisAlignment.start,
+            crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
                 sessionTitle ?? 'Conversation',
                 textDirection: titleDirection,
-                textAlign: titleDirection == TextDirection.rtl
-                    ? TextAlign.right
-                    : TextAlign.left,
+                textAlign: titleDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
                 style: theme.textTheme.titleSmall?.copyWith(
                   fontWeight: FontWeight.w600,
                   color: theme.colorScheme.onSurface,
@@ -173,9 +164,7 @@ class ConversationAppBar extends StatelessWidget
                   child: Text(
                     workspace!.name,
                     textDirection: workspaceDirection,
-                    textAlign: workspaceDirection == TextDirection.rtl
-                        ? TextAlign.right
-                        : TextAlign.left,
+                    textAlign: workspaceDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: theme.colorScheme.onSurfaceVariant.withValues(
                         alpha: 0.8,

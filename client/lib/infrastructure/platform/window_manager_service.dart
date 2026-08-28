@@ -19,6 +19,15 @@ class WindowManagerService with WindowListener {
   );
   WindowManagerService._();
 
+  static const _widthKey = 'window_width';
+  static const _heightKey = 'window_height';
+  static const _legacyXKey = 'window_x';
+  static const _legacyYKey = 'window_y';
+  static const _expandedXKey = 'window_expanded_x';
+  static const _expandedYKey = 'window_expanded_y';
+  static const _compactXKey = 'window_compact_x';
+  static const _compactYKey = 'window_compact_y';
+
   static bool _isInitialized = false;
   static Timer? _saveTimer;
   static Rect? _restoreBounds;
@@ -44,27 +53,43 @@ class WindowManagerService with WindowListener {
   static bool isCompactWidth(double width) => width <= compactWindowSize.width + 1.0;
 
   @visibleForTesting
-  static Rect compactBoundsFor(Rect currentBounds) => Rect.fromLTWH(
-    currentBounds.left,
-    currentBounds.top,
+  static Rect compactBoundsFor(Rect currentBounds, {Offset? savedPosition}) => Rect.fromLTWH(
+    savedPosition?.dx ?? currentBounds.left,
+    savedPosition?.dy ?? currentBounds.top,
     compactWindowSize.width,
     compactWindowSize.height,
   );
 
   @visibleForTesting
-  static Rect restoreBoundsFor(Rect? previousBounds, {Rect? currentBounds}) {
-    final origin = previousBounds ?? currentBounds ?? Rect.zero;
+  static Rect restoreBoundsFor(
+    Rect? previousBounds, {
+    Rect? currentBounds,
+    Offset? savedPosition,
+  }) {
+    final origin = previousBounds?.topLeft ?? savedPosition ?? currentBounds?.topLeft ?? Offset.zero;
     if (previousBounds == null ||
         previousBounds.width < defaultWindowSize.width ||
         previousBounds.height < defaultWindowSize.height) {
       return Rect.fromLTWH(
-        origin.left,
-        origin.top,
+        origin.dx,
+        origin.dy,
         defaultWindowSize.width,
         defaultWindowSize.height,
       );
     }
     return previousBounds;
+  }
+
+  static Offset? _readPosition(
+    SharedPreferences prefs,
+    String xKey,
+    String yKey, {
+    double? fallbackX,
+    double? fallbackY,
+  }) {
+    final x = prefs.getDouble(xKey) ?? fallbackX;
+    final y = prefs.getDouble(yKey) ?? fallbackY;
+    return x == null || y == null ? null : Offset(x, y);
   }
 
   static Future<void> initialize() async {
@@ -75,25 +100,39 @@ class WindowManagerService with WindowListener {
 
     final prefs = await SharedPreferences.getInstance();
 
-    // Retrieve saved dimensions/position
-    final double? savedWidth = prefs.getDouble('window_width');
-    final double? savedHeight = prefs.getDouble('window_height');
-    final double? savedX = prefs.getDouble('window_x');
-    final double? savedY = prefs.getDouble('window_y');
-    final bool isMaximized = prefs.getBool('window_is_maximized') ?? false;
+    final savedWidth = prefs.getDouble(_widthKey);
+    final savedHeight = prefs.getDouble(_heightKey);
+    final legacyX = prefs.getDouble(_legacyXKey);
+    final legacyY = prefs.getDouble(_legacyYKey);
+    final expandedPosition = _readPosition(
+      prefs,
+      _expandedXKey,
+      _expandedYKey,
+      fallbackX: legacyX,
+      fallbackY: legacyY,
+    );
+    final compactPosition = _readPosition(
+      prefs,
+      _compactXKey,
+      _compactYKey,
+      fallbackX: expandedPosition?.dx,
+      fallbackY: expandedPosition?.dy,
+    );
+    final isMaximized = prefs.getBool('window_is_maximized') ?? false;
+    final startCompact = !isMaximized && savedWidth != null && isCompactWidth(savedWidth);
 
-    // Use default values if nothing is saved
-    final Size savedWindowSize = (savedWidth != null && savedHeight != null)
+    final savedExpandedSize = (savedWidth != null && savedHeight != null && !isCompactWidth(savedWidth))
         ? Size(savedWidth, savedHeight)
         : defaultWindowSize;
-    final Size windowSize = Size(
-      savedWindowSize.width < minimumWindowSize.width ? minimumWindowSize.width : savedWindowSize.width,
-      savedWindowSize.height < minimumWindowSize.height ? minimumWindowSize.height : savedWindowSize.height,
+    final expandedSize = Size(
+      savedExpandedSize.width < minimumWindowSize.width ? minimumWindowSize.width : savedExpandedSize.width,
+      savedExpandedSize.height < minimumWindowSize.height ? minimumWindowSize.height : savedExpandedSize.height,
     );
+    final windowSize = startCompact ? compactWindowSize : expandedSize;
+    final savedPosition = startCompact ? compactPosition : expandedPosition;
 
-    // Determine if we should center the window
-    final bool hasCentered = prefs.getBool('has_centered_window') ?? false;
-    final bool shouldCenter = !hasCentered && (savedX == null || savedY == null);
+    final hasCentered = prefs.getBool('has_centered_window') ?? false;
+    final shouldCenter = !hasCentered && savedPosition == null;
 
     final WindowOptions windowOptions = WindowOptions(
       size: windowSize,
@@ -107,8 +146,8 @@ class WindowManagerService with WindowListener {
 
     await windowManager.waitUntilReadyToShow(windowOptions, () async {
       await windowManager.setMinimumSize(minimumWindowSize);
-      if (savedX != null && savedY != null && !isMaximized) {
-        await windowManager.setPosition(Offset(savedX, savedY));
+      if (savedPosition != null && !isMaximized) {
+        await windowManager.setPosition(savedPosition);
       }
 
       await windowManager.show();
@@ -121,7 +160,7 @@ class WindowManagerService with WindowListener {
       // Mark as initialized so subsequent events are tracked.
       _isInitialized = true;
       if (!isMaximized) {
-        _isCompactMode.value = isCompactWidth(windowSize.width);
+        _isCompactMode.value = startCompact;
       }
       await _instance._refreshMaximizedOrFullScreenState();
 
@@ -134,13 +173,26 @@ class WindowManagerService with WindowListener {
   static Future<void> toggleCompactMode() async {
     if (!AppPlatform.isDesktop || !_isInitialized) return;
 
+    final prefs = await SharedPreferences.getInstance();
     if (_isCompactMode.value) {
+      await _saveCurrentBoundsForMode(prefs, isCompact: true);
       final currentBounds = await windowManager.getBounds();
-      final targetBounds = restoreBoundsFor(_restoreBounds, currentBounds: currentBounds);
+      final expandedPosition = _readPosition(
+        prefs,
+        _expandedXKey,
+        _expandedYKey,
+        fallbackX: prefs.getDouble(_legacyXKey),
+        fallbackY: prefs.getDouble(_legacyYKey),
+      );
+      final targetBounds = restoreBoundsFor(
+        _restoreBounds,
+        currentBounds: currentBounds,
+        savedPosition: expandedPosition,
+      );
       await _setBounds(targetBounds);
       _restoreBounds = null;
       _isCompactMode.value = false;
-      _instance._saveWindowState();
+      await _saveCurrentBoundsForMode(prefs, isCompact: false);
       return;
     }
 
@@ -152,10 +204,20 @@ class WindowManagerService with WindowListener {
     }
 
     final currentBounds = await windowManager.getBounds();
+    await _saveBoundsForMode(prefs, currentBounds, isCompact: false);
     _restoreBounds = currentBounds;
-    final compactBounds = compactBoundsFor(currentBounds);
+    final compactPosition = _readPosition(
+      prefs,
+      _compactXKey,
+      _compactYKey,
+    );
+    final compactBounds = compactBoundsFor(
+      currentBounds,
+      savedPosition: compactPosition,
+    );
     await _setBounds(compactBounds);
     _isCompactMode.value = true;
+    await _saveCurrentBoundsForMode(prefs, isCompact: true);
   }
 
   static Future<void> _setBounds(Rect bounds) async {
@@ -167,23 +229,44 @@ class WindowManagerService with WindowListener {
     }
   }
 
-  // Helper method to save state with a 500ms debounce
+  static Future<void> _saveCurrentBoundsForMode(
+    SharedPreferences prefs, {
+    required bool isCompact,
+  }) async {
+    final bounds = await windowManager.getBounds();
+    await _saveBoundsForMode(prefs, bounds, isCompact: isCompact);
+  }
+
+  static Future<void> _saveBoundsForMode(
+    SharedPreferences prefs,
+    Rect bounds, {
+    required bool isCompact,
+  }) async {
+    final xKey = isCompact ? _compactXKey : _expandedXKey;
+    final yKey = isCompact ? _compactYKey : _expandedYKey;
+    await prefs.setDouble(xKey, bounds.left);
+    await prefs.setDouble(yKey, bounds.top);
+
+    if (!isCompact) {
+      await prefs.setDouble(_widthKey, bounds.width);
+      await prefs.setDouble(_heightKey, bounds.height);
+      // Keep the legacy position synchronized for seamless downgrade/migration.
+      await prefs.setDouble(_legacyXKey, bounds.left);
+      await prefs.setDouble(_legacyYKey, bounds.top);
+    }
+  }
+
+  // Helper method to save state with a 500ms debounce.
   void _saveWindowState() {
     _saveTimer?.cancel();
     _saveTimer = Timer(const Duration(milliseconds: 500), () async {
-      if (!_isInitialized || _isCompactMode.value) return;
+      if (!_isInitialized || await windowManager.isMaximized()) return;
 
-      final isMaximized = await windowManager.isMaximized();
       final prefs = await SharedPreferences.getInstance();
-
-      if (!isMaximized) {
-        final size = await windowManager.getSize();
-        final pos = await windowManager.getPosition();
-        await prefs.setDouble('window_width', size.width);
-        await prefs.setDouble('window_height', size.height);
-        await prefs.setDouble('window_x', pos.dx);
-        await prefs.setDouble('window_y', pos.dy);
-      }
+      await _saveCurrentBoundsForMode(
+        prefs,
+        isCompact: _isCompactMode.value,
+      );
     });
   }
 
