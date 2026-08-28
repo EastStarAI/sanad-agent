@@ -514,18 +514,23 @@ See also `docs/technical/run_cancellation_and_process_ownership.md`.
 
 `ToolContext` carries `runId`, `generation`, and the active `RunCancellationScope`.
 `ToolExecutionCoordinator` builds that context for every sequential and parallel
-tool call and suppresses live tool events once publication is closed.
+tool call. Once publication closes it consumes late futures internally without
+writing their results to checkpoints/history or starting the next sequential
+tool, leaving Stop-owned terminalization authoritative.
 
 `ShellExecuteTool` is cooperatively cancellable:
 
-1. Spawns owned containment (`setsid` on Linux, `perl setpgrp` on macOS, `taskkill /T` on Windows).
+1. Spawns owned containment (`setsid` on Linux, `perl setpgrp` on macOS, and a
+   kill-on-close Job Object on Windows; `taskkill /T /F` is fallback only).
 2. Registers `ProcessTreeHandle` cleanup on the run scope before awaiting output.
 3. Races natural exit, `timeout_ms`, and `whenCancelled` with one terminal compare-and-set.
 4. Returns `Command cancelled by user.` for Stop and keeps timeout messaging separate.
 
 `ProcessTreeController` performs `TERM → bounded grace → KILL → verify` and
 records typed cleanup outcomes (`exited`, `escalated`, `ownershipLost`, `failed`).
-Natural completion calls `release()` so a late Stop does not target a reused PID.
+The controller captures and rechecks an OS process-start identity before late
+cleanup. Natural wrapper completion first removes surviving descendants, then
+calls `release()` so a later Stop cannot target a reused PID.
 
 ## Durable Terminal Tool Events (Plan 50d)
 

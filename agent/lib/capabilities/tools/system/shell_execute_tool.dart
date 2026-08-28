@@ -64,6 +64,7 @@ class ShellExecuteTool extends SpecBackedTool {
       String executable,
       List<String> arguments,
       Directory? cleanupDirectory,
+      File? startGate,
       bool usesProcessGroup,
     })
   >
@@ -71,11 +72,21 @@ class ShellExecuteTool extends SpecBackedTool {
     if (Platform.isWindows) {
       final directory = await Directory.systemTemp.createTemp('sanad-shell-');
       final script = File('${directory.path}\\command.cmd');
-      await script.writeAsString('@echo off\r\n$command\r\n');
+      final startGate = File('${directory.path}\\owned.ready');
+      await script.writeAsString(
+        '@echo off\r\n'
+        ':wait_for_owner\r\n'
+        'if not exist "${startGate.path}" (\r\n'
+        '  >nul 2>&1 ping -n 2 127.0.0.1\r\n'
+        '  goto wait_for_owner\r\n'
+        ')\r\n'
+        '$command\r\n',
+      );
       return (
         executable: Platform.environment['COMSPEC'] ?? 'cmd.exe',
         arguments: ['/d', '/q', '/c', script.path],
         cleanupDirectory: directory,
+        startGate: startGate,
         usesProcessGroup: false,
       );
     }
@@ -84,14 +95,23 @@ class ShellExecuteTool extends SpecBackedTool {
         executable: 'setsid',
         arguments: ['sh', '-c', command],
         cleanupDirectory: null,
+        startGate: null,
         usesProcessGroup: true,
       );
     }
     if (Platform.isMacOS) {
       return (
         executable: 'perl',
-        arguments: ['-e', r'setpgrp(0,0); exec @ARGV', '--', 'sh', '-c', command],
+        arguments: [
+          '-e',
+          r'setpgrp(0,0); exec @ARGV',
+          '--',
+          'sh',
+          '-c',
+          command,
+        ],
         cleanupDirectory: null,
+        startGate: null,
         usesProcessGroup: true,
       );
     }
@@ -99,6 +119,7 @@ class ShellExecuteTool extends SpecBackedTool {
       executable: 'sh',
       arguments: ['-c', command],
       cleanupDirectory: null,
+      startGate: null,
       usesProcessGroup: false,
     );
   }
@@ -209,6 +230,15 @@ class ShellExecuteTool extends SpecBackedTool {
           },
         );
       }
+      if (scope != null && !scope.isPublicationOpen) {
+        final cleanup = await tree.terminate(gracePeriod: _terminationGrace);
+        return await finishWith(
+          isError: true,
+          output: 'Command cancelled by user.',
+          cleanup: cleanup,
+        );
+      }
+      await shell.startGate?.writeAsString('owned');
 
       unawaited(process.stdin.close().catchError((_) {}));
 
@@ -224,9 +254,11 @@ class ShellExecuteTool extends SpecBackedTool {
 
       switch (waitOutcome) {
         case _ShellWaitCompleted(:final exitCode):
+          final naturalCleanup = await tree.completeNaturally(
+            gracePeriod: _terminationGrace,
+          );
           final stdoutResult = await stdoutFuture;
           final stderrResult = await stderrFuture;
-          tree.release();
           cancellationHandle?.release();
           final stdoutStr = _renderBoundedOutput(stdoutResult);
           final stderrStr = _renderBoundedOutput(stderrResult);
@@ -240,9 +272,20 @@ class ShellExecuteTool extends SpecBackedTool {
           if (output.isEmpty && exitCode == 0) {
             output = 'Command executed successfully (no output).';
           }
-          return await finishWith(isError: exitCode != 0, output: output);
+          final cleanupFailed =
+              naturalCleanup.outcome == ToolProcessCleanupOutcome.failed ||
+              naturalCleanup.outcome == ToolProcessCleanupOutcome.ownershipLost;
+          if (cleanupFailed) {
+            output = '$output\nOwned process cleanup failed.';
+          }
+          return await finishWith(
+            isError: exitCode != 0 || cleanupFailed,
+            output: output,
+            cleanup: cleanupFailed ? naturalCleanup : null,
+          );
         case _ShellWaitTimedOut():
           final cleanup = await tree.terminate(gracePeriod: _terminationGrace);
+          cancellationHandle?.release();
           await _drainOutput(stdoutFuture, stderrFuture);
           return await finishWith(
             isError: true,
@@ -261,6 +304,8 @@ class ShellExecuteTool extends SpecBackedTool {
     } catch (e) {
       if (tree != null && !terminalSet) {
         await tree.terminate(gracePeriod: _terminationGrace);
+      } else if (process != null && !terminalSet) {
+        process.kill(ProcessSignal.sigkill);
       }
       return await finishWith(
         isError: true,

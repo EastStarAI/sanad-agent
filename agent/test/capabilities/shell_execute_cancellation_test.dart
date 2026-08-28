@@ -11,9 +11,7 @@ void main() {
     late Directory workspaceDir;
 
     setUp(() async {
-      workspaceDir = await Directory.systemTemp.createTemp(
-        'shell-cancel-test',
-      );
+      workspaceDir = await Directory.systemTemp.createTemp('shell-cancel-test');
     });
 
     tearDown(() async {
@@ -98,5 +96,50 @@ void main() {
       },
       skip: Platform.isWindows,
     );
+
+    test(
+      'natural wrapper exit drains output and removes live descendants',
+      () async {
+        final childPidFile = File('${workspaceDir.path}/child.pid');
+        final tool = ShellExecuteTool(workspacePath: workspaceDir.path);
+        final command =
+            "(trap '' TERM; while :; do echo late-output; sleep 0.02; done) & "
+            'echo "\$!" > "${childPidFile.path}"; exit 0';
+
+        final resultString = await tool
+            .execute({'command': command, 'timeout_ms': 5000})
+            .timeout(const Duration(seconds: 5));
+        final result = jsonDecode(resultString) as Map<String, dynamic>;
+
+        expect(result['isError'], isFalse);
+        final childPid = childPidFile.readAsStringSync().trim();
+        expect(
+          (await Process.run('kill', ['-0', childPid])).exitCode,
+          isNot(0),
+        );
+      },
+      skip: Platform.isWindows,
+    );
+
+    test('tool timeout releases its run cancellation registration', () async {
+      final scope = RunCancellationScope(
+        sessionId: 'session-timeout-release',
+        runId: 'run-timeout-release',
+        workItemId: 'work-timeout-release',
+        generation: 1,
+      );
+      final tool = ShellExecuteTool(workspacePath: workspaceDir.path);
+
+      await tool.execute(
+        {'command': 'sleep 30', 'timeout_ms': 20},
+        context: ToolContext(
+          sessionId: scope.sessionId,
+          cancellationScope: scope,
+        ),
+      );
+      final report = await scope.cancel();
+
+      expect(report.resources, isEmpty);
+    }, skip: Platform.isWindows);
   });
 }

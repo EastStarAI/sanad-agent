@@ -68,6 +68,7 @@ class ToolExecutionCoordinator {
     })?
     onToolEvent,
   }) async {
+    if (!_canPublishToolEvents(cancellationScope)) return;
     final repo = getIt.isRegistered<PersistedRuntimeStateRepository>()
         ? getIt<PersistedRuntimeStateRepository>()
         : null;
@@ -176,6 +177,10 @@ class ToolExecutionCoordinator {
       finalResults.addAll(executedResults);
     }
 
+    // Stop owns terminalization once publication closes. Late tool futures are
+    // allowed to settle internally, but must not mutate checkpoints or history.
+    if (!_canPublishToolEvents(cancellationScope)) return;
+
     // After execution, collect results from checkpoint to build finalResults
     // in original order for the history-merge step.
     final updatedMeta =
@@ -201,6 +206,7 @@ class ToolExecutionCoordinator {
     // Add all guarded results to history in the original tool-call order.
     // Presence checks preserve idempotency for resumed single-tool paths.
     for (final toolCall in toolCalls) {
+      if (!_canPublishToolEvents(cancellationScope)) return;
       final result = finalResults[toolCall.id]!;
       final alreadyAdded = callbacks.isToolMessagePresent(toolCall.id);
       if (!alreadyAdded) {
@@ -212,6 +218,7 @@ class ToolExecutionCoordinator {
         await callbacks.addToolMessage(toolCall, result, isError: isError);
       }
     }
+    if (!_canPublishToolEvents(cancellationScope)) return;
     callbacks.saveHistory();
     checkpointCoordinator.saveCheckpoint(
       ctx: ctx,
@@ -286,6 +293,7 @@ class ToolExecutionCoordinator {
   }) async {
     final results = <String, String>{};
     for (final toolCall in toolCallsToRun) {
+      if (!_canPublishToolEvents(cancellationScope)) return results;
       final argumentsString = jsonEncode(toolCall.arguments);
       _logger.info(
         '🛠️ [Agent] Requesting tool call: ${toolCall.name} (arguments: $argumentsString)',
@@ -302,6 +310,7 @@ class ToolExecutionCoordinator {
           ),
         );
       }
+      if (!_canPublishToolEvents(cancellationScope)) return results;
 
       // Mark as currently executing
       checkpointCoordinator.saveCheckpoint(
@@ -317,6 +326,7 @@ class ToolExecutionCoordinator {
         emitStartEvent: false,
         appendToHistory: false,
       );
+      if (!_canPublishToolEvents(cancellationScope)) return results;
       final deferred = DeferredToolResultDescriptor.tryParseToolResult(
         result,
         sessionId: sessionId,
@@ -330,6 +340,7 @@ class ToolExecutionCoordinator {
           currentlyExecutingToolCallIds: [toolCall.id],
         );
         final resolution = await deferredToolResultResolver.resolve(deferred);
+        if (!_canPublishToolEvents(cancellationScope)) return results;
         result = resolution.output;
         isError = resolution.isError;
         if (onToolEvent != null) {
@@ -401,6 +412,7 @@ class ToolExecutionCoordinator {
         }),
       );
     }
+    if (!_canPublishToolEvents(cancellationScope)) return const {};
 
     // Mark all as currently executing
     final idsToRun = toolCallsToRun.map((tc) => tc.id).toList();
@@ -447,6 +459,7 @@ class ToolExecutionCoordinator {
           final result = ToolOutputGuard.guardResult(
             _applyLateResultIsolation(toolCall.id, rawResult),
           );
+          if (!_canPublishToolEvents(cancellationScope)) return;
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
           checkpointCoordinator.saveCheckpoint(
@@ -463,6 +476,7 @@ class ToolExecutionCoordinator {
             currentlyExecutingToolCallIds: remainingExecuting.toList(),
           );
         } catch (e) {
+          if (!_canPublishToolEvents(cancellationScope)) return;
           final result = 'Error executing tool: $e';
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
@@ -482,6 +496,7 @@ class ToolExecutionCoordinator {
         }
       }),
     );
+    if (!_canPublishToolEvents(cancellationScope)) return executionResults;
 
     // Emit completion events in order.
     final repoMeta = getIt.isRegistered<PersistedRuntimeStateRepository>()
@@ -587,6 +602,9 @@ class ToolExecutionCoordinator {
         ),
       );
     }
+    if (!_canPublishToolEvents(cancellationScope)) {
+      return 'Error: Tool execution cancelled.';
+    }
 
     String result;
     bool isError = forcedIsError;
@@ -619,6 +637,7 @@ class ToolExecutionCoordinator {
       }
     }
     result = ToolOutputGuard.guardResult(result);
+    if (!_canPublishToolEvents(cancellationScope)) return result;
 
     final isDeferredResult =
         DeferredToolResultDescriptor.tryParseToolResult(

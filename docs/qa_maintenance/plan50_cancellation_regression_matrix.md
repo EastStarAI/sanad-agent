@@ -28,6 +28,9 @@ Status: verified in aggregation branch `feat/plan-50-run-cancellation`
 | User Stop during shell | `Command cancelled by user.` | `shell_execute_cancellation_test.dart` |
 | Timeout vs cancel race | Single terminal message | `shell_execute_cancellation_test.dart` |
 | Linux process group | Grandchild killed | `process_tree_controller_test.dart` |
+| Natural wrapper exit with live descendant | Descendant is removed before success | `process_tree_controller_test.dart` |
+| PID start-identity mismatch | Cleanup refuses to signal the live PID | `process_tree_controller_test.dart` |
+| Tool future settles after Stop | No late checkpoint or history result | `session_restart_checkpoint_test.dart` |
 
 ## Terminal durability (50d)
 

@@ -2,11 +2,14 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
+import 'package:sanad_agent/capabilities/models/tool_schema.dart';
+import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
+import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_agent/engine/runtime/tool_execution_coordinator.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
@@ -237,6 +240,63 @@ void main() {
     },
   );
 
+  test(
+    'late tool completion cannot replace Stop-owned terminalization',
+    () async {
+      persisted.executionState.enqueueWorkItem(
+        workItemId: 'restart-work',
+        sessionId: 'restart-session',
+        state: SessionWorkState.running,
+        continuationMetadata: const {
+          'checkpoint_kind': AgentRunner.checkpointKindAfterToolResult,
+        },
+      );
+      final tool = _HangingTool();
+      final registry = ToolsRegistry()..registerTool(tool);
+      final coordinator = ToolExecutionCoordinator(
+        sessionId: 'restart-session',
+        registry: registry,
+        sessionManager: SessionManager(),
+        pluginManager: PluginManager(),
+        checkpointCoordinator: ContinuationCheckpointCoordinator(
+          sessionId: 'restart-session',
+        ),
+      );
+      final callbacks = _ToolCallbacks();
+      final scope = RunCancellationScope(
+        sessionId: 'restart-session',
+        runId: 'run-cancelled',
+        workItemId: 'restart-work',
+        generation: 1,
+      );
+
+      final execution = coordinator.executeToolCalls(
+        [ToolCall(id: 'late-call', name: 'hanging', arguments: const {})],
+        parallel: false,
+        callbacks: callbacks,
+        ctx: (currentTurnStartIndex: 0, currentModelStepId: 'step-1'),
+        cancellationScope: scope,
+      );
+      await tool.started.future;
+      scope.invalidate(reason: RunCancellationReason.userStop);
+      tool.finish('late success');
+      await execution;
+
+      final metadata = persisted
+          .findActiveWorkItem('restart-session')!
+          .continuationMetadata;
+      expect(metadata['currently_executing_tools'], ['late-call']);
+      expect(
+        (metadata['completed_tool_results'] as Map?)?.containsKey(
+              'late-call',
+            ) ??
+            false,
+        isFalse,
+      );
+      expect(callbacks.results, isEmpty);
+    },
+  );
+
   test('controlled restart drain refuses suspended resume claims', () async {
     final orchestrator = SessionRunOrchestrator();
     orchestrator.beginControlledRestartDrain();
@@ -281,6 +341,26 @@ class _ToolCallbacks implements ToolExecutionCallbacks {
 
   @override
   void saveHistory() {}
+}
+
+class _HangingTool extends BaseTool {
+  final Completer<void> started = Completer<void>();
+  final Completer<String> _result = Completer<String>();
+
+  @override
+  ToolSchema get schema => ToolSchema(
+    name: 'hanging',
+    description: 'Test-only hanging tool.',
+    parameters: const {'type': 'object'},
+  );
+
+  void finish(String result) => _result.complete(result);
+
+  @override
+  Future<String> execute(Map<String, dynamic> args, {ToolContext? context}) {
+    if (!started.isCompleted) started.complete();
+    return _result.future;
+  }
 }
 
 Future<bool> _isCompleted<T>(Future<T> future) async {
