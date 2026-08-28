@@ -77,7 +77,7 @@ Stop accepted
 | 50a Cancellation Core | `complete` | closed | 12 | اعتماد primitive وbounded stop contract |
 | 50b Provider Interruption | `complete` | closed | 14 | اكتمال 50a |
 | 50c Tool/Shell Cancellation | `complete` | closed | 14 | اكتمال 50a |
-| 50d Terminal Event Durability | `pending` | Waiting | 14 | اكتمال 50a و50c |
+| 50d Terminal Event Durability | `complete` | closed | 14 | اكتمال 50a و50c |
 | 50e Client Live/History Parity | `pending` | Waiting | 14 | اكتمال 50d |
 | 50f Integration QA | `pending` | Waiting | 10 | اكتمال 50b–50e |
 

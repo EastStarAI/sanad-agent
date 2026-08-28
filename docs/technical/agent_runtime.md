@@ -526,3 +526,16 @@ tool call and suppresses live tool events once publication is closed.
 `ProcessTreeController` performs `TERM → bounded grace → KILL → verify` and
 records typed cleanup outcomes (`exited`, `escalated`, `ownershipLost`, `failed`).
 Natural completion calls `release()` so a late Stop does not target a reused PID.
+
+## Durable Terminal Tool Events (Plan 50d)
+
+Stop terminalizes every `currently_executing_tools` entry into one
+`ToolTerminalRecord` with `status: cancelled` before emitting `stopped`.
+`ToolTerminalizationService` persists the canonical payload to checkpoint and
+session history, then `SessionRunOrchestrator` publishes matching
+`tool_result` events with `isToolCancelled`.
+
+Late tool completions consult `_lockedCancelledResult` in
+`ToolExecutionCoordinator` so a cancelled terminal cannot be replaced by a
+timeout/success race. History hydration exposes the same `status` field used by
+live canonical events.

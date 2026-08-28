@@ -29,3 +29,7 @@ This contract applies to `agent/lib/interfaces/`.
 - MCP configuration listing, inspection, and mutation are disabled at the cloud
   adapter boundary. MCP servers configured locally remain available to the
   per-turn capability runtime for both local and cloud-origin turns.
+
+## Run Cancellation
+- `requestStop` terminalizes executing tools through `ToolTerminalizationService` before emitting `stopped`.
+- Canonical `tool_result` events expose `status: cancelled` for durable terminal parity with history hydration.

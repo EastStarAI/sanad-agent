@@ -204,6 +204,9 @@ class SessionQueryHandler {
           'tool': resolvedToolContext.toolName ?? 'Unknown Tool',
           'output': visibleContent,
           'isError': isError,
+          'status':
+              message.metadata?['status']?.toString() ??
+              (isError ? 'error' : 'done'),
           if (resolvedToolContext.runId != null)
             'run_id': resolvedToolContext.runId,
           if (resolvedToolContext.modelStepId != null)

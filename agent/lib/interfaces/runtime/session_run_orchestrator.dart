@@ -30,6 +30,7 @@ import 'session_turn_executor.dart';
 import 'session_recovery_restorer.dart';
 import 'session_turn_request_helpers.dart';
 import 'suspended_checkpoint_store.dart';
+import 'package:sanad_agent/engine/runtime/tool_terminalization_service.dart';
 
 class SuspendedRun {
   final GatewayEvent event;
@@ -463,6 +464,38 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         _logger.info(
           'Runtime recovery transition superseded by stop for session '
           '$sessionId: $error',
+        );
+      }
+    }
+    if (activeRun != null) {
+      final terminalRecords = ToolTerminalizationService(
+        repository: persistedState,
+        sessionManager: getIt<SessionManager>(),
+      ).terminalizeExecutingTools(
+        sessionId: sessionId,
+        agentRunner: activeRun.agentRunner,
+        runId: activeRun.runId,
+        generation: activeRun.generation,
+        modelStepId: stoppedModelStepId,
+      );
+      for (final record in terminalRecords) {
+        _emitResponse(
+          GatewayResponse(
+            sessionId: sessionId,
+            message: Message(
+              role: MessageRole.tool,
+              content: record.message,
+              metadata: record.toHistoryMetadata(modelStepId: stoppedModelStepId),
+            ),
+            isComplete: true,
+            runId: record.runId,
+            modelStepId: stoppedModelStepId,
+            toolCallId: record.toolCallId,
+            toolName: record.toolName,
+            isToolResult: true,
+            isToolError: record.isError,
+            isToolCancelled: record.isTerminalCancelled,
+          ),
         );
       }
     }

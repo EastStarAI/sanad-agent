@@ -12,6 +12,7 @@ import 'continuation_checkpoint_coordinator.dart';
 import 'deferred_tool_result.dart';
 import 'run_cancellation_scope.dart';
 import 'tool_output_guard.dart';
+import 'tool_terminal_record.dart';
 
 /// Executes tool-call batches (sequential or parallel), persists per-tool
 /// completion checkpoints, and replays completed/interrupted tools safely on
@@ -205,6 +206,7 @@ class ToolExecutionCoordinator {
       if (!alreadyAdded) {
         final outputRecord = allOutputs[toolCall.id];
         final isError =
+            _lockedCancelledResult(toolCall.id) != null ||
             (outputRecord is Map && outputRecord['is_error'] == true) ||
             result.startsWith('Error');
         await callbacks.addToolMessage(toolCall, result, isError: isError);
@@ -236,6 +238,26 @@ class ToolExecutionCoordinator {
 
   bool _canPublishToolEvents(RunCancellationScope? cancellationScope) =>
       cancellationScope?.isPublicationOpen ?? true;
+
+  String? _lockedCancelledResult(String toolCallId) {
+    final repo = getIt.isRegistered<PersistedRuntimeStateRepository>()
+        ? getIt<PersistedRuntimeStateRepository>()
+        : null;
+    final meta = repo?.findActiveWorkItem(sessionId)?.continuationMetadata;
+    if (meta == null) return null;
+    final outputs = meta['completed_tool_outputs'];
+    if (outputs is! Map) return null;
+    final raw = outputs[toolCallId];
+    if (raw is! Map) return null;
+    final record = ToolTerminalRecord.fromCheckpointOutput(
+      Map<String, dynamic>.from(raw),
+    );
+    return record?.isTerminalCancelled == true ? record!.message : null;
+  }
+
+  String _applyLateResultIsolation(String toolCallId, String result) {
+    return _lockedCancelledResult(toolCallId) ?? result;
+  }
 
   Future<void> _maybeEmitToolEvent(
     RunCancellationScope? cancellationScope, {
@@ -422,7 +444,9 @@ class ToolExecutionCoordinator {
               cancellationScope: cancellationScope,
             ),
           );
-          final result = ToolOutputGuard.guardResult(rawResult);
+          final result = ToolOutputGuard.guardResult(
+            _applyLateResultIsolation(toolCall.id, rawResult),
+          );
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
           checkpointCoordinator.saveCheckpoint(
@@ -575,13 +599,19 @@ class ToolExecutionCoordinator {
         isError = true;
       } else {
         try {
-          result = await tool.execute(
-            toolCall.arguments,
-            context: _toolContextFor(
-              toolCall,
-              cancellationScope: cancellationScope,
+          result = _applyLateResultIsolation(
+            toolCall.id,
+            await tool.execute(
+              toolCall.arguments,
+              context: _toolContextFor(
+                toolCall,
+                cancellationScope: cancellationScope,
+              ),
             ),
           );
+          if (_lockedCancelledResult(toolCall.id) != null) {
+            isError = true;
+          }
         } catch (e) {
           result = 'Error executing tool: $e';
           isError = true;

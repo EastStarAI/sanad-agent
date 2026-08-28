@@ -63,6 +63,9 @@ class AgentToCanonical {
         'tool': response.toolName,
         'output': response.message.content,
         'isError': response.isToolError,
+        'status': response.isToolCancelled
+            ? 'cancelled'
+            : (response.isToolError ? 'error' : 'done'),
         if (response.runId != null) 'run_id': response.runId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,
         if (response.toolCallId != null) 'tool_call_id': response.toolCallId,
