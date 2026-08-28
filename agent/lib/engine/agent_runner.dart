@@ -41,6 +41,7 @@ import 'runtime/llm_route_snapshot.dart';
 import 'runtime/response_continuation_coordinator.dart';
 import 'runtime/steer_coordinator.dart' as steer_lib;
 import 'runtime/tool_execution_coordinator.dart';
+import 'runtime/run_cancellation_scope.dart';
 import 'runtime/turn_route_state.dart';
 
 /// Legacy re-exports so existing imports of the steer constants from
@@ -110,7 +111,22 @@ class AgentRunner {
     _stopRequested = true;
     _providerRequestInFlight = false;
     cancelControlledRestartDrain();
+    _cancellationScope?.invalidate(reason: RunCancellationReason.userStop);
   }
+
+  void attachCancellationScope(RunCancellationScope scope) {
+    _cancellationScope = scope;
+  }
+
+  void detachCancellationScope(RunCancellationScope scope) {
+    if (identical(_cancellationScope, scope)) {
+      _cancellationScope = null;
+    }
+  }
+
+  bool get canPublishRunEvents => _cancellationScope?.isPublicationOpen ?? true;
+
+  RunCancellationScope? get cancellationScope => _cancellationScope;
 
   /// Three-tier context assembler responsible for building the single system
   /// message sent to the LLM on every turn.
@@ -134,6 +150,7 @@ class AgentRunner {
   String? _authoritativeRunId;
   String? _authoritativeWorkItemId;
   int? _authoritativeGeneration;
+  RunCancellationScope? _cancellationScope;
   LLMRouteSnapshot? _lastSuccessfulLlmRoute;
   void Function(PendingSteerRecord record)? _onPendingSteerChanged;
 
@@ -170,6 +187,7 @@ class AgentRunner {
     _authoritativeRunId = null;
     _authoritativeWorkItemId = null;
     _authoritativeGeneration = null;
+    _cancellationScope = null;
     _onPendingSteerChanged = null;
     _turnRoute.setTurnRunId(null);
   }

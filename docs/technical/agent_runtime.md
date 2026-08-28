@@ -487,3 +487,25 @@ older history when the configured context threshold is exceeded. System messages
 and recent conversation remain intact. Compression runs before plugin hooks so
 plugins observe the final effective history, while `AgentRunner` remains the
 only mutable history owner.
+
+## Run Cancellation Core (Plan 50a)
+
+Each active turn owns one `RunCancellationScope` keyed by immutable `runId`.
+`ActiveRun` creates the scope, `AgentRunner` attaches to it for the turn, and
+`SessionRunOrchestrator.requestStop` awaits bounded cleanup through the same
+primitive.
+
+Publication rules:
+
+1. `invalidate()` closes the publication gate synchronously before any await.
+2. Live assistant, reasoning, and tool events must check `isPublicationOpen`.
+3. Late provider or tool output from a cancelled run is consumed internally only.
+
+Cleanup rules:
+
+1. Resources register a cleanup callback and receive a `release()` handle.
+2. `cancel()` is idempotent and joins one bounded cleanup operation.
+3. The default cleanup deadline is five seconds (`RunCancellationScope.defaultCleanupDeadline`), shared with `SessionRunOrchestrator.runStopCleanupTimeout`.
+4. Deadline or cleanup failure becomes `cleanup_failed`; the session must not remain in `stopping` indefinitely.
+
+See also `docs/technical/run_cancellation_and_process_ownership.md`.

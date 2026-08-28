@@ -1,8 +1,8 @@
 ---
 title: "Task 50a: Run Cancellation Core and Bounded Stop"
 description: "إضافة cancellation primitive مملوكة للـrun وإزالة الانتظار غير المحدود من مسار Stop مع حماية ملكية الجولات."
-status: "pending"
-current_gate: "A0"
+status: "complete"
+current_gate: "closed"
 priority: "critical"
 depends_on: "Plan 30 run isolation, Task 31 authoritative execution snapshots, Task 36 stop recovery"
 file_budget: 12
@@ -17,81 +17,87 @@ design_contract: "docs/technical/run_cancellation_and_process_ownership.md"
 
 توفير `RunCancellationScope` واحد لكل `ActiveRun` يصبح عقد الإلغاء المشترك للمزود والأدوات والانتظارات، وجعل Stop محدودًا زمنيًا ويحافظ على عزل run القديمة عن أي run أحدث.
 
+### قاعدة التسليم
+
+- التنفيذ داخل worktree معزول على فرع تجميعي `feat/plan-50-run-cancellation`.
+- لا دمج على `main` حتى اكتمال Plan 50 بالكامل (50a–50f) والتحقق النهائي.
+- PR واحد من الفرع التجميعي إلى `main` بعد إغلاق 50f وموافقة المراجعة.
+
 ## Gate R0 — External Reference Grounding
 
-- [ ] حل `evidence_id` عبر workflow التأصيل الخارجي والتحقق من freshness.
-- [ ] قراءة implementations والاختبارات الإلزامية وتسجيل مصفوفة
+- [x] حل `evidence_id` عبر workflow التأصيل الخارجي والتحقق من freshness.
+- [x] قراءة implementations والاختبارات الإلزامية وتسجيل مصفوفة
       `Adopt / Adapt / Reject` محلية ومحايدة المصدر.
-- [ ] تحويل القرارات المقبولة إلى invariants واختبارات صريحة لهذه المهمة.
-- [ ] عند غياب الحزمة أو قدمها، تشغيل authoring/refresh حتى تصبح `ready`.
-- [ ] عدم بدء A0 قبل `ready`؛ لا تسجل `blocked` إلا لمانع غير قابل للتعافي.
+- [x] تحويل القرارات المقبولة إلى invariants واختبارات صريحة لهذه المهمة.
+- [x] عند غياب الحزمة أو قدمها، تشغيل authoring/refresh حتى تصبح `ready`.
+- [x] عدم بدء A0 قبل `ready`؛ لا تسجل `blocked` إلا لمانع غير قابل للتعافي.
 
 ### R0 Exit
 
-- [ ] سجل التأصيل يحمل fingerprint والرموز والاختبارات المتحققة والقرارات.
-- [ ] لا يحتوي أي ملف متتبع هوية المصدر الخارجي أو مساره؛ يبقى العقد سلوكيًا.
+- [x] سجل التأصيل يحمل fingerprint والرموز والاختبارات المتحققة والقرارات.
+- [x] لا يحتوي أي ملف متتبع هوية المصدر الخارجي أو مساره؛ يبقى العقد سلوكيًا.
 
 ## 2. بوابة الدخول A0 — تثبيت العقد
 
-- [ ] توثيق حالات scope وأسباب الإلغاء ونتيجة cleanup typed.
-- [ ] تحديد deadline الافتراضية ومصدر إعدادها دون magic values.
-- [ ] تثبيت ترتيب `invalidate -> signal -> cleanup -> terminalize -> idle`.
-- [ ] تحديد مسار cleanup failure وعدم إبقاء `stopping` بلا نهاية.
-- [ ] إثبات أن scope keyed بالـrunId ولا يعاد استخدامها بين runs.
-- [ ] اعتماد registration handle قابلة لـ`release()` دون إلغاء المورد، مع منع
+- [x] توثيق حالات scope وأسباب الإلغاء ونتيجة cleanup typed.
+- [x] تحديد deadline الافتراضية ومصدر إعدادها دون magic values.
+- [x] تثبيت ترتيب `invalidate -> signal -> cleanup -> terminalize -> idle`.
+- [x] تحديد مسار cleanup failure وعدم إبقاء `stopping` بلا نهاية.
+- [x] إثبات أن scope keyed بالـrunId ولا يعاد استخدامها بين runs.
+- [x] اعتماد registration handle قابلة لـ`release()` دون إلغاء المورد، مع منع
       تحريرها قبل إثبات انتقال الملكية عند وجود handoff مستقبلي.
 
 ### A0 Exit
 
-- [ ] API معتمدة ولا تتطلب تغييرًا لاحقًا من 50b أو50c.
-- [ ] لا توجد سياسة تعتمد على sessionId وحده عند وجود runId.
+- [x] API معتمدة ولا تتطلب تغييرًا لاحقًا من 50b أو50c.
+- [x] لا توجد سياسة تعتمد على sessionId وحده عند وجود runId.
 
 ## 3. Gate A1 — Cancellation primitive وملكية ActiveRun
 
-- [ ] إضافة primitive تدعم signal idempotent وتسجيل cleanup callbacks.
-- [ ] جعل التسجيل بعد بدء cancellation ينفذ cleanup بأمان مرة واحدة.
-- [ ] جعل كل registration تعيد handle ذات `release()` idempotent وتزيل callback
+- [x] إضافة primitive تدعم signal idempotent وتسجيل cleanup callbacks.
+- [x] جعل التسجيل بعد بدء cancellation ينفذ cleanup بأمان مرة واحدة.
+- [x] جعل كل registration تعيد handle ذات `release()` idempotent وتزيل callback
       من cleanup المستقبلية دون تشغيلها.
-- [ ] حفظ reason وtimestamps وتقرير الموارد التي انتهت أو فشلت.
-- [ ] ربط scope بـ`ActiveRun` وتمريرها إلى `AgentRunner`.
-- [ ] إبطال run synchronously قبل أول await في Stop.
+- [x] حفظ reason وtimestamps وتقرير الموارد التي انتهت أو فشلت.
+- [x] ربط scope بـ`ActiveRun` وتمريرها إلى `AgentRunner`.
+- [x] إبطال run synchronously قبل أول await في Stop.
 
 ### A1 Exit
 
-- [ ] الإلغاء المتكرر لا ينفذ cleanup مرتين.
-- [ ] release متكررة آمنة، وcancel بعد release لا ينفذ cleanup المحررة.
-- [ ] run A الملغاة لا تستطيع إبطال أو إكمال run B.
+- [x] الإلغاء المتكرر لا ينفذ cleanup مرتين.
+- [x] release متكررة آمنة، وcancel بعد release لا ينفذ cleanup المحررة.
+- [x] run A الملغاة لا تستطيع إبطال أو إكمال run B.
 
 ## 4. Gate A2 — Bounded stop orchestration
 
-- [ ] استبدال await المفتوح على subscription cancellation بانتظار bounded.
-- [ ] فصل إكمال session state عن Future متأخرة مع إبقاء late-result guards.
-- [ ] إنهاء work item إلى `cancelled` قبل نشر `idle` في مسار النجاح.
-- [ ] تعريف transition واضح عند cleanup deadline failure.
-- [ ] الحفاظ على stop recovery والqueued/steer barrier الحالية.
+- [x] استبدال await المفتوح على subscription cancellation بانتظار bounded.
+- [x] فصل إكمال session state عن Future متأخرة مع إبقاء late-result guards.
+- [x] إنهاء work item إلى `cancelled` قبل نشر `idle` في مسار النجاح.
+- [x] تعريف transition واضح عند cleanup deadline failure.
+- [x] الحفاظ على stop recovery والqueued/steer barrier الحالية.
 
 ### A2 Exit
 
-- [ ] hanging stream وهمية لا تبقي الجلسة `stopping` بلا نهاية.
-- [ ] رسالة أحدث بعد stop barrier تبقى محفوظة ولا تمسحها run القديمة.
+- [x] hanging stream وهمية لا تبقي الجلسة `stopping` بلا نهاية.
+- [x] رسالة أحدث بعد stop barrier تبقى محفوظة ولا تمسحها run القديمة.
 
 ## 5. Gate A3 — التحقق والتوثيق
 
-- [ ] اختبارات primitive: first cancel, repeated cancel, late registration, cleanup failure.
-- [ ] اختبارات registration release: normal completion، repeated release، cancel
+- [x] اختبارات primitive: first cancel, repeated cancel, late registration, cleanup failure.
+- [x] اختبارات registration release: normal completion، repeated release، cancel
       after release، وفشل handoff قبل release.
-- [ ] اختبارات orchestrator: hanging subscription, bounded exit, stale run، وmulti-client Stop.
-- [ ] تحديث عقود engine/interfaces وأقرب وثيقة runtime/QA.
-- [ ] مراجعة file budget قبل الإغلاق.
+- [x] اختبارات orchestrator: hanging subscription, bounded exit, stale run، وmulti-client Stop.
+- [x] تحديث عقود engine/interfaces وأقرب وثيقة runtime/QA.
+- [x] مراجعة file budget قبل الإغلاق.
 
 ### A3 Exit / Definition of Done
 
-- [ ] cancellation scope مستقرة ويمكن أن تستهلكها 50b و50c.
-- [ ] العقد العام قابل لاستهلاك Plan 54 لاحقًا دون وجود أي dependency عكسية أو
+- [x] cancellation scope مستقرة ويمكن أن تستهلكها 50b و50c.
+- [x] العقد العام قابل لاستهلاك Plan 54 لاحقًا دون وجود أي dependency عكسية أو
       background implementation داخل هذه المهمة.
-- [ ] Stop لا يعتمد على اكتمال provider/tool Future كي يخرج من الانتظار غير المحدود.
-- [ ] اختبارات run isolation وstop recovery الحالية لا تتراجع.
-- [ ] Reference parity audit يثبت أن التنفيذ والاختبارات يحققان كل قرار
+- [x] Stop لا يعتمد على اكتمال provider/tool Future كي يخرج من الانتظار غير المحدود.
+- [x] اختبارات run isolation وstop recovery الحالية لا تتراجع.
+- [x] Reference parity audit يثبت أن التنفيذ والاختبارات يحققان كل قرار
       `Adopt/Adapt` مسجل، أو يعيد أي deviation إلى تصميم المهمة.
 
 ## 6. الملفات المتوقعة

@@ -48,6 +48,7 @@ class SuspendedRun {
 class SessionRunOrchestrator implements SessionQueueProviderOverride {
   static const controlledRestartCheckpointTimeout = Duration(minutes: 1);
   static const providerRestartCancellationTimeout = Duration(seconds: 5);
+  static const runStopCleanupTimeout = Duration(seconds: 5);
   static const controlledRestartCheckpointPollInterval = Duration(
     milliseconds: 25,
   );
@@ -442,7 +443,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     }
     if (stopFuture != null) {
       try {
-        await stopFuture;
+        await stopFuture.timeout(runStopCleanupTimeout);
+      } on TimeoutException {
+        _logger.warning(
+          'Run stop cleanup exceeded the bounded deadline for session '
+          '$sessionId; publication remains invalidated.',
+        );
       } on RuntimeRecoveryCancelled catch (error) {
         // Stop intentionally aborts an active recovery wait. The stream
         // cancellation can surface that expected lifecycle transition through

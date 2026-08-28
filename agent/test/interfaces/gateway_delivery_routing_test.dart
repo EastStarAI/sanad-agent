@@ -12,6 +12,7 @@ import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
+import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
@@ -107,6 +108,17 @@ void main() {
     when(mockAgentRunner.requestStop()).thenReturn(null);
     when(mockAgentRunner.beginAuthoritativeRun(any)).thenReturn(null);
     when(mockAgentRunner.endAuthoritativeRun(any)).thenReturn(null);
+    when(
+      mockAgentRunner.attachCancellationScope(
+        argThat(isA<RunCancellationScope>()),
+      ),
+    ).thenReturn(null);
+    when(
+      mockAgentRunner.detachCancellationScope(
+        argThat(isA<RunCancellationScope>()),
+      ),
+    ).thenReturn(null);
+    when(mockAgentRunner.canPublishRunEvents).thenReturn(true);
 
     final mockSessionDb = MockSessionDB();
     when(mockSessionManager.db).thenReturn(mockSessionDb);

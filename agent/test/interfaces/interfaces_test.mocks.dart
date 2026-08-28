@@ -9,20 +9,21 @@ import 'package:mockito/mockito.dart' as _i1;
 import 'package:mockito/src/dummies.dart' as _i15;
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart' as _i4;
 import 'package:sanad_agent/core/models/message.dart' as _i10;
-import 'package:sanad_agent/core/models/tool_call.dart' as _i20;
+import 'package:sanad_agent/core/models/tool_call.dart' as _i21;
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart' as _i3;
 import 'package:sanad_agent/engine/agent_context_assembler.dart' as _i9;
 import 'package:sanad_agent/engine/agent_runner.dart' as _i18;
 import 'package:sanad_agent/engine/context_engine.dart' as _i7;
-import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart' as _i23;
+import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart' as _i24;
+import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart' as _i19;
 import 'package:sanad_agent/evolution/db/session_db.dart' as _i11;
 import 'package:sanad_agent/evolution/memory/file_memory_store.dart' as _i8;
-import 'package:sanad_agent/evolution/models/pending_steer_record.dart' as _i19;
+import 'package:sanad_agent/evolution/models/pending_steer_record.dart' as _i20;
 import 'package:sanad_agent/evolution/models/session_query.dart' as _i13;
 import 'package:sanad_agent/evolution/models/session_state.dart' as _i12;
-import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart' as _i21;
+import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart' as _i22;
 import 'package:sanad_agent/evolution/session_manager.dart' as _i5;
-import 'package:sanad_agent/evolution/title_service.dart' as _i22;
+import 'package:sanad_agent/evolution/title_service.dart' as _i23;
 import 'package:sanad_agent/interfaces/models/delivery/models.dart' as _i2;
 import 'package:sanad_agent/interfaces/models/gateway_event.dart' as _i17;
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart' as _i14;
@@ -294,6 +295,14 @@ class MockAgentRunner extends _i1.Mock implements _i18.AgentRunner {
           as bool);
 
   @override
+  bool get canPublishRunEvents =>
+      (super.noSuchMethod(
+            Invocation.getter(#canPublishRunEvents),
+            returnValue: false,
+          )
+          as bool);
+
+  @override
   _i9.AgentContextAssembler get contextAssembler =>
       (super.noSuchMethod(
             Invocation.getter(#contextAssembler),
@@ -399,6 +408,20 @@ class MockAgentRunner extends _i1.Mock implements _i18.AgentRunner {
   );
 
   @override
+  void attachCancellationScope(_i19.RunCancellationScope? scope) =>
+      super.noSuchMethod(
+        Invocation.method(#attachCancellationScope, [scope]),
+        returnValueForMissingStub: null,
+      );
+
+  @override
+  void detachCancellationScope(_i19.RunCancellationScope? scope) =>
+      super.noSuchMethod(
+        Invocation.method(#detachCancellationScope, [scope]),
+        returnValueForMissingStub: null,
+      );
+
+  @override
   void beginAuthoritativeRun(
     String? runId, {
     String? workItemId,
@@ -416,7 +439,7 @@ class MockAgentRunner extends _i1.Mock implements _i18.AgentRunner {
   void configurePendingSteerLifecycle({
     required String? runId,
     required int? generation,
-    void Function(_i19.PendingSteerRecord)? onChanged,
+    void Function(_i20.PendingSteerRecord)? onChanged,
   }) => super.noSuchMethod(
     Invocation.method(#configurePendingSteerLifecycle, [], {
       #runId: runId,
@@ -450,7 +473,7 @@ class MockAgentRunner extends _i1.Mock implements _i18.AgentRunner {
 
   @override
   _i16.Future<void> executeToolCalls(
-    List<_i20.ToolCall>? toolCalls, {
+    List<_i21.ToolCall>? toolCalls, {
     required bool? parallel,
     _i16.Future<void> Function({
       required bool isError,
@@ -523,7 +546,7 @@ class MockAgentRunner extends _i1.Mock implements _i18.AgentRunner {
           as _i16.Future<_i10.Message>);
 
   @override
-  bool shouldParallelizeToolBatch(List<_i20.ToolCall>? toolCalls) =>
+  bool shouldParallelizeToolBatch(List<_i21.ToolCall>? toolCalls) =>
       (super.noSuchMethod(
             Invocation.method(#shouldParallelizeToolBatch, [toolCalls]),
             returnValue: false,
@@ -893,28 +916,28 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
           as Map<String, dynamic>?);
 
   @override
-  void saveSuspendedCheckpoint(_i21.SuspendedCheckpoint? checkpoint) =>
+  void saveSuspendedCheckpoint(_i22.SuspendedCheckpoint? checkpoint) =>
       super.noSuchMethod(
         Invocation.method(#saveSuspendedCheckpoint, [checkpoint]),
         returnValueForMissingStub: null,
       );
 
   @override
-  _i21.SuspendedCheckpoint? getSuspendedCheckpointByRequestId(
+  _i22.SuspendedCheckpoint? getSuspendedCheckpointByRequestId(
     String? requestId,
   ) =>
       (super.noSuchMethod(
             Invocation.method(#getSuspendedCheckpointByRequestId, [requestId]),
           )
-          as _i21.SuspendedCheckpoint?);
+          as _i22.SuspendedCheckpoint?);
 
   @override
-  List<_i21.SuspendedCheckpoint> listSuspendedCheckpoints({String? status}) =>
+  List<_i22.SuspendedCheckpoint> listSuspendedCheckpoints({String? status}) =>
       (super.noSuchMethod(
             Invocation.method(#listSuspendedCheckpoints, [], {#status: status}),
-            returnValue: <_i21.SuspendedCheckpoint>[],
+            returnValue: <_i22.SuspendedCheckpoint>[],
           )
-          as List<_i21.SuspendedCheckpoint>);
+          as List<_i22.SuspendedCheckpoint>);
 
   @override
   void updateSuspendedCheckpointStatus({
@@ -1181,28 +1204,28 @@ class MockSessionDB extends _i1.Mock implements _i11.SessionDB {
   );
 
   @override
-  void saveSuspendedCheckpoint(_i21.SuspendedCheckpoint? checkpoint) =>
+  void saveSuspendedCheckpoint(_i22.SuspendedCheckpoint? checkpoint) =>
       super.noSuchMethod(
         Invocation.method(#saveSuspendedCheckpoint, [checkpoint]),
         returnValueForMissingStub: null,
       );
 
   @override
-  _i21.SuspendedCheckpoint? getSuspendedCheckpointByRequestId(
+  _i22.SuspendedCheckpoint? getSuspendedCheckpointByRequestId(
     String? requestId,
   ) =>
       (super.noSuchMethod(
             Invocation.method(#getSuspendedCheckpointByRequestId, [requestId]),
           )
-          as _i21.SuspendedCheckpoint?);
+          as _i22.SuspendedCheckpoint?);
 
   @override
-  List<_i21.SuspendedCheckpoint> listSuspendedCheckpoints({String? status}) =>
+  List<_i22.SuspendedCheckpoint> listSuspendedCheckpoints({String? status}) =>
       (super.noSuchMethod(
             Invocation.method(#listSuspendedCheckpoints, [], {#status: status}),
-            returnValue: <_i21.SuspendedCheckpoint>[],
+            returnValue: <_i22.SuspendedCheckpoint>[],
           )
-          as List<_i21.SuspendedCheckpoint>);
+          as List<_i22.SuspendedCheckpoint>);
 
   @override
   void updateSuspendedCheckpointStatus({
@@ -1248,7 +1271,7 @@ class MockSessionDB extends _i1.Mock implements _i11.SessionDB {
 /// A class which mocks [TitleService].
 ///
 /// See the documentation for Mockito's code generation for more information.
-class MockTitleService extends _i1.Mock implements _i22.TitleService {
+class MockTitleService extends _i1.Mock implements _i23.TitleService {
   MockTitleService() {
     _i1.throwOnMissingStub(this);
   }
@@ -1259,7 +1282,7 @@ class MockTitleService extends _i1.Mock implements _i22.TitleService {
     required String? userMessage,
     required String? assistantResponse,
     String? modelOverride,
-    _i23.LLMRouteSnapshot? route,
+    _i24.LLMRouteSnapshot? route,
   }) =>
       (super.noSuchMethod(
             Invocation.method(#generateTitle, [], {

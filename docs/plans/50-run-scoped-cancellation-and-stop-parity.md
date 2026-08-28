@@ -42,7 +42,19 @@ Stop accepted
 6. حدث `stopped` في العميل ينهي thinking، لكنه لا يحول tool events الجارية إلى حالة terminal.
 7. النتيجة المتأخرة قد تحفظ في التاريخ بعد invalidation من دون أن تصل إلى live projection، فتختلف الواجهة عن reload.
 
-## 1.2 قاعدة إدارة التقدم
+## 1.2 قاعدة التسليم والدمج
+
+- يُنفَّذ Plan 50 بالكامل داخل **worktree معزول** واحد (فرع تجميعي مثل
+  `feat/plan-50-run-cancellation`)؛ لا تُدمج أي مهمة فرعية أو gate على
+  `main` أثناء التنفيذ.
+- تُنفَّذ المهام `50a`–`50f` على نفس الفرع التجميعي داخل الـworktree، مع
+  commits مرحلية اختيارية لكل gate مكتمل.
+- لا يُفتح PR إلى `main` إلا بعد إغلاق **50f**، تجميع كل التغييرات في فرع
+  واحد، ونجاح التحقق الكامل (analyzer + اختبارات مركزة + سيناريوهات QA
+  المطلوبة).
+- يبقى `main` نظيفًا حتى مراجعة بشرية وموافقة صريحة على PR التجميعي.
+
+## 1.3 قاعدة إدارة التقدم
 
 - كل مهمة تبدأ بـGate R0 للتأصيل الخارجي قبل أول Gate تنفيذية. الحزمة المفقودة
   أو القديمة تشغّل مسار authoring/refresh أولًا، ولا تسجل المهمة `blocked` إلا
@@ -58,12 +70,12 @@ Stop accepted
 - العقد التقني الحاكم للسلوك هو
   [Run Cancellation and Process Ownership](../technical/run_cancellation_and_process_ownership.md).
 
-## 1.3 لوحة التقدم
+## 1.4 لوحة التقدم
 
 | المهمة | الحالة | Gate الحالية | سقف الملفات | شرط الانتقال |
 |---|---|---|---:|---|
-| 50a Cancellation Core | `pending` | A0 | 12 | اعتماد primitive وbounded stop contract |
-| 50b Provider Interruption | `pending` | Waiting | 14 | اكتمال 50a |
+| 50a Cancellation Core | `complete` | closed | 12 | اعتماد primitive وbounded stop contract |
+| 50b Provider Interruption | `pending` | A0 | 14 | اكتمال 50a |
 | 50c Tool/Shell Cancellation | `pending` | Waiting | 14 | اكتمال 50a |
 | 50d Terminal Event Durability | `pending` | Waiting | 14 | اكتمال 50a و50c |
 | 50e Client Live/History Parity | `pending` | Waiting | 14 | اكتمال 50d |

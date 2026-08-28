@@ -30,3 +30,9 @@ This contract applies to `agent/lib/engine/`.
 - Missing providers degrade to the lazy missing-provider adapter.
 - Automatic failover within one model invocation must exclude every provider instance that already failed before streaming; it must never revisit an exhausted route in the same chain.
 - Internal accumulated usage remains separate from the latest immutable context-usage projection exposed to clients.
+
+## Run Cancellation
+- `RunCancellationScope` is the run-owned cancellation primitive keyed by `runId`; provider, tool, and wait layers register bounded cleanup callbacks on it.
+- `AgentRunner` attaches to the active scope for the authoritative turn and must not publish run-scoped output after scope invalidation.
+- `release()` on a registration handle is idempotent and removes a resource from future cleanup without cancelling it.
+- Stop acceptance invalidates publication synchronously; cleanup is parallel, bounded, and reports a typed terminal outcome.
