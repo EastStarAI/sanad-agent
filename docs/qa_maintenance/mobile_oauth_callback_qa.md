@@ -24,7 +24,7 @@ description: "Regression and physical-device gates for PKCE callback delivery th
 | Entitlements | Exactly the intended Client Associated Domains are present; old Portal claims are absent. |
 | iOS lifecycle | AppDelegate registers plugins and calls `super.application(...didFinishLaunching...)`; no override swallows `continue userActivity` or scene delivery. |
 | Callback filtering | Wrong scheme, host, port, path, user-info, or fragment is ignored; exact callback with non-empty code/state is delivered once. The Development custom scheme is accepted only by a Debug iOS build compiled for Development and never by Profile/Release or Production config. |
-| Router ownership | `FlutterDeepLinkingEnabled=false`; callback query cannot become a GoRouter location or diagnostic. |
+| Router ownership | `FlutterDeepLinkingEnabled=false`; callback query cannot become a GoRouter location or diagnostic. After redemption, `/login` redirects to bootstrap without preserving `/login` as `from`; stale auth-only or external bootstrap destinations fall back to `/home` instead of creating a redirect loop or 404. |
 | Portal redirect | Mobile transaction registration is exact and OAuth completion redirects iOS from Portal to the configured Client host while retaining one-time PKCE code/state semantics. |
 | AASA | Every Client host returns `200`, JSON, no redirect, exact app ID, and only `/oauth/ios`; Apple CDN matches. |
 | HTTP fallback | Exact callback location has `access_log off`, strips the query with a no-store redirect, and does not proxy to app-site or Portal. |
