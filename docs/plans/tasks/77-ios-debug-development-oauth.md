@@ -21,6 +21,14 @@ Allow any Debug iOS build targeting Development—including Simulator and physic
 4. Add focused unit and static contract tests proving exact matching and Production exclusion.
 5. Update authentication design and QA documentation.
 
+## Execution gates
+
+- [x] Add exact Development-only iOS Debug callback selection.
+- [x] Preserve claimed HTTPS callbacks for non-Debug builds.
+- [x] Add focused selection, callback, and platform contract tests.
+- [x] Pass formatting, analysis, and focused tests.
+- [ ] Merge the private Portal registration and complete a real Development login.
+
 ## Definition of Done
 
 - `fvm flutter analyze` passes.
