@@ -245,8 +245,10 @@ class AppRouter {
     // 1. Authenticated state
     if (authState is AuthAuthenticated) {
       if (isLoggingIn) {
-        final requestedLocation = currentUri.queryParameters['from'];
-        if (requestedLocation != null && requestedLocation.isNotEmpty) {
+        final requestedLocation = _authenticatedAppLocation(
+          currentUri.queryParameters['from'],
+        );
+        if (requestedLocation != null) {
           return _debugRedirect(
             Uri(
               path: AppRoutes.splash,
@@ -259,7 +261,7 @@ class AppRouter {
           );
         }
         return _debugRedirect(
-          _authLocationWithReturnTo(AppRoutes.splash, currentUri),
+          AppRoutes.splash,
           authState: authState,
           uri: currentUri,
           matchedLocation: matchedLocation,
@@ -274,10 +276,13 @@ class AppRouter {
             ? (gatewayStatus?.isLocalConnected == true || gatewayStatus?.isCloudReady == true)
             : (gatewayStatus?.isCloudReady == true || gatewayStatus?.sanadGateway == SanadGatewayStatus.disconnected);
         if (isReady) {
-          final requestedLocation = currentUri.queryParameters['from'];
-          final target = (requestedLocation != null && requestedLocation.isNotEmpty)
-              ? requestedLocation
-              : (gatewayStatus?.recommendedRoute ?? AppRoutes.home);
+          final requestedLocation = _authenticatedAppLocation(
+            currentUri.queryParameters['from'],
+          );
+          final recommendedLocation = _authenticatedAppLocation(
+            gatewayStatus?.recommendedRoute,
+          );
+          final target = requestedLocation ?? recommendedLocation ?? AppRoutes.home;
           return _debugRedirect(
             target,
             authState: authState,
@@ -392,6 +397,17 @@ class AppRouter {
       'uriPath=${uri.path} redirectPath=$redirectPath reason=$reason',
     );
     return redirect;
+  }
+
+  static String? _authenticatedAppLocation(String? location) {
+    if (location == null || location.isEmpty) return null;
+    final uri = Uri.tryParse(location);
+    if (uri == null || uri.hasScheme || uri.host.isNotEmpty) return null;
+    final path = uri.path;
+    if (path.isEmpty || path == AppRoutes.splash || path == AppRoutes.login) {
+      return null;
+    }
+    return uri.toString();
   }
 
   static String _authLocationWithReturnTo(String authPath, Uri currentUri) {

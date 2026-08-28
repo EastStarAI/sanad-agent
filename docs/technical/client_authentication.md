@@ -98,7 +98,11 @@ pin a public commit reachable from public `main`, not a content-equivalent PR
 head after squash merge. `app_links` subscribes before the system browser opens,
 accepts cold-start and warm-link events, and filters exact scheme, host, port,
 and path before code/state validation. Flutter's competing built-in Android
-deep-link handler is disabled to prevent duplicate callback delivery.
+deep-link handler is disabled to prevent duplicate callback delivery. After
+successful redemption, authenticated navigation enters the bootstrap route
+without preserving `/login` as a return destination. Bootstrap rejects stale
+auth-only, malformed, or external destinations and falls back to `/home`,
+preventing `/login` ↔ `/` redirect loops and a post-login 404.
 
 ## Headless Agent Device Authorization
 
