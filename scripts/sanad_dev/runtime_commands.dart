@@ -759,9 +759,17 @@ String _newRuntimeOwnershipToken() {
   return base64Url.encode(bytes).replaceAll('=', '');
 }
 
-Future<void> handleRuntimeStatus({int? portOverride}) async {
-  final runtime = await _currentRuntime();
-  final activeAgents = await discoverAgentInstances();
+Future<void> handleRuntimeStatus({
+  int? portOverride,
+  String? sanadHomePath,
+}) async {
+  final runtime = await discoverSanadDevRuntime(
+    callerDirectory: _callerDirectory,
+    sanadHomeOverride: sanadHomePath,
+  );
+  final activeAgents = await discoverAgentInstances(
+    sanadHomeOverride: sanadHomePath,
+  );
   final activeClients = await discoverClientInstances();
   final processState = selectRuntimeProcessState(
     activeAgents: activeAgents,

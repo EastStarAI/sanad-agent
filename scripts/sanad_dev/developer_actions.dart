@@ -382,14 +382,24 @@ Future<void> handleClientLogs(
   exit(0);
 }
 
-Future<void> handleClientAttachAction(String action, int? portOverride) async {
-  final instance = await selectClientInstance(portOverride);
+Future<void> handleClientAttachAction(
+  String action,
+  int? portOverride, {
+  String? sanadHomePath,
+}) async {
+  final instance = await selectClientInstance(
+    portOverride,
+    sanadHomePath: sanadHomePath,
+  );
   if (instance == null) exit(1);
 
   final vmUrl = instance.token.isEmpty
       ? 'http://127.0.0.1:${instance.port}/'
       : 'http://127.0.0.1:${instance.port}/${instance.token}/';
-  final runtime = await _currentRuntime();
+  final runtime = await discoverSanadDevRuntime(
+    callerDirectory: _callerDirectory,
+    sanadHomeOverride: sanadHomePath,
+  );
   final expectedClientDirectory =
       '${runtime.repositoryRoot}${Platform.pathSeparator}client';
   if (!_samePath(instance.path, expectedClientDirectory)) {
@@ -410,7 +420,9 @@ Future<void> handleClientAttachAction(String action, int? portOverride) async {
     exitCode = 1;
     return;
   }
-  final activeAgents = await discoverAgentInstances();
+  final activeAgents = await discoverAgentInstances(
+    sanadHomeOverride: sanadHomePath,
+  );
   final workspaceHash = runtime.worktreeId.split('-').last;
   final matchingAgents = activeAgents
       .where((agent) => agent.workspaceHash == workspaceHash)
@@ -850,13 +862,18 @@ Future<void> handleAgentRestart(
   int? portOverride, {
   bool force = false,
   int timeoutSeconds = 60,
+  String? sanadHomePath,
 }) async {
   final instance = await selectAgentInstance(
     portOverride,
     allowStartupGrace: true,
+    sanadHomePath: sanadHomePath,
   );
   if (instance == null) exit(1);
-  final runtime = await _currentRuntime();
+  final runtime = await discoverSanadDevRuntime(
+    callerDirectory: _callerDirectory,
+    sanadHomeOverride: sanadHomePath,
+  );
   final workspaceHash = runtime.worktreeId.split('-').last;
   if (instance.workspaceHash != workspaceHash) {
     stderr.writeln(

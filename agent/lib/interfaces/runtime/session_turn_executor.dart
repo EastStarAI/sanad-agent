@@ -451,6 +451,7 @@ class SessionTurnExecutor {
         return;
       }
 
+      agentRunner.markProviderResponseTerminalCommitted();
       sessionManager.clearInFlightSnapshot(event.sessionId);
       emitResponse(
         GatewayResponse(

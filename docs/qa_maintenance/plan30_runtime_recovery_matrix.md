@@ -22,6 +22,7 @@ This matrix owns verification for:
   - `agent/test/interfaces/interfaces_test.dart`
   - `agent/test/interfaces/gateway_manager_error_containment_test.dart`
   - `agent/test/interfaces/runtime/session_restart_checkpoint_test.dart`
+  - `agent/e2e_test/durable_recovery_restart_e2e_test.dart`
   - `agent/test/core/provider_runtime/runtime_recovery_service_test.dart`
   - `agent/test/evolution/persisted_runtime_state_repository_test.dart` (Gate C)
 - Client:
@@ -110,6 +111,9 @@ This matrix owns verification for:
 68. **Resumable component shutdown**: `sanad-dev stop agent` closes admission, waits for the global safe checkpoint, exits the source supervisor without `requestStopAll()`, and leaves the launcher plus Clients active. `sanad-dev run agent` reclaims checkpoint-safe work exactly once and preserves queued FIFO input. A timeout leaves all components running; `stop agent --force` uses terminal cancellation and produces no later resume.
 69. **Bounded multi-provider failover**: one model invocation records every provider instance that fails before streaming. With three qualified same-model instances, failures on A and B route exactly once to C; no failed instance becomes eligible again within that invocation. If every candidate fails, the session reaches its normal controllable recovery state instead of producing an unbounded route-transition cycle.
 70. **Staged route label coherence**: when the composer stages a provider/model pair that differs from the selected session route, the chip resolves the staged provider through daemon-owned instance metadata and never pairs the staged model with stale session provider display metadata. An unknown UUID remains hidden.
+71. **Known provider failure checkpoint settlement**: a definitive live failure such as HTTP 429 clears `model_request_in_flight`, restores the preceding safe checkpoint, and retains established waiting, Change Provider, Retry, and Stop behavior across daemon restart.
+72. **Provider-only restart timeout ownership**: timeout interruption binds to the exact work-item, run, and generation. A stale blocker cannot cancel or block a completed/replaced owner; a matching owner transitions to blocked recovery before its stream is cancelled.
+73. **Unknown provider outcome replay prevention**: a process interruption while `model_request_in_flight` remains durable restores as blocked, makes Retry, Change Provider, and Stop available, and issues no automatic provider request.
 
 ## Current Status
 

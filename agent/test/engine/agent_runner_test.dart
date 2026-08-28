@@ -1892,6 +1892,7 @@ void main() {
 
         final chunksFuture = runner.streamMessage('Start then stop').toList();
         await adapter.started.future;
+        expect(runner.providerRequestInFlight, isTrue);
         runner.requestStop();
         adapter.release.complete();
 
@@ -1899,6 +1900,7 @@ void main() {
         expect(toolExecutions, 0);
         expect(adapter.callCount, 1);
         expect(runner.stopRequested, isTrue);
+        expect(runner.providerRequestInFlight, isFalse);
       },
     );
 
@@ -4113,6 +4115,7 @@ void main() {
               .continuationMetadata;
           expect(metadata['currently_executing_tools'], isNull);
           expect(metadata['checkpoint_kind'], 'after_tool_result');
+          expect(metadata['checkpoint_before_model_request'], isNull);
           expect(metadata['resume_history_length'], 5);
           final completedResults =
               metadata['completed_tool_results'] as Map<String, dynamic>;

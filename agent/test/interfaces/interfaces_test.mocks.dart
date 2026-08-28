@@ -286,6 +286,14 @@ class MockAgentRunner extends _i1.Mock implements _i18.AgentRunner {
           as bool);
 
   @override
+  bool get providerRequestInFlight =>
+      (super.noSuchMethod(
+            Invocation.getter(#providerRequestInFlight),
+            returnValue: false,
+          )
+          as bool);
+
+  @override
   _i9.AgentContextAssembler get contextAssembler =>
       (super.noSuchMethod(
             Invocation.getter(#contextAssembler),
@@ -357,6 +365,30 @@ class MockAgentRunner extends _i1.Mock implements _i18.AgentRunner {
   @override
   set runStartTime(DateTime? value) => super.noSuchMethod(
     Invocation.setter(#runStartTime, value),
+    returnValueForMissingStub: null,
+  );
+
+  @override
+  void markProviderResponseTerminalCommitted() => super.noSuchMethod(
+    Invocation.method(#markProviderResponseTerminalCommitted, []),
+    returnValueForMissingStub: null,
+  );
+
+  @override
+  void allowManualAmbiguousToolRecovery() => super.noSuchMethod(
+    Invocation.method(#allowManualAmbiguousToolRecovery, []),
+    returnValueForMissingStub: null,
+  );
+
+  @override
+  void beginControlledRestartDrain() => super.noSuchMethod(
+    Invocation.method(#beginControlledRestartDrain, []),
+    returnValueForMissingStub: null,
+  );
+
+  @override
+  void cancelControlledRestartDrain() => super.noSuchMethod(
+    Invocation.method(#cancelControlledRestartDrain, []),
     returnValueForMissingStub: null,
   );
 
@@ -776,6 +808,14 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
           as bool);
 
   @override
+  List<_i12.SessionState> getPendingTitleSessions() =>
+      (super.noSuchMethod(
+            Invocation.method(#getPendingTitleSessions, []),
+            returnValue: <_i12.SessionState>[],
+          )
+          as List<_i12.SessionState>);
+
+  @override
   void deleteSession(String? sessionId) => super.noSuchMethod(
     Invocation.method(#deleteSession, [sessionId]),
     returnValueForMissingStub: null,
@@ -1059,6 +1099,30 @@ class MockSessionDB extends _i1.Mock implements _i11.SessionDB {
           as bool);
 
   @override
+  bool finalizePendingSessionTitle(
+    String? sessionId, {
+    required String? expectedTitle,
+    required String? title,
+  }) =>
+      (super.noSuchMethod(
+            Invocation.method(
+              #finalizePendingSessionTitle,
+              [sessionId],
+              {#expectedTitle: expectedTitle, #title: title},
+            ),
+            returnValue: false,
+          )
+          as bool);
+
+  @override
+  List<_i12.SessionState> getPendingTitleSessions() =>
+      (super.noSuchMethod(
+            Invocation.method(#getPendingTitleSessions, []),
+            returnValue: <_i12.SessionState>[],
+          )
+          as List<_i12.SessionState>);
+
+  @override
   void deleteSession(String? sessionId) => super.noSuchMethod(
     Invocation.method(#deleteSession, [sessionId]),
     returnValueForMissingStub: null,
@@ -1219,4 +1283,12 @@ class MockTitleService extends _i1.Mock implements _i22.TitleService {
             ),
           )
           as _i16.Future<String>);
+
+  @override
+  _i16.Future<int> recoverPendingTitles() =>
+      (super.noSuchMethod(
+            Invocation.method(#recoverPendingTitles, []),
+            returnValue: _i16.Future<int>.value(0),
+          )
+          as _i16.Future<int>);
 }
