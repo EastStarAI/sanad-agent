@@ -17,6 +17,7 @@ enum EventStatus {
   running,
   done,
   error,
+  cancelled,
 }
 
 /// Canonical representation of a conversation event
@@ -137,11 +138,9 @@ class CanonicalEvent {
 
   /// Merges another event into this one (e.g. tool_result into tool_use)
   CanonicalEvent merge(CanonicalEvent other) {
-    // Only merge if they represent the same thing (usually same runId)
-    // We prefer non-null values and higher-stage statuses
     return copyWith(
       text: other.text.isNotEmpty ? other.text : text,
-      status: other.status.index > status.index ? other.status : status,
+      status: _terminalStatusPrecedence(status, other.status),
       tool: other.tool != null ? {...?tool, ...other.tool!} : tool,
       plan: other.plan != null ? {...?plan, ...other.plan!} : plan,
       model: other.model ?? model,
@@ -164,6 +163,19 @@ class CanonicalEvent {
   String toString() {
     return 'CanonicalEvent(id: $id, kind: $kind, status: $status, text: ${text.length > 20 ? text.substring(0, 20) : text})';
   }
+}
+
+int terminalStatusRank(EventStatus status) => switch (status) {
+  EventStatus.running => 0,
+  EventStatus.done => 1,
+  EventStatus.error => 2,
+  EventStatus.cancelled => 3,
+};
+
+EventStatus _terminalStatusPrecedence(EventStatus current, EventStatus incoming) {
+  return terminalStatusRank(incoming) >= terminalStatusRank(current)
+      ? incoming
+      : current;
 }
 
 LlmUsageSnapshot? latestContextUsage(List<CanonicalEvent> events) {

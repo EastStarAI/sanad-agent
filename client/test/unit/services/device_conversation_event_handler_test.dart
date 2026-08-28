@@ -604,6 +604,65 @@ void main() {
       PendingSteerState.delivered,
     );
   });
+
+  test('tool_result cancelled closes running tool without spinner state', () async {
+    socket.eventRouter.routeEvent(
+      _envelope('tool_use', {
+        'tool': 'shell_execute',
+        'input': '{"command":"sleep 30"}',
+        'session_id': 'session-1',
+        'run_id': 'run-cancel',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-cancel-1',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('tool_result', {
+        'tool': 'shell_execute',
+        'output': 'Command cancelled by user.',
+        'status': 'cancelled',
+        'isError': true,
+        'session_id': 'session-1',
+        'run_id': 'run-cancel',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-cancel-1',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final tool = store.currentMessages.singleWhere(
+      (event) => event.kind == EventKind.toolCall,
+    );
+    expect(tool.status, EventStatus.cancelled);
+    expect(tool.toolOutput, 'Command cancelled by user.');
+  });
+
+  test('stopped cancels running tools for the same run as defensive fallback', () async {
+    socket.eventRouter.routeEvent(
+      _envelope('tool_use', {
+        'tool': 'shell_execute',
+        'input': '{"command":"sleep 30"}',
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-stop-1',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('stopped', {
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final tool = store.currentMessages.singleWhere(
+      (event) => event.kind == EventKind.toolCall,
+    );
+    expect(tool.status, EventStatus.cancelled);
+    expect(tool.toolOutput, 'Command cancelled by user.');
+  });
 }
 
 Map<String, dynamic> _envelope(String event, Map<String, dynamic> payload) => {

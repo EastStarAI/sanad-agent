@@ -613,7 +613,12 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   // ── Helpers & Data ────────────────────────────────────────────────────────
 
   Color _getTitleColor(BuildContext context) {
-    if (widget.event.status == EventStatus.running) return Theme.of(context).colorScheme.primary;
+    if (widget.event.status == EventStatus.running) {
+      return Theme.of(context).colorScheme.primary;
+    }
+    if (widget.event.status == EventStatus.cancelled) {
+      return Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6);
+    }
     if (widget.event.kind == EventKind.error || widget.event.status == EventStatus.error) {
       return Theme.of(context).colorScheme.error;
     }

@@ -85,6 +85,29 @@ class ConversationState {
     _events.removeWhere((event) => event.id == id);
   }
 
+  /// Defensive fallback when `stopped` arrives before a terminal tool_result.
+  void cancelRunningToolsForRun({
+    required String runId,
+    String? sessionId,
+    String message = 'Command cancelled by user.',
+  }) {
+    for (var index = 0; index < _events.length; index++) {
+      final event = _events[index];
+      if (event.kind != EventKind.toolCall || event.status != EventStatus.running) {
+        continue;
+      }
+      if (event.runId != runId) continue;
+      if (sessionId != null && event.sessionId != sessionId) continue;
+      _events[index] = event.copyWith(
+        status: EventStatus.cancelled,
+        tool: {
+          ...?event.tool,
+          'output': message,
+        },
+      );
+    }
+  }
+
   bool truncateAtUserRequest(String requestId) {
     final index = _events.indexWhere(
       (event) => event.kind == EventKind.userMessage && event.requestId == requestId,
@@ -331,13 +354,9 @@ class ConversationState {
   }
 
   EventStatus _advanceStatus(EventStatus current, EventStatus incoming) {
-    // error wins, then done, then running.
-    const rank = {
-      EventStatus.running: 0,
-      EventStatus.done: 1,
-      EventStatus.error: 2,
-    };
-    return rank[incoming]! >= rank[current]! ? incoming : current;
+    return terminalStatusRank(incoming) >= terminalStatusRank(current)
+        ? incoming
+        : current;
   }
 
   void dispose() {}

@@ -548,6 +548,9 @@ class ToolPresentationHelper {
     if (cleanTitle == 'Ran' && event.status == EventStatus.running) {
       return 'Running';
     }
+    if (cleanTitle == 'Ran' && event.status == EventStatus.cancelled) {
+      return 'Cancelled';
+    }
     return cleanTitle;
   }
 
@@ -596,6 +599,9 @@ class ToolPresentationHelper {
   }
 
   static (IconData, Color) getEventIconData(BuildContext context, CanonicalEvent event) {
+    if (event.status == EventStatus.cancelled) {
+      return (Icons.cancel_outlined, Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6));
+    }
     if (event.status == EventStatus.error) {
       return (Icons.error_outline, Theme.of(context).colorScheme.error);
     }

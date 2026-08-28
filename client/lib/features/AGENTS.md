@@ -34,3 +34,4 @@ Dependencies must follow:
 - Client-originated command correlation uses the shared UUID-backed request-id generator. Never derive request identity from wall-clock precision.
 - Feature UI must not read agent-owned files or discover agent-owned catalogs directly when a daemon query surface exists.
 - Cross-feature navigation and composition belong to their owning Home/core coordinators; individual feature widgets must not create competing global routing state.
+- Tool cancellation projects `EventStatus.cancelled` with terminal precedence; live `tool_result` and history hydration must agree, and `stopped` defensively closes same-run running tools that missed a terminal packet.

@@ -631,6 +631,27 @@ class DeviceConversationStore {
     if (changed) _emitMessages();
   }
 
+  void cancelRunningToolsForRun({
+    required String runId,
+    String? sessionId,
+    String message = 'Command cancelled by user.',
+  }) {
+    final hadRunningTools = _conversation.events.any(
+      (event) =>
+          event.kind == EventKind.toolCall &&
+          event.status == EventStatus.running &&
+          event.runId == runId &&
+          (sessionId == null || event.sessionId == sessionId),
+    );
+    if (!hadRunningTools) return;
+    _conversation.cancelRunningToolsForRun(
+      runId: runId,
+      sessionId: sessionId,
+      message: message,
+    );
+    _emitMessages();
+  }
+
   void updateProcessingState(String? type, String? sessionId) {
     // Compatibility no-op. Session processing is projected exclusively from
     // authoritative execution snapshots.

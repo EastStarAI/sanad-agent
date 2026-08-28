@@ -78,6 +78,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         'tool': row['tool'] ?? _historyToolName(metadata['tool']) ?? toolMetadata,
         'output': row['output'] ?? metadata['output'] ?? toolMetadata?['output'],
         'isError': row['isError'] ?? metadata['isError'],
+        'status': row['status'] ?? metadata['status'],
       },
       'tool_call' => <String, dynamic>{
         'tool': row['tool'] ?? toolMetadata ?? _historyToolName(metadata['tool']),
@@ -263,7 +264,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         return CanonicalEvent(
           id: _toolId(toolCallId, runId, event['tool'], eventId, timestamp),
           kind: EventKind.toolCall,
-          status: EventStatus.running,
+          status: status ?? EventStatus.running,
           tool: {
             'name': event['tool'] ?? 'Unknown Tool',
             'input': event['input'],
@@ -288,12 +289,20 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
 
       case 'tool_result':
         final output = event['output']?.toString() ?? '';
-        final isError = event['isError'] == true || status == EventStatus.error;
+        final explicitStatus = _extractStatus(event['status']);
+        final isCancelled =
+            explicitStatus == EventStatus.cancelled ||
+            event['status']?.toString() == 'cancelled';
+        final isError =
+            !isCancelled &&
+            (event['isError'] == true || explicitStatus == EventStatus.error);
 
         return CanonicalEvent(
           id: _toolId(toolCallId, runId, event['tool'], eventId, timestamp),
           kind: EventKind.toolCall,
-          status: isError ? EventStatus.error : EventStatus.done,
+          status: isCancelled
+              ? EventStatus.cancelled
+              : (isError ? EventStatus.error : EventStatus.done),
           tool: {
             'name': event['tool'] ?? '',
             'output': output,
@@ -497,6 +506,8 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       case 'error':
       case 'failed':
         return EventStatus.error;
+      case 'cancelled':
+        return EventStatus.cancelled;
       default:
         return null;
     }

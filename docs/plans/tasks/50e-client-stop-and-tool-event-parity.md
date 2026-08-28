@@ -1,8 +1,8 @@
 ---
 title: "Task 50e: Client Stop and Tool Event Parity"
 description: "عرض tool cancellation فورًا في Flutter، ودمجها idempotently مع stopped/history ومنع spinner أو late timeout من استبدالها."
-status: "pending"
-current_gate: "Waiting for 50d"
+status: "complete"
+current_gate: "E3 complete"
 priority: "high"
 depends_on: "50d"
 file_budget: 14
