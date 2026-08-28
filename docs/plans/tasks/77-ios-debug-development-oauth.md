@@ -28,7 +28,7 @@ Allow any Debug iOS build targeting Development—including Simulator and physic
 - [x] Add focused selection, callback, and platform contract tests.
 - [x] Pass formatting, analysis, and focused tests.
 - [x] Merge the private Portal registration and pin the merged public Client commit.
-- [ ] Complete a real Development login from an iOS Debug build.
+- [x] Complete a real Development Google login from an iOS Debug Simulator build.
 
 ## Definition of Done
 

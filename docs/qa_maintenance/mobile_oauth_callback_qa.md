@@ -51,6 +51,22 @@ For each environment, complete these checks in order:
 6. Treat Safari rendering either callback host, a `404`, a query-bearing fallback page, app termination, timeout, stale state, or Router navigation as a failed gate. Logs/evidence must never include query, fragment, code, state, verifier, access token, or refresh token.
 7. Run lower-environment regressions before accepting Staging or Production. A source merge, health response, stack deployment, AASA origin response, or edge reload alone is insufficient.
 
+## Observed Development iOS Debug login — 2026-08-28
+
+An iPhone 17 Simulator Debug build compiled with exact Development Backend and
+Portal endpoints completed Google authentication through
+`sanad://oauth/ios-development`. Safari offered to return to Sanad, the Client
+redeemed the PKCE-bound code, loaded the authenticated profile, and displayed
+the authenticated New Task surface. No callback query, code, state, verifier,
+or credential was retained in evidence. The account had no registered
+Development Agent, so the final surface correctly reported `No Agents Found`.
+
+An explicit `agent-device open` used to foreground the already-returned app
+briefly exposed the generic `/login` not-found route; `Return to Home` restored
+the authenticated New Task surface. Authentication and credential redemption
+had already completed, but this automation-induced foreground/navigation
+observation should remain visible in future routing regression work.
+
 ## Physical iPhone gate
 
 Use the owner-approved environment build and physical device. A restart or reinstall requires fresh owner approval. Development passed with a signed Profile build on 2026-08-12; Staging and Production require their own artifact and evidence and cannot inherit Development acceptance.
