@@ -36,6 +36,8 @@ class DaemonRestartPreparation {
     'message': switch (outcome) {
       'safe' => 'Daemon reached a safe restart checkpoint.',
       'forced' => 'Restart timeout expired. Forced daemon restart accepted.',
+      'provider_requests_interrupted' =>
+        'Provider requests exceeded the restart timeout and were cancelled without automatic replay.',
       'already_in_progress' => 'Another daemon restart is already in progress.',
       'cancelled' =>
         'Daemon restart was cancelled by a higher-priority action.',
@@ -125,7 +127,21 @@ class DaemonRestartCoordinator {
       );
     }
 
-    if (!checkpoint.isSafe && !force) {
+    final providerOnlyTimeout =
+        !checkpoint.isSafe &&
+        checkpoint.blockers.isNotEmpty &&
+        checkpoint.blockers.every(
+          (blocker) =>
+              blocker.providerRequestInFlight &&
+              blocker.toolCallIds.isEmpty &&
+              blocker.checkpointRecognized,
+        );
+    if (providerOnlyTimeout || (!checkpoint.isSafe && force)) {
+      await orchestrator?.interruptProviderRequestsForRestart(
+        checkpoint.blockers,
+      );
+    }
+    if (!checkpoint.isSafe && !providerOnlyTimeout && !force) {
       orchestrator?.cancelControlledRestartDrain();
       _restartInProgress = false;
       return DaemonRestartPreparation(
@@ -146,7 +162,11 @@ class DaemonRestartCoordinator {
       requesterSessionId: requesterSessionId,
       requesterToolCallId: requesterToolCallId,
       blockers: checkpoint.blockers,
-      outcome: checkpoint.isSafe ? 'safe' : 'forced',
+      outcome: checkpoint.isSafe
+          ? 'safe'
+          : providerOnlyTimeout
+          ? 'provider_requests_interrupted'
+          : 'forced',
     );
     _activePreparation = preparation;
     return preparation;

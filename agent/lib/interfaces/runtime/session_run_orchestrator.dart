@@ -9,6 +9,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
+import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
@@ -46,6 +47,7 @@ class SuspendedRun {
 
 class SessionRunOrchestrator implements SessionQueueProviderOverride {
   static const controlledRestartCheckpointTimeout = Duration(minutes: 1);
+  static const providerRestartCancellationTimeout = Duration(seconds: 5);
   static const controlledRestartCheckpointPollInterval = Duration(
     milliseconds: 25,
   );
@@ -519,6 +521,78 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     }
   }
 
+  /// Cancels provider streams that exhausted the controlled-restart timeout
+  /// without terminally stopping or replaying their durable work.
+  Future<void> interruptProviderRequestsForRestart(
+    Iterable<ControlledRestartBlocker> blockers,
+  ) async {
+    final providerBlockers = blockers.where(
+      (blocker) => blocker.providerRequestInFlight,
+    );
+    await Future.wait(
+      providerBlockers.map((blocker) async {
+        final activeRun = _turnExecutor.getActiveRun(blocker.sessionId);
+        if (activeRun == null ||
+            !_turnExecutor.ownsRun(activeRun) ||
+            activeRun.workItemId != blocker.workItemId ||
+            activeRun.runId != blocker.runId ||
+            activeRun.generation != blocker.generation ||
+            !activeRun.agentRunner.providerRequestInFlight) {
+          return;
+        }
+
+        final item = blocker.workItemId == null
+            ? null
+            : persistedState?.findWorkItem(blocker.workItemId!);
+        if (item == null ||
+            (item.state != SessionWorkState.running &&
+                item.state != SessionWorkState.resuming) ||
+            item.continuationMetadata['owner_run_id'] != blocker.runId ||
+            item.continuationMetadata['owner_generation'] !=
+                blocker.generation ||
+            item.continuationMetadata['checkpoint_kind'] !=
+                ContinuationCheckpointCoordinator
+                    .checkpointKindModelRequestInFlight) {
+          return;
+        }
+
+        final metadata = Map<String, dynamic>.from(item.continuationMetadata)
+          ..['restart_interrupted_provider_request'] = true;
+        persistedState?.transitionWorkItemState(
+          workItemId: item.workItemId,
+          fromState: item.state,
+          toState: SessionWorkState.blocked,
+          continuationMetadata: metadata,
+        );
+
+        if (getIt.isRegistered<RuntimeRecoveryService>()) {
+          getIt<RuntimeRecoveryService>().reportFailure(
+            sessionId: blocker.sessionId,
+            reason: RuntimeFailureReason.unknown,
+            requestId: item.requestId,
+            providerInstanceId: item.providerInstanceId,
+            title: 'Provider request interrupted for restart',
+            message:
+                'The provider did not finish before the restart timeout. The request was cancelled and will not be sent again automatically. Retry, change provider, or stop the session.',
+            forceBlocked: true,
+            runId: activeRun.runId,
+          );
+        }
+
+        try {
+          await activeRun.requestStop().timeout(
+            providerRestartCancellationTimeout,
+          );
+        } on TimeoutException {
+          _logger.warning(
+            'Provider stream cancellation exceeded the restart cleanup timeout '
+            'for session ${blocker.sessionId}; publication remains invalidated.',
+          );
+        }
+      }),
+    );
+  }
+
   /// Stops all daemon-owned work before a controlled restart.
   Future<void> requestStopAll() async {
     final sessionIds = <String>{
@@ -582,9 +656,17 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           continue;
         }
         final metadata = item.continuationMetadata;
+        final activeRun = _turnExecutor.getActiveRun(sessionId);
+        final providerRequestInFlight =
+            activeRun != null &&
+            _turnExecutor.ownsRun(activeRun) &&
+            activeRun.agentRunner.providerRequestInFlight;
         final checkpointKind = metadata['checkpoint_kind']?.toString();
         final recognizedCheckpoint =
             checkpointKind == AgentRunner.checkpointKindInitialModelRequest ||
+            checkpointKind ==
+                ContinuationCheckpointCoordinator
+                    .checkpointKindModelRequestInFlight ||
             checkpointKind == AgentRunner.checkpointKindAfterToolResult;
         final completedResults = Map<String, dynamic>.from(
           metadata['completed_tool_results'] as Map? ?? const {},
@@ -622,6 +704,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
             (requesterToolCallId != null &&
                 hasValidDeferredResult(requesterToolCallId));
         if (!recognizedCheckpoint ||
+            providerRequestInFlight ||
             executingTools.isNotEmpty ||
             !requesterCompletionSafe) {
           blockers.add(
@@ -629,6 +712,10 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               sessionId: sessionId,
               toolCallIds: executingTools,
               checkpointRecognized: recognizedCheckpoint,
+              providerRequestInFlight: providerRequestInFlight,
+              workItemId: item.workItemId,
+              runId: activeRun?.runId,
+              generation: activeRun?.generation,
             ),
           );
         }
@@ -1645,16 +1732,26 @@ class ControlledRestartBlocker {
     required this.sessionId,
     required this.toolCallIds,
     required this.checkpointRecognized,
+    this.providerRequestInFlight = false,
+    this.workItemId,
+    this.runId,
+    this.generation,
   });
 
   final String sessionId;
   final List<String> toolCallIds;
   final bool checkpointRecognized;
+  final bool providerRequestInFlight;
+  final String? workItemId;
+  final String? runId;
+  final int? generation;
 
   Map<String, dynamic> toJson() => {
     'session_id': sessionId,
     'tool_call_ids': toolCallIds,
-    'reason': checkpointRecognized
+    'reason': providerRequestInFlight
+        ? 'active_provider_request'
+        : checkpointRecognized
         ? 'active_tool_execution'
         : 'unrecognized_checkpoint',
   };

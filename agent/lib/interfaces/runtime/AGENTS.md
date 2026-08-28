@@ -42,7 +42,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 
 ## Restart Recovery
 - Persist continuation checkpoint kind, completed tool results, executing tools, replay-safety metadata, and owner identity.
-- Controlled restart drains every active session for a bounded caller-selected timeout; ordinary timeout never exits, and force exit requires an explicit flag.
+- Controlled restart drains every active session for a bounded caller-selected timeout. An active provider request blocks exit until completion; provider-only timeout may cancel only the exact still-current work-item/run/generation owner, preserves blocked recovery, and exits without automatic replay. A stale timeout snapshot cannot cancel a completed or replaced owner. Other ordinary timeouts never exit, and force exit requires an explicit flag.
 - While restart drain owns admission, queue new work durably and do not promote queued, restored, retry, or auto-resume work until cancellation or the next process restores it.
 - A tool-origin restart may exempt only its exact requester identity before the single response and must await that tool's durable post-response checkpoint before normal exit.
 - A requester-bound deferred result is a valid post-response checkpoint only

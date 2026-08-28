@@ -165,6 +165,9 @@ Use the review skill.''',
       ),
     ).thenReturn(null);
     when(mockAgentRunner.requestStop()).thenReturn(null);
+    when(
+      mockAgentRunner.markProviderResponseTerminalCommitted(),
+    ).thenReturn(null);
     when(mockAgentRunner.beginAuthoritativeRun(any)).thenReturn(null);
     when(mockAgentRunner.endAuthoritativeRun(any)).thenReturn(null);
 
@@ -324,6 +327,118 @@ Use the review skill.''',
       verify(mockPlatform.initialize()).called(1);
       verify(mirrorPlatform.initialize()).called(1);
       verify(mirrorPlatform.eventStream).called(1);
+    },
+  );
+
+  test(
+    'provider restart interruption rejects stale ownership before blocking',
+    () async {
+      final stateDb = AgentStateDatabase.inMemory();
+      final repo = PersistedRuntimeStateRepository(stateDb.db);
+      getIt.registerSingleton<AgentStateDatabase>(stateDb);
+      getIt.registerSingleton<PersistedRuntimeStateRepository>(repo);
+      final recoveryService = RuntimeRecoveryService(
+        MockProviderInstanceRepository(),
+        ProviderRateLimiter(),
+      )..attachPersistedState(repo);
+      getIt.registerSingleton<RuntimeRecoveryService>(recoveryService);
+      addTearDown(() {
+        getIt.unregister<AgentStateDatabase>();
+        getIt.unregister<PersistedRuntimeStateRepository>();
+        getIt.unregister<RuntimeRecoveryService>();
+        stateDb.dispose();
+      });
+      final now = DateTime.now().toUtc().toIso8601String();
+      stateDb.db.execute(
+        '''INSERT INTO sessions (
+          session_id, model, title, metadata, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?)''',
+        [
+          'restart-owner-session',
+          'test-model',
+          'Restart owner',
+          '{}',
+          now,
+          now,
+        ],
+      );
+
+      final providerStream = StreamController<String>();
+      addTearDown(providerStream.close);
+      when(mockAgentRunner.providerRequestInFlight).thenReturn(true);
+      when(
+        mockAgentRunner.streamMessage(
+          any,
+          runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+          providerId: anyNamed('providerId'),
+          model: anyNamed('model'),
+          thinkingMode: anyNamed('thinkingMode'),
+          receivedAt: anyNamed('receivedAt'),
+          onToolEvent: anyNamed('onToolEvent'),
+          onSteerContinuation: anyNamed('onSteerContinuation'),
+          onThoughtDelta: anyNamed('onThoughtDelta'),
+          onReasoningDelta: anyNamed('onReasoningDelta'),
+        ),
+      ).thenAnswer((_) => providerStream.stream);
+
+      final orchestrator = getIt<SessionRunOrchestrator>();
+      unawaited(
+        orchestrator.handleEvent(
+          GatewayEvent(
+            sessionId: 'restart-owner-session',
+            platformId: 'test-platform',
+            message: Message(role: MessageRole.user, content: 'wait'),
+          ),
+        ),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+
+      final item = repo.findActiveWorkItem('restart-owner-session')!;
+      final metadata = Map<String, dynamic>.from(item.continuationMetadata)
+        ..['checkpoint_kind'] = 'model_request_in_flight';
+      repo.transitionWorkItemState(
+        workItemId: item.workItemId,
+        fromState: item.state,
+        toState: item.state,
+        continuationMetadata: metadata,
+      );
+
+      final checkpoint = await orchestrator.waitForControlledRestartCheckpoint(
+        timeout: Duration.zero,
+      );
+      final blocker = checkpoint.blockers.single;
+      expect(blocker.workItemId, item.workItemId);
+      expect(blocker.runId, isNotNull);
+      expect(blocker.generation, isNotNull);
+
+      await orchestrator.interruptProviderRequestsForRestart([
+        ControlledRestartBlocker(
+          sessionId: blocker.sessionId,
+          toolCallIds: blocker.toolCallIds,
+          checkpointRecognized: blocker.checkpointRecognized,
+          providerRequestInFlight: true,
+          workItemId: blocker.workItemId,
+          runId: 'stale-run',
+          generation: blocker.generation,
+        ),
+      ]);
+      expect(repo.findWorkItem(item.workItemId)!.state, item.state);
+      verifyNever(mockAgentRunner.requestStop());
+
+      await orchestrator.interruptProviderRequestsForRestart([blocker]);
+      final interrupted = repo.findWorkItem(item.workItemId)!;
+      expect(interrupted.state, SessionWorkState.blocked);
+      expect(
+        interrupted
+            .continuationMetadata['restart_interrupted_provider_request'],
+        isTrue,
+      );
+      expect(
+        recoveryService.activeNotice('restart-owner-session')?.status,
+        RuntimeNoticeStatus.blocked,
+      );
+      expect(repo.findNotice('restart-owner-session')?.status, 'blocked');
+      verify(mockAgentRunner.requestStop()).called(1);
     },
   );
 
@@ -2327,7 +2442,10 @@ Use the review skill.''',
       await Future<void>.delayed(Duration.zero);
 
       expect(orchestrator.isSessionBusy('session-stop-rate-limit'), isFalse);
-      expect(orchestrator.hasSuspendedEvent('session-stop-rate-limit'), isFalse);
+      expect(
+        orchestrator.hasSuspendedEvent('session-stop-rate-limit'),
+        isFalse,
+      );
       expect(
         responses.where(
           (response) =>
@@ -2596,6 +2714,80 @@ Use the review skill.''',
   );
 
   group('Gate E: Runtime Restoration and FIFO', () {
+    test(
+      'startup blocks an interrupted provider request without replaying it',
+      () async {
+        final stateDb = AgentStateDatabase.inMemory();
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        getIt.registerSingleton<AgentStateDatabase>(stateDb);
+        getIt.registerSingleton<PersistedRuntimeStateRepository>(repo);
+        final recoveryService = RuntimeRecoveryService(
+          MockProviderInstanceRepository(),
+          ProviderRateLimiter(),
+        )..attachPersistedState(repo);
+        getIt.registerSingleton<RuntimeRecoveryService>(recoveryService);
+        addTearDown(() {
+          getIt.unregister<AgentStateDatabase>();
+          getIt.unregister<PersistedRuntimeStateRepository>();
+          getIt.unregister<RuntimeRecoveryService>();
+          stateDb.dispose();
+        });
+
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('provider-crash-session', 'gpt-4o', '2026-08-19', '2026-08-19')",
+        );
+        final now = DateTime.now();
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'provider-crash-work',
+            sessionId: 'provider-crash-session',
+            requestId: 'provider-crash-request',
+            sequence: 1,
+            providerInstanceId: 'provider-a',
+            modelId: 'gpt-4o',
+            state: SessionWorkState.running,
+            attempt: 0,
+            payload: const {'message': 'do not replay this request'},
+            continuationMetadata: const {
+              'owner_run_id': 'provider-crash-run',
+              'owner_generation': 3,
+              'checkpoint_kind': 'model_request_in_flight',
+              'checkpoint_before_model_request': 'initial_model_request',
+              'resume_history_length': 1,
+              'currentTurnStartIndex': 0,
+            },
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+
+        final orchestrator = SessionRunOrchestrator();
+        await orchestrator.restorePersistedState();
+
+        expect(
+          repo.findWorkItem('provider-crash-work')?.state,
+          SessionWorkState.blocked,
+        );
+        expect(
+          recoveryService.activeNotice('provider-crash-session')?.status,
+          RuntimeNoticeStatus.blocked,
+        );
+        expect(
+          orchestrator.hasSuspendedEvent('provider-crash-session'),
+          isTrue,
+        );
+        verifyNever(
+          mockAgentRunner.resumeStream(
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            onToolEvent: anyNamed('onToolEvent'),
+            onSteerContinuation: anyNamed('onSteerContinuation'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        );
+      },
+    );
+
     test(
       'restart restores a suspended ask-user tool as waiting, not blocked',
       () async {
