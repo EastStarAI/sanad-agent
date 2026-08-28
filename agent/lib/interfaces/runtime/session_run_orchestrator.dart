@@ -56,6 +56,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   final _logger = Logger('SessionRunOrchestrator');
 
   final Map<String, SuspendedRun> _suspendedEvents = {};
+  final Map<String, Future<void>> _stopRequests = {};
   final Set<String> _busySessions = {};
   final Set<String> _resumingSessions = {};
   bool _controlledRestartDraining = false;
@@ -368,6 +369,38 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     bool forceEmitStopped = false,
     String? stopRequestId,
     String? recoveryOwnerToken,
+  }) {
+    final existing = _stopRequests[sessionId];
+    if (existing != null) {
+      return existing;
+    }
+    final future = _requestStop(
+      sessionId,
+      forceEmitStopped: forceEmitStopped,
+      stopRequestId: stopRequestId,
+      recoveryOwnerToken: recoveryOwnerToken,
+    );
+    _stopRequests[sessionId] = future;
+    void clearCompletedStop() {
+      if (identical(_stopRequests[sessionId], future)) {
+        _stopRequests.remove(sessionId);
+      }
+    }
+
+    unawaited(
+      future.then<void>(
+        (_) => clearCompletedStop(),
+        onError: (Object _, StackTrace _) => clearCompletedStop(),
+      ),
+    );
+    return future;
+  }
+
+  Future<void> _requestStop(
+    String sessionId, {
+    required bool forceEmitStopped,
+    required String? stopRequestId,
+    required String? recoveryOwnerToken,
   }) async {
     final activeRun = _turnExecutor.getActiveRun(sessionId);
     final stoppedRunId = activeRun?.runId;
@@ -468,16 +501,17 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       }
     }
     if (activeRun != null) {
-      final terminalRecords = ToolTerminalizationService(
-        repository: persistedState,
-        sessionManager: getIt<SessionManager>(),
-      ).terminalizeExecutingTools(
-        sessionId: sessionId,
-        agentRunner: activeRun.agentRunner,
-        runId: activeRun.runId,
-        generation: activeRun.generation,
-        modelStepId: stoppedModelStepId,
-      );
+      final terminalRecords =
+          ToolTerminalizationService(
+            repository: persistedState,
+            sessionManager: getIt<SessionManager>(),
+          ).terminalizeExecutingTools(
+            sessionId: sessionId,
+            agentRunner: activeRun.agentRunner,
+            runId: activeRun.runId,
+            generation: activeRun.generation,
+            modelStepId: stoppedModelStepId,
+          );
       for (final record in terminalRecords) {
         _emitResponse(
           GatewayResponse(
@@ -485,7 +519,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
             message: Message(
               role: MessageRole.tool,
               content: record.message,
-              metadata: record.toHistoryMetadata(modelStepId: stoppedModelStepId),
+              metadata: record.toHistoryMetadata(
+                modelStepId: stoppedModelStepId,
+              ),
             ),
             isComplete: true,
             runId: record.runId,

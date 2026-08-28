@@ -1,12 +1,7 @@
 import 'dart:async';
 
 /// Why an active run entered cancellation.
-enum RunCancellationReason {
-  userStop,
-  timeout,
-  shutdown,
-  superseded,
-}
+enum RunCancellationReason { userStop, timeout, shutdown, superseded }
 
 /// Lifecycle of a run-scoped cancellation owner.
 enum RunCancellationState {
@@ -82,6 +77,7 @@ class _ResourceRegistration {
   bool cleanupStarted = false;
   bool cleanupCompleted = false;
   Object? cleanupError;
+  Future<void>? cleanupFuture;
 
   _ResourceRegistration({required this.label, required this.cleanup});
 }
@@ -133,7 +129,9 @@ class RunCancellationScope {
       _state == RunCancellationState.completed;
 
   /// Closes publication immediately. Safe to call multiple times.
-  void invalidate({RunCancellationReason reason = RunCancellationReason.userStop}) {
+  void invalidate({
+    RunCancellationReason reason = RunCancellationReason.userStop,
+  }) {
     _publicationOpen = false;
     _reason ??= reason;
     _acceptedAt ??= DateTime.now();
@@ -153,7 +151,13 @@ class RunCancellationScope {
     _registrations[id] = registration;
 
     if (_state == RunCancellationState.cancelling) {
-      unawaited(_runRegistrationCleanup(id, registration));
+      _startRegistrationCleanup(id, registration);
+    } else if (_state == RunCancellationState.cancelled ||
+        _state == RunCancellationState.cleanupFailed) {
+      // A resource can finish starting in the same event-loop turn that Stop
+      // terminalizes an otherwise empty scope. It is too late to amend the
+      // terminal report, but the resource must still be cleaned up once.
+      unawaited(_startRegistrationCleanup(id, registration));
     }
 
     return RunCancellationResourceHandle._(this, id);
@@ -195,35 +199,42 @@ class RunCancellationScope {
     _registrations.remove(registrationId);
   }
 
-  Future<RunCancellationReport> _executeCleanup(Duration cleanupDeadline) async {
+  Future<RunCancellationReport> _executeCleanup(
+    Duration cleanupDeadline,
+  ) async {
     final acceptedAt = _acceptedAt ?? DateTime.now();
     final reason = _reason ?? RunCancellationReason.userStop;
-    final pending = Map<String, _ResourceRegistration>.from(_registrations)
-      ..removeWhere((_, registration) => registration.released);
-
+    final stopwatch = Stopwatch()..start();
     var deadlineExceeded = false;
 
-    if (pending.isEmpty) {
-      return _finalizeReport(
-        reason: reason,
-        acceptedAt: acceptedAt,
-        cleanupDeadlineExceeded: false,
-        finalState: RunCancellationState.cancelled,
-      );
-    }
+    while (true) {
+      final pending = Map<String, _ResourceRegistration>.from(_registrations)
+        ..removeWhere((_, registration) => registration.released);
+      if (pending.isEmpty) {
+        break;
+      }
 
-    try {
-      await Future.wait(
-        pending.entries.map(
-          (entry) => _runRegistrationCleanup(entry.key, entry.value),
-        ),
-      ).timeout(cleanupDeadline);
-    } on TimeoutException {
-      deadlineExceeded = true;
+      final remaining = cleanupDeadline - stopwatch.elapsed;
+      if (remaining <= Duration.zero) {
+        deadlineExceeded = true;
+        break;
+      }
+
+      try {
+        await Future.wait(
+          pending.entries.map(
+            (entry) => _startRegistrationCleanup(entry.key, entry.value),
+          ),
+        ).timeout(remaining);
+      } on TimeoutException {
+        deadlineExceeded = true;
+        break;
+      }
     }
+    stopwatch.stop();
 
     if (deadlineExceeded) {
-      for (final entry in pending.entries) {
+      for (final entry in _registrations.entries.toList(growable: false)) {
         final registration = entry.value;
         if (registration.released || _resourceReports.containsKey(entry.key)) {
           continue;
@@ -238,11 +249,9 @@ class RunCancellationScope {
       }
     }
 
-    final hasCleanupFailure = pending.values.any(
-      (registration) =>
-          !registration.released &&
-          registration.cleanupStarted &&
-          !registration.cleanupCompleted,
+    final hasCleanupFailure = _resourceReports.values.any(
+      (report) =>
+          report.outcome == RunCancellationResourceOutcome.cleanupFailed,
     );
 
     return _finalizeReport(
@@ -255,13 +264,26 @@ class RunCancellationScope {
     );
   }
 
+  Future<void> _startRegistrationCleanup(
+    String registrationId,
+    _ResourceRegistration registration,
+  ) {
+    final existing = registration.cleanupFuture;
+    if (existing != null) {
+      return existing;
+    }
+    if (registration.released) {
+      return Future.value();
+    }
+    final cleanupFuture = _runRegistrationCleanup(registrationId, registration);
+    registration.cleanupFuture = cleanupFuture;
+    return cleanupFuture;
+  }
+
   Future<void> _runRegistrationCleanup(
     String registrationId,
     _ResourceRegistration registration,
   ) async {
-    if (registration.released || registration.cleanupStarted) {
-      return;
-    }
     registration.cleanupStarted = true;
     try {
       await registration.cleanup();

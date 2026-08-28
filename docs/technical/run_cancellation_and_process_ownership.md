@@ -31,6 +31,7 @@ accept Stop
 - سبب الإلغاء وأول وقت لقبوله.
 - registrations للموارد التي بدأت داخل الجولة.
 - عملية إلغاء مشتركة تنضم إليها طلبات Stop المكررة.
+- عملية Stop مشتركة على مستوى الجلسة تمنع طلبين متزامنين من تكرار terminalization أو حدث `stopped`.
 - بوابة نشر تُغلق تزامنيًا عند invalidation.
 
 كل registration تنتقل مرة واحدة:
@@ -44,6 +45,10 @@ registered -> cancelling -> cleanup_failed
 `release` تعني انتقال الملكية أو اكتمال المورد، وليست إلغاءً. لا تنجح إلا بعد
 اكتمال طبيعي أو إثبات مالك جديد. الوصول المتأخر إلى registration محررة أو
 ملغاة عملية idempotent بلا side effect.
+
+أي registration تصل أثناء cancellation تنضم إلى مهلة cleanup الأصلية. وإذا
+اكتمل terminal report قبل وصول registration متسابقة، تُشغّل cleanup الخاصة بها
+مرة واحدة فور التسجيل كي لا يبقى المورد orphan، من دون إعادة فتح التقرير النهائي.
 
 ## 3. الإلغاء المحدود والنتائج
 

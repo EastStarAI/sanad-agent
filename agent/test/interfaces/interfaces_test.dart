@@ -2664,11 +2664,26 @@ Use the review skill.''',
       unawaited(orchestrator.handleEvent(event));
       await Future<void>.delayed(const Duration(milliseconds: 10));
 
-      // Two stops from two clients.
-      await orchestrator.requestStop('session-double-stop');
-      await orchestrator.requestStop('session-double-stop');
+      final responses = <GatewayResponse>[];
+      final responseSubscription = orchestrator.responses.listen(responses.add);
+      addTearDown(responseSubscription.cancel);
+
+      // Two concurrent stops from two clients join one terminal transition.
+      await Future.wait([
+        orchestrator.requestStop('session-double-stop'),
+        orchestrator.requestStop('session-double-stop'),
+      ]);
+      await Future<void>.delayed(Duration.zero);
 
       expect(orchestrator.isSessionBusy('session-double-stop'), isFalse);
+      expect(
+        responses.where(
+          (response) =>
+              response.message.metadata?['canonical_event_type'] == 'stopped',
+        ),
+        hasLength(1),
+      );
+      verify(mockAgentRunner.requestStop()).called(1);
       if (!completer.isCompleted) completer.complete('stopped');
     },
   );

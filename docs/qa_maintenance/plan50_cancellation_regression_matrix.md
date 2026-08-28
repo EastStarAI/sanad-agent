@@ -3,6 +3,14 @@
 Date: 2026-08-29
 Status: verified in aggregation branch `feat/plan-50-run-cancellation`
 
+## Cancellation core (50a)
+
+| Scenario | Expected | Evidence |
+|---|---|---|
+| Registration races active cleanup | Late cleanup joins the original deadline and is reported | `run_cancellation_scope_test.dart` |
+| Registration arrives after terminal cancellation | Cleanup still runs once; the terminal report is not reopened | `run_cancellation_scope_test.dart` |
+| Two clients stop the same session concurrently | One shared Stop operation and one `stopped` event | `interfaces_test.dart` |
+
 ## Provider interruption (50b)
 
 | Scenario | Expected | Evidence |

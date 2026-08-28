@@ -34,7 +34,10 @@ void main() {
       expect(cleanupCount, 1);
       expect(report.finalState, RunCancellationState.cancelled);
       expect(report.resources, hasLength(1));
-      expect(report.resources.first.outcome, RunCancellationResourceOutcome.cancelled);
+      expect(
+        report.resources.first.outcome,
+        RunCancellationResourceOutcome.cancelled,
+      );
     });
 
     test('repeated cancel joins the same operation', () async {
@@ -73,6 +76,54 @@ void main() {
 
       expect(lateCount, 1);
     });
+
+    test(
+      'late hanging registration joins the original cleanup deadline',
+      () async {
+        final initialGate = Completer<void>();
+        scope.register('initial', () => initialGate.future);
+
+        final cancelFuture = scope.cancel(
+          cleanupDeadline: const Duration(milliseconds: 30),
+        );
+        await Future<void>.delayed(Duration.zero);
+        final lateGate = Completer<void>();
+        scope.register('late-hanging', () => lateGate.future);
+        initialGate.complete();
+
+        final report = await cancelFuture;
+
+        expect(report.finalState, RunCancellationState.cleanupFailed);
+        expect(report.cleanupDeadlineExceeded, isTrue);
+        expect(
+          report.resources.where(
+            (resource) => resource.label == 'late-hanging',
+          ),
+          hasLength(1),
+        );
+        expect(
+          report.resources
+              .singleWhere((resource) => resource.label == 'late-hanging')
+              .outcome,
+          RunCancellationResourceOutcome.timedOut,
+        );
+      },
+    );
+
+    test(
+      'registration after terminal cancellation still cleans up once',
+      () async {
+        await scope.cancel();
+        var cleanupCount = 0;
+
+        scope.register('terminal-race', () async {
+          cleanupCount++;
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        expect(cleanupCount, 1);
+      },
+    );
 
     test('release removes registration without running cleanup', () async {
       var cleanupCount = 0;
@@ -118,7 +169,10 @@ void main() {
       final report = await scope.cancel();
 
       expect(report.finalState, RunCancellationState.cleanupFailed);
-      expect(report.resources.first.outcome, RunCancellationResourceOutcome.cleanupFailed);
+      expect(
+        report.resources.first.outcome,
+        RunCancellationResourceOutcome.cleanupFailed,
+      );
     });
 
     test('cleanup deadline produces cleanup_failed without hanging', () async {
@@ -132,20 +186,26 @@ void main() {
 
       expect(report.cleanupDeadlineExceeded, isTrue);
       expect(report.finalState, RunCancellationState.cleanupFailed);
-      expect(report.resources.first.outcome, RunCancellationResourceOutcome.timedOut);
+      expect(
+        report.resources.first.outcome,
+        RunCancellationResourceOutcome.timedOut,
+      );
     });
 
-    test('markCompleted closes publication without cancelling resources', () async {
-      var cleanupCount = 0;
-      scope.register('resource', () async {
-        cleanupCount++;
-      });
+    test(
+      'markCompleted closes publication without cancelling resources',
+      () async {
+        var cleanupCount = 0;
+        scope.register('resource', () async {
+          cleanupCount++;
+        });
 
-      scope.markCompleted();
+        scope.markCompleted();
 
-      expect(scope.isPublicationOpen, isFalse);
-      expect(scope.state, RunCancellationState.completed);
-      expect(cleanupCount, 0);
-    });
+        expect(scope.isPublicationOpen, isFalse);
+        expect(scope.state, RunCancellationState.completed);
+        expect(cleanupCount, 0);
+      },
+    );
   });
 }
