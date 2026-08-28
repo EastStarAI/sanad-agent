@@ -10,6 +10,7 @@ import '../../evolution/session_manager.dart';
 import '../../plugins/plugin_manager.dart';
 import 'continuation_checkpoint_coordinator.dart';
 import 'deferred_tool_result.dart';
+import 'run_cancellation_scope.dart';
 import 'tool_output_guard.dart';
 
 /// Executes tool-call batches (sequential or parallel), persists per-tool
@@ -55,6 +56,7 @@ class ToolExecutionCoordinator {
     required bool parallel,
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
+    RunCancellationScope? cancellationScope,
     Future<void> Function({
       required String toolName,
       String? input,
@@ -160,12 +162,14 @@ class ToolExecutionCoordinator {
               toolCallsToRun,
               callbacks: callbacks,
               ctx: ctx,
+              cancellationScope: cancellationScope,
               onToolEvent: onToolEvent,
             )
           : await _executeSequential(
               toolCallsToRun,
               callbacks: callbacks,
               ctx: ctx,
+              cancellationScope: cancellationScope,
               onToolEvent: onToolEvent,
             );
       finalResults.addAll(executedResults);
@@ -216,10 +220,38 @@ class ToolExecutionCoordinator {
     callbacks.applyPendingSteerToToolResults(toolCalls.length);
   }
 
+  ToolContext _toolContextFor(
+    ToolCall toolCall, {
+    RunCancellationScope? cancellationScope,
+  }) {
+    return ToolContext(
+      sessionId: sessionId,
+      metadata: sessionManager.getSessionMetadata(sessionId) ?? const {},
+      toolCallId: toolCall.id,
+      runId: cancellationScope?.runId,
+      generation: cancellationScope?.generation,
+      cancellationScope: cancellationScope,
+    );
+  }
+
+  bool _canPublishToolEvents(RunCancellationScope? cancellationScope) =>
+      cancellationScope?.isPublicationOpen ?? true;
+
+  Future<void> _maybeEmitToolEvent(
+    RunCancellationScope? cancellationScope, {
+    required Future<void> Function()? emit,
+  }) async {
+    if (emit == null || !_canPublishToolEvents(cancellationScope)) {
+      return;
+    }
+    await emit();
+  }
+
   Future<Map<String, String>> _executeSequential(
     List<ToolCall> toolCallsToRun, {
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
+    RunCancellationScope? cancellationScope,
     required Future<void> Function({
       required String toolName,
       String? input,
@@ -237,12 +269,15 @@ class ToolExecutionCoordinator {
         '🛠️ [Agent] Requesting tool call: ${toolCall.name} (arguments: $argumentsString)',
       );
       if (onToolEvent != null) {
-        await onToolEvent(
-          toolName: toolCall.name,
-          input: argumentsString,
-          isError: false,
-          isStart: true,
-          toolRunId: toolCall.id,
+        await _maybeEmitToolEvent(
+          cancellationScope,
+          emit: () => onToolEvent(
+            toolName: toolCall.name,
+            input: argumentsString,
+            isError: false,
+            isStart: true,
+            toolRunId: toolCall.id,
+          ),
         );
       }
 
@@ -255,6 +290,7 @@ class ToolExecutionCoordinator {
       var result = await _executeSingleToolCall(
         toolCall,
         callbacks: callbacks,
+        cancellationScope: cancellationScope,
         onToolEvent: onToolEvent,
         emitStartEvent: false,
         appendToHistory: false,
@@ -275,12 +311,15 @@ class ToolExecutionCoordinator {
         result = resolution.output;
         isError = resolution.isError;
         if (onToolEvent != null) {
-          await onToolEvent(
-            toolName: toolCall.name,
-            output: result,
-            isError: isError,
-            isStart: false,
-            toolRunId: toolCall.id,
+          await _maybeEmitToolEvent(
+            cancellationScope,
+            emit: () => onToolEvent(
+              toolName: toolCall.name,
+              output: result,
+              isError: isError,
+              isStart: false,
+              toolRunId: toolCall.id,
+            ),
           );
         }
       }
@@ -309,6 +348,7 @@ class ToolExecutionCoordinator {
     List<ToolCall> toolCallsToRun, {
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
+    RunCancellationScope? cancellationScope,
     required Future<void> Function({
       required String toolName,
       String? input,
@@ -326,12 +366,15 @@ class ToolExecutionCoordinator {
     if (onToolEvent != null) {
       await Future.wait(
         toolCallsToRun.map((toolCall) {
-          return onToolEvent(
-            toolName: toolCall.name,
-            input: jsonEncode(toolCall.arguments),
-            isError: false,
-            isStart: true,
-            toolRunId: toolCall.id,
+          return _maybeEmitToolEvent(
+            cancellationScope,
+            emit: () => onToolEvent(
+              toolName: toolCall.name,
+              input: jsonEncode(toolCall.arguments),
+              isError: false,
+              isStart: true,
+              toolRunId: toolCall.id,
+            ),
           );
         }),
       );
@@ -374,11 +417,9 @@ class ToolExecutionCoordinator {
         try {
           final rawResult = await tool.execute(
             toolCall.arguments,
-            context: ToolContext(
-              sessionId: sessionId,
-              metadata:
-                  sessionManager.getSessionMetadata(sessionId) ?? const {},
-              toolCallId: toolCall.id,
+            context: _toolContextFor(
+              toolCall,
+              cancellationScope: cancellationScope,
             ),
           );
           final result = ToolOutputGuard.guardResult(rawResult);
@@ -435,12 +476,15 @@ class ToolExecutionCoordinator {
           '';
       final isError = result.startsWith('Error');
       if (onToolEvent != null) {
-        await onToolEvent(
-          toolName: toolCall.name,
-          output: result,
-          isError: isError,
-          isStart: false,
-          toolRunId: toolCall.id,
+        await _maybeEmitToolEvent(
+          cancellationScope,
+          emit: () => onToolEvent(
+            toolName: toolCall.name,
+            output: result,
+            isError: isError,
+            isStart: false,
+            toolRunId: toolCall.id,
+          ),
         );
       }
       if (isError) {
@@ -462,6 +506,7 @@ class ToolExecutionCoordinator {
   Future<String> executeSingleToolCall(
     ToolCall toolCall, {
     required ToolExecutionCallbacks callbacks,
+    RunCancellationScope? cancellationScope,
     Future<void> Function({
       required String toolName,
       String? input,
@@ -478,6 +523,7 @@ class ToolExecutionCoordinator {
     return _executeSingleToolCall(
       toolCall,
       callbacks: callbacks,
+      cancellationScope: cancellationScope,
       onToolEvent: onToolEvent,
       emitStartEvent: emitStartEvent,
       forcedOutput: forcedOutput,
@@ -489,6 +535,7 @@ class ToolExecutionCoordinator {
   Future<String> _executeSingleToolCall(
     ToolCall toolCall, {
     required ToolExecutionCallbacks callbacks,
+    RunCancellationScope? cancellationScope,
     Future<void> Function({
       required String toolName,
       String? input,
@@ -505,12 +552,15 @@ class ToolExecutionCoordinator {
   }) async {
     final argumentsString = jsonEncode(toolCall.arguments);
     if (emitStartEvent && onToolEvent != null) {
-      await onToolEvent(
-        toolName: toolCall.name,
-        input: argumentsString,
-        isError: false,
-        isStart: true,
-        toolRunId: toolCall.id,
+      await _maybeEmitToolEvent(
+        cancellationScope,
+        emit: () => onToolEvent(
+          toolName: toolCall.name,
+          input: argumentsString,
+          isError: false,
+          isStart: true,
+          toolRunId: toolCall.id,
+        ),
       );
     }
 
@@ -527,11 +577,9 @@ class ToolExecutionCoordinator {
         try {
           result = await tool.execute(
             toolCall.arguments,
-            context: ToolContext(
-              sessionId: sessionId,
-              metadata:
-                  sessionManager.getSessionMetadata(sessionId) ?? const {},
-              toolCallId: toolCall.id,
+            context: _toolContextFor(
+              toolCall,
+              cancellationScope: cancellationScope,
             ),
           );
         } catch (e) {
@@ -550,12 +598,15 @@ class ToolExecutionCoordinator {
         ) !=
         null;
     if (onToolEvent != null && !isDeferredResult) {
-      await onToolEvent(
-        toolName: toolCall.name,
-        output: result,
-        isError: isError,
-        isStart: false,
-        toolRunId: toolCall.id,
+      await _maybeEmitToolEvent(
+        cancellationScope,
+        emit: () => onToolEvent(
+          toolName: toolCall.name,
+          output: result,
+          isError: isError,
+          isStart: false,
+          toolRunId: toolCall.id,
+        ),
       );
     }
 

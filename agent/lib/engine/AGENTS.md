@@ -37,3 +37,5 @@ This contract applies to `agent/lib/engine/`.
 - `release()` on a registration handle is idempotent and removes a resource from future cleanup without cancelling it.
 - Stop acceptance invalidates publication synchronously; cleanup is parallel, bounded, and reports a typed terminal outcome.
 - Provider turns register request-owned HTTP transport on `RunCancellationScope`; shared adapter clients must not be closed by another run's cancellation.
+- `ToolExecutionCoordinator` passes the active scope through `ToolContext` and gates tool start/complete events on `isPublicationOpen`.
+- Shell execution uses `ProcessTreeController` for owned containment and bounded tree termination; tools opt into cooperative cancellation explicitly.

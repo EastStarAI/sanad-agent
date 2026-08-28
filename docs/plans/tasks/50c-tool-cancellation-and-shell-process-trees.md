@@ -1,8 +1,8 @@
 ---
 title: "Task 50c: Tool Cancellation and Shell Process Trees"
 description: "تمرير run cancellation إلى الأدوات وقتل shell process tree المملوكة بالكامل مع نتائج user-cancelled منفصلة عن timeout."
-status: "pending"
-current_gate: "Waiting for 50a"
+status: "complete"
+current_gate: "C4 complete"
 priority: "critical"
 depends_on: "50a"
 file_budget: 14

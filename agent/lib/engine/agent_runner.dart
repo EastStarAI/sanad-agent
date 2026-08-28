@@ -407,6 +407,7 @@ class AgentRunner {
     parallel: parallel,
     callbacks: _RunnerToolCallbacks(this),
     ctx: _checkpointCtx,
+    cancellationScope: _cancellationScope,
     onToolEvent: onToolEvent,
   );
 
@@ -1141,6 +1142,7 @@ class AgentRunner {
         parallel: shouldParallelizeToolBatch(toolCalls),
         callbacks: _RunnerToolCallbacks(this),
         ctx: _checkpointCtx,
+        cancellationScope: _cancellationScope,
       );
       return await _getNextResponse(
         runtimeSystemPrompt: runtimeSystemPrompt,
@@ -1565,6 +1567,7 @@ class AgentRunner {
           parallel: shouldParallelizeToolBatch(toolCalls),
           callbacks: _RunnerToolCallbacks(this),
           ctx: _checkpointCtx,
+          cancellationScope: _cancellationScope,
           onToolEvent: onToolEvent,
         );
         if (_stopRequested) return;
@@ -1750,6 +1753,7 @@ class AgentRunner {
         parallel: shouldParallelizeToolBatch(toolCalls),
         callbacks: _RunnerToolCallbacks(this),
         ctx: _checkpointCtx,
+        cancellationScope: _cancellationScope,
       );
     }
   }

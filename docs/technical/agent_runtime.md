@@ -509,3 +509,20 @@ Cleanup rules:
 4. Deadline or cleanup failure becomes `cleanup_failed`; the session must not remain in `stopping` indefinitely.
 
 See also `docs/technical/run_cancellation_and_process_ownership.md`.
+
+## Tool and Shell Cancellation (Plan 50c)
+
+`ToolContext` carries `runId`, `generation`, and the active `RunCancellationScope`.
+`ToolExecutionCoordinator` builds that context for every sequential and parallel
+tool call and suppresses live tool events once publication is closed.
+
+`ShellExecuteTool` is cooperatively cancellable:
+
+1. Spawns owned containment (`setsid` on Linux, `perl setpgrp` on macOS, `taskkill /T` on Windows).
+2. Registers `ProcessTreeHandle` cleanup on the run scope before awaiting output.
+3. Races natural exit, `timeout_ms`, and `whenCancelled` with one terminal compare-and-set.
+4. Returns `Command cancelled by user.` for Stop and keeps timeout messaging separate.
+
+`ProcessTreeController` performs `TERM → bounded grace → KILL → verify` and
+records typed cleanup outcomes (`exited`, `escalated`, `ownershipLost`, `failed`).
+Natural completion calls `release()` so a late Stop does not target a reused PID.
