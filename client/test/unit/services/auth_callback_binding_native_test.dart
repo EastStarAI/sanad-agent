@@ -5,12 +5,52 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_callback_binding_native.dart';
 
 void main() {
+  group('Development iOS callback selection', () {
+    test('requires iOS Debug and exact Development environment', () {
+      const redirect = 'sanad://oauth/ios-development';
+      expect(
+        shouldUseDevelopmentIosAuth(
+          isIos: true,
+          isDebug: true,
+          environment: 'dev',
+          redirect: redirect,
+        ),
+        isTrue,
+      );
+      for (final rejected in [
+        (isIos: false, isDebug: true, environment: 'dev', redirect: redirect),
+        (isIos: true, isDebug: false, environment: 'dev', redirect: redirect),
+        (isIos: true, isDebug: true, environment: 'prod', redirect: redirect),
+        (isIos: true, isDebug: true, environment: 'stg', redirect: redirect),
+        (isIos: true, isDebug: true, environment: 'development', redirect: redirect),
+        (isIos: true, isDebug: true, environment: 'dev', redirect: ''),
+      ]) {
+        expect(
+          shouldUseDevelopmentIosAuth(
+            isIos: rejected.isIos,
+            isDebug: rejected.isDebug,
+            environment: rejected.environment,
+            redirect: rejected.redirect,
+          ),
+          isFalse,
+        );
+      }
+    });
+  });
+
   group('mobile claimed HTTPS callback matching', () {
     final expected = Uri.parse(
       'https://app.sanad.eaststarai.com/oauth/ios',
     );
 
     test('accepts only the exact HTTPS origin path', () {
+      expect(
+        isValidMobileAuthRedirect(
+          expected,
+          allowDevelopmentCustomScheme: false,
+        ),
+        isTrue,
+      );
       expect(
         isExpectedMobileAuthCallback(
           expected.replace(
@@ -52,6 +92,46 @@ void main() {
             'https://app.sanad.eaststarai.com/oauth/ios'
             '?code=code&state=state#fragment',
           ),
+          expected,
+        ),
+        isFalse,
+      );
+    });
+    test('development custom scheme is explicit and exact', () {
+      final expected = Uri.parse('sanad://oauth/ios-development');
+      expect(
+        isValidMobileAuthRedirect(
+          expected,
+          allowDevelopmentCustomScheme: true,
+        ),
+        isTrue,
+      );
+      expect(
+        isValidMobileAuthRedirect(
+          expected,
+          allowDevelopmentCustomScheme: false,
+        ),
+        isFalse,
+      );
+      expect(
+        isValidMobileAuthRedirect(
+          Uri.parse('sanad://oauth/ios-production'),
+          allowDevelopmentCustomScheme: true,
+        ),
+        isFalse,
+      );
+      expect(
+        isExpectedMobileAuthCallback(
+          Uri.parse(
+            'sanad://oauth/ios-development?code=code&state=state',
+          ),
+          expected,
+        ),
+        isTrue,
+      );
+      expect(
+        isExpectedMobileAuthCallback(
+          Uri.parse('sanad://oauth/ios?code=code&state=state'),
           expected,
         ),
         isFalse,

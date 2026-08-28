@@ -78,9 +78,18 @@ publishing an unverified association.
 
 Production mobile builds receive the exact callback URIs through
 `client/config/prod.json`. Development and Staging builds inject their matching
-URIs explicitly and must never reuse another environment's config. Development
-and Staging Home-screen/device-tool acceptance uses a signed Profile or reviewed
-release-candidate; Production acceptance uses the signed Release/archive artifact.
+URIs explicitly and must never reuse another environment's config. Any Debug iOS
+build, on Simulator or a physical development device, may use the dedicated
+`sanad_flutter_ios_development` registration and exact
+`sanad://oauth/ios-development` callback only when the
+Client is compiled with `ENVIRONMENT=dev` plus the explicit Development redirect.
+This is callback transport for the normal PKCE flow, not an authentication
+bypass: the Portal provider, one-time code, token issuance, and authenticated
+Backend/Socket session remain real. Profile, Release, Staging, TestFlight, and
+App Store builds cannot select this registration and continue to require their
+claimed HTTPS callback. Development and Staging Home-screen/device-tool
+acceptance uses a signed Profile or reviewed release-candidate; Production
+acceptance uses the signed Release/archive artifact.
 A Debug iOS build is launched only through Flutter tooling or Xcode and is not a
 release gate. Before hosted promotion, inspect the built artifact for team
 `UC2824B99G`, bundle `com.eaststarai.sanad`, effective target Client-host
