@@ -68,7 +68,7 @@ Stop accepted
 - كل مهمة تحدث أقرب `AGENTS.md` ووثائق technical/product/QA التي تملك السلوك المعدل.
 - لا تغلق الخطة قبل نجاح 50f وتطابق live/history في سيناريوهات الإلغاء كلها.
 - العقد التقني الحاكم للسلوك هو
-  [Run Cancellation and Process Ownership](../technical/run_cancellation_and_process_ownership.md).
+  [Run Cancellation and Process Ownership](../../technical/run_cancellation_and_process_ownership.md).
 
 ## 1.4 لوحة التقدم
 
@@ -114,7 +114,7 @@ Stop accepted
 ## 2.1 حد التكامل مع Plan 54
 
 Plan 50 مستقلة وقابلة للإغلاق دون تنفيذ
-[Plan 54](54-durable-background-terminal-tasks-and-session-wakeups.md):
+[Plan 54](../54-durable-background-terminal-tasks-and-session-wakeups.md):
 
 - Plan 50 توفر cancellation registration قابلة للتحرير وprocess-tree controller
   قابلة لإعادة الاستخدام.
@@ -180,12 +180,12 @@ RunCancellationScope
 
 ## 5. خطط المهام
 
-1. [50a: Run Cancellation Core and Bounded Stop](tasks/50a-run-cancellation-core-and-bounded-stop.md)
-2. [50b: Provider Request Interruption and Watchdogs](tasks/50b-provider-request-interruption-and-watchdogs.md)
-3. [50c: Tool Cancellation and Shell Process Trees](tasks/50c-tool-cancellation-and-shell-process-trees.md)
-4. [50d: Durable Terminal Tool Events](tasks/50d-durable-terminal-tool-events.md)
-5. [50e: Client Stop and Tool Event Parity](tasks/50e-client-stop-and-tool-event-parity.md)
-6. [50f: Cancellation Integration and Regression QA](tasks/50f-cancellation-integration-and-regression-qa.md)
+1. [50a: Run Cancellation Core and Bounded Stop](../tasks/done/50a-run-cancellation-core-and-bounded-stop.md)
+2. [50b: Provider Request Interruption and Watchdogs](../tasks/done/50b-provider-request-interruption-and-watchdogs.md)
+3. [50c: Tool Cancellation and Shell Process Trees](../tasks/done/50c-tool-cancellation-and-shell-process-trees.md)
+4. [50d: Durable Terminal Tool Events](../tasks/done/50d-durable-terminal-tool-events.md)
+5. [50e: Client Stop and Tool Event Parity](../tasks/done/50e-client-stop-and-tool-event-parity.md)
+6. [50f: Cancellation Integration and Regression QA](../tasks/done/50f-cancellation-integration-and-regression-qa.md)
 
 ## 6. معايير القبول الكلية
 
