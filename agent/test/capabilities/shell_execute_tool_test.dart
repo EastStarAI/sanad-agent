@@ -127,6 +127,20 @@ void main() {
       ); // Prompts because it is sensitive and not yet cached/pre-approved
     });
 
+    test('malformed process output cannot crash shell execution', () async {
+      final tool = ShellExecuteTool(workspacePath: workspaceDir.path);
+      final command = Platform.isWindows
+          ? r'''powershell.exe -NoProfile -NonInteractive -Command "$bytes=[byte[]](0xFF,0xFE,0x41); [Console]::OpenStandardOutput().Write($bytes,0,$bytes.Length)"'''
+          : r"printf '\377\376A'";
+
+      final resultString = await tool.execute({'command': command});
+      final result = jsonDecode(resultString) as Map<String, dynamic>;
+
+      expect(result['isError'], isFalse);
+      expect(result['output'], contains('\uFFFD'));
+      expect(result['output'], contains('A'));
+    });
+
     test(
       'Path traversal validation - blocks execution outside workspace',
       () async {
