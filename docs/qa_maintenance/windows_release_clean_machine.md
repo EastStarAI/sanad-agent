@@ -87,7 +87,17 @@ screenshots beside it.
    operating-system review flow offered by Windows.
 3. Launch the Client, record its displayed version and startup result, then
    reboot and launch it again.
-4. Uninstall through Windows Installed Apps and verify that application entries
+4. While the installed Client is running, launch the next candidate installer.
+   Confirm the Client closes, the upgrade completes, and the new Client starts
+   without Bad Image or DLL-load errors. Verify that no
+   `.sanad-install-staging` or `.sanad-install-backup` directory remains and
+   that the installed EXE, every top-level DLL, and the `data/` tree match the
+   candidate payload hashes.
+5. Repeat with an independent process holding one installed DLL without delete
+   sharing. Confirm the installer aborts without changing the installed
+   payload; release the handle and confirm retry succeeds. Do not use a real
+   user Client or Sanad Home for this fault-injection case.
+6. Uninstall through Windows Installed Apps and verify that application entries
    and installed binaries are removed while the test Sanad Home remains.
 
 Capture machine state after each stage:
@@ -186,6 +196,28 @@ This is real Windows vault and source lifecycle evidence, not a new packaged
 clean-machine pass. The existing release clean-machine procedure remains the
 authority for a future candidate artifact's Defender, SmartScreen, install,
 upgrade, reboot, rollback, and uninstall evidence.
+
+## Isolated running-client installer regression — 2026-08-30
+
+A current-workstation test used two synthetic NSIS payload versions, a dedicated
+installation directory, dedicated HKCU application and Installed Apps keys, no
+shortcuts, and no Sanad Home. It did not replace or stop the normal installed or
+source Client. The isolated lifecycle proved:
+
+- version 1 installed with isolated registry metadata;
+- installing version 2 while the exact version 1 executable was running stopped
+  only that executable and replaced EXE, DLL, and `data/` without staging or
+  backup residue;
+- an exclusive lock on the installed version 1 DLL rejected the upgrade with
+  installer exit code `2` and preserved the complete version 1 payload;
+- releasing the lock allowed a successful retry, removed the stale version 1
+  DLL, and installed the exact version 2 payload;
+- silent uninstall removed the isolated directory and both isolated registry
+  keys; the pre-existing normal Client process remained alive.
+
+This is focused current-machine regression evidence. It does not replace the
+protected clean-snapshot Defender, SmartScreen, signing, reboot, or release
+candidate gate above.
 
 ## Acceptance criteria
 

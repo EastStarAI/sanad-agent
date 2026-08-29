@@ -190,6 +190,13 @@ jobs:
           [void][scriptblock]::Create((Get-Content -Raw scripts/install.ps1))
           [void][scriptblock]::Create((Get-Content -Raw client/release/windows/build_installer.ps1))
           [void][scriptblock]::Create((Get-Content -Raw client/release/windows/release.ps1))
+          [void][scriptblock]::Create((Get-Content -Raw client/release/windows/stop_installed_client.ps1))
+          [void][scriptblock]::Create((Get-Content -Raw client/release/windows/install_staged_client.ps1))
+          [void][scriptblock]::Create((Get-Content -Raw client/release/windows/verify_installer.ps1))
+      - name: Verify Windows running-client upgrade guard
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./client/release/windows/verify_installer.ps1 -UpgradeGuardOnly
 
   docs-governance:
     name: Validate docs and governance
