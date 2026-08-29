@@ -545,11 +545,11 @@ class ToolPresentationHelper {
 
   static String displayToolTitle(CanonicalEvent event) {
     final cleanTitle = cleanToolTitle(event.toolName ?? 'Using Tool');
+    if (event.status == EventStatus.cancelled) {
+      return 'Cancelled';
+    }
     if (cleanTitle == 'Ran' && event.status == EventStatus.running) {
       return 'Running';
-    }
-    if (cleanTitle == 'Ran' && event.status == EventStatus.cancelled) {
-      return 'Cancelled';
     }
     return cleanTitle;
   }

@@ -19,89 +19,89 @@ design_contract: "docs/technical/run_cancellation_and_process_ownership.md"
 
 ## Gate R0 — External Reference Grounding
 
-- [ ] حل `evidence_id` عبر workflow التأصيل الخارجي والتحقق من freshness.
-- [ ] قراءة implementations والاختبارات الإلزامية ومراجعة سجلات التأصيل
+- [x] حل `evidence_id` عبر workflow التأصيل الخارجي والتحقق من freshness.
+- [x] قراءة implementations والاختبارات الإلزامية ومراجعة سجلات التأصيل
       السابقة في مصفوفة `Adopt / Adapt / Reject` محايدة المصدر.
-- [ ] تحويل القرارات المقبولة إلى مصفوفة تحقق تكاملية صريحة.
-- [ ] عند غياب الحزمة أو قدمها، تشغيل authoring/refresh ومراجعة السجلات السابقة.
-- [ ] عدم بدء F0 قبل `ready`؛ لا تسجل `blocked` إلا لمانع غير قابل للتعافي.
+- [x] تحويل القرارات المقبولة إلى مصفوفة تحقق تكاملية صريحة.
+- [x] عند غياب الحزمة أو قدمها، تشغيل authoring/refresh ومراجعة السجلات السابقة.
+- [x] عدم بدء F0 قبل `ready`؛ لا تسجل `blocked` إلا لمانع غير قابل للتعافي.
 
 ### R0 Exit
 
-- [ ] سجل التأصيل يحمل fingerprint والرموز والاختبارات المتحققة والقرارات.
-- [ ] لا يحتوي أي ملف متتبع هوية المصدر الخارجي أو مساره؛ يبقى العقد سلوكيًا.
+- [x] سجل التأصيل يحمل fingerprint والرموز والاختبارات المتحققة والقرارات.
+- [x] لا يحتوي أي ملف متتبع هوية المصدر الخارجي أو مساره؛ يبقى العقد سلوكيًا.
 
 ## 2. Gate F0 — Readiness audit
 
-- [ ] 50b–50e كلها `complete` ولا توجد Gate مفتوحة.
-- [ ] schemas وdeadline settings وterminal precedence متطابقة بين الوثائق والكود.
-- [ ] cancellation registration release contract مكتملة ومستقلة عن Plan 54.
-- [ ] لا توجد تغييرات إنتاجية غير موثقة في tasks السابقة.
-- [ ] تحديد E2E التي تحتاج منافذ وتشغيلها sequential فقط عند الحاجة الفعلية.
+- [x] 50b–50e كلها `complete` ولا توجد Gate مفتوحة.
+- [x] schemas وdeadline settings وterminal precedence متطابقة بين الوثائق والكود.
+- [x] cancellation registration release contract مكتملة ومستقلة عن Plan 54.
+- [x] لا توجد تغييرات إنتاجية غير موثقة في tasks السابقة.
+- [x] تحديد E2E التي تحتاج منافذ وتشغيلها sequential فقط عند الحاجة الفعلية.
 
 ### F0 Exit
 
-- [ ] integration matrix ثابتة ولا تحتاج قرارات تصميم جديدة.
+- [x] integration matrix ثابتة ولا تحتاج قرارات تصميم جديدة.
 
 ## 3. Gate F1 — Provider hang matrix
 
-- [ ] hang قبل headers ثم Stop.
-- [ ] hang بعد headers وقبل first byte.
-- [ ] SSE تتوقف بعد partial reasoning/content.
-- [ ] جلسة ثانية تواصل العمل أثناء إلغاء الأولى.
-- [ ] لا retry/failover/runtime notice بعد user cancellation.
+- [x] hang قبل headers ثم Stop.
+- [x] hang بعد headers وقبل first byte.
+- [x] SSE تتوقف بعد partial reasoning/content.
+- [x] جلسة ثانية تواصل العمل أثناء إلغاء الأولى.
+- [x] لا retry/failover/runtime notice بعد user cancellation.
 
 ### F1 Exit
 
-- [ ] كل provider path إنتاجية تنتهي داخل deadline وتحافظ على run isolation.
+- [x] كل provider path إنتاجية تنتهي داخل deadline وتحافظ على run isolation.
 
 ## 4. Gate F2 — Tool/process matrix
 
-- [ ] shell parent/child/grandchild وpre-commit-like hook.
-- [ ] TERM-resistant child ينتقل إلى KILL.
-- [ ] child يتفرع قرب Stop لا يفلت من containment المملوكة.
-- [ ] parent يخرج أثناء grace بينما يبقى child؛ التحقق يستمر حتى زوال المجموعة.
-- [ ] PID-reuse fingerprint mismatch ترفض kill دون استهداف عملية حقيقية غريبة.
-- [ ] timeout وStop يتسابقان دون نتيجة مزدوجة.
-- [ ] process تكتب أثناء TERM grace: pipes تُصرف بلا late progress أو deadlock.
-- [ ] لا PID orphan ولا CPU process متبقية بعد النجاح.
-- [ ] release بعد اكتمال foreground process تمنع kill متأخر، بينما failure قبل
+- [x] shell parent/child/grandchild وpre-commit-like hook.
+- [x] TERM-resistant child ينتقل إلى KILL.
+- [x] child يتفرع قرب Stop لا يفلت من containment المملوكة.
+- [x] parent يخرج أثناء grace بينما يبقى child؛ التحقق يستمر حتى زوال المجموعة.
+- [x] PID-reuse fingerprint mismatch ترفض kill دون استهداف عملية حقيقية غريبة.
+- [x] timeout وStop يتسابقان دون نتيجة مزدوجة.
+- [x] process تكتب أثناء TERM grace: pipes تُصرف بلا late progress أو deadlock.
+- [x] لا PID orphan ولا CPU process متبقية بعد النجاح.
+- [x] release بعد اكتمال foreground process تمنع kill متأخر، بينما failure قبل
       release يبقي process قابلة للإلغاء.
 
 ### F2 Exit
 
-- [ ] process-tree cleanup مثبت على المنصات المدعومة أو موثق بحاجز منصة صريح.
+- [x] process-tree cleanup مثبت على المنصات المدعومة أو موثق بحاجز منصة صريح.
 
 ## 5. Gate F3 — Client/recovery matrix
 
-- [ ] live tool cancellation ثم navigation والعودة.
-- [ ] daemon/client reconnect أثناء stopping/terminalization.
-- [ ] multi-client Stop وterminal event واحدة.
-- [ ] success متأخرة تخسر terminal compare-and-set بعد cancellation ولا تزيد
+- [x] live tool cancellation ثم navigation والعودة.
+- [x] daemon/client reconnect أثناء stopping/terminalization.
+- [x] multi-client Stop وterminal event واحدة.
+- [x] success متأخرة تخسر terminal compare-and-set بعد cancellation ولا تزيد
       revision أو تعيد فتح spinner.
-- [ ] late progress packets بعد stopped تُرفض ولا تعود الأداة إلى running.
-- [ ] رسالة جديدة بعد Stop ورفض late events القديمة.
-- [ ] restart hydration تعرض cancelled نفسها.
+- [x] late progress packets بعد stopped تُرفض ولا تعود الأداة إلى running.
+- [x] رسالة جديدة بعد Stop ورفض late events القديمة.
+- [x] restart hydration تعرض cancelled نفسها.
 
 ### F3 Exit
 
-- [ ] live/history/reconnect projections متطابقة ولا spinner دائم.
+- [x] live/history/reconnect projections متطابقة ولا spinner دائم.
 
 ## 6. Gate F4 — Final regression and handoff
 
-- [ ] تحليل agent وclient ناجح.
-- [ ] الاختبارات المركزة والجناح السريع المناسب ناجحة.
-- [ ] E2E النظامية المطلوبة ناجحة دون port collisions.
-- [ ] تحديث technical/product/QA وAGENTS والخطة الأم ولوحة التقدم.
-- [ ] تسجيل كل finding وإرجاعه إلى المهمة المالكة بدل توسيع F4 عشوائيًا.
+- [x] تحليل agent وclient ناجح.
+- [x] الاختبارات المركزة والجناح السريع المناسب ناجحة.
+- [x] E2E النظامية المطلوبة ناجحة دون port collisions.
+- [x] تحديث technical/product/QA وAGENTS والخطة الأم ولوحة التقدم.
+- [x] تسجيل كل finding وإرجاعه إلى المهمة المالكة بدل توسيع F4 عشوائيًا.
 
 ### F4 Exit / Definition of Done
 
-- [ ] جميع معايير القبول الكلية في Plan 50 مغلقة.
-- [ ] إغلاق Plan 50 لا يتطلب أي جدول أو أداة أو UI من Plan 54.
-- [ ] لا عملية معلقة ولا session trapped ولا live/history mismatch في matrix.
-- [ ] الخطة جاهزة لمراجعة المستخدم قبل commit/push/PR.
-- [ ] Reference parity audit يثبت أن التنفيذ والاختبارات يحققان كل قرار
+- [x] جميع معايير القبول الكلية في Plan 50 مغلقة.
+- [x] إغلاق Plan 50 لا يتطلب أي جدول أو أداة أو UI من Plan 54.
+- [x] لا عملية معلقة ولا session trapped ولا live/history mismatch في matrix.
+- [x] الخطة جاهزة لمراجعة المستخدم قبل commit/push/PR.
+- [x] Reference parity audit يثبت أن التنفيذ والاختبارات يحققان كل قرار
       `Adopt/Adapt` مسجل في 50a–50f، أو يعيد deviation إلى المهمة المالكة.
 
 ## 7. الملفات المتوقعة
@@ -121,10 +121,14 @@ design_contract: "docs/technical/run_cancellation_and_process_ownership.md"
 ## 9. سجل التقدم
 
 ```text
-Date:
-Gate/status:
-Files changed:
-Verification:
-Findings:
-Next gate:
+Date: 2026-08-29
+Gate/status: F4 complete after review repair
+Files changed: daemon-backed cancellation E2E, execution snapshot publication,
+  runtime/interface contracts, and the Plan 50 QA matrix
+Verification: agent/client analyzers and fast suites; focused cancellation,
+  durable-state, interface, widget, and sequential daemon-backed E2E suites
+Findings: the original closeout had no real live-shell Stop proof and allowed
+  idle to publish before cancelled/stopped. Added provider and shell system
+  cases and deferred only the committed snapshot publication to restore order.
+Next gate: user review before the combined 50e/50f commit
 ```

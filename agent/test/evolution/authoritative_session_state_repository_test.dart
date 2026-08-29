@@ -363,6 +363,35 @@ void main() {
       },
     );
 
+    test('can defer a committed Stop snapshot until terminal delivery', () {
+      seedSession('session-deferred-stop-publication');
+      final emitted = <SessionExecutionSnapshot>[];
+      executionState.changes.listen(emitted.add);
+      executionState.enqueueWorkItem(
+        workItemId: 'work-deferred-stop-publication',
+        sessionId: 'session-deferred-stop-publication',
+        state: SessionWorkState.running,
+      );
+      executionState.markStopping('session-deferred-stop-publication');
+
+      final committed = executionState.cancelAll(
+        'session-deferred-stop-publication',
+        publish: false,
+      );
+
+      expect(committed.snapshot.state, SessionExecutionState.idle);
+      expect(
+        snapshots.getSnapshot('session-deferred-stop-publication').state,
+        SessionExecutionState.idle,
+        reason: 'durable cleanup must commit before stopped is delivered',
+      );
+      expect(emitted.last.state, SessionExecutionState.stopping);
+
+      executionState.publishCommittedChange(committed);
+
+      expect(emitted.last.state, SessionExecutionState.idle);
+    });
+
     test('restart normalization derives stale stopping from durable work', () {
       seedSession('session-restart-stopping');
       executionState.enqueueWorkItem(

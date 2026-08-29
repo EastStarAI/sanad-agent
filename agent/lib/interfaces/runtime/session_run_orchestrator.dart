@@ -549,11 +549,16 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
                   !capturedWorkItemIds.contains(item.workItemId),
             ) ??
         false;
-    if (hasNewerDurableWork) {
-      persistedState?.cancelWorkItems(sessionId, capturedWorkItemIds);
-    } else {
-      persistedState?.clearAllForSession(sessionId);
-    }
+    final deferredExecutionChange = hasNewerDurableWork
+        ? persistedState?.cancelWorkItems(
+            sessionId,
+            capturedWorkItemIds,
+            publishExecutionChange: false,
+          )
+        : persistedState?.clearAllForSession(
+            sessionId,
+            publishExecutionChange: false,
+          );
     if (hadWork) {
       _emitResponse(
         GatewayResponse(
@@ -574,6 +579,16 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           runId: stoppedRunId,
           modelStepId: stoppedModelStepId,
         ),
+      );
+      // Durable cleanup is already committed, but response delivery is
+      // asynchronous while execution-snapshot publication is synchronous.
+      // Let the cancelled tool terminal and stopped acknowledgement reach
+      // clients before publishing the final idle/queued snapshot.
+      await Future<void>.delayed(Duration.zero);
+    }
+    if (deferredExecutionChange != null) {
+      persistedState?.executionState.publishCommittedChange(
+        deferredExecutionChange,
       );
     }
     if (recoveryOutcome != null) {

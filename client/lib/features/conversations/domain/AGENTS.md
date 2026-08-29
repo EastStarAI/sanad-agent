@@ -35,6 +35,7 @@ This contract applies to `client/lib/features/conversations/domain/`.
 
 ## Canonical Identity
 - Use `model_step_id` for thinking/final segments and `tool_call_id` for tool pairs; use `run_id` only for execution correlation.
+- Never infer tool-call identity from the tool name. Merge a tool terminal only through its canonical call identity, preserve terminal generation/revision metadata, and reject stale or conflicting terminal observations.
 - `tool_use` closes only its matching model-step thought.
 - `final_answer` and `stopped` remove only the matching running model-step projection and preserve completed prior thoughts.
 - A stop without active model-step identity clears runtime controls only.

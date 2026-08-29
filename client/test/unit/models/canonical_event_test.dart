@@ -326,17 +326,64 @@ void main() {
       final toolUseEvent = agentEvent('tool_use', {
         'tool': 'calculator',
         'run_id': 'run-abc',
+        'tool_call_id': 'call-abc',
       });
       final toolResultEvent = agentEvent('tool_result', {
         'tool': 'calculator',
         'output': '4',
         'run_id': 'run-abc',
+        'tool_call_id': 'call-abc',
       });
 
       final toolUse = mapper.mapLiveEvent(toolUseEvent);
       final toolResult = mapper.mapLiveEvent(toolResultEvent);
 
       expect(toolUse!.id, toolResult!.id);
+    });
+
+    test('same named tools do not merge without a shared tool call identity', () {
+      final first = mapper.mapLiveEvent(
+        agentEvent('tool_use', {
+          'tool': 'shell_execute',
+          'run_id': 'run-abc',
+          'event_id': 'event-1',
+        }),
+      );
+      final second = mapper.mapLiveEvent(
+        agentEvent('tool_use', {
+          'tool': 'shell_execute',
+          'run_id': 'run-abc',
+          'event_id': 'event-2',
+        }),
+      );
+
+      expect(first!.id, isNot(second!.id));
+    });
+
+    test('cancelled tool result preserves terminal version metadata', () {
+      final canonical = mapper.mapLiveEvent(
+        agentEvent('tool_result', {
+          'tool': 'shell_execute',
+          'output': 'Command cancelled by user.',
+          'status': 'cancelled',
+          'run_id': 'run-abc',
+          'tool_call_id': 'call-abc',
+          'generation': 7,
+          'revision': 42,
+          'reason': 'user_stop',
+          'started_at': '2026-08-29T00:00:00Z',
+          'terminal_at': '2026-08-29T00:00:01Z',
+          'cleanup_outcome': 'completed',
+        }),
+      );
+
+      expect(canonical!.status, EventStatus.cancelled);
+      expect(canonical.generation, 7);
+      expect(canonical.revision, 42);
+      expect(canonical.metadata, containsPair('reason', 'user_stop'));
+      expect(canonical.metadata, containsPair('started_at', '2026-08-29T00:00:00Z'));
+      expect(canonical.metadata, containsPair('terminal_at', '2026-08-29T00:00:01Z'));
+      expect(canonical.metadata, containsPair('cleanup_outcome', 'completed'));
     });
 
     test('model steps remain distinct inside one authoritative run', () {
@@ -502,6 +549,32 @@ void main() {
       expect(events.single.kind, EventKind.toolCall);
       expect(events.single.toolName, 'execute_terminal_command');
       expect(events.single.toolOutput, '/tmp/project');
+    });
+
+    test('history cancellation matches live terminal metadata', () {
+      final events = mapper.mapHistory([
+        {
+          'type': 'tool_result',
+          'tool': 'shell_execute',
+          'output': 'Command cancelled by user.',
+          'status': 'cancelled',
+          'run_id': 'run-history',
+          'tool_call_id': 'call-history',
+          'generation': 3,
+          'revision': 91,
+          'reason': 'user_stop',
+          'started_at': '2026-08-29T00:00:00Z',
+          'terminal_at': '2026-08-29T00:00:01Z',
+          'cleanup_outcome': 'completed',
+        },
+      ]);
+
+      final terminal = events.single;
+      expect(terminal.status, EventStatus.cancelled);
+      expect(terminal.generation, 3);
+      expect(terminal.revision, 91);
+      expect(terminal.metadata, containsPair('reason', 'user_stop'));
+      expect(terminal.metadata, containsPair('cleanup_outcome', 'completed'));
     });
 
     test('maps canonical tool_call from history metadata fallback', () {
@@ -945,6 +1018,89 @@ void main() {
       expect(state.events.first.toolName, 'calculator');
       expect(state.events.first.toolInput, {'expression': '2+2'});
       expect(state.events.first.toolOutput, '4');
+    });
+
+    test('cancelled terminal rejects older and unversioned late results', () {
+      final now = DateTime.now();
+      state.apply(
+        CanonicalEvent(
+          id: 'tool_call-1',
+          kind: EventKind.toolCall,
+          status: EventStatus.cancelled,
+          tool: const {'name': 'shell_execute', 'output': 'cancelled'},
+          timestamp: now,
+          runId: 'run-1',
+          toolCallId: 'call-1',
+          metadata: const {'generation': 4, 'revision': 20},
+        ),
+      );
+      state.apply(
+        CanonicalEvent(
+          id: 'tool_call-1',
+          kind: EventKind.toolCall,
+          status: EventStatus.error,
+          tool: const {'output': 'late timeout'},
+          timestamp: now.add(const Duration(seconds: 1)),
+          runId: 'run-1',
+          toolCallId: 'call-1',
+          metadata: const {'generation': 4, 'revision': 19},
+        ),
+      );
+      state.apply(
+        CanonicalEvent(
+          id: 'tool_call-1',
+          kind: EventKind.toolCall,
+          status: EventStatus.error,
+          tool: const {'output': 'newer late timeout'},
+          timestamp: now.add(const Duration(milliseconds: 1500)),
+          runId: 'run-1',
+          toolCallId: 'call-1',
+          metadata: const {'generation': 4, 'revision': 21},
+        ),
+      );
+      state.apply(
+        CanonicalEvent(
+          id: 'tool_call-1',
+          kind: EventKind.toolCall,
+          status: EventStatus.done,
+          tool: const {'output': 'late completion'},
+          timestamp: now.add(const Duration(seconds: 2)),
+          runId: 'run-1',
+          toolCallId: 'call-1',
+        ),
+      );
+
+      expect(state.events.single.status, EventStatus.cancelled);
+      expect(state.events.single.toolOutput, 'cancelled');
+      expect(state.events.single.revision, 20);
+    });
+
+    test('newer terminal revision replaces an older terminal observation', () {
+      final now = DateTime.now();
+      state.apply(
+        CanonicalEvent(
+          id: 'tool_call-1',
+          kind: EventKind.toolCall,
+          status: EventStatus.error,
+          tool: const {'name': 'shell_execute', 'output': 'old timeout'},
+          timestamp: now,
+          metadata: const {'generation': 2, 'revision': 10},
+        ),
+      );
+      state.apply(
+        CanonicalEvent(
+          id: 'tool_call-1',
+          kind: EventKind.toolCall,
+          status: EventStatus.done,
+          tool: const {'output': 'authoritative completion'},
+          timestamp: now.add(const Duration(seconds: 1)),
+          metadata: const {'generation': 2, 'revision': 11},
+        ),
+      );
+
+      expect(state.events.single.status, EventStatus.done);
+      expect(state.events.single.toolOutput, 'authoritative completion');
+      expect(state.events.single.revision, 11);
     });
 
     test('tool use closes the persisted model-step thought', () {

@@ -616,6 +616,110 @@ void main() {
     expect(tool.toolOutput, 'fresh completed output');
   });
 
+  test('loadSessionHistory hydrates the durable cancelled projection', () async {
+    final future = commands.loadSessionHistory('session-1');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'messages': [
+          {
+            'id': 1,
+            'type': 'tool_use',
+            'tool': 'shell_execute',
+            'input': {'command': 'sleep 30'},
+            'tool_call_id': 'call-cancelled',
+            'model_step_id': 'step-1',
+            'run_id': 'run-1',
+            'session_id': 'session-1',
+            'created_at': '2026-08-29T00:00:00Z',
+          },
+          {
+            'id': 2,
+            'type': 'tool_result',
+            'tool': 'shell_execute',
+            'output': 'Command cancelled by user.',
+            'status': 'cancelled',
+            'tool_call_id': 'call-cancelled',
+            'model_step_id': 'step-1',
+            'run_id': 'run-1',
+            'session_id': 'session-1',
+            'generation': 6,
+            'revision': 60,
+            'reason': 'user_stop',
+            'started_at': '2026-08-29T00:00:00Z',
+            'terminal_at': '2026-08-29T00:00:01Z',
+            'cleanup_outcome': 'completed',
+            'created_at': '2026-08-29T00:00:01Z',
+          },
+        ],
+      },
+    });
+
+    final history = await future;
+    final tool = history.single;
+    expect(tool.status, EventStatus.cancelled);
+    expect(tool.toolInput, {'command': 'sleep 30'});
+    expect(tool.toolOutput, 'Command cancelled by user.');
+    expect(tool.generation, 6);
+    expect(tool.revision, 60);
+    expect(tool.metadata, containsPair('reason', 'user_stop'));
+    expect(tool.metadata, containsPair('cleanup_outcome', 'completed'));
+  });
+
+  test('loadSessionHistory reapplies a newer live terminal revision', () async {
+    final future = commands.loadSessionHistory('session-1');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+
+    store.apply(
+      CanonicalEvent(
+        id: 'tool_call-1',
+        kind: EventKind.toolCall,
+        status: EventStatus.cancelled,
+        tool: const {
+          'name': 'shell_execute',
+          'output': 'Command cancelled by user.',
+        },
+        timestamp: DateTime.parse('2026-08-29T00:00:02Z'),
+        sessionId: 'session-1',
+        runId: 'run-1',
+        toolCallId: 'call-1',
+        metadata: const {'generation': 3, 'revision': 30},
+      ),
+    );
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'messages': [
+          {
+            'id': 1,
+            'type': 'tool_result',
+            'tool': 'shell_execute',
+            'output': 'older timeout',
+            'status': 'error',
+            'tool_call_id': 'call-1',
+            'run_id': 'run-1',
+            'session_id': 'session-1',
+            'generation': 3,
+            'revision': 29,
+            'created_at': '2026-08-29T00:00:01Z',
+          },
+        ],
+      },
+    });
+
+    final history = await future;
+    expect(history.single.status, EventStatus.cancelled);
+    expect(history.single.toolOutput, 'Command cancelled by user.');
+    expect(history.single.revision, 30);
+  });
+
   test('loadSessionHistory does not duplicate a live user message already persisted', () async {
     final sentAt = DateTime.parse('2026-07-12T04:48:20Z');
     store.activateSession('session-1');

@@ -51,6 +51,10 @@ class CanonicalEvent {
     return value == null || value.isEmpty ? null : value;
   }
 
+  int? get generation => _metadataInt(metadata?['generation']);
+
+  int? get revision => _metadataInt(metadata?['revision']);
+
   CanonicalEvent({
     required this.id,
     required this.kind,
@@ -172,10 +176,59 @@ int terminalStatusRank(EventStatus status) => switch (status) {
   EventStatus.cancelled => 3,
 };
 
+int? _metadataInt(dynamic value) {
+  if (value is int) return value;
+  if (value is num && value.toInt() == value) return value.toInt();
+  return int.tryParse(value?.toString() ?? '');
+}
+
+/// Whether [incoming] is a strictly newer terminal observation of [current].
+///
+/// Tool generation/revision is authoritative when present. Legacy events
+/// without version metadata retain cancellation precedence so a late timeout
+/// or completion cannot revive a row closed by Stop.
+bool isNewerToolTerminalEvent(
+  CanonicalEvent current,
+  CanonicalEvent incoming,
+) {
+  if (current.kind != EventKind.toolCall ||
+      incoming.kind != EventKind.toolCall ||
+      incoming.status == EventStatus.running) {
+    return false;
+  }
+  if (current.status == EventStatus.running) return true;
+  if (current.status == EventStatus.cancelled && incoming.status != EventStatus.cancelled) {
+    return false;
+  }
+
+  final currentGeneration = current.generation;
+  final incomingGeneration = incoming.generation;
+  if (currentGeneration != null && incomingGeneration != null) {
+    if (incomingGeneration != currentGeneration) {
+      return incomingGeneration > currentGeneration;
+    }
+  } else if (incomingGeneration != null) {
+    return true;
+  } else if (currentGeneration != null) {
+    return false;
+  }
+
+  final currentRevision = current.revision;
+  final incomingRevision = incoming.revision;
+  if (currentRevision != null && incomingRevision != null) {
+    if (incomingRevision != currentRevision) {
+      return incomingRevision > currentRevision;
+    }
+    return false;
+  }
+  if (incomingRevision != null) return true;
+  if (currentRevision != null) return false;
+
+  return terminalStatusRank(incoming.status) > terminalStatusRank(current.status);
+}
+
 EventStatus _terminalStatusPrecedence(EventStatus current, EventStatus incoming) {
-  return terminalStatusRank(incoming) >= terminalStatusRank(current)
-      ? incoming
-      : current;
+  return terminalStatusRank(incoming) >= terminalStatusRank(current) ? incoming : current;
 }
 
 LlmUsageSnapshot? latestContextUsage(List<CanonicalEvent> events) {

@@ -246,6 +246,7 @@ class ConversationState {
         );
 
       case EventKind.toolCall:
+        if (!_shouldApplyToolEvent(existing, incoming)) return existing;
         // tool_use seeds `name`/`input`, tool_result adds `output` and flips status.
         final merged = <String, dynamic>{...?existing.tool};
         incoming.tool?.forEach((k, v) {
@@ -253,11 +254,14 @@ class ConversationState {
         });
         return existing.copyWith(
           tool: merged,
-          // Advance toward done/error; don't regress a finalized row back to running.
-          status: _advanceStatus(existing.status, incoming.status),
+          status: _mergedToolStatus(existing, incoming),
           timestamp: incoming.timestamp,
+          sessionId: incoming.sessionId ?? existing.sessionId,
           runId: incoming.runId ?? existing.runId,
+          modelStepId: incoming.modelStepId ?? existing.modelStepId,
           toolCallId: incoming.toolCallId ?? existing.toolCallId,
+          eventId: incoming.eventId ?? existing.eventId,
+          metadata: incoming.metadata != null ? {...?existing.metadata, ...incoming.metadata!} : existing.metadata,
         );
 
       case EventKind.finalAnswer:
@@ -354,9 +358,38 @@ class ConversationState {
   }
 
   EventStatus _advanceStatus(EventStatus current, EventStatus incoming) {
-    return terminalStatusRank(incoming) >= terminalStatusRank(current)
-        ? incoming
-        : current;
+    return terminalStatusRank(incoming) >= terminalStatusRank(current) ? incoming : current;
+  }
+
+  EventStatus _mergedToolStatus(
+    CanonicalEvent existing,
+    CanonicalEvent incoming,
+  ) {
+    final hasVersionMetadata =
+        existing.generation != null ||
+        incoming.generation != null ||
+        existing.revision != null ||
+        incoming.revision != null;
+    if (hasVersionMetadata && isNewerToolTerminalEvent(existing, incoming)) {
+      return incoming.status;
+    }
+    return _advanceStatus(existing.status, incoming.status);
+  }
+
+  bool _shouldApplyToolEvent(
+    CanonicalEvent existing,
+    CanonicalEvent incoming,
+  ) {
+    if (incoming.status == EventStatus.running) {
+      return existing.status == EventStatus.running;
+    }
+    if (existing.status == EventStatus.running) return true;
+
+    final sameVersion = existing.generation == incoming.generation && existing.revision == incoming.revision;
+    if (sameVersion && existing.revision != null) {
+      return existing.status == incoming.status;
+    }
+    return isNewerToolTerminalEvent(existing, incoming);
   }
 
   void dispose() {}

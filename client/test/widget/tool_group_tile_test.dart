@@ -251,6 +251,34 @@ void main() {
     expect(find.text('Ran: pwd', findRichText: true), findsOneWidget);
   });
 
+  testWidgets('cancelled tool shows terminal state without a spinner', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      _app(
+        EventTile(
+          event: _tool(
+            'search-cancelled',
+            'web_search',
+            status: EventStatus.cancelled,
+            input: const {'query': 'Sanad'},
+            output: 'Command cancelled by user.',
+          ),
+        ),
+      ),
+    );
+
+    expect(
+      find.text('Cancelled: "Sanad"', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('tool_running_progress_indicator')),
+      findsNothing,
+    );
+    expect(find.byIcon(Icons.cancel_outlined), findsOneWidget);
+  });
+
   testWidgets('modified file and line impact wrap as one unit', (
     tester,
   ) async {

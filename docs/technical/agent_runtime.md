@@ -544,6 +544,12 @@ are appended to live runner history and published by `SessionRunOrchestrator`.
 Repeated calls, a stale owner, or a tool that already has a terminal result are
 no-ops and do not mint another revision.
 
+Stop commits captured work cancellation before acknowledging completion, but
+defers publication of the resulting execution snapshot. Clients therefore
+observe each newly committed cancelled tool terminal first, then `stopped`,
+then the final `idle` or newer-work `queued` snapshot. A client reconnecting
+during bounded cleanup joins this same ordered terminal stream.
+
 The execution checkpoint records each tool's start time when its executing
 marker is created. Cancellation persists that time together with terminal
 time, revision, reason, and cleanup outcome. Late tool completions are consumed

@@ -766,24 +766,28 @@ class SessionExecutionStateCoordinator {
     return change;
   }
 
-  SessionExecutionSnapshotChange cancelAll(String sessionId) {
+  SessionExecutionSnapshotChange cancelAll(
+    String sessionId, {
+    bool publish = true,
+  }) {
     final change = _state.transaction((tx) {
       _workItems.cancelAllActiveAndQueuedWorkItems(sessionId, transaction: tx);
       return _recomputeInTransaction(sessionId, tx, preserveStopping: false);
     });
-    _publish(change);
+    if (publish) _publish(change);
     return change;
   }
 
   SessionExecutionSnapshotChange cancelWorkItems(
     String sessionId,
-    Iterable<String> workItemIds,
-  ) {
+    Iterable<String> workItemIds, {
+    bool publish = true,
+  }) {
     final change = _state.transaction((tx) {
       _workItems.cancelWorkItems(workItemIds, transaction: tx);
       return _recomputeInTransaction(sessionId, tx, preserveStopping: false);
     });
-    _publish(change);
+    if (publish) _publish(change);
     return change;
   }
 

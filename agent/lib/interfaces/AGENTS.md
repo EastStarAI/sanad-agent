@@ -32,4 +32,5 @@ This contract applies to `agent/lib/interfaces/`.
 
 ## Run Cancellation
 - `requestStop` terminalizes executing tools through an owner-validated durable transaction before emitting `stopped`.
+- Stop delivery order is cancelled tool terminals, `stopped`, then the final idle/queued execution snapshot; durable work cancellation is already committed before `stopped` is delivered.
 - Canonical cancelled `tool_result` events and history hydration expose the same run/generation/revision, reason, cleanup outcome, and start/terminal timestamps.

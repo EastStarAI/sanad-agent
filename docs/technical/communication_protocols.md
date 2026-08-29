@@ -680,4 +680,9 @@ Stop or a late success/timeout cannot advance the revision or replace that
 terminal. The event envelope keeps the session and opaque event identities;
 the payload does not duplicate tool output in `content`.
 
+For an active tool Stop, delivery order is the durable cancelled `tool_result`,
+then `stopped`, then the final `session.execution_state_changed` snapshot for
+`idle` or preserved newer queued work. Durable work cancellation commits before
+`stopped`; only snapshot publication is deferred to preserve wire order.
+
 `get_session_history` emits these same identities and ordering. Legacy rows without a model-step identity use deterministic message/segment order. Canonical history is consumed directly and is never converted through a legacy model that requires numeric IDs; route-transition UUIDs therefore remain valid.
