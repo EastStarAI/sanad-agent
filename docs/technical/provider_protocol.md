@@ -358,6 +358,32 @@ session instead of failing silently or scattering raw error text into the
 conversation. The agent is the single source of truth: the UI sends commands
 and waits for a fresh event before changing its visual state.
 
+### Provider request interruption (Plan 50b)
+
+Each provider turn receives the active `RunCancellationScope` through
+`LLMRequestOptions`. Production adapters (`BaseOpenAIAdapter`,
+`BaseAnthropicAdapter`, `CodexResponsesAdapter`, `OllamaAdapter`) issue HTTP
+through `ProviderRequestTransport`:
+
+- When a cancellation scope is attached, the transport owns a request-scoped
+  HTTP client and registers cleanup on that scope. Closing the client aborts
+  connect/send and ends SSE reads without closing an adapter-shared client used
+  by another run.
+- `ProviderRequestCancelledException` is typed separately from network/HTTP
+  failures. `AgentRunner` maps it to `RuntimeRecoveryCancelled` and must not
+  start retry/failover.
+- Watchdog defaults live in `ProviderWatchdogConfig` (connect, first-byte, and
+  stream-idle bounds, plus an optional total bound). First-byte and idle
+  expiry fail the stream with `TimeoutException` and cancel its upstream
+  subscription; they never masquerade as a successful end-of-stream. The
+  optional total deadline spans connect and streaming rather than restarting
+  for each phase. A timeout is not treated as proof of cleanup by itself.
+- Rate-limit waits observe `RunCancellationScope.whenCancelled` in addition to
+  the recovery cancel token, so Stop aborts a wait without inventing a network
+  notice.
+
+See also `docs/technical/run_cancellation_and_process_ownership.md`.
+
 ### Per-instance rate limit
 
 Every `ProviderInstance` carries two Plan 30 fields:

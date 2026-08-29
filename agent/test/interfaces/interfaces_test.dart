@@ -10,6 +10,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_exception.dar
 import 'package:sanad_agent/interfaces/gateway_manager.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
+import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart';
 import 'package:sanad_agent/core/models/message.dart';
@@ -170,6 +171,17 @@ Use the review skill.''',
     ).thenReturn(null);
     when(mockAgentRunner.beginAuthoritativeRun(any)).thenReturn(null);
     when(mockAgentRunner.endAuthoritativeRun(any)).thenReturn(null);
+    when(
+      mockAgentRunner.attachCancellationScope(
+        argThat(isA<RunCancellationScope>()),
+      ),
+    ).thenReturn(null);
+    when(
+      mockAgentRunner.detachCancellationScope(
+        argThat(isA<RunCancellationScope>()),
+      ),
+    ).thenReturn(null);
+    when(mockAgentRunner.canPublishRunEvents).thenReturn(true);
 
     // Stub SessionManager so GatewayManager can persist metrics during tests
     mockSessionDb = MockSessionDB();
@@ -2652,11 +2664,26 @@ Use the review skill.''',
       unawaited(orchestrator.handleEvent(event));
       await Future<void>.delayed(const Duration(milliseconds: 10));
 
-      // Two stops from two clients.
-      await orchestrator.requestStop('session-double-stop');
-      await orchestrator.requestStop('session-double-stop');
+      final responses = <GatewayResponse>[];
+      final responseSubscription = orchestrator.responses.listen(responses.add);
+      addTearDown(responseSubscription.cancel);
+
+      // Two concurrent stops from two clients join one terminal transition.
+      await Future.wait([
+        orchestrator.requestStop('session-double-stop'),
+        orchestrator.requestStop('session-double-stop'),
+      ]);
+      await Future<void>.delayed(Duration.zero);
 
       expect(orchestrator.isSessionBusy('session-double-stop'), isFalse);
+      expect(
+        responses.where(
+          (response) =>
+              response.message.metadata?['canonical_event_type'] == 'stopped',
+        ),
+        hasLength(1),
+      );
+      verify(mockAgentRunner.requestStop()).called(1);
       if (!completer.isCompleted) completer.complete('stopped');
     },
   );

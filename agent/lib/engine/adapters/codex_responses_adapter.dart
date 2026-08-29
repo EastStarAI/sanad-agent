@@ -15,6 +15,7 @@ import 'codex_responses_policy.dart';
 import 'codex_responses_sse_accumulator.dart';
 import 'llm_http_exception.dart';
 import 'llm_request_options.dart';
+import 'provider_request_transport.dart';
 import 'provider_state_rejected_exception.dart';
 
 /// Stateless adapter for Responses-compatible Codex endpoints.
@@ -97,16 +98,15 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
       );
     }
 
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     late http.StreamedResponse response;
     try {
-      final send = httpClient.send(request);
-      response = options.timeout == null
-          ? await send
-          : await send.timeout(options.timeout!);
+      response = await transport.send(request, operation: 'generateResponse');
     } catch (_) {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
       rethrow;
     }
 
@@ -123,14 +123,11 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
         throw _providerStateFailureOrHttp(failure, body, codec);
       }
 
-      Stream<List<int>> byteStream = response.stream;
-      if (options.timeout != null) {
-        byteStream = byteStream.timeout(options.timeout!);
-      }
-      await for (final line
-          in byteStream
-              .transform(utf8.decoder)
-              .transform(const LineSplitter())) {
+      await for (final line in transport.decodeSseLines(
+        response.stream,
+        operation: 'generateResponse',
+      )) {
+        transport.throwIfCancelled(operation: 'generateResponse');
         capturedLines.add(line);
         if (line.trim().isEmpty || line.startsWith('event:')) continue;
         if (!line.startsWith('data:')) continue;
@@ -160,7 +157,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
       }
       rethrow;
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
   }
 
@@ -193,16 +190,15 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
       );
     }
 
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     late http.StreamedResponse response;
     try {
-      final send = httpClient.send(request);
-      response = options.timeout == null
-          ? await send
-          : await send.timeout(options.timeout!);
+      response = await transport.send(request, operation: 'generateStream');
     } catch (_) {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
       rethrow;
     }
 
@@ -222,14 +218,11 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
         throw _providerStateFailureOrHttp(failure, body, codec);
       }
 
-      Stream<List<int>> byteStream = response.stream;
-      if (options.timeout != null) {
-        byteStream = byteStream.timeout(options.timeout!);
-      }
-      await for (final line
-          in byteStream
-              .transform(utf8.decoder)
-              .transform(const LineSplitter())) {
+      await for (final line in transport.decodeSseLines(
+        response.stream,
+        operation: 'generateStream',
+      )) {
+        transport.throwIfCancelled(operation: 'generateStream');
         capturedLines.add(line);
         if (line.trim().isEmpty || line.startsWith('event:')) continue;
         if (!line.startsWith('data:')) continue;
@@ -311,7 +304,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
       }
       rethrow;
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
   }
 

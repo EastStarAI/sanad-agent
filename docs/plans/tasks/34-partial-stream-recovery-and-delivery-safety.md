@@ -35,7 +35,7 @@ reasoning أو content أو tool state يصبح retry الشفاف غير آمن
 ## 2.1 حدود الملكية والتكامل مع Plan 50
 
 تتكامل هذه المهمة مع
-[Plan 50](../50-run-scoped-cancellation-and-stop-parity.md) دون أن تعيد تنفيذ
+[Plan 50](../done/50-run-scoped-cancellation-and-stop-parity.md) دون أن تعيد تنفيذ
 مسار الإلغاء الخاص بها:
 
 - **Plan 50 تملك:** user Stop، `RunCancellationScope`، قطع اتصال المزود، إلغاء

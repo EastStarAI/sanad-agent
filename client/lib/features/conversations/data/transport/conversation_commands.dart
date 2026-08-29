@@ -749,15 +749,17 @@ class ConversationCommands {
     // identity alone is not enough: reapply the terminal live event to merge
     // its output and advance the stale history row.
     if (transient.kind == EventKind.toolCall && transient.status != EventStatus.running && isRepresented) {
-      final matchingHistoryIsRunning = history.any((persisted) {
-        if (persisted.kind != EventKind.toolCall || persisted.status != EventStatus.running) {
-          return false;
-        }
+      final matchingHistory = history.where((persisted) {
+        if (persisted.kind != EventKind.toolCall) return false;
         return _reconciliationIdentityKeys(
           persisted,
         ).any(transientIdentityKeys.contains);
       });
-      if (matchingHistoryIsRunning) return false;
+      if (matchingHistory.any(
+        (persisted) => persisted.status == EventStatus.running || isNewerToolTerminalEvent(persisted, transient),
+      )) {
+        return false;
+      }
     }
 
     // Running thinking chunks may be newer than the persisted in-flight

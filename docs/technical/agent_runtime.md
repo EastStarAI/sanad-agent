@@ -487,3 +487,72 @@ older history when the configured context threshold is exceeded. System messages
 and recent conversation remain intact. Compression runs before plugin hooks so
 plugins observe the final effective history, while `AgentRunner` remains the
 only mutable history owner.
+
+## Run Cancellation Core (Plan 50a)
+
+Each active turn owns one `RunCancellationScope` keyed by immutable `runId`.
+`ActiveRun` creates the scope, `AgentRunner` attaches to it for the turn, and
+`SessionRunOrchestrator.requestStop` awaits bounded cleanup through the same
+primitive.
+
+Publication rules:
+
+1. `invalidate()` closes the publication gate synchronously before any await.
+2. Live assistant, reasoning, and tool events must check `isPublicationOpen`.
+3. Late provider or tool output from a cancelled run is consumed internally only.
+
+Cleanup rules:
+
+1. Resources register a cleanup callback and receive a `release()` handle.
+2. `cancel()` is idempotent and joins one bounded cleanup operation.
+3. The default cleanup deadline is five seconds (`RunCancellationScope.defaultCleanupDeadline`), shared with `SessionRunOrchestrator.runStopCleanupTimeout`.
+4. Deadline or cleanup failure becomes `cleanup_failed`; the session must not remain in `stopping` indefinitely.
+
+See also `docs/technical/run_cancellation_and_process_ownership.md`.
+
+## Tool and Shell Cancellation (Plan 50c)
+
+`ToolContext` carries `runId`, `generation`, and the active `RunCancellationScope`.
+`ToolExecutionCoordinator` builds that context for every sequential and parallel
+tool call. Once publication closes it consumes late futures internally without
+writing their results to checkpoints/history or starting the next sequential
+tool, leaving Stop-owned terminalization authoritative.
+
+`ShellExecuteTool` is cooperatively cancellable:
+
+1. Spawns owned containment (`setsid` on Linux, `perl setpgrp` on macOS, and a
+   kill-on-close Job Object on Windows; `taskkill /T /F` is fallback only).
+2. Registers `ProcessTreeHandle` cleanup on the run scope before awaiting output.
+3. Races natural exit, `timeout_ms`, and `whenCancelled` with one terminal compare-and-set.
+4. Returns `Command cancelled by user.` for Stop and keeps timeout messaging separate.
+
+`ProcessTreeController` performs `TERM → bounded grace → KILL → verify` and
+records typed cleanup outcomes (`exited`, `escalated`, `ownershipLost`, `failed`).
+The controller captures and rechecks an OS process-start identity before late
+cleanup. Natural wrapper completion first removes surviving descendants, then
+calls `release()` so a later Stop cannot target a reused PID.
+
+## Durable Terminal Tool Events (Plan 50d)
+
+Stop terminalizes every `currently_executing_tools` entry into one
+`ToolTerminalRecord` with `status: cancelled` before emitting `stopped`.
+`ToolTerminalizationService` submits the canonical checkpoint output and tool
+history message to `SessionExecutionStateCoordinator`, which validates the
+exact work item, run, generation, and non-terminal tool state and commits both
+records in one SQLite transaction. Only records returned as newly committed
+are appended to live runner history and published by `SessionRunOrchestrator`.
+Repeated calls, a stale owner, or a tool that already has a terminal result are
+no-ops and do not mint another revision.
+
+Stop commits captured work cancellation before acknowledging completion, but
+defers publication of the resulting execution snapshot. Clients therefore
+observe each newly committed cancelled tool terminal first, then `stopped`,
+then the final `idle` or newer-work `queued` snapshot. A client reconnecting
+during bounded cleanup joins this same ordered terminal stream.
+
+The execution checkpoint records each tool's start time when its executing
+marker is created. Cancellation persists that time together with terminal
+time, revision, reason, and cleanup outcome. Late tool completions are consumed
+behind the synchronously closed publication gate and cannot reach checkpoint or
+history writes. Live translation and history hydration expose the same durable
+terminal identity fields.

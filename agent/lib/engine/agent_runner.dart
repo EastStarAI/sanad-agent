@@ -33,6 +33,7 @@ import 'history_healer.dart';
 import 'metrics_tracker.dart';
 import 'tool_concurrency_evaluator.dart';
 import 'adapters/llm_http_exception.dart';
+import 'adapters/provider_request_cancelled_exception.dart';
 import 'adapters/rate_limited_llm_adapter.dart';
 import 'adapters/provider_state_rejected_exception.dart';
 import 'runtime/continuation_checkpoint_coordinator.dart';
@@ -41,6 +42,7 @@ import 'runtime/llm_route_snapshot.dart';
 import 'runtime/response_continuation_coordinator.dart';
 import 'runtime/steer_coordinator.dart' as steer_lib;
 import 'runtime/tool_execution_coordinator.dart';
+import 'runtime/run_cancellation_scope.dart';
 import 'runtime/turn_route_state.dart';
 
 /// Legacy re-exports so existing imports of the steer constants from
@@ -110,7 +112,22 @@ class AgentRunner {
     _stopRequested = true;
     _providerRequestInFlight = false;
     cancelControlledRestartDrain();
+    _cancellationScope?.invalidate(reason: RunCancellationReason.userStop);
   }
+
+  void attachCancellationScope(RunCancellationScope scope) {
+    _cancellationScope = scope;
+  }
+
+  void detachCancellationScope(RunCancellationScope scope) {
+    if (identical(_cancellationScope, scope)) {
+      _cancellationScope = null;
+    }
+  }
+
+  bool get canPublishRunEvents => _cancellationScope?.isPublicationOpen ?? true;
+
+  RunCancellationScope? get cancellationScope => _cancellationScope;
 
   /// Three-tier context assembler responsible for building the single system
   /// message sent to the LLM on every turn.
@@ -134,6 +151,7 @@ class AgentRunner {
   String? _authoritativeRunId;
   String? _authoritativeWorkItemId;
   int? _authoritativeGeneration;
+  RunCancellationScope? _cancellationScope;
   LLMRouteSnapshot? _lastSuccessfulLlmRoute;
   void Function(PendingSteerRecord record)? _onPendingSteerChanged;
 
@@ -170,6 +188,7 @@ class AgentRunner {
     _authoritativeRunId = null;
     _authoritativeWorkItemId = null;
     _authoritativeGeneration = null;
+    _cancellationScope = null;
     _onPendingSteerChanged = null;
     _turnRoute.setTurnRunId(null);
   }
@@ -388,6 +407,7 @@ class AgentRunner {
     parallel: parallel,
     callbacks: _RunnerToolCallbacks(this),
     ctx: _checkpointCtx,
+    cancellationScope: _cancellationScope,
     onToolEvent: onToolEvent,
   );
 
@@ -486,6 +506,7 @@ class AgentRunner {
       requestId: _turnRoute.turnRequestId,
       providerInstanceId: providerInstanceId,
       thinkingMode: _turnRoute.effectiveThinkingMode,
+      cancellationScope: _cancellationScope,
     );
   }
 
@@ -780,7 +801,7 @@ class AgentRunner {
     required bool streamStarted,
     required Set<String> failedProviderInstanceIds,
   }) async {
-    if (error is RateLimitCancelled) {
+    if (error is RateLimitCancelled || error is ProviderRequestCancelledException) {
       throw RuntimeRecoveryCancelled(sessionId);
     }
     final recovery = _recoveryService;
@@ -1121,6 +1142,7 @@ class AgentRunner {
         parallel: shouldParallelizeToolBatch(toolCalls),
         callbacks: _RunnerToolCallbacks(this),
         ctx: _checkpointCtx,
+        cancellationScope: _cancellationScope,
       );
       return await _getNextResponse(
         runtimeSystemPrompt: runtimeSystemPrompt,
@@ -1545,6 +1567,7 @@ class AgentRunner {
           parallel: shouldParallelizeToolBatch(toolCalls),
           callbacks: _RunnerToolCallbacks(this),
           ctx: _checkpointCtx,
+          cancellationScope: _cancellationScope,
           onToolEvent: onToolEvent,
         );
         if (_stopRequested) return;
@@ -1730,6 +1753,7 @@ class AgentRunner {
         parallel: shouldParallelizeToolBatch(toolCalls),
         callbacks: _RunnerToolCallbacks(this),
         ctx: _checkpointCtx,
+        cancellationScope: _cancellationScope,
       );
     }
   }

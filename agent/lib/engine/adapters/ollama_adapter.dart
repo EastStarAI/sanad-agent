@@ -10,6 +10,7 @@ import '../../capabilities/models/tool_schema.dart';
 import 'base_openai_adapter.dart';
 import 'llm_request_options.dart';
 import 'llm_http_exception.dart';
+import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 
 class OllamaAdapter extends BaseOpenAIAdapter {
@@ -211,22 +212,36 @@ class OllamaAdapter extends BaseOpenAIAdapter {
           .toList();
     }
 
-    var response = await (client ?? http.Client()).post(
-      url,
-      headers: {'Content-Type': 'application/json', ...profile.defaultHeaders},
-      body: jsonEncode(body),
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
     );
+    late http.Response response;
+    try {
+      response = await transport.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          ...profile.defaultHeaders,
+        },
+        body: jsonEncode(body),
+        operation: 'generateResponse',
+      );
 
-    if (response.statusCode == 400) {
-      final responseBody = response.body;
-      if (responseBody.contains('does not support tools')) {
-        body.remove('tools');
-        response = await (client ?? http.Client()).post(
-          url,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(body),
-        );
+      if (response.statusCode == 400) {
+        final responseBody = response.body;
+        if (responseBody.contains('does not support tools')) {
+          body.remove('tools');
+          response = await transport.post(
+            url,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode(body),
+            operation: 'generateResponse',
+          );
+        }
       }
+    } finally {
+      await transport.dispose();
     }
 
     if (response.statusCode != 200) {
@@ -310,7 +325,10 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       return data;
     }).toList();
 
-    final httpClient = client ?? http.Client();
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     final request = http.Request('POST', url);
     request.headers['Content-Type'] = 'application/json';
     profile.defaultHeaders.forEach((k, v) => request.headers[k] = v);
@@ -333,40 +351,51 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     }
 
     request.body = jsonEncode(body);
-    var response = await httpClient.send(request);
+    late http.StreamedResponse response;
+    try {
+      response = await transport.send(request, operation: 'generateStream');
+    } catch (_) {
+      await transport.dispose();
+      rethrow;
+    }
 
-    if (response.statusCode == 400) {
-      final errorBody = await response.stream.bytesToString();
-      if (errorBody.contains('does not support tools')) {
-        body.remove('tools');
-        final retryRequest = http.Request('POST', url);
-        retryRequest.headers['Content-Type'] = 'application/json';
-        retryRequest.body = jsonEncode(body);
-        response = await httpClient.send(retryRequest);
-      } else {
+    try {
+      if (response.statusCode == 400) {
+        final errorBody = await response.stream.bytesToString();
+        if (errorBody.contains('does not support tools')) {
+          body.remove('tools');
+          final retryRequest = http.Request('POST', url);
+          retryRequest.headers['Content-Type'] = 'application/json';
+          retryRequest.body = jsonEncode(body);
+          response = await transport.send(
+            retryRequest,
+            operation: 'generateStream',
+          );
+        } else {
+          throw LlmHttpException.fromStreamedResponse(
+            response,
+            errorBody,
+            operation: 'generateStream',
+          );
+        }
+      }
+
+      if (response.statusCode != 200) {
+        final errBody = await response.stream.bytesToString();
         throw LlmHttpException.fromStreamedResponse(
           response,
-          errorBody,
+          errBody,
           operation: 'generateStream',
         );
       }
-    }
 
-    if (response.statusCode != 200) {
-      final errBody = await response.stream.bytesToString();
-      throw LlmHttpException.fromStreamedResponse(
-        response,
-        errBody,
+      final taggedReasoning = TaggedReasoningStreamParser();
+      await for (final line in transport.decodeSseLines(
+        response.stream,
         operation: 'generateStream',
-      );
-    }
-
-    final taggedReasoning = TaggedReasoningStreamParser();
-    await for (final line
-        in response.stream
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())) {
-      if (line.trim().isEmpty) continue;
+      )) {
+        transport.throwIfCancelled(operation: 'generateStream');
+        if (line.trim().isEmpty) continue;
 
       final data = jsonDecode(line);
       final choice = data['message'];
@@ -430,6 +459,9 @@ class OllamaAdapter extends BaseOpenAIAdapter {
         model: resolvedModel,
         provider: profile.name,
       );
+    }
+    } finally {
+      await transport.dispose();
     }
   }
 }

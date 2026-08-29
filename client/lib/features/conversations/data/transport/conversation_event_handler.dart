@@ -215,6 +215,12 @@ class ConversationEventHandler {
         runId: runId,
         sessionId: eventSessionId,
       );
+      if (runId != null && runId.isNotEmpty) {
+        _conversationStore.cancelRunningToolsForRun(
+          runId: runId,
+          sessionId: eventSessionId,
+        );
+      }
       if (eventSessionId != null) {
         _conversationStore.clearPendingSuspendedRequestForSession(
           eventSessionId,

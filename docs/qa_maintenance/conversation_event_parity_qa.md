@@ -33,6 +33,7 @@ All items share one `run_id`. The three assistant segments have distinct `model_
 14. A late steer completes the pre-steer running row as a visible thought before the steer continuation starts, and history hydration reproduces the same order.
 15. Running thought Markdown is exercised through the progressive renderer in widget tests; tests do not silently replace it with the completed-document renderer.
 16. Live and history tool execution events maintain identical error status parity (a tool failing with an error in the live run is hydrated as a tool error event in history).
+17. User Stop during a running tool publishes `tool_result.status = cancelled` live and hydrates the same run/generation/revision, reason, cleanup outcome, start time, and terminal time after reload; repeated Stop or late success does not add a second terminal revision, and `stopped` defensively closes any same-run tool that missed the terminal packet without leaving a spinner.
 
 ## Automated ownership
 
@@ -41,5 +42,7 @@ All items share one `run_id`. The three assistant segments have distinct `model_
 - Tagged reasoning parser and OpenAI-compatible streaming: `agent/test/engine/adapters/tagged_reasoning_parser_test.dart`, `agent/test/engine/adapters_test.dart`
 - Client mapping/state cleanup: `client/test/unit/models/canonical_event_test.dart`
 - Client history hydration: `client/test/unit/services/device_conversation_commands_test.dart`
+- Client Stop fallback and live terminal ordering: `client/test/unit/services/device_conversation_event_handler_test.dart`
+- Client cancelled-state presentation: `client/test/widget/tool_group_tile_test.dart`
 - Client failure/retry presentation: `client/test/unit/bloc/session_cubit_test.dart`
 - Full local socket/runtime/history path: `client/e2e_test/local_dual_connection_e2e_test.dart`

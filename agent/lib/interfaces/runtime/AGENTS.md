@@ -6,6 +6,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 ## Active Run Ownership
 - Every turn is owned by immutable session id, work-item id, stable run id, and monotonically increasing generation.
 - Only the current non-invalidated owner may broadcast callbacks, clear busy state, drain queues, persist execution state, or deliver a terminal result.
+- Each `ActiveRun` owns one `RunCancellationScope`; Stop invalidates that scope synchronously before awaiting bounded cleanup.
 - Stop invalidates ownership synchronously before awaiting cancellation; input received during that wait belongs to the next generation.
 - Visible recovery is session-addressable, but cancellation, retry, stopped reason, and late-notice authority remain run-scoped.
 

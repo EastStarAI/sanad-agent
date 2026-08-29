@@ -1,8 +1,8 @@
 ---
 title: "Task 50d: Durable Terminal Tool Events"
 description: "ضمان terminal event واحدة لكل أداة بدأت، وحفظ cancellation قبل idle مع عزل النتائج المتأخرة وتطابق history/live payloads."
-status: "pending"
-current_gate: "Waiting for 50a and 50c"
+status: "complete"
+current_gate: "D3 complete"
 priority: "critical"
 depends_on: "50a, 50c"
 file_budget: 14

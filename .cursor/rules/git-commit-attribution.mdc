@@ -1,0 +1,25 @@
+---
+description: Git commits must use the human developer identity only; never Cursor Agent co-authorship
+alwaysApply: true
+---
+
+# Git Commit Attribution
+
+When creating any `git commit` in this repository:
+
+1. **Author and committer** must be the repository developer only:
+   - Name: `AhmedAttia3`
+   - Email: `36775916+AhmedAttia3@users.noreply.github.com`
+2. Set identity explicitly for every commit (do not rely on Cursor defaults):
+   ```bash
+   git -c user.name="AhmedAttia3" -c user.email="36775916+AhmedAttia3@users.noreply.github.com" commit -m "$(cat <<'EOF'
+   ...
+   EOF
+   )"
+   ```
+3. **Never** add `Co-authored-by: Cursor`, `Co-authored-by: Cursor Agent`, or any Cursor/agent trailer to commit messages.
+4. Before reporting a commit as done, verify attribution:
+   ```bash
+   git log -1 --format='author=%an <%ae> committer=%cn <%ce>%n%b'
+   ```
+   Reject and amend if any Cursor identity or `Co-authored-by` trailer is present.

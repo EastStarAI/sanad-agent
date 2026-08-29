@@ -30,6 +30,7 @@ import 'session_turn_executor.dart';
 import 'session_recovery_restorer.dart';
 import 'session_turn_request_helpers.dart';
 import 'suspended_checkpoint_store.dart';
+import 'package:sanad_agent/engine/runtime/tool_terminalization_service.dart';
 
 class SuspendedRun {
   final GatewayEvent event;
@@ -48,12 +49,14 @@ class SuspendedRun {
 class SessionRunOrchestrator implements SessionQueueProviderOverride {
   static const controlledRestartCheckpointTimeout = Duration(minutes: 1);
   static const providerRestartCancellationTimeout = Duration(seconds: 5);
+  static const runStopCleanupTimeout = Duration(seconds: 5);
   static const controlledRestartCheckpointPollInterval = Duration(
     milliseconds: 25,
   );
   final _logger = Logger('SessionRunOrchestrator');
 
   final Map<String, SuspendedRun> _suspendedEvents = {};
+  final Map<String, Future<void>> _stopRequests = {};
   final Set<String> _busySessions = {};
   final Set<String> _resumingSessions = {};
   bool _controlledRestartDraining = false;
@@ -366,6 +369,38 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     bool forceEmitStopped = false,
     String? stopRequestId,
     String? recoveryOwnerToken,
+  }) {
+    final existing = _stopRequests[sessionId];
+    if (existing != null) {
+      return existing;
+    }
+    final future = _requestStop(
+      sessionId,
+      forceEmitStopped: forceEmitStopped,
+      stopRequestId: stopRequestId,
+      recoveryOwnerToken: recoveryOwnerToken,
+    );
+    _stopRequests[sessionId] = future;
+    void clearCompletedStop() {
+      if (identical(_stopRequests[sessionId], future)) {
+        _stopRequests.remove(sessionId);
+      }
+    }
+
+    unawaited(
+      future.then<void>(
+        (_) => clearCompletedStop(),
+        onError: (Object _, StackTrace _) => clearCompletedStop(),
+      ),
+    );
+    return future;
+  }
+
+  Future<void> _requestStop(
+    String sessionId, {
+    required bool forceEmitStopped,
+    required String? stopRequestId,
+    required String? recoveryOwnerToken,
   }) async {
     final activeRun = _turnExecutor.getActiveRun(sessionId);
     final stoppedRunId = activeRun?.runId;
@@ -442,7 +477,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     }
     if (stopFuture != null) {
       try {
-        await stopFuture;
+        await stopFuture.timeout(runStopCleanupTimeout);
+      } on TimeoutException {
+        _logger.warning(
+          'Run stop cleanup exceeded the bounded deadline for session '
+          '$sessionId; publication remains invalidated.',
+        );
       } on RuntimeRecoveryCancelled catch (error) {
         // Stop intentionally aborts an active recovery wait. The stream
         // cancellation can surface that expected lifecycle transition through
@@ -460,6 +500,45 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         );
       }
     }
+    if (activeRun != null && activeRun.workItemId != null) {
+      final cleanupReport = activeRun.cancellationScope.report;
+      final terminalRecords =
+          ToolTerminalizationService(
+            repository: persistedState,
+          ).terminalizeExecutingTools(
+            sessionId: sessionId,
+            agentRunner: activeRun.agentRunner,
+            workItemId: activeRun.workItemId!,
+            runId: activeRun.runId,
+            generation: activeRun.generation,
+            modelStepId: stoppedModelStepId,
+            cleanupOutcome:
+                cleanupReport?.finalState.name ??
+                activeRun.cancellationScope.state.name,
+          );
+      for (final record in terminalRecords) {
+        _emitResponse(
+          GatewayResponse(
+            sessionId: sessionId,
+            message: Message(
+              role: MessageRole.tool,
+              content: record.message,
+              metadata: record.toHistoryMetadata(
+                modelStepId: stoppedModelStepId,
+              ),
+            ),
+            isComplete: true,
+            runId: record.runId,
+            modelStepId: stoppedModelStepId,
+            toolCallId: record.toolCallId,
+            toolName: record.toolName,
+            isToolResult: true,
+            isToolError: record.isError,
+            isToolCancelled: record.isTerminalCancelled,
+          ),
+        );
+      }
+    }
     final hasNewerDurableWork =
         persistedState
             ?.findAllWorkItems(sessionId)
@@ -470,11 +549,16 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
                   !capturedWorkItemIds.contains(item.workItemId),
             ) ??
         false;
-    if (hasNewerDurableWork) {
-      persistedState?.cancelWorkItems(sessionId, capturedWorkItemIds);
-    } else {
-      persistedState?.clearAllForSession(sessionId);
-    }
+    final deferredExecutionChange = hasNewerDurableWork
+        ? persistedState?.cancelWorkItems(
+            sessionId,
+            capturedWorkItemIds,
+            publishExecutionChange: false,
+          )
+        : persistedState?.clearAllForSession(
+            sessionId,
+            publishExecutionChange: false,
+          );
     if (hadWork) {
       _emitResponse(
         GatewayResponse(
@@ -495,6 +579,16 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           runId: stoppedRunId,
           modelStepId: stoppedModelStepId,
         ),
+      );
+      // Durable cleanup is already committed, but response delivery is
+      // asynchronous while execution-snapshot publication is synchronous.
+      // Let the cancelled tool terminal and stopped acknowledgement reach
+      // clients before publishing the final idle/queued snapshot.
+      await Future<void>.delayed(Duration.zero);
+    }
+    if (deferredExecutionChange != null) {
+      persistedState?.executionState.publishCommittedChange(
+        deferredExecutionChange,
       );
     }
     if (recoveryOutcome != null) {

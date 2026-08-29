@@ -1298,6 +1298,81 @@ void main() {
     );
 
     test(
+      'get_session_history restores the complete cancelled tool terminal',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-cancelled-tool-history';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'sanad-agent',
+            createdAt: DateTime.parse('2026-08-29T00:00:00Z'),
+            updatedAt: DateTime.parse('2026-08-29T00:01:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Run a command'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'tool-cancelled-1',
+                name: 'shell_execute',
+                arguments: const {'command': 'sleep 10'},
+              ),
+            ],
+            metadata: const {
+              'run_id': 'run-cancelled-1',
+              'model_step_id': 'step-cancelled-1',
+            },
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'tool-cancelled-1',
+            content: 'Command cancelled by user.',
+            metadata: const {
+              'run_id': 'run-cancelled-1',
+              'model_step_id': 'step-cancelled-1',
+              'generation': 5,
+              'revision': 23,
+              'status': 'cancelled',
+              'reason': 'user_stop',
+              'is_error': true,
+              'started_at': '2026-08-29T00:00:10.000Z',
+              'terminal_at': '2026-08-29T00:00:11.000Z',
+              'cleanup_outcome': 'cancelled',
+            },
+          ),
+        ]);
+
+        Map<String, dynamic>? emitted;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-cancelled-tool-history',
+            'session_id': sessionId,
+          },
+        }, (envelope) async => emitted = envelope);
+
+        final messages = emitted?['payload']['messages'] as List;
+        final toolResult = messages.singleWhere(
+          (message) => message['type'] == 'tool_result',
+        );
+        expect(toolResult['status'], 'cancelled');
+        expect(toolResult['run_id'], 'run-cancelled-1');
+        expect(toolResult['model_step_id'], 'step-cancelled-1');
+        expect(toolResult['tool_call_id'], 'tool-cancelled-1');
+        expect(toolResult['generation'], 5);
+        expect(toolResult['revision'], 23);
+        expect(toolResult['reason'], 'user_stop');
+        expect(toolResult['started_at'], '2026-08-29T00:00:10.000Z');
+        expect(toolResult['terminal_at'], '2026-08-29T00:00:11.000Z');
+        expect(toolResult['cleanup_outcome'], 'cancelled');
+      },
+    );
+
+    test(
       'get_session_history restores steer after its tool result without exposing markers',
       () async {
         final bridge = SanadProtocolBridge();

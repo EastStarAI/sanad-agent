@@ -604,6 +604,151 @@ void main() {
       PendingSteerState.delivered,
     );
   });
+
+  test('tool_result cancelled closes running tool without spinner state', () async {
+    socket.eventRouter.routeEvent(
+      _envelope('tool_use', {
+        'tool': 'shell_execute',
+        'input': '{"command":"sleep 30"}',
+        'session_id': 'session-1',
+        'run_id': 'run-cancel',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-cancel-1',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('tool_result', {
+        'tool': 'shell_execute',
+        'output': 'Command cancelled by user.',
+        'status': 'cancelled',
+        'isError': true,
+        'session_id': 'session-1',
+        'run_id': 'run-cancel',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-cancel-1',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final tool = store.currentMessages.singleWhere(
+      (event) => event.kind == EventKind.toolCall,
+    );
+    expect(tool.status, EventStatus.cancelled);
+    expect(tool.toolOutput, 'Command cancelled by user.');
+  });
+
+  test('stopped cancels running tools for the same run as defensive fallback', () async {
+    socket.eventRouter.routeEvent(
+      _envelope('tool_use', {
+        'tool': 'shell_execute',
+        'input': '{"command":"sleep 30"}',
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-stop-1',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('stopped', {
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final tool = store.currentMessages.singleWhere(
+      (event) => event.kind == EventKind.toolCall,
+    );
+    expect(tool.status, EventStatus.cancelled);
+    expect(tool.toolOutput, 'Command cancelled by user.');
+  });
+
+  test('stopped fallback leaves running tools from another run untouched', () async {
+    for (final entry in [('run-stop', 'tool-stop'), ('run-other', 'tool-other')]) {
+      socket.eventRouter.routeEvent(
+        _envelope('tool_use', {
+          'tool': 'shell_execute',
+          'input': '{"command":"sleep 30"}',
+          'session_id': 'session-1',
+          'run_id': entry.$1,
+          'model_step_id': 'step-${entry.$2}',
+          'tool_call_id': entry.$2,
+        }),
+      );
+    }
+    socket.eventRouter.routeEvent(
+      _envelope('stopped', {
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-tool-stop',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      store.currentMessages.singleWhere((event) => event.toolCallId == 'tool-stop').status,
+      EventStatus.cancelled,
+    );
+    expect(
+      store.currentMessages.singleWhere((event) => event.toolCallId == 'tool-other').status,
+      EventStatus.running,
+    );
+  });
+
+  test('authoritative cancellation enriches fallback and blocks late timeout', () async {
+    socket.eventRouter.routeEvent(
+      _envelope('tool_use', {
+        'tool': 'shell_execute',
+        'input': '{"command":"sleep 30"}',
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-stop',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('stopped', {
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('tool_result', {
+        'tool': 'shell_execute',
+        'output': 'Command cancelled by user.',
+        'status': 'cancelled',
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-stop',
+        'generation': 5,
+        'revision': 50,
+        'reason': 'user_stop',
+        'terminal_at': '2026-08-29T00:00:01Z',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('tool_result', {
+        'tool': 'shell_execute',
+        'output': 'Command timed out.',
+        'status': 'error',
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-stop',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final tool = store.currentMessages.single;
+    expect(tool.status, EventStatus.cancelled);
+    expect(tool.toolOutput, 'Command cancelled by user.');
+    expect(tool.generation, 5);
+    expect(tool.revision, 50);
+    expect(tool.metadata, containsPair('reason', 'user_stop'));
+  });
 }
 
 Map<String, dynamic> _envelope(String event, Map<String, dynamic> payload) => {

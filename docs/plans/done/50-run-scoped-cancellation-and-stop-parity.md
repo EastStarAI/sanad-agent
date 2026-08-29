@@ -1,7 +1,7 @@
 ---
 title: "Plan 50: Run-Scoped Cancellation and Stop Parity"
 description: "خطة مظلة لجعل Stop يقطع طلبات المزود والأدوات والعمليات الفرعية فورًا، ويثبت terminal events متطابقة بين البث الحي والتاريخ المستعاد."
-status: "pending"
+status: "complete"
 priority: "critical"
 related_to: "Plan 54 durable background terminal tasks and session wakeups"
 reference_grounding: "required for tasks 50a-50f"
@@ -11,7 +11,7 @@ reference_grounding: "required for tasks 50a-50f"
 
 ## 1. الحالة والهدف
 
-- الحالة: `pending` — الخطة جاهزة للمراجعة قبل بدء 50a.
+- الحالة: `complete` — Plan 50 مغلق على فرع التجميع `feat/plan-50-run-cancellation`.
 - الأولوية: حرجة؛ الخلل قد يترك session في `stopping` وعمليات خارجية orphan.
 - النطاق: Sanad Agent runtime، provider transports، tool execution، shell process trees، canonical events، وFlutter conversation projection.
 - أسلوب التنفيذ: خطة مظلة تنجز عبر المهام `50a` إلى `50f` في `docs/plans/tasks/`.
@@ -42,7 +42,19 @@ Stop accepted
 6. حدث `stopped` في العميل ينهي thinking، لكنه لا يحول tool events الجارية إلى حالة terminal.
 7. النتيجة المتأخرة قد تحفظ في التاريخ بعد invalidation من دون أن تصل إلى live projection، فتختلف الواجهة عن reload.
 
-## 1.2 قاعدة إدارة التقدم
+## 1.2 قاعدة التسليم والدمج
+
+- يُنفَّذ Plan 50 بالكامل داخل **worktree معزول** واحد (فرع تجميعي مثل
+  `feat/plan-50-run-cancellation`)؛ لا تُدمج أي مهمة فرعية أو gate على
+  `main` أثناء التنفيذ.
+- تُنفَّذ المهام `50a`–`50f` على نفس الفرع التجميعي داخل الـworktree، مع
+  commits مرحلية اختيارية لكل gate مكتمل.
+- لا يُفتح PR إلى `main` إلا بعد إغلاق **50f**، تجميع كل التغييرات في فرع
+  واحد، ونجاح التحقق الكامل (analyzer + اختبارات مركزة + سيناريوهات QA
+  المطلوبة).
+- يبقى `main` نظيفًا حتى مراجعة بشرية وموافقة صريحة على PR التجميعي.
+
+## 1.3 قاعدة إدارة التقدم
 
 - كل مهمة تبدأ بـGate R0 للتأصيل الخارجي قبل أول Gate تنفيذية. الحزمة المفقودة
   أو القديمة تشغّل مسار authoring/refresh أولًا، ولا تسجل المهمة `blocked` إلا
@@ -56,18 +68,18 @@ Stop accepted
 - كل مهمة تحدث أقرب `AGENTS.md` ووثائق technical/product/QA التي تملك السلوك المعدل.
 - لا تغلق الخطة قبل نجاح 50f وتطابق live/history في سيناريوهات الإلغاء كلها.
 - العقد التقني الحاكم للسلوك هو
-  [Run Cancellation and Process Ownership](../technical/run_cancellation_and_process_ownership.md).
+  [Run Cancellation and Process Ownership](../../technical/run_cancellation_and_process_ownership.md).
 
-## 1.3 لوحة التقدم
+## 1.4 لوحة التقدم
 
 | المهمة | الحالة | Gate الحالية | سقف الملفات | شرط الانتقال |
 |---|---|---|---:|---|
-| 50a Cancellation Core | `pending` | A0 | 12 | اعتماد primitive وbounded stop contract |
-| 50b Provider Interruption | `pending` | Waiting | 14 | اكتمال 50a |
-| 50c Tool/Shell Cancellation | `pending` | Waiting | 14 | اكتمال 50a |
-| 50d Terminal Event Durability | `pending` | Waiting | 14 | اكتمال 50a و50c |
-| 50e Client Live/History Parity | `pending` | Waiting | 14 | اكتمال 50d |
-| 50f Integration QA | `pending` | Waiting | 10 | اكتمال 50b–50e |
+| 50a Cancellation Core | `complete` | closed | 12 | اعتماد primitive وbounded stop contract |
+| 50b Provider Interruption | `complete` | closed | 14 | اكتمال 50a |
+| 50c Tool/Shell Cancellation | `complete` | closed | 14 | اكتمال 50a |
+| 50d Terminal Event Durability | `complete` | closed | 14 | اكتمال 50a و50c |
+| 50e Client Live/History Parity | `complete` | closed | 14 | اكتمال 50d |
+| 50f Integration QA | `complete` | closed | 10 | اكتمال 50b–50e |
 
 ## 2. قرارات التصميم الحاكمة
 
@@ -102,7 +114,7 @@ Stop accepted
 ## 2.1 حد التكامل مع Plan 54
 
 Plan 50 مستقلة وقابلة للإغلاق دون تنفيذ
-[Plan 54](54-durable-background-terminal-tasks-and-session-wakeups.md):
+[Plan 54](../54-durable-background-terminal-tasks-and-session-wakeups.md):
 
 - Plan 50 توفر cancellation registration قابلة للتحرير وprocess-tree controller
   قابلة لإعادة الاستخدام.
@@ -168,12 +180,12 @@ RunCancellationScope
 
 ## 5. خطط المهام
 
-1. [50a: Run Cancellation Core and Bounded Stop](tasks/50a-run-cancellation-core-and-bounded-stop.md)
-2. [50b: Provider Request Interruption and Watchdogs](tasks/50b-provider-request-interruption-and-watchdogs.md)
-3. [50c: Tool Cancellation and Shell Process Trees](tasks/50c-tool-cancellation-and-shell-process-trees.md)
-4. [50d: Durable Terminal Tool Events](tasks/50d-durable-terminal-tool-events.md)
-5. [50e: Client Stop and Tool Event Parity](tasks/50e-client-stop-and-tool-event-parity.md)
-6. [50f: Cancellation Integration and Regression QA](tasks/50f-cancellation-integration-and-regression-qa.md)
+1. [50a: Run Cancellation Core and Bounded Stop](../tasks/done/50a-run-cancellation-core-and-bounded-stop.md)
+2. [50b: Provider Request Interruption and Watchdogs](../tasks/done/50b-provider-request-interruption-and-watchdogs.md)
+3. [50c: Tool Cancellation and Shell Process Trees](../tasks/done/50c-tool-cancellation-and-shell-process-trees.md)
+4. [50d: Durable Terminal Tool Events](../tasks/done/50d-durable-terminal-tool-events.md)
+5. [50e: Client Stop and Tool Event Parity](../tasks/done/50e-client-stop-and-tool-event-parity.md)
+6. [50f: Cancellation Integration and Regression QA](../tasks/done/50f-cancellation-integration-and-regression-qa.md)
 
 ## 6. معايير القبول الكلية
 

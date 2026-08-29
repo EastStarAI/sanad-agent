@@ -13,6 +13,7 @@ import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
 import 'llm_http_exception.dart';
 import 'llm_request_options.dart';
+import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 import '../llm_request_dumper.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
@@ -251,20 +252,20 @@ class BaseAnthropicAdapter implements LLMAdapter {
       );
     }
 
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     late http.Response response;
     try {
-      response = await _withTimeout(
-        httpClient.post(
-          url,
-          headers: _anthropicHeaders(),
-          body: jsonEncode(body),
-        ),
-        options.timeout,
+      response = await transport.post(
+        url,
+        headers: _anthropicHeaders(),
+        body: jsonEncode(body),
+        operation: 'generateResponse',
       );
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
 
     _logger.info('LLM Response status: ${response.statusCode}');
@@ -364,17 +365,19 @@ class BaseAnthropicAdapter implements LLMAdapter {
       );
     }
 
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     final request = http.Request('POST', url);
     request.headers.addAll(_anthropicHeaders());
     request.body = jsonEncode(body);
 
     late http.StreamedResponse response;
     try {
-      response = await _withTimeout(httpClient.send(request), options.timeout);
+      response = await transport.send(request, operation: 'generateStream');
     } catch (_) {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
       rethrow;
     }
 
@@ -405,10 +408,11 @@ class BaseAnthropicAdapter implements LLMAdapter {
       LLMFinishReason? streamFinishReason;
 
       try {
-        await for (final line
-            in response.stream
-                .transform(utf8.decoder)
-                .transform(const LineSplitter())) {
+        await for (final line in transport.decodeSseLines(
+          response.stream,
+          operation: 'generateStream',
+        )) {
+          transport.throwIfCancelled(operation: 'generateStream');
           accumulatedStreamLines.add(line);
           final trimmed = line.trim();
           if (trimmed.isEmpty) continue;
@@ -619,7 +623,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
         );
       }
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
   }
 
@@ -834,9 +838,6 @@ class BaseAnthropicAdapter implements LLMAdapter {
             : LLMFinishReason.unknown;
     }
   }
-
-  Future<T> _withTimeout<T>(Future<T> future, Duration? timeout) =>
-      timeout == null ? future : future.timeout(timeout);
 }
 
 Map<String, dynamic> _normalizeAnthropicUsage(Map<String, dynamic> usage) => {

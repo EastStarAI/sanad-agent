@@ -65,6 +65,11 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       'provider_instance_id': row['provider_instance_id'] ?? metadata['provider_instance_id'],
       'route_revision': row['route_revision'] ?? metadata['route_revision'],
       'reason': row['reason'] ?? metadata['reason'],
+      'generation': row['generation'] ?? metadata['generation'],
+      'revision': row['revision'] ?? metadata['revision'],
+      'started_at': row['started_at'] ?? metadata['started_at'],
+      'terminal_at': row['terminal_at'] ?? metadata['terminal_at'],
+      'cleanup_outcome': row['cleanup_outcome'] ?? metadata['cleanup_outcome'],
       'previous_provider_display_name':
           row['previous_provider_display_name'] ?? metadata['previous_provider_display_name'],
       'provider_display_name': row['provider_display_name'] ?? metadata['provider_display_name'],
@@ -78,6 +83,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         'tool': row['tool'] ?? _historyToolName(metadata['tool']) ?? toolMetadata,
         'output': row['output'] ?? metadata['output'] ?? toolMetadata?['output'],
         'isError': row['isError'] ?? metadata['isError'],
+        'status': row['status'] ?? metadata['status'],
       },
       'tool_call' => <String, dynamic>{
         'tool': row['tool'] ?? toolMetadata ?? _historyToolName(metadata['tool']),
@@ -261,9 +267,9 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
 
       case 'tool_use':
         return CanonicalEvent(
-          id: _toolId(toolCallId, runId, event['tool'], eventId, timestamp),
+          id: _toolId(toolCallId, eventId, timestamp),
           kind: EventKind.toolCall,
-          status: EventStatus.running,
+          status: status ?? EventStatus.running,
           tool: {
             'name': event['tool'] ?? 'Unknown Tool',
             'input': event['input'],
@@ -288,12 +294,14 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
 
       case 'tool_result':
         final output = event['output']?.toString() ?? '';
-        final isError = event['isError'] == true || status == EventStatus.error;
+        final explicitStatus = _extractStatus(event['status']);
+        final isCancelled = explicitStatus == EventStatus.cancelled || event['status']?.toString() == 'cancelled';
+        final isError = !isCancelled && (event['isError'] == true || explicitStatus == EventStatus.error);
 
         return CanonicalEvent(
-          id: _toolId(toolCallId, runId, event['tool'], eventId, timestamp),
+          id: _toolId(toolCallId, eventId, timestamp),
           kind: EventKind.toolCall,
-          status: isError ? EventStatus.error : EventStatus.done,
+          status: isCancelled ? EventStatus.cancelled : (isError ? EventStatus.error : EventStatus.done),
           tool: {
             'name': event['tool'] ?? '',
             'output': output,
@@ -319,7 +327,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       case 'tool_call':
         final tool = (event['tool'] as Map?)?.cast<String, dynamic>();
         return CanonicalEvent(
-          id: _toolId(toolCallId, runId, event['tool'], eventId, timestamp),
+          id: _toolId(toolCallId, eventId, timestamp),
           kind: EventKind.toolCall,
           status: status ?? EventStatus.running,
           tool: {
@@ -457,17 +465,9 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
   // Same id for tool_use + matching tool_result so they fold together.
   String _toolId(
     String? toolCallId,
-    String? runId,
-    dynamic toolName,
     String? eventId,
     DateTime timestamp,
-  ) => 'tool_${toolCallId ?? _legacyToolKey(runId, toolName) ?? eventId ?? timestamp.millisecondsSinceEpoch}';
-
-  String? _legacyToolKey(String? runId, dynamic toolName) {
-    if (runId == null || runId.isEmpty) return null;
-    final name = toolName?.toString().trim();
-    return name == null || name.isEmpty ? runId : '${runId}_$name';
-  }
+  ) => 'tool_${toolCallId ?? eventId ?? timestamp.microsecondsSinceEpoch}';
 
   String? _stringId(dynamic value) {
     final normalized = value?.toString().trim();
@@ -497,6 +497,8 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       case 'error':
       case 'failed':
         return EventStatus.error;
+      case 'cancelled':
+        return EventStatus.cancelled;
       default:
         return null;
     }
@@ -509,6 +511,12 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       if (event['request_id'] != null) 'request_id': event['request_id'],
       if (event['queued'] != null) 'queued': event['queued'],
       if (event['classification'] != null) 'classification': event['classification'],
+      if (event['generation'] != null) 'generation': event['generation'],
+      if (event['revision'] != null) 'revision': event['revision'],
+      if (event['reason'] != null) 'reason': event['reason'],
+      if (event['started_at'] != null) 'started_at': event['started_at'],
+      if (event['terminal_at'] != null) 'terminal_at': event['terminal_at'],
+      if (event['cleanup_outcome'] != null) 'cleanup_outcome': event['cleanup_outcome'],
     };
     return normalized.isEmpty ? null : normalized;
   }
