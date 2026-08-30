@@ -126,6 +126,11 @@ class SessionDB {
     return getWorkspaceById(id);
   }
 
+  bool removeWorkspace(String id) {
+    _db.execute('DELETE FROM workspaces WHERE id = ?', [id]);
+    return _db.updatedRows == 1;
+  }
+
   static String _workspaceDisplayName(String? displayName, String path) {
     final trimmed = displayName?.trim();
     if (trimmed != null && trimmed.isNotEmpty) return trimmed;

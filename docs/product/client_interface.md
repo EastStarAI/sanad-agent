@@ -233,6 +233,10 @@ Settings distinguish:
 
 Workspace configuration can override a user-level capability with the same
 name. Inherited entries remain identifiable so the user can see their origin.
+Workspace Overview offers record-only removal behind a confirmation that
+explicitly preserves the host folder, its files, and existing conversations.
+Remote folder browsing is not exposed there; its constrained runtime remains
+reserved for a future conversation-side file tree.
 
 ## Connection states
 

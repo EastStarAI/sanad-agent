@@ -81,11 +81,16 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
       }
     }
     ```
-  - **Note:** Supported commands include `think`, `stop`, `clear_history`, `register_tools`, `workspace.get_policy`, `workspace.set_permission_mode`, `session.runtime_retry`, `session.runtime_continue_with_provider`, `tool_permission_response`, `session.pending_steer_cancel`, `session.queued_message_delete`, `session.stop_recovery_claim`, and `session.stop_recovery_ack`. Conversation actions sent by Sanad Client never use a direct `protocol_event`; local and cloud routes use this same explicit-device command envelope.
+  - **Note:** Supported commands include `think`, `stop`, `clear_history`, `register_tools`, `workspace.get_policy`, `workspace.set_permission_mode`, `session.runtime_retry`, `session.runtime_continue_with_provider`, `tool_permission_response`, `session.pending_steer_cancel`, `session.queued_message_delete`, `session.stop_recovery_claim`, `session.stop_recovery_ack`, `device.update.check`, `device.update.apply`, and `device.runtime.restart`. Conversation actions sent by Sanad Client never use a direct `protocol_event`; local and cloud routes use this same explicit-device command envelope.
   - Every routed command has a canonical `request_id`. The gateway records a
     short-lived private route from that identifier to the originating app
     socket before dispatching the command. It does not broadcast a generic
     `device_command_echo` to the user's other interfaces.
+  - The hosted Gateway relays a command only when the authenticated app User
+    matches the live daemon connection for that `device_id`. Relayed payloads
+    are not stored as hosted settings. Task 82 remote update, restart,
+    workspace, and MCP commands follow
+    [Remote Device Control Threat Model](remote_device_control_threat_model.md).
 
 #### B.1. Workspace Policy Commands (Plan 25)
 - **Command: `workspace.get_policy`**
@@ -360,6 +365,7 @@ stateDiagram-v2
 - Evaluates the active socket states and matches the user's `hardware_id`.
 - Resolves the active `ConnectionScope` (`cloud` | `local`) for each target device.
 - **Local Reachability Rule:** If the target device's `hardware_id` matches the local machine's fingerprint, the coordinator treats it as a local candidate. It upgrades the connection to the local daemon and bypasses cloud routing when the local socket is active.
+- **Synthetic identity boundary:** `local-agent` is a stable client inventory/cache id only. The coordinator never uses that text to infer transport; a matching `hardware_id` plus live local socket state is required. Once transport is resolved, commands target the hardware identity locally and the durable account device identity in cloud, never the synthetic row id.
 - **Transition continuity:** Swapping connection scopes does not destroy the active conversation session cache. UI-side chat histories persist in-memory to prevent screen blanks during reconnects or local takeovers.
 - **Restart reconciliation:** When a conversation is already bound to the local daemon, a bounded grace period keeps that binding and its cached sessions visible while the daemon restarts. The first session snapshot after reconnect is merged with the retained snapshot, then the client requests history for the active session to recover final answers, queue state, and runtime notices emitted while disconnected. A missing session in this transitional snapshot is not deletion proof; explicit `session_deleted` or an explicit manual refresh owns removal.
 - **History/live deduplication:** Reconnect hydration reconciles persisted history with events retained in memory by canonical `request_id`, then `run_id`/event identity. Legacy user rows without an identity use same-session text plus a bounded timestamp match. Running thinking chunks remain mergeable so newer streaming content is not discarded.

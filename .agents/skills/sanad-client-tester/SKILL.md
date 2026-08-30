@@ -152,6 +152,7 @@ These general-purpose tools are permanently located in the workspace:
 
 ### C. Non-Negotiable Driver Rules
 
+* **Missing Element Means Inspect the Widget First:** When `sanad-dev ui find` cannot locate an expected button, field, or other interactive element, inspect its Flutter widget source before trying coordinate-based interaction. If the widget has no unique descriptive `Key`, add one, run `sanad-dev reload client`, verify that the key is now discoverable, and then continue the interactive scenario through that key.
 * **Never Abort mid-Driver Run:** Do not cancel a driver script while a tap or text entry operation is active to prevent the UI thread from hanging in a "Guarded" state.
 * **Guarded Recovery:** If a `Guarded function conflict` occurs, immediately trigger a **Hot Restart** using the developer utility: `sanad-dev restart client` to reset the service.
 * **Target Scaffolds over Slivers:** Tapping items inside `CustomScrollView` (Slivers) may hang on macOS. Target outer Scaffolds or static layouts first.

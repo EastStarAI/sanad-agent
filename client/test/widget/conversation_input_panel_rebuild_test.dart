@@ -57,6 +57,7 @@ void main() {
     await getIt.reset();
     ConversationInputPanel.debugPickDirectoryPath = null;
     WorkspacePickerHelper.debugOnRemoteDisabled = null;
+    WorkspacePickerHelper.debugRemoteWorkspaceName = null;
     socket = FakeSanadSocketService();
     socket.autoCapabilitiesPayload = const {
       'supports_workspaces': true,
@@ -99,6 +100,7 @@ void main() {
     ConversationInputPanel.debugPickDirectoryPath = null;
     ConversationInputPanel.debugOnValidationError = null;
     WorkspacePickerHelper.debugOnRemoteDisabled = null;
+    WorkspacePickerHelper.debugRemoteWorkspaceName = null;
     await sessionMessagesCubit.close();
     await sessionCubit.close();
     await agentCubit.close();
@@ -857,17 +859,14 @@ void main() {
     expect(conversationRepository.createdWorkspaces.single, containsPair('path', '/picked/local-workspace'));
   });
 
-  testWidgets('blocks remote workspace creation with a security notice', (tester) async {
+  testWidgets('creates a remote workspace by name without a host path', (tester) async {
     socket.setConnected(true);
     var pickerCalled = false;
-    String? disabledMessage;
     ConversationInputPanel.debugPickDirectoryPath = () async {
       pickerCalled = true;
       return '/remote/workspace';
     };
-    WorkspacePickerHelper.debugOnRemoteDisabled = (message) {
-      disabledMessage = message;
-    };
+    WorkspacePickerHelper.debugRemoteWorkspaceName = () async => 'remote-notes';
 
     await pumpTestApp(
       tester,
@@ -885,10 +884,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Choose Workspace'), findsNothing);
-    expect(disabledMessage, WorkspacePickerHelper.remoteDisabledMessage);
     expect(pickerCalled, isFalse);
     expect(conversationRepository.browseWorkspaceTreeRequests, isEmpty);
-    expect(conversationRepository.createdWorkspaces, isEmpty);
+    expect(conversationRepository.createdWorkspaces.single, containsPair('name', 'remote-notes'));
+    expect(conversationRepository.createdWorkspaces.single['path'], isNull);
   });
 
   testWidgets('appends dropped file paths to input field when files are dragged and dropped', (tester) async {

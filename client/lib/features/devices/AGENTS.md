@@ -35,6 +35,14 @@ This contract applies to `client/lib/features/devices/`.
 - Use `IDeviceClientRegistry` and `ManagedConversationClientRegistry` to preserve one managed client per device.
 - Retain clients only for devices still present in merged inventory and dispose registries with their owning cubit/service.
 - Device-targeted operations must resolve local versus cloud transport through `DeviceConnectionCoordinator`.
+- The synthetic local inventory id is identity only. Transport resolution must
+  use same-hardware evidence and live socket state, never compare the id text.
+- Remote update, restart, workspace, and MCP management are available for every Online device. Do not add or read `supports_remote_*` capability flags.
+- `ResolvedAgentEndpoint.protocolDeviceId` owns protocol target identity: use
+  hardware identity on the local transport and account device identity on the
+  cloud transport. Inventory ids, including the synthetic local row id, must
+  not be sent as authority when they differ from that transport identity.
+- Device Overview Check/Update/Restart actions use `DeviceCommandClient`; they do not call `LocalDaemonController`.
 - Desktop daemon health, lifecycle, update, socket, and voice endpoints must derive from `AppConfig.localGatewayUrl`.
 - Every desktop daemon HTTP/WebSocket request must use the credential belonging to the same active Sanad Home; non-desktop runtimes are remote-only.
 - `ENABLE_CLOUD_GATEWAY=false` is development isolation: make local transport primary without changing production defaults.

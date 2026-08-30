@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:mcp_client/mcp_client.dart';
@@ -11,6 +13,10 @@ import 'package:sanad_agent/capabilities/skills/skill_load_service.dart';
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_boundary.dart';
+import 'package:sanad_agent/interfaces/models/workspace_control.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/session_db.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
@@ -49,6 +55,7 @@ class LocalWorkspaceRuntimeService {
   final SessionDB? _sessionDb;
   SessionDB? _localDb;
   AgentStateDatabase? _localStateDb;
+  Future<void> _mutationTail = Future<void>.value();
 
   SessionDB get _db {
     if (_sessionDb != null) return _sessionDb;
@@ -106,7 +113,16 @@ class LocalWorkspaceRuntimeService {
   Future<Map<String, dynamic>> createWorkspace({
     String? name,
     String? path,
+    String? description,
+    bool managedRemote = false,
   }) async {
+    if (managedRemote) {
+      return _createManagedRemoteWorkspace(
+        name: name,
+        path: path,
+        description: description,
+      );
+    }
     final trimmedPath = path?.trim();
     final trimmedName = name?.trim() ?? '';
     final effectiveName = trimmedName.isNotEmpty
@@ -165,7 +181,54 @@ class LocalWorkspaceRuntimeService {
     return _workspacePayload(workspace);
   }
 
+  Future<String> removeWorkspace({
+    required String workspaceId,
+    bool managedRemote = false,
+  }) async {
+    final normalizedId = workspaceId.trim();
+    if (normalizedId.isEmpty) {
+      throw const FormatException('Workspace id is required.');
+    }
+    if (!_db.removeWorkspace(normalizedId)) {
+      throw StateError('Workspace not found.');
+    }
+    return normalizedId;
+  }
+
   Future<Map<String, dynamic>> relocateWorkspace({
+    required String workspaceId,
+    required String newPath,
+    bool managedRemote = false,
+    String? expectedFingerprint,
+  }) async {
+    if (managedRemote) {
+      return _serialized(() async {
+        final preview = await previewRelocateWorkspace(
+          workspaceId: workspaceId,
+          newPath: newPath,
+        );
+        if (expectedFingerprint != null &&
+            expectedFingerprint != preview.fingerprint) {
+          throw const WorkspaceCommandException(
+            WorkspaceCommandErrorCodes.staleConfirmation,
+            'The confirmation ticket is stale or does not match.',
+          );
+        }
+        return _relocateWorkspaceUnchecked(
+          workspaceId: workspaceId,
+          newPath: newPath,
+          managedRemote: true,
+        );
+      });
+    }
+    return _relocateWorkspaceUnchecked(
+      workspaceId: workspaceId,
+      newPath: newPath,
+      managedRemote: false,
+    );
+  }
+
+  Future<WorkspaceMutationPreview> previewRelocateWorkspace({
     required String workspaceId,
     required String newPath,
   }) async {
@@ -173,33 +236,42 @@ class LocalWorkspaceRuntimeService {
     if (_db.getWorkspaceById(normalizedId) == null) {
       throw StateError('Workspace not found.');
     }
-    final normalizedPath = _normalizeExistingDirectory(
+    final normalizedPath = await _requireAllowedExistingDirectory(
       newPath,
       label: 'Workspace directory',
     );
-    final owner = _db.getWorkspaceByPath(normalizedPath);
-    if (owner != null && owner['id'] != normalizedId) {
-      throw StateError(
-        'That folder is already connected to another workspace.',
-      );
-    }
-    final workspace = _db.relocateWorkspace(normalizedId, normalizedPath);
-    if (workspace == null) throw StateError('Workspace not found.');
-    return _workspacePayload(workspace);
+    return WorkspaceMutationPreview(
+      operation: CanonicalEventTypes.relocateWorkspace,
+      path: normalizedPath,
+      fingerprint: _fingerprint(
+        operation: CanonicalEventTypes.relocateWorkspace,
+        path: '$normalizedId|$normalizedPath',
+        extra: normalizedId,
+      ),
+      summary: 'Change this workspace folder to the selected allowed path.',
+      entryCount: 0,
+      truncated: false,
+    );
   }
 
   Future<Map<String, dynamic>> browseWorkspaceTree({
     String? workspaceId,
     String? path,
     int maxEntries = 200,
+    bool managedRemote = false,
   }) async {
     final trimmedPath = path?.trim();
     if (trimmedPath == null || trimmedPath.isEmpty) {
       if (workspaceId != null && workspaceId.trim().isNotEmpty) {
-        final workspace = _workspaceRecord(workspaceId);
-        final resolvedWorkspacePath = await _resolveWorkspacePath(workspaceId);
+        final workspace = _workspaceRecordById(workspaceId);
+        final resolvedWorkspacePath = await _resolveWorkspacePathById(
+          workspaceId,
+        );
         if (workspace == null || resolvedWorkspacePath == null) {
           throw StateError('Workspace not found or its folder is unavailable.');
+        }
+        if (managedRemote) {
+          await _assertAllowedRemotePath(resolvedWorkspacePath);
         }
         return _buildDirectorySnapshot(
           directory: Directory(resolvedWorkspacePath),
@@ -208,19 +280,35 @@ class LocalWorkspaceRuntimeService {
           path: resolvedWorkspacePath,
           parentPath: null,
           maxEntries: maxEntries,
+          hideInternal: managedRemote,
         );
+      }
+      if (managedRemote) {
+        return _browseAllowedRemoteRoots(maxEntries: maxEntries);
       }
       return _browseSystemRoots(maxEntries: maxEntries);
     }
 
+    _rejectUnsafePathString(trimmedPath);
     final requestedPath = _normalizePath(trimmedPath);
     var workspacePath = '';
     var rootPath = _rootPathFor(requestedPath);
     var parentPath = _parentPathFor(requestedPath, rootPath: rootPath);
 
+    if (managedRemote) {
+      await _assertAllowedRemotePath(requestedPath);
+      final allowedRoot = await _containingAllowedRoot(requestedPath);
+      rootPath = allowedRoot ?? requestedPath;
+      parentPath = requestedPath == rootPath
+          ? null
+          : _parentPathFor(requestedPath, rootPath: rootPath);
+    }
+
     if (workspaceId != null && workspaceId.trim().isNotEmpty) {
-      final workspace = _workspaceRecord(workspaceId);
-      final resolvedWorkspacePath = await _resolveWorkspacePath(workspaceId);
+      final workspace = _workspaceRecordById(workspaceId);
+      final resolvedWorkspacePath = await _resolveWorkspacePathById(
+        workspaceId,
+      );
       if (workspace == null || resolvedWorkspacePath == null) {
         throw StateError('Workspace not found or its folder is unavailable.');
       }
@@ -247,6 +335,7 @@ class LocalWorkspaceRuntimeService {
       path: requestedPath,
       parentPath: parentPath,
       maxEntries: maxEntries,
+      hideInternal: managedRemote,
     );
   }
 
@@ -266,11 +355,11 @@ class LocalWorkspaceRuntimeService {
   Future<Map<String, dynamic>> readMcpSnapshot({String? workspaceId}) async {
     final workspace = workspaceId == null
         ? null
-        : _workspaceRecord(workspaceId);
+        : _workspaceRecordById(workspaceId);
     final resolvedWorkspaceId = workspace?['id'] as String?;
     final resolvedWorkspacePath = workspaceId == null
         ? null
-        : await _resolveWorkspacePath(workspaceId);
+        : await _resolveWorkspacePathById(workspaceId);
     final settingsStore = SanadSettingsStore(homeDirectoryPath: _sanadHome);
     final globalDocument = await settingsStore.readUserMcpConfigDocument();
     final globalServers = settingsStore.parseMcpServersDocument(globalDocument);
@@ -435,6 +524,35 @@ class LocalWorkspaceRuntimeService {
     );
 
     return readMcpSnapshot(workspaceId: workspaceId);
+  }
+
+  Future<String> mcpMutationFingerprint({
+    required String operation,
+    required String scope,
+    String? workspaceId,
+    String? serverName,
+    Map<String, dynamic> intent = const {},
+  }) async {
+    final settingsStore = SanadSettingsStore(homeDirectoryPath: _sanadHome);
+    final fingerprintScope = scope.trim().toLowerCase() == 'workspace'
+        ? 'workspace'
+        : 'global';
+    Map<String, dynamic> document;
+    try {
+      final workspacePath = await _resolveWorkspacePathForMcpMutation(
+        scope: fingerprintScope,
+        workspaceId: workspaceId,
+      );
+      document = await _readMcpDocumentForScope(
+        settingsStore: settingsStore,
+        scope: fingerprintScope,
+        workspacePath: workspacePath,
+      );
+    } catch (_) {
+      document = const {'mcpServers': <String, dynamic>{}};
+    }
+    final revision = const McpConfigCodec().revisionFor(document);
+    return '$operation|$fingerprintScope|${serverName ?? ''}|$revision|${jsonEncode(intent)}';
   }
 
   Future<Map<String, dynamic>> replaceMcpConfig({
@@ -629,10 +747,10 @@ class LocalWorkspaceRuntimeService {
     final normalizedScope = _normalizeMcpScope(scope);
     final resolvedWorkspaceId = workspaceId == null
         ? null
-        : _workspaceRecord(workspaceId)?['id'] as String?;
+        : _workspaceRecordById(workspaceId)?['id'] as String?;
     final resolvedWorkspacePath = workspaceId == null
         ? null
-        : await _resolveWorkspacePath(workspaceId);
+        : await _resolveWorkspacePathById(workspaceId);
     final servers = switch (normalizedScope) {
       'global' => await settingsStore.readUserMcpServers(),
       'workspace' =>
@@ -822,6 +940,12 @@ class LocalWorkspaceRuntimeService {
     return null;
   }
 
+  Map<String, dynamic>? _workspaceRecordById(String workspaceId) {
+    final normalizedId = workspaceId.trim();
+    if (normalizedId.isEmpty) return null;
+    return _db.getWorkspaceById(normalizedId);
+  }
+
   Map<String, dynamic> _workspacePayload(Map<String, dynamic> workspace) {
     final path = workspace['path'] as String;
     final available = Directory(path).existsSync();
@@ -839,6 +963,13 @@ class LocalWorkspaceRuntimeService {
 
   Future<String?> _resolveWorkspacePath(String workspaceIdOrPath) async {
     final workspace = _workspaceRecord(workspaceIdOrPath);
+    if (workspace == null) return null;
+    final path = workspace['path'] as String;
+    return await Directory(path).exists() ? path : null;
+  }
+
+  Future<String?> _resolveWorkspacePathById(String workspaceId) async {
+    final workspace = _workspaceRecordById(workspaceId);
     if (workspace == null) return null;
     final path = workspace['path'] as String;
     return await Directory(path).exists() ? path : null;
@@ -876,6 +1007,7 @@ class LocalWorkspaceRuntimeService {
     required String path,
     required String? parentPath,
     required int maxEntries,
+    bool hideInternal = false,
   }) async {
     final entities = <FileSystemEntity>[];
     await for (final entity in directory.list(followLinks: false)) {
@@ -896,9 +1028,13 @@ class LocalWorkspaceRuntimeService {
     final items = <Map<String, dynamic>>[];
     for (final entity in entities.take(maxEntries)) {
       final entry = await _buildTreeEntry(entity, rootPath: rootPath);
-      if (entry != null) {
-        items.add(entry);
+      if (entry == null) {
+        continue;
       }
+      if (hideInternal && _isSanadInternalHidden(entry['path'] as String)) {
+        continue;
+      }
+      items.add(entry);
     }
 
     return {
@@ -1027,7 +1163,7 @@ class LocalWorkspaceRuntimeService {
     final normalizedScope = _normalizeMcpScope(scope);
     final workspacePath = workspaceId == null
         ? null
-        : await _resolveWorkspacePath(workspaceId);
+        : await _resolveWorkspacePathById(workspaceId);
     return switch (normalizedScope) {
       'global' => settingsStore.readUserMcpServers(),
       'workspace' =>
@@ -1082,12 +1218,14 @@ class LocalWorkspaceRuntimeService {
     required String? workspaceId,
   }) async {
     if (scope != 'workspace') {
-      return workspaceId == null ? null : _resolveWorkspacePath(workspaceId);
+      return workspaceId == null
+          ? null
+          : _resolveWorkspacePathById(workspaceId);
     }
 
-    final resolvedWorkspacePath = await _resolveWorkspacePath(
-      workspaceId ?? _currentWorkspacePath,
-    );
+    final resolvedWorkspacePath = workspaceId == null
+        ? await _resolveWorkspacePath(_currentWorkspacePath)
+        : await _resolveWorkspacePathById(workspaceId);
     if (resolvedWorkspacePath == null) {
       throw StateError('Workspace scope requires a selected workspace.');
     }
@@ -1133,50 +1271,108 @@ class LocalWorkspaceRuntimeService {
   Future<String> createFolder({
     required String parentPath,
     required String name,
+    bool managedRemote = false,
   }) async {
-    final folderName = _validateFolderName(name);
-    final normalizedParent = _normalizeExistingDirectory(
-      parentPath,
-      label: 'Parent directory',
-    );
-    final targetPath = p.normalize(p.join(normalizedParent, folderName));
-    if (!p.isWithin(normalizedParent, targetPath)) {
-      throw const FormatException(
-        'Folder name must stay within the selected parent directory.',
-      );
-    }
-    if (await FileSystemEntity.type(targetPath, followLinks: false) !=
-        FileSystemEntityType.notFound) {
-      throw StateError('A file or folder with that name already exists.');
-    }
+    return _serialized(() async {
+      final folderName = _validateFolderName(name);
+      final normalizedParent = managedRemote
+          ? await _requireAllowedExistingDirectory(
+              parentPath,
+              label: 'Parent directory',
+            )
+          : _normalizeExistingDirectory(parentPath, label: 'Parent directory');
+      final targetPath = p.normalize(p.join(normalizedParent, folderName));
+      if (!p.isWithin(normalizedParent, targetPath)) {
+        throw const FormatException(
+          'Folder name must stay within the selected parent directory.',
+        );
+      }
+      if (await FileSystemEntity.type(targetPath, followLinks: false) !=
+          FileSystemEntityType.notFound) {
+        throw StateError('A file or folder with that name already exists.');
+      }
 
-    await Directory(targetPath).create();
-    return _normalizePath(targetPath);
+      await Directory(targetPath).create();
+      return _normalizePath(targetPath);
+    });
   }
 
   Future<String> renameFolder({
     required String path,
     required String newName,
+    bool managedRemote = false,
   }) async {
-    final sourcePath = await _validateMutableDirectory(path);
-    final folderName = _validateFolderName(newName);
-    final targetPath = p.normalize(p.join(p.dirname(sourcePath), folderName));
-    if (targetPath == sourcePath) {
-      return sourcePath;
-    }
-    if (await FileSystemEntity.type(targetPath, followLinks: false) !=
-        FileSystemEntityType.notFound) {
-      throw StateError('A file or folder with that name already exists.');
-    }
+    return _serialized(() async {
+      final sourcePath = await _validateMutableDirectory(
+        path,
+        managedRemote: managedRemote,
+      );
+      final folderName = _validateFolderName(newName);
+      final targetPath = p.normalize(p.join(p.dirname(sourcePath), folderName));
+      if (targetPath == sourcePath) {
+        return sourcePath;
+      }
+      if (await FileSystemEntity.type(targetPath, followLinks: false) !=
+          FileSystemEntityType.notFound) {
+        throw StateError('A file or folder with that name already exists.');
+      }
+      if (managedRemote) {
+        await _assertAllowedRemotePath(p.dirname(sourcePath));
+      }
 
-    final renamed = await Directory(sourcePath).rename(targetPath);
-    return _normalizePath(renamed.path);
+      final renamed = await Directory(sourcePath).rename(targetPath);
+      return _normalizePath(renamed.path);
+    });
   }
 
-  Future<String> deleteFolder(String path) async {
-    final targetPath = await _validateMutableDirectory(path);
-    await Directory(targetPath).delete(recursive: true);
-    return targetPath;
+  Future<WorkspaceMutationPreview> previewDeleteFolder(
+    String path, {
+    bool managedRemote = false,
+  }) async {
+    final targetPath = await _validateMutableDirectory(
+      path,
+      managedRemote: managedRemote,
+    );
+    final counts = await _countDirectoryEntries(Directory(targetPath));
+    final name = p.basename(targetPath);
+    return WorkspaceMutationPreview(
+      operation: CanonicalEventTypes.deleteFolder,
+      path: targetPath,
+      fingerprint: _fingerprint(
+        operation: CanonicalEventTypes.deleteFolder,
+        path: targetPath,
+        extra: '${counts.count}:${counts.truncated}',
+      ),
+      summary:
+          'Delete "$name" and ${counts.count}${counts.truncated ? '+' : ''} items inside it. This cannot be undone.',
+      entryCount: counts.count,
+      truncated: counts.truncated,
+    );
+  }
+
+  Future<String> deleteFolder(
+    String path, {
+    bool managedRemote = false,
+    String? expectedFingerprint,
+  }) async {
+    return _serialized(() async {
+      if (managedRemote) {
+        final preview = await previewDeleteFolder(path, managedRemote: true);
+        if (expectedFingerprint != null &&
+            expectedFingerprint != preview.fingerprint) {
+          throw const WorkspaceCommandException(
+            WorkspaceCommandErrorCodes.staleConfirmation,
+            'The confirmation ticket is stale or does not match.',
+          );
+        }
+      }
+      final targetPath = await _validateMutableDirectory(
+        path,
+        managedRemote: managedRemote,
+      );
+      await Directory(targetPath).delete(recursive: true);
+      return targetPath;
+    });
   }
 
   String _validateFolderName(String value) {
@@ -1185,7 +1381,8 @@ class LocalWorkspaceRuntimeService {
         name == '.' ||
         name == '..' ||
         name.contains('/') ||
-        name.contains(r'\')) {
+        name.contains(r'\') ||
+        name.contains('\u0000')) {
       throw const FormatException('Folder name must be a single path segment.');
     }
     return name;
@@ -1203,13 +1400,23 @@ class LocalWorkspaceRuntimeService {
     return _normalizePath(trimmed);
   }
 
-  Future<String> _validateMutableDirectory(String value) async {
+  Future<String> _validateMutableDirectory(
+    String value, {
+    bool managedRemote = false,
+  }) async {
+    _rejectUnsafePathString(value);
     final trimmed = value.trim();
     if (trimmed.isEmpty) {
       throw const FormatException('Folder path is required.');
     }
     final type = await FileSystemEntity.type(trimmed, followLinks: false);
     if (type == FileSystemEntityType.link) {
+      if (managedRemote) {
+        throw const WorkspaceCommandException(
+          WorkspaceCommandErrorCodes.pathNotAllowed,
+          'Symbolic-link folders cannot be changed here.',
+        );
+      }
       throw StateError('Symbolic-link folders cannot be changed here.');
     }
     if (type != FileSystemEntityType.directory) {
@@ -1219,6 +1426,15 @@ class LocalWorkspaceRuntimeService {
     final normalized = _normalizePath(trimmed);
     if (_isFileSystemRoot(normalized)) {
       throw StateError('Filesystem roots cannot be renamed or deleted.');
+    }
+    if (managedRemote) {
+      await _assertAllowedRemotePath(normalized);
+      if (await _isProtectedRemoteRoot(normalized)) {
+        throw const WorkspaceCommandException(
+          WorkspaceCommandErrorCodes.pathNotAllowed,
+          'Protected workspace roots cannot be renamed or deleted.',
+        );
+      }
     }
     return normalized;
   }
@@ -1241,6 +1457,273 @@ class LocalWorkspaceRuntimeService {
 
   String get _currentWorkspacePath =>
       _normalizePath(_currentWorkingDirectory ?? Directory.current.path);
+
+  Future<Map<String, dynamic>> _createManagedRemoteWorkspace({
+    String? name,
+    String? path,
+    String? description,
+  }) async {
+    if (path != null && path.trim().isNotEmpty) {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.invalidRequest,
+        'Remote workspace creation accepts a name, not a host path.',
+      );
+    }
+    final folderName = _validateFolderName(name ?? '');
+    final managedRoot = _ensureManagedWorkspacesRoot();
+    final targetPath = p.normalize(p.join(managedRoot, folderName));
+    if (!p.isWithin(managedRoot, targetPath)) {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        'Workspace name must stay inside the managed workspaces root.',
+      );
+    }
+    if (await FileSystemEntity.type(targetPath, followLinks: false) ==
+        FileSystemEntityType.link) {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        'Symbolic-link folders cannot be used as a workspace.',
+      );
+    }
+    final directory = Directory(targetPath);
+    final existed = await directory.exists();
+    if (!existed) {
+      await directory.create();
+    } else if (await FileSystemEntity.type(targetPath, followLinks: false) !=
+        FileSystemEntityType.directory) {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        'A file with that workspace name already exists.',
+      );
+    }
+    final displayName = description?.trim().isNotEmpty == true
+        ? description!.trim()
+        : folderName;
+    final stored = await _storeWorkspace(
+      targetPath,
+      source: existed ? 'existing' : 'managed_remote',
+      displayName: displayName,
+    );
+    return _workspacePayload(stored);
+  }
+
+  Future<Map<String, dynamic>> _relocateWorkspaceUnchecked({
+    required String workspaceId,
+    required String newPath,
+    required bool managedRemote,
+  }) async {
+    final normalizedId = workspaceId.trim();
+    if (_db.getWorkspaceById(normalizedId) == null) {
+      throw StateError('Workspace not found.');
+    }
+    final normalizedPath = managedRemote
+        ? await _requireAllowedExistingDirectory(
+            newPath,
+            label: 'Workspace directory',
+          )
+        : _normalizeExistingDirectory(newPath, label: 'Workspace directory');
+    final owner = _db.getWorkspaceByPath(normalizedPath);
+    if (owner != null && owner['id'] != normalizedId) {
+      throw StateError(
+        'That folder is already connected to another workspace.',
+      );
+    }
+    final workspace = _db.relocateWorkspace(normalizedId, normalizedPath);
+    if (workspace == null) throw StateError('Workspace not found.');
+    return _workspacePayload(workspace);
+  }
+
+  String _ensureManagedWorkspacesRoot() {
+    try {
+      return SanadHomeBootstrap.atRoot(
+        _sanadHome,
+        scope: SanadHomeScope.identity,
+      ).ensureDirectoryPathSync(
+        SanadHomeBootstrap.managedWorkspacesDirectoryName,
+      );
+    } on SanadHomeBoundaryViolation {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        'The managed workspaces root is not available.',
+      );
+    }
+  }
+
+  Future<Map<String, dynamic>> _browseAllowedRemoteRoots({
+    required int maxEntries,
+  }) async {
+    final roots = await _allowedRemoteRoots();
+    final entries = <Map<String, dynamic>>[];
+    for (final root in roots.take(maxEntries)) {
+      final entry = await _buildTreeEntry(Directory(root), rootPath: '');
+      if (entry != null && !_isSanadInternalHidden(root)) {
+        entries.add(entry);
+      }
+    }
+    return {
+      'workspace_id': '',
+      'root_path': '',
+      'path': '',
+      'parent_path': null,
+      'entries': entries,
+      'truncated': roots.length > maxEntries,
+    };
+  }
+
+  Future<List<String>> _allowedRemoteRoots() async {
+    final roots = <String>{};
+    final managed = _normalizePath(_ensureManagedWorkspacesRoot());
+    roots.add(managed);
+    for (final workspace in await _readStoredWorkspaces()) {
+      final path = workspace['path'] as String?;
+      if (path == null || path.trim().isEmpty) continue;
+      if (!Directory(path).existsSync()) continue;
+      final normalized = _normalizePath(path);
+      if (_isSanadInternalHidden(normalized)) continue;
+      if (_isWithinRoot(root: managed, target: normalized)) continue;
+      roots.add(normalized);
+    }
+    return roots.toList(growable: false);
+  }
+
+  Future<String?> _containingAllowedRoot(String path) async {
+    final normalized = _normalizePath(path);
+    for (final root in await _allowedRemoteRoots()) {
+      if (_isWithinRoot(root: root, target: normalized)) {
+        return root;
+      }
+    }
+    return null;
+  }
+
+  Future<void> _assertAllowedRemotePath(String path) async {
+    _rejectUnsafePathString(path);
+    final type = await FileSystemEntity.type(path, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        'Symbolic-link folders cannot be browsed or changed here.',
+      );
+    }
+    final normalized = _normalizePath(path);
+    if (_isSanadInternalHidden(normalized) || _isFileSystemRoot(normalized)) {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        'That path is outside the allowed workspace roots.',
+      );
+    }
+    if (await _containingAllowedRoot(normalized) == null) {
+      throw const WorkspaceCommandException(
+        WorkspaceCommandErrorCodes.pathNotAllowed,
+        'That path is outside the allowed workspace roots.',
+      );
+    }
+  }
+
+  Future<String> _requireAllowedExistingDirectory(
+    String value, {
+    required String label,
+  }) async {
+    _rejectUnsafePathString(value);
+    final normalized = _normalizeExistingDirectory(value, label: label);
+    await _assertAllowedRemotePath(normalized);
+    return normalized;
+  }
+
+  Future<bool> _isProtectedRemoteRoot(String path) async {
+    final normalized = _normalizePath(path);
+    if (normalized == _normalizePath(_ensureManagedWorkspacesRoot())) {
+      return true;
+    }
+    if (normalized == _normalizePath(_sanadHome)) {
+      return true;
+    }
+    final stateHome = _normalizePath(getSanadStateHome());
+    if (normalized == stateHome) {
+      return true;
+    }
+    for (final workspace in await _readStoredWorkspaces()) {
+      final workspacePath = workspace['path'] as String?;
+      if (workspacePath == null) continue;
+      if (_normalizePath(workspacePath) == normalized) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool _isSanadInternalHidden(String path) {
+    final normalized = _normalizePath(path);
+    final home = _normalizePath(_sanadHome);
+    final managed = _normalizePath(
+      p.join(home, SanadHomeBootstrap.managedWorkspacesDirectoryName),
+    );
+    if (normalized == managed ||
+        _isWithinRoot(root: managed, target: normalized)) {
+      return false;
+    }
+    if (normalized == home || _isWithinRoot(root: home, target: normalized)) {
+      return true;
+    }
+    final stateHome = _normalizePath(getSanadStateHome());
+    if (stateHome != home &&
+        (normalized == stateHome ||
+            _isWithinRoot(root: stateHome, target: normalized))) {
+      return true;
+    }
+    return false;
+  }
+
+  void _rejectUnsafePathString(String value) {
+    if (value.contains('\u0000')) {
+      throw const FormatException('Invalid path.');
+    }
+  }
+
+  String _fingerprint({
+    required String operation,
+    required String path,
+    String extra = '',
+  }) {
+    var modified = '';
+    try {
+      modified = FileStat.statSync(path).modified.toUtc().toIso8601String();
+    } catch (_) {}
+    return '$operation|$path|$modified|$extra';
+  }
+
+  Future<({int count, bool truncated})> _countDirectoryEntries(
+    Directory directory,
+  ) async {
+    var count = 0;
+    const limit = 500;
+    try {
+      await for (final _ in directory.list(
+        recursive: true,
+        followLinks: false,
+      )) {
+        count += 1;
+        if (count >= limit) {
+          return (count: count, truncated: true);
+        }
+      }
+    } on FileSystemException {
+      return (count: count, truncated: false);
+    }
+    return (count: count, truncated: false);
+  }
+
+  Future<T> _serialized<T>(Future<T> Function() operation) async {
+    final previous = _mutationTail;
+    final done = Completer<void>();
+    _mutationTail = done.future;
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      done.complete();
+    }
+  }
 }
 
 Map<String, String> _runtimeStringMap(Object? value) => value is Map

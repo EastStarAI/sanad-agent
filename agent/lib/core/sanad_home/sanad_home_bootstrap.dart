@@ -27,6 +27,7 @@ class SanadHomeBootstrap {
 
   static const int secretFileMode = 0x180; // 0600
   static const int secretDirMode = 0x1c0; // 0700
+  static const String managedWorkspacesDirectoryName = 'workspaces';
   static bool _ownerOnlyUmaskInstalled = false;
 
   static SanadHomeBootstrap identity() =>
@@ -95,6 +96,9 @@ class SanadHomeBootstrap {
     }
     _rejectLink(absolute, code: 'root_symlink');
     await _enforceDirectoryOwnership(root);
+    if (scope == SanadHomeScope.identity) {
+      ensureDirectoryPathSync(managedWorkspacesDirectoryName);
+    }
     return root.resolveSymbolicLinksSync();
   }
 

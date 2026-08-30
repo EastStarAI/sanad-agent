@@ -42,6 +42,7 @@ import 'package:sanad_agent/interfaces/gateway_manager.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/device_settings_service.dart';
+import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 import 'package:sanad_agent/core/provider_runtime/env_file_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_store.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_catalog_service.dart';
@@ -84,6 +85,15 @@ void setupDI() {
   }
 
   getIt.registerLazySingleton<AuthManager>(() => AuthManager());
+  getIt.registerLazySingleton<DeviceCommandAdmission>(
+    () => DeviceCommandAdmission(
+      registeredDeviceId: () {
+        if (!getIt.isRegistered<ServerSanadGatewayPlatform>()) return '';
+        return getIt<ServerSanadGatewayPlatform>().registeredDeviceId ?? '';
+      },
+      additionalDeviceIds: () => [getIt<AuthManager>().hardwareId ?? ''],
+    ),
+  );
   getIt.registerLazySingleton<Config>(() => Config());
   getIt.registerLazySingleton<ModelsDevService>(() => ModelsDevService());
   getIt.registerLazySingleton<SessionRunOrchestrator>(

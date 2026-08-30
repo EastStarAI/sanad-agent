@@ -1,4 +1,5 @@
 import '../../../models/delivery/models.dart';
+import '../../../models/device_control.dart';
 
 /// Represents a standard event in the Sanad Unified Protocol.
 class CanonicalEvent {
@@ -71,20 +72,26 @@ class CanonicalEventTypes {
   static const String workspaceCreated = 'workspace_created';
   static const String renameWorkspace = 'workspace.rename';
   static const String workspaceRenamed = 'workspace.renamed';
+  static const String removeWorkspace = 'workspace.remove';
+  static const String workspaceRemoved = 'workspace.removed';
   static const String relocateWorkspace = 'workspace.relocate';
   static const String workspaceRelocated = 'workspace.relocated';
+  static const String relocateWorkspacePreview = 'workspace.relocate.preview';
   static const String browseWorkspaceTree = 'browse_workspace_tree';
   static const String workspaceTree = 'workspace_tree';
   static const String listMcpServers = 'list_mcp_servers';
   static const String mcpServersList = 'mcp_servers_list';
   static const String saveMcpServer = 'save_mcp_server';
   static const String mcpServerSaved = 'mcp_server_saved';
+  static const String mcpServerSavePreview = 'mcp.server.save.preview';
   static const String deleteMcpServer = 'delete_mcp_server';
   static const String mcpServerDeleted = 'mcp_server_deleted';
+  static const String mcpServerDeletePreview = 'mcp.server.delete.preview';
   static const String replaceMcpConfig = 'replace_mcp_config';
   static const String mcpConfigReplaced = 'mcp_config_replaced';
   static const String inspectMcpServer = 'inspect_mcp_server';
   static const String mcpServerInspected = 'mcp_server_inspected';
+  static const String mcpServerInspectPreview = 'mcp.server.inspect.preview';
   static const String previewMcpImport = 'preview_mcp_import';
   static const String mcpImportPreviewed = 'mcp_import_previewed';
   static const String exportMcpServers = 'export_mcp_servers';
@@ -103,6 +110,7 @@ class CanonicalEventTypes {
   static const String mcpOAuthCancelled = 'mcp_oauth_cancelled';
   static const String completeMcpOAuth = 'complete_mcp_oauth';
   static const String mcpOAuthCompleted = 'mcp_oauth_completed';
+  static const String mcpOAuthCompletePreview = 'mcp.oauth.complete.preview';
   static const String searchSlashCommands = 'search_slash_commands';
   static const String slashCommandsList = 'slash_commands_list';
   static const String listSkills = 'list_skills';
@@ -186,6 +194,7 @@ class CanonicalEventTypes {
   static const String folderRenamed = 'workspace.folder_renamed';
   static const String deleteFolder = 'workspace.delete_folder';
   static const String folderDeleted = 'workspace.folder_deleted';
+  static const String deleteFolderPreview = 'workspace.delete_folder.preview';
 
   // ── Plan 29: Multi-account & Model cache ────────────────────────────────
   static const String providerTemplatesList = 'provider.templates.list';
@@ -258,4 +267,19 @@ class CanonicalEventTypes {
   static const String providerUsageSupport = 'provider.usage.support';
   static const String providerUsageSupportResult =
       'provider.usage.support_result';
+
+  // ── Task 82: remote device control ────────────────────────────────────
+  static const String deviceUpdateCheck = DeviceControlCommands.updateCheck;
+  static const String deviceUpdateCheckResult =
+      DeviceControlCommands.updateCheckResult;
+  static const String deviceUpdateApply = DeviceControlCommands.updateApply;
+  static const String deviceUpdateApplyAccepted =
+      DeviceControlCommands.updateApplyAccepted;
+  static const String deviceUpdateProgress =
+      DeviceControlCommands.updateProgress;
+  static const String deviceUpdateResult = DeviceControlCommands.updateResult;
+  static const String deviceRuntimeRestart =
+      DeviceControlCommands.runtimeRestart;
+  static const String deviceRuntimeRestartAccepted =
+      DeviceControlCommands.runtimeRestartAccepted;
 }

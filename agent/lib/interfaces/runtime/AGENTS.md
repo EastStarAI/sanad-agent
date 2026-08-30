@@ -22,6 +22,14 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - `SessionTurnExecutor` owns active stream subscriptions, turn callbacks, tool event emission, exception routing, and post-terminal title scheduling.
 - `SessionRecoveryRestorer` owns startup reconstruction and classification of queued, waiting, blocked, running, and resuming durable work.
 - Shared request-id and route helpers remain stateless and must not import the orchestrator.
+- `DeviceCommandAdmission` owns device-control admission: correlation against
+  the daemon's registered cloud id or local hardware id, cross-transport
+  duplicate `request_id`, confirmation tickets, explicit boolean force
+  selection, and unbounded-timeout rejection. It also exposes `admitCorrelation` and
+  `consumeConfirmation` for managed-remote workspace mutations and cloud-admitted
+  MCP save/delete/inspect/complete. It does not inspect capability flags.
+  `DeviceControlCommandHandler` executes update check/apply and supervised
+  restart after admission.
 - Runtime collaborators do not open database connections or duplicate table ownership.
 
 ## Terminal Commit
@@ -76,6 +84,8 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Create accepts an existing parent plus one validated child name; never accept a client-assembled create target path.
 - Rename and delete reject filesystem roots, symbolic links, non-directories, missing paths, traversal names, and occupied rename destinations.
 - Recursive delete requires an explicit client confirmation, but daemon validation remains authoritative regardless of client behavior.
+- Workspace-record removal is metadata-only: it deletes the registered
+  workspace row and never deletes the directory, files, sessions, or messages.
 
 ## Verification Boundary
 - Runtime changes require focused tests for FIFO, stale ownership, stop, retry, route rewrite, terminal commit, and restart reconstruction.
