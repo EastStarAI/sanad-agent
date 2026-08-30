@@ -3,8 +3,8 @@
 ## الحالة
 
 - **الحالة:** قيد التنفيذ داخل worktree معزولة.
-- **البوابة الحالية:** G8 — المراجعة النهائية وتسليم Pull Request.
-- **نسبة العمل المتبقي:** 10%.
+- **البوابة الحالية:** G8 — PR #120 قيد CI والمراجعة المحمية.
+- **نسبة العمل المتبقي:** 8% حتى اكتمال المراجعة ثم بوابة الإصدار G9.
 - **G0 الاكتشاف والقرارات:** مكتملة.
 - **الإصدار المرجعي الحالي:** Sanad Agent `1.0.6`.
 - **حدود التسليم:** لا commit أو push أو PR أو نشر إصدار دون موافقة صريحة من
@@ -467,8 +467,8 @@ logout/uninstall/reinstall/upgrade/rollback دون ترك اعتماد أو با
 - [x] تشغيل analyzer والاختبارات المطلوبة وGraphify وdiff check نهائياً: Agent
   `1216 passed, 12 skipped` وClient `1103 passed, 1 skipped` مع نجاح analyzer.
 - [x] استلام موافقة صريحة من المالك على commit وpush وPR بعد نجاح G7.
-- [ ] بعد الموافقة فقط: commit داخل worktree، push، وإنشاء PR يشرح المشكلة
-  والتصميم والاختبارات المحلية والسيرفرية والـclean-host evidence.
+- [x] بعد الموافقة: أُنشئ commit داخل worktree ودُفع الفرع وأُنشئ PR #120 بشرح
+  المشكلة والتصميم والاختبارات المحلية والسيرفرية والـclean-host evidence.
 - [ ] لا merge تلقائي ولا تنظيف worktree قبل مراجعة المالك ونجاح CI.
 
 ### G9 — الإصدار والتحقق من Production
@@ -519,6 +519,6 @@ logout/uninstall/reinstall/upgrade/rollback دون ترك اعتماد أو با
 - [x] Agent وClient analyzers والاختبارات المركزة وfull fast suites تمر.
 - [x] Linux x64 candidate وclean-server reboot evidence ناجحان.
 - [x] لا أسرار أو معرفات بنية خاصة في المستودع أو تقارير التسليم.
-- [ ] commit/push/PR تم فقط بعد موافقة المالك.
+- [x] commit/push/PR تم فقط بعد موافقة المالك.
 - [ ] الإصدار نُشر فقط بعد merge وموافقة إصدار مستقلة.
 - [ ] Production Add Device command نجح على artifact المنشور.
