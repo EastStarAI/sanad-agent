@@ -62,7 +62,7 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Target | Local evidence | Hosted or clean-machine evidence still required |
 |---|---|---|
 | Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification, accepted notary log with exact architecture/`cdhash` ticket match | both hosted runners, clean install, real upgrade and rollback |
-| Agent Linux x64 | contract and workflow path | hosted build, provenance, clean install, service/update/rollback |
+| Agent Linux x64 | analyzer, installer transaction/failure injection, candidate-manifest hook, version/cloud health verification, and service backend tests | hosted build, provenance, clean user/system systemd and OpenRC install, logout/reboot reconnect, request, uninstall/reinstall/update/rollback |
 | Agent Windows x64 | contract and workflow path | Unsigned Windows build disclosure, SHA-256/manifest/provenance, Defender/SmartScreen and lifecycle on Windows 11, service/update/rollback |
 | Client macOS universal | universal Mach-O inspection, Developer ID-signed and notarized DMG, staple, Gatekeeper, Sparkle signature | clean update and rollback |
 | Client Linux x64 | Web/Linux workflow definition, compatibility-runner contract, `.deb` metadata/layout audit, portable-bundle smoke, and forbidden-symbol audit | hosted `.deb` install/launch/purge, provenance, clean update |
@@ -70,6 +70,14 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Client Android APK/AAB | signed local APK/AAB, package identity and keystore fingerprint | signed hosted build, clean install/upgrade |
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
 | Client Web | analyzer, startup contract test, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
+
+Linux candidate installer testing may override manifest and artifact URLs only
+with `SANAD_INSTALL_ALLOW_TEST_URL=1`. This explicit harness switch is forbidden
+from the generated Add Device command and Production verification. Candidate
+manifests still require the canonical repository identity, exactly one matching
+public signed artifact, filename, size, SHA-256, and version. The clean-host gate
+must use a fresh one-time pairing command and prove expected-version Local
+Gateway health plus authoritative cloud registration before accepting success.
 
 For raw macOS Agent installation, runtime verification must accept the exact
 Apple-anchored NanoSoft Developer ID requirement (Team ID `UC2824B99G`) after
@@ -274,7 +282,11 @@ Task 67B native gates even when shared tests pass on macOS.
 
 The canonical installer sources accept a creation-time pairing token, Portal
 sign-in, or local-only installation; they never accept or expose the durable
-device credential. Interactive tokenless installs offer sign-in, while
+device credential. Public manual commands use the conventional
+`curl -fsSL ... | bash` and `irm ... | iex` forms. The Client POSIX Add Device
+command appends the shell-quoted creation token to `bash -s -- --pairing-token`;
+the installer then feeds it to Agent login through stdin rather than Agent
+process arguments. Interactive tokenless installs offer sign-in, while
 unattended tokenless installs must not block and default to local-only mode.
 The installers select the release through the manifest, validate repository
 URLs, architecture, size, and SHA-256, preserve Sanad Home, authenticate before

@@ -65,6 +65,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Develop Sanad Agent](docs/operations/developer_guide.md): Set up the public repository, run the Dart agent and Flutter client, test changes, and use isolated development runtimes.
 - [Release, Signing, and Deployment Architecture](docs/operations/release_and_signing.md): The stable release pipeline, protected signing boundaries, artifact publication, and live-release handoff.
 - [Install and Use Sanad Agent](docs/operations/user_guide.md): Install the Sanad client and agent, connect local or remote devices, configure providers, manage the service, and update Sanad.
+- [المهمة 81 — تثبيت Linux بضغطة واحدة وخدمة دائمة على Desktop وHeadless](docs/plans/tasks/81-linux-headless-one-command-install-and-durable-service.md): خطة التنفيذ المعتمدة للاكتشاف التلقائي لمخزن الاعتماد والخدمة، والتثبيت الذري، ودورة الإصلاح على Linux، والاختبار النهائي على سيرفر نظيف قبل PR والإصدار.
 - [خارطة متطلبات المنتج والأعمال](docs/product/MOC.md): فهرس وخارطة وثائق متطلبات المنتج، تجربة المستخدم، والأعمال الاستراتيجية للمشروع.
 - [Sanad Client Interface](docs/product/client_interface.md): Current user experience for devices, workspaces, conversations, providers, permissions, and active agent interactions.
 - [Conversation Navigation UX Spec](docs/product/conversation_navigation_ux_spec.md): UX specifications for conversation navigation destinations, history, deletion, and restart recovery.
@@ -89,6 +90,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Device Workspace Sidebar QA](docs/qa_maintenance/device_workspace_sidebar_qa.md): Focused QA coverage for the Plan 32c device-scoped sidebar, including pagination, cache-first rendering, responsive layout, accessibility, and live ordering.
 - [Live Context Usage Indicator QA](docs/qa_maintenance/live_context_usage_indicator_qa.md): Regression matrix for latest provider usage, cached-input visibility, tool-loop updates, and history restoration.
 - [Local Gateway and Sanad Home Security QA](docs/qa_maintenance/local_gateway_and_sanad_home_security_qa.md): Regression matrix for authenticated loopback transport, secure local files, startup preparation, and isolated runtimes.
+- [Linux Service Lifecycle QA](docs/qa_maintenance/linux_service_lifecycle_qa.md): Automated and clean-host verification matrix for user/system systemd, OpenRC, typed status, migration, and transactional rollback.
 - [MCP Server Configuration QA](docs/qa_maintenance/mcp_server_configuration_qa.md): Security, form, import/export, OAuth, lifecycle, and regression checks for daemon-owned MCP server configuration.
 - [SEC-01E Mobile OAuth Callback QA](docs/qa_maintenance/mobile_oauth_callback_qa.md): Regression and physical-device gates for PKCE callback delivery through Android App Links and iOS Universal Links.
 - [Memory Tool Reliability QA](docs/qa_maintenance/memory_tool_reliability.md): Regression matrix for compact memory results, atomic batches, file safety, bounded recovery, and frozen prompt snapshots.
@@ -133,6 +135,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Run Cancellation and Process Ownership](docs/technical/run_cancellation_and_process_ownership.md): العقد التقني لإلغاء جولة الوكيل إلغاءً محدود الزمن، ومقاطعة المزود والأداة، وامتلاك شجرة العمليات، وتثبيت نتيجة نهائية متطابقة حيًا وتاريخيًا.
 - [sanad-dev Runtime Ownership](docs/technical/sanad_dev_runtime_ownership.md): Managed launcher leases, workspace/client ownership, clone isolation, reconciliation, and continuous source handoff.
 - [Release and Update Architecture](docs/technical/update_architecture.md): The shared release manifest and the update ownership of the Sanad agent and client on every runtime.
+- [Linux Agent Service Lifecycle](docs/technical/linux_service_lifecycle.md): Capability-selected user/system systemd and OpenRC registration, typed status, ownership, conflict migration, and transactional rollback.
 - [Local Gateway and Sanad Home Protection](docs/technical/user_data_protection_and_minimization.md): Authentication, origin enforcement, filesystem ownership, secure startup, and runtime isolation for local Sanad data.
 - [Experimental Realtime Voice](docs/technical/voice_streaming.md): Current experimental Gemini Realtime voice path, transports, audio format, interruption behavior, and release boundaries.
 - [Remote Workspace Folder Mutation Protocol](docs/technical/workspace_folder_mutation_protocol.md): Current cloud rejection boundary and suspended design for remote workspace filesystem management.
