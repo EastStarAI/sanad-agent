@@ -455,6 +455,24 @@ void main() {
       expect(json['capabilities']['supports_stop'], isTrue);
       expect(json['capabilities']['supports_workspaces'], isTrue);
       expect(json['capabilities']['supports_local_tool_runtime'], isTrue);
+      expect(
+        json['capabilities'].containsKey('supports_remote_update'),
+        isFalse,
+      );
+      expect(
+        json['capabilities'].containsKey('supports_remote_restart'),
+        isFalse,
+      );
+      expect(
+        json['capabilities'].containsKey(
+          'supports_remote_workspace_management',
+        ),
+        isFalse,
+      );
+      expect(
+        json['capabilities'].containsKey('supports_remote_mcp_management'),
+        isFalse,
+      );
     });
     // ...
 
@@ -689,6 +707,32 @@ void main() {
           'Failed to change workspace path: '
           'That folder is already connected to another workspace.',
         );
+      },
+    );
+
+    test(
+      'handleCommand removes a workspace record without deleting its folder',
+      () async {
+        final service = getIt<LocalWorkspaceRuntimeService>();
+        final directory = Directory('${tempDir.path}/remove-workspace')
+          ..createSync();
+        final workspace = await service.createWorkspace(path: directory.path);
+        Map<String, dynamic>? emitted;
+
+        final handled = await SanadProtocolBridge().handleCommand({
+          'command': CanonicalEventTypes.removeWorkspace,
+          'payload': {
+            'request_id': 'workspace-remove-1',
+            'workspace_id': workspace['id'],
+          },
+        }, (envelope) async => emitted = envelope);
+
+        expect(handled, isTrue);
+        expect(emitted?['event'], CanonicalEventTypes.workspaceRemoved);
+        expect(emitted?['request_id'], 'workspace-remove-1');
+        expect(emitted?['payload']['workspace_id'], workspace['id']);
+        expect(directory.existsSync(), isTrue);
+        expect(await service.listWorkspaces(), isEmpty);
       },
     );
 

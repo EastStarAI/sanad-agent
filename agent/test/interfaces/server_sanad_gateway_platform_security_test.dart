@@ -9,9 +9,14 @@ import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/core/update/agent_update_service.dart';
+import 'package:sanad_agent/interfaces/models/device_control.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/device_control_command_handler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
+import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
+import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_session_channel.dart';
@@ -21,30 +26,8 @@ import 'package:test/test.dart';
 
 import '../support/memory_agent_secret_store.dart';
 
-const blockedWorkspaceCommands = <String>[
-  CanonicalEventTypes.createWorkspace,
-  CanonicalEventTypes.relocateWorkspace,
-  CanonicalEventTypes.browseWorkspaceTree,
-  CanonicalEventTypes.createFolder,
-  CanonicalEventTypes.renameFolder,
-  CanonicalEventTypes.deleteFolder,
-];
-
-const blockedMcpManagementCommands = <String>[
-  CanonicalEventTypes.listMcpServers,
-  CanonicalEventTypes.saveMcpServer,
-  CanonicalEventTypes.deleteMcpServer,
+const blockedMcpReplaceCommands = <String>[
   CanonicalEventTypes.replaceMcpConfig,
-  CanonicalEventTypes.inspectMcpServer,
-  CanonicalEventTypes.previewMcpImport,
-  CanonicalEventTypes.exportMcpServers,
-  CanonicalEventTypes.readAdvancedMcpServer,
-  CanonicalEventTypes.previewAdvancedMcpServer,
-  CanonicalEventTypes.saveAdvancedMcpServer,
-  CanonicalEventTypes.startMcpOAuth,
-  CanonicalEventTypes.getMcpOAuthStatus,
-  CanonicalEventTypes.cancelMcpOAuth,
-  CanonicalEventTypes.completeMcpOAuth,
 ];
 
 class FakeManager implements Manager {
@@ -184,6 +167,7 @@ class TrackingWorkspaceRuntimeService extends LocalWorkspaceRuntimeService {
   TrackingWorkspaceRuntimeService({required super.sanadHomePath});
 
   final List<String> calls = [];
+  bool? lastManagedRemote;
 
   @override
   Future<List<Map<String, dynamic>>> listWorkspaces() async {
@@ -195,16 +179,41 @@ class TrackingWorkspaceRuntimeService extends LocalWorkspaceRuntimeService {
   Future<Map<String, dynamic>> createWorkspace({
     String? name,
     String? path,
+    String? description,
+    bool managedRemote = false,
   }) async {
+    lastManagedRemote = managedRemote;
     calls.add(CanonicalEventTypes.createWorkspace);
-    return const {};
+    return {
+      'id': 'ws-1',
+      'name': name ?? 'workspace',
+      'display_name': name ?? 'workspace',
+      'path': '/managed/workspaces/${name ?? 'workspace'}',
+      'source': 'managed_remote',
+      'is_current': false,
+      'is_missing': false,
+      'availability': 'available',
+    };
+  }
+
+  @override
+  Future<String> removeWorkspace({
+    required String workspaceId,
+    bool managedRemote = false,
+  }) async {
+    lastManagedRemote = managedRemote;
+    calls.add(CanonicalEventTypes.removeWorkspace);
+    return workspaceId;
   }
 
   @override
   Future<Map<String, dynamic>> relocateWorkspace({
     required String workspaceId,
     required String newPath,
+    bool managedRemote = false,
+    String? expectedFingerprint,
   }) async {
+    lastManagedRemote = managedRemote;
     calls.add(CanonicalEventTypes.relocateWorkspace);
     return const {};
   }
@@ -214,16 +223,27 @@ class TrackingWorkspaceRuntimeService extends LocalWorkspaceRuntimeService {
     String? workspaceId,
     String? path,
     int maxEntries = 200,
+    bool managedRemote = false,
   }) async {
+    lastManagedRemote = managedRemote;
     calls.add(CanonicalEventTypes.browseWorkspaceTree);
-    return const {};
+    return {
+      'workspace_id': '',
+      'root_path': '',
+      'path': '',
+      'parent_path': null,
+      'entries': const [],
+      'truncated': false,
+    };
   }
 
   @override
   Future<String> createFolder({
     required String parentPath,
     required String name,
+    bool managedRemote = false,
   }) async {
+    lastManagedRemote = managedRemote;
     calls.add(CanonicalEventTypes.createFolder);
     return parentPath;
   }
@@ -232,13 +252,20 @@ class TrackingWorkspaceRuntimeService extends LocalWorkspaceRuntimeService {
   Future<String> renameFolder({
     required String path,
     required String newName,
+    bool managedRemote = false,
   }) async {
+    lastManagedRemote = managedRemote;
     calls.add(CanonicalEventTypes.renameFolder);
     return path;
   }
 
   @override
-  Future<String> deleteFolder(String path) async {
+  Future<String> deleteFolder(
+    String path, {
+    bool managedRemote = false,
+    String? expectedFingerprint,
+  }) async {
+    lastManagedRemote = managedRemote;
     calls.add(CanonicalEventTypes.deleteFolder);
     return path;
   }
@@ -320,7 +347,33 @@ void main() {
     authManager = FakeAuthManager();
     getIt.registerSingleton<AuthManager>(authManager);
     getIt.registerSingleton<Config>(Config());
-    getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
+    getIt.registerSingleton<DeviceCommandAdmission>(
+      DeviceCommandAdmission(registeredDeviceId: () => 'test-device-id'),
+    );
+    getIt.registerSingleton<DaemonRestartCoordinator>(
+      DaemonRestartCoordinator(exitDaemon: (_) {}),
+    );
+    final bridge = SanadProtocolBridge();
+    getIt.registerSingleton<SanadProtocolBridge>(bridge);
+    getIt.registerSingleton<DeviceControlCommandHandler>(
+      DeviceControlCommandHandler(
+        admission: getIt<DeviceCommandAdmission>(),
+        bridge: bridge,
+        restartCoordinator: getIt<DaemonRestartCoordinator>(),
+        updateService: () => _ScriptedUpdateService(
+          checkResult: const AgentUpdateResult(
+            status: AgentUpdateStatus.upToDate,
+            currentVersion: '1.0.0',
+            availableVersion: '1.0.0',
+          ),
+          applyResult: const AgentUpdateResult(
+            status: AgentUpdateStatus.upToDate,
+            currentVersion: '1.0.0',
+          ),
+        ),
+        isSupervised: () => true,
+      ),
+    );
     getIt.registerSingleton<PlatformRuntimeBridge>(runtimeBridge);
     getIt.registerSingleton<LocalWorkspaceRuntimeService>(workspaceRuntime);
 
@@ -329,9 +382,11 @@ void main() {
       identityLoader: () =>
           DeviceKeyIdentity.loadOrCreate(secretStore: secrets),
       httpClient: MockClient(
-        (_) async => http.Response('', 200, headers: {
-          'date': HttpDate.format(DateTime.now().toUtc()),
-        }),
+        (_) async => http.Response(
+          '',
+          200,
+          headers: {'date': HttpDate.format(DateTime.now().toUtc())},
+        ),
       ),
     );
     await platform.initialize();
@@ -469,85 +524,133 @@ void main() {
     expect(socket.emittedEvents, isEmpty);
   });
 
-  group('cloud remote workspace admission', () {
+  group('cloud managed workspace admission', () {
     test(
-      'rejects every execute_command before session or runtime mutation',
+      'dispatches create_workspace as managed remote without a session',
       () async {
-        for (final command in blockedWorkspaceCommands) {
-          socket.emittedEvents.clear();
+        await socket.trigger('execute_command', {
+          'command': CanonicalEventTypes.createWorkspace,
+          'device_id': 'test-device-id',
+          'payload': {
+            'request_id': 'req-create',
+            'session_id': 'sess-123',
+            'name': 'remote-notes',
+            'path': '/etc/passwd',
+          },
+        });
 
-          await socket.trigger('execute_command', {
-            'command': command,
-            'device_id': 'request-device',
-            'payload': {
-              'request_id': 'req-$command',
-              'session_id': 'sess-123',
-              'workspace_id': 'workspace-1',
-              'path': tempDir.path,
-              'new_path': tempDir.path,
-              'parent_path': tempDir.path,
-              'name': 'blocked-folder',
-              'new_name': 'blocked-folder',
-            },
-          });
-
-          _expectDisabledError(
-            socket.emittedEvents,
-            requestId: 'req-$command',
-            code: 'remote_workspace_management_disabled',
-          );
-        }
-
+        expect(workspaceRuntime.calls, [CanonicalEventTypes.createWorkspace]);
+        expect(workspaceRuntime.lastManagedRemote, isTrue);
         expect(runtimeBridge.registeredSessionCount, 0);
-        expect(workspaceRuntime.calls, isEmpty);
-        expect(
-          Directory('${tempDir.path}/blocked-folder').existsSync(),
-          isFalse,
-        );
+        expect(socket.emittedEvents, isNotEmpty);
+        final data =
+            socket.emittedEvents.single['data'] as Map<String, dynamic>;
+        expect(data['event'], CanonicalEventTypes.workspaceCreated);
       },
     );
 
     test(
-      'rejects every protocol_event before workspace runtime mutation',
+      'dispatches empty browse as managed remote without listing through session',
       () async {
-        for (final eventType in blockedWorkspaceCommands) {
-          socket.emittedEvents.clear();
+        await socket.trigger('execute_command', {
+          'command': CanonicalEventTypes.browseWorkspaceTree,
+          'device_id': 'test-device-id',
+          'payload': {'request_id': 'req-browse', 'session_id': 'sess-123'},
+        });
 
-          await socket.trigger('protocol_event', {
-            'event': eventType,
-            'type': eventType,
-            'session_id': 'sess-123',
-            'payload': {
-              'request_id': 'req-$eventType',
-              'path': tempDir.path,
-              'parent_path': tempDir.path,
-              'name': 'blocked-folder',
-            },
-          });
+        expect(workspaceRuntime.calls, [
+          CanonicalEventTypes.browseWorkspaceTree,
+        ]);
+        expect(workspaceRuntime.lastManagedRemote, isTrue);
+        expect(runtimeBridge.registeredSessionCount, 0);
+      },
+    );
 
-          _expectDisabledError(
-            socket.emittedEvents,
-            requestId: 'req-$eventType',
-            code: 'remote_workspace_management_disabled',
-          );
-        }
+    test('dispatches workspace record removal as managed remote', () async {
+      await socket.trigger('execute_command', {
+        'command': CanonicalEventTypes.removeWorkspace,
+        'device_id': 'test-device-id',
+        'payload': {
+          'request_id': 'req-remove-workspace',
+          'session_id': 'sess-123',
+          'workspace_id': 'ws-1',
+        },
+      });
 
-        expect(workspaceRuntime.calls, isEmpty);
-        expect(
-          Directory('${tempDir.path}/blocked-folder').existsSync(),
-          isFalse,
-        );
+      expect(workspaceRuntime.calls, [CanonicalEventTypes.removeWorkspace]);
+      expect(workspaceRuntime.lastManagedRemote, isTrue);
+      expect(runtimeBridge.registeredSessionCount, 0);
+      final data = socket.emittedEvents.single['data'] as Map<String, dynamic>;
+      expect(data['event'], CanonicalEventTypes.workspaceRemoved);
+      expect((data['payload'] as Map)['workspace_id'], 'ws-1');
+    });
+
+    test('rejects a mismatched workspace command as wrong_device', () async {
+      await socket.trigger('execute_command', {
+        'command': CanonicalEventTypes.createWorkspace,
+        'device_id': 'other-device',
+        'payload': {
+          'request_id': 'req-create-wrong',
+          'session_id': 'sess-123',
+          'name': 'blocked',
+        },
+      });
+      _expectDisabledError(
+        socket.emittedEvents,
+        requestId: 'req-create-wrong',
+        code: DeviceControlErrorCodes.wrongDevice,
+      );
+      expect(workspaceRuntime.calls, isEmpty);
+      expect(runtimeBridge.registeredSessionCount, 0);
+    });
+
+    test('rejects a workspace command without device_id', () async {
+      await socket.trigger('execute_command', {
+        'command': CanonicalEventTypes.createWorkspace,
+        'payload': {
+          'request_id': 'req-create-missing-device',
+          'session_id': 'sess-123',
+          'name': 'blocked',
+        },
+      });
+      expect(socket.emittedEvents, hasLength(1));
+      final data = socket.emittedEvents.single['data'] as Map<String, dynamic>;
+      final payload = data['payload'] as Map<String, dynamic>;
+      expect(data['event'], 'error');
+      expect(payload['request_id'], 'req-create-missing-device');
+      expect(payload['code'], DeviceControlErrorCodes.invalidRequest);
+      expect(workspaceRuntime.calls, isEmpty);
+      expect(runtimeBridge.registeredSessionCount, 0);
+    });
+
+    test(
+      'dispatches protocol_event workspace browse without session registration',
+      () async {
+        await socket.trigger('protocol_event', {
+          'event': CanonicalEventTypes.browseWorkspaceTree,
+          'type': CanonicalEventTypes.browseWorkspaceTree,
+          'device_id': 'test-device-id',
+          'session_id': 'sess-123',
+          'payload': {'request_id': 'req-browse-event'},
+        });
+
+        expect(workspaceRuntime.calls, [
+          CanonicalEventTypes.browseWorkspaceTree,
+        ]);
+        expect(workspaceRuntime.lastManagedRemote, isTrue);
+        expect(runtimeBridge.registeredSessionCount, 0);
       },
     );
 
     test('allows list_workspaces through the cloud adapter', () async {
       await socket.trigger('execute_command', {
         'command': CanonicalEventTypes.listWorkspaces,
+        'device_id': 'test-device-id',
         'payload': {'request_id': 'req-list', 'session_id': 'sess-list'},
       });
 
       expect(workspaceRuntime.calls, [CanonicalEventTypes.listWorkspaces]);
-      expect(runtimeBridge.registeredSessionCount, 1);
+      expect(runtimeBridge.registeredSessionCount, 0);
       final response = socket.emittedEvents.singleWhere(
         (item) => item['event'] == 'device_event',
       );
@@ -555,29 +658,113 @@ void main() {
       expect(data['event'], CanonicalEventTypes.workspacesList);
       expect(data['payload'], containsPair('request_id', 'req-list'));
     });
+
+    test('rejects list_workspaces without a device id', () async {
+      await socket.trigger('execute_command', {
+        'command': CanonicalEventTypes.listWorkspaces,
+        'payload': {
+          'request_id': 'req-list-missing-device',
+          'session_id': 'sess-list',
+        },
+      });
+
+      expect(workspaceRuntime.calls, isEmpty);
+      expect(runtimeBridge.registeredSessionCount, 0);
+      final response = socket.emittedEvents.singleWhere(
+        (item) => item['event'] == 'device_event',
+      );
+      final data = response['data'] as Map<String, dynamic>;
+      expect(data['event'], 'error');
+      expect(
+        (data['payload'] as Map)['code'],
+        DeviceControlErrorCodes.invalidRequest,
+      );
+    });
   });
 
   group('cloud remote MCP management admission', () {
-    test(
-      'rejects every execute_command before session or MCP runtime access',
-      () async {
-        for (final command in blockedMcpManagementCommands) {
-          socket.emittedEvents.clear();
+    test('dispatches list_mcp_servers without registering a session', () async {
+      await socket.trigger('execute_command', {
+        'command': CanonicalEventTypes.listMcpServers,
+        'device_id': 'test-device-id',
+        'payload': {'request_id': 'req-list-mcp', 'session_id': 'sess-123'},
+      });
 
+      expect(workspaceRuntime.calls, [CanonicalEventTypes.listMcpServers]);
+      expect(runtimeBridge.registeredSessionCount, 0);
+      final data = socket.emittedEvents.single['data'] as Map<String, dynamic>;
+      expect(data['event'], CanonicalEventTypes.mcpServersList);
+      expect((data['payload'] as Map)['request_id'], 'req-list-mcp');
+    });
+
+    test(
+      'issues a save preview then mutates only after confirmation',
+      () async {
+        await socket.trigger('execute_command', {
+          'command': CanonicalEventTypes.saveMcpServer,
+          'device_id': 'test-device-id',
+          'payload': {
+            'request_id': 'req-save-preview',
+            'session_id': 'sess-123',
+            'scope': 'global',
+            'config': {'name': 'docs', 'url': 'https://example.test/mcp'},
+            'secrets': {'bearer_token': 'must-not-persist-in-preview'},
+          },
+        });
+
+        expect(workspaceRuntime.calls, isEmpty);
+        expect(runtimeBridge.registeredSessionCount, 0);
+        final preview =
+            socket.emittedEvents.single['data'] as Map<String, dynamic>;
+        expect(preview['event'], CanonicalEventTypes.mcpServerSavePreview);
+        final previewPayload = Map<String, dynamic>.from(
+          preview['payload'] as Map,
+        );
+        expect(previewPayload.toString(), isNot(contains('must-not-persist')));
+        final token = previewPayload['confirmation_token']?.toString() ?? '';
+        final fingerprint =
+            previewPayload['confirmation_fingerprint']?.toString() ?? '';
+        expect(token, isNotEmpty);
+        expect(fingerprint, isNotEmpty);
+
+        socket.emittedEvents.clear();
+        await socket.trigger('execute_command', {
+          'command': CanonicalEventTypes.saveMcpServer,
+          'device_id': 'test-device-id',
+          'payload': {
+            'request_id': 'req-save-confirm',
+            'session_id': 'sess-123',
+            'scope': 'global',
+            'config': {'name': 'docs', 'url': 'https://example.test/mcp'},
+            'secrets': {'bearer_token': 'must-not-persist-in-preview'},
+            'confirmation_token': token,
+            'confirmation_fingerprint': fingerprint,
+          },
+        });
+
+        expect(workspaceRuntime.calls, [CanonicalEventTypes.saveMcpServer]);
+        expect(runtimeBridge.registeredSessionCount, 0);
+        final saved =
+            socket.emittedEvents.single['data'] as Map<String, dynamic>;
+        expect(saved['event'], CanonicalEventTypes.mcpServerSaved);
+      },
+    );
+
+    test(
+      'still rejects replace_mcp_config before session or MCP runtime access',
+      () async {
+        for (final command in blockedMcpReplaceCommands) {
+          socket.emittedEvents.clear();
           await socket.trigger('execute_command', {
             'command': command,
-            'device_id': 'request-device',
+            'device_id': 'test-device-id',
             'payload': {
               'request_id': 'req-$command',
               'session_id': 'sess-123',
-              'workspace_id': 'workspace-1',
               'scope': 'global',
-              'server_name': 'blocked-server',
-              'config': <String, dynamic>{},
               'document': <String, dynamic>{},
             },
           });
-
           _expectDisabledError(
             socket.emittedEvents,
             requestId: 'req-$command',
@@ -585,37 +772,136 @@ void main() {
           );
         }
 
+        socket.emittedEvents.clear();
+        await socket.trigger('protocol_event', {
+          'event': CanonicalEventTypes.replaceMcpConfig,
+          'type': CanonicalEventTypes.replaceMcpConfig,
+          'session_id': 'sess-123',
+          'payload': {
+            'request_id': 'req-replace-event',
+            'scope': 'global',
+            'document': <String, dynamic>{},
+          },
+        });
+        _expectDisabledError(
+          socket.emittedEvents,
+          requestId: 'req-replace-event',
+          code: 'remote_mcp_management_disabled',
+        );
+
         expect(runtimeBridge.registeredSessionCount, 0);
         expect(workspaceRuntime.calls, isEmpty);
       },
     );
 
-    test('rejects every protocol_event before MCP runtime access', () async {
-      for (final eventType in blockedMcpManagementCommands) {
-        socket.emittedEvents.clear();
+    test('rejects a mismatched MCP command as wrong_device', () async {
+      await socket.trigger('execute_command', {
+        'command': CanonicalEventTypes.listMcpServers,
+        'device_id': 'other-device',
+        'payload': {'request_id': 'req-mcp-wrong', 'session_id': 'sess-123'},
+      });
+      _expectDisabledError(
+        socket.emittedEvents,
+        requestId: 'req-mcp-wrong',
+        code: DeviceControlErrorCodes.wrongDevice,
+      );
+      expect(workspaceRuntime.calls, isEmpty);
+      expect(runtimeBridge.registeredSessionCount, 0);
+    });
 
+    test(
+      'dispatches protocol_event MCP list without session registration',
+      () async {
         await socket.trigger('protocol_event', {
-          'event': eventType,
-          'type': eventType,
+          'event': CanonicalEventTypes.listMcpServers,
+          'type': CanonicalEventTypes.listMcpServers,
+          'device_id': 'test-device-id',
           'session_id': 'sess-123',
-          'payload': {
-            'request_id': 'req-$eventType',
-            'scope': 'global',
-            'server_name': 'blocked-server',
-            'config': <String, dynamic>{},
-            'document': <String, dynamic>{},
-          },
+          'payload': {'request_id': 'req-list-mcp-event'},
         });
 
+        expect(workspaceRuntime.calls, [CanonicalEventTypes.listMcpServers]);
+        expect(runtimeBridge.registeredSessionCount, 0);
+      },
+    );
+  });
+
+  group('cloud device-control admission', () {
+    test(
+      'dispatches a matching update check without registering a session',
+      () async {
+        await socket.trigger('execute_command', {
+          'command': DeviceControlCommands.updateCheck,
+          'device_id': 'test-device-id',
+          'payload': {'request_id': 'req-check', 'session_id': 'sess-123'},
+        });
+        expect(socket.emittedEvents, hasLength(1));
+        final emitted = socket.emittedEvents.single;
+        expect(emitted['event'], 'device_event');
+        final data = emitted['data'] as Map<String, dynamic>;
+        expect(data['event'], DeviceControlCommands.updateCheckResult);
+        expect(
+          (data['payload'] as Map)['status'],
+          AgentUpdateStatus.upToDate.wireName,
+        );
+        expect(runtimeBridge.registeredSessionCount, 0);
+      },
+    );
+
+    test(
+      'rejects apply without confirmation as confirmation_required',
+      () async {
+        await socket.trigger('execute_command', {
+          'command': DeviceControlCommands.updateApply,
+          'device_id': 'test-device-id',
+          'payload': {
+            'request_id': 'req-apply',
+            'session_id': 'sess-123',
+            'target_version': '1.2.3',
+            'manifest_revision': 'rev-1',
+            'manifest_fingerprint': 'fp-1',
+          },
+        });
         _expectDisabledError(
           socket.emittedEvents,
-          requestId: 'req-$eventType',
-          code: 'remote_mcp_management_disabled',
+          requestId: 'req-apply',
+          code: DeviceControlErrorCodes.confirmationRequired,
         );
-      }
+        expect(runtimeBridge.registeredSessionCount, 0);
+      },
+    );
 
+    test('rejects a mismatched device_id without listing workspaces', () async {
+      await socket.trigger('execute_command', {
+        'command': CanonicalEventTypes.listWorkspaces,
+        'device_id': 'other-device',
+        'payload': {'request_id': 'req-wrong', 'session_id': 'sess-123'},
+      });
+      _expectDisabledError(
+        socket.emittedEvents,
+        requestId: 'req-wrong',
+        code: DeviceControlErrorCodes.wrongDevice,
+      );
       expect(workspaceRuntime.calls, isEmpty);
+      expect(runtimeBridge.registeredSessionCount, 0);
     });
+
+    test(
+      'rejects a mismatched device-control command as wrong_device',
+      () async {
+        await socket.trigger('execute_command', {
+          'command': DeviceControlCommands.updateCheck,
+          'device_id': 'other-device',
+          'payload': {'request_id': 'req-check', 'session_id': 'sess-123'},
+        });
+        _expectDisabledError(
+          socket.emittedEvents,
+          requestId: 'req-check',
+          code: DeviceControlErrorCodes.wrongDevice,
+        );
+        expect(runtimeBridge.registeredSessionCount, 0);
+      },
+    );
   });
 }
 
@@ -634,4 +920,27 @@ void _expectDisabledError(
   final payload = data['payload'] as Map<String, dynamic>;
   expect(payload['request_id'], requestId);
   expect(payload['code'], code);
+}
+
+class _ScriptedUpdateService extends AgentUpdateService {
+  _ScriptedUpdateService({required this.checkResult, required this.applyResult})
+    : super(
+        currentVersion: '1.0.0',
+        executablePath: '/tmp/sanad-agent',
+        isSourceManaged: false,
+        client: http.Client(),
+      );
+
+  final AgentUpdateResult checkResult;
+  final AgentUpdateResult applyResult;
+
+  @override
+  Future<AgentUpdateResult> check({String? targetVersion}) async => checkResult;
+
+  @override
+  Future<AgentUpdateResult> update({
+    String? targetVersion,
+    String? expectedManifestTag,
+    String? expectedManifestCommit,
+  }) async => applyResult;
 }

@@ -17,6 +17,8 @@ This contract applies to `agent/lib/evolution/db/`.
 ## Session Data
 - Workspace identity is an immutable UUID; filesystem path and display name are mutable workspace properties and must never replace it in session or runtime references.
 - Persist workspace id and provider/model route as recoverable session state.
+- Removing a workspace record must not cascade into sessions or messages;
+  their stable workspace reference remains historical conversation metadata.
 - Preserve raw request identity on accepted user messages and route transitions.
 - Canonical user acceptance alone advances session-list user-message ordering.
 - Title compare-and-set, deletion, and route transitions remain atomic with their owning session data.

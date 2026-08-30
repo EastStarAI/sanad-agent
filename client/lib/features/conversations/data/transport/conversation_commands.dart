@@ -476,12 +476,15 @@ class ConversationCommands {
   }
 
   Future<DeviceWorkspace> createWorkspace({
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) async {
-    final trimmedPath = path.trim();
-    if (trimmedPath.isEmpty) {
-      throw StateError('Workspace path is required');
+    final trimmedPath = path?.trim() ?? '';
+    final trimmedName = name?.trim() ?? '';
+    final trimmedDescription = description?.trim() ?? '';
+    if (trimmedPath.isEmpty && trimmedName.isEmpty) {
+      throw StateError('Workspace name or path is required');
     }
 
     final requestId = generateConversationRequestId();
@@ -489,8 +492,9 @@ class ConversationCommands {
       command: 'create_workspace',
       payload: {
         'request_id': requestId,
-        'path': trimmedPath,
-        if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
+        if (trimmedPath.isNotEmpty) 'path': trimmedPath,
+        if (trimmedName.isNotEmpty) 'name': trimmedName,
+        if (trimmedDescription.isNotEmpty) 'description': trimmedDescription,
       },
       requestId: requestId,
     );
@@ -519,6 +523,29 @@ class ConversationCommands {
     );
   }
 
+  Future<void> removeWorkspace({required String workspaceId}) async {
+    final normalizedId = workspaceId.trim();
+    if (normalizedId.isEmpty) {
+      throw StateError('Workspace id is required');
+    }
+    final requestId = generateConversationRequestId();
+    final result = await _gateway.request(
+      command: 'workspace.remove',
+      payload: {'request_id': requestId, 'workspace_id': normalizedId},
+      requestId: requestId,
+    );
+    final payload = result?['payload'] as Map<String, dynamic>? ?? result;
+    if (result?['event'] == 'workspace.removed' && payload?['workspace_id']?.toString() == normalizedId) {
+      return;
+    }
+    if (result?['event'] == 'error') {
+      throw StateError(
+        payload?['message']?.toString() ?? 'Failed to remove workspace',
+      );
+    }
+    throw StateError('Failed to remove workspace');
+  }
+
   Future<DeviceWorkspace> relocateWorkspace({
     required String workspaceId,
     required String newPath,
@@ -529,12 +556,14 @@ class ConversationCommands {
         'workspace_id': workspaceId.trim(),
         'new_path': newPath.trim(),
       },
+      previewEvent: 'workspace.relocate.preview',
     );
   }
 
   Future<DeviceWorkspace> _mutateWorkspace({
     required String command,
     required Map<String, dynamic> payload,
+    String? previewEvent,
   }) async {
     final requestId = generateConversationRequestId();
     final result = await _gateway.request(
@@ -542,6 +571,22 @@ class ConversationCommands {
       payload: {'request_id': requestId, ...payload},
       requestId: requestId,
     );
+    if (previewEvent != null && result?['event'] == previewEvent) {
+      final preview = result?['payload'] as Map<String, dynamic>? ?? result;
+      final token = preview?['confirmation_token']?.toString() ?? '';
+      final fingerprint = preview?['confirmation_fingerprint']?.toString() ?? '';
+      if (token.isEmpty || fingerprint.isEmpty) {
+        throw StateError('Failed to update workspace');
+      }
+      return _mutateWorkspace(
+        command: command,
+        payload: {
+          ...payload,
+          'confirmation_token': token,
+          'confirmation_fingerprint': fingerprint,
+        },
+      );
+    }
     final response = result == null ? null : (result['payload'] as Map<String, dynamic>? ?? result);
     if (result?['event'] == 'error') {
       throw StateError(
@@ -621,6 +666,31 @@ class ConversationCommands {
       },
       requestId: requestId,
     );
+    if (result?['event']?.toString() == 'workspace.delete_folder.preview') {
+      final payload = result?['payload'] as Map<String, dynamic>? ?? result;
+      final token = payload?['confirmation_token']?.toString() ?? '';
+      final fingerprint = payload?['confirmation_fingerprint']?.toString() ?? '';
+      if (token.isEmpty || fingerprint.isEmpty) {
+        throw StateError('Failed to delete folder');
+      }
+      final confirmId = generateConversationRequestId();
+      final confirmed = await _gateway.request(
+        command: 'workspace.delete_folder',
+        payload: {
+          'request_id': confirmId,
+          'path': trimmedPath,
+          'confirmation_token': token,
+          'confirmation_fingerprint': fingerprint,
+        },
+        requestId: confirmId,
+      );
+      _requireFolderMutationAcknowledgment(
+        confirmed,
+        expectedEvent: 'workspace.folder_deleted',
+        fallbackMessage: 'Failed to delete folder',
+      );
+      return;
+    }
     _requireFolderMutationAcknowledgment(
       result,
       expectedEvent: 'workspace.folder_deleted',

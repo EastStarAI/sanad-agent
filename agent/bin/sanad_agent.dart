@@ -16,6 +16,8 @@ import 'service.dart' as service_cmd;
 final String version = loadAgentVersion();
 
 void main(List<String> arguments) async {
+  if (_handleDaemonHelpOrInvalidArguments(arguments)) return;
+
   // A supervised daemon parent must remain a lightweight process owner. Its
   // child prepares the secure Home roots before any daemon dependency is
   // composed, avoiding duplicate full-tree work on every source start.
@@ -66,6 +68,30 @@ void main(List<String> arguments) async {
 
   // Standard execution if hot restart is disabled
   await _executeCommand(arguments);
+}
+
+bool _handleDaemonHelpOrInvalidArguments(List<String> arguments) {
+  if (arguments.isEmpty ||
+      !const {'daemon', 'start'}.contains(arguments.first.toLowerCase())) {
+    return false;
+  }
+  final remaining = arguments.sublist(1);
+  final visible = remaining
+      .where((value) => value != '--child-process')
+      .toList();
+  if (visible.length == 1 &&
+      const {'help', '-h', '--help'}.contains(visible.single)) {
+    print('Usage: sanad daemon');
+    print('Starts the supervised Sanad Agent daemon.');
+    return true;
+  }
+  if (visible.isNotEmpty) {
+    stderr.writeln('Unknown daemon argument: ${visible.first}');
+    stderr.writeln('Usage: sanad daemon');
+    exitCode = 64;
+    return true;
+  }
+  return false;
 }
 
 Future<void> _executeCommand(List<String> arguments) async {

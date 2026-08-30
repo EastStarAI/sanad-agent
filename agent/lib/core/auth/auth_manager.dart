@@ -17,6 +17,9 @@ class AuthManager {
 
   static const deviceCredentialKey = 'device_credential';
   static const pendingDeviceCredentialKey = 'pending_device_credential';
+  static const previousDeviceCredentialKey =
+      'pairing_previous_device_credential';
+  static const pairingTokenKey = 'pairing_token';
   static const pendingAgentLogoutKey = 'agent_logout_pending';
 
   final _logger = Logger('AuthManager');
@@ -72,7 +75,6 @@ class AuthManager {
           _accessToken = data['access_token'];
           _refreshToken = data['refresh_token'];
           _hardwareId = data['hardware_id'];
-          _pairingToken = data['pairing_token'];
         }
       } catch (_) {
         // A malformed or temporarily unavailable file cannot authorize a
@@ -126,14 +128,29 @@ class AuthManager {
       }
       _pendingDeviceToken = pendingCredential;
 
+      var pairingToken = await _secretStore.read(pairingTokenKey);
+      final legacyPairingToken = data?['pairing_token'] as String?;
+      if (pairingToken == null && legacyPairingToken != null) {
+        await _secretStore.write(pairingTokenKey, legacyPairingToken);
+        pairingToken = await _secretStore.read(pairingTokenKey);
+        if (pairingToken != legacyPairingToken) {
+          throw const AgentSecretStoreUnavailable(
+            'Pairing token migration verification failed.',
+          );
+        }
+      }
+      _pairingToken = pairingToken;
+
       if (data != null &&
           (data.containsKey('device_token') ||
               data.containsKey('pending_device_token') ||
+              data.containsKey('pairing_token') ||
               data.containsKey('access_token') ||
               data.containsKey('refresh_token'))) {
         data
           ..remove('device_token')
           ..remove('pending_device_token')
+          ..remove('pairing_token')
           ..remove('access_token')
           ..remove('refresh_token');
         await boundary.writeSecretBytes(
@@ -173,6 +190,8 @@ class AuthManager {
         );
       }
       await _secretStore.delete(pendingDeviceCredentialKey);
+      await _secretStore.delete(pairingTokenKey);
+      await _secretStore.delete(previousDeviceCredentialKey);
       _deviceToken = token;
       _pairingToken = null;
       _pendingDeviceToken = null;
@@ -190,12 +209,29 @@ class AuthManager {
     }
     return _withAuthFileLock(() async {
       await _reloadUnlocked();
+      final previousCredential = _deviceToken;
+      if (previousCredential == null) {
+        await _secretStore.delete(previousDeviceCredentialKey);
+      } else {
+        await _secretStore.write(
+          previousDeviceCredentialKey,
+          previousCredential,
+        );
+        if (await _secretStore.read(previousDeviceCredentialKey) !=
+            previousCredential) {
+          throw const AgentSecretStoreUnavailable(
+            'Previous Device Credential snapshot verification failed.',
+          );
+        }
+      }
       final pendingCredential = _generateDeviceToken();
       await _secretStore.write(pendingDeviceCredentialKey, pendingCredential);
+      await _secretStore.write(pairingTokenKey, pairingToken);
       if (await _secretStore.read(pendingDeviceCredentialKey) !=
-          pendingCredential) {
+              pendingCredential ||
+          await _secretStore.read(pairingTokenKey) != pairingToken) {
         throw const AgentSecretStoreUnavailable(
-          'Pending Device Credential write verification failed.',
+          'Pending pairing authority write verification failed.',
         );
       }
       _pairingToken = pairingToken;
@@ -218,7 +254,42 @@ class AuthManager {
         );
       }
       await _secretStore.delete(pendingDeviceCredentialKey);
+      await _secretStore.delete(pairingTokenKey);
+      await _secretStore.delete(previousDeviceCredentialKey);
       _deviceToken = pendingToken;
+      _pairingToken = null;
+      _pendingDeviceToken = null;
+      await _saveAuthUnlocked();
+      return true;
+    });
+  }
+
+  Future<bool> cancelPreparedDevicePairing() {
+    return _withAuthFileLock(() async {
+      await _reloadUnlocked();
+      if (_pairingToken == null || _pendingDeviceToken == null) return false;
+      final previous = await _secretStore.read(previousDeviceCredentialKey);
+      if (previous == null) {
+        await _secretStore.delete(deviceCredentialKey);
+      } else {
+        await _secretStore.write(deviceCredentialKey, previous);
+        if (await _secretStore.read(deviceCredentialKey) != previous) {
+          throw const AgentSecretStoreUnavailable(
+            'Previous Device Credential restore verification failed.',
+          );
+        }
+      }
+      await _secretStore.delete(pendingDeviceCredentialKey);
+      await _secretStore.delete(pairingTokenKey);
+      await _secretStore.delete(previousDeviceCredentialKey);
+      if (await _secretStore.read(pendingDeviceCredentialKey) != null ||
+          await _secretStore.read(pairingTokenKey) != null ||
+          await _secretStore.read(previousDeviceCredentialKey) != null) {
+        throw const AgentSecretStoreUnavailable(
+          'Pending pairing cleanup verification failed.',
+        );
+      }
+      _deviceToken = previous;
       _pairingToken = null;
       _pendingDeviceToken = null;
       await _saveAuthUnlocked();
@@ -320,11 +391,6 @@ class AuthManager {
     if (_accessToken != null) data['access_token'] = _accessToken;
     if (_refreshToken != null) data['refresh_token'] = _refreshToken;
     if (_hardwareId != null) data['hardware_id'] = _hardwareId;
-    if (_pairingToken != null) data['pairing_token'] = _pairingToken;
-    if (_pendingDeviceToken != null) {
-      data['pending_device_token'] = _pendingDeviceToken;
-    }
-
     await boundary.writeSecretBytes('auth.json', utf8.encode(jsonEncode(data)));
     if (notify) _notifyChanged();
   }
@@ -369,8 +435,12 @@ class AuthManager {
   Future<void> _deleteAgentCredentials() async {
     await _secretStore.delete(deviceCredentialKey);
     await _secretStore.delete(pendingDeviceCredentialKey);
+    await _secretStore.delete(pairingTokenKey);
+    await _secretStore.delete(previousDeviceCredentialKey);
     if (await _secretStore.read(deviceCredentialKey) != null ||
-        await _secretStore.read(pendingDeviceCredentialKey) != null) {
+        await _secretStore.read(pendingDeviceCredentialKey) != null ||
+        await _secretStore.read(pairingTokenKey) != null ||
+        await _secretStore.read(previousDeviceCredentialKey) != null) {
       throw const AgentSecretStoreUnavailable(
         'Agent credential deletion verification failed.',
       );

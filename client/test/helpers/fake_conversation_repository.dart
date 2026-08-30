@@ -56,6 +56,7 @@ class FakeConversationRepository implements ConversationRepository {
   final List<Map<String, Object?>> createdSessionRequests = [];
   final List<DeviceWorkspace> workspaces = [];
   final List<Map<String, String?>> createdWorkspaces = [];
+  final List<String> removedWorkspaceIds = [];
   final List<Map<String, String?>> slashCommandSearchRequests = [];
   final List<Map<String, String?>> browseWorkspaceTreeRequests = [];
   final List<Map<String, String?>> permissionResponses = [];
@@ -522,15 +523,21 @@ class FakeConversationRepository implements ConversationRepository {
   @override
   Future<DeviceWorkspace> createWorkspace(
     DeviceConfig agent, {
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) async {
     createdWorkspaces.add({
       'device_id': agent.id,
       'path': path,
       'name': name,
+      'description': description,
     });
-    return DeviceWorkspace(id: path, path: path, name: name ?? path);
+    return DeviceWorkspace(
+      id: path ?? name ?? 'workspace',
+      path: path ?? name ?? 'workspace',
+      name: name ?? path ?? 'workspace',
+    );
   }
 
   @override
@@ -540,6 +547,15 @@ class FakeConversationRepository implements ConversationRepository {
     required String displayName,
   }) async {
     return DeviceWorkspace(id: workspaceId, name: displayName, path: workspaceId);
+  }
+
+  @override
+  Future<void> removeWorkspace(
+    DeviceConfig agent, {
+    required String workspaceId,
+  }) async {
+    removedWorkspaceIds.add(workspaceId);
+    workspaces.removeWhere((workspace) => workspace.id == workspaceId);
   }
 
   @override

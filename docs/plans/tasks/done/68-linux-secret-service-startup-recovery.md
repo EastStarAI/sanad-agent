@@ -1,27 +1,36 @@
 # Task 68 — Linux Product Vault and Platform Verification
 
-## Problem
+## Supersession notice
 
-The Linux Agent currently invokes `secret-tool` directly. A normal Linux system
-may provide a working desktop Secret Service while omitting that executable, and
-a headless/server installation may provide neither D-Bus nor Secret Service.
+This completed task records the Linux credential contract that existed before
+Task 81. The active implementation and release candidate now support automatic
+owner-protected file credentials plus durable user/system systemd and OpenRC
+services on Headless Linux; see
+`docs/plans/tasks/81-linux-headless-one-command-install-and-durable-service.md`.
+
+## Historical problem
+
+At the start of Task 68, the Linux Agent invoked `secret-tool` directly. A normal
+Linux system could provide a working desktop Secret Service while omitting that
+executable, and a headless/server installation could provide neither D-Bus nor
+Secret Service.
 Missing vault infrastructure previously allowed authentication reload—especially
 `pending_agent_logout` reconciliation—to abort daemon bootstrap and trigger the
 supervisor repeatedly.
 
 Phase 1 normalized vault launch failures and kept daemon startup fail-closed.
-Gate L2 completes the supported Linux desktop path. Secure unattended cloud
-credentials on Headless Linux require a separate privileged provisioning design
-and are explicitly deferred to a later release; current headless installations
-remain stable but local-only when no unlocked user-session Secret Service exists.
+At Task 68 completion, Gate L2 covered only the Linux desktop path and deliberately
+left unattended Headless cloud credentials for later work. Task 81 has now
+superseded that limitation with the owner-protected file backend and durable
+service lifecycle.
 
-## Goals
+## Historical goals
 
 1. A normal Linux desktop user installs and uses Sanad without manually running
    `apt` or installing `secret-tool`, GNOME Keyring, D-Bus, or another dependency.
-2. A headless Linux Agent without Secret Service remains crash-free and
-   fail-closed in this release; secure unattended cloud capability is deferred
-   to a later release.
+2. Task 68 kept a Headless Linux Agent without Secret Service crash-free and
+   fail-closed while deferring unattended cloud capability; Task 81 later
+   superseded this historical boundary.
 3. Daemon startup and local health remain available when the selected credential
    backend is unavailable; only cloud authorization fails closed.
 4. Secure backends never fall through silently to plaintext or another
@@ -147,27 +156,24 @@ created/loaded local identity and exposed no cloud Agent authority. Locked
 collections and non-root prompt paths are rejected without requesting an
 interactive unlock.
 
-## Deferred Headless Linux Cloud Phase
+## Historical deferred Headless Linux cloud phase
 
-Secure unattended cloud credentials for Headless Linux are deferred to a later
-release by product decision. The current release contract is explicit:
+Task 68 intentionally shipped the following temporary boundary:
 
-- a headless Linux Agent without an unlocked user-session Secret Service starts
-  normally and keeps the daemon and Local Gateway available;
-- Agent cloud authorization fails closed, with no restart loop and no plaintext
+- a Headless Linux Agent without an unlocked user-session Secret Service started
+  normally and kept the daemon and Local Gateway available;
+- Agent cloud authorization failed closed, with no restart loop and no plaintext
   or lower-precedence fallback;
-- installing `secret-tool` or a desktop keyring package alone is not presented as
-  a supported unattended-cloud solution;
-- durable cloud pairing/reconnection after unattended restart is not supported
-  on that host profile in this release.
+- installing `secret-tool` or a desktop keyring package alone was not presented
+  as a supported unattended-cloud solution;
+- durable cloud pairing/reconnection after unattended restart was deferred.
 
-The later headless project owns TPM/vTPM or another independently protected trust
-root, privileged product-owned provisioning, operator credential references, any
-explicit plaintext compatibility mode, clean-host reboot evidence, and headless
-installer/upgrade/uninstall lifecycle. The exploratory Gate L3 result remains
-useful evidence: this Ubuntu 22.04 host exposed TPM devices, but the unprivileged
-Sanad user service could not access them and no encrypted systemd credential
-utility was available. No backend or insecure workaround was adopted.
+Task 81 supersedes that boundary with an owner-protected file backend selected by
+capability probe, verified migration, and clean-host reboot evidence for durable
+Headless cloud pairing. The exploratory Gate L3 TPM result remains historical
+evidence: that Ubuntu 22.04 host exposed TPM devices, but the unprivileged Sanad
+user service could not access them and no encrypted systemd credential utility
+was available. Task 81 did not adopt an insecure plaintext workaround.
 
 ### Gate L3 — Current-release Linux packaging and lifecycle
 
@@ -276,8 +282,8 @@ restart. Existing logout and pending-logout tests cover deletion persistence.
 
 - Linux desktop: Secret Service available, absent, locked, and recovered.
 - Linux source and compiled Agent: no `secret-tool` installation required.
-- Linux headless current release: no D-Bus/Secret Service remains crash-free,
-  local-only, and cloud-fail-closed; secure unattended cloud is deferred.
+- Task 68 Headless baseline: no D-Bus/Secret Service remained crash-free and
+  cloud-fail-closed. Task 81 supersedes the former local-only/deferred boundary.
 - Authentication: new identity, legacy migration, pairing, Portal authorization,
   gateway proof, pending logout, logout, backend reload, and no downgrade.
 - Lifecycle: clean install, reinstall, upgrade from older release, rollback,
@@ -299,23 +305,23 @@ machine reproduction.
   verification: complete.
 - Linux packaging/runtime dependency scope: complete; `secret-tool` is not
   required.
-- Headless Linux secure unattended cloud: explicitly deferred to a later
-  release; current behavior is stable local-only and cloud-fail-closed.
+- Headless Linux secure unattended cloud: deferred when Task 68 closed; Task 81
+  now supersedes this item with durable owner-file credentials and service support.
 - Windows DPAPI implementation and real source-runtime verification: complete.
 - Windows packaged clean-machine candidate lifecycle: remains a release-artifact
   gate and is not claimed by this source worktree verification.
 
-**Current Task 68 implementation remaining: 0%.** Linux desktop and Windows vault
-behavior are complete for the current release. Deferred Headless Linux is tracked
-as later-release scope and does not block this release. A future candidate still
-runs the existing Windows clean-machine release gate before publication.
+**Task 68 implementation remaining: 0%.** Its Linux desktop and Windows vault
+scope is complete. Task 81 subsequently completed the Headless Linux capability
+that Task 68 had deferred. A future Windows candidate still runs the existing
+clean-machine release gate before publication.
 
 ## Definition of Done
 
 - Linux desktop works after normal product installation without user-run
   dependency commands.
-- Headless Linux without Secret Service remains stable, local-only, and
-  cloud-fail-closed; secure unattended cloud is documented as later-release scope.
+- Task 68 kept Headless Linux without Secret Service stable and cloud-fail-closed;
+  Task 81 later added the supported owner-file cloud path without plaintext downgrade.
 - No secure configuration silently downgrades to plaintext.
 - Vault/backend failure cannot prevent daemon startup or cause a restart loop.
 - Cloud authentication remains fail-closed whenever selected credential

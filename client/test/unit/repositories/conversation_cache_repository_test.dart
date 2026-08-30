@@ -58,6 +58,15 @@ class _FakeTransport implements ConversationRepository {
     );
   }
 
+  @override
+  Future<void> removeWorkspace(
+    DeviceConfig agent, {
+    required String workspaceId,
+  }) async {
+    final mutationError = workspaceMutationError;
+    if (mutationError != null) throw mutationError;
+  }
+
   // The rest of the interface is not needed for these tests.
   @override
   dynamic noSuchMethod(Invocation invocation) {}
@@ -137,6 +146,28 @@ void main() {
         throwsA(same(error)),
       );
       expect(store.snapshot.contexts[device.id], isNull);
+    });
+
+    test('workspace removal updates only workspace projections', () async {
+      transport.workspacesToReturn = const [
+        DeviceWorkspace(id: 'ws-1', name: 'Project', path: '/project'),
+      ];
+      await repo.refreshWorkspaces(device);
+      store.recordLastDestination(
+        ConversationDestination.newConversation(
+          deviceId: device.id,
+          workspaceId: 'ws-1',
+        ),
+      );
+
+      await repo.removeWorkspace(device, workspaceId: 'ws-1');
+
+      final context = store.snapshot.contexts[device.id]!;
+      expect(context.workspaces.workspaces, isEmpty);
+      expect(
+        context.lastDestination,
+        ConversationDestination.newConversation(deviceId: device.id),
+      );
     });
 
     test('refreshUnscopedConversations fetches and caches sessions', () async {

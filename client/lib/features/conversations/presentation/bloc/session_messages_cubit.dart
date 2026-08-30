@@ -1388,8 +1388,9 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   }
 
   Future<DeviceWorkspace?> createWorkspace({
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) async {
     final agent = _currentAgent;
     if (agent == null) return null;
@@ -1400,11 +1401,13 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
               agent,
               path: path,
               name: name,
+              description: description,
             )
           : await conversationCacheRepository!.createWorkspace(
               agent,
               path: path,
               name: name,
+              description: description,
             );
       if (workspace == null) return null;
       final currentList = List<DeviceWorkspace>.from(_workspacesByAgentId[agent.id] ?? const []);

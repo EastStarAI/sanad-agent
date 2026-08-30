@@ -151,13 +151,18 @@ abstract class ConversationRepository {
   });
   Future<DeviceWorkspace> createWorkspace(
     DeviceConfig agent, {
-    required String path,
+    String? path,
     String? name,
+    String? description,
   });
   Future<DeviceWorkspace> renameWorkspace(
     DeviceConfig agent, {
     required String workspaceId,
     required String displayName,
+  });
+  Future<void> removeWorkspace(
+    DeviceConfig agent, {
+    required String workspaceId,
   });
   Future<DeviceWorkspace> relocateWorkspace(
     DeviceConfig agent, {

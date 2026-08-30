@@ -23,12 +23,18 @@ This contract applies to `agent/lib/interfaces/`.
 ## Runtime Query Boundary
 - The daemon owns workspace browsing/creation, MCP management, skill inventory/load, slash commands, device settings, provider runtime, and conversation history/list queries.
 - Query responses must remain transport-neutral and usable over both local and cloud Sanad transports.
-- Cloud filesystem navigation and workspace-path mutation are disabled at the
-  cloud adapter boundary. Transport-neutral handlers may expose daemon-provided
-  roots and parent metadata only to an admitted local caller.
-- MCP configuration listing, inspection, and mutation are disabled at the cloud
-  adapter boundary. MCP servers configured locally remain available to the
-  per-turn capability runtime for both local and cloud-origin turns.
+- Cloud `device_id` that does not match the registered device fails closed as
+  `wrong_device` before session registration. Remote update, restart, managed
+  workspace, and MCP management commands are admitted without new capability
+  flags. Root-document `replace_mcp_config` remains rejected on cloud.
+- Authenticated Local Gateway health exposes only non-secret runtime facts needed for lifecycle verification, including binary version and whether the cloud adapter has completed authoritative registration; socket connection alone is not registration.
+- Cloud filesystem navigation is managed-remote: name-based create under
+  `SANAD_HOME/workspaces`, browse limited to that root and registered workspace
+  roots, and preview tokens for recursive delete and relocate.
+- Cloud MCP configuration listing, inspection, import/export, Advanced JSON,
+  OAuth, and reviewed mutations use the same daemon handlers as local. Secret
+  values stay out of snapshots, logs, and events. Cloud-origin turns still
+  execute configured MCP tools through `PermissionManager`.
 
 ## Run Cancellation
 - `requestStop` terminalizes executing tools through an owner-validated durable transaction before emitting `stopped`.

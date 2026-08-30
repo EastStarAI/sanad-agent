@@ -480,10 +480,15 @@ class SocketConversationClient implements ConversationClient {
 
   @override
   Future<DeviceWorkspace> createWorkspace({
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) {
-    return _commands!.createWorkspace(path: path, name: name);
+    return _commands!.createWorkspace(
+      path: path,
+      name: name,
+      description: description,
+    );
   }
 
   @override
@@ -495,6 +500,11 @@ class SocketConversationClient implements ConversationClient {
       workspaceId: workspaceId,
       displayName: displayName,
     );
+  }
+
+  @override
+  Future<void> removeWorkspace({required String workspaceId}) {
+    return _commands!.removeWorkspace(workspaceId: workspaceId);
   }
 
   @override

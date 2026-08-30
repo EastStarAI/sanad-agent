@@ -19,3 +19,9 @@ This contract applies to `client/lib/features/mcp/`.
 - Add and Edit reuse one typed draft flow. Import only seeds that draft after daemon preview.
 - Widgets may temporarily hold newly entered credentials only until the daemon request completes; edit state receives configured markers, never stored values.
 - OAuth UI may launch a daemon-provided authorization URL and poll an opaque flow ID, but discovery, callbacks, PKCE, registration, token exchange, refresh, and token persistence remain daemon-owned.
+- Cloud and local MCP management share `DeviceCommandClient`. Destructive cloud
+  mutations auto-consume daemon preview tickets after the user already confirmed
+  in the form. Nested `secrets` payloads are redacted from socket diagnostics.
+- Offline devices show an in-page reconnect message and disable add, test, edit,
+  and remove. Destructive actions are single-flight; a failed mutation reloads
+  the daemon snapshot instead of retrying automatically.

@@ -337,10 +337,15 @@ class SocketConversationRepository implements ConversationRepository {
   @override
   Future<DeviceWorkspace> createWorkspace(
     DeviceConfig agent, {
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) {
-    return _clientFor(agent).createWorkspace(path: path, name: name);
+    return _clientFor(agent).createWorkspace(
+      path: path,
+      name: name,
+      description: description,
+    );
   }
 
   @override
@@ -353,6 +358,14 @@ class SocketConversationRepository implements ConversationRepository {
       workspaceId: workspaceId,
       displayName: displayName,
     );
+  }
+
+  @override
+  Future<void> removeWorkspace(
+    DeviceConfig agent, {
+    required String workspaceId,
+  }) {
+    return _clientFor(agent).removeWorkspace(workspaceId: workspaceId);
   }
 
   @override

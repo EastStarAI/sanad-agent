@@ -294,6 +294,39 @@ void main() {
       );
     });
 
+    test('rejects a manifest revision changed after confirmation', () async {
+      final executable = File('${temporaryDirectory.path}/sanad')
+        ..writeAsStringSync('old');
+      var artifactRequested = false;
+      final service = AgentUpdateService(
+        currentVersion: '1.0.0',
+        executablePath: executable.path,
+        isSourceManaged: false,
+        operatingSystem: 'linux',
+        architecture: 'x64',
+        client: MockClient((request) async {
+          if (!request.url.path.endsWith('release-manifest.json')) {
+            artifactRequested = true;
+          }
+          return http.Response(
+            jsonEncode(_manifestJson(bytes: [1, 2, 3])),
+            200,
+          );
+        }),
+      );
+
+      final result = await service.update(
+        targetVersion: '1.1.0',
+        expectedManifestTag: 'v1.1.0',
+        expectedManifestCommit: 'superseded-commit',
+      );
+
+      expect(result.status, AgentUpdateStatus.targetMismatch);
+      expect(result.message, contains('changed after confirmation'));
+      expect(artifactRequested, isFalse);
+      expect(executable.readAsStringSync(), 'old');
+    });
+
     test('rejects latest when it differs from the exact target', () async {
       final executable = File('${temporaryDirectory.path}/sanad')
         ..writeAsStringSync('old');

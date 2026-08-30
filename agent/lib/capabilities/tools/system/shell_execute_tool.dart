@@ -392,7 +392,9 @@ class ShellExecuteTool extends SpecBackedTool {
     var tail = '';
     var totalChars = 0;
 
-    await for (final chunk in stream.transform(utf8.decoder)) {
+    await for (final chunk in stream.transform(
+      const Utf8Decoder(allowMalformed: true),
+    )) {
       totalChars += chunk.length;
       var remainingChunk = chunk;
       final availableHead = headLimit - head.length;

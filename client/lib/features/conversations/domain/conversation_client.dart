@@ -133,13 +133,15 @@ abstract class ConversationClient {
     String? path,
   });
   Future<DeviceWorkspace> createWorkspace({
-    required String path,
+    String? path,
     String? name,
+    String? description,
   });
   Future<DeviceWorkspace> renameWorkspace({
     required String workspaceId,
     required String displayName,
   });
+  Future<void> removeWorkspace({required String workspaceId});
   Future<DeviceWorkspace> relocateWorkspace({
     required String workspaceId,
     required String newPath,

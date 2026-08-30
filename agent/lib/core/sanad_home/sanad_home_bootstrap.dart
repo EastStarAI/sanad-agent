@@ -1,5 +1,6 @@
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -26,6 +27,7 @@ class SanadHomeBootstrap {
 
   static const int secretFileMode = 0x180; // 0600
   static const int secretDirMode = 0x1c0; // 0700
+  static const String managedWorkspacesDirectoryName = 'workspaces';
   static bool _ownerOnlyUmaskInstalled = false;
 
   static SanadHomeBootstrap identity() =>
@@ -94,6 +96,9 @@ class SanadHomeBootstrap {
     }
     _rejectLink(absolute, code: 'root_symlink');
     await _enforceDirectoryOwnership(root);
+    if (scope == SanadHomeScope.identity) {
+      ensureDirectoryPathSync(managedWorkspacesDirectoryName);
+    }
     return root.resolveSymbolicLinksSync();
   }
 
@@ -194,6 +199,52 @@ class SanadHomeBootstrap {
     final file = File(child(relative));
     return file.existsSync() &&
         file.statSync().type == FileSystemEntityType.file;
+  }
+
+  Future<T> runWithFileLock<T>(
+    String relative,
+    Future<T> Function() operation, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final lockFile = _openStableLockFileSync(relative);
+    try {
+      try {
+        await lockFile.lock(FileLock.exclusive).timeout(timeout);
+      } on TimeoutException {
+        throw const SanadHomeWriteFailure(
+          'lock_timeout',
+          'Timed out waiting for an exclusive Sanad Home file lock.',
+        );
+      }
+      return await operation();
+    } finally {
+      try {
+        await lockFile.unlock();
+      } catch (_) {}
+      await lockFile.close();
+    }
+  }
+
+  RandomAccessFile _openStableLockFileSync(String relative) {
+    final file = File(child(relative));
+    _secureParentsSync(file.parent);
+    final type = FileSystemEntity.typeSync(file.path, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      throw const SanadHomeBoundaryViolation(
+        'symlink_target',
+        'Symbolic links are not allowed at the Sanad runtime boundary.',
+      );
+    }
+    if (type == FileSystemEntityType.notFound) {
+      try {
+        file.createSync(exclusive: true);
+      } on FileSystemException {
+        if (!file.existsSync()) rethrow;
+      }
+    }
+    _assertRegularFile(file);
+    _enforceSecretOwnershipSync(file);
+    return file.openSync(mode: FileMode.append);
   }
 
   Future<void> deleteFile(String relative) async {

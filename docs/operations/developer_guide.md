@@ -251,9 +251,13 @@ Restore it after the source run:
 sanad service start
 ```
 
-The service command owns the platform-specific launchd, systemd, or Windows
-Scheduled Task integration. Direct operating-system commands are useful only
-when diagnosing a broken service registration.
+The service command owns the platform-specific launchd, systemd, OpenRC, or
+Windows Scheduled Task integration. Direct operating-system commands are useful
+only when diagnosing a broken service registration. Linux status is typed and
+reports the selected manager and scope; a unit file by itself is not considered
+a successful installation. Service registration writes non-secret ownership
+metadata so uninstall cannot remove an unrelated definition, while activation
+failure restores the previous owned definition.
 
 ## Source-build authentication
 

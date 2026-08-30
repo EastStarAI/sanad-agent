@@ -1,5 +1,10 @@
 /// Configuration model for an agent backend
 class DeviceConfig {
+  /// Stable client-only identity for the synthetic desktop inventory entry.
+  ///
+  /// This value identifies an inventory row. It must never be used to infer
+  /// which transport should carry a request.
+  static const syntheticLocalId = 'local-agent';
   static const int maxNameLength = 255;
 
   final String id;
@@ -26,13 +31,14 @@ class DeviceConfig {
 
   bool get isLocalReachable => metadata?['is_local_reachable'] == true;
   bool get isLocalCandidate => metadata?['is_local_candidate'] == true;
+  bool get isSyntheticLocal => id == syntheticLocalId;
 
   /// Cloud inventory identity represented by this device after a same-hardware
   /// cloud/local entry is merged into the canonical local entry.
   String? get cloudDeviceId => metadata?['cloud_device_id'] as String?;
 
   /// The account-owned id that can be used for inventory mutations.
-  String? get accountDeviceId => cloudDeviceId ?? (id == 'local-agent' ? null : id);
+  String? get accountDeviceId => cloudDeviceId ?? (isSyntheticLocal ? null : id);
 
   bool representsDeviceId(String deviceId) => id == deviceId || cloudDeviceId == deviceId;
 

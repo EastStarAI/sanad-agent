@@ -233,6 +233,10 @@ Settings distinguish:
 
 Workspace configuration can override a user-level capability with the same
 name. Inherited entries remain identifiable so the user can see their origin.
+Workspace Overview offers record-only removal behind a confirmation that
+explicitly preserves the host folder, its files, and existing conversations.
+Remote folder browsing is not exposed there; its constrained runtime remains
+reserved for a future conversation-side file tree.
 
 ## Connection states
 
@@ -246,10 +250,19 @@ Mobile and web act as remote controllers for paired agents.
 After a remote device record is created, the installation view keeps both
 platform paths visible at once: macOS/Linux first and Windows PowerShell below
 it. Each compact editor card has a platform label, one generated command,
-horizontal overflow for long tokens, and an independent copy action. Running
-that command installs the agent, prepares the creation-only pairing token, and
-starts the service. The view continues automatically when the authoritative
-inventory reports the new device Online.
+horizontal overflow for long tokens, and an independent copy action. The POSIX
+card follows the conventional `curl -fsSL ... | bash -s -- --pairing-token`
+shape; the Windows card invokes the downloaded PowerShell script block with
+`-PairingToken`. Running either command installs the agent, prepares the
+creation-only pairing token, and starts the service. The view continues
+automatically when the authoritative
+inventory reports the new device Online. If Online status arrives before the
+new row is present in the current inventory snapshot, the Client immediately
+reconciles authoritative inventory; the resulting device row then triggers
+capability loading so model and thinking controls do not require an Agent
+restart. A correlated null capability response received before the device is
+Online is not cached as a valid capability set; the Online transition retries
+the request.
 
 ## Accessibility and responsive behavior
 

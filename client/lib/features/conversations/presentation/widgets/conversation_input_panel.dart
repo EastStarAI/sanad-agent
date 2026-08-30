@@ -742,16 +742,20 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
   }
 
   Future<void> _pickAndCreateWorkspace(DeviceConfig? activeAgent) async {
-    final selectedPath = await WorkspacePickerHelper.pickWorkspacePath(
+    final selected = await WorkspacePickerHelper.promptCreateWorkspace(
       context: context,
       device: activeAgent,
-      debugOverride: ConversationInputPanel.debugPickDirectoryPath,
+      debugLocalPath: ConversationInputPanel.debugPickDirectoryPath,
     );
-    if (!mounted || selectedPath == null || selectedPath.trim().isEmpty) {
+    if (!mounted || selected == null) {
       return;
     }
 
-    final workspace = await context.read<ConversationInputCubit>().createWorkspace(path: selectedPath);
+    final workspace = await context.read<ConversationInputCubit>().createWorkspace(
+      path: selected.path,
+      name: selected.name,
+      description: selected.description,
+    );
     if (!mounted || workspace == null) {
       return;
     }

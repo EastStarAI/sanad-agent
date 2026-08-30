@@ -111,7 +111,7 @@ curl -fsSL https://sanad.eaststarai.com/install.sh | bash
 For Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://sanad.eaststarai.com/install.ps1)))
+irm https://sanad.eaststarai.com/install.ps1 | iex
 ```
 
 Press Enter at the prompt to sign in through the Portal, or answer `n` to run
@@ -127,6 +127,9 @@ waits for input. After successful authentication, a clean installation starts
 the newly registered service. A reinstall or upgrade refreshes a previously
 running service so it loads the replacement executable and stored
 authentication; a previously stopped service is started with the new state.
+When an existing installation is authenticated, reinstall and upgrade require
+cloud registration health before reporting that the account connection was
+restored; they do not describe that installation as local-only.
 If you sign in later after choosing local-only mode, follow `sanad login` with
 `sanad service restart` so the running daemon loads the stored authentication.
 
@@ -178,6 +181,21 @@ sanad service uninstall
 
 Closing Sanad Client does not stop an installed agent service. Active or
 scheduled work can continue on the device while the service is running.
+
+On Linux, the same command automatically selects a durable user systemd service
+only when its bus and linger capability are healthy. Otherwise it registers a
+system systemd unit that still runs the Agent as an unprivileged account, or a
+native OpenRC service when OpenRC is the host init manager. `service status`
+reports `Missing`, `InstalledStopped`, `Running`, `Failed`, or
+`ManagerUnavailable`, together with the selected scope and credential backend.
+An unsupported init manager fails explicitly rather than leaving a detached
+process that disappears after logout or reboot. The Add Device surface follows
+the conventional `curl -fsSL ... | bash` bootstrap on POSIX and shell-quotes its
+creation token. The installer passes that token to the Agent through stdin,
+never through Agent process arguments, and reports success only after the
+installed version responds locally and, for connected installs, cloud
+registration is complete. A failed attempt restores the prior executable,
+service state, and pending pairing state without deleting the wider Sanad Home.
 
 ## Providers and accounts
 

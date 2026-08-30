@@ -876,6 +876,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         normalized == 'credential' ||
         normalized == 'credentials' ||
         normalized == 'secret' ||
+        normalized == 'secrets' ||
         normalized == 'api_key' ||
         normalized.endsWith('_token') ||
         normalized.endsWith('_secret') ||
