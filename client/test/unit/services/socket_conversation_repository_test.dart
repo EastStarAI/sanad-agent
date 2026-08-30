@@ -9,6 +9,7 @@ import 'package:sanad_client/features/conversations/domain/models/session_attent
 import 'package:sanad_client/features/conversations/domain/models/session_route_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
@@ -278,6 +279,11 @@ class _TestConversationClient implements ConversationClient {
     safety: TurnReplaySafety.safe,
     requiresConfirmation: false,
   );
+
+  @override
+  Future<SessionCompactResult> compactSession({
+    required String sessionId,
+  }) async => const SessionCompactResult(outcome: 'accepted');
 
   @override
   Future<void> retryRuntimeNotice({

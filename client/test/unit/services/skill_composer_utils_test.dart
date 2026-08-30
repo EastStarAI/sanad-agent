@@ -5,14 +5,20 @@ import 'package:sanad_client/features/conversations/presentation/utils/skill_com
 
 void main() {
   group('SkillComposerUtils', () {
-    test('detects slash query at the start of the message', () {
+    test('detectRuntimeSlashQuery handles slash at message start', () {
       const value = TextEditingValue(text: '/tes', selection: TextSelection.collapsed(offset: 4));
 
-      final query = SkillComposerUtils.detectSlashQuery(value);
+      final query = SkillComposerUtils.detectRuntimeSlashQuery(value);
 
       expect(query, isNotNull);
       expect(query!.slashIndex, 0);
       expect(query.query, 'tes');
+    });
+
+    test('detectSlashQuery ignores slash at message start', () {
+      const value = TextEditingValue(text: '/tes', selection: TextSelection.collapsed(offset: 4));
+
+      expect(SkillComposerUtils.detectSlashQuery(value), isNull);
     });
 
     test('detects slash query in the middle of the message', () {
@@ -25,10 +31,10 @@ void main() {
       expect(query.query, 'tes');
     });
 
-    test('keeps slash query active when the user types spaces', () {
+    test('detectRuntimeSlashQuery keeps spaces in runtime command token', () {
       const value = TextEditingValue(text: '/test sanad', selection: TextSelection.collapsed(offset: 11));
 
-      final query = SkillComposerUtils.detectSlashQuery(value);
+      final query = SkillComposerUtils.detectRuntimeSlashQuery(value);
 
       expect(query, isNotNull);
       expect(query!.query, 'test sanad');
@@ -37,9 +43,8 @@ void main() {
     test('exits slash query when the user types a second space', () {
       const value = TextEditingValue(text: '/test sanad client', selection: TextSelection.collapsed(offset: 18));
 
-      final query = SkillComposerUtils.detectSlashQuery(value);
-
-      expect(query, isNull);
+      expect(SkillComposerUtils.detectRuntimeSlashQuery(value), isNull);
+      expect(SkillComposerUtils.detectSlashQuery(value), isNull);
     });
 
     test('ignores slashes that are not token-prefixed by whitespace', () {

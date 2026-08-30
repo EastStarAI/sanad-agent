@@ -8,6 +8,7 @@ import 'package:sanad_client/features/conversations/domain/models/workspace_tree
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 
 import 'conversation_input_state.dart';
@@ -122,6 +123,15 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
         safety: TurnReplaySafety.unknown,
         requiresConfirmation: false,
       );
+    }
+  }
+
+  Future<SessionCompactResult> compactSession() async {
+    try {
+      return await messagesCubit.compactSession();
+    } catch (e) {
+      emit(state.copyWith(error: e.toString()));
+      return const SessionCompactResult(outcome: 'failed');
     }
   }
 

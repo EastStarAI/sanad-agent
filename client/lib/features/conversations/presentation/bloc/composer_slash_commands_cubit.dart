@@ -91,7 +91,11 @@ class ComposerSlashCommandsCubit extends Cubit<ComposerSlashCommandsState> {
       return;
     }
 
-    final query = SkillComposerUtils.detectSlashQuery(_lastComposerValue);
+    final runtimeQuery = SkillComposerUtils.detectRuntimeSlashQuery(
+      _lastComposerValue,
+    );
+    final query = runtimeQuery ??
+        SkillComposerUtils.detectSlashQuery(_lastComposerValue);
     if (query == null) {
       emit(
         state.copyWith(

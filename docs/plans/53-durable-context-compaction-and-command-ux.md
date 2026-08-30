@@ -1,7 +1,7 @@
 ---
 title: "Plan 53: Durable Goal-Preserving Context Compaction and Command UX"
 description: "خطة مظلة لاستبدال نموذج الضغط التجريبي بضغط سياق ذري يحفظ الهدف والتاريخ، مع auto-compaction وأمر /compact حقيقي وتجربة timeline قابلة للاستعادة."
-status: "pending"
+status: "in_review"
 priority: "critical"
 ---
 
@@ -9,7 +9,7 @@ priority: "critical"
 
 ## 1. الحالة والهدف
 
-- الحالة: `pending` — الخطة جاهزة للمراجعة قبل بدء 53a.
+- الحالة: `in_review` — مهام 53a–53f مغلقة بدليل تحقق؛ جاهزة للمراجعة البشرية قبل `complete`.
 - الأولوية: حرجة؛ أي تلخيص ناقص قد يجعل الوكيل ينسى الهدف أو يعيد آثار أدوات أو يتابع من حالة قديمة.
 - النطاق: Sanad Agent engine، session persistence، run orchestration، provider failure recovery، canonical protocol، slash-command discovery، Flutter composer، conversation timeline، والاختبارات التكاملية.
 - أسلوب التنفيذ: خطة مظلة تنجز عبر المهام `53a` إلى `53f` في `docs/plans/tasks/`.
@@ -58,12 +58,12 @@ request pressure detected أو /compact accepted
 
 | المهمة | الحالة | Gate الحالية | سقف الملفات | شرط الانتقال |
 |---|---|---|---:|---|
-| 53a Prototype Retirement and Contracts | `pending` | A0 | 10 | اعتماد ownership وإزالة المسار التجريبي |
-| 53b Durable Boundary and Projection | `pending` | Waiting | 14 | اكتمال 53a |
-| 53c Goal-Preserving Engine | `pending` | Waiting | 14 | اكتمال 53a؛ يثبت API مع 53b |
-| 53d Auto Orchestration and Overflow Recovery | `pending` | Waiting | 15 | اكتمال 53b و53c |
-| 53e `/compact` and Timeline UX | `pending` | Waiting | 15 | اكتمال 53d |
-| 53f Integration QA | `pending` | Waiting | 12 | اكتمال 53b–53e |
+| 53a Prototype Retirement and Contracts | `complete` | — | 24 | 53b + 53c may start |
+| 53b Durable Boundary and Projection | `complete` | — | 14 | B4 complete |
+| 53c Goal-Preserving Engine | `complete` | — | 14 | C5 verified |
+| 53d Auto Orchestration and Overflow Recovery | `complete` | — | 15 | D2/D7 + daemon E2E |
+| 53e `/compact` and Timeline UX | `complete` | — | 15 | E2 lifecycle dedup |
+| 53f Integration QA | `complete` | — | 12 | F5 verified |
 
 ## 2. الوقائع المثبتة في Sanad الحالية
 
@@ -293,21 +293,21 @@ Session execution
 
 ## 9. معايير القبول الكلية
 
-- [ ] أزيل `ContextEngine` التجريبي وكل استدعاء ووثيقة واختبار يصفه كميزة إنتاجية.
-- [ ] لا توجد slash commands وهمية في device capabilities أو composer suggestions.
-- [ ] `/compact` أول runtime slash command حقيقي، exact وبلا arguments، ولا يتحول إلى user message.
-- [ ] skills قابلة للإدراج في أي موضع ولا تتأثر بقيود slash command في بداية النص.
-- [ ] auto-compaction تسبق overflow بهامش output/safety وتعمل داخل tool loop.
-- [ ] summary تحافظ على goal، constraints، current state، decisions، files، blockers، pending asks، وremaining work عبر repeated compaction.
-- [ ] tool calls/results وmodel steps وuser turns لا تنفصل عند tail boundary.
-- [ ] التاريخ الأصلي لا يحذف، وأحدث boundary ناجحة فقط تغير model projection.
-- [ ] فشل أو إلغاء summarizer لا يفعل boundary ناقصة ولا يفقد الرسائل.
-- [ ] context overflow قبل أول provider output يسمح بضغط ثم retry واحدة؛ بعد partial output لا توجد إعادة شفافة.
-- [ ] compaction المتزامنة للجلسة نفسها تمنع ذريًا، ولا تتأثر Session B بعملية Session A.
-- [ ] رسالة تصل أثناء compaction تحفظ وتنفذ FIFO فور terminal outcome المناسب.
-- [ ] manual وauto events تظهر centered بحالات started/completed/failed وتستعاد بعد reload بالتفاصيل نفسها.
-- [ ] tooltip متعددة الأسطر تعمل بالhover وtap/focus ولا تكشف summary الداخلية.
-- [ ] تحليلات agent/client والاختبارات المركزة والكاملة وdaemon-backed E2E المطلوبة ناجحة.
+- [x] أزيل `ContextEngine` التجريبي وكل استدعاء ووثيقة واختبار يصفه كميزة إنتاجية.
+- [x] لا توجد slash commands وهمية في device capabilities أو composer suggestions.
+- [x] `/compact` أول runtime slash command حقيقي، exact وبلا arguments، ولا يتحول إلى user message.
+- [x] skills قابلة للإدراج في أي موضع ولا تتأثر بقيود slash command في بداية النص.
+- [x] auto-compaction تسبق overflow بهامش output/safety وتعمل داخل tool loop.
+- [x] summary تحافظ على goal، constraints، current state، decisions، files، blockers، pending asks، وremaining work عبر repeated compaction.
+- [x] tool calls/results وmodel steps وuser turns لا تنفصل عند tail boundary.
+- [x] التاريخ الأصلي لا يحذف، وأحدث boundary ناجحة فقط تغير model projection.
+- [x] فشل أو إلغاء summarizer لا يفعل boundary ناقصة ولا يفقد الرسائل.
+- [x] context overflow قبل أول provider output يسمح بضغط ثم retry واحدة؛ بعد partial output لا توجد إعادة شفافة.
+- [x] compaction المتزامنة للجلسة نفسها تمنع ذريًا، ولا تتأثر Session B بعملية Session A.
+- [x] رسالة تصل أثناء compaction تحفظ وتنفذ FIFO فور terminal outcome المناسب.
+- [x] manual وauto events تظهر centered بحالات started/completed/failed وتستعاد بعد reload بالتفاصيل نفسها.
+- [x] tooltip متعددة الأسطر تعمل بالhover وtap/focus ولا تكشف summary الداخلية.
+- [x] تحليلات agent/client والاختبارات المركزة والكاملة وdaemon-backed E2E المطلوبة ناجحة.
 
 ## 10. مخاطر وحواجزها
 
@@ -335,14 +335,14 @@ Session execution
 ## 12. سجل التقدم والتسليم
 
 ```text
-Date:
-Task/Gate:
-Status transition:
-Owner/worktree:
-Files changed:
-Completed:
-Verification evidence:
-Documentation updated:
-Open findings/blockers:
-Next gate/owner:
+Date: 2026-08-29
+Task/Gate: 53a complete
+Status transition: in_progress → complete; 53b/53c unblocked
+Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction
+Files changed: 24 (see 53a task file budget table)
+Completed: prototype retirement, compaction domain types, technical design doc, contracts
+Verification evidence: fvm dart analyze clean; 94 focused tests passed; no ContextEngine in agent/
+Documentation updated: context_compaction.md, MOC.md, llms.txt, engine/plugins AGENTS.md, agent_runtime.md, provider_protocol.md
+Open findings/blockers: none
+Next gate/owner: 53b B0 + 53c C0 (parallel)
 ```

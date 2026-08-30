@@ -13,6 +13,7 @@ import 'package:sanad_client/features/conversations/domain/models/slash_command_
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
@@ -1309,6 +1310,18 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     final agent = _currentAgent;
     if (agent == null) return;
     await _ensureWorkspacesForAgent(agent, force: true);
+  }
+
+  Future<SessionCompactResult> compactSession() async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || sessionId.isEmpty) {
+      return const SessionCompactResult(outcome: 'missing_session');
+    }
+    return conversationRepository.compactSession(
+      agent,
+      sessionId: sessionId,
+    );
   }
 
   Future<List<SlashCommandEntry>> searchSlashCommands({String? query}) async {

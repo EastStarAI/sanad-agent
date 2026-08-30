@@ -14,6 +14,26 @@ class SkillSlashQuery {
 
 class SkillComposerUtils {
   static SkillSlashQuery? detectSlashQuery(TextEditingValue value) {
+    final query = _detectSlashToken(value);
+    if (query == null) {
+      return null;
+    }
+    // Runtime slash commands own index zero; mid-message slash stays skill-only.
+    if (query.slashIndex == 0) {
+      return null;
+    }
+    return query;
+  }
+
+  static SkillSlashQuery? detectRuntimeSlashQuery(TextEditingValue value) {
+    final query = _detectSlashToken(value);
+    if (query == null || query.slashIndex != 0) {
+      return null;
+    }
+    return query;
+  }
+
+  static SkillSlashQuery? _detectSlashToken(TextEditingValue value) {
     final selection = value.selection;
     if (!selection.isValid || !selection.isCollapsed) {
       return null;

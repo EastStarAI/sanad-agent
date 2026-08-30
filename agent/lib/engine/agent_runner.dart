@@ -27,7 +27,6 @@ import '../core/provider_runtime/runtime_recovery_exception.dart';
 import '../core/provider_runtime/runtime_recovery_service.dart';
 import '../core/secrets_redactor.dart';
 import 'agent_context_assembler.dart';
-import 'context_engine.dart';
 import 'llm_request_dumper.dart';
 import 'history_healer.dart';
 import 'metrics_tracker.dart';
@@ -43,6 +42,12 @@ import 'runtime/response_continuation_coordinator.dart';
 import 'runtime/steer_coordinator.dart' as steer_lib;
 import 'runtime/tool_execution_coordinator.dart';
 import 'runtime/run_cancellation_scope.dart';
+import '../evolution/compaction/model_projection_builder.dart';
+import '../core/agent_runtime_service.dart';
+import '../evolution/db/session_history_revision_repository.dart';
+import '../engine/compaction/compaction.dart';
+import 'context/context.dart';
+import 'runtime/compaction_coordinator.dart';
 import 'runtime/turn_route_state.dart';
 
 /// Legacy re-exports so existing imports of the steer constants from
@@ -57,7 +62,6 @@ class AgentRunner {
   final ToolsRegistry registry;
   final SessionManager sessionManager;
   final PluginManager pluginManager;
-  final ContextEngine contextEngine;
   final DeferredToolResultResolver? _deferredToolResultResolver;
   late final FileMemoryStore memoryStore;
   late final String sessionId;
@@ -66,6 +70,9 @@ class AgentRunner {
   int _currentTurnStartIndex = 0;
   bool _stopRequested = false;
   bool _allowManualAmbiguousToolRecovery = false;
+  bool _overflowCompactionRetried = false;
+  DateTime? _lastCompactionCompletedAt;
+  static const _compactionCooldown = Duration(seconds: 30);
   bool _providerRequestInFlight = false;
   Completer<void>? _restartDrainRelease;
 
@@ -275,11 +282,9 @@ class AgentRunner {
     this.registry,
     this.sessionManager, {
     PluginManager? pluginManager,
-    ContextEngine? contextEngine,
     String? existingSessionId,
     DeferredToolResultResolver? deferredToolResultResolver,
   }) : pluginManager = pluginManager ?? PluginManager(),
-       contextEngine = contextEngine ?? ContextEngine(adapter: adapter),
        _deferredToolResultResolver = deferredToolResultResolver {
     if (existingSessionId != null) {
       final session = sessionManager.getSession(existingSessionId);
@@ -821,6 +826,77 @@ class AgentRunner {
       body: providerBody,
       hasTrustedTemporaryReset: httpRetryAfter != null,
     );
+    if (reason == RuntimeFailureReason.contextOverflow &&
+        !streamStarted &&
+        !_overflowCompactionRetried &&
+        getIt.isRegistered<CompactionCoordinator>() &&
+        getIt.isRegistered<SessionHistoryRevisionRepository>()) {
+      _overflowCompactionRetried = true;
+      final coordinator = getIt<CompactionCoordinator>();
+      final revisionRepo = getIt<SessionHistoryRevisionRepository>();
+      final revision = revisionRepo.read(sessionId);
+      if (revision != null) {
+        final timeline = _compactionTimelineForSession();
+        if (timeline.isEmpty) {
+          // Fall through to recovery notice below.
+        } else {
+        var contextWindow = await getContextTokens() ?? 128_000;
+        var targetRequestTokens = (contextWindow * 0.7).round();
+        final routeSignature = getIt<AgentRuntimeService>().resolveSignature(
+          providerId: providerInstanceId,
+          modelId: modelId,
+        );
+        final probeEngine = getIt.isRegistered<ContextCompactionEngine>()
+            ? getIt<ContextCompactionEngine>()
+            : ContextCompactionEngine(
+                summarizer: StructuredCompactionSummarizer(),
+              );
+        final pressure = probeEngine.measurePressure(
+          CompactionEngineRequest(
+            compactionId: '',
+            sessionId: sessionId,
+            trigger: CompactionTrigger.overflow,
+            sourceRevision: revision.toCompactionRevision(),
+            routeSignature: routeSignature,
+            contextWindowTokens: contextWindow,
+            timeline: timeline,
+            systemPrompt: contextAssembler.assemble() ?? '',
+            runtimeContext: '',
+            toolSchemas: const [],
+            targetRequestTokens: targetRequestTokens,
+          ),
+        );
+        if (!pressure.exceedsThreshold &&
+            pressure.estimatedRequestTokens <= targetRequestTokens) {
+          contextWindow = (pressure.estimatedRequestTokens * 1.15)
+              .ceil()
+              .clamp(1024, contextWindow);
+          targetRequestTokens = (contextWindow * 0.7).round();
+        }
+        final request = CompactionEngineRequest(
+          compactionId: '',
+          sessionId: sessionId,
+          trigger: CompactionTrigger.overflow,
+          sourceRevision: revision.toCompactionRevision(),
+          routeSignature: routeSignature,
+          contextWindowTokens: contextWindow,
+          timeline: timeline,
+          systemPrompt: contextAssembler.assemble() ?? '',
+          runtimeContext: '',
+          toolSchemas: const [],
+          targetRequestTokens: targetRequestTokens,
+        );
+        final outcome = await coordinator.runCompaction(
+          request: request,
+          force: true,
+        );
+        if (outcome?.status == CompactionStatus.completed) {
+          _refreshCanonicalHistoryAfterCompaction();
+          return true;
+        }
+        }
+      }
+    }
     // When the failure is non-HTTP (no statusCode), retryAfter comes from
     // the fallback delay only — no header to parse.
     final retryAfter = httpRetryAfter ?? _fallbackRetryDelay(reason, attempt);
@@ -999,24 +1075,9 @@ class AgentRunner {
 
     _steerCoordinator.drainPreApiSteer(_RunnerSteerCallbacks(this));
 
-    // Resolve the live turn-scoped adapter before context compression so the
-    // compressor uses the current provider route, never a stale singleton
-    // frozen before a provider was configured.
-    final preRouteAdapter = _turnRoute.adapterForTurn();
-
-    // Apply context compression
-    history = await contextEngine.compressIfNeeded(
-      history,
-      adapter: preRouteAdapter,
-    );
-
-    // Prepare effective history with memory injection
-    var effectiveHistory = _buildEffectiveHistory(
+    var effectiveHistory = await _prepareProviderHistory(
       runtimeSystemPrompt: runtimeSystemPrompt,
     );
-
-    // Run plugins pre-execution
-    effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
 
     _logger.info('🧠 [Agent] Thinking...');
 
@@ -1354,24 +1415,9 @@ class AgentRunner {
 
     _steerCoordinator.drainPreApiSteer(_RunnerSteerCallbacks(this));
 
-    // Resolve the live turn-scoped adapter before context compression so the
-    // compressor uses the current provider route, never a stale singleton
-    // frozen before a provider was configured.
-    final preRouteAdapter = _turnRoute.adapterForTurn();
-
-    // Apply context compression
-    history = await contextEngine.compressIfNeeded(
-      history,
-      adapter: preRouteAdapter,
-    );
-
-    // Prepare effective history with memory injection
-    var effectiveHistory = _buildEffectiveHistory(
+    var effectiveHistory = await _prepareProviderHistory(
       runtimeSystemPrompt: runtimeSystemPrompt,
     );
-
-    // Run plugins pre-execution
-    effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
 
     String fullContent = '';
     List<ToolCall>? accumulatedToolCalls;
@@ -1837,16 +1883,24 @@ class AgentRunner {
   /// The three-tier structure (stable → context → volatile) inside the
   /// assembled string is ordered for maximum LLM prefix-cache efficiency:
   /// the stable identity block (longest, never changes) lives at the top so
-  /// providers can reuse its cached KV-state across turns.
-  ///
-  ///   system message  ← assembled from stable + context + volatile
-  ///   user message 1
-  ///   agent message 1
-  ///   user message 2
-  ///   ...
+  List<Message> _providerConversationMessages() {
+    if (getIt.isRegistered<ModelProjectionBuilder>()) {
+      try {
+        return getIt<ModelProjectionBuilder>()
+            .buildForSession(sessionId)
+            .conversationMessages;
+      } catch (error) {
+        _logger.warning(
+          'Compaction projection unavailable for $sessionId: $error',
+        );
+      }
+    }
+    return history;
+  }
+
   List<Message> _buildEffectiveHistory({String? runtimeSystemPrompt}) {
-    // history only contains user/assistant/tool messages — safe to copy as-is.
-    final effectiveHistory = List<Message>.from(history);
+    // Provider payload uses active model projection; canonical [history] stays intact.
+    final effectiveHistory = List<Message>.from(_providerConversationMessages());
 
     // Update volatile tier with the current turn's live data.
     final memorySections = <String>[];
@@ -1885,6 +1939,177 @@ class AgentRunner {
       );
     }
     return effectiveHistory;
+  }
+
+  Future<List<Message>> _prepareProviderHistory({
+    String? runtimeSystemPrompt,
+  }) async {
+    var effectiveHistory = _buildEffectiveHistory(
+      runtimeSystemPrompt: runtimeSystemPrompt,
+    );
+    effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
+    if (await _maybeRunPreflightCompaction(
+      runtimeSystemPrompt: runtimeSystemPrompt,
+    )) {
+      effectiveHistory = _buildEffectiveHistory(
+        runtimeSystemPrompt: runtimeSystemPrompt,
+      );
+      effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
+    }
+    return effectiveHistory;
+  }
+
+  Future<bool> _maybeRunPreflightCompaction({
+    String? runtimeSystemPrompt,
+  }) async {
+    if (!getIt.isRegistered<CompactionCoordinator>() ||
+        !getIt.isRegistered<SessionHistoryRevisionRepository>()) {
+      return false;
+    }
+    final revisionRepo = getIt<SessionHistoryRevisionRepository>();
+    final revision = revisionRepo.read(sessionId);
+    if (revision == null) {
+      return false;
+    }
+    final timelineEntries = _compactionTimelineForSession();
+    if (timelineEntries.isEmpty) {
+      return false;
+    }
+    final routing = _turnRoute.resolveTurnRouting();
+    final contextWindow = await getContextTokens() ?? 128_000;
+    final request = CompactionEngineRequest(
+      compactionId: '',
+      sessionId: sessionId,
+      trigger: CompactionTrigger.auto,
+      sourceRevision: revision.toCompactionRevision(),
+      routeSignature: getIt<AgentRuntimeService>().resolveSignature(
+        providerId: routing.providerId,
+        modelId: routing.model,
+      ),
+      contextWindowTokens: contextWindow,
+      timeline: timelineEntries,
+      systemPrompt: contextAssembler.assemble() ?? '',
+      runtimeContext: runtimeSystemPrompt ?? '',
+      toolSchemas: registry.allTools.map((t) => t.schema.toJson()).toList(),
+      targetRequestTokens: (contextWindow * 0.7).round(),
+    );
+    if (getIt.isRegistered<ContextCompactionEngine>()) {
+      final pressure = getIt<ContextCompactionEngine>().measurePressure(request);
+      final withinCooldown = _lastCompactionCompletedAt != null &&
+          DateTime.now().toUtc().difference(_lastCompactionCompletedAt!) <
+              _compactionCooldown;
+      if (withinCooldown && !pressure.exceedsThreshold) {
+        return false;
+      }
+    }
+    final outcome = await getIt<CompactionCoordinator>().runCompaction(
+      request: request,
+    );
+    if (outcome?.status == CompactionStatus.completed) {
+      _lastCompactionCompletedAt = DateTime.now().toUtc();
+      _refreshCanonicalHistoryAfterCompaction();
+      return true;
+    }
+    return false;
+  }
+
+  void _refreshCanonicalHistoryAfterCompaction() {
+    final session = sessionManager.getSession(sessionId);
+    if (session != null) {
+      history = session.messages.toList();
+      _healHistory();
+    }
+    _checkpointCoordinator.saveCheckpoint(
+      ctx: _checkpointCtx,
+      resumeHistoryLength: history.length,
+    );
+  }
+
+  /// Test hook for Plan 53d preflight compaction verification.
+  @visibleForTesting
+  Future<List<Message>> debugPrepareProviderHistory({
+    String? runtimeSystemPrompt,
+  }) {
+    return _prepareProviderHistory(runtimeSystemPrompt: runtimeSystemPrompt);
+  }
+
+  @visibleForTesting
+  void debugSaveCheckpointForTesting({
+    required int resumeHistoryLength,
+    required int turnStartIndex,
+  }) {
+    _currentTurnStartIndex = turnStartIndex;
+    _checkpointCoordinator.saveCheckpoint(
+      ctx: _checkpointCtx,
+      checkpointKind:
+          ContinuationCheckpointCoordinator.checkpointKindInitialModelRequest,
+      resumeHistoryLength: resumeHistoryLength,
+    );
+  }
+
+  @visibleForTesting
+  ResumeResult debugRestoreCheckpointForTesting() {
+    final result = _checkpointCoordinator.restoreCheckpointForResume(
+      currentHistoryLength: history.length,
+    );
+    if (result.resumeHistoryLength >= 0 &&
+        history.length > result.resumeHistoryLength) {
+      history = history.take(result.resumeHistoryLength).toList(growable: true);
+    }
+    if (result.savedTurnStartIndex != null) {
+      _currentTurnStartIndex = result.savedTurnStartIndex!;
+    }
+    return result;
+  }
+
+  @visibleForTesting
+  void debugRefreshAfterCompactionForTesting() {
+    _refreshCanonicalHistoryAfterCompaction();
+  }
+
+  /// Test hook for Plan 53d overflow recovery verification.
+  List<IndexedConversationMessage> _compactionTimelineForSession() {
+    if (getIt.isRegistered<ModelProjectionBuilder>()) {
+      final canonical =
+          getIt<ModelProjectionBuilder>().loadCanonicalTimeline(sessionId);
+      if (canonical.messages.isNotEmpty) {
+        return [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ];
+      }
+    }
+    return history.asMap().entries.map((entry) {
+      return IndexedConversationMessage(
+        rowId: entry.key + 1,
+        message: entry.value,
+      );
+    }).toList(growable: false);
+  }
+
+  @visibleForTesting
+  Future<bool> debugTryOverflowCompactionRecovery({
+    required Object error,
+    required String? providerInstanceId,
+    required String? modelId,
+    bool streamStarted = false,
+    int attempt = 0,
+  }) async {
+    try {
+      return await _handleRuntimeFailure(
+        error,
+        providerInstanceId: providerInstanceId,
+        modelId: modelId,
+        attempt: attempt,
+        streamStarted: streamStarted,
+        failedProviderInstanceIds: {},
+      );
+    } on RuntimeRecoveryRequired {
+      return false;
+    }
   }
 }
 

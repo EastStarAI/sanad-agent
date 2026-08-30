@@ -17,6 +17,17 @@ This contract applies to `agent/lib/evolution/`.
 - Emit session update only after compare-and-set succeeds.
 - Clean title output to the user's language, preserve the 3–7 word request and 80-character storage cap, and remove reasoning/prefix/quote artifacts.
 
+## Compaction boundaries (Plan 53b)
+- `session_compaction_operations` (B1) is the sole owner of durable compaction lifecycle, internal summaries, and range metadata.
+- Canonical `messages` rows are never deleted or replaced by compaction; model projection reads the latest eligible completed boundary plus live message rows.
+- `messages.id` is the durable identity for source/tail ranges; `sessions.history_revision` (B1) provides CAS for snapshot activation.
+- `CompactionBoundaryRepository` owns claim, terminal transition, and latest-boundary reads; see `docs/technical/context_compaction.md` §8.
+- `SessionHistoryRevisionRepository` bumps `sessions.history_revision` on canonical message insert/replace; compaction activation CAS depends on it.
+- `ModelProjectionBuilder` (B2) in `agent/lib/evolution/compaction/` builds ephemeral provider conversation payloads: one projected user summary anchor, verbatim retained tail, and post-boundary messages. System/runtime context stays in `AgentContextAssembler`.
+- `CompactionActivationService` (B3) completes or fails a started operation atomically, bumps projection revision only after successful commit, and publishes one boundary change for interface consumers; it does not drain queued work.
+- `CanonicalConversationTimeline` / `SessionDB.getPersistedMessages()` serve UI and audit; they never filter at compaction boundaries.
+- Partial row-id gaps in the newest completed boundary reject projection via `ModelProjectionException`; fully superseded ranges skip to an older eligible boundary or canonical fallback.
+
 ## Scheduling
 - Persist scheduled tasks and restore them on startup.
 - Scheduled events preserve originating session identity and enter through normal gateway/orchestrator admission.

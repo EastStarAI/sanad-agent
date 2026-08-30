@@ -26,9 +26,16 @@ import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
+import 'package:sanad_agent/evolution/db/session_history_revision_repository.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
+import 'package:sanad_agent/engine/context/context.dart';
+import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
+import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
+import 'package:sanad_agent/evolution/db/session_projection_revision_repository.dart';
+import 'package:sanad_agent/evolution/compaction/compaction_activation_service.dart';
+import 'package:sanad_agent/evolution/compaction/compaction_boundary_change.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/plugins/plugin_manager.dart';
-import 'package:sanad_agent/engine/context_engine.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
@@ -39,6 +46,7 @@ import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_resume_service.dart';
 import 'package:sanad_agent/interfaces/gateway_manager.dart';
+import 'package:sanad_agent/interfaces/runtime/compaction_lifecycle_relay.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/device_settings_service.dart';
@@ -107,6 +115,18 @@ void setupDI() {
   );
   getIt.registerLazySingleton<SessionRouteTransitionRepository>(
     () => SessionRouteTransitionRepository(getIt<AgentStateDatabase>()),
+  );
+  getIt.registerLazySingleton<SessionHistoryRevisionRepository>(
+    () => SessionHistoryRevisionRepository(getIt<AgentStateDatabase>()),
+  );
+  getIt.registerLazySingleton<SessionProjectionRevisionRepository>(
+    () => SessionProjectionRevisionRepository(getIt<AgentStateDatabase>()),
+  );
+  getIt.registerLazySingleton<CompactionBoundaryRepository>(
+    () => CompactionBoundaryRepository(
+      getIt<AgentStateDatabase>(),
+      getIt<SessionHistoryRevisionRepository>(),
+    ),
   );
   getIt.registerLazySingleton<SessionRouteMutationCoordinator>(
     () => SessionRouteMutationCoordinator(
@@ -186,6 +206,34 @@ void setupDI() {
   );
 
   getIt.registerLazySingleton<SessionManager>(() => SessionManager());
+  getIt.registerLazySingleton<CompactionBoundaryChangeNotifier>(
+    () => CompactionBoundaryChangeNotifier(),
+  );
+  getIt.registerLazySingleton<CompactionActivationService>(
+    () => CompactionActivationService(
+      boundaries: getIt<CompactionBoundaryRepository>(),
+      projectionRevisions: getIt<SessionProjectionRevisionRepository>(),
+      changes: getIt<CompactionBoundaryChangeNotifier>(),
+    ),
+  );
+  getIt.registerLazySingleton<ContextCompactionEngine>(
+    () => ContextCompactionEngine(),
+  );
+  getIt.registerLazySingleton<CompactionCoordinator>(
+    () => CompactionCoordinator(
+      engine: getIt<ContextCompactionEngine>(),
+      boundaries: getIt<CompactionBoundaryRepository>(),
+      activation: getIt<CompactionActivationService>(),
+      projectionBuilder: getIt<ModelProjectionBuilder>(),
+      onLifecycleEvent: CompactionLifecycleRelay.publish,
+    ),
+  );
+  getIt.registerLazySingleton<ModelProjectionBuilder>(
+    () => ModelProjectionBuilder(
+      sessions: getIt<SessionManager>().db,
+      boundaries: getIt<CompactionBoundaryRepository>(),
+    ),
+  );
   getIt.registerLazySingleton<CronScheduler>(() => CronScheduler());
   getIt.registerLazySingleton<TitleService>(() => TitleService());
 
@@ -348,18 +396,12 @@ void setupDI() {
 
   getIt.registerLazySingleton<PluginManager>(() => PluginManager());
 
-  // Compression receives the live turn-scoped adapter from AgentRunner. Keep
-  // the shared engine provider-neutral so it cannot retain a pre-onboarding
-  // MissingProviderAdapter.
-  getIt.registerLazySingleton<ContextEngine>(() => ContextEngine());
-
   getIt.registerFactoryParam<AgentRunner, String?, void>(
     (sessionId, _) => AgentRunner(
       getIt<LLMAdapter>(),
       getIt<ToolsRegistry>().copy(),
       getIt<SessionManager>(),
       pluginManager: getIt<PluginManager>(),
-      contextEngine: getIt<ContextEngine>(),
       existingSessionId: sessionId,
     ),
   );

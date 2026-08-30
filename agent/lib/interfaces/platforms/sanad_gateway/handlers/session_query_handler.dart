@@ -7,7 +7,10 @@ import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/models/session_route_transition.dart';
+import 'package:sanad_agent/engine/compaction/compaction.dart';
+import 'package:sanad_agent/evolution/models/compaction_operation_record.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
@@ -32,6 +35,7 @@ class SessionQueryHandler {
   final PersistedRuntimeStateRepository? _persistedState;
   final SessionRouteMutationCoordinator? _routeCoordinator;
   final SessionRouteTransitionRepository? _routeTransitions;
+  final CompactionBoundaryRepository? _compactionBoundaries;
 
   SessionQueryHandler({
     required SessionManager sessionManager,
@@ -41,13 +45,15 @@ class SessionQueryHandler {
     PersistedRuntimeStateRepository? persistedState,
     SessionRouteMutationCoordinator? routeCoordinator,
     SessionRouteTransitionRepository? routeTransitions,
+    CompactionBoundaryRepository? compactionBoundaries,
   }) : _sessionManager = sessionManager,
        _bridge = bridge,
        _orchestrator = orchestrator,
        _runtimeRecovery = runtimeRecovery,
        _persistedState = persistedState,
        _routeCoordinator = routeCoordinator,
-       _routeTransitions = routeTransitions;
+       _routeTransitions = routeTransitions,
+       _compactionBoundaries = compactionBoundaries;
 
   Map<String, dynamic> buildHistoryEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId ?? 'default';
@@ -429,6 +435,23 @@ class SessionQueryHandler {
       historyMessages.insert(insertionIndex, transitionRow);
     }
 
+    for (final operation
+        in _compactionBoundaries?.listLifecycleForSession(sessionId) ??
+            const <CompactionOperationRecord>[]) {
+      final lifecycleRow = _compactionLifecycleHistoryRow(operation);
+      var insertionIndex = historyMessages.indexWhere((row) {
+        final createdAt = DateTime.tryParse(
+          row['created_at']?.toString() ?? '',
+        );
+        return createdAt != null &&
+            createdAt.isAfter(operation.startedAt.toUtc());
+      });
+      if (insertionIndex == -1) {
+        insertionIndex = historyMessages.length;
+      }
+      historyMessages.insert(insertionIndex, lifecycleRow);
+    }
+
     final inFlight = _sessionManager.getInFlightSnapshot(sessionId);
     final queuedEvents = _orchestrator?.getQueuedEvents(sessionId) ?? const [];
     final runtimeNotice =
@@ -808,6 +831,44 @@ class SessionQueryHandler {
   SessionExecutionSnapshot _executionSnapshot(String sessionId) {
     return _persistedState?.executionSnapshots.getSnapshot(sessionId) ??
         SessionExecutionSnapshot.virtualIdle(sessionId);
+  }
+
+  Map<String, dynamic> _compactionLifecycleHistoryRow(
+    CompactionOperationRecord operation,
+  ) {
+    final wireType = switch (operation.status) {
+      CompactionStatus.started => CanonicalEventTypes.contextCompactionStarted,
+      CompactionStatus.completed =>
+        CanonicalEventTypes.contextCompactionCompleted,
+      CompactionStatus.failed => CanonicalEventTypes.contextCompactionFailed,
+    };
+    final metrics = operation.metrics;
+    return {
+      'id': operation.compactionId,
+      'event_id': operation.compactionId,
+      'sender': 'system',
+      'type': wireType,
+      'session_id': operation.sessionId,
+      'compaction_id': operation.compactionId,
+      'trigger': operation.trigger.wireValue,
+      'status': operation.status.wireValue,
+      'started_at': operation.startedAt.toUtc().toIso8601String(),
+      if (operation.completedAt != null)
+        'completed_at': operation.completedAt!.toUtc().toIso8601String(),
+      if (metrics != null) ...{
+        'context_window_tokens': metrics.contextWindowTokens,
+        'estimated_request_tokens_before': metrics.estimatedRequestTokensBefore,
+        'estimated_request_tokens_after': metrics.estimatedRequestTokensAfter,
+        'retained_tail_tokens': metrics.retainedTailTokens,
+        if (metrics.duration != null)
+          'duration_ms': metrics.duration!.inMilliseconds,
+      },
+      if (operation.failureReason != null)
+        'failure_reason': operation.failureReason!.wireValue,
+      'created_at': (operation.completedAt ?? operation.startedAt)
+          .toUtc()
+          .toIso8601String(),
+    };
   }
 }
 

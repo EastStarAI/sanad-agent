@@ -35,6 +35,7 @@ This directory owns the technical specifications of "HOW" the system is structur
 - **Hosted data boundary:** The optional hosted service owns only the account, device-inventory, and usage data described in [Hosted Services Boundary](hosted_services_boundary.md); agent workspaces and conversations remain local.
 - **[مواصفات قاعدة البيانات المحلية للوكيل | Local Agent Database Schema Spec](agent_database_schema.md):** تفاصيل وتصميم جداول قاعدة البيانات المحلية (SQLite - state.db) التابعة للوكيل sanad-agent لحفظ الجلسات وتفاصيل التعليق.
 - **[بروتوكولات الاتصال ونظام نقل الأحداث | Communication Protocols & Event Flow Spec](communication_protocols.md):** توثيق شامل للاتصال الهجين وسوكت الأحداث، ومهام الانتظار والتوجيه والتعليق البرمجي.
+- **[Context Compaction Architecture](context_compaction.md):** Durable goal-preserving compaction ownership, vocabulary, wire-safety rules, and prototype retirement boundary (Plan 53).
 - **[معمارية تشغيل الوكيل المحلي | Local Agent Runtime & Prompt Assembly Spec](agent_runtime.md):** شرح معمارية تشغيل الوكيل المعتمد على لغة Dart، وترتيب موجه النظام والتحقق الأمني الذاتي.
 - **[Experimental Realtime Voice](voice_streaming.md):** Current Gemini Realtime transport, audio, interruption, and capability boundaries.
 - **[بروتوكول إعداد مزودي LLM والتخزين | Provider Protocol & Storage Spec](provider_protocol.md):** أوامر socket لإعداد المزودين، حالة المصادقة، التخزين المنفصل لـ OAuth tokens، وفصل configured عن runtime_ready.

@@ -2,8 +2,8 @@ import 'package:flutter/widgets.dart';
 import 'package:material_symbols_icons/material_symbols_icons.dart';
 
 enum SlashCommandType {
-  skill('skill')
-  ;
+  skill('skill'),
+  runtimeCommand('runtime_command');
 
   final String type;
   const SlashCommandType(this.type);
@@ -14,6 +14,8 @@ extension SlashCommandTypeX on SlashCommandType {
     switch (this) {
       case SlashCommandType.skill:
         return Symbols.contract;
+      case SlashCommandType.runtimeCommand:
+        return Symbols.compress;
     }
   }
 }

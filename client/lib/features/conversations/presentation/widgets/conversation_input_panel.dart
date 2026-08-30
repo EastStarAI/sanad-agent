@@ -242,11 +242,50 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     final text = dispatchExport.plainText.trim();
     if (text.isEmpty) return;
 
+    if (text.startsWith('/compact')) {
+      if (text != '/compact') {
+        _showValidationError('/compact does not accept arguments.');
+        return;
+      }
+      unawaited(_dispatchCompactCommand());
+      return;
+    }
+
     _draftSaveDebouncer?.cancel();
     _saveDraftNow();
     _setPendingAcceptance('dispatching');
     widget.onSendMessage(text, intent: intent);
     _slashCommandsCubit.clear();
+  }
+
+  Future<void> _dispatchCompactCommand() async {
+    final sessionId = widget.sessionId?.trim();
+    if (sessionId == null || sessionId.isEmpty) {
+      _showValidationError('Create or select a session before running /compact.');
+      return;
+    }
+    final result = await _inputCubit.compactSession();
+    if (!mounted) return;
+    if (result.accepted) {
+      _chatController.clear();
+      _slashCommandsCubit.clear();
+      _hasUnsavedDraftChanges = false;
+      _saveDraftNow();
+      return;
+    }
+    if (result.sessionBusy) {
+      _showValidationError('Session is busy. Try /compact again when idle.');
+      return;
+    }
+    if (result.compactionInProgress) {
+      _showValidationError('Context compaction is already in progress.');
+      return;
+    }
+    _showValidationError(
+      result.failureReason == null
+          ? 'Context compaction could not start.'
+          : 'Context compaction failed: ${result.failureReason}',
+    );
   }
 
   void _selectSlashSuggestion(SlashCommandEntry entry) {

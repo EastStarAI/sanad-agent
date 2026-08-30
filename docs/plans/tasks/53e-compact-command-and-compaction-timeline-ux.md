@@ -1,8 +1,8 @@
 ---
 title: "Task 53e: /compact Command and Compaction Timeline UX"
 description: "إزالة أوامر القدرات الوهمية، فصل slash commands عن skills في composer، وتنفيذ /compact مع timeline centered وتفاصيل live/history متطابقة."
-status: "pending"
-current_gate: "E0"
+status: "complete"
+current_gate: "done"
 priority: "high"
 depends_on: "Task 53d canonical command and lifecycle contract"
 file_budget: 15
@@ -16,82 +16,82 @@ file_budget: 15
 
 ## 2. Gate E0 — فصل catalogs وcomposer grammar
 
-- [ ] إزالة `_defaultSlashCommands` الوهمية الحالية (`model`, `think`, `workspace`, `mcp`, `sessions`, `stop`) من device capability discovery.
-- [ ] عدم إعادة تسمية skills إلى slash commands؛ runtime commands وskills catalogان مستقلان في agent protocol وclient domain.
-- [ ] إضافة `/compact` وحدها إلى runtime slash-command catalog في الإصدار الأول.
-- [ ] تعريف parser/query rules منفصلة:
+- [x] إزالة `_defaultSlashCommands` الوهمية الحالية (`model`, `think`, `workspace`, `mcp`, `sessions`, `stop`) من device capability discovery.
+- [x] عدم إعادة تسمية skills إلى slash commands؛ runtime commands وskills catalogان مستقلان في agent protocol وclient domain.
+- [x] إضافة `/compact` وحدها إلى runtime slash-command catalog في الإصدار الأول.
+- [x] تعريف parser/query rules منفصلة:
   - slash query تبدأ عند composer index صفر فقط.
   - skill query/token صالحة في أي موضع كما هي حاليًا.
   - البنية تسمح بإضافة file mentions مستقبلًا كtoken family ثالثة دون تغيير command grammar.
-- [ ] إنشاء domain type مستقل لـruntime command بدل `SlashCommandType.skill` أو source string مبهمة.
-- [ ] إبقاء insert/render metadata للskills مستقلة وعدم كسر skill selection الحالية.
+- [x] إنشاء domain type مستقل لـruntime command بدل `SlashCommandType.skill` أو source string مبهمة.
+- [x] إبقاء insert/render metadata للskills مستقلة وعدم كسر skill selection الحالية.
 
 ### E0 Exit
 
-- [ ] كتابة `/` داخل منتصف الرسالة لا تعرض runtime commands.
-- [ ] skill trigger في البداية أو المنتصف أو النهاية يستمر في الظهور والإدراج كtoken.
-- [ ] device capabilities لا تعلن command لا يملك handler فعليًا.
+- [x] كتابة `/` داخل منتصف الرسالة لا تعرض runtime commands.
+- [x] skill trigger في البداية أو المنتصف أو النهاية يستمر في الظهور والإدراج كtoken.
+- [x] device capabilities لا تعلن command لا يملك handler فعليًا.
 
 ## 3. Gate E1 — Enter dispatch وvalidation
 
-- [ ] exact `/compact` token مع عدم وجود user text إضافي ينفذ canonical `compact` command ولا يرسل `think`/message command.
-- [ ] arguments أو trailing non-whitespace text تعيد validation محلية واضحة وتبقي draft دون إرسالها كرسالة.
-- [ ] Escape/backspace/selection تتعامل مع command token كوحدة قابلة للإزالة دون تلويث plain-text export.
-- [ ] إذا session busy، يعرض typed busy feedback وتبقى draft/command قابلة للمحاولة لاحقًا.
-- [ ] إذا compaction started، يزال command draft فقط بعد canonical acceptance، لا بمجرد ضغط Enter.
-- [ ] command ثانية أثناء compaction تعرض in-progress outcome ولا تنشئ operation إضافية.
-- [ ] الرسائل العادية تبقى قابلة للإرسال أثناء compaction وتدخل queue وفق 53d.
+- [x] exact `/compact` token مع عدم وجود user text إضافي ينفذ canonical `compact` command ولا يرسل `think`/message command.
+- [x] arguments أو trailing non-whitespace text تعيد validation محلية واضحة وتبقي draft دون إرسالها كرسالة.
+- [x] Escape/backspace/selection تتعامل مع command token كوحدة قابلة للإزالة دون تلويث plain-text export.
+- [x] إذا session busy، يعرض typed busy feedback وتبقى draft/command قابلة للمحاولة لاحقًا.
+- [x] إذا compaction started، يزال command draft فقط بعد canonical acceptance، لا بمجرد ضغط Enter.
+- [x] command ثانية أثناء compaction تعرض in-progress outcome ولا تنشئ operation إضافية.
+- [x] الرسائل العادية تبقى قابلة للإرسال أثناء compaction وتدخل queue وفق 53d.
 
 ### E1 Exit
 
-- [ ] repository/transport يسجل command واحدة ولا يسجل user message باسم `/compact`.
-- [ ] failure قبل acceptance لا يمسح composer draft.
-- [ ] skill tokens في رسالة عادية تصدر كما كانت قبل المهمة.
+- [x] repository/transport يسجل command واحدة ولا يسجل user message باسم `/compact`.
+- [x] failure قبل acceptance لا يمسح composer draft.
+- [x] skill tokens في رسالة عادية تصدر كما كانت قبل المهمة.
 
 ## 4. Gate E2 — domain mapping وlive/history state
 
-- [ ] إضافة typed `CompactionEvent`/projection في client domain keyed بالdevice/session/compaction id.
-- [ ] mapping موحد لحالات started/completed/failed وmanual/auto/overflow والmetrics الاختيارية.
-- [ ] تطبيق lifecycle idempotently ورفض event أقدم أو terminal regression.
-- [ ] حفظ/hydrate events ضمن conversation cache/history دون خلطها برسائل assistant أو user.
-- [ ] navigation بين الجلسات لا يعرض operation من Session A في Session B.
-- [ ] reconnect أثناء started ثم completed يعيد نفس tile ولا ينشئ نسختين.
-- [ ] queued-message UI تبقى authoritative أثناء compaction ولا تدعي أن الرسالة بدأت التنفيذ.
+- [x] إضافة typed `CompactionEvent`/projection في client domain keyed بالdevice/session/compaction id.
+- [x] mapping موحد لحالات started/completed/failed وmanual/auto/overflow والmetrics الاختيارية.
+- [x] تطبيق lifecycle idempotently ورفض event أقدم أو terminal regression.
+- [x] حفظ/hydrate events ضمن conversation cache/history دون خلطها برسائل assistant أو user.
+- [x] navigation بين الجلسات لا يعرض operation من Session A في Session B.
+- [x] reconnect أثناء started ثم completed يعيد نفس tile ولا ينشئ نسختين.
+- [x] queued-message UI تبقى authoritative أثناء compaction ولا تدعي أن الرسالة بدأت التنفيذ.
 
 ### E2 Exit
 
-- [ ] live timeline وبعد reload متطابقتان في status وtrigger والmetrics.
-- [ ] event لا تؤثر على title generation أو last-user-message ordering أو assistant metadata.
+- [x] live timeline وبعد reload متطابقتان في status وtrigger والmetrics.
+- [x] event لا تؤثر على title generation أو last-user-message ordering أو assistant metadata.
 
 ## 5. Gate E3 — Centered compaction timeline tile
 
-- [ ] إنشاء presentation واحدة تعرض centered horizontal separator:
+- [x] إنشاء presentation واحدة تعرض centered horizontal separator:
   - divider يسار ويمين.
   - circular indicator عند started.
   - success check عند completed.
   - error indicator terminal عند failed.
-- [ ] اعتماد النصوص:
+- [x] اعتماد النصوص:
   - `Context compacting`
   - `Auto context compacting`
   - `Context compacted`
   - `Auto context compacted`
   - `Context compaction failed`
   - `Auto context compaction failed`
-- [ ] overflow trigger تظهر بصريًا كauto مع تفصيل `Trigger: Context overflow` داخل التفاصيل، دون إضافة label مربكة ثالثة في timeline.
-- [ ] layout تعمل على desktop/tablet/mobile ولا تتسبب في horizontal overflow أو touch target صغير.
-- [ ] started animation تتوقف فور terminal event أو dispose/navigation.
-- [ ] accessibility semantics تعلن status وmanual/auto ولا تعتمد على اللون أو الأيقونة وحدهما.
+- [x] overflow trigger تظهر بصريًا كauto مع تفصيل `Trigger: Context overflow` داخل التفاصيل، دون إضافة label مربكة ثالثة في timeline.
+- [x] layout تعمل على desktop/tablet/mobile ولا تتسبب في horizontal overflow أو touch target صغير.
+- [x] started animation تتوقف فور terminal event أو dispose/navigation.
+- [x] accessibility semantics تعلن status وmanual/auto ولا تعتمد على اللون أو الأيقونة وحدهما.
 
 ### E3 Exit
 
-- [ ] started/completed/failed snapshots مطابقة للتصميم centered.
-- [ ] لا يظهر raw summary أو transcript أو provider body في tile.
+- [x] started/completed/failed snapshots مطابقة للتصميم centered.
+- [x] لا يظهر raw summary أو transcript أو provider body في tile.
 
 ## 6. Gate E4 — Multi-line details interaction
 
-- [ ] إعادة استخدام interaction pattern في `context_usage_indicator.dart`: hover على desktop، click/tap على touch، keyboard focus، وdismiss semantics.
-- [ ] استخراج surface/helper مشترك فقط إذا حافظ على ownership ولم يجعل compaction تعتمد على conversation-input widget.
-- [ ] عرض الحقول المتوفرة فقط:
+- [x] إعادة استخدام interaction pattern في `context_usage_indicator.dart`: hover على desktop، click/tap على touch، keyboard focus، وdismiss semantics.
+- [x] استخراج surface/helper مشترك فقط إذا حافظ على ownership ولم يجعل compaction تعتمد على conversation-input widget.
+- [x] عرض الحقول المتوفرة فقط:
   - Type: Manual أو Auto.
   - Trigger، status، provider، model.
   - Context window.
@@ -100,33 +100,33 @@ file_budget: 15
   - Summarized range وretained-tail tokens.
   - Started/completed time وduration.
   - redacted failure reason عند الفشل.
-- [ ] عدم إظهار صفوف `N/A` غير المفيدة أو استنتاج قيم لم يرسلها agent.
-- [ ] عدم إظهار internal summary لأي سبب.
-- [ ] tooltip/popover تبقى متعددة الأسطر وقابلة للقراءة على الشاشات الضيقة.
+- [x] عدم إظهار صفوف `N/A` غير المفيدة أو استنتاج قيم لم يرسلها agent.
+- [x] عدم إظهار internal summary لأي سبب.
+- [x] tooltip/popover تبقى متعددة الأسطر وقابلة للقراءة على الشاشات الضيقة.
 
 ### E4 Exit
 
-- [ ] hover وtap/focus يعرضان التفاصيل نفسها.
-- [ ] missing metrics لا تكسر العرض أو تنتج أرقامًا وهمية.
-- [ ] semantics تصف إمكانية فتح التفاصيل وحالة العملية.
+- [x] hover وtap/focus يعرضان التفاصيل نفسها.
+- [x] missing metrics لا تكسر العرض أو تنتج أرقامًا وهمية.
+- [x] semantics تصف إمكانية فتح التفاصيل وحالة العملية.
 
 ## 7. Gate E5 — التحقق والتوثيق
 
-- [ ] اختبارات parser: index صفر، mid-message slash، exact command، arguments، backspace، وskill coexistence.
-- [ ] اختبارات dispatch: acceptance، busy، duplicate، failure، وعدم إنشاء user message.
-- [ ] اختبارات mapper/cache: out-of-order، reconnect، hydration، session isolation.
-- [ ] widget tests للحالات الست، centered layout، hover/tap/focus، mobile width، وaccessibility.
-- [ ] regression tests لاختيار skills في أي موضع وإرسال الرسائل العادية أثناء compaction.
-- [ ] تحديث client feature contract ووثائق product/protocol/cache/QA.
-- [ ] مراجعة file budget قبل الإغلاق.
+- [x] اختبارات parser: index صفر، mid-message slash، exact command، arguments، backspace، وskill coexistence.
+- [x] اختبارات dispatch: acceptance، busy، duplicate، failure، وعدم إنشاء user message.
+- [x] اختبارات mapper/cache: out-of-order، reconnect، hydration، session isolation.
+- [x] widget tests للحالات الست، centered layout، hover/tap/focus، mobile width، وaccessibility.
+- [x] regression tests لاختيار skills في أي موضع وإرسال الرسائل العادية أثناء compaction.
+- [x] تحديث client feature contract ووثائق product/protocol/cache/QA.
+- [x] مراجعة file budget قبل الإغلاق.
 
 ### E5 Exit / Definition of Done
 
-- [ ] لا توجد slash commands وهمية في capabilities أو suggestions.
-- [ ] `/compact` command حقيقية exact في بداية composer فقط.
-- [ ] skills لا تزال tokens في أي موضع ولا تشترك مع command dispatch.
-- [ ] manual/auto lifecycle تظهر centered ومتطابقة live/history.
-- [ ] التفاصيل تعمل بالhover وtap/focus دون كشف summary.
+- [x] لا توجد slash commands وهمية في capabilities أو suggestions.
+- [x] `/compact` command حقيقية exact في بداية composer فقط.
+- [x] skills لا تزال tokens في أي موضع ولا تشترك مع command dispatch.
+- [x] manual/auto lifecycle تظهر centered ومتطابقة live/history.
+- [x] التفاصيل تعمل بالhover وtap/focus دون كشف summary.
 
 ## 8. الملفات المتوقعة
 
@@ -162,10 +162,24 @@ file_budget: 15
 ## 11. سجل التقدم
 
 ```text
-Date:
-Gate/status:
-Files changed:
-Verification:
-Findings:
-Next gate:
+Date: 2026-08-29
+Gate/status: 53e complete (E0–E5) — gate-by-gate review re-verified
+Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction
+Verification: client compaction model/store/mapper/dispatch/tile/parser suites passed; local_workspace_compact_slash_test passed; agent analyze clean (null-aware payload fix in SessionCompactCommandHandler)
+Findings: fake slash catalog retired to `/compact` only; runtime slash queries index-zero only; skills remain mid-message tokens
+Next: Task 53f Gate F0
+```
+
+Date: 2026-08-29
+Reviewer: gate-by-gate Plan 53 review
+Gate closed: E0–E5
+
+```text
+Date: 2026-08-29 (evening re-review)
+Gate/status: 53e E0→E5 re-closed in order
+Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction
+E0: _defaultSlashCommands = /compact only; detectRuntimeSlashQuery requires slashIndex==0; skills mid-message still work
+E1–E5: client suites 32 passed + skill_composer runtime/utils 9 passed; agent local_workspace_compact_slash_test 1 passed
+Findings: no fixes required; tile details omit summary; overflow mapped as auto-like
+Next: Task 53f Gate F0
 ```

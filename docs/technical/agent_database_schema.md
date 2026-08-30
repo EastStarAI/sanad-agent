@@ -121,6 +121,58 @@ Maintains message history. Messages are serialized as JSON blobs in the `data` c
 | `session_id` | `TEXT` | Foreign Key (`sessions.session_id`), ON DELETE CASCADE | Associated chat thread |
 | `data` | `TEXT` | Non-null | JSON string mapping to the protocol `Message` |
 
+#### Message identity for compaction (Plan 53)
+
+- `messages.id` is the **only** durable identity used by compaction source/tail ranges. In-memory list indices inside `AgentRunner` are never persisted on boundary rows.
+- Compaction must not delete or rewrite summarized rows. Canonical history remains fully queryable for timeline pagination (Task 47).
+- `SessionDB.replaceMessages` remains the replay/supersession path (Task 51) and bumps `sessions.history_revision` in the same write path (Plan 53b).
+
+### 3.2.1. `session_compaction_operations` Table (Plan 53b — implemented Gate B1)
+
+Durable compaction lifecycle rows. Internal summaries are stored here, never as extra `messages` rows.
+
+| Column | Type | Constraints | Description |
+|---|---|---|---|
+| `compaction_id` | `TEXT` | Primary Key | Operation UUID |
+| `session_id` | `TEXT` | FK → `sessions`, ON DELETE CASCADE | Owning session |
+| `trigger` | `TEXT` | CHECK `manual\|auto\|overflow` | Why compaction started |
+| `status` | `TEXT` | CHECK `started\|completed\|failed` | Lifecycle state |
+| `source_history_revision` | `INTEGER` | NOT NULL, `>= 0` | `sessions.history_revision` at snapshot freeze |
+| `source_start_message_id` | `INTEGER` | NOT NULL | Inclusive summarized head start (`messages.id`) |
+| `source_end_message_id` | `INTEGER` | NOT NULL | Inclusive summarized head end |
+| `tail_start_message_id` | `INTEGER` | NOT NULL | Inclusive verbatim tail start |
+| `tail_end_message_id` | `INTEGER` | NOT NULL | Inclusive verbatim tail end |
+| `provider_instance_id` | `TEXT` | NOT NULL | Summarizer route instance |
+| `model_id` | `TEXT` | NOT NULL | Summarizer model |
+| `template_id` | `TEXT` | NOT NULL | Provider template metadata |
+| `protocol` | `TEXT` | NOT NULL | Provider protocol id |
+| `normalized_base_url` | `TEXT` | NOT NULL | Normalized base URL (no secrets) |
+| `config_revision` | `INTEGER` | NOT NULL | Route config revision |
+| `credential_revision` | `INTEGER` | NOT NULL | Route credential revision |
+| `context_window_tokens` | `INTEGER` | Nullable | Present when terminal metrics recorded |
+| `estimated_request_tokens_before` | `INTEGER` | Nullable | Pre-compaction estimate |
+| `estimated_request_tokens_after` | `INTEGER` | Nullable | Post-compaction estimate |
+| `retained_tail_tokens` | `INTEGER` | Nullable | Tail budget metric |
+| `duration_ms` | `INTEGER` | Nullable | Wall duration when terminal |
+| `internal_summary_json` | `TEXT` | Nullable | Redacted structured summary; **completed only** |
+| `failure_reason` | `TEXT` | Nullable | Enum wire name; **failed only** |
+| `failure_detail_json` | `TEXT` | Nullable | Redacted diagnostics; optional |
+| `started_at` | `TEXT` | NOT NULL | ISO8601 UTC |
+| `completed_at` | `TEXT` | Nullable | ISO8601 UTC; set once at terminal transition |
+
+Indexes (B1):
+
+- Partial unique: one `started` row per `session_id`.
+- Lookup: `(session_id, completed_at DESC)` where `status = 'completed'` for latest authoritative boundary.
+
+#### `sessions.history_revision` column (Plan 53b — implemented Gate B1)
+
+| Column | Type | Constraints | Description |
+|---|---|---|---|
+| `history_revision` | `INTEGER` | NOT NULL DEFAULT `0`, CHECK `>= 0` | Monotonic CAS revision bumped on message insert/delete/replace |
+
+See `docs/technical/context_compaction.md` §8 for activation CAS and Task 51/52 invalidation rules.
+
 ### 3.3. `scheduled_tasks` Table
 Tracks automation tasks and scheduled loops that the daemon runs asynchronously.
 

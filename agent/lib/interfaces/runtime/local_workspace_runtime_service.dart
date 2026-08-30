@@ -63,27 +63,11 @@ class LocalWorkspaceRuntimeService {
 
   static const List<Map<String, String>> _defaultSlashCommands = [
     {
-      'command': 'model',
+      'command': 'compact',
       'description':
-          'Change or inspect the active model for the current thread.',
+          'Compact conversation context while preserving the current goal.',
+      'type': 'runtime_command',
     },
-    {
-      'command': 'think',
-      'description': 'Adjust thinking mode for the next local turn.',
-    },
-    {
-      'command': 'workspace',
-      'description': 'Inspect or switch the active workspace context.',
-    },
-    {
-      'command': 'mcp',
-      'description': 'Inspect configured MCP servers for the local runtime.',
-    },
-    {
-      'command': 'sessions',
-      'description': 'Browse local conversation threads.',
-    },
-    {'command': 'stop', 'description': 'Stop the current run.'},
   ];
 
   Future<List<Map<String, dynamic>>> listWorkspaces() async {

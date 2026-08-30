@@ -129,6 +129,12 @@ class ConversationEventHandler {
       return;
     }
 
+    if (eventType == 'session.compact_result') {
+      // Command acknowledgement only; lifecycle tiles come from
+      // context_compaction.started/completed/failed events.
+      return;
+    }
+
     if (eventType == 'session_preferences_updated') {
       final routePayload = <String, dynamic>{
         ...payload,

@@ -23,6 +23,7 @@ import 'package:sanad_client/features/conversations/domain/models/slash_command_
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
@@ -272,6 +273,11 @@ class SocketConversationClient implements ConversationClient {
     thinkingMode: thinkingMode,
     confirmedReplayUnsafe: confirmedReplayUnsafe,
   );
+
+  @override
+  Future<SessionCompactResult> compactSession({
+    required String sessionId,
+  }) => _commands!.compactSession(sessionId: sessionId);
 
   @override
   Future<void> retryRuntimeNotice({

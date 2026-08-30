@@ -1,6 +1,7 @@
 import 'package:sanad_client/features/conversations/data/mappers/device_event_mapper.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/llm_usage_snapshot.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_route_snapshot.dart';
 
 /// Maps standardized agent events (live Redis stream + persisted history rows) into
@@ -93,6 +94,27 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       },
       'plan' => <String, dynamic>{
         'plan': row['plan'] ?? metadata['plan'],
+      },
+      'context_compaction.started' ||
+      'context_compaction.completed' ||
+      'context_compaction.failed' => <String, dynamic>{
+        'compaction_id': row['compaction_id'] ?? metadata['compaction_id'],
+        'trigger': row['trigger'] ?? metadata['trigger'],
+        'status': row['status'] ?? metadata['status'],
+        'started_at': row['started_at'] ?? metadata['started_at'],
+        'completed_at': row['completed_at'] ?? metadata['completed_at'],
+        'failure_reason': row['failure_reason'] ?? metadata['failure_reason'],
+        'context_window_tokens':
+            row['context_window_tokens'] ?? metadata['context_window_tokens'],
+        'estimated_request_tokens_before':
+            row['estimated_request_tokens_before'] ??
+            metadata['estimated_request_tokens_before'],
+        'estimated_request_tokens_after':
+            row['estimated_request_tokens_after'] ??
+            metadata['estimated_request_tokens_after'],
+        'retained_tail_tokens':
+            row['retained_tail_tokens'] ?? metadata['retained_tail_tokens'],
+        'duration_ms': row['duration_ms'] ?? metadata['duration_ms'],
       },
       _ => const <String, dynamic>{},
     };
@@ -419,6 +441,11 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
           metadata: metadata,
         );
 
+      case 'context_compaction.started':
+      case 'context_compaction.completed':
+      case 'context_compaction.failed':
+        return _mapCompactionEvent(event, timestamp);
+
       case 'session_route_transition':
         final snapshot = SessionRouteSnapshot.fromJson(event);
         return CanonicalEvent(
@@ -442,6 +469,46 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       default:
         return null;
     }
+  }
+
+  CanonicalEvent? _mapCompactionEvent(
+    Map<String, dynamic> event,
+    DateTime timestamp,
+  ) {
+    final snapshot = CompactionEventSnapshot.fromJson(event);
+    final status = switch (snapshot.status) {
+      CompactionLifecycleStatus.started => EventStatus.running,
+      CompactionLifecycleStatus.completed => EventStatus.done,
+      CompactionLifecycleStatus.failed => EventStatus.error,
+    };
+    return CanonicalEvent(
+      id: snapshot.logicalEventId,
+      kind: EventKind.informational,
+      status: status,
+      text: snapshot.timelineLabel,
+      timestamp: snapshot.completedAt ?? snapshot.startedAt ?? timestamp,
+      sessionId: snapshot.sessionId,
+      eventId: snapshot.compactionId,
+      metadata: {
+        'informational': true,
+        'compaction_event': true,
+        'compaction_id': snapshot.compactionId,
+        'compaction_status': snapshot.status.name,
+        'compaction_trigger': snapshot.trigger.name,
+        if (snapshot.failureReason != null)
+          'failure_reason': snapshot.failureReason,
+        if (snapshot.contextWindowTokens != null)
+          'context_window_tokens': snapshot.contextWindowTokens,
+        if (snapshot.estimatedRequestTokensBefore != null)
+          'estimated_request_tokens_before':
+              snapshot.estimatedRequestTokensBefore,
+        if (snapshot.estimatedRequestTokensAfter != null)
+          'estimated_request_tokens_after': snapshot.estimatedRequestTokensAfter,
+        if (snapshot.retainedTailTokens != null)
+          'retained_tail_tokens': snapshot.retainedTailTokens,
+        if (snapshot.durationMs != null) 'duration_ms': snapshot.durationMs,
+      },
+    );
   }
 
   // Same id for every chunk + finalized thought within one cycle so

@@ -36,7 +36,6 @@ import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_resume_service.dart';
-import 'package:sanad_agent/engine/context_engine.dart';
 import 'package:sanad_agent/plugins/plugin_manager.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/interfaces/gateway_manager.dart';
@@ -397,16 +396,12 @@ _startResumeRuntime({
     ),
   );
   getIt.registerSingleton<PluginManager>(PluginManager());
-  getIt.registerSingleton<ContextEngine>(
-    ContextEngine(adapter: getIt<LLMAdapter>()),
-  );
   getIt.registerFactoryParam<AgentRunner, String?, void>(
     (sessionId, _) => AgentRunner(
       getIt<LLMAdapter>(),
       getIt<ToolsRegistry>().copy(),
       getIt<SessionManager>(),
       pluginManager: getIt<PluginManager>(),
-      contextEngine: getIt<ContextEngine>(),
       existingSessionId: sessionId,
     ),
   );

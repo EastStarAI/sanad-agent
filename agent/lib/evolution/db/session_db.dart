@@ -9,6 +9,8 @@ import '../models/session_state.dart';
 import '../models/suspended_checkpoint.dart';
 import '../../core/models/message.dart';
 import 'agent_state_database.dart';
+import 'session_history_revision_repository.dart';
+import '../compaction/model_context_projection.dart';
 
 /// Persistent storage for sessions, messages, scheduled tasks, and suspended
 /// checkpoints.
@@ -418,6 +420,7 @@ class SessionDB {
         stmt.execute([sessionId, jsonEncode(msg.toJson())]);
       }
       stmt.dispose();
+      SessionHistoryRevisionRepository.bumpDatabase(_db, sessionId);
       _db.execute('COMMIT');
     } catch (e) {
       _db.execute('ROLLBACK');
@@ -426,14 +429,23 @@ class SessionDB {
   }
 
   List<Message> getMessages(String sessionId) {
+    return getPersistedMessages(
+      sessionId,
+    ).map((entry) => entry.message).toList(growable: false);
+  }
+
+  List<PersistedMessage> getPersistedMessages(String sessionId) {
     final result = _db.select(
       'SELECT * FROM messages WHERE session_id = ? ORDER BY id ASC',
       [sessionId],
     );
     return result.map((row) {
       final data = jsonDecode(row['data'] as String);
-      return Message.fromJson(data);
-    }).toList();
+      return PersistedMessage(
+        rowId: row['id'] as int,
+        message: Message.fromJson(data),
+      );
+    }).toList(growable: false);
   }
 
   // Scheduled Tasks persistence
