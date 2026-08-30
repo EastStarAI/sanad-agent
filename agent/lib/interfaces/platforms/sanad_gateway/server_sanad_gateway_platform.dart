@@ -90,6 +90,9 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   io.Socket? get socket => _socket;
 
+  bool get isCloudRegistered =>
+      (_socket?.connected ?? false) && _registeredDeviceId != null;
+
   @visibleForTesting
   set socketForTesting(io.Socket? s) => _socket = s;
 

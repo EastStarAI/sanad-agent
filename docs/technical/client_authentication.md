@@ -107,8 +107,8 @@ preventing `/login` ↔ `/` redirect loops and a post-login 404.
 ## Headless Agent Device Authorization
 
 1. `sanad login --portal` creates or loads an Agent-owned P-256 identity from
-   the OS-backed Agent vault (macOS Keychain, Linux Secret Service, or Windows
-   DPAPI-protected ciphertext).
+   the platform credential store: macOS Keychain, Windows DPAPI-protected
+   ciphertext, or the capability-selected Linux backend described below.
 2. The Agent calls `POST /auth/device/transactions` with the public JWK,
    normalized device display name, and platform.
 3. CLI prints only the fixed verification URI, short user code, and shortened
@@ -126,31 +126,43 @@ preventing `/login` ↔ `/` redirect loops and a post-login 404.
    Credential, then signs a `SOCKET`/`sanad-gateway:register_device` proof with
    the same P-256 key and sends credential plus proof in registration.
 
-The private key and durable Device Credential are separate OS-vault entries
-scoped by the canonical Sanad Home. macOS uses Keychain directly, Linux talks to
-the freedesktop.org Secret Service over the user session D-Bus, and Windows
-stores only DPAPI ciphertext under the protected Home boundary. DPoP and Gateway
-proofs require a fresh `iat`; when the local clock differs materially, the Agent
-calibrates against the HTTPS Portal response `Date`, verifies and persists only
-the non-secret offset through the same vault boundary. Each Gateway registration
-refreshes that calibration so later operating-system clock corrections replace a
-stale offset before signing. Non-HTTPS or malformed time responses are never
-trusted.
-The Linux path uses the protocol directly and has no runtime dependency on the external
-`secret-tool` executable. It opens a bounded non-interactive session, rejects
-locked collections or operations that require a prompt, and never places secret
-values in process arguments or environment variables.
+The private key, Device Credential, pending Device Credential, and pairing
+authority are separate logical entries scoped by the canonical Sanad Home; none
+is persisted in `auth.json`. macOS uses Keychain directly and Windows stores only
+DPAPI ciphertext under the protected Home boundary.
 
-Linux D-Bus/service/locked-collection failures and Windows
-DPAPI/library/filesystem failures are normalized as vault-unavailable outcomes.
-During startup, an unavailable vault disables Agent cloud authority while the
-local daemon remains available; pending logout and legacy migration bytes stay
-intact for a later verified retry. Startup migrates legacy
-`device_identity.json` and `auth.json.device_token` by writing and reading back
-the vault entry before deleting plaintext. An unavailable or unverifiable vault
-fails closed and preserves legacy bytes only for recovery; it never loads them
-as an active fallback credential. Explicit vault mutations still fail rather
-than claiming an unverified write or deletion.
+Linux first performs a real non-interactive Secret Service capability probe with
+a random synthetic write/read/delete. A successful probe selects the direct
+freedesktop.org D-Bus backend; otherwise Linux automatically selects an
+owner-protected file under `SANAD_HOME`. The fallback file is not described as
+encrypted: its protection is the operating-system account boundary, `0700`
+directories, `0600` data and lock files, cross-process locking, and atomic
+flushed replacement with symlink rejection. The selected backend identity is
+non-secret durable metadata. Temporary failure of a selected Secret Service
+backend fails closed and cannot read an older owner-file record. A later process
+may migrate an owner-file selection to Secret Service only after probing it and
+verifying every write; owner-file bytes are deleted only after the backend
+identity commits to Secret Service. Failed verification keeps the owner-file
+selection and bytes intact. The direct D-Bus path has no `secret-tool` runtime
+dependency and rejects locked collections or operations requiring a prompt.
+
+DPoP and Gateway proofs require a fresh `iat`; when the local clock differs
+materially, the Agent calibrates against the HTTPS Portal response `Date`,
+verifies and persists only the non-secret offset through the same credential
+boundary. Each Gateway registration refreshes that calibration so later
+operating-system clock corrections replace a stale offset before signing.
+Non-HTTPS or malformed time responses are never trusted.
+
+Linux backend failures and Windows DPAPI/library/filesystem failures are
+normalized as credential-store-unavailable outcomes. During startup, an
+unavailable selected backend disables Agent cloud authority while the local
+daemon remains available; pending logout and legacy migration bytes stay intact
+for a later verified retry. Startup migrates legacy `device_identity.json` and
+secret fields from `auth.json` by writing and reading back the selected entry
+before deleting plaintext. An unavailable or unverifiable selected backend fails
+closed and preserves legacy bytes only for recovery; it never loads another
+backend as active fallback. Explicit mutations still fail rather than claiming
+an unverified write or deletion.
 
 ## Pairing boundary
 

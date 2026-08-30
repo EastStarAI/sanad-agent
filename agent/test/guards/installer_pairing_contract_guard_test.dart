@@ -13,11 +13,15 @@ void main() {
       expect(posix, contains('--pairing-token'));
       expect(posix, contains('--login'));
       expect(posix, contains('--no-login'));
-      expect(posix, contains('login --token "\$PAIRING_TOKEN"'));
+      expect(posix, contains('login --token-stdin'));
+      expect(posix, contains('--pairing-token-stdin'));
+      expect(posix, isNot(contains('login --token "\$PAIRING_TOKEN"')));
       expect(posix, contains('login --portal'));
       expect(posix, contains('No interactive terminal detected'));
       expect(posix, contains('service install'));
-      expect(posix, contains('service restart'));
+      expect(posix, contains('--expected-version'));
+      expect(posix, contains('--require-cloud'));
+      expect(posix, contains('restore_previous_installation'));
       expect(posix, contains('SERVICE_WAS_RUNNING'));
       expect(posix, contains('anchor apple generic'));
       expect(posix, contains('certificate leaf[subject.OU] = "UC2824B99G"'));
@@ -52,8 +56,10 @@ void main() {
       expect(login, contains('Choose either --portal or --token'));
 
       expect(
-        posix.indexOf('login --token "\$PAIRING_TOKEN"'),
-        lessThan(posix.indexOf('service install')),
+        posix.indexOf('login --token-stdin'),
+        lessThan(
+          posix.indexOf('"\$TARGET" service install --expected-version'),
+        ),
       );
       expect(
         windows.indexOf('login --token \$PairingToken'),
@@ -61,15 +67,13 @@ void main() {
       );
       expect(
         posix.indexOf('login --portal'),
-        lessThan(posix.indexOf('service install')),
+        lessThan(
+          posix.indexOf('"\$TARGET" service install --expected-version'),
+        ),
       );
       expect(
         windows.indexOf('login --portal'),
         lessThan(windows.indexOf('service install')),
-      );
-      expect(
-        posix.indexOf('service install'),
-        lessThan(posix.indexOf('service restart')),
       );
       expect(
         windows.indexOf('service install'),

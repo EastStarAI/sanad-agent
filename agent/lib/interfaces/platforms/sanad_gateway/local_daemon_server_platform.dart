@@ -20,6 +20,7 @@ import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
@@ -273,6 +274,9 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         'dev_runtime_nonce': Platform.environment['SANAD_DEV_RUNTIME_NONCE'],
         'state_mode': stateMode,
         'gateway_enabled': _config.enableGateway,
+        'cloud_registered':
+            getIt.isRegistered<ServerSanadGatewayPlatform>() &&
+            getIt<ServerSanadGatewayPlatform>().isCloudRegistered,
       });
       return;
     }

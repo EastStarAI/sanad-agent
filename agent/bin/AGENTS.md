@@ -6,6 +6,7 @@ This contract applies to `agent/bin/`.
 ## Composition Ownership
 - Entry points compose dependencies and select runtime mode; they must not own engine, protocol, persistence, provider, or capability business logic.
 - Keep CLI, daemon, setup, service management, and supervisor concerns isolated behind focused commands and services.
+- Service entry points accept one known action (or help); only install accepts bounded expected-version/cloud-health options. They delegate lifecycle and health decisions to `core/setup/` and present typed state, scope, backend, and concise errors without inferring installation from file existence.
 - Register local, cloud, and CLI platform adapters independently so one initialization failure does not prevent remaining interfaces from starting.
 
 ## Supervisor

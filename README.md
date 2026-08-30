@@ -113,7 +113,7 @@ curl -fsSL https://sanad.eaststarai.com/install.sh | bash
 For Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://sanad.eaststarai.com/install.ps1)))
+irm https://sanad.eaststarai.com/install.ps1 | iex
 ```
 
 Choose account sign-in to connect the machine through the Portal, or skip it

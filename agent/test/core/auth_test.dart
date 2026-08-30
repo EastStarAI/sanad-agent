@@ -158,11 +158,45 @@ void main() {
     );
 
     test(
+      'cancelled pairing atomically restores the prior Device Credential',
+      () async {
+        await authManager.initialize();
+        await authManager.saveDeviceToken('prior-device-credential');
+        await authManager.prepareDevicePairing('replacement-pairing-authority');
+
+        expect(authManager.deviceToken, isNull);
+        expect(
+          secrets.values[AuthManager.previousDeviceCredentialKey],
+          'prior-device-credential',
+        );
+        expect(await authManager.cancelPreparedDevicePairing(), isTrue);
+        expect(authManager.deviceToken, 'prior-device-credential');
+        expect(authManager.hasPendingDevicePairing, isFalse);
+        expect(
+          secrets.values[AuthManager.deviceCredentialKey],
+          'prior-device-credential',
+        );
+        expect(secrets.values[AuthManager.pendingDeviceCredentialKey], isNull);
+        expect(secrets.values[AuthManager.pairingTokenKey], isNull);
+        expect(secrets.values[AuthManager.previousDeviceCredentialKey], isNull);
+      },
+    );
+
+    test(
       'pending pairing survives restart for retry after a lost response',
       () async {
         await authManager.initialize();
         await authManager.prepareDevicePairing('sanad_retry_pairing_token');
         final proposed = authManager.pendingDeviceToken;
+
+        final authFile = File(p.join(tempDir.path, 'auth.json'));
+        final persistedAuth = await authFile.readAsString();
+        expect(persistedAuth, isNot(contains('sanad_retry_pairing_token')));
+        expect(persistedAuth, isNot(contains(proposed!)));
+        expect(
+          secrets.values[AuthManager.pairingTokenKey],
+          'sanad_retry_pairing_token',
+        );
 
         final restored = AuthManager(secretStore: secrets);
         await restored.initialize();

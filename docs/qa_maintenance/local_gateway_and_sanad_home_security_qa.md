@@ -31,6 +31,8 @@ test mode never disables or weakens Local Gateway authentication.
 |---|---|
 | New Home and nested directory | Owner-only root and directories before use |
 | New secret/config write | Exclusive secure temp before payload, atomic activation, owner-only destination |
+| Stable cross-process lock | Owner-only regular lock inode is never replaced; timeout releases handles and later mutation proceeds |
+| Linux owner-file credentials | Concurrent updates retain all entries; data and lock are `0600`, corrupt/symlink targets fail closed, and no entry appears in backend metadata |
 | Simulated write failure | Original destination unchanged and no temporary artifact remains |
 | Existing permissive file that is read | Content preserved and that target's permissions tightened before bytes are returned |
 | Existing unrelated development file | Root preparation does not enumerate or mutate the unrelated child |
