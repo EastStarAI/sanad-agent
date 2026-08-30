@@ -40,6 +40,9 @@ This contract applies to `client/lib/features/conversations/data/`.
 - Send workspace identity and per-message preferences only; do not rebuild workspace bootstrap or system context in the client.
 - Source slash commands, workspace trees, folder mutations, skills, web capabilities, and MCP catalogs from daemon query surfaces.
 - Folder-mutation requests accept only their exact operation-specific canonical acknowledgment; timeout, error, or unrelated events remain failures.
+- Workspace removal accepts only `workspace.removed` for the requested stable
+  workspace id, then removes the workspace projection without deleting cached
+  or daemon-owned conversation records.
 - Workspace metadata mutations preserve correlated daemon failure reasons through the cache facade so presentation can render actionable feedback; never collapse them to `null` or a generic error.
 - Client tool registration may advertise platform-provided tools only; do not rebroadcast daemon-owned workspace, skill, web, or MCP catalogs.
 

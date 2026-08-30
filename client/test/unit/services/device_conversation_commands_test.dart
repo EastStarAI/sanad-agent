@@ -248,6 +248,32 @@ void main() {
     expect(snapshot.entries.single.isDirectory, isTrue);
   });
 
+  test('createWorkspace sends a name without a path for managed remote create', () async {
+    final future = commands.createWorkspace(name: 'remote-notes');
+
+    expect(socket.capturedCommands.single['command'], 'create_workspace');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    expect(payload.containsKey('path'), isFalse);
+    expect(payload['name'], 'remote-notes');
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'workspace_created',
+      'payload': {
+        'request_id': payload['request_id'],
+        'workspace': {
+          'id': 'workspace-2',
+          'name': 'remote-notes',
+          'path': '/home/sanad/workspaces/remote-notes',
+          'trust_state': 'trusted',
+        },
+      },
+    });
+
+    final workspace = await future;
+    expect(workspace.id, 'workspace-2');
+    expect(workspace.name, 'remote-notes');
+  });
+
   test('createWorkspace sends path and returns the created workspace', () async {
     final future = commands.createWorkspace(path: '/repo', name: 'desktop-agent');
 
@@ -357,6 +383,25 @@ void main() {
       },
     });
     await deleteFuture;
+  });
+
+  test('workspace removal requires the matching record-only acknowledgment', () async {
+    final future = commands.removeWorkspace(workspaceId: ' workspace-1 ');
+    final command = socket.capturedCommands.single;
+    final payload = command['payload'] as Map<String, dynamic>;
+    expect(command['command'], 'workspace.remove');
+    expect(payload['workspace_id'], 'workspace-1');
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'workspace.removed',
+      'payload': {
+        'request_id': payload['request_id'],
+        'workspace_id': 'workspace-1',
+      },
+    });
+
+    await future;
   });
 
   test('folder mutation surfaces daemon errors and disconnected requests', () async {

@@ -35,7 +35,8 @@ no writer outside this helper reaches the filesystem.
   another process may hold it.
 - The configured root and child path components are rejected when they are
   symlinks; the resulting real path is verified against the canonical root.
-- The daemon MUST refuse to start on a symlink or overlap home.
+- Identity prepare creates `workspaces/` as a non-symlink managed remote
+  workspace root. The daemon MUST refuse to start on a symlink or overlap home.
 - Loopback is mandatory for any local binding; non-loopback is rejected
   with a single warning and non-zero exit (INV-1).
 

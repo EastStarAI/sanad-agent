@@ -18,7 +18,7 @@ The primary Settings navigation contains Profile and General, followed by device
 
 Selecting a device changes only the Settings inspection target. The conversation device changes only through Set as active in Overview.
 
-A workspace opens one detail page with Overview, MCP Servers, and Skills tabs. It does not create a nested sidebar. The conversation sidebar exposes a hover-only settings gear that deep-links to this page with the exact inspection device and workspace selected. Workspace Overview owns **Rename Workspace** for the Sanad display name and **Change Path** for reconnecting the same stable workspace identity to a different folder; these are separate actions and neither changes the workspace UUID.
+A workspace opens one detail page with Overview, MCP Servers, and Skills tabs. It does not create a nested sidebar. The conversation sidebar exposes a hover-only settings gear that deep-links to this page with the exact inspection device and workspace selected. Workspace Overview owns **Rename Workspace** for the Sanad display name and shows **Change Path** only for a confirmed same-desktop local connection; these actions keep the workspace UUID stable. **Remove workspace** deletes only the registered workspace record after explicit confirmation; it preserves the folder, files, sessions, and messages. The Overview does not expose the retained remote folder browser, which is reserved for a future conversation-side File Tree.
 
 Compact layouts move the same navigation into a drawer. Destinations and capabilities remain identical to the wide layout.
 

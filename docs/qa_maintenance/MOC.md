@@ -28,8 +28,9 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Device Name Editing QA](device_name_editing_qa.md): Device rename validation, synchronization, and failure coverage.
 - [Provider Account Usage Limits QA](provider_account_usage_limits_qa.md): Regression coverage for instance isolation, capability discovery, freshness, stale responses, and usage-card presentation.
 - [Message Edit and Retry QA](message_edit_retry_qa.md): Coverage for inline editing, idle-boundary ordering, side-effect confirmation, latest-turn identity, navigation cancellation, and current route selection.
-- [Remote Workspace Folder Management QA](workspace_folder_management_qa.md): Coverage for folder create, rename, confirmed recursive delete, validation, request correlation, refresh, and remote-picker error behavior.
-- [Remote MCP Management Boundary QA](remote_mcp_management_qa.md): Coverage for cloud-only configuration rejection, local configuration continuity, and preserved MCP tool use in cloud-origin turns.
+- [Remote Device Control QA](remote_device_control_qa.md): Gate-linked pass/fail coverage for remote Agent update, restart, managed workspaces, and redacted MCP management, starting from the current cloud freeze.
+- [Remote Workspace Folder Management QA](workspace_folder_management_qa.md): Coverage for local native picker continuity and managed-remote create/browse.
+- [Remote MCP Management Boundary QA](remote_mcp_management_qa.md): Coverage for cloud MCP configuration admission, redaction, confirmation tickets, local continuity, and preserved MCP tool use in cloud-origin turns.
 - [Workspace Identity and Change Path QA](workspace_identity_relocation_qa.md): Coverage for UUID migration, missing folders, scoped Settings routing, display rename, path repair, and cache reconciliation.
 - [Live Context Usage Indicator QA](live_context_usage_indicator_qa.md): Regression coverage for exact latest-provider values, cached-input visibility, tool-loop updates, session isolation, and history restoration.
 - [Session Title Generation QA](session_title_generation_qa.md): Regression coverage for background first-exchange title generation, atomic placeholder ownership, stale-result rejection, and client synchronization.

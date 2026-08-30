@@ -249,6 +249,30 @@ class ConversationCacheStore {
     _emit();
   }
 
+  void applyWorkspaceRemoved(String deviceId, String workspaceId) {
+    ensureDeviceContext(deviceId);
+    final ctx = _contextFor(deviceId);
+    final workspaces = List<DeviceWorkspace>.from(ctx.workspaces.workspaces)
+      ..removeWhere((workspace) => workspace.id == workspaceId);
+    final pages = Map<String, ConversationSectionPage>.from(
+      ctx.workspaceConversationPages,
+    )..remove(workspaceId);
+    final expansion = Map<String, bool>.from(ctx.workspaceExpansion)..remove(workspaceId);
+    final destination = ctx.lastDestination?.workspaceId == workspaceId
+        ? ConversationDestination.newConversation(deviceId: deviceId)
+        : ctx.lastDestination;
+    _contexts[deviceId] = ctx.copyWith(
+      workspaces: ctx.workspaces.copyWith(
+        workspaces: List.unmodifiable(workspaces),
+      ),
+      workspaceConversationPages: pages,
+      workspaceExpansion: expansion,
+      lastDestination: destination,
+      clearNewConversationDraftWorkspace: ctx.newConversationDraftWorkspaceId == workspaceId,
+    );
+    _emit();
+  }
+
   void applyWorkspacesRefreshed(
     String deviceId,
     List<DeviceWorkspace> workspaces, {

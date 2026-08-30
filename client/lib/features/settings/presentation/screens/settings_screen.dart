@@ -168,6 +168,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     }
   }
 
+  Future<void> _removeWorkspace(
+    DeviceConfig device,
+    DeviceWorkspace workspace,
+  ) async {
+    try {
+      await _cache.removeWorkspace(device, workspaceId: workspace.id);
+      if (!mounted) return;
+      setState(() {
+        _selectedWorkspaceId = null;
+        _destination = SettingsDestination.overview;
+      });
+      ToastUtils.showSuccess(context, 'Workspace removed from Sanad.');
+    } catch (error) {
+      if (mounted) {
+        ToastUtils.showError(
+          context,
+          _workspaceMutationError(error, 'Could not remove workspace.'),
+        );
+      }
+    }
+  }
+
   String _workspaceMutationError(Object error, String fallback) {
     return switch (error) {
       StateError() => error.message.toString(),
@@ -327,7 +349,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         device: selected,
         workspace: workspace,
         onRename: () => _renameWorkspace(selected, workspace),
-        onChangePath: () => _changeWorkspacePath(selected, workspace),
+        onChangePath: selected.isLocalReachable ? () => _changeWorkspacePath(selected, workspace) : null,
+        onRemove: selected.isOnline ? () => _removeWorkspace(selected, workspace) : null,
       ),
       _ => const EmptyDevicePage(),
     };

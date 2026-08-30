@@ -312,11 +312,16 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
   }
 
   Future<DeviceWorkspace?> createWorkspace({
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) async {
     try {
-      return await messagesCubit.createWorkspace(path: path, name: name);
+      return await messagesCubit.createWorkspace(
+        path: path,
+        name: name,
+        description: description,
+      );
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
       return null;

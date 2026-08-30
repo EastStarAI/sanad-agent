@@ -325,7 +325,11 @@ class _TestConversationClient implements ConversationClient {
   }
 
   @override
-  Future<DeviceWorkspace> createWorkspace({required String path, String? name}) {
+  Future<DeviceWorkspace> createWorkspace({
+    String? path,
+    String? name,
+    String? description,
+  }) {
     throw UnimplementedError();
   }
 
@@ -334,6 +338,11 @@ class _TestConversationClient implements ConversationClient {
     required String workspaceId,
     required String displayName,
   }) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> removeWorkspace({required String workspaceId}) async {
     throw UnimplementedError();
   }
 

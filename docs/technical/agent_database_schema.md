@@ -169,6 +169,11 @@ Stores logical workspace identity independently from its current filesystem loca
 
 Folder availability is derived at runtime and is not persisted. A missing folder therefore does not delete the workspace row or its sessions. Workspace queries return `availability: available | missing` and the last known path.
 
+The explicit `workspace.remove` operation deletes this row only. It does not
+delete the path or its contents and does not cascade into session or message
+tables; existing conversation rows retain the removed workspace UUID as
+historical metadata.
+
 Legacy databases with `workspaces(path PRIMARY KEY)` are migrated atomically. The migration generates one UUID per distinct old path, updates session and recoverable runtime workspace columns, rewrites nested persisted `workspace_id` values where safe, and creates a workspace row for a path referenced only by a legacy session.
 
 ---

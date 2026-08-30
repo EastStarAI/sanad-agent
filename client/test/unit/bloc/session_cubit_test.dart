@@ -2211,8 +2211,9 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
 
   @override
   Future<DeviceWorkspace> createWorkspace({
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) async {
     throw UnimplementedError();
   }
@@ -2222,6 +2223,11 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
     required String workspaceId,
     required String displayName,
   }) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> removeWorkspace({required String workspaceId}) async {
     throw UnimplementedError();
   }
 
