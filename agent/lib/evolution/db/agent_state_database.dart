@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -53,7 +54,26 @@ class AgentStateDatabase {
   /// Opens (or creates) `state.db` under [getSanadStateHome] and initializes the
   /// full schema. This is the single production connection.
   AgentStateDatabase() {
+    _rejectUnisolatedTestOpen();
     _openAtPath(getSanadStateHome());
+  }
+
+  static void _rejectUnisolatedTestOpen() {
+    if (!_isDartTestRuntime() || hasExplicitSanadStateIsolation()) return;
+    throw StateError(
+      'Refusing to open the inherited Sanad state database from a Dart test. '
+      'Inject AgentStateDatabase.inMemory(), use AgentStateDatabase.atPath(), '
+      'or select a temporary state root with setSanadHomeOverride(), '
+      'setSanadStateHomeOverride(), or SANAD_STATE_HOME.',
+    );
+  }
+
+  static bool _isDartTestRuntime() {
+    if (Zone.current[#test.invoker] != null) return true;
+    // Suite-level initializers run before the test invoker Zone exists. The VM
+    // runner executes those initializers from its generated dart_test kernel.
+    final script = Platform.script.toString();
+    return script.contains('dart_test.kernel.') && script.endsWith('.dill');
   }
 
   /// Opens (or creates) `state.db` under an explicit runtime-state directory.

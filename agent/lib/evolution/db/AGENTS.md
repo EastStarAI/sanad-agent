@@ -7,6 +7,7 @@ This contract applies to `agent/lib/evolution/db/`.
 - Use one shared `AgentStateDatabase` connection for sessions, provider metadata, runtime work, notices, pending input, and route transitions.
 - Repositories receive the shared connection; they must not open independent handles to the same state database.
 - Cross-table aggregate mutations execute transactionally through one owning coordinator.
+- Default on-disk connection construction fails closed under `dart test` unless state has been explicitly redirected; tests use in-memory or temporary state and never inherit the user's database.
 
 ## Repository Ownership
 - Each table has one repository responsible for schema-facing CRUD and query semantics.

@@ -234,6 +234,7 @@ Use the review skill.''',
         updatedAt: DateTime.now(),
       );
     });
+    when(mockSessionManager.getMessages(any)).thenReturn(const []);
 
     when(mockSessionManager.saveSessionMetadata(any, any)).thenReturn(null);
     when(mockSessionManager.getSessionMetadata(any)).thenReturn(null);
