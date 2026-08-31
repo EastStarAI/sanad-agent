@@ -184,6 +184,65 @@ void main() {
     },
   );
 
+  test('completion accepts durable ranges with AUTOINCREMENT gaps', () {
+    sessions.replaceMessages('session-1', [
+      Message(role: MessageRole.user, content: 'one'),
+      Message(role: MessageRole.user, content: 'two edited'),
+      Message(role: MessageRole.assistant, content: 'three edited'),
+      Message(role: MessageRole.user, content: 'four edited'),
+    ]);
+    final ids = sessions
+        .getPersistedMessages('session-1')
+        .map((entry) => entry.rowId)
+        .toList();
+    expect(ids, [1, 5, 6, 7]);
+    final source = CompactionMessageRange(
+      start: CompactionMessageIdentity(ids[0]),
+      end: CompactionMessageIdentity(ids[1]),
+    );
+    final tail = CompactionMessageRange(
+      start: CompactionMessageIdentity(ids[2]),
+      end: CompactionMessageIdentity(ids[3]),
+    );
+    final startedAt = DateTime.utc(2026, 8, 29, 1);
+    final claim = boundaries.tryClaim(
+      compactionId: 'cmp-gapped',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.auto,
+      sourceRange: source,
+      retainedTailRange: tail,
+      routeSignature: _route(),
+      startedAt: startedAt,
+    );
+    const summary = CompactionInternalSummary(
+      currentGoal: 'Preserve gapped identities',
+      remainingWork: 'Project the retained tail',
+    );
+    final result = boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-gapped',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.auto,
+        sourceRevision: claim.record!.sourceHistoryRevision,
+        sourceRange: source,
+        retainedTailRange: tail,
+        internalSummary: summary,
+        continuityResult: CompactionContinuityResult.fromSummary(summary),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 400_000,
+          estimatedRequestTokensBefore: 320_000,
+          estimatedRequestTokensAfter: 40_000,
+          retainedTailTokens: 10_000,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: startedAt,
+      completedAt: DateTime.utc(2026, 8, 29, 2),
+    );
+
+    expect(result.outcome, CompactionTerminalOutcome.completed);
+  });
+
   test('failed and started rows are not returned as latest completed', () {
     final startedAt = DateTime.utc(2026, 8, 29, 1);
     boundaries.tryClaim(

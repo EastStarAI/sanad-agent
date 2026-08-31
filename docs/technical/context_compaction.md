@@ -66,8 +66,11 @@ Removing `ContextEngine` does **not** alter these independent paths:
 - `MetricsTracker` accumulates turn usage; `AgentRunner._buildContextUsageSnapshot()` projects latest provider-reported input against the active route's context window.
 - Prototype compression did not feed usage metrics; it only replaced message lists before the provider call.
 - Latest provider-reported input usage for the same route and measured request
-  material is the pressure baseline. Only an appended suffix is estimated;
-  route, prompt, schema, or measured-prefix changes invalidate the baseline.
+  material is the authoritative pressure baseline. Adapter-owned wire
+  fingerprints prove a strict extension and only the appended wire suffix is
+  estimated; a rough full-request estimate must not override that confirmed
+  value. Route, prompt, schema, or measured-prefix changes invalidate the
+  baseline.
 
 ### 2.3 Provider context-limit resolution
 
@@ -272,6 +275,10 @@ eligible; edit/retry still supersedes the changed suffix and bumps
 
 Invariant: `source_end_message_id < tail_start_message_id`.
 
+The pair is an ordered bound over rows belonging to the session, not a promise
+that every integer between the endpoints exists. `messages.id` is global and
+edit/retry suffix replacement leaves valid AUTOINCREMENT gaps.
+
 ### 8.3 Lifecycle (`started → completed | failed`)
 
 ```text
@@ -384,7 +391,7 @@ Dart helper: `CompactionBoundaryValidity` in `agent/lib/evolution/models/compact
 | `ModelProjectionBuilder` | Reads canonical history + newest **eligible** completed boundary; emits ephemeral provider conversation list |
 | `CompactionSummaryProjection` | Formats internal summary as one projected **user** message (`sanad_compaction_summary: true` metadata) |
 | `CanonicalConversationTimeline` | Full `messages.id` ordering for UI/audit; independent of projection |
-| `CompactionBoundaryValidity` | Eligibility checks; `hasConflictingMessageRowIds` rejects partial row-id gaps |
+| `CompactionBoundaryValidity` | Eligibility checks; endpoint loss rejects a partially superseded range while numeric gaps between present endpoints remain valid |
 
 Projection rules:
 
@@ -392,7 +399,7 @@ Projection rules:
 2. Active boundary ⇒ `[summary user message] + retained tail verbatim + rows with id > tail_end`.
 3. System prompt and runtime overlays remain outside projection; `AgentContextAssembler` owns them per request (53d wiring).
 4. Repeated compactions use only the newest eligible boundary; prior summaries are not stacked.
-5. Partial missing row ids in the newest completed boundary ⇒ `ModelProjectionException` (no silent reorder fallback). Fully superseded ranges (all ids gone) skip to older boundaries or rule 1.
+5. Exactly one missing endpoint in the newest completed boundary ⇒ `ModelProjectionException` (no silent reorder fallback). Both endpoints missing skip to older boundaries or rule 1; numeric gaps between present endpoints are normal.
 6. Compaction row fields and projection metadata never enter provider wire payloads.
 
 DI: `ModelProjectionBuilder` registered after `SessionManager` in `agent/lib/core/di.dart`.
@@ -415,6 +422,7 @@ idle|running -> compacting (in-memory barrier + durable started row)
 - Busy run returns typed `session_busy`.
 - In-flight compaction returns typed `compaction_in_progress`.
 - Auto preflight and overflow recovery keep the active work item / run authority.
+- A failed Auto attempt opens a breaker for the active run, preventing repeated summarizer/provider work on later tool-loop steps. A new run resets the breaker and manual `/compact` remains available.
 - Incoming user messages during compaction remain durable queued work and are never folded into the in-flight summary snapshot.
 
 ### 9.2 Triggers

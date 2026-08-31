@@ -116,5 +116,22 @@ void main() {
         isTrue,
       );
     });
+
+    test('accepts numeric gaps when both durable range endpoints exist', () {
+      final boundary = CompactionOperationRecord.fromCandidate(
+        candidate: _candidate(),
+        startedAt: DateTime.utc(2026, 8, 29),
+        completedAt: DateTime.utc(2026, 8, 29, 1),
+      );
+
+      expect(
+        CompactionBoundaryValidity.isProjectionEligible(
+          boundary: boundary,
+          existingMessageRowIds: {1, 3, 4, 6},
+          currentRevision: const SessionHistoryRevision(5),
+        ),
+        isTrue,
+      );
+    });
   });
 }

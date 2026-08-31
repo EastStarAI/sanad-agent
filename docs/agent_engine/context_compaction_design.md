@@ -35,8 +35,10 @@ row as typed failed and never mutates canonical history.
   route `contextWindowTokens`, then subtracts output reservation (`4096` default)
   and safety headroom (`1024` default).
 - Provider-confirmed input usage is authoritative only for the same route and
-  byte-equivalent measured request prefix. Preflight starts from that value and
-  estimates only newly appended messages (`confirmed` / `mixed`).
+  byte-equivalent measured wire prefix. The adapter fingerprints instructions,
+  tools, and ordered wire input items; a strict extension starts from the
+  confirmed value and estimates only the appended wire suffix (`confirmed` /
+  `mixed`). A larger rough estimate of the full request cannot override it.
 - A route/model/config revision, prompt, tool-schema, or measured-prefix change
   invalidates the snapshot and returns to an explicitly estimated projection.
 - Tool-schema token estimates are cached by route identity + schema fingerprint
@@ -93,6 +95,9 @@ Structured summary sections:
 Continuity anchors extracted before summarization must survive validation. One
 bounded repair attempt is allowed; weak fallback summaries never activate a
 boundary. Failures may carry `CompactionAntiThrashingHints` for 53d cooldown.
+One failed Auto attempt also opens a per-run breaker so later tool-loop model
+steps cannot repeat compaction work; manual compaction and a new run remain
+eligible.
 
 ## Summarizer contract (C3)
 

@@ -422,10 +422,9 @@ class CompactionBoundaryRepository {
 
   bool _rangesResolve(CompactionCandidate candidate, Set<int> rowIds) {
     for (final range in [candidate.sourceRange, candidate.retainedTailRange]) {
-      for (var id = range.start.rowId; id <= range.end.rowId; id++) {
-        if (!rowIds.contains(id)) {
-          return false;
-        }
+      if (!rowIds.contains(range.start.rowId) ||
+          !rowIds.contains(range.end.rowId)) {
+        return false;
       }
     }
     return true;

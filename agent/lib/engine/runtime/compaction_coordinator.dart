@@ -209,6 +209,7 @@ class CompactionCoordinator {
         compactionId: compactionId,
         failureReason: CompactionFailureReason.persistenceFailed,
         completedAt: DateTime.now().toUtc(),
+        failureDetail: {'activation_outcome': activation.outcome.name},
       );
       _emit(
         CompactionLifecycleEvent(

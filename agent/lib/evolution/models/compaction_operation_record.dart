@@ -167,23 +167,20 @@ abstract final class CompactionBoundaryValidity {
     return boundary.sourceHistoryRevision.value <= currentRevision.value;
   }
 
-  /// True when a boundary range references some but not all expected row ids.
+  /// True when exactly one durable endpoint of a boundary range remains.
   ///
-  /// All rows missing is treated as superseded history (skip to older boundary
-  /// or canonical fallback). Partial gaps reject projection loudly.
+  /// `messages.id` is globally AUTOINCREMENT and edit/retry may leave numeric
+  /// gaps, so integers between the endpoints are not expected identities.
+  /// Both endpoints missing is treated as superseded history (skip to an older
+  /// boundary or canonical fallback).
   static bool hasConflictingMessageRowIds({
     required CompactionOperationRecord boundary,
     required Set<int> existingMessageRowIds,
   }) {
     for (final range in [boundary.sourceRange, boundary.retainedTailRange]) {
-      final ids = <int>[
-        for (var id = range.start.rowId; id <= range.end.rowId; id++) id,
-      ];
-      if (ids.isEmpty) {
-        continue;
-      }
-      final present = ids.where(existingMessageRowIds.contains).length;
-      if (present > 0 && present < ids.length) {
+      final startPresent = existingMessageRowIds.contains(range.start.rowId);
+      final endPresent = existingMessageRowIds.contains(range.end.rowId);
+      if (startPresent != endPresent) {
         return true;
       }
     }
@@ -194,12 +191,8 @@ abstract final class CompactionBoundaryValidity {
     CompactionMessageRange range,
     Set<int> existingMessageRowIds,
   ) {
-    for (var id = range.start.rowId; id <= range.end.rowId; id++) {
-      if (!existingMessageRowIds.contains(id)) {
-        return true;
-      }
-    }
-    return false;
+    return !existingMessageRowIds.contains(range.start.rowId) ||
+        !existingMessageRowIds.contains(range.end.rowId);
   }
 
   static bool _hasMissingRows({

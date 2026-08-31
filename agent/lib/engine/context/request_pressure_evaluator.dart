@@ -5,6 +5,7 @@ import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
 
 import '../compaction/compaction_enums.dart';
+import '../adapters/llm_adapter.dart';
 import 'compaction_token_estimator.dart';
 import 'request_pressure_snapshot.dart';
 
@@ -37,6 +38,7 @@ class RequestPressureEvaluator {
     required List<Map<String, dynamic>> toolSchemas,
     ConfirmedInputUsageBaseline? confirmedInputUsage,
     int? wireEstimatedInputTokens,
+    WireInputMeasurement? wireMeasurement,
     double thresholdRatio = 1.0,
   }) {
     final historyTokens = CompactionTokenEstimator.estimateMessages(
@@ -65,6 +67,7 @@ class RequestPressureEvaluator {
       systemPrompt: systemPrompt,
       runtimeContext: runtimeContext,
       toolSchemas: toolSchemas,
+      wireMeasurement: wireMeasurement,
     );
     final confirmedInputTokens = baselineDelta == null
         ? null
@@ -134,7 +137,18 @@ class RequestPressureEvaluator {
     required String systemPrompt,
     required String runtimeContext,
     required List<Map<String, dynamic>> toolSchemas,
+    required WireInputMeasurement? wireMeasurement,
   }) {
+    final baselineWire = baseline?.wireMeasurement;
+    if (baseline != null &&
+        baseline.routeSignature == routeSignature &&
+        baselineWire != null &&
+        wireMeasurement != null &&
+        wireMeasurement.extendsMeasurement(baselineWire)) {
+      final delta =
+          wireMeasurement.estimatedTokens - baselineWire.estimatedTokens;
+      return delta < 0 ? null : delta;
+    }
     if (baseline == null ||
         baseline.routeSignature != routeSignature ||
         baseline.systemPrompt != systemPrompt ||

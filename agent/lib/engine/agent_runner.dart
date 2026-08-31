@@ -158,6 +158,7 @@ class AgentRunner {
   ConfirmedInputUsageBaseline? _pendingInputUsageBaseline;
   ConfirmedInputUsageBaseline? _confirmedInputUsageBaseline;
   RequestPressureSnapshot? _lastPreflightPressure;
+  bool _autoCompactionBlockedForRun = false;
   String? currentModelStepId;
   String? _authoritativeRunId;
   String? _authoritativeWorkItemId;
@@ -191,6 +192,7 @@ class AgentRunner {
     _authoritativeWorkItemId = workItemId;
     _authoritativeGeneration = generation;
     _lastSuccessfulLlmRoute = null;
+    _autoCompactionBlockedForRun = false;
     _turnRoute.setTurnRunId(runId);
   }
 
@@ -306,18 +308,29 @@ class AgentRunner {
     }
   }
 
-  void _stageInputUsageBaseline({
+  Future<void> _stageInputUsageBaseline({
     required List<Message> requestMessages,
     required List<Map<String, dynamic>> toolSchemas,
     required String? providerId,
     required String? modelId,
-  }) {
+  }) async {
     if (providerId == null ||
         modelId == null ||
         !getIt.isRegistered<AgentRuntimeService>()) {
       _pendingInputUsageBaseline = null;
       return;
     }
+    final measurementAdapter = _wireMeasurementAdapter(
+      _turnRoute.adapterForTurn(),
+    );
+    final wireMeasurement = measurementAdapter is WireInputUsageMeasurer
+        ? await (measurementAdapter as WireInputUsageMeasurer).measureInput(
+            requestMessages,
+            tools: registry.allTools.map((tool) => tool.schema).toList(),
+            modelOverride: modelId,
+            options: _requestOptionsForTurn(providerId),
+          )
+        : null;
     _pendingInputUsageBaseline = ConfirmedInputUsageBaseline(
       routeSignature: getIt<AgentRuntimeService>().resolveSignature(
         providerId: providerId,
@@ -328,8 +341,12 @@ class AgentRunner {
       systemPrompt: '',
       runtimeContext: '',
       toolSchemas: toolSchemas,
+      wireMeasurement: wireMeasurement,
     );
   }
+
+  static LLMAdapter _wireMeasurementAdapter(LLMAdapter adapter) =>
+      adapter is RateLimitedLLMAdapter ? adapter.providerAdapter : adapter;
 
   AgentRunner(
     this.adapter,
@@ -1161,7 +1178,7 @@ class AgentRunner {
         );
         _providerRequestInFlight = true;
         try {
-          _stageInputUsageBaseline(
+          await _stageInputUsageBaseline(
             requestMessages: effectiveHistory,
             toolSchemas: tools.map((tool) => tool.toJson()).toList(),
             providerId: provider,
@@ -1519,7 +1536,7 @@ class AgentRunner {
         );
         _providerRequestInFlight = true;
         try {
-          _stageInputUsageBaseline(
+          await _stageInputUsageBaseline(
             requestMessages: effectiveHistory,
             toolSchemas: tools.map((tool) => tool.toJson()).toList(),
             providerId: provider,
@@ -2018,6 +2035,9 @@ class AgentRunner {
     String? runtimeSystemPrompt,
     required List<Message> prospectiveHistory,
   }) async {
+    if (_autoCompactionBlockedForRun) {
+      return false;
+    }
     if (!getIt.isRegistered<CompactionCoordinator>() ||
         !getIt.isRegistered<SessionHistoryRevisionRepository>() ||
         !getIt.isRegistered<AgentRuntimeService>()) {
@@ -2040,15 +2060,28 @@ class AgentRunner {
     final policy = getIt.isRegistered<Config>()
         ? getIt<Config>().compactionPolicyForModel(routing.model ?? '')
         : const CompactionPolicy(threshold: 0.80, targetRatio: 0.10);
-    final turnAdapter = _turnRoute.adapterForTurn();
-    final wireEstimatedInputTokens = turnAdapter is WireInputTokenEstimator
-        ? await (turnAdapter as WireInputTokenEstimator).estimateInputTokens(
+    final turnAdapter = _wireMeasurementAdapter(_turnRoute.adapterForTurn());
+    final wireMeasurement = turnAdapter is WireInputUsageMeasurer
+        ? await (turnAdapter as WireInputUsageMeasurer).measureInput(
             prospectiveHistory,
             tools: registry.allTools.map((tool) => tool.schema).toList(),
             modelOverride: routing.model,
             options: _requestOptionsForTurn(routing.providerId),
           )
         : null;
+    final wireEstimatedInputTokens =
+        wireMeasurement?.estimatedTokens ??
+        (turnAdapter is WireInputTokenEstimator
+            ? await (turnAdapter as WireInputTokenEstimator)
+                  .estimateInputTokens(
+                    prospectiveHistory,
+                    tools: registry.allTools
+                        .map((tool) => tool.schema)
+                        .toList(),
+                    modelOverride: routing.model,
+                    options: _requestOptionsForTurn(routing.providerId),
+                  )
+            : null);
     final routeSignature = getIt<AgentRuntimeService>().resolveSignature(
       providerId: routing.providerId,
       modelId: routing.model,
@@ -2067,6 +2100,7 @@ class AgentRunner {
         toolSchemas: toolSchemas,
         confirmedInputUsage: _confirmedInputUsageBaseline,
         wireEstimatedInputTokens: wireEstimatedInputTokens,
+        wireMeasurement: wireMeasurement,
         thresholdRatio: policy.threshold,
       );
       preflightPressure = pressure;
@@ -2078,7 +2112,8 @@ class AgentRunner {
           _lastCompactionCompletedAt != null &&
           DateTime.now().toUtc().difference(_lastCompactionCompletedAt!) <
               _compactionCooldown;
-      if (withinCooldown && !pressure.exceedsThreshold) {
+      if (withinCooldown &&
+          pressure.estimatedRequestTokens <= pressure.effectiveInputBudget) {
         return false;
       }
     }
@@ -2106,8 +2141,12 @@ class AgentRunner {
     );
     if (outcome?.status == CompactionStatus.completed) {
       _lastCompactionCompletedAt = DateTime.now().toUtc();
+      _autoCompactionBlockedForRun = false;
       _refreshCanonicalHistoryAfterCompaction();
       return true;
+    }
+    if (outcome?.status == CompactionStatus.failed) {
+      _autoCompactionBlockedForRun = true;
     }
     return false;
   }

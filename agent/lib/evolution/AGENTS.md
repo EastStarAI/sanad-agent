@@ -20,14 +20,14 @@ This contract applies to `agent/lib/evolution/`.
 ## Compaction boundaries (Plan 53b)
 - `session_compaction_operations` (B1) is the sole owner of durable compaction lifecycle, internal summaries, and range metadata.
 - Canonical `messages` rows are never deleted or replaced by compaction; model projection reads the latest eligible completed boundary plus live message rows.
-- `messages.id` is the durable identity for source/tail ranges; `sessions.history_revision` (B1) provides CAS for snapshot activation.
+- `messages.id` endpoints are durable bounds for source/tail ranges; globally allocated ids may contain numeric gaps after edit/retry, so projection walks the session's ordered rows between those endpoints. `sessions.history_revision` (B1) provides CAS for snapshot activation.
 - `CompactionBoundaryRepository` owns claim, terminal transition, and latest-boundary reads; see `docs/technical/context_compaction.md` §8.
 - Completed boundary identity, ranges, summary, route, and estimates are immutable. The repository alone may reconcile `provider_confirmed_request_tokens_after` exactly once from null to the first same-route provider response; later responses are no-ops.
 - `SessionHistoryRevisionRepository` bumps `sessions.history_revision` on canonical message insert/replace; compaction activation CAS depends on it.
 - `ModelProjectionBuilder` (B2) in `agent/lib/evolution/compaction/` builds ephemeral provider conversation payloads: one projected user summary anchor, verbatim retained tail, and post-boundary messages. System/runtime context stays in `AgentContextAssembler`.
 - `CompactionActivationService` (B3) completes or fails a started operation atomically, bumps projection revision only after successful commit, and publishes one boundary change for interface consumers; it does not drain queued work.
 - `CanonicalConversationTimeline` / `SessionDB.getPersistedMessages()` serve UI and audit; they never filter at compaction boundaries.
-- Partial row-id gaps in the newest completed boundary reject projection via `ModelProjectionException`; fully superseded ranges skip to an older eligible boundary or canonical fallback.
+- Losing exactly one range endpoint in the newest completed boundary rejects projection via `ModelProjectionException`; losing both endpoints treats that range as superseded. Numeric gaps between present endpoints are valid and must not be synthesized or rejected.
 
 ## Scheduling
 - Persist scheduled tasks and restore them on startup.

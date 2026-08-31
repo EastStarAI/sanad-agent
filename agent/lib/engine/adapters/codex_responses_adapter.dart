@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
+
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 
@@ -23,7 +25,7 @@ import 'provider_state_rejected_exception.dart';
 ///
 /// Sync and stream share one request codec and one final response normalizer.
 class CodexResponsesAdapter extends BaseOpenAIAdapter
-    implements WireInputTokenEstimator {
+    implements WireInputTokenEstimator, WireInputUsageMeasurer {
   final _modelsLogger = Logger('CodexResponsesAdapter');
   final CodexModelsService _modelsService;
 
@@ -75,6 +77,21 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
+    return (await measureInput(
+      history,
+      tools: tools,
+      modelOverride: modelOverride,
+      options: options,
+    ))?.estimatedTokens;
+  }
+
+  @override
+  Future<WireInputMeasurement?> measureInput(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
     final body = _codec(options).buildRequest(
       history: history,
       model: resolveModel(modelOverride),
@@ -86,7 +103,17 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       'input': body['input'],
       if (body['tools'] != null) 'tools': body['tools'],
     };
-    return (jsonEncode(measured).length / 4).ceil();
+    String fingerprint(Object? value) =>
+        sha256.convert(utf8.encode(jsonEncode(value))).toString();
+    final input = (body['input'] as List?) ?? const [];
+    return WireInputMeasurement(
+      estimatedTokens: (jsonEncode(measured).length / 4).ceil(),
+      stableMaterialFingerprint: fingerprint({
+        'instructions': body['instructions'],
+        'tools': body['tools'],
+      }),
+      inputItemFingerprints: input.map(fingerprint).toList(growable: false),
+    );
   }
 
   @override

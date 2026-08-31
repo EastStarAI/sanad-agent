@@ -51,3 +51,4 @@ This contract applies to `agent/lib/engine/runtime/`.
 - Latest provider usage replaces the presentation snapshot; normalize aliases, clear absent fields, and do not infer missing totals.
 - Internal accumulated usage may aggregate for accounting but never becomes the client context-usage projection.
 - Cached input remains an independent provider value; cache-write usage is excluded from client projection.
+- One failed automatic compaction opens a breaker for the active run; later model steps in that run must not repeat the attempt, while a new run and manual `/compact` remain eligible.

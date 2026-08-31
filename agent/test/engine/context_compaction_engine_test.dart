@@ -1,6 +1,7 @@
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/context/context.dart';
@@ -645,6 +646,52 @@ Remaining Work and Safest Next Action: Run verification
       expect(snapshot.measurementKind, CompactionMeasurementKind.confirmed);
       expect(snapshot.exceedsThreshold, isTrue);
     });
+
+    test(
+      'provider-confirmed usage outranks an inflated full-wire estimate',
+      () {
+        final evaluator = RequestPressureEvaluator();
+        final baselineWire = WireInputMeasurement(
+          estimatedTokens: 315_700,
+          stableMaterialFingerprint: 'instructions-and-tools',
+          inputItemFingerprints: ['measured-prefix'],
+        );
+        final nextWire = WireInputMeasurement(
+          estimatedTokens: 316_900,
+          stableMaterialFingerprint: 'instructions-and-tools',
+          inputItemFingerprints: ['measured-prefix', 'small-tool-suffix'],
+        );
+        final snapshot = evaluator.evaluate(
+          routeSignature: _route(),
+          contextWindowTokens: 400_000,
+          conversationMessages: [
+            Message(role: MessageRole.user, content: 'local metadata changed'),
+          ],
+          systemPrompt: '',
+          runtimeContext: '',
+          toolSchemas: const [],
+          confirmedInputUsage: ConfirmedInputUsageBaseline(
+            routeSignature: _route(),
+            inputTokens: 260_537,
+            conversationMessages: [
+              Message(role: MessageRole.user, content: 'older local form'),
+            ],
+            systemPrompt: '',
+            runtimeContext: '',
+            toolSchemas: const [],
+            wireMeasurement: baselineWire,
+          ),
+          wireEstimatedInputTokens: nextWire.estimatedTokens,
+          wireMeasurement: nextWire,
+          thresholdRatio: 0.80,
+        );
+
+        expect(snapshot.measurementKind, CompactionMeasurementKind.mixed);
+        expect(snapshot.confirmedInputTokens, 260_537);
+        expect(snapshot.estimatedRequestTokens, 261_737);
+        expect(snapshot.exceedsThreshold, isFalse);
+      },
+    );
 
     test(
       'invalidates confirmed usage after route or measured-prefix change',

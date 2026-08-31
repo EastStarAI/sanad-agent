@@ -4,6 +4,7 @@ import 'package:sanad_agent/core/models/message.dart';
 
 import '../compaction/compaction_enums.dart';
 import '../compaction/compaction_pressure.dart';
+import '../adapters/llm_adapter.dart';
 
 /// Provider-confirmed input usage tied to the exact request material it measured.
 ///
@@ -18,6 +19,7 @@ class ConfirmedInputUsageBaseline {
   final String systemPrompt;
   final String runtimeContext;
   final List<Map<String, dynamic>> toolSchemas;
+  final WireInputMeasurement? wireMeasurement;
 
   ConfirmedInputUsageBaseline({
     required this.routeSignature,
@@ -26,6 +28,7 @@ class ConfirmedInputUsageBaseline {
     required this.systemPrompt,
     required this.runtimeContext,
     required List<Map<String, dynamic>> toolSchemas,
+    this.wireMeasurement,
   }) : assert(inputTokens >= 0),
        conversationMessages = List.unmodifiable(conversationMessages),
        toolSchemas = List.unmodifiable(toolSchemas);
@@ -38,6 +41,7 @@ class ConfirmedInputUsageBaseline {
       systemPrompt: systemPrompt,
       runtimeContext: runtimeContext,
       toolSchemas: toolSchemas,
+      wireMeasurement: wireMeasurement,
     );
   }
 }

@@ -31,10 +31,19 @@ import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'package:test/test.dart';
 
-class _PreflightAdapter implements LLMAdapter {
+class _PreflightAdapter implements LLMAdapter, WireInputUsageMeasurer {
   final int contextLimit;
+  final WireInputMeasurement? wireMeasurement;
 
-  _PreflightAdapter({this.contextLimit = 3_000});
+  _PreflightAdapter({this.contextLimit = 3_000, this.wireMeasurement});
+
+  @override
+  Future<WireInputMeasurement?> measureInput(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async => wireMeasurement;
 
   @override
   Future<int> getContextLimit([String? modelOverride]) async => contextLimit;
@@ -77,6 +86,13 @@ class _FakeRuntimeService extends AgentRuntimeService {
       configRevision: 1,
       credentialRevision: 1,
     );
+  }
+}
+
+class _FailingSummarizer implements CompactionSummarizer {
+  @override
+  Future<String> summarize({required String prompt}) {
+    throw StateError('synthetic summarizer failure');
   }
 }
 
@@ -241,6 +257,44 @@ void main() {
     expect(runner.history.length, canonicalLength);
   });
 
+  test('one failed auto compaction opens the per-run breaker', () async {
+    sessions.replaceMessages('session-preflight', [
+      Message(role: MessageRole.user, content: 'goal: exercise breaker'),
+      for (var index = 0; index < 500; index++)
+        Message(
+          role: MessageRole.user,
+          content: 'large request $index ${'x' * 1_000}',
+        ),
+    ]);
+    var startedEvents = 0;
+    getIt.registerSingleton<CompactionCoordinator>(
+      CompactionCoordinator(
+        engine: ContextCompactionEngine(summarizer: _FailingSummarizer()),
+        boundaries: boundaries,
+        activation: CompactionActivationService(
+          boundaries: boundaries,
+          projectionRevisions: SessionProjectionRevisionRepository(state),
+        ),
+        projectionBuilder: getIt<ModelProjectionBuilder>(),
+        onLifecycleEvent: (event) {
+          if (event.status == CompactionStatus.started) startedEvents++;
+        },
+      ),
+    );
+
+    await runner.debugPrepareProviderHistory();
+    expect(runner.debugLastPreflightPressure?.exceedsThreshold, isTrue);
+    await runner.debugPrepareProviderHistory();
+
+    expect(startedEvents, 1);
+    expect(
+      boundaries
+          .listLifecycleForSession('session-preflight')
+          .where((record) => record.status == CompactionStatus.failed),
+      hasLength(1),
+    );
+  });
+
   test(
     'next preflight uses provider input baseline instead of full estimate',
     () async {
@@ -310,6 +364,74 @@ void main() {
         greaterThan(7_000),
         reason:
             '7,500 provider-confirmed input tokens must drive admission even when the chars/4 estimate is small',
+      );
+    },
+  );
+
+  test(
+    '65 percent provider usage plus a small wire suffix does not auto compact',
+    () async {
+      final now = DateTime.utc(2026, 8, 31);
+      sessions.saveSession(
+        SessionState(
+          sessionId: 'session-provider-priority',
+          providerId: 'provider-1',
+          model: 'gpt-4o',
+          createdAt: now,
+          updatedAt: now,
+          lastUserMessageAt: now,
+        ),
+      );
+      sessions.replaceMessages('session-provider-priority', [
+        Message(role: MessageRole.user, content: 'large canonical history'),
+        Message(role: MessageRole.tool, content: 'small new result'),
+      ]);
+      final nextWire = WireInputMeasurement(
+        estimatedTokens: 99_000,
+        stableMaterialFingerprint: 'stable-wire-material',
+        inputItemFingerprints: ['measured-prefix', 'small-tool-suffix'],
+      );
+      final usageRegistry = ToolsRegistry();
+      final usageRunner = AgentRunner(
+        _PreflightAdapter(contextLimit: 400_000, wireMeasurement: nextWire),
+        usageRegistry,
+        sessionManager,
+        existingSessionId: 'session-provider-priority',
+      );
+      usageRunner.debugSetConfirmedInputUsageBaseline(
+        ConfirmedInputUsageBaseline(
+          routeSignature: getIt<AgentRuntimeService>().resolveSignature(
+            providerId: 'provider-1',
+            modelId: 'gpt-4o',
+          ),
+          inputTokens: 83_200,
+          conversationMessages: const [],
+          systemPrompt: '',
+          runtimeContext: '',
+          toolSchemas: usageRegistry.allTools
+              .map((tool) => tool.schema.toJson())
+              .toList(),
+          wireMeasurement: WireInputMeasurement(
+            estimatedTokens: 98_500,
+            stableMaterialFingerprint: 'stable-wire-material',
+            inputItemFingerprints: ['measured-prefix'],
+          ),
+        ),
+      );
+
+      await usageRunner.debugPrepareProviderHistory();
+
+      expect(
+        usageRunner.debugLastPreflightPressure?.estimatedRequestTokens,
+        lessThan(98_304),
+      );
+      expect(
+        usageRunner.debugLastPreflightPressure?.measurementKind,
+        CompactionMeasurementKind.mixed,
+      );
+      expect(
+        boundaries.listCompletedForSession('session-provider-priority'),
+        isEmpty,
       );
     },
   );

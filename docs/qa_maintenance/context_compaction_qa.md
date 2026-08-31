@@ -72,6 +72,9 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] Full client fast suite — 1150 passed; 1 skipped (2026-08-31 Task 53g delivery follow-up).
 - [x] Full agent fast suite — 1365 passed; 12 skipped. The isolated-runner regression now skips compaction when `AgentRuntimeService` is intentionally absent; the independently reproduced DelegateTaskTool failure is closed (2026-08-31 Task 53g delivery follow-up).
 - [x] Compaction AgentRunner/history tests prepare and clean an explicit temporary Sanad Home rather than depending on leaked suite order; the focused Linux-CI repair bundle passes 7/7 (2026-08-31 Task 53g delivery follow-up).
+- [x] Provider-confirmed input remains authoritative when Codex wire instructions/tools and the ordered input prefix are unchanged; the `260537 + 1200 = 261737` regression stays below the 80% threshold even when the rough full-wire estimate is `316900` — `context_compaction_engine_test.dart`, `codex_responses_adapter_test.dart`, and `compaction_preflight_integration_test.dart` (2026-08-31 live Auto regression remediation).
+- [x] Boundary activation and projection accept edit/retry AUTOINCREMENT gaps such as `[1,5,6,7]` while still rejecting loss of exactly one durable endpoint — `compaction_boundary_repository_test.dart`, `compaction_operation_record_test.dart`, and `model_projection_builder_test.dart` (2026-08-31 live Auto regression remediation).
+- [x] Two preflight calls after one synthetic Auto failure emit exactly one started/failed lifecycle because the active-run breaker blocks the repeat — `compaction_preflight_integration_test.dart`; activation diagnostics preserve `sourceRevisionStale`; full agent suite 1373 passed / 12 skipped and isolated daemon E2E 3/3 (2026-08-31 live Auto regression remediation).
 
 ## Review notes (2026-08-29 evening)
 

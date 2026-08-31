@@ -313,6 +313,52 @@ void main() {
     expect((await pending)?.status, CompactionStatus.completed);
   });
 
+  test('activation failure persists its terminal repository outcome', () async {
+    sessions.replaceMessages(
+      'session-a',
+      _heavyTimeline().map((entry) => entry.message).toList(),
+    );
+    final canonical = ModelProjectionBuilder(
+      sessions: sessions,
+      boundaries: boundaries,
+    ).loadCanonicalTimeline('session-a');
+    final summarizer = _BlockingSummarizer();
+    final blockingCoordinator = CompactionCoordinator(
+      engine: ContextCompactionEngine(summarizer: summarizer),
+      boundaries: boundaries,
+      activation: CompactionActivationService(
+        boundaries: boundaries,
+        projectionRevisions: SessionProjectionRevisionRepository(state),
+      ),
+      projectionBuilder: ModelProjectionBuilder(
+        sessions: sessions,
+        boundaries: boundaries,
+      ),
+      onLifecycleEvent: lifecycle.add,
+    );
+    final pending = blockingCoordinator.runCompaction(
+      request: requestFor(
+        sessionId: 'session-a',
+        timeline: [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ],
+      ),
+      force: true,
+    );
+    await summarizer.entered.future;
+    SessionHistoryRevisionRepository.bumpDatabase(state.db, 'session-a');
+    summarizer.release.complete();
+
+    final outcome = await pending;
+    final persisted = boundaries.findById(outcome!.compactionId);
+    expect(outcome.failureReason, CompactionFailureReason.persistenceFailed);
+    expect(persisted?.failureDetailJson, contains('sourceRevisionStale'));
+  });
+
   test('summarizer failure closes the early claim as typed failed', () async {
     sessions.replaceMessages(
       'session-a',

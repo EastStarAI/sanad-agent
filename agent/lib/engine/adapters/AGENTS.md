@@ -20,6 +20,7 @@ This contract applies to `agent/lib/engine/adapters/`.
 - Sync and stream for one protocol reuse the same request builder and final normalization.
 - Structured reasoning fields take precedence over textual thought tags.
 - Codex Responses transport reuses its codec, SSE accumulator, policy, and model service; do not implement parallel contracts in the adapter.
+- Adapter-owned wire measurement fingerprints instructions, tools, and ordered input items. When a later request is a strict wire extension, provider-confirmed input remains authoritative and only the appended wire suffix is estimated.
 - Codex Responses API requires `stream: true` on every request; the sync `generateResponse` path sends a streaming request and consumes the SSE events internally, returning one complete `AgentResponse` — callers see no difference.
 - Responses requests keep server storage disabled and encrypted reasoning replay explicitly scoped.
 - Anthropic, OpenAI-compatible, Ollama, and other protocols keep translation isolated in their owning adapters.

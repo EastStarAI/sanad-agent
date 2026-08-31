@@ -45,7 +45,10 @@ class ModelProjectionBuilder {
       for (final entry in timeline.messages) entry.rowId: entry.message,
     };
     _assertRangePresent(byId, boundary.retainedTailRange, 'retained tail');
-    final tailMessages = _messagesForRange(byId, boundary.retainedTailRange);
+    final tailMessages = _messagesForRange(
+      timeline.messages,
+      boundary.retainedTailRange,
+    );
     final postBoundaryMessages = timeline.messages
         .where((entry) => entry.rowId > boundary.retainedTailRange.end.rowId)
         .map((entry) => entry.message)
@@ -150,27 +153,25 @@ class ModelProjectionBuilder {
     CompactionMessageRange range,
     String label,
   ) {
-    for (var id = range.start.rowId; id <= range.end.rowId; id++) {
-      if (!byId.containsKey(id)) {
-        throw ModelProjectionException(
-          'missing $label message row id $id for active boundary',
-        );
-      }
+    for (final id in {range.start.rowId, range.end.rowId}) {
+      if (byId.containsKey(id)) continue;
+      throw ModelProjectionException(
+        'missing $label message row id $id for active boundary',
+      );
     }
   }
 
   List<Message> _messagesForRange(
-    Map<int, Message> byId,
+    List<PersistedMessage> timeline,
     CompactionMessageRange range,
   ) {
-    final messages = <Message>[];
-    for (var id = range.start.rowId; id <= range.end.rowId; id++) {
-      final message = byId[id];
-      if (message == null) {
-        throw ModelProjectionException('missing message row id $id');
-      }
-      messages.add(message);
-    }
-    return messages;
+    return timeline
+        .where(
+          (entry) =>
+              entry.rowId >= range.start.rowId &&
+              entry.rowId <= range.end.rowId,
+        )
+        .map((entry) => entry.message)
+        .toList(growable: false);
   }
 }

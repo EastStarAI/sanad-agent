@@ -178,6 +178,75 @@ void main() {
     },
   );
 
+  test('projection walks session rows instead of numeric ids across gaps', () {
+    sessions.replaceMessages('session-1', [
+      Message(role: MessageRole.user, content: 'old-1'),
+      Message(role: MessageRole.user, content: 'old-2'),
+      Message(role: MessageRole.assistant, content: 'tail-1'),
+      Message(role: MessageRole.user, content: 'tail-2'),
+      Message(role: MessageRole.user, content: 'after'),
+    ]);
+    sessions.replaceMessages('session-1', [
+      Message(role: MessageRole.user, content: 'old-1'),
+      Message(role: MessageRole.user, content: 'old-2 edited'),
+      Message(role: MessageRole.assistant, content: 'tail-1 edited'),
+      Message(role: MessageRole.user, content: 'tail-2 edited'),
+      Message(role: MessageRole.user, content: 'after edited'),
+    ]);
+    final timeline = builder.loadCanonicalTimeline('session-1').messages;
+    expect(timeline.map((entry) => entry.rowId), [1, 6, 7, 8, 9]);
+    final source = CompactionMessageRange(
+      start: CompactionMessageIdentity(timeline[0].rowId),
+      end: CompactionMessageIdentity(timeline[1].rowId),
+    );
+    final tail = CompactionMessageRange(
+      start: CompactionMessageIdentity(timeline[2].rowId),
+      end: CompactionMessageIdentity(timeline[3].rowId),
+    );
+    final startedAt = DateTime.utc(2026, 8, 29, 1);
+    final claim = boundaries.tryClaim(
+      compactionId: 'cmp-gapped-projection',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.auto,
+      sourceRange: source,
+      retainedTailRange: tail,
+      routeSignature: _route(),
+      startedAt: startedAt,
+    );
+    const summary = CompactionInternalSummary(
+      currentGoal: 'Project gapped rows',
+      remainingWork: 'Continue',
+    );
+    final completed = boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-gapped-projection',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.auto,
+        sourceRevision: claim.record!.sourceHistoryRevision,
+        sourceRange: source,
+        retainedTailRange: tail,
+        internalSummary: summary,
+        continuityResult: CompactionContinuityResult.fromSummary(summary),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 400_000,
+          estimatedRequestTokensBefore: 320_000,
+          estimatedRequestTokensAfter: 40_000,
+          retainedTailTokens: 10_000,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: startedAt,
+      completedAt: DateTime.utc(2026, 8, 29, 2),
+    );
+    expect(completed.outcome, CompactionTerminalOutcome.completed);
+
+    final projection = builder.buildForSession('session-1');
+    expect(
+      projection.conversationMessages.map((message) => message.content),
+      containsAllInOrder(['tail-1 edited', 'tail-2 edited', 'after edited']),
+    );
+  });
+
   test('reload builds identical projection from storage only', () {
     sessions.replaceMessages('session-1', [
       Message(role: MessageRole.user, content: 'one'),
