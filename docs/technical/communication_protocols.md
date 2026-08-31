@@ -697,6 +697,16 @@ output; only an explicit Stop uses `reason=cancelled_by_user`. The event
 envelope keeps the session and opaque event identities; the payload does not
 duplicate tool output in `content`.
 
+When startup terminalizes a crashed shell, the recovery checkpoint keeps that
+tool call as a pending history-reconciliation member even though process
+execution is already terminal. Before the next provider invocation, canonical
+history restores the original assistant `tool_use` followed by exactly one
+matching `tool_result` with the same `tool_call_id`. A later provider-issued
+call is a separate tool use and must not replace the recovered pair in history
+or presentation. Recovery does not constrain the model's next decision: if the
+model requests the same command again, that request is recorded and presented
+as a new pair with its own `tool_call_id` and terminal result.
+
 For an active tool Stop, delivery order is the durable cancelled `tool_result`,
 then `stopped`, then the final `session.execution_state_changed` snapshot for
 `idle` or preserved newer queued work. Durable work cancellation commits before

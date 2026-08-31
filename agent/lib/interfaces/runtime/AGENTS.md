@@ -61,7 +61,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - A safe preparation may complete as a permanent supervised stop when an external launcher is taking ownership; this must preserve the checkpoint boundary while preventing the old supervisor from respawning.
 - Resume interrupted tools automatically only when every executing operation explicitly declares restart replay safety and ownership metadata is complete.
 - Unsafe, ownerless, or ambiguous interrupted work becomes blocked rather than guessed complete.
-- A crashed foreground shell with owned persisted progress is terminalized once as `interrupted`, including bounded partial output and verified containment cleanup, then resumes the model without replaying the command. Missing or conflicting ownership remains blocked.
+- A crashed foreground shell with owned persisted progress is terminalized once as `interrupted`, including bounded partial output and verified containment cleanup. Resume restores the original assistant tool call and its matching terminal result into canonical history before invoking the model; recovery itself does not replay the command. Missing or conflicting ownership remains blocked.
 - Explicit manual Retry or Change Provider may close ambiguous unsafe tools with a neutral unknown-outcome result and continue, but must never replay their side effects.
 - An unresolved suspended checkpoint covering every executing tool call is an interactive `waiting` owner, not an ambiguous interrupted-tool failure.
 - Repeated startup while an interactive checkpoint is unanswered preserves the same request in `waiting`; it emits neither an interruption result nor a blocked notice.

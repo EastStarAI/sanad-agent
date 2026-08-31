@@ -27,6 +27,7 @@ This contract applies to `agent/lib/engine/runtime/`.
   descriptor exactly once into the original tool result; it never replays the
   external mutation.
 - Automatic resume fails closed on ambiguous unsafe tools; explicit manual continuation records a neutral unknown-outcome result without replaying the side effect.
+- A tool terminalized during startup remains a recovery batch member until its original assistant call and completed result have been restored with the same tool-call id before the next provider invocation.
 - Resume only through the interface runtime's claimed owner.
 
 ## Semantic Continuation

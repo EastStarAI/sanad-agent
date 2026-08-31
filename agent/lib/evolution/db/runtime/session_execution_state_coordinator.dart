@@ -534,6 +534,7 @@ class SessionExecutionStateCoordinator {
         metadata['executing_tool_progress'] as Map? ?? const {},
       );
       final persistedToolIds = <String>{};
+      final persistedToolArguments = <String, Map<String, dynamic>>{};
       final rows = tx.db.select(
         'SELECT data FROM messages WHERE session_id = ? ORDER BY id ASC',
         [sessionId],
@@ -542,6 +543,9 @@ class SessionExecutionStateCoordinator {
         final decoded = jsonDecode(row['data'] as String);
         if (decoded is! Map) continue;
         final message = Message.fromJson(Map<String, dynamic>.from(decoded));
+        for (final toolCall in message.toolCalls ?? const []) {
+          persistedToolArguments[toolCall.id] = toolCall.arguments;
+        }
         if (message.role == MessageRole.tool && message.toolCallId != null) {
           persistedToolIds.add(message.toolCallId!);
         }
@@ -550,7 +554,7 @@ class SessionExecutionStateCoordinator {
       final committedIds = <String>[];
       for (final entry in checkpointOutputs.entries) {
         final toolCallId = entry.key;
-        final output = entry.value;
+        final output = Map<String, dynamic>.from(entry.value);
         if (!executing.contains(toolCallId) ||
             completedResults.containsKey(toolCallId) ||
             completedOutputs.containsKey(toolCallId) ||
@@ -567,6 +571,14 @@ class SessionExecutionStateCoordinator {
             historyMessage.role != MessageRole.tool ||
             historyMessage.toolCallId != toolCallId) {
           continue;
+        }
+
+        // Startup recovery constructs the terminal record from the durable
+        // process snapshot. Recover the arguments from the persisted assistant
+        // call so the provider receives one faithful tool-use/result pair.
+        final originalArguments = persistedToolArguments[toolCallId];
+        if (originalArguments != null) {
+          output['arguments'] = originalArguments;
         }
 
         completedResults[toolCallId] = output['result']?.toString() ?? '';
@@ -595,6 +607,14 @@ class SessionExecutionStateCoordinator {
       metadata['completed_tool_results'] = completedResults;
       metadata['completed_tool_outputs'] = completedOutputs;
       metadata['checkpoint_kind'] = 'after_tool_result';
+      final restartTerminalizedToolIds = <String>{
+        ...List<String>.from(
+          metadata['restart_terminalized_tool_ids'] as List? ?? const [],
+        ),
+        ...committedIds,
+      };
+      metadata['restart_terminalized_tool_ids'] = restartTerminalizedToolIds
+          .toList();
       if (executing.isEmpty) {
         metadata.remove('currently_executing_tools');
         metadata.remove('tool_started_at');

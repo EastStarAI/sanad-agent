@@ -1931,6 +1931,7 @@ class AgentRunner {
     final recoveryToolCallIds = <String>{
       ...result.ambiguousToolCallIds,
       ...result.deferredToolCallIds,
+      ...result.restartTerminalizedToolCallIds,
     }.toList();
     final recoveryBatch = recoveryToolCallIds.isEmpty
         ? null

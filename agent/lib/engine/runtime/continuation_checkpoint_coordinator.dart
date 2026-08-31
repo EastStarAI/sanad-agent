@@ -3,6 +3,7 @@ import '../../core/secrets_redactor.dart';
 import '../../core/models/tool_call.dart';
 import '../../evolution/db/persisted_runtime_state_repository.dart';
 import 'deferred_tool_result.dart';
+import 'tool_terminal_record.dart';
 
 /// Builds, persists, and restores per-turn continuation checkpoints so a
 /// daemon crash mid-tool-batch can be safely resumed without replaying
@@ -64,6 +65,7 @@ class ContinuationCheckpointCoordinator {
     Map<String, Map<String, dynamic>>? additionalToolOutputs,
     Map<String, Map<String, dynamic>>? additionalDeferredToolResults,
     Iterable<String>? removeDeferredToolCallIds,
+    Iterable<String>? removeRestartTerminalizedToolCallIds,
     Map<String, bool>? toolReplaySafety,
     String? checkpointKind,
     int? resumeHistoryLength,
@@ -113,6 +115,20 @@ class ContinuationCheckpointCoordinator {
     }
     if (outputs.isNotEmpty) {
       meta['completed_tool_outputs'] = outputs;
+    }
+
+    if (removeRestartTerminalizedToolCallIds != null) {
+      final restartTerminalizedToolIds = <String>{
+        ...List<String>.from(
+          meta['restart_terminalized_tool_ids'] as List? ?? const [],
+        ),
+      }..removeAll(removeRestartTerminalizedToolCallIds);
+      if (restartTerminalizedToolIds.isEmpty) {
+        meta.remove('restart_terminalized_tool_ids');
+      } else {
+        meta['restart_terminalized_tool_ids'] = restartTerminalizedToolIds
+            .toList();
+      }
     }
 
     final deferredResults = Map<String, dynamic>.from(
@@ -330,11 +346,15 @@ class ContinuationCheckpointCoordinator {
     final completedResults = Map<String, dynamic>.from(
       meta['completed_tool_results'] as Map? ?? const {},
     );
+    final completedOutputs = Map<String, dynamic>.from(
+      meta['completed_tool_outputs'] as Map? ?? const {},
+    );
     final toolReplaySafety = Map<String, dynamic>.from(
       meta['tool_replay_safety'] as Map? ?? const {},
     );
     final ambiguousToolCallIds = <String>[];
     final deferredToolCallIds = <String>[];
+    final restartTerminalizedToolCallIds = <String>[];
     final deferredResults = Map<String, dynamic>.from(
       meta['deferred_tool_results'] as Map? ?? const {},
     );
@@ -359,6 +379,21 @@ class ContinuationCheckpointCoordinator {
           'Cannot safely resume session $sessionId: tool $toolId has ambiguous execution state and is not idempotent.',
         );
       }
+    }
+    for (final toolId in List<String>.from(
+      meta['restart_terminalized_tool_ids'] as List? ?? const [],
+    )) {
+      final output = completedOutputs[toolId];
+      if (!completedResults.containsKey(toolId) ||
+          output is! Map ||
+          output['status'] != ToolTerminalStatus.interrupted.name ||
+          output['reason'] != 'daemon_interrupted') {
+        throw StateError(
+          'Cannot safely resume session $sessionId: restart-terminalized '
+          'tool $toolId has incomplete interruption evidence.',
+        );
+      }
+      restartTerminalizedToolCallIds.add(toolId);
     }
 
     final resumeHistoryLengthRaw = meta['resume_history_length'];
@@ -389,6 +424,7 @@ class ContinuationCheckpointCoordinator {
       resumeHistoryLength: resumeHistoryLength,
       ambiguousToolCallIds: ambiguousToolCallIds,
       deferredToolCallIds: deferredToolCallIds,
+      restartTerminalizedToolCallIds: restartTerminalizedToolCallIds,
       savedTurnStartIndex:
           (savedTurnStart != null &&
               savedTurnStart >= 0 &&
@@ -467,6 +503,7 @@ class ResumeResult {
   final String? savedModelStepId;
   final List<String> ambiguousToolCallIds;
   final List<String> deferredToolCallIds;
+  final List<String> restartTerminalizedToolCallIds;
 
   const ResumeResult({
     required this.resumeHistoryLength,
@@ -474,6 +511,7 @@ class ResumeResult {
     this.savedModelStepId,
     this.ambiguousToolCallIds = const [],
     this.deferredToolCallIds = const [],
+    this.restartTerminalizedToolCallIds = const [],
   });
 
   static const ResumeResult empty = ResumeResult(resumeHistoryLength: -1);

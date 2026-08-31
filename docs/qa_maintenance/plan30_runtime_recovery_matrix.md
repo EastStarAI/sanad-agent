@@ -117,7 +117,7 @@ This matrix owns verification for:
 74. **Safe missing-checkpoint repair**: an owned durable user message with no provider/tool/result/deferred evidence is repaired once to `initial_model_request`; ambiguous evidence still blocks, and a failed resume emits no final answer.
 75. **Repeated ask-user force stop**: a daemon-backed isolated test issues `system_ask_user`, kills the daemon with `SIGKILL` twice, reopens the same on-disk state after each kill, and observes the same pending request in `waiting` without a blocked notice. One answer then produces one tool result and one final answer.
 76. **Typed shell interruption**: explicit Stop alone reports `cancelled_by_user`; shutdown reports `agent_interrupted`; timeout reports `timed_out`. Timeout and shutdown preserve bounded partial stdout/stderr.
-77. **Crashed shell settlement**: persisted redacted progress and process fingerprint let startup verify/reclaim the owned containment, atomically commit one `interrupted` tool result with unknown outcome, and continue without replay. A reused or unverifiable PID is never signaled.
+77. **Crashed shell settlement**: persisted redacted progress, original arguments, and process fingerprint let startup verify/reclaim the owned containment, atomically commit one `interrupted` tool result with unknown outcome, and continue without recovery replay by restoring the original `tool use + tool result` pair to canonical history before provider invocation. A later provider-issued call remains a separate pair; a reused or unverifiable PID is never signaled.
 78. **Notice revision convergence**: a runtime notice older than the accepted execution snapshot is rejected or removed, and a stale notice clear cannot erase a newer notice.
 
 ## Current Status

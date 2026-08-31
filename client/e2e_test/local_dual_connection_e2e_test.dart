@@ -733,7 +733,7 @@ void main() {
   );
 
   test(
-    'terminalizes a force-stopped shell with partial output and never calls it user cancellation',
+    'restores the original force-stopped shell pair with truthful partial output',
     () async {
       final agentDir = Directory(
         '${Directory.current.parent.path}${Platform.pathSeparator}agent',

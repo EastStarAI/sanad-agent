@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'dart:async';
+import 'dart:convert';
 import 'package:test/test.dart';
 import 'package:mockito/mockito.dart';
 import 'package:mockito/annotations.dart';
@@ -14,6 +15,7 @@ import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
@@ -5326,6 +5328,27 @@ Use the review skill.''',
           "INSERT INTO sessions (session_id, model, created_at, updated_at) "
           "VALUES ('$sessionId', 'gpt-4o', '2026-08-31', '2026-08-31')",
         );
+        stateDb.db.execute(
+          'INSERT INTO messages (session_id, data) VALUES (?, ?)',
+          [
+            sessionId,
+            jsonEncode(
+              Message(
+                role: MessageRole.assistant,
+                toolCalls: [
+                  ToolCall(
+                    id: 'shell-call',
+                    name: 'shell_execute',
+                    arguments: const {
+                      'command': 'printf durable-before-crash; sleep 120',
+                      'timeout_ms': 60000,
+                    },
+                  ),
+                ],
+              ).toJson(),
+            ),
+          ],
+        );
         repo.insertWorkItem(
           SessionWorkItem(
             workItemId: 'work-crashed-shell',
@@ -5374,13 +5397,21 @@ Use the review skill.''',
         final item = repo.findWorkItem('work-crashed-shell')!;
         expect(item.state, SessionWorkState.completed);
         expect(item.continuationMetadata['currently_executing_tools'], isNull);
+        final recoveredOutput =
+            (item.continuationMetadata['completed_tool_outputs']
+                    as Map)['shell-call']
+                as Map;
+        expect(recoveredOutput['arguments'], {
+          'command': 'printf durable-before-crash; sleep 120',
+          'timeout_ms': 60000,
+        });
         final rows = stateDb.db.select(
           'SELECT data FROM messages WHERE session_id = ?',
           [sessionId],
         );
         final persisted = rows.map((row) => row['data'].toString()).join('\n');
         expect(persisted, contains('durable-before-crash'));
-        expect(persisted, contains('stopped unexpectedly'));
+        expect(persisted, contains('interrupted unexpectedly'));
         expect(persisted, isNot(contains('cancelled by user')));
         verifyNever(
           mockAgentRunner.streamMessage(

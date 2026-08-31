@@ -742,7 +742,10 @@ class SessionRecoveryRestorer {
           ? null
           : await ProcessTreeController.terminatePersisted(fingerprint);
       final interruption =
-          'The command was interrupted because the agent stopped unexpectedly. Its final outcome is unknown.';
+          'The execution was interrupted unexpectedly because the agent '
+          'stopped. Its outcome is unknown. Review the partial result before '
+          'proceeding, and check the current system state before re-running '
+          'the same execution.';
       final message = partial.isEmpty
           ? interruption
           : '$partial\n$interruption';

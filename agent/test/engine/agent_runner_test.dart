@@ -4372,6 +4372,134 @@ void main() {
       );
 
       test(
+        'restart-terminalized shell restores original tool pair before model continuation',
+        () async {
+          final session = sessionManager.createSession('gpt-4o');
+          sessionManager.saveSessionHistory(session.sessionId, [
+            Message(role: MessageRole.user, content: 'run once'),
+            Message(
+              role: MessageRole.assistant,
+              toolCalls: [
+                ToolCall(
+                  id: 'call-crashed-shell',
+                  name: 'shell_execute',
+                  arguments: const {
+                    'command': 'printf partial; sleep 120',
+                    'timeout_ms': 60000,
+                  },
+                ),
+              ],
+            ),
+            Message(
+              role: MessageRole.tool,
+              content: 'partial\nThe execution was interrupted unexpectedly.',
+              toolCallId: 'call-crashed-shell',
+              metadata: const {
+                'status': 'interrupted',
+                'reason': 'daemon_interrupted',
+                'is_error': true,
+              },
+            ),
+          ]);
+
+          final stateDb = AgentStateDatabase.inMemory();
+          final repo = PersistedRuntimeStateRepository(stateDb.db);
+          GetIt.I.registerSingleton<PersistedRuntimeStateRepository>(repo);
+          addTearDown(() {
+            GetIt.I.unregister<PersistedRuntimeStateRepository>();
+            stateDb.dispose();
+          });
+          stateDb.db.execute(
+            "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('${session.sessionId}', 'gpt-4o', '2026-08-31', '2026-08-31')",
+          );
+          repo.insertWorkItem(
+            SessionWorkItem(
+              workItemId: 'w-restart-terminalized-shell',
+              sessionId: session.sessionId,
+              requestId: 'req-restart-terminalized-shell',
+              sequence: 1,
+              state: SessionWorkState.resuming,
+              attempt: 0,
+              continuationMetadata: const {
+                'checkpoint_kind': 'after_tool_result',
+                'resume_history_length': 1,
+                'currentTurnStartIndex': 0,
+                'restart_terminalized_tool_ids': ['call-crashed-shell'],
+                'completed_tool_results': {
+                  'call-crashed-shell':
+                      'partial\nThe execution was interrupted unexpectedly.',
+                },
+                'completed_tool_outputs': {
+                  'call-crashed-shell': {
+                    'tool_call_id': 'call-crashed-shell',
+                    'tool_name': 'shell_execute',
+                    'arguments': {
+                      'command': 'printf partial; sleep 120',
+                      'timeout_ms': 60000,
+                    },
+                    'result':
+                        'partial\nThe execution was interrupted unexpectedly.',
+                    'is_error': true,
+                    'sent_to_provider': false,
+                    'status': 'interrupted',
+                    'reason': 'daemon_interrupted',
+                  },
+                },
+              },
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+          );
+
+          var shellExecutions = 0;
+          registry.registerTool(
+            GateDTestTool('shell_execute', (args, context) async {
+              shellExecutions++;
+              return 'must not execute during restoration';
+            }),
+          );
+          final adapter = MockAdapter([
+            AgentResponse(
+              message: Message(
+                role: MessageRole.assistant,
+                content: 'reviewed interruption',
+              ),
+            ),
+          ]);
+          final runner = AgentRunner(
+            adapter,
+            registry,
+            sessionManager,
+            existingSessionId: session.sessionId,
+          );
+
+          expect(await runner.resumeStream().join(), 'reviewed interruption');
+          expect(shellExecutions, 0);
+          final providerHistory = adapter.lastHistory!
+              .where((message) => message.role != MessageRole.system)
+              .toList();
+          expect(providerHistory.map((message) => message.role), [
+            MessageRole.user,
+            MessageRole.assistant,
+            MessageRole.tool,
+          ]);
+          expect(providerHistory[1].toolCalls!.single.id, 'call-crashed-shell');
+          expect(providerHistory[2].toolCallId, 'call-crashed-shell');
+          expect(providerHistory[2].content, contains('partial'));
+          expect(
+            providerHistory[2].content,
+            contains('interrupted unexpectedly'),
+          );
+          expect(
+            repo
+                .findWorkItem('w-restart-terminalized-shell')!
+                .continuationMetadata['restart_terminalized_tool_ids'],
+            isNull,
+          );
+        },
+      );
+
+      test(
         'ambiguous tool state stays blocked with safe stop/retry actions',
         () async {
           final session = sessionManager.createSession('gpt-4o');

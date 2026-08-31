@@ -155,10 +155,20 @@ class E2eFixtureAdapter implements LLMAdapter {
           (toolResult.content?.contains('CRASH_OUTPUT') ?? false) &&
           (toolResult.content?.contains('interrupted') ?? false) &&
           !(toolResult.content?.contains('cancelled by user') ?? false);
+      final hasOriginalToolUse = history.any(
+        (message) =>
+            message.role == MessageRole.assistant &&
+            (message.toolCalls ?? const []).any(
+              (toolCall) =>
+                  toolCall.id == shellToolCallId &&
+                  toolCall.name == shellToolName &&
+                  toolCall.arguments['command'] != null,
+            ),
+      );
       return AgentResponse(
         message: Message(
           role: MessageRole.assistant,
-          content: truthfulInterruption
+          content: truthfulInterruption && hasOriginalToolUse
               ? shellCrashResponseText
               : 'INVALID_SHELL_INTERRUPTION_RESULT',
         ),

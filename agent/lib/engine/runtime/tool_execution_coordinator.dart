@@ -225,6 +225,7 @@ class ToolExecutionCoordinator {
       checkpointKind:
           ContinuationCheckpointCoordinator.checkpointKindAfterToolResult,
       resumeHistoryLength: callbacks.currentHistoryLength(),
+      removeRestartTerminalizedToolCallIds: toolCalls.map((call) => call.id),
     );
     callbacks.applyPendingSteerToToolResults(toolCalls.length);
   }

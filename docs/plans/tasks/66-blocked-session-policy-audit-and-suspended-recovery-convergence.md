@@ -235,7 +235,7 @@ question/permission أولًا، ثم blocked/fatal، لكنه يحتفظ بـru
 | `TERM-TIMEOUT-OUTPUT` | `_ShellWaitTimedOut` في `ShellExecuteTool.execute` | stdout/stderr تجمعان في الذاكرة، ثم `_drainOutput` ينتظرهما ويهمل النص ويعيد `Command timed out...` فقط | يفقد كل output المفيدة قبل timeout | **Fix**: بعد cleanup تجمع النتيجة bounded وتعيد partial stdout/stderr ثم terminal reason=`timed_out`, timeout، وcleanup outcome في payload واحدة |
 | `TERM-CANCEL-OUTPUT` | `_ShellWaitCancelled` وكل cancellation scope غير مفتوح | يعيد دائمًا `Command cancelled by user.` ويهمل output و`RunCancellationReason` | Stop البشري وrestart/crash/watchdog/timeout تُطمس في سبب واحد | **Split**: user Stop وحده=`cancelled_by_user`; shutdown/force/restart=`agent_interrupted`; watchdog=`timed_out`; cleanup failure/ownership loss typed، مع partial output المتاح |
 | `TERM-STOP-TERMINALIZATION` | `ToolTerminalizationService` و`ToolTerminalRecord.cancelled` | terminal status لا يملك `timedOut/interrupted`؛ factory الافتراضي user_stop/message ثابتة | كل unresolved tool أثناء Stop تصير cancellation بشرية حتى إذا كان السبب مختلفًا | **Split**: terminal factory عامة وحالات/reasons منفصلة، وتستخدم سبب `RunCancellationScope` الفعلي؛ message مشتقة من reason لا ثابتة |
-| `TERM-CRASH-DURABILITY` | foreground shell تحفظ PID/fingerprint/output buffers في الذاكرة فقط | checkpoint يحفظ tool id/start/replay safety، ولا يحفظ containment fingerprint أو incremental output | بعد crash لا يمكن إثبات قتل process orphan ولا إعادة partial output الصحيح | **Fix**: سجل تنفيذ shell دائم ومحدود يحفظ fingerprint والـcursor ومخرجات منقحة تدريجيًا؛ startup يتحقق من الهوية، ينهي containment المملوكة إن بقيت، ويثبت terminal `interrupted/outcome_unknown` مرة واحدة |
+| `TERM-CRASH-DURABILITY` | foreground shell تحفظ PID/fingerprint/output buffers في الذاكرة فقط | checkpoint يحفظ tool id/start/replay safety، ولا يحفظ containment fingerprint أو incremental output | بعد crash لا يمكن إثبات قتل process orphan ولا إعادة partial output الصحيح | **Fix**: سجل تنفيذ shell دائم ومحدود يحفظ fingerprint والـcursor ومخرجات منقحة تدريجيًا؛ startup يتحقق من الهوية، ينهي containment المملوكة إن بقيت، ويثبت terminal `interrupted/outcome_unknown` مرة واحدة مع معاملات الاستدعاء الأصلية، ثم يرسل `tool use + tool result` الأصليين إلى الـLLM ليستكمل القرار من الحالة الصادقة |
 
 السلوك المقترح الذي يصل إلى الـLLM بعد restart لا يعيد تنفيذ أمر shell:
 
@@ -259,7 +259,8 @@ cleanup_outcome: <...>
 ```
 
 بعد تثبيت هذه النتيجة في checkpoint/history، تستكمل الجولة بإرسالها إلى الـLLM
-مرة واحدة. لا يعاد تشغيل command لأن `shell_execute` غير replay-safe. إذا لم
+مرة واحدة. لا يعاد تشغيل command أثناء الاستعادة لأن `shell_execute` غير
+replay-safe؛ يتلقى الـLLM الـtool use الأصلي ونتيجته المنقطعة ليقيّم الحالة. إذا لم
 توجد أي bytes محفوظة، تبقى `partial_output` فارغة لكن السبب يظل صادقًا ولا
 يتحول إلى user cancellation.
 
@@ -358,7 +359,9 @@ cleanup_outcome: <...>
 لا replay تلقائي لنتيجة provider/tool الغامضة؛ shell المنقطعة تُسوّى بنتيجة
 typed مع partial output وتستكمل الجولة مرة واحدة؛ user cancellation لا تستخدم
 إلا لStop صريح؛ Ask User/permission غير المجابة تبقى waiting؛ وnotice القديمة
-لا تتغلب على execution authority الأحدث.
+لا تتغلب على execution authority الأحدث. الاستعادة لا تتحكم في قرار النموذج
+التالي ولا تمنع إعادة الأمر: مسؤوليتها حفظ وعرض زوج `tool use`/`tool result`
+الأصلي بنفس `tool_call_id`، وأي استدعاء جديد من النموذج يبقى زوجًا مستقلًا.
 
 ---
 
