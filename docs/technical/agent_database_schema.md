@@ -663,29 +663,16 @@ by another session fails the write instead of mutating that session's row.
 
 ### 7.2. Backfill
 
-Gate A walks each session in physical `id` order and never matches records by
-text or timestamp:
+Task 51 was introduced before a public persisted-data compatibility boundary,
+so daemon startup does not scan or rewrite pre-Task-51 message rows. New writes
+receive `message_id`, `turn_id`, activity, and input-kind identity at their
+normal persistence boundary. A development database retained from before Task
+51 may still display old rows, but those rows remain ineligible for replay or
+fork targeting until the database is recreated or migrated explicitly.
 
-- Every existing row receives a new stored UUID `message_id` and
-  `history_status = active`.
-- A new `turn_id` starts at each `role=user` record that is not a steer;
-  following assistant, tool, reasoning, and steer records inherit that
-  `turn_id` until the next root user record.
-- `input_kind` is `steer` when `metadata.steer` is true or the record is an
-  entry in `metadata.steer_messages`; otherwise a persisted user row is
-  `root_turn`. Pending rows in `session_pending_steers` are not backfilled as
-  history.
-- Each `steer_messages` entry receives a stored `message_id` so history
-  projection reuses it instead of a hydration index.
-- `request_id` and `run_id` are copied from existing metadata when present.
-  A root user row without `request_id` is durable and visible but
-  non-replayable.
-- `sessions.history_revision` starts at `0`. The first committed history
-  mutation becomes `1`.
-
-A record whose kind cannot be classified from stored markers is marked
-non-replayable rather than guessed. Supersession relationships are not
-invented during migration; only later replay writes `superseded_by_turn_id`.
+Opening a normalized database must not rewrite any message row. In particular,
+schema initialization must never perform an all-history identity pass; startup
+cost cannot scale with the number or size of stored message payloads.
 
 ---
 

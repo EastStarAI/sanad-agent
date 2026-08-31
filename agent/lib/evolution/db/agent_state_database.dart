@@ -11,7 +11,6 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/constants.dart';
 import '../../core/sanad_home/sanad_home_bootstrap.dart';
-import 'message_history_identity.dart';
 import 'session_lineage.dart';
 
 /// Single owner of the agent's local SQLite connection (`state.db`).
@@ -272,7 +271,6 @@ class AgentStateDatabase {
       'ALTER TABLE messages ADD COLUMN origin_message_id TEXT',
     );
     _migrateLastUserMessageAt(db);
-    MessageHistoryIdentity.backfill(db);
     db.execute('''
       CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_message_id
       ON messages(message_id);

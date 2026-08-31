@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/core/constants.dart';
@@ -37,85 +36,49 @@ void main() {
     );
   }
 
-  test('backfill assigns stable identities without text matching', () {
-    final raw = sqlite3.open('${tempDir.path}/state.db');
-    raw.execute('''
-      CREATE TABLE sessions (
-        session_id TEXT PRIMARY KEY,
-        model TEXT NOT NULL,
-        title TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+  test('opening fully identified history does not rewrite message rows', () {
+    final first = SessionDB();
+    first.saveSession(session('normalized'));
+    first.replaceMessages('normalized', [
+      Message(
+        role: MessageRole.user,
+        content: 'hello',
+        metadata: const {'request_id': 'req-normalized'},
+      ),
+      Message(role: MessageRole.assistant, content: 'hi'),
+    ]);
+    first.dispose();
+
+    final audited = sqlite3.open('${tempDir.path}/state.db');
+    audited.execute('''
+      CREATE TABLE message_migration_audit (
+        update_count INTEGER NOT NULL DEFAULT 0
       );
     ''');
-    raw.execute('''
-      CREATE TABLE messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        session_id TEXT NOT NULL,
-        data TEXT NOT NULL
-      );
+    audited.execute(
+      'INSERT INTO message_migration_audit (update_count) VALUES (0)',
+    );
+    audited.execute('''
+      CREATE TRIGGER messages_update_audit
+      AFTER UPDATE ON messages
+      BEGIN
+        UPDATE message_migration_audit
+        SET update_count = update_count + 1;
+      END;
     ''');
-    raw.execute(
-      'INSERT INTO sessions (session_id, model, created_at, updated_at) '
-      'VALUES (?, ?, ?, ?)',
-      ['legacy', 'model', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'],
-    );
-    raw.execute('INSERT INTO messages (session_id, data) VALUES (?, ?)', [
-      'legacy',
-      jsonEncode({
-        'role': 'user',
-        'content': 'hello',
-        'metadata': {'request_id': 'req-1'},
-      }),
-    ]);
-    raw.execute('INSERT INTO messages (session_id, data) VALUES (?, ?)', [
-      'legacy',
-      jsonEncode({
-        'role': 'assistant',
-        'content': 'hi',
-        'metadata': {'run_id': 'run-1'},
-      }),
-    ]);
-    raw.execute('INSERT INTO messages (session_id, data) VALUES (?, ?)', [
-      'legacy',
-      jsonEncode({
-        'role': 'user',
-        'content': 'steer later',
-        'metadata': {'steer': true, 'request_id': 'steer-1'},
-      }),
-    ]);
-    raw.dispose();
-
-    final db = SessionDB();
-    addTearDown(db.dispose);
-    final messages = db.getMessages('legacy');
-    expect(messages, hasLength(3));
-    expect(messages[0].metadata?['message_id'], isNotEmpty);
-    expect(messages[1].metadata?['message_id'], isNotEmpty);
-    expect(
-      messages[0].metadata?['message_id'],
-      isNot(messages[1].metadata?['message_id']),
-    );
-    expect(messages[0].metadata?['turn_id'], messages[1].metadata?['turn_id']);
-    expect(messages[0].metadata?['input_kind'], 'root_turn');
-    expect(messages[0].metadata?['replay_eligible'], isTrue);
-    expect(messages[2].metadata?['input_kind'], 'steer');
-    expect(messages[2].metadata?['replay_eligible'], isFalse);
-    expect(messages[2].metadata?['turn_id'], messages[0].metadata?['turn_id']);
-    expect(db.getSession('legacy')!.historyRevision, 0);
-
-    final ids = [
-      for (final message in messages) message.metadata?['message_id'],
-    ];
-    db.dispose();
+    audited.dispose();
 
     final reopened = SessionDB();
-    addTearDown(reopened.dispose);
-    final restored = reopened.getMessages('legacy');
-    expect([
-      for (final message in restored) message.metadata?['message_id'],
-    ], ids);
-    expect(restored[0].metadata?['turn_id'], restored[1].metadata?['turn_id']);
+    reopened.dispose();
+
+    final verified = sqlite3.open('${tempDir.path}/state.db');
+    addTearDown(verified.dispose);
+    final updateCount =
+        verified
+                .select('SELECT update_count FROM message_migration_audit')
+                .first['update_count']
+            as int;
+    expect(updateCount, 0);
   });
 
   test('normal reads hide superseded rows and keep them in sqlite', () {

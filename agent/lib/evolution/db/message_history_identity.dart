@@ -256,20 +256,6 @@ class MessageHistoryIdentity {
     return prepared;
   }
 
-  static void backfill(Database db) {
-    final sessions = db.select('SELECT session_id FROM sessions');
-    for (final session in sessions) {
-      _backfillSession(db, session['session_id'] as String);
-    }
-    final orphanSessions = db.select(
-      'SELECT DISTINCT session_id FROM messages '
-      'WHERE message_id IS NULL OR turn_id IS NULL',
-    );
-    for (final row in orphanSessions) {
-      _backfillSession(db, row['session_id'] as String);
-    }
-  }
-
   static Message _assignOne(
     Message message,
     String? currentTurnId,
@@ -339,30 +325,6 @@ class MessageHistoryIdentity {
       }
     }
     return _assignOne(message, currentTurnId, (_) {});
-  }
-
-  static void _backfillSession(Database db, String sessionId) {
-    final rows = db.select(
-      'SELECT id, data, message_id, turn_id, history_status, input_kind, '
-      'request_id, run_id, superseded_by_turn_id, origin_message_id '
-      'FROM messages WHERE session_id = ? ORDER BY id ASC',
-      [sessionId],
-    );
-    String? currentTurnId;
-    for (final row in rows) {
-      final decoded = jsonDecode(row['data'] as String);
-      if (decoded is! Map) continue;
-      var message = overlayFromRow(
-        Message.fromJson(
-          _promoteLegacyTimestamp(Map<String, dynamic>.from(decoded)),
-        ),
-        row,
-      );
-      message = _assignOne(message, currentTurnId, (turnId) {
-        currentTurnId = turnId;
-      });
-      persist(db, sessionId, message, sqliteId: row['id'] as int);
-    }
   }
 
   static Message _stampSteerMessages(Message message, String turnId) {
