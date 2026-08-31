@@ -34,10 +34,18 @@ class CompactionLifecycleBroadcaster {
               'compaction_id': event.compactionId,
               'trigger': event.trigger.wireValue,
               'status': event.status.wireValue,
+              if (event.providerInstanceId != null)
+                'provider_instance_id': event.providerInstanceId,
+              if (event.modelId != null) 'model_id': event.modelId,
               if (event.failureReason != null)
                 'failure_reason': event.failureReason!.wireValue,
               if (metrics != null) ...{
                 'context_window_tokens': metrics.contextWindowTokens,
+                if (metrics.effectiveInputBudgetTokens != null)
+                  'effective_input_budget_tokens':
+                      metrics.effectiveInputBudgetTokens,
+                if (metrics.autoThresholdTokens != null)
+                  'auto_threshold_tokens': metrics.autoThresholdTokens,
                 'estimated_request_tokens_before':
                     metrics.estimatedRequestTokensBefore,
                 'estimated_request_tokens_after':

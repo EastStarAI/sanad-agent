@@ -25,6 +25,8 @@ void main() {
         sessionId: 'session-1',
         trigger: CompactionTrigger.auto,
         status: CompactionStatus.completed,
+        providerInstanceId: 'provider-1',
+        modelId: 'gpt-5.6-sol',
         startedAt: startedAt,
         completedAt: startedAt.add(const Duration(seconds: 1)),
       ),
@@ -51,5 +53,9 @@ void main() {
       final payload = response.message.metadata?['canonical_payload'] as Map;
       expect(payload['compaction_id'], 'cmp-1');
     }
+    final completedPayload =
+        responses[1].message.metadata?['canonical_payload'] as Map;
+    expect(completedPayload['provider_instance_id'], 'provider-1');
+    expect(completedPayload['model_id'], 'gpt-5.6-sol');
   });
 }

@@ -975,7 +975,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     }
 
     final compactionId = const Uuid().v4();
-    final engineRequest = CompactionRequestFactory.forSession(
+    final engineRequest = await CompactionRequestFactory.forSession(
       sessionId: sessionId,
       trigger: CompactionTrigger.manual,
       compactionId: compactionId,

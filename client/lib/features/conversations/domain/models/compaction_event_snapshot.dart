@@ -35,6 +35,8 @@ class CompactionEventSnapshot extends Equatable {
   final CompactionTriggerKind trigger;
   final String? failureReason;
   final int? contextWindowTokens;
+  final int? effectiveInputBudgetTokens;
+  final int? autoThresholdTokens;
   final int? estimatedRequestTokensBefore;
   final int? estimatedRequestTokensAfter;
   final String? beforeMeasurementKind;
@@ -51,6 +53,8 @@ class CompactionEventSnapshot extends Equatable {
     required this.trigger,
     this.failureReason,
     this.contextWindowTokens,
+    this.effectiveInputBudgetTokens,
+    this.autoThresholdTokens,
     this.estimatedRequestTokensBefore,
     this.estimatedRequestTokensAfter,
     this.beforeMeasurementKind,
@@ -86,6 +90,10 @@ class CompactionEventSnapshot extends Equatable {
       trigger: CompactionTriggerKind.fromWire(json['trigger'] ?? 'manual'),
       failureReason: _nullableString(json['failure_reason']),
       contextWindowTokens: _nullableInt(json['context_window_tokens']),
+      effectiveInputBudgetTokens: _nullableInt(
+        json['effective_input_budget_tokens'],
+      ),
+      autoThresholdTokens: _nullableInt(json['auto_threshold_tokens']),
       estimatedRequestTokensBefore: _nullableInt(
         json['estimated_request_tokens_before'],
       ),
@@ -161,6 +169,8 @@ class CompactionEventSnapshot extends Equatable {
     trigger,
     failureReason,
     contextWindowTokens,
+    effectiveInputBudgetTokens,
+    autoThresholdTokens,
     estimatedRequestTokensBefore,
     estimatedRequestTokensAfter,
     beforeMeasurementKind,

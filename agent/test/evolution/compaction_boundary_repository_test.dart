@@ -114,6 +114,8 @@ void main() {
       containsAll([
         'before_measurement_kind',
         'provider_confirmed_request_tokens_after',
+        'effective_input_budget_tokens',
+        'auto_threshold_tokens',
       ]),
     );
   });

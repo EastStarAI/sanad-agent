@@ -177,7 +177,8 @@ class CompactionBoundaryRepository {
         '''
         UPDATE session_compaction_operations
         SET status = ?, completed_at = ?, internal_summary_json = ?,
-            context_window_tokens = ?, estimated_request_tokens_before = ?,
+            context_window_tokens = ?, effective_input_budget_tokens = ?,
+            auto_threshold_tokens = ?, estimated_request_tokens_before = ?,
             estimated_request_tokens_after = ?, before_measurement_kind = ?,
             retained_tail_tokens = ?, duration_ms = ?
         WHERE compaction_id = ? AND status = ?
@@ -187,6 +188,8 @@ class CompactionBoundaryRepository {
           completedAt.toUtc().toIso8601String(),
           summaryJson,
           metrics.contextWindowTokens,
+          metrics.effectiveInputBudgetTokens,
+          metrics.autoThresholdTokens,
           metrics.estimatedRequestTokensBefore,
           metrics.estimatedRequestTokensAfter,
           metrics.beforeMeasurementKind.wireValue,

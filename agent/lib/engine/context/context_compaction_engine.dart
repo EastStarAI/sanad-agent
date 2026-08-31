@@ -272,6 +272,8 @@ class ContextCompactionEngine {
       continuityResult: continuity,
       metrics: CompactionMetrics(
         contextWindowTokens: request.contextWindowTokens,
+        effectiveInputBudgetTokens: pressure.effectiveInputBudget,
+        autoThresholdTokens: pressure.thresholdTokens,
         estimatedRequestTokensBefore: beforeTokens,
         estimatedRequestTokensAfter: afterTokens,
         beforeMeasurementKind: pressure.measurementKind,

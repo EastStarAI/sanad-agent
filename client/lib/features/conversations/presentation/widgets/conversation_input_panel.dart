@@ -15,6 +15,7 @@ import 'package:sanad_client/features/conversations/presentation/bloc/conversati
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/composer_text_editing.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/skill_composer_utils.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
@@ -75,6 +76,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
   bool _isSettingDraftText = false;
   bool _hasUnsavedDraftChanges = false;
   bool _isRestoringDraftContext = false;
+  final Set<String> _runtimeActionsInFlight = <String>{};
   String? _boundDeviceId;
   String? _observedPendingRequestId;
   bool _isDragging = false;
@@ -242,13 +244,27 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     final text = dispatchExport.plainText.trim();
     if (text.isEmpty) return;
 
-    if (text.startsWith('/compact')) {
-      if (text != '/compact') {
-        _showValidationError('/compact does not accept arguments.');
+    unawaited(_dispatchComposerText(text, intent: intent));
+  }
+
+  Future<void> _dispatchComposerText(
+    String text, {
+    required MessageDeliveryIntent intent,
+  }) async {
+    final invocation = SkillComposerUtils.parseLeadingRuntimeInvocation(text);
+    if (invocation != null) {
+      final entry = await _resolveRuntimeAction(invocation.command);
+      if (!mounted) return;
+      if (entry != null) {
+        if (invocation.arguments.isNotEmpty) {
+          _showValidationError(
+            '${entry.invocationText} does not accept arguments.',
+          );
+          return;
+        }
+        await _dispatchRuntimeAction(entry);
         return;
       }
-      unawaited(_dispatchCompactCommand());
-      return;
     }
 
     _draftSaveDebouncer?.cancel();
@@ -256,6 +272,40 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     _setPendingAcceptance('dispatching');
     widget.onSendMessage(text, intent: intent);
     _slashCommandsCubit.clear();
+  }
+
+  Future<SlashCommandEntry?> _resolveRuntimeAction(String command) async {
+    bool matches(SlashCommandEntry entry) =>
+        entry.type == SlashCommandType.runtimeAction &&
+        entry.command.trim().replaceFirst(RegExp(r'^/+'), '').toLowerCase() == command;
+
+    for (final entry in _slashCommandsCubit.state.availableEntries) {
+      if (matches(entry)) return entry;
+    }
+    final entries = await _inputCubit.searchSlashCommands(query: command);
+    for (final entry in entries) {
+      if (matches(entry)) return entry;
+    }
+    return null;
+  }
+
+  Future<void> _dispatchRuntimeAction(SlashCommandEntry entry) async {
+    final command = entry.command.trim().replaceFirst(RegExp(r'^/+'), '').toLowerCase();
+    if (!_runtimeActionsInFlight.add(command)) return;
+    try {
+      final handler = <String, Future<void> Function()>{
+        'compact': _dispatchCompactCommand,
+      }[command];
+      if (handler == null) {
+        _showValidationError(
+          '${entry.invocationText} is not supported by this client.',
+        );
+        return;
+      }
+      await handler();
+    } finally {
+      _runtimeActionsInFlight.remove(command);
+    }
   }
 
   Future<void> _dispatchCompactCommand() async {
@@ -291,6 +341,19 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
   void _selectSlashSuggestion(SlashCommandEntry entry) {
     final query = _slashCommandsCubit.state.activeQuery;
     if (query == null) {
+      return;
+    }
+
+    if (entry.type.selectionAction == SlashCommandSelectionAction.executeImmediately) {
+      _chatController.value = _slashCommandsCubit.applySelection(
+        SkillComposerUtils.applySlashSelectionText(
+          _chatController.value,
+          query: query,
+          replacement: entry.invocationText,
+        ),
+      );
+      _chatFocusNode.requestFocus();
+      unawaited(_dispatchRuntimeAction(entry));
       return;
     }
 

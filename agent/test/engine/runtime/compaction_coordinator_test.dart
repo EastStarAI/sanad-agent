@@ -200,6 +200,10 @@ void main() {
         CompactionStatus.completed,
       ]);
       expect(lifecycle.first.trigger, CompactionTrigger.manual);
+      expect(lifecycle.first.providerInstanceId, 'provider-1');
+      expect(lifecycle.first.modelId, 'gpt-4o');
+      expect(lifecycle.last.providerInstanceId, 'provider-1');
+      expect(lifecycle.last.modelId, 'gpt-4o');
       expect(boundaries.findLatestCompletedForSession('session-a'), isNotNull);
     },
   );

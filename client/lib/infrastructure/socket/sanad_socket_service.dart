@@ -415,7 +415,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     final dedup = eventDeduplicator;
     if (dedup == null) return true;
     final eventId = event['event_id'] as String?;
-    if (!dedup.shouldProcess(eventId, transport: transport)) {
+    if (!dedup.shouldProcess(eventId, transport: transport, payload: event)) {
       _logger.fine(
         '↪️ Dropping duplicate device_event (event_id=$eventId, '
         'transport=$transport) already seen on the same transport.',

@@ -162,6 +162,14 @@ file_budget: 15
 ## 11. سجل التقدم
 
 ```text
+Date: 2026-08-31 (typed manual-command selection remediation)
+Gate/status: E0/E1/E5 reopened for regression repair; automated proof complete and live proof pending
+Root cause: the catalog exposed a type but the client still inserted every selection as a token, mapped runtime text without its slash, failed to filter runtime results mid-message, and dispatched `/compact` through a command-name condition
+Remediation: closed `runtime_action` versus `skill` semantics now own placement and selection; leading partial Enter/click executes immediately through one runtime-action registry, skills insert then submit, direct typed actions converge on the same dispatcher, and duplicate Enter is coalesced
+Evidence: agent/client analyzers clean; focused agent catalog and client parser/mapper/cubit/controller/widget suites pass; interactive verification remains required
+```
+
+```text
 Date: 2026-08-31 (independent remediation review, E2→E5)
 Gate/status: 53e complete after reopening E2
 Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction

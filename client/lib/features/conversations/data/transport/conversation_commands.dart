@@ -433,18 +433,22 @@ class ConversationCommands {
       final commands = payload['commands'] as List? ?? [];
       return commands
           .whereType<Map>()
-          .map(
-            (command) => SlashCommandEntry(
+          .map((command) {
+            final type = switch (command['type']?.toString()) {
+              'runtime_action' => SlashCommandType.runtimeAction,
+              'skill' => SlashCommandType.skill,
+              _ => null,
+            };
+            if (type == null) return null;
+            return SlashCommandEntry(
               sourceId: command['source']?.toString() ?? 'runtime',
               command: command['command']?.toString() ?? '',
               insertText: command['command']?.toString() ?? '',
               description: command['description']?.toString(),
-              type: command['type']?.toString() == 'runtime_command' ||
-                      command['source']?.toString() == 'sanad-agent'
-                  ? SlashCommandType.runtimeCommand
-                  : SlashCommandType.skill,
-            ),
-          )
+              type: type,
+            );
+          })
+          .whereType<SlashCommandEntry>()
           .where((entry) => entry.command.trim().isNotEmpty)
           .toList(growable: false);
     }

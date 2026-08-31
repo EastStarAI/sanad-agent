@@ -24,6 +24,7 @@ This contract applies to `agent/lib/interfaces/`.
 
 ## Runtime Query Boundary
 - The daemon owns workspace browsing/creation, MCP management, skill inventory/load, slash commands, device settings, provider runtime, and conversation history/list queries.
+- Slash catalog entries use closed semantic types: `runtime_action` identifies a no-argument runtime operation and `skill` identifies model-directed skill insertion. Clients must not infer these semantics from command names or source labels.
 - Query responses must remain transport-neutral and usable over both local and cloud Sanad transports.
 - Cloud `device_id` that does not match the registered device fails closed as
   `wrong_device` before session registration. Remote update, restart, managed

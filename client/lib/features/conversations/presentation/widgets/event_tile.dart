@@ -212,6 +212,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         ),
         failureReason: metadata['failure_reason']?.toString(),
         contextWindowTokens: metadata['context_window_tokens'] as int?,
+        effectiveInputBudgetTokens: metadata['effective_input_budget_tokens'] as int?,
+        autoThresholdTokens: metadata['auto_threshold_tokens'] as int?,
         estimatedRequestTokensBefore: metadata['estimated_request_tokens_before'] as int?,
         estimatedRequestTokensAfter: metadata['estimated_request_tokens_after'] as int?,
         beforeMeasurementKind: metadata['before_measurement_kind']?.toString(),

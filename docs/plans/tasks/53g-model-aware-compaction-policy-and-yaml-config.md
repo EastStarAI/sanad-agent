@@ -38,10 +38,12 @@ compaction:
 - الملف canonical لهذه الإعدادات غير السرية هو `$SANAD_HOME/config.yaml` ويقرأ عند بدء daemon؛ يتطلب تغييره restart في هذا الإصدار.
 - `context.modelLimits` افتراضيًا `{}`. المفتاح model id بعد normalization والمطابقة exact؛ لا wildcards ولا substring matching في هذه المهمة.
 - عند غياب context override يكون ترتيب حل النافذة: metadata الحية من المزود، ثم model metadata الحالية، ثم fallback المزود الحالي.
+- يطبق `/compact` اليدوي ترتيب الحل نفسه؛ لا يجوز أن يستنتج نافذة أصغر من حجم المحادثة ثم يقيدها عند `128K` بينما adapter يعرف نافذة النموذج.
 - `compaction.threshold` افتراضيًا `0.80` من effective input window، و`compaction.targetRatio` افتراضيًا `0.10` لميزانية retained history الحديثة.
 - `compaction.models` افتراضيًا `{}`. يستطيع كل نموذج تجاوز `threshold` أو `targetRatio` منفردًا، وكل مفتاح غائب يرث القيمة العامة.
 - لا يوجد `thresholdTokens` في العقد العام أو داخل `models`: التحكم في هذه المرحلة نسبي فقط، مع بقاء output reservation وsafety buffer وoverflow recovery ضمانات داخلية غير قابلة للتعطيل.
 - target هي ميزانية مستهدفة للذيل وليست وعدًا بأن إجمالي الطلب بعد الضغط يساوي النسبة نفسها؛ system/runtime prompts وtool schemas وsummary overhead تقاس وتعرض منفصلة.
+- عند اكتمال الضغط يصبح after-compaction أحدث input usage في composer فورًا. تبقى نافذة النموذج وهويته من آخر لقطة مزود لنفس النموذج إن تعارضت مع metadata قديمة للعملية، ولا يرث المؤشر قيمة cached input السابقة للضغط.
 - يزال `CONTEXT_LIMIT` من config وtemplate ومسار الحل. وجوده في `.env` قديم لا يؤثر ولا يتحول إلى override لكل النماذج.
 - الأسرار تظل في SecretStore/Keychain ولا تنقل إلى YAML.
 
@@ -169,6 +171,35 @@ compaction:
 - تنفيذ `/goal`؛ المطلوب فقط عدم إغلاق مسار دمجها لاحقًا.
 
 ## 11. سجل التقدم
+
+```text
+Date: 2026-08-31 (manual compact live acceptance)
+Gate/status: G0–G5 complete; task returned to in_review; merge remains paused pending user direction
+Observed: a selected runtime action could leave its slash surface open after success; completed compaction did not replace the composer usage snapshot; manual /compact resolved gpt-5.6-sol to a capped 128000 window instead of the adapter-known 400000 window
+Root causes: clear() did not invalidate an already-running slash search; only provider events supplied CanonicalEvent.contextUsage; the manual request factory skipped adapter context-limit resolution and fell back to an estimate capped at 128000
+Remediation: slash clear/workspace changes advance the search epoch; completed compaction becomes a usage checkpoint with confirmed-after then estimated-after precedence, no stale cached input, and the latest authoritative same-model provider window; manual compaction resolves explicit override, YAML override, adapter/provider metadata, then bounded fallback; lifecycle carries route/model identity
+Interactive evidence: in conversation 1a057bb5-8aa2-4641-b98f-a6c9fa27d790, /co click executed without a user /compact message, the slash suggestion disappeared, and operation c9fcc624-0c0c-408d-8f2d-a0d6761023d2 completed once with model gpt-5.6-sol, context window 400000, effective budget 394880, auto threshold 315904, estimated before 158781, estimated after 6304, retained tail 6217. The client showed two ordered Context compacted rows and the composer advanced to the post-compaction usage while retaining the 400000/model identity
+Verification: agent/client analyzers clean; focused Agent 13/13; focused Client 30/30; full Agent 1380 passed / 12 skipped; full Client 1166 passed / 1 skipped; wiki lint success with informational orphan notices only; Graphify 21731 nodes / 29533 edges
+Preservation: the designated conversation remains intact; no commit, push, PR update, merge, runtime switch, or worktree deletion was performed
+```
+
+```text
+Date: 2026-08-31 (typed manual compact remediation)
+Gate/status: G5 reopened for client command-selection regression; merge remains paused
+Observed: selecting compact produced an ordinary token/message path, partial Enter required a second submit, and runtime suggestions returned in mid-message slash searches
+Root cause: runtime/skill type metadata did not own placement or selection; mapper omitted the invocation slash and the panel special-cased `/compact` only at final send
+Remediation: closed `runtime_action`/`skill` semantics drive leading-only filtering and execute-versus-insert selection; direct and selected actions share one runtime-action dispatcher with in-flight coalescing
+Evidence: static analysis and focused automated suites pass; interactive verification in the user-designated conversation remains next
+```
+
+```text
+Date: 2026-08-31 (confirmed-card reconciliation and interaction remediation)
+Gate/status: G1/G5 remediation implemented; merge remains paused pending live verification
+Observed: SQLite stored provider_confirmed_request_tokens_after=34922, but the visible completed tile retained estimated_request_tokens_after=57630; hover also activated over the entire separator row
+Root cause: the client deduplicator keyed only event_id + transport and discarded the enriched completed event before logging/routing because reconciliation intentionally preserves the completed lifecycle event identity
+Remediation: exact-redelivery identity now includes a canonical payload SHA-256 fingerprint, allowing one same-id semantic enrichment while suppressing identical repeats; compaction operations persist and publish daemon-owned effective-input and auto-threshold token values; the flat card replaces the estimate with confirmed after usage and confines hover/tap/focus to the centered label
+Evidence: agent/client analyzers clean; focused dedup/socket/widget/model/store/persistence/history/engine suites pass; live runtime verification remains next
+```
 
 ```text
 Date: 2026-08-31 (live auto-compaction regression remediation)

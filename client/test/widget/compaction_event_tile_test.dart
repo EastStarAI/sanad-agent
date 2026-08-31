@@ -90,11 +90,13 @@ void main() {
               status: CompactionLifecycleStatus.completed,
               trigger: CompactionTriggerKind.auto,
               contextWindowTokens: 400000,
-              estimatedRequestTokensBefore: 360404,
-              estimatedRequestTokensAfter: 58506,
-              beforeMeasurementKind: 'estimated',
-              providerConfirmedRequestTokensAfter: 40830,
-              retainedTailTokens: 38979,
+              effectiveInputBudgetTokens: 394880,
+              autoThresholdTokens: 315904,
+              estimatedRequestTokensBefore: 318066,
+              estimatedRequestTokensAfter: 57630,
+              beforeMeasurementKind: 'mixed',
+              providerConfirmedRequestTokensAfter: 34922,
+              retainedTailTokens: 38073,
             ),
           ),
         ),
@@ -104,15 +106,21 @@ void main() {
     await tester.tap(find.byType(InkWell));
     await tester.pump();
     expect(
-      find.textContaining('Provider confirmed after: 40830 tokens (10.2%)'),
+      find.textContaining('After compaction: 34,922 tokens (8.8%) ✓ Confirmed'),
       findsOneWidget,
     );
-    expect(find.textContaining('58506'), findsNothing);
-    expect(find.textContaining('Pre-confirmation'), findsNothing);
+    expect(find.textContaining('57,630'), findsNothing);
     expect(
-      find.textContaining('Estimated reclaimed: 319574 tokens (88.7%)'),
+      find.textContaining('Context reclaimed: 283,144 tokens (89.0%)'),
       findsOneWidget,
     );
+    expect(find.textContaining('Before compaction: 318,066 tokens (80.5%)'), findsOneWidget);
+    expect(find.textContaining('Retained tail: ~38,073 tokens'), findsOneWidget);
+    expect(find.textContaining('Auto threshold: 315,904 tokens (80.0%)'), findsOneWidget);
+    expect(find.textContaining('Usable input: 394,880 tokens'), findsOneWidget);
+    expect(find.textContaining('Context window: 400,000 tokens'), findsOneWidget);
+    expect(find.textContaining('Trigger:'), findsNothing);
+    expect(find.textContaining('Status:'), findsNothing);
   });
 
   testWidgets('keeps the timeline interaction at least 44 logical pixels high', (
@@ -141,16 +149,11 @@ void main() {
     tester,
   ) async {
     const details =
-        'Trigger: Context overflow\n'
-        'Status: failed\n'
-        'Context window: 100000\n'
-        'Estimated before: 80000 tokens (80.0%)\n'
-        'Estimated after: 20000 tokens (20.0%)\n'
-        'Estimated reclaimed: 60000 tokens (75.0%)\n'
-        'Retained tail: 5000 tokens\n'
-        'Started: 2026-08-29T02:00:00.000Z\n'
-        'Completed: 2026-08-29T02:00:02.000Z\n'
-        'Duration: 2000 ms\n'
+        'Before compaction: 80,000 tokens (80.0%)\n'
+        'After compaction: 20,000 tokens (20.0%)\n'
+        'Context reclaimed: 60,000 tokens (75.0%)\n'
+        'Retained tail: ~5,000 tokens\n'
+        'Context window: 100,000 tokens\n'
         'Failure: projection_still_over_budget';
     await tester.pumpWidget(
       MaterialApp(
@@ -196,6 +199,41 @@ void main() {
     await tester.sendKeyEvent(LogicalKeyboardKey.tab);
     await tester.pump();
     expect(find.text(details), findsOneWidget);
+  });
+
+  testWidgets('only the centered label opens details, not the divider row', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            width: 800,
+            child: CompactionEventTile(
+              snapshot: CompactionEventSnapshot(
+                sessionId: 'session-1',
+                compactionId: 'cmp-hit-target',
+                status: CompactionLifecycleStatus.completed,
+                trigger: CompactionTriggerKind.auto,
+                contextWindowTokens: 400000,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final row = find.byType(CompactionEventTile);
+    final rowRect = tester.getRect(row);
+    await tester.tapAt(Offset(rowRect.left + 20, rowRect.center.dy));
+    await tester.pump();
+    expect(find.textContaining('Context window: 400,000 tokens'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const ValueKey('compaction-label-cmp-hit-target')),
+    );
+    await tester.pump();
+    expect(find.textContaining('Context window: 400,000 tokens'), findsOneWidget);
   });
 
   testWidgets('renders all terminal labels without narrow-layout overflow', (

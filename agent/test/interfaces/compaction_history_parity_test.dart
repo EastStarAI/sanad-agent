@@ -56,6 +56,8 @@ CompactionCandidate _candidate({required String id}) {
     continuityResult: CompactionContinuityResult.fromSummary(summary),
     metrics: CompactionMetrics(
       contextWindowTokens: 100_000,
+      effectiveInputBudgetTokens: 95_000,
+      autoThresholdTokens: 76_000,
       estimatedRequestTokensBefore: 80_000,
       estimatedRequestTokensAfter: 20_000,
       retainedTailTokens: 5_000,
@@ -189,6 +191,8 @@ void main() {
     expect(compactionRows.first['status'], 'completed');
     expect(compactionRows.first.containsKey('internal_summary_json'), isFalse);
     expect(compactionRows.first['estimated_request_tokens_before'], 80_000);
+    expect(compactionRows.first['effective_input_budget_tokens'], 95_000);
+    expect(compactionRows.first['auto_threshold_tokens'], 76_000);
 
     final liveResponses = <GatewayResponse>[];
     CompactionLifecycleBroadcaster(liveResponses.add).handle(

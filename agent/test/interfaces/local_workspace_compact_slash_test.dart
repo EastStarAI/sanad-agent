@@ -23,11 +23,14 @@ void main() {
     }
   });
 
-  test('searchSlashCommands exposes only /compact runtime command by default', () async {
-    final commands = await service.searchSlashCommands();
-    expect(commands, hasLength(1));
-    expect(commands.single['command'], 'compact');
-    expect(commands.single['type'], 'runtime_command');
-    expect(commands.single['source'], 'sanad-agent');
-  });
+  test(
+    'searchSlashCommands exposes only /compact runtime command by default',
+    () async {
+      final commands = await service.searchSlashCommands();
+      expect(commands, hasLength(1));
+      expect(commands.single['command'], 'compact');
+      expect(commands.single['type'], 'runtime_action');
+      expect(commands.single['source'], 'sanad-agent');
+    },
+  );
 }

@@ -328,7 +328,7 @@ Partial unique index (B1): at most one `started` row per `session_id`.
 | Lifecycle | `trigger`, `status`, `started_at`, `completed_at` |
 | Snapshot | `source_history_revision`, `source_start_message_id`, `source_end_message_id`, `tail_start_message_id`, `tail_end_message_id`, semantic `tail_end_anchor_fingerprint`, `tail_end_anchor_ordinal` |
 | Route | `provider_instance_id`, `model_id`, `template_id`, `protocol`, `normalized_base_url`, `config_revision`, `credential_revision` |
-| Metrics | `context_window_tokens`, `estimated_request_tokens_before`, `before_measurement_kind`, `estimated_request_tokens_after`, write-once `provider_confirmed_request_tokens_after`, `retained_tail_tokens`, `duration_ms` |
+| Metrics | `context_window_tokens`, daemon-owned `effective_input_budget_tokens`, daemon-owned `auto_threshold_tokens`, `estimated_request_tokens_before`, `before_measurement_kind`, `estimated_request_tokens_after`, write-once `provider_confirmed_request_tokens_after`, `retained_tail_tokens`, `duration_ms` |
 | Completed only | `internal_summary_json` (redacted structured summary — **not** a `Message` JSON blob) |
 | Failed only | `failure_reason` (enum wire name), optional `failure_detail_json` (redacted diagnostics, never provider wire) |
 
@@ -342,6 +342,10 @@ The completed lifecycle event may be republished with the same deterministic
 event id after provider reconciliation. Live clients fold that update into the
 existing tile, and history hydration reads the same confirmed value. Later
 tool-loop responses cannot replace the first confirmed value.
+Client transport deduplication therefore distinguishes exact redelivery from a
+same-id payload enrichment: the cache key includes a canonical payload
+fingerprint, so the enriched event is applied once without minting a competing
+lifecycle identity.
 
 **Session column (B1):** add `sessions.history_revision INTEGER NOT NULL DEFAULT 0 CHECK (history_revision >= 0)`, bumped in the same transaction as message insert/delete/replace.
 
@@ -455,6 +459,7 @@ idle|running -> compacting (in-memory barrier + durable started row)
 | Wire surface | Shape |
 |---|---|
 | Command | `compact` via gateway session command handler |
+| Catalog type | `runtime_action`; leading-only, no arguments, immediate selection dispatch |
 | Events | `context_compaction.started` / `context_compaction.completed` / `context_compaction.failed` |
 | Identities | `session_id`, logical `compaction_id`, transition-specific `event_id`, `trigger`, `status` |
 | Safe metrics | before/after/retained/window/duration only |

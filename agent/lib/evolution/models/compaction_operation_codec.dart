@@ -52,6 +52,9 @@ abstract final class CompactionOperationCodec {
     if (before != null) {
       metrics = CompactionMetrics(
         contextWindowTokens: row['context_window_tokens'] as int,
+        effectiveInputBudgetTokens:
+            row['effective_input_budget_tokens'] as int?,
+        autoThresholdTokens: row['auto_threshold_tokens'] as int?,
         estimatedRequestTokensBefore: before,
         estimatedRequestTokensAfter:
             row['estimated_request_tokens_after'] as int,

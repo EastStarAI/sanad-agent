@@ -569,6 +569,8 @@ class AgentStateDatabase {
         config_revision INTEGER NOT NULL,
         credential_revision INTEGER NOT NULL,
         context_window_tokens INTEGER,
+        effective_input_budget_tokens INTEGER,
+        auto_threshold_tokens INTEGER,
         estimated_request_tokens_before INTEGER,
         estimated_request_tokens_after INTEGER,
         before_measurement_kind TEXT NOT NULL DEFAULT 'estimated'
@@ -590,6 +592,14 @@ class AgentStateDatabase {
     _safeAddColumn(
       db,
       "ALTER TABLE session_compaction_operations ADD COLUMN before_measurement_kind TEXT NOT NULL DEFAULT 'estimated' CHECK (before_measurement_kind IN ('estimated', 'confirmed', 'mixed'))",
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN effective_input_budget_tokens INTEGER CHECK (effective_input_budget_tokens > 0)',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN auto_threshold_tokens INTEGER CHECK (auto_threshold_tokens > 0)',
     );
     _safeAddColumn(
       db,

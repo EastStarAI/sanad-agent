@@ -3,19 +3,37 @@ import 'package:material_symbols_icons/material_symbols_icons.dart';
 
 enum SlashCommandType {
   skill('skill'),
-  runtimeCommand('runtime_command');
+  runtimeAction('runtime_action');
 
   final String type;
   const SlashCommandType(this.type);
 }
 
+enum SlashCommandPlacement { messageStart, anywhere }
+
+enum SlashCommandSelectionAction { insertToken, executeImmediately }
+
 extension SlashCommandTypeX on SlashCommandType {
+  SlashCommandPlacement get placement {
+    return switch (this) {
+      SlashCommandType.skill => SlashCommandPlacement.anywhere,
+      SlashCommandType.runtimeAction => SlashCommandPlacement.messageStart,
+    };
+  }
+
+  SlashCommandSelectionAction get selectionAction {
+    return switch (this) {
+      SlashCommandType.skill => SlashCommandSelectionAction.insertToken,
+      SlashCommandType.runtimeAction => SlashCommandSelectionAction.executeImmediately,
+    };
+  }
+
   IconData get icon {
     switch (this) {
       case SlashCommandType.skill:
         return Symbols.contract;
-      case SlashCommandType.runtimeCommand:
-        return Symbols.compress;
+      case SlashCommandType.runtimeAction:
+        return Symbols.terminal;
     }
   }
 }
@@ -34,4 +52,12 @@ class SlashCommandEntry {
     this.description,
     this.type = SlashCommandType.skill,
   });
+
+  String get invocationText {
+    final normalizedCommand = command.trim().replaceFirst(RegExp(r'^/+'), '');
+    return switch (type) {
+      SlashCommandType.skill => insertText,
+      SlashCommandType.runtimeAction => '/$normalizedCommand',
+    };
+  }
 }

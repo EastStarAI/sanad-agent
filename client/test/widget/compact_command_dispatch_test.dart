@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
+import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_state.dart';
@@ -11,6 +14,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../helpers/fake_conversation_repository.dart';
@@ -45,6 +49,15 @@ void main() {
     resolver = createTestResolver(cloudSocket: socket, localSocket: socket);
     capabilities = DeviceCapabilitiesStore(resolver);
     conversationRepository = FakeConversationRepository();
+    conversationRepository.slashCommandResults = const [
+      SlashCommandEntry(
+        sourceId: 'sanad-agent',
+        command: 'compact',
+        insertText: 'compact',
+        description: 'Compact conversation context',
+        type: SlashCommandType.runtimeAction,
+      ),
+    ];
     agent = DeviceConfig(id: 'agent-1', name: 'SanadAgent', isOnline: true);
     agentRepository.seedAgents([agent], activeAgentId: agent.id);
     agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
@@ -116,6 +129,183 @@ void main() {
 
     expect(sendCalls, 0);
     expect(conversationRepository.compactSessionCalls, 1);
+  });
+
+  testWidgets('Enter on a partial runtime action executes it immediately', (
+    tester,
+  ) async {
+    var sendCalls = 0;
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: ConversationInputPanel(
+        sessionId: 'session-compact',
+        onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {
+          sendCalls += 1;
+        },
+      ),
+    );
+
+    await tester.enterText(find.byKey(const Key('chat_input')), '/com');
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pumpAndSettle();
+
+    expect(sendCalls, 0);
+    expect(conversationRepository.compactSessionCalls, 1);
+    expect(find.text('/compact'), findsNothing);
+    expect(
+      find.byKey(const Key('slash_suggestion_runtime_action_compact')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('clicking a partial runtime action executes it immediately', (
+    tester,
+  ) async {
+    var sendCalls = 0;
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: ConversationInputPanel(
+        sessionId: 'session-compact',
+        onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {
+          sendCalls += 1;
+        },
+      ),
+    );
+
+    await tester.enterText(find.byKey(const Key('chat_input')), '/co');
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(
+      find.byKey(const Key('slash_suggestion_runtime_action_compact')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(sendCalls, 0);
+    expect(conversationRepository.compactSessionCalls, 1);
+    expect(find.text('/compact'), findsNothing);
+    expect(
+      find.byKey(const Key('slash_suggestion_runtime_action_compact')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('double Enter coalesces one in-flight runtime action', (
+    tester,
+  ) async {
+    final compactResult = Completer<SessionCompactResult>();
+    conversationRepository.compactSessionHandler = () => compactResult.future;
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: ConversationInputPanel(
+        sessionId: 'session-compact',
+        onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+      ),
+    );
+
+    await tester.enterText(find.byKey(const Key('chat_input')), '/com');
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+
+    expect(conversationRepository.compactSessionCalls, 1);
+    compactResult.complete(
+      const SessionCompactResult(outcome: 'accepted'),
+    );
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('a selected skill inserts first and sends on the next Enter', (
+    tester,
+  ) async {
+    conversationRepository.slashCommandResults = const [
+      SlashCommandEntry(
+        sourceId: 'skill',
+        command: 'review',
+        insertText: 'review',
+        type: SlashCommandType.skill,
+      ),
+    ];
+    final sentMessages = <String>[];
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: ConversationInputPanel(
+        sessionId: 'session-compact',
+        onSendMessage: (message, {intent = MessageDeliveryIntent.auto}) {
+          sentMessages.add(message);
+        },
+      ),
+    );
+
+    await tester.enterText(
+      find.byKey(const Key('chat_input')),
+      'please /rev',
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+
+    expect(sentMessages, isEmpty);
+    expect(conversationRepository.compactSessionCalls, 0);
+    expect(find.text('review'), findsOneWidget);
+
+    await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+    await tester.pump();
+
+    expect(sentMessages, ['please review']);
+    expect(conversationRepository.compactSessionCalls, 0);
+  });
+
+  testWidgets('a mid-message runtime invocation remains ordinary text', (
+    tester,
+  ) async {
+    final sentMessages = <String>[];
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: ConversationInputPanel(
+        sessionId: 'session-compact',
+        onSendMessage: (message, {intent = MessageDeliveryIntent.auto}) {
+          sentMessages.add(message);
+        },
+      ),
+    );
+
+    await tester.enterText(
+      find.byKey(const Key('chat_input')),
+      'please /compact',
+    );
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(
+      find.byKey(const Key('slash_suggestion_runtime_action_compact')),
+      findsNothing,
+    );
+
+    await tester.tap(find.byKey(const Key('send_message_btn')));
+    await tester.pump();
+
+    expect(sentMessages, ['please /compact']);
+    expect(conversationRepository.compactSessionCalls, 0);
   });
 
   testWidgets('/compact with arguments shows validation and keeps draft', (

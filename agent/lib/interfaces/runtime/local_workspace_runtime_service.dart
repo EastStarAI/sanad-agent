@@ -73,7 +73,7 @@ class LocalWorkspaceRuntimeService {
       'command': 'compact',
       'description':
           'Compact conversation context while preserving the current goal.',
-      'type': 'runtime_command',
+      'type': 'runtime_action',
     },
   ];
 
@@ -837,6 +837,7 @@ class LocalWorkspaceRuntimeService {
             'command': entry.name,
             'description': entry.description ?? 'Load the ${entry.name} skill.',
             'source': 'skill',
+            'type': 'skill',
             'path': entry.path,
           },
         )

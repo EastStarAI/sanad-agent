@@ -64,6 +64,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       'previous_provider_instance_id':
           row['previous_provider_instance_id'] ?? metadata['previous_provider_instance_id'],
       'provider_instance_id': row['provider_instance_id'] ?? metadata['provider_instance_id'],
+      'model_id': row['model_id'] ?? metadata['model_id'],
       'route_revision': row['route_revision'] ?? metadata['route_revision'],
       'reason': row['reason'] ?? metadata['reason'],
       'generation': row['generation'] ?? metadata['generation'],
@@ -85,6 +86,8 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         'output': row['output'] ?? metadata['output'] ?? toolMetadata?['output'],
         'isError': row['isError'] ?? metadata['isError'],
         'status': row['status'] ?? metadata['status'],
+        'provider_instance_id': row['provider_instance_id'] ?? metadata['provider_instance_id'],
+        'model_id': row['model_id'] ?? metadata['model_id'],
       },
       'tool_call' => <String, dynamic>{
         'tool': row['tool'] ?? toolMetadata ?? _historyToolName(metadata['tool']),
@@ -480,6 +483,19 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       CompactionLifecycleStatus.completed => EventStatus.done,
       CompactionLifecycleStatus.failed => EventStatus.error,
     };
+    final tokensAfterCompaction = snapshot.providerConfirmedRequestTokensAfter ?? snapshot.estimatedRequestTokensAfter;
+    final contextUsage =
+        snapshot.status == CompactionLifecycleStatus.completed &&
+            tokensAfterCompaction != null &&
+            snapshot.contextWindowTokens != null
+        ? LlmUsageSnapshot(
+            inputTokens: tokensAfterCompaction,
+            contextWindowTokens: snapshot.contextWindowTokens,
+            modelId: event['model_id']?.toString(),
+            providerInstanceId: event['provider_instance_id']?.toString(),
+            observedAt: snapshot.completedAt ?? timestamp,
+          )
+        : null;
     return CanonicalEvent(
       id: snapshot.logicalEventId,
       kind: EventKind.informational,
@@ -488,14 +504,20 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       timestamp: snapshot.completedAt ?? snapshot.startedAt ?? timestamp,
       sessionId: snapshot.sessionId,
       eventId: event['event_id']?.toString() ?? 'context_compaction:${snapshot.compactionId}:${snapshot.status.name}',
+      contextUsage: contextUsage,
       metadata: {
         'informational': true,
         'compaction_event': true,
         'compaction_id': snapshot.compactionId,
         'compaction_status': snapshot.status.name,
         'compaction_trigger': snapshot.trigger.name,
+        if (event['provider_instance_id'] != null) 'provider_instance_id': event['provider_instance_id'],
+        if (event['model_id'] != null) 'model_id': event['model_id'],
         if (snapshot.failureReason != null) 'failure_reason': snapshot.failureReason,
         if (snapshot.contextWindowTokens != null) 'context_window_tokens': snapshot.contextWindowTokens,
+        if (snapshot.effectiveInputBudgetTokens != null)
+          'effective_input_budget_tokens': snapshot.effectiveInputBudgetTokens,
+        if (snapshot.autoThresholdTokens != null) 'auto_threshold_tokens': snapshot.autoThresholdTokens,
         if (snapshot.estimatedRequestTokensBefore != null)
           'estimated_request_tokens_before': snapshot.estimatedRequestTokensBefore,
         if (snapshot.estimatedRequestTokensAfter != null)

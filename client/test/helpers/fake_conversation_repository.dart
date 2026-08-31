@@ -49,8 +49,8 @@ class FakeConversationRepository implements ConversationRepository {
   final List<String?> stoppedSessionIds = [];
   final List<Map<String, String?>> retriedRuntimeNotices = [];
   final List<Map<String, String?>> continuedRuntimeNotices = [];
-  SessionCompactResult compactSessionResult =
-      const SessionCompactResult(outcome: 'accepted');
+  SessionCompactResult compactSessionResult = const SessionCompactResult(outcome: 'accepted');
+  Future<SessionCompactResult> Function()? compactSessionHandler;
   int compactSessionCalls = 0;
   final List<Map<String, String?>> updatedSessionPreferences = [];
   final List<Map<String, Object?>> createdSessionRequests = [];
@@ -347,6 +347,8 @@ class FakeConversationRepository implements ConversationRepository {
     required String sessionId,
   }) async {
     compactSessionCalls += 1;
+    final handler = compactSessionHandler;
+    if (handler != null) return handler();
     return compactSessionResult;
   }
 

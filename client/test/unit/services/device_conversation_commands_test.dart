@@ -8,6 +8,7 @@ import 'package:sanad_client/features/conversations/domain/models/device_suspend
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -199,6 +200,18 @@ void main() {
             'command': 'test-sanad-plugin',
             'description': 'Prompts the model to test a plugin',
             'source': 'skill',
+            'type': 'skill',
+          },
+          {
+            'command': 'compact',
+            'description': 'Compact conversation context',
+            'source': 'sanad-agent',
+            'type': 'runtime_action',
+          },
+          {
+            'command': 'future-command',
+            'source': 'sanad-agent',
+            'type': 'unknown_future_type',
           },
         ],
       },
@@ -206,9 +219,11 @@ void main() {
 
     final commandsList = await future;
 
-    expect(commandsList, hasLength(1));
-    expect(commandsList.single.command, 'test-sanad-plugin');
-    expect(commandsList.single.sourceId, 'skill');
+    expect(commandsList, hasLength(2));
+    expect(commandsList.first.command, 'test-sanad-plugin');
+    expect(commandsList.first.sourceId, 'skill');
+    expect(commandsList.last.type, SlashCommandType.runtimeAction);
+    expect(commandsList.last.invocationText, '/compact');
   });
 
   test('browseWorkspaceTree requests runtime-owned file tree data', () async {

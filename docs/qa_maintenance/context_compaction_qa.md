@@ -24,7 +24,7 @@ Verification matrix for durable goal-preserving context compaction across agent 
 | Restart persistence (53f F2) | `cd agent && fvm dart test test/evolution/compaction_restart_persistence_test.dart` | Boundary survives DB reopen |
 | Daemon E2E (53f F5) | `cd agent && fvm dart test --concurrency=1 --timeout=120s e2e_test/context_compaction_daemon_e2e_test.dart` | Manual compact + restart history hydration over real daemon |
 | Slash catalog (53e E0) | `cd agent && fvm dart test test/interfaces/local_workspace_compact_slash_test.dart test/interfaces/sanad_bridge_test.dart` | `/compact` runtime command exposed |
-| Client dispatch (53e E5) | `cd client && fvm flutter test test/widget/compact_command_dispatch_test.dart test/unit/services/skill_composer_utils_test.dart` | Exact `/compact`, args rejection, busy/in-progress feedback |
+| Client dispatch (53e E5) | `cd client && fvm flutter test test/widget/compact_command_dispatch_test.dart test/unit/services/skill_composer_utils_test.dart test/unit/bloc/composer_slash_commands_cubit_test.dart` | Partial Enter/click immediate action, exact `/compact`, mid-message exclusion, skill insert-then-submit, duplicate/args/busy feedback |
 
 ## Manual scenarios (53f)
 
@@ -46,6 +46,7 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] Live/history parity for compaction lifecycle events (53f F4) — `compaction_event_mapper_test.dart` + mapper history fix (2026-08-29).
 - [x] Overflow recovery one retry before visible stream (53d D4) — `compaction_overflow_recovery_test.dart` + 400 classify fix (2026-08-29).
 - [x] Client `/compact` dispatch and validation outcomes (53e E5) — `compact_command_dispatch_test.dart` (2026-08-29).
+- [x] Typed composer selection keeps leading-only `runtime_action` separate from anywhere-insertable `skill`, executes partial Enter/click immediately, coalesces duplicate Enter, and rejects stale slash-search responses after the action closes the surface — focused client suites (2026-08-31 remediation).
 - [x] Restart reopens compaction boundary rows (53f F2 partial) — `compaction_restart_persistence_test.dart` (2026-08-29).
 - [x] Preflight rebuilds provider history from activated projection (53d D1/D7) — `compaction_preflight_integration_test.dart` (2026-08-29).
 - [x] Checkpoint resume stays valid after compaction activation (53d D2) — `compaction_checkpoint_resume_test.dart` (2026-08-29).
@@ -69,6 +70,8 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] History places a lifecycle row at the durable retained-tail boundary before the first model response produced afterward, independent of synthetic message timestamps — `compaction_history_parity_test.dart` (2026-08-31 independent remediation).
 - [x] A logical compaction cannot regress or switch between terminal `completed` and `failed` states during retry/reload reconciliation — `conversation_state_compaction_test.dart` (2026-08-31 independent remediation).
 - [x] Compaction tiles keep a 44px interaction target, render all six manual/auto lifecycle labels at 280px/2x text scale without overflow, and expose identical redacted metrics by tap, hover, and keyboard focus; unconfirmed token metrics are labeled Estimated — `compaction_event_tile_test.dart` (2026-08-31 independent remediation).
+- [x] A completed compaction immediately replaces the composer context-usage snapshot with provider-confirmed-after when available, otherwise estimated-after; stale cached-input usage is discarded, while started/failed events do not replace the last valid usage — `compaction_event_mapper_test.dart` (2026-08-31 remediation).
+- [x] Manual compaction resolves the active adapter/model context limit before its bounded estimate fallback, carries model/route identity through live and hydrated lifecycle events, and preserves the latest same-model provider window in the composer — `compaction_request_factory_test.dart`, `compaction_lifecycle_broadcaster_test.dart`, and client mapper/usage tests (2026-08-31 remediation).
 - [x] The first provider response after activation writes one confirmed after-value, republishes the same completed event id, survives hydration, and cannot be replaced by later tool-loop responses — `compaction_boundary_repository_test.dart` + `compaction_coordinator_test.dart` + live provider verification (2026-08-31 Task 53g).
 - [x] Compaction separators fill the conversation width symmetrically while retaining narrow/large-text safety; reconciled details show `Provider confirmed after` and suppress the superseded pre-confirmation estimate — `compaction_event_tile_test.dart` + live UI verification (2026-08-31 Task 53g).
 - [x] Compaction details expose one trigger label without the redundant `Type: Auto` / `Trigger: Auto` pair — `compaction_event_tile_test.dart` + live UI verification (2026-08-31 Task 53g).
@@ -80,6 +83,8 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] Provider-confirmed input remains authoritative when Codex wire instructions/tools and the ordered input prefix are unchanged; the `260537 + 1200 = 261737` regression stays below the 80% threshold even when the rough full-wire estimate is `316900` — `context_compaction_engine_test.dart`, `codex_responses_adapter_test.dart`, and `compaction_preflight_integration_test.dart` (2026-08-31 live Auto regression remediation).
 - [x] Boundary activation and projection accept edit/retry AUTOINCREMENT gaps such as `[1,5,6,7]` while still rejecting loss of exactly one durable endpoint — `compaction_boundary_repository_test.dart`, `compaction_operation_record_test.dart`, and `model_projection_builder_test.dart` (2026-08-31 live Auto regression remediation).
 - [x] Two preflight calls after one synthetic Auto failure emit exactly one started/failed lifecycle because the active-run breaker blocks the repeat — `compaction_preflight_integration_test.dart`; activation diagnostics preserve `sourceRevisionStale`; full agent suite 1373 passed / 12 skipped and isolated daemon E2E 3/3 (2026-08-31 live Auto regression remediation).
+- [x] Same-id completed reconciliation bypasses exact-redelivery suppression once, while an identical enriched replay is still dropped; canonical map ordering cannot change the fingerprint — `event_deduplicator_test.dart` + `cross_transport_dedup_test.dart` (2026-08-31 live card remediation).
+- [x] The compaction card uses the confirmed after-value, effective-input denominators, daemon-owned automatic threshold, grouped token values, and no Type/Trigger/Status rows; only the centered 44px label opens it and divider clicks do nothing — `compaction_event_tile_test.dart` (2026-08-31 live card remediation).
 
 ## Review notes (2026-08-29 evening)
 

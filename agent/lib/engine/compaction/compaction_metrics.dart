@@ -6,6 +6,8 @@ import 'compaction_enums.dart';
 @immutable
 class CompactionMetrics {
   final int contextWindowTokens;
+  final int? effectiveInputBudgetTokens;
+  final int? autoThresholdTokens;
   final int estimatedRequestTokensBefore;
   final int estimatedRequestTokensAfter;
   final CompactionMeasurementKind beforeMeasurementKind;
@@ -16,6 +18,8 @@ class CompactionMetrics {
 
   CompactionMetrics({
     required this.contextWindowTokens,
+    this.effectiveInputBudgetTokens,
+    this.autoThresholdTokens,
     required this.estimatedRequestTokensBefore,
     required this.estimatedRequestTokensAfter,
     this.beforeMeasurementKind = CompactionMeasurementKind.estimated,
@@ -30,6 +34,9 @@ class CompactionMetrics {
              estimatedRequestTokensAfter >= 0 &&
              (providerConfirmedRequestTokensAfter == null ||
                  providerConfirmedRequestTokensAfter >= 0) &&
+             (effectiveInputBudgetTokens == null ||
+                 effectiveInputBudgetTokens > 0) &&
+             (autoThresholdTokens == null || autoThresholdTokens > 0) &&
              retainedTailTokens >= 0,
          'token counts must be non-negative',
        ),
@@ -44,6 +51,8 @@ class CompactionMetrics {
       other is CompactionMetrics &&
           runtimeType == other.runtimeType &&
           contextWindowTokens == other.contextWindowTokens &&
+          effectiveInputBudgetTokens == other.effectiveInputBudgetTokens &&
+          autoThresholdTokens == other.autoThresholdTokens &&
           estimatedRequestTokensBefore == other.estimatedRequestTokensBefore &&
           estimatedRequestTokensAfter == other.estimatedRequestTokensAfter &&
           beforeMeasurementKind == other.beforeMeasurementKind &&
@@ -56,6 +65,8 @@ class CompactionMetrics {
   @override
   int get hashCode => Object.hash(
     contextWindowTokens,
+    effectiveInputBudgetTokens,
+    autoThresholdTokens,
     estimatedRequestTokensBefore,
     estimatedRequestTokensAfter,
     beforeMeasurementKind,

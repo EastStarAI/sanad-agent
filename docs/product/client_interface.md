@@ -120,6 +120,13 @@ thinking mode. A first-time user with no thinking preference starts at
 runtime has an authoritative provider/model route, the model selector is never
 left empty merely because only the provider half was restored.
 
+Composer suggestions have distinct interaction types. A no-argument runtime
+action is available only from a leading slash and executes as soon as the user
+chooses it with Enter or the pointer. A skill can be inserted at any slash
+position and remains in the draft until the next submit. These behaviors come
+from the suggestion type rather than a hard-coded command name; inline `@`
+file references can therefore be added later as a separate insertion type.
+
 Dragging and dropping files of any type onto the composer area captures their full local paths and inserts them at the current caret, replacing an active text selection and leaving the caret after the inserted paths. During a drag-over action, the composer card displays a highlighted primary border and a matching subtle background tint for clear visual feedback. A newly presented New Conversation focuses the message field automatically, and clicking any blank non-control area of the composer transfers focus to that field so typing can begin without targeting the text line precisely.
 
 A workspace created elsewhere in the client appears on the selector's first
@@ -269,17 +276,17 @@ the request.
 Context compaction appears as one centered timeline separator per logical
 operation. Manual and automatic/overflow labels remain distinct, running state
 uses progress, and terminal success or failure replaces that same tile. The
-interaction target is at least 44 logical pixels and opens the same redacted
-multiline metrics through desktop hover, touch/click, or keyboard focus; narrow
-layouts may wrap the centered label but must not overflow.
-Details expose one `Trigger` field and do not repeat it as a redundant `Type`.
-Until the daemon supplies provider-confirmed metric provenance, before/after
-and reclaimed token values are labeled `Estimated` rather than presented as
-provider facts. After reconciliation, the same tile shows `Provider confirmed
-after` as the authoritative value and removes the superseded after-estimate
-from user-facing details; persistence may retain that estimate for bounded
-diagnostics. Reclaimed tokens are recomputed against that confirmed after-value;
-the label remains `Estimated` whenever the before-value is not itself confirmed.
+centered label alone owns a localized interaction target of at least 44 logical
+pixels and opens the same redacted multiline metrics through desktop hover,
+touch/click, or keyboard focus. Hovering or clicking the divider space does
+nothing; narrow layouts may wrap the label but must not overflow.
+The flat detail card omits lifecycle `Type`, `Trigger`, and `Status` rows. It
+shows before, after, reclaimed context, retained tail, automatic threshold,
+usable input, and full window. Before/after percentages use the daemon-owned
+usable input budget; reclaimed percentage uses the before value. Once provider
+reconciliation arrives, after uses the confirmed value, marks it `Confirmed`,
+suppresses the superseded estimate, and recomputes reclaimed context from it.
+Persistence may retain the provisional estimate for bounded diagnostics.
 The separator dividers consume the full conversation width around the intrinsic
 centered label in both LTR and RTL layouts.
 

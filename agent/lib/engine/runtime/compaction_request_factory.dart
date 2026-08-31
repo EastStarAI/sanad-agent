@@ -11,7 +11,7 @@ import 'package:sanad_agent/evolution/session_manager.dart';
 abstract final class CompactionRequestFactory {
   CompactionRequestFactory._();
 
-  static CompactionEngineRequest? forSession({
+  static Future<CompactionEngineRequest?> forSession({
     required String sessionId,
     required CompactionTrigger trigger,
     required String compactionId,
@@ -21,7 +21,7 @@ abstract final class CompactionRequestFactory {
     int? contextWindowTokens,
     ConfirmedInputUsageBaseline? confirmedInputUsage,
     double? targetRatio,
-  }) {
+  }) async {
     if (!getIt.isRegistered<ModelProjectionBuilder>() ||
         !getIt.isRegistered<SessionHistoryRevisionRepository>() ||
         !getIt.isRegistered<AgentRuntimeService>()) {
@@ -64,10 +64,13 @@ abstract final class CompactionRequestFactory {
           toolSchemas: toolSchemas,
         )
         .estimatedRequestTokens;
-    final window =
-        contextWindowTokens ??
-        config?.contextModelLimit(route.modelId) ??
-        (estimatedRequestTokens * 1.4).round().clamp(4_096, 128_000);
+    final window = await resolveContextWindowTokens(
+      explicitOverride: contextWindowTokens,
+      configuredOverride: config?.contextModelLimit(route.modelId),
+      resolveProviderLimit: () =>
+          runtime.adapterFor(route).getContextLimit(route.modelId),
+      estimatedRequestTokens: estimatedRequestTokens,
+    );
     final effectiveWindow = calculateEffectiveInputWindow(window);
 
     return CompactionEngineRequest(
@@ -95,5 +98,23 @@ abstract final class CompactionRequestFactory {
               .round(),
       thresholdRatio: policy?.threshold ?? 0.80,
     );
+  }
+
+  static Future<int> resolveContextWindowTokens({
+    required int? explicitOverride,
+    required int? configuredOverride,
+    required Future<int> Function() resolveProviderLimit,
+    required int estimatedRequestTokens,
+  }) async {
+    if (explicitOverride != null) return explicitOverride;
+    if (configuredOverride != null) return configuredOverride;
+    try {
+      final providerLimit = await resolveProviderLimit();
+      if (providerLimit > 0) return providerLimit;
+    } catch (_) {
+      // Keep manual compaction available if provider metadata cannot be
+      // resolved; the bounded estimate below remains the last resort.
+    }
+    return (estimatedRequestTokens * 1.4).round().clamp(4_096, 128_000);
   }
 }

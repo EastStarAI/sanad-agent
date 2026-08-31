@@ -16,6 +16,8 @@ class CompactionLifecycleEvent {
   final CompactionStatus status;
   final CompactionFailureReason? failureReason;
   final CompactionMetrics? metrics;
+  final String? providerInstanceId;
+  final String? modelId;
   final DateTime startedAt;
   final DateTime? completedAt;
 
@@ -26,6 +28,8 @@ class CompactionLifecycleEvent {
     required this.status,
     this.failureReason,
     this.metrics,
+    this.providerInstanceId,
+    this.modelId,
     required this.startedAt,
     this.completedAt,
   });
@@ -80,6 +84,8 @@ class CompactionCoordinator {
         trigger: record.trigger,
         status: CompactionStatus.completed,
         metrics: record.metrics,
+        providerInstanceId: record.routeSignature.providerInstanceId,
+        modelId: record.routeSignature.modelId,
         startedAt: record.startedAt,
         completedAt: record.completedAt,
       ),
@@ -163,6 +169,8 @@ class CompactionCoordinator {
         sessionId: request.sessionId,
         trigger: request.trigger,
         status: CompactionStatus.started,
+        providerInstanceId: request.routeSignature.providerInstanceId,
+        modelId: request.routeSignature.modelId,
         startedAt: startedAt,
       ),
     );
@@ -218,6 +226,8 @@ class CompactionCoordinator {
           trigger: request.trigger,
           status: CompactionStatus.failed,
           failureReason: CompactionFailureReason.persistenceFailed,
+          providerInstanceId: request.routeSignature.providerInstanceId,
+          modelId: request.routeSignature.modelId,
           startedAt: startedAt,
           completedAt: DateTime.now().toUtc(),
         ),
@@ -236,6 +246,8 @@ class CompactionCoordinator {
         trigger: request.trigger,
         status: CompactionStatus.completed,
         metrics: candidate.metrics,
+        providerInstanceId: request.routeSignature.providerInstanceId,
+        modelId: request.routeSignature.modelId,
         startedAt: startedAt,
         completedAt: DateTime.now().toUtc(),
       ),
@@ -266,6 +278,8 @@ class CompactionCoordinator {
         trigger: request.trigger,
         status: CompactionStatus.failed,
         failureReason: failureReason,
+        providerInstanceId: request.routeSignature.providerInstanceId,
+        modelId: request.routeSignature.modelId,
         startedAt: startedAt,
         completedAt: completedAt,
       ),

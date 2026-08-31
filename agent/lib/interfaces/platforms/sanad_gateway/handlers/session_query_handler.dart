@@ -916,11 +916,17 @@ class SessionQueryHandler {
       'compaction_id': operation.compactionId,
       'trigger': operation.trigger.wireValue,
       'status': operation.status.wireValue,
+      'provider_instance_id': operation.routeSignature.providerInstanceId,
+      'model_id': operation.routeSignature.modelId,
       'started_at': operation.startedAt.toUtc().toIso8601String(),
       if (operation.completedAt != null)
         'completed_at': operation.completedAt!.toUtc().toIso8601String(),
       if (metrics != null) ...{
         'context_window_tokens': metrics.contextWindowTokens,
+        if (metrics.effectiveInputBudgetTokens != null)
+          'effective_input_budget_tokens': metrics.effectiveInputBudgetTokens,
+        if (metrics.autoThresholdTokens != null)
+          'auto_threshold_tokens': metrics.autoThresholdTokens,
         'estimated_request_tokens_before': metrics.estimatedRequestTokensBefore,
         'estimated_request_tokens_after': metrics.estimatedRequestTokensAfter,
         'before_measurement_kind': metrics.beforeMeasurementKind.wireValue,

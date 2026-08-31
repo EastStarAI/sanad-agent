@@ -59,7 +59,11 @@ void main() {
       const value = TextEditingValue(text: 'please /tes now', selection: TextSelection.collapsed(offset: 11));
       final query = SkillComposerUtils.detectSlashQuery(value)!;
 
-      final updated = SkillComposerUtils.applySkillSelection(value, query: query, skillName: 'test-sanad-plugin');
+      final updated = SkillComposerUtils.applySlashSelectionText(
+        value,
+        query: query,
+        replacement: 'test-sanad-plugin',
+      );
 
       expect(updated.text, 'please test-sanad-plugin now');
       expect(updated.selection.baseOffset, 'please test-sanad-plugin'.length);
@@ -67,6 +71,19 @@ void main() {
 
     test('normalizes spaces and separators for slash matching', () {
       expect(SkillComposerUtils.normalizeSlashSearchToken('Test Sanad_Plugin'), 'testsanadplugin');
+    });
+
+    test('parses a leading runtime invocation without naming a command', () {
+      final invocation = SkillComposerUtils.parseLeadingRuntimeInvocation(
+        ' /compact force ',
+      );
+
+      expect(invocation?.command, 'compact');
+      expect(invocation?.arguments, 'force');
+      expect(
+        SkillComposerUtils.parseLeadingRuntimeInvocation('please /compact'),
+        isNull,
+      );
     });
   });
 }
