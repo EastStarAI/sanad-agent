@@ -59,7 +59,7 @@ class AgentTurnRequest {
     String? providerInstanceId,
     String? providerId,
     Object? model = _unset,
-    String? thinkingMode,
+    Object? thinkingMode = _unset,
     String? requestId,
     MessageDeliveryIntent? deliveryIntent,
     Map<String, dynamic>? metadata,
@@ -71,7 +71,9 @@ class AgentTurnRequest {
       providerInstanceId: providerInstanceId ?? this.providerInstanceId,
       providerId: providerId ?? this.providerId,
       model: identical(model, _unset) ? this.model : model as String?,
-      thinkingMode: thinkingMode ?? this.thinkingMode,
+      thinkingMode: identical(thinkingMode, _unset)
+          ? this.thinkingMode
+          : thinkingMode as String?,
       requestId: requestId ?? this.requestId,
       deliveryIntent: deliveryIntent ?? this.deliveryIntent,
       metadata: metadata ?? this.metadata,

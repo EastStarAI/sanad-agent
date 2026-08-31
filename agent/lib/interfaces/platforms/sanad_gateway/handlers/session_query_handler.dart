@@ -2,6 +2,10 @@ import 'dart:convert';
 
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/core/provider_thinking/session_route_thinking_control.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
+import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/evolution/models/session_query.dart';
 import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
@@ -32,6 +36,8 @@ class SessionQueryHandler {
   final PersistedRuntimeStateRepository? _persistedState;
   final SessionRouteMutationCoordinator? _routeCoordinator;
   final SessionRouteTransitionRepository? _routeTransitions;
+  final ThinkingSelectionResolver? _thinkingSelectionResolver;
+  final ThinkingRoutePreferenceStore? _thinkingPreferenceStore;
 
   SessionQueryHandler({
     required SessionManager sessionManager,
@@ -41,13 +47,40 @@ class SessionQueryHandler {
     PersistedRuntimeStateRepository? persistedState,
     SessionRouteMutationCoordinator? routeCoordinator,
     SessionRouteTransitionRepository? routeTransitions,
+    ThinkingSelectionResolver? thinkingSelectionResolver,
+    ThinkingRoutePreferenceStore? thinkingPreferenceStore,
   }) : _sessionManager = sessionManager,
        _bridge = bridge,
        _orchestrator = orchestrator,
        _runtimeRecovery = runtimeRecovery,
        _persistedState = persistedState,
        _routeCoordinator = routeCoordinator,
-       _routeTransitions = routeTransitions;
+       _routeTransitions = routeTransitions,
+       _thinkingSelectionResolver = thinkingSelectionResolver,
+       _thinkingPreferenceStore = thinkingPreferenceStore;
+
+  Map<String, dynamic> _sessionPayloadFor({
+    required SessionState session,
+    Map<String, dynamic>? sessionMetadata,
+    Map<String, dynamic>? metadataOverrides,
+  }) {
+    final resolver = _thinkingSelectionResolver;
+    final correction = _thinkingPreferenceStore
+        ?.readCorrection(session.sessionId)
+        ?.toMap();
+    return buildSessionPayload(
+      session: session,
+      sessionMetadata: sessionMetadata,
+      metadataOverrides: metadataOverrides,
+      thinkingControl: resolver == null
+          ? null
+          : resolveSessionRouteThinkingControl(
+              resolver: resolver,
+              session: session,
+            ),
+      thinkingCorrection: correction,
+    );
+  }
 
   Map<String, dynamic> buildHistoryEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId ?? 'default';
@@ -437,7 +470,7 @@ class SessionQueryHandler {
           'session_id': sessionId,
           'execution_snapshot': _executionSnapshot(sessionId).toPayload(),
           if (session != null)
-            ...buildSessionPayload(
+            ..._sessionPayloadFor(
               session: session,
               sessionMetadata: sessionMetadata,
               metadataOverrides: {'context_usage': ?latestContextUsage},
@@ -484,7 +517,7 @@ class SessionQueryHandler {
 
       final serializedSessions = result.sessions.map((session) {
         final runtimeNotice = _runtimeRecovery?.activeNotice(session.sessionId);
-        final payload = buildSessionPayload(
+        final payload = _sessionPayloadFor(
           session: session,
           sessionMetadata: _sessionManager.getSessionMetadata(
             session.sessionId,

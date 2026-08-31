@@ -29,6 +29,7 @@ This contract applies to `agent/lib/core/`.
 ## Provider Runtime
 - `ProviderRegistry` is the source of supported provider templates; `ProviderInstance` UUID is routing identity and display name is presentation metadata.
 - `core/provider_usage/` owns the unified account-usage models, per-template usage adapters, and the usage adapter registry (Task 55). The registry is the single authority for whether an instance supports usage queries; clients must not hardcode a provider list. Adapters are auth-method-independent and read-only in v1; ChatGPT (`openai-codex`) maps `primary_window`/`secondary_window` to Session/Weekly and never synthesises a placeholder. Snapshots never carry credentials, account ids, or raw provider payloads.
+- `core/provider_thinking/` owns typed thinking-control descriptors, native directive unions, provider thinking policies, and the thinking policy registry (Task 43). Policies decide per-route capability and translate stored selection ids into typed directives; adapters own wire payloads and must not infer capability from `supportsReasoning` alone.
 - Provider setup is instance-first. Templates are immutable capability definitions; instances own editable metadata, credential revision, model choice, rate limit, and failover policy.
 - Keep constants for protocol, auth method, credential action, requirement, and status centralized; do not branch on duplicate raw literals.
 - Separate configured state from runtime readiness. Only a successfully verified current metadata/credential revision may become ready or default.

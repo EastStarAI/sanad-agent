@@ -125,7 +125,7 @@ All responses carry `request_id`. Instance mutations broadcast
 | `provider.credential.update` | `provider.credential.updated` | `keep` \| `replace` \| `remove` for API-key instances. |
 | `provider.auth.reconnect` | `provider_auth_started` | Re-runs OAuth for an existing instance. |
 | `provider.auth.disconnect` | `provider.credential.updated` | Deletes OAuth tokens; instance metadata stays. |
-| `model.snapshot` | `model.snapshot_result` | Returns cached models per instance (stale-while-revalidate), including `status` so clients can render true runtime readiness from the instance lifecycle instead of inferring it from cache presence. Model ids are instance-local: redundant `<template>/` prefixes and Gemini's `models/` transport prefix must already be stripped. |
+| `model.snapshot` | `model.snapshot_result` | Returns cached models per instance (stale-while-revalidate), including `status` so clients can render true runtime readiness from the instance lifecycle instead of inferring it from cache presence. Model ids are instance-local: redundant `<template>/` prefixes and Gemini's `models/` transport prefix must already be stripped. Each model entry may include `supports_reasoning_output` and a per-model `thinking_control` descriptor (Task 43). |
 | `model.refresh` | `model.cache_updated` | Refreshes models for an instance; **all events (started/updated/failed) carry the original `request_id`** and clients must complete the request only on `updated`/`failed`, never on `started`. |
 | `model.recent.list` | `model.recent.recent_result` | Returns last 5 selections with current display names, using the same normalized instance-local model ids as `model.snapshot`. |
 | `model.recent.record` | `model.recent.recent_recorded` | Records a model selection (upsert, moves to top). |
@@ -183,6 +183,28 @@ Additional contract rules:
 - If a base URL, protocol, or credential revision changes, the instance must demote out of `ready` until a successful cache refresh verifies the current revisions again. For optional-key templates, removing the key demotes to `draft`, not `needs_auth`.
 - Templates whose account-auth flow is not implemented yet must be omitted by `ProviderCatalogService` itself so CLI and client stay consistent.
 - `get_capabilities` must not double as provider-model discovery. A fresh install with no provider instances must still answer `capabilities` successfully; model catalogs come only from `model.snapshot`, `model.refresh`, `model.options`, and readiness/setup commands.
+
+### Task 43 — Provider-aware thinking controls (Gates A–C)
+
+Device capabilities advertise whether the client understands model-scoped thinking
+controls, not the selectable values themselves:
+
+- `supports_thinking_mode_change`: device understands the thinking selector contract.
+- `thinking_mode_source`: `model` when options come from the active model snapshot; legacy agents omit this field and clients treat `thinking_modes_list` as authoritative.
+- `thinking_modes_list`: retained for backward compatibility only. Current agents emit an empty list when `thinking_mode_source` is `model`.
+
+Each model entry in `model.snapshot_result.instances[].models[]` may include:
+
+- `supports_reasoning_output`: whether the model may emit reasoning output.
+- `thinking_control`: descriptor with `status` (`supported` | `unsupported` | `unknown`), optional `kind`, ordered `options[]` (`id`, English `label`, `is_off`, `is_provider_default`), `default_option_id`, `capability_revision`, and `source`.
+
+Session payloads may also include `thinking_control` for the active route when the daemon can resolve it from the current model cache revision. Clients must ignore a route descriptor when its `capability_revision` or `route_revision` does not match the active route (Gate D).
+
+Aggregator templates such as OpenRouter use `aggregator_upstream` thinking policy: capability follows the upstream vendor prefix in the model id (`anthropic/...`, `google/...`, `deepseek/...`, `openai/...`, etc.), and the chat-completions adapter emits OpenRouter's nested `reasoning` object instead of top-level `reasoning_effort`.
+
+Gemini templates use `google_thinking`: budget models map to `extra_body.google.thinking_config.thinking_budget`, level models map to `thinking_level`, and the adapter never mixes those shapes with top-level `reasoning_effort`.
+
+DeepSeek templates use `deepseek_thinking`: only fixed chat fixtures advertise toggle/effort controls; unresolved models stay `unknown`, reasoner models stay `unsupported`, and the wire codec keeps toggle off and effort mutually exclusive.
 
 ### Provisional setup ownership (Task 57)
 

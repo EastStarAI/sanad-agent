@@ -4,6 +4,7 @@ import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_exception.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_errors.dart';
 import 'package:sanad_agent/core/secrets_redactor.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart';
@@ -509,6 +510,28 @@ class SessionTurnExecutor {
           activeRun.workItemId,
         );
       }
+    } on ThinkingSelectionException catch (e) {
+      if (activeRun == null || !ownsRun(activeRun)) {
+        return;
+      }
+      sessionManager.clearInFlightSnapshot(event.sessionId);
+      emitResponse(
+        GatewayResponse(
+          sessionId: event.sessionId,
+          platformId: event.platformId,
+          message: Message(
+            role: MessageRole.assistant,
+            content: e.message,
+            metadata: {
+              'error_code': e.code,
+              'thinking_selection_error': true,
+            },
+          ),
+          isComplete: true,
+          runId: activeRun.runId,
+          modelStepId: agentRunner.currentModelStepId,
+        ),
+      );
     } catch (e, stack) {
       if (activeRun == null || activeRun.stopRequested || !ownsRun(activeRun)) {
         return;

@@ -1,10 +1,10 @@
 ---
 title: "Provider-Aware Thinking Mode Capability"
 description: "خطة مبنية على أدلة تنفيذية لتوفير تحكم ديناميكي في التفكير بحسب provider instance والنموذج والبروتوكول، مع منع التجاهل الصامت والتحقق من payload النهائي."
-status: "approval required"
+status: "review complete"
 scope: "agent llm adapters, provider runtime, canonical protocol, client composer"
 evidence_id: "43"
-evidence_fingerprint: "sha256:f3437424b8662bd34c449fdf6d4b60f18b4c413ab7620ccc3a7b4b554f306c17"
+evidence_fingerprint: "sha256:ee2edb165e9df40967f05dfd8b7997c80524d31a44fb38a0441a4c7a5a5f44e5"
 ---
 
 # Task 43: Provider-Aware Thinking Mode Capability
@@ -16,7 +16,9 @@ evidence_fingerprint: "sha256:f3437424b8662bd34c449fdf6d4b60f18b4c413ab7620ccc3a
 المزودين الخارجي في تأسيس هذه الخطة بناءً على قرار المنتج؛ لذلك لا يُعلن دعم
 أي mapping لا يثبته evidence packet واختبار Sanad خاص بالـrequest body.
 
-هذه الوثيقة بانتظار الاعتماد قبل بدء أي تعديل برمجي.
+الخطة معتمدة للتنفيذ والمراجعة البوابية في الورك تري
+`.agent/worktrees/43-provider-aware-thinking-mode`. حزمة الأدلة `43` أُعيد
+تحديثها في 2026-08-29 والـresolver يعيد `ready`.
 
 ## 2. خلاصة البحث
 
@@ -353,9 +355,26 @@ thinking_capability_revision
 - [x] إنشاء evidence packet لثلاثة مشاريع عاملة.
 - [x] تسجيل revisions وlicenses والملفات والاختبارات المفحوصة.
 - [x] إنتاج Adopt/Adapt/Reject ومصفوفة wire shapes.
-- [ ] اعتماد هذه الخطة من المستخدم.
-- [ ] تحديد provider/model policies التي ستدخل الإصدار الأول؛ أي حالة ملتبسة
+- [x] اعتماد هذه الخطة من المستخدم.
+- [x] تحديد provider/model policies التي ستدخل الإصدار الأول؛ أي حالة ملتبسة
       تبقى `unknown` ولا تؤخر البنية العامة.
+
+**قائمة الإصدار الأول المغلقة (policy ids):**
+
+| policy id | نطاق القالب / الـroute | ملاحظة |
+|---|---|---|
+| `openai_chat_effort` | قالب `openai` فقط (`thinkingPolicyId` صريح) | لا يُشتق تلقائيًا لكل `chat_completions` |
+| `codex_responses_effort` | `apiMode: codex_responses` | Responses shape منفصل |
+| `anthropic_thinking` | `apiMode: anthropic_messages` | manual/adaptive حسب كتالوج النموذج |
+| `aggregator_upstream` | OpenRouter (`thinkingPolicyId` صريح) | يركّب مع upstream model policy |
+| `google_thinking` | Gemini (`thinkingPolicyId` صريح) | budget/level حسب النموذج |
+| `deepseek_thinking` | DeepSeek (`thinkingPolicyId` صريح) | فقط نماذج fixture مثبتة؛ غير ذلك unsupported/unknown داخل السياسة |
+| `ollama_live` | `apiMode: ollama` | probe حي؛ فشل مؤقت → `unknown` |
+| `unknown` | custom وجميع المسارات الملتبسة | fail-closed؛ لا selector تخميني |
+
+Toggle/effort المتنافي (Kimi/Moonshot وأشباهه) لا يدخل الإصدار الأول كـpolicy
+عامة حتى يوجد `thinkingPolicyId` مخصص وfixture Sanad؛ حتى ذلك يبقى خارج
+القائمة المغلقة أعلاه أو fail-closed.
 
 **DoD:** resolver يعيد `ready`، والخطة معتمدة، وقائمة الإصدار الأول مغلقة.
 
@@ -363,19 +382,19 @@ thinking_capability_revision
 
 **الهدف:** فصل capability عن request JSON.
 
-- إضافة أنواع descriptor/options/status/directives.
-- إضافة `ProviderThinkingPolicy` وregistry.
-- إضافة policy افتراضية fail-closed ترجع `unknown` للcustom/unknown route.
-- إضافة `thinkingPolicyId` أو seam مكافئة إلى provider profile.
-- إبقاء runner provider-neutral.
+- [x] إضافة أنواع descriptor/options/status/directives.
+- [x] إضافة `ProviderThinkingPolicy` وregistry.
+- [x] إضافة policy افتراضية fail-closed ترجع `unknown` للcustom/unknown route.
+- [x] إضافة `thinkingPolicyId` أو seam مكافئة إلى provider profile.
+- [x] إبقاء runner provider-neutral.
 
 **اختبارات:**
 
-- supported/unsupported/unknown؛
-- unknown custom endpoint؛
-- option ordering/default/off semantics؛
-- policy lookup حسب profile + protocol؛
-- لا raw maps في directive boundary.
+- [x] supported/unsupported/unknown؛
+- [x] unknown custom endpoint؛
+- [x] option ordering/default/off semantics؛
+- [x] policy lookup حسب profile + protocol؛
+- [x] لا raw maps في directive boundary.
 
 **DoD:** كل route تحصل على policy صريحة أو fail-closed policy، ولا يتغير wire
 payload بعد.
@@ -384,20 +403,20 @@ payload بعد.
 
 **الهدف:** حساب descriptor لكل model وربطها بالcache revisions.
 
-- توسيع `ModelOption` أو إنشاء DTO مستقل لـthinking control.
-- تركيب profile facts + model metadata + live probe.
-- فصل `supportsReasoningOutput` عن `thinkingControl`.
-- إضافة `capabilityRevision`, source, freshness.
-- الحفاظ على `unknown` عند فشل probe المؤقت.
-- تحديث serialization/deserialization في provider model cache.
+- [x] توسيع `ModelOption` أو إنشاء DTO مستقل لـthinking control.
+- [x] تركيب profile facts + model metadata + live probe.
+- [x] فصل `supportsReasoningOutput` عن `thinkingControl`.
+- [x] إضافة `capabilityRevision`, source, freshness.
+- [x] الحفاظ على `unknown` عند فشل probe المؤقت.
+- [x] تحديث serialization/deserialization في provider model cache.
 
 **اختبارات:**
 
-- cache roundtrip؛
-- config/credential revision invalidation؛
-- stale live evidence؛
-- transient probe failure ≠ unsupported؛
-- Ollama/local capability probe fixture دون افتراض name pattern.
+- [x] cache roundtrip؛
+- [x] config/credential revision invalidation؛
+- [x] transient probe failure ≠ unsupported؛
+- [x] stale live evidence؛
+- [x] Ollama/local capability probe fixture دون افتراض name pattern.
 
 **DoD:** model snapshot الداخلي يصف خيارات كل model بدقة ولا يعتمد على boolean
 واحد.
@@ -406,18 +425,18 @@ payload بعد.
 
 **الهدف:** إيصال capability الديناميكية إلى الواجهة.
 
-- إضافة `thinking_mode_source: model` إلى device capability.
-- إضافة `thinking_control` إلى model snapshot والroute/session snapshot.
-- تحديث DTOs في العميل مع parsing متوافق خلفيًا.
-- عدم استخدام `thinking_modes_list` في العميل الجديد.
-- توثيق protocol في `docs/technical/provider_protocol.md`.
+- [x] إضافة `thinking_mode_source: model` إلى device capability.
+- [x] إضافة `thinking_control` إلى model snapshot والroute/session snapshot.
+- [x] تحديث DTOs في العميل مع parsing متوافق خلفيًا.
+- [x] عدم استخدام `thinking_modes_list` في العميل الجديد.
+- [x] توثيق protocol في `docs/technical/provider_protocol.md`.
 
 **اختبارات:**
 
-- agent serialization؛
-- client parsing لكل status؛
-- old agent payload fallback؛
-- route revision تمنع تطبيق descriptor قديمة.
+- [x] agent serialization؛
+- [x] client parsing لكل status؛
+- [x] old agent payload fallback؛
+- [x] route revision تمنع تطبيق descriptor قديمة.
 
 **DoD:** client يستطيع معرفة الخيارات الصحيحة للنموذج الفعال دون hardcoding.
 
@@ -425,22 +444,22 @@ payload بعد.
 
 **الهدف:** منع silent ignore وربط الاختيار بالroute.
 
-- إضافة resolver مركزي للاختيار الفعال.
-- إضافة typed unsupported/stale error قبل adapter call.
-- توسيع persistence بالroute binding وcapability revision.
-- revalidation عند model/provider switch وrestore/failover.
-- correction event عند clearing/downgrade المعلن.
-- migration للقيم legacy.
+- [x] إضافة resolver مركزي للاختيار الفعال.
+- [x] إضافة typed unsupported/stale error قبل adapter call.
+- [x] توسيع persistence بالroute binding وcapability revision.
+- [x] revalidation عند model/provider switch وrestore/failover.
+- [x] correction event عند clearing/downgrade المعلن.
+- [x] migration للقيم legacy.
 
 **اختبارات:**
 
-- explicit valid selection؛
-- explicit unsupported selection يرسل صفر HTTP requests؛
-- null يستخدم provider default؛
-- switch valid→invalid؛
-- restore بعد تغير capability revision؛
-- auto-failover وqueued work؛
-- legacy aliases المتاحة وغير المتاحة.
+- [x] explicit valid selection؛
+- [x] explicit unsupported selection يرسل صفر HTTP requests؛
+- [x] null يستخدم provider default؛
+- [x] switch valid→invalid؛
+- [x] restore بعد تغير capability revision؛
+- [x] auto-failover وqueued work؛
+- [x] legacy aliases المتاحة وغير المتاحة.
 
 **DoD:** لا توجد قيمة مخزنة تصل adapter دون validation حديثة، ولا يحدث silent
 fallback.
@@ -449,19 +468,19 @@ fallback.
 
 **الهدف:** نقل السلوك الحالي من mapping عام إلى policies مثبتة.
 
-- OpenAI Chat directive → top-level `reasoning_effort`.
-- Responses/Codex directive → `reasoning.{effort,summary}`.
-- model-specific effort subsets؛ لا passthrough مفتوح للقيم.
-- إزالة `_normalizeReasoningEffort` العامة بعد اكتمال migration.
-- إبقاء encrypted reasoning/state contracts دون تغيير.
+- [x] OpenAI Chat directive → top-level `reasoning_effort`.
+- [x] Responses/Codex directive → `reasoning.{effort,summary}`.
+- [x] model-specific effort subsets؛ لا passthrough مفتوح للقيم.
+- [x] إزالة `_normalizeReasoningEffort` العامة بعد اكتمال migration.
+- [x] إبقاء encrypted reasoning/state contracts دون تغيير.
 
 **اختبارات request-body:**
 
-- low/medium/high وأي tier إضافي مثبت لكل model fixture؛
-- unsupported tier يرسل صفر requests؛
-- sync/stream parity؛
-- Chat لا يحمل Responses shape والعكس؛
-- wrapper forwarding يحافظ على resolved options نفسها.
+- [x] low/medium/high وأي tier إضافي مثبت لكل model fixture؛
+- [x] unsupported tier يرسل صفر requests (عبر Gate D resolver)؛
+- [x] sync/stream parity؛
+- [x] Chat لا يحمل Responses shape والعكس؛
+- [x] wrapper forwarding يحافظ على resolved options نفسها.
 
 **DoD:** لا يعتمد OpenAI-compatible العام على `supportsReasoning` لإرسال effort.
 
@@ -469,20 +488,20 @@ fallback.
 
 **الهدف:** دعم manual/adaptive دون خلطهما.
 
-- manual budget options بجداول model مثبتة فقط.
-- adaptive descriptor منفصل عن manual budget.
-- explicit off يظهر فقط إذا أثبتته policy.
-- shared body builder لمساري sync وstream؛ لا نسخ بناء request الحالي.
-- الحفاظ على tool/reasoning replay contracts الخاصة بالبروتوكول.
+- [x] manual budget options بجداول model مثبتة فقط.
+- [x] adaptive descriptor منفصل عن manual budget.
+- [x] explicit off يظهر فقط إذا أثبتته policy.
+- [x] shared body builder لمساري sync وstream؛ لا نسخ بناء request الحالي.
+- [x] الحفاظ على tool/reasoning replay contracts الخاصة بالبروتوكول.
 
 **اختبارات request-body:**
 
-- budget lowering الصحيح؛
-- adaptive/manual mutual exclusion؛
-- missing budget validation؛
-- unsupported off؛
-- sync/stream parity؛
-- tool continuation لا يفقد controls المطلوبة.
+- [x] budget lowering الصحيح؛
+- [x] adaptive/manual mutual exclusion؛
+- [x] missing budget validation؛
+- [x] unsupported off؛
+- [x] sync/stream parity؛
+- [x] tool continuation لا يفقد controls المطلوبة.
 
 **DoD:** Anthropic لا يتجاهل selection ولا يرسل manual shape إلى adaptive model.
 
@@ -492,21 +511,21 @@ fallback.
 
 ترتيب التنفيذ:
 
-1. Aggregator profile مع upstream-model policy.
-2. Gemini budget/level policies مع route nesting.
-3. Toggle/effort mutual-exclusion policies.
-4. Local live-capability policy.
-5. DeepSeek فقط بعد حسم route/model fixture؛ يبقى `unknown` قبل ذلك.
+- [x] Aggregator profile مع upstream-model policy (`aggregator_upstream` → OpenRouter nested `reasoning` + Anthropic/OpenAI capability delegation).
+- [x] Gemini budget/level policies مع route nesting.
+- [x] Toggle/effort mutual-exclusion policies.
+- [x] Local live-capability policy (`ollama_live`).
+- [x] DeepSeek فقط بعد حسم route/model fixture؛ يبقى `unknown` قبل ذلك.
 
 **اختبارات request-body لكل policy:**
 
-- exact nesting/casing؛
-- model-specific option subsets؛
-- zero/off semantics؛
-- token-budget يحظى بالأولوية ولا يستبدل بـeffort؛
-- conflicting controls never coexist؛
-- unsupported model يرسل صفر controls وصفر request عند explicit selection؛
-- sync/stream parity.
+- [x] exact nesting/casing (Ollama `think`, OpenAI, Anthropic)؛
+- [x] model-specific option subsets (Ollama gpt-oss)؛
+- [x] zero/off semantics (Ollama off → `think: false`)؛
+- [x] token-budget يحظى بالأولوية ولا يستبدل بـeffort؛
+- [x] conflicting controls never coexist (Anthropic manual vs adaptive)؛
+- [x] unsupported model يرسل صفر controls وصفر request عند explicit selection؛
+- [x] sync/stream parity (Ollama/OpenAI/Anthropic).
 
 **DoD:** كل mapping له policy وfixture واختبار نهائي، ولا توجد branch عامة حسب
 اسم model داخل runner.
@@ -515,21 +534,21 @@ fallback.
 
 **الهدف:** عرض الاختيارات الصحيحة فقط.
 
-- `supported`: إظهار options المرتبة من daemon.
-- `unsupported`: إخفاء thinking chip.
-- `unknown`: تعطيل الاختيار وعرض unavailable/refresh state عند الحاجة.
-- route change يعيد بناء القائمة ويزيل selection المصححة بعد confirmation.
-- لا fallback محلي إلى `balanced` عند قائمة فارغة.
-- جميع نصوص UI بالإنجليزية.
+- [x] `supported`: إظهار options المرتبة من daemon.
+- [x] `unsupported`: إخفاء thinking chip.
+- [x] `unknown`: تعطيل الاختيار وعرض unavailable/refresh state عند الحاجة.
+- [x] route change يعيد بناء القائمة ويزيل selection المصححة بعد confirmation.
+- [x] لا fallback محلي إلى `balanced` عند قائمة فارغة.
+- [x] جميع نصوص UI بالإنجليزية.
 
 **اختبارات widget/state:**
 
-- supported option list؛
-- unsupported hidden؛
-- unknown disabled؛
-- route switch stale descriptor؛
-- correction event؛
-- backward-compatible old payload.
+- [x] supported option list (resolver unit tests)؛
+- [x] unsupported hidden؛
+- [x] unknown disabled؛
+- [x] route switch stale descriptor؛
+- [x] correction event؛
+- [x] backward-compatible old payload.
 
 **DoD:** لا يستطيع المستخدم اختيار قيمة لا يعلنها النموذج الفعال.
 
@@ -537,7 +556,7 @@ fallback.
 
 **الهدف:** إثبات المسار الكامل ومراجعة الالتزامات المرجعية.
 
-- E2E باستخدام deterministic fixture provider يلتقط final payload:
+- [x] E2E باستخدام deterministic fixture provider يلتقط final payload:
 
   ```text
   composer selection
@@ -548,12 +567,39 @@ fallback.
   → adapter payload
   ```
 
-- E2E ثانٍ لاختيار unsupported يثبت عدم استدعاء provider.
-- اختبار restart/model-switch revalidation عبر daemon الحقيقي إذا تطلب تغيير
-  persistence ذلك.
-- إعادة فتح evidence run وتقييم كل Adopt/Adapt item كـ`satisfied`, `deviated`,
-  أو `not applicable`.
-- تحديث Graphify بعد تعديل الكود.
+- [x] E2E ثانٍ لاختيار unsupported يثبت عدم استدعاء provider.
+- [x] اختبار restart/model-switch revalidation عبر daemon الحقيقي إذا تطلب تغيير
+      persistence ذلك.
+- [x] إعادة فتح evidence run وتقييم كل Adopt/Adapt item كـ`satisfied`, `deviated`,
+      أو `not applicable`.
+- [x] تحديث Graphify بعد تعديل الكود.
+
+**Evidence audit (Gate R0 → Gate I closure):**
+
+| المرجع | القرار | الحالة | ملاحظة |
+|---|---|---|---|
+| Model variants — descriptor ديناميكي لكل model | Adopt | satisfied | `ThinkingControlDescriptor` + model cache/snapshot |
+| Model variants — typed resolution error للقيمة غير المتاحة | Adopt | satisfied | `ThinkingSelectionException` قبل HTTP |
+| Canonical level + provider hooks — validation مركزي | Adopt | satisfied | `ThinkingSelectionResolver` + `ProviderThinkingPolicy` |
+| Canonical level + provider hooks — provider wrappers | Adopt | satisfied | typed wire codecs لكل policy |
+| Canonical enabled/effort + profiles — per-model config | Adopt | satisfied | catalogs + assembler + cache revisions |
+| Canonical enabled/effort + profiles — omission = provider default | Adopt | satisfied | `null` selection → لا حقل wire |
+| OpenAI Chat `reasoning_effort` | Adopt | satisfied | Gate E + `thinking_mode_gate_i_e2e_test.dart` I.1 |
+| OpenAI Responses `reasoning.{effort,summary}` | Adopt | satisfied | Codex codec + adapter tests |
+| Anthropic manual/adaptive/off | Adopt | satisfied | Gate F policy + wire codec |
+| Google budget/level nesting | Adopt | satisfied | Gate G `google_thinking` |
+| Aggregator upstream composition | Adapt | satisfied | `aggregator_upstream` delegates upstream policy |
+| Toggle/effort mutual exclusion | Adapt | satisfied | `toggle_effort_thinking_wire_codec` |
+| Local Ollama live probe | Adapt | satisfied | `/api/show` metadata probe |
+| Custom/unknown endpoint fail-closed | Adopt | satisfied | `unknown_thinking_policy` |
+| Silent ignore للقيمة غير الصالحة | Reject | satisfied (avoided) | fail-closed + correction events |
+| Model-name heuristics وحدها | Reject | satisfied (avoided) | catalog/probe/metadata only |
+| Static device `thinking_modes_list` في client جديد | Reject | satisfied (avoided) | `thinking_mode_source: model` |
+
+**E2E coverage:**
+
+- `agent/test/engine/thinking_selection_agent_runner_test.dart` — runner-level supported/unsupported.
+- `agent/e2e_test/thinking_mode_gate_i_e2e_test.dart` — daemon payload capture، unsupported skip، model-switch correction، restart revalidation.
 
 **DoD:** E2E أخضر، audit بلا deviation غير مبرر، والتحليل والاختبارات المطلوبة
 حسب blast radius ناجحة.
@@ -617,3 +663,28 @@ fallback.
   descriptor/correction contract الجديد.
 - لا تشغيل كود أو tests للمشاريع المرجعية؛ هي مصادر قراءة غير موثوقة، والاختبار
   التنفيذي يتم داخل Sanad فقط.
+
+## 13. سجل التقدم
+
+| التاريخ | البوابة | النتيجة | ملاحظات |
+|---|---|---|---|
+| 2026-08-29 | R0 | مغلق بعد إصلاح | `resolve_packet.sh 43` كان `refresh_required` (hermes+openclaw drift). حُدّثت pins والمسارات الإلزامية؛ fingerprint الجديد `sha256:ee2edb165e9df40967f05dfd8b7997c80524d31a44fb38a0441a4c7a5a5f44e5`؛ resolver=`ready`. أُغلقت قائمة سياسات الإصدار الأول. |
+| 2026-08-30 | R0 | مراجعة بوابة: مغلق | أُعيد `resolve_packet.sh 43` → `status=ready`. البصمة تطابق frontmatter. Pins: opencode `d2305d4`، hermes `f52feed`، openclaw `2013a4b`. قائمة الإصدار الأول مغلقة في الخطة وفي سجل التشغيل. |
+| 2026-08-30 | A | مراجعة بوابة: مغلق بعد إصلاح | الأنواع/registry/fail-closed/`thinkingPolicyId` وrunner محايد. أُزيلت حلقة placeholders الميتة. اختبارات descriptor تغطي off/default/unsupported. تحقق: analyze على ملفات البوابة نظيف؛ `provider_thinking_test.dart` 56/56. |
+| 2026-08-30 | B | مراجعة بوابة: مغلق بعد إصلاح | assembler + cache enrichment + فصل reasoning output عن thinkingControl + probe_failed=unknown. أُضيفت اختبارات stale (TTL/observedAt/probe_failed/profile) وفحص probe دون name heuristic. تحقق: cache/stale/probe/model-cache 24/24. |
+| 2026-08-30 | C | مراجعة بوابة: مغلق بعد إصلاح | `thinking_mode_source: model` يفرّغ `thinking_modes_list` في wire. DTOs العميل + session `thinking_control` + تجاهل descriptor عند اختلاف route revision. تحديث اختبار البروتوكول وE2E dual-connection. تحقق: agent 43 + client 23. |
+| 2026-08-30 | D | مراجعة بوابة: مغلق بعد إصلاح | resolver fail-closed يمنع silent UseProviderDefault لاختيار صريح. إعادة تحقق عند تبديل المزود وليس النموذج فقط. mock `clearThinkingMode`. تحقق: selection/preference/sync/runner 15/15. |
+| 2026-08-30 | E | مراجعة بوابة: مغلق بعد إصلاح | Chat `reasoning_effort` وResponses nested؛ لا `_normalizeReasoningEffort`. اختبار Codex يستخدم directive بدل `thinkingMode: deep`. تحقق: OpenAI/Codex focused 47/47. |
+| 2026-08-30 | F | مراجعة بوابة: مغلق بعد تحقق | manual/adaptive/off + shared body builder + budget lowering. تحقق: Anthropic focused 25/25. |
+| 2026-08-30 | G | مراجعة بوابة: مغلق بعد تحقق | aggregator/google/deepseek/ollama + XOR codec. Kimi يبقى `unknown`. تحقق: Gate G focused 29. |
+| 2026-08-30 | H | مراجعة بوابة: مغلق بعد تحقق | `supported` يعرض options؛ `unsupported` يخفي؛ `unknown` يعطّل مع Unavailable؛ لا `balanced` مع source=model. تحقق: route/input/session cubit focused 19. |
+| 2026-08-30 | I | مراجعة بوابة: مغلق بعد إصلاح | E2E I.1–I.4 أخضر (`--concurrency=1`) بعد ربط منافذ loopback الحرة بدل النطاق الضيق. runner 2/2. `moonshotai` على المجمع يبقى `unknown` وفق قفل R0. تدقيق الأدلة `43-audit-2026-08-30`. Graphify محدّث. analyze للعامل والعميل نظيف. |
+| 2026-08-29 | A | مغلق بعد إصلاح | الأنواع/registry/fail-closed موجودة. أُصلح اشتقاق `chat_completions` العام إلى `unknown` مع opt-in صريح لـ`openai`. تحقق: `fvm dart analyze` نظيف؛ `provider_thinking_test.dart` 54/54. |
+| 2026-08-29 | B | مغلق بعد تحقق | assembler + cache enrichment + فصل `supportsReasoningOutput`/`thinkingControl` + stale/probe-failed. تحقق: cache resolver/stale/model-cache tests 17/17. |
+| 2026-08-29 | C | مغلق بعد تحقق | `thinking_mode_source: model`، `thinking_control` في snapshots، DTOs العميل، توثيق protocol. تحقق: agent 3 + client 19 اختبارات. |
+| 2026-08-29 | D | مغلق بعد تحقق | resolver + typed errors + preference store + revalidator + sync failover/restore. تحقق: selection/preference/sync/runner tests 13/13. |
+| 2026-08-29 | E | مغلق بعد تحقق | Chat `reasoning_effort` وResponses nested؛ لا `_normalizeReasoningEffort`؛ sync/stream parity. تحقق: OpenAI/Codex focused tests 29/29. |
+| 2026-08-29 | F | مغلق بعد تحقق | manual/adaptive/off + shared body builder. تحقق: Anthropic focused tests 25/25. |
+| 2026-08-29 | G | مغلق بعد تحقق | aggregator/google/deepseek/ollama + toggle XOR codec. Kimi يبقى `unknown` وفق قفل R0. تحقق: Gate G focused 30 + ollama probe. |
+| 2026-08-29 | H | مغلق بعد إصلاح | إصلاح مسح `selectThinkingMode(null)` + `clearLastThinkingMode`؛ لا فرض `balanced` مع `thinking_mode_source=model`. تحقق: route + input cubit 45/45. |
+| 2026-08-29 | I | مغلق بعد تحقق وإصلاح وثائق | E2E 4 + runner 2 أخضر؛ تحديث Graphify؛ تدقيق الأدلة بلا deviation؛ تحديث `llm_adapter_runtime_contract.md` وإضافة QA matrix. |

@@ -130,6 +130,7 @@ class SessionManager {
     String? providerId,
     String? model,
     String? thinkingMode,
+    bool clearThinkingMode = false,
   }) {
     final session = _db.getSession(sessionId);
     if (session != null) {
@@ -137,7 +138,9 @@ class SessionManager {
         sessionId: session.sessionId,
         model: model ?? session.model,
         providerId: providerId ?? session.providerId,
-        thinkingMode: thinkingMode ?? session.thinkingMode,
+        thinkingMode: clearThinkingMode
+            ? null
+            : (thinkingMode ?? session.thinkingMode),
         title: session.title,
         titleStatus: session.titleStatus,
         workspaceId: session.workspaceId,

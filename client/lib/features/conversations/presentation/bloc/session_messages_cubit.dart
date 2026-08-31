@@ -466,10 +466,18 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       }
       if (!_nextMessageThinkingByAgentId.containsKey(agent.id)) {
         final savedThinking = preferencesRepository.getLastThinkingMode(agent.id)?.trim();
-        final thinkingMode = savedThinking?.isNotEmpty == true ? savedThinking! : defaultThinkingMode;
-        _nextMessageThinkingByAgentId[agent.id] = thinkingMode;
-        if (savedThinking == null || savedThinking.isEmpty) {
-          unawaited(preferencesRepository.setLastThinkingMode(agent.id, thinkingMode));
+        final caps = capabilitiesStore?.getForAgent(agent.id);
+        if (caps?.usesModelThinkingControls == true) {
+          if (savedThinking != null && savedThinking.isNotEmpty) {
+            _nextMessageThinkingByAgentId[agent.id] = savedThinking;
+          }
+        } else {
+          final thinkingMode =
+              savedThinking?.isNotEmpty == true ? savedThinking! : defaultThinkingMode;
+          _nextMessageThinkingByAgentId[agent.id] = thinkingMode;
+          if (savedThinking == null || savedThinking.isEmpty) {
+            unawaited(preferencesRepository.setLastThinkingMode(agent.id, thinkingMode));
+          }
         }
       }
 
@@ -1049,6 +1057,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         final trimmedThinkingMode = thinkingMode.trim();
         if (trimmedThinkingMode.isEmpty) {
           _nextMessageThinkingByAgentId.remove(agent.id);
+          unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
         } else {
           _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
           unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
@@ -1092,6 +1101,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     if (trimmedThinkingMode != null) {
       if (trimmedThinkingMode.isEmpty) {
         _nextMessageThinkingByAgentId.remove(agent.id);
+        unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
       } else {
         _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
         unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));

@@ -8,6 +8,10 @@ import '../../core/models/llm_provider_state.dart';
 import '../../core/models/tool_call.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
+import '../../core/provider_thinking/aggregator_thinking_wire_codec.dart';
+import '../../core/provider_thinking/google_thinking_wire_codec.dart';
+import '../../core/provider_thinking/openai_thinking_wire_codec.dart';
+import '../../core/provider_thinking/toggle_effort_thinking_wire_codec.dart';
 import '../../core/models/model_metadata.dart';
 import '../../core/provider_runtime/provider_model_id.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
@@ -793,9 +797,27 @@ class BaseOpenAIAdapter implements LLMAdapter {
         'max_completion_tokens': options.maxOutputTokens,
     };
 
-    final effort = _normalizeReasoningEffort(options.thinkingMode);
-    if (effort != null && await _modelSupportsReasoning(resolvedModel)) {
-      body['reasoning_effort'] = effort;
+    switch (profile.effectiveThinkingPolicyId) {
+      case 'aggregator_upstream':
+        AggregatorThinkingWireCodec.applyReasoning(
+          body,
+          options.thinkingDirective,
+        );
+      case 'google_thinking':
+        GoogleThinkingWireCodec.applyThinkingConfig(
+          body,
+          options.thinkingDirective,
+        );
+      case 'deepseek_thinking':
+        ToggleEffortThinkingWireCodec.applyChatCompletions(
+          body,
+          options.thinkingDirective,
+        );
+      default:
+        OpenAiThinkingWireCodec.applyChatCompletionsReasoning(
+          body,
+          options.thinkingDirective,
+        );
     }
 
     if (tools != null && tools.isNotEmpty) {
@@ -971,28 +993,6 @@ class BaseOpenAIAdapter implements LLMAdapter {
         return hasToolCalls
             ? LLMFinishReason.toolCalls
             : LLMFinishReason.unknown;
-    }
-  }
-
-  String? _normalizeReasoningEffort(String? thinkingMode) {
-    switch (thinkingMode?.trim().toLowerCase()) {
-      case 'fast':
-        return 'low';
-      case 'balanced':
-      case 'normal':
-        return 'medium';
-      case 'deep':
-        return 'high';
-      case 'none':
-      case 'minimal':
-      case 'low':
-      case 'medium':
-      case 'high':
-      case 'xhigh':
-      case 'max':
-        return thinkingMode!.trim().toLowerCase();
-      default:
-        return null;
     }
   }
 

@@ -265,12 +265,16 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     String? thinkingMode,
   }) async {
     try {
-      // Always update local preference first (for UI and persistence)
-      messagesCubit.setNextMessagePreferences(thinkingMode: thinkingMode);
+      // Null/empty means provider default (Task 43 Gate H). Pass an empty
+      // string so setNextMessagePreferences clears local + persisted preference.
+      final normalized = thinkingMode?.trim() ?? '';
+      messagesCubit.setNextMessagePreferences(thinkingMode: normalized);
 
       switch (scope) {
         case CapabilityValueScope.session:
-          await messagesCubit.updateSessionPreferences(thinkingMode: thinkingMode);
+          await messagesCubit.updateSessionPreferences(
+            thinkingMode: normalized.isEmpty ? null : normalized,
+          );
           break;
         case CapabilityValueScope.message:
           // Already handled by setNextMessagePreferences

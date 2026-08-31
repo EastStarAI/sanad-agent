@@ -235,7 +235,8 @@ void main() {
 
       final caps = await capabilitiesStore.ensureFreshForAgent(agent, force: true);
       expect(caps.supportsStop, isTrue);
-      expect(caps.thinkingModesList, isNotEmpty);
+      expect(caps.usesModelThinkingControls, isTrue);
+      expect(caps.thinkingModesList, isEmpty);
 
       final conversationClient = conversationRegistry.getOrCreateConversationClientForAgent(agent);
       final sessionsBefore = await conversationClient.getSessions();

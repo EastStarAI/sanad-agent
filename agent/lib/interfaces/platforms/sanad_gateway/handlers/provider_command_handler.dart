@@ -962,18 +962,35 @@ class ProviderCommandHandler {
           final map = Map<String, dynamic>.from(entry);
           final rawValue = map['value']?.toString();
           if (rawValue == null || rawValue.isEmpty) {
-            return map;
+            return _normalizeModelEntry(map);
           }
-          return {
+          return _normalizeModelEntry({
             ...map,
             'value': ProviderModelId.normalize(
               templateId: templateId,
               protocol: protocol,
               rawModelId: rawValue,
             ),
-          };
+          });
         })
         .toList(growable: false);
+  }
+
+  Map<String, dynamic> _normalizeModelEntry(Map<String, dynamic> map) {
+    final normalized = Map<String, dynamic>.from(map);
+    final value = normalized['value']?.toString();
+    if (value != null && value.isNotEmpty) {
+      normalized['id'] ??= value;
+    }
+    final label = normalized['label']?.toString();
+    if (label != null && label.isNotEmpty) {
+      normalized['name'] ??= label;
+    }
+    if (normalized.containsKey('supports_reasoning')) {
+      normalized['supports_reasoning_output'] ??=
+          normalized['supports_reasoning'];
+    }
+    return normalized;
   }
 
   // ── Task 55: Provider account usage limits ─────────────────────────────

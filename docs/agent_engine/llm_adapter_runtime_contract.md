@@ -24,11 +24,14 @@ assistant `Message` المحفوظة حتى يبقى متاحًا بعد restart
 ## خيارات الطلب
 
 `LLMRequestOptions` هو سياق عابر لكل model call ويحتوي هوية الجلسة والطلب،
-thinking mode الفعال، timeout، وحد output الاختياري. لا يحتفظ adapter بهذه
-القيم بين الطلبات، ولا تُخزن داخل history.
+اختياريًا `thinkingMode` كـselection id للمسار، و`thinkingDirective` typed من
+سياسة التفكير بعد التحقق المركزي (Task 43)، بالإضافة إلى timeout وحد output.
+لا يحتفظ adapter بهذه القيم بين الطلبات، ولا تُخزن داخل history.
 
 كل استدعاء لاحق داخل tool loop يستخدم الخيارات نفسها للدور ما لم يغيّر runtime
-route أو إعدادات الدور صراحةً.
+route أو إعدادات الدور صراحةً. لا يخمن adapter القدرة من
+`supportsReasoning`/`supportsReasoningOutput` وحده؛ وضع الحقول السلكية يتم فقط
+من `NativeThinkingDirective` عبر wire codecs الخاصة بالسياسة.
 
 ## Adapter Reasoning Parity
 
@@ -47,10 +50,18 @@ route أو إعدادات الدور صراحةً.
 ## OpenAI-compatible Chat Completions
 
 يبني `BaseOpenAIAdapter` payload الأساسي مرة واحدة لمساري sync وstream؛ يضيف
-مسار stream فقط `stream` و`stream_options`. عندما يكون النموذج معروفًا بدعم
-reasoning، تتحول أوضاع Sanad `fast`, `balanced`, `deep` إلى قيم effort
-`low`, `medium`, `high`. لا يرسل adapter الحقل إلى نموذج عادي، لأن دعم
-`reasoning_effort` يختلف حسب النموذج. يستخدم حد المخرجات الحديث
+مسار stream فقط `stream` و`stream_options`. تُطبَّق سياسة التفكير حسب
+`ProviderProfile.effectiveThinkingPolicyId` عبر codecs typed:
+
+- `openai_chat_effort` → `OpenAiThinkingWireCodec` يضع `reasoning_effort` فقط
+  عند وجود `OpenAiEffortDirective`.
+- `aggregator_upstream` / `google_thinking` / `deepseek_thinking` → codecs
+  العائلة المقابلة (nested `reasoning` أو `thinking_config` أو toggle XOR
+  effort).
+- `unknown` أو `UseProviderDefault` → لا يُضاف حقل تفكير.
+
+القيم `fast`/`balanced`/`deep` aliases ترحيلية فقط في طبقة التحقق المركزية؛ لا
+تُعرض في snapshots الجديدة ولا يترجمها adapter مباشرة. يستخدم حد المخرجات الحديث
 `max_completion_tokens` لأنه يشمل النص المرئي وreasoning tokens.
 
 ترتيب استخراج التفكير المرئي هو `reasoning_content` ثم `reasoning` ثم
@@ -104,9 +115,11 @@ tool calls وusage مستقلة عن السطحين.
 داخليًا ويعيد `AgentResponse` مكتملة، بينما يصدر stream deltas للمتصل. يمرر
 المساران التجميع النهائي إلى normalizer واحدة.
 
-يستخدم الطلب `store: false` ويطلب `reasoning.encrypted_content` صراحةً. تتحول
-أوضاع التفكير إلى Responses reasoning effort، ويُرسل `max_output_tokens` عند
-وجوده. يعيد codec encrypted reasoning وعناصر assistant message الآمنة فقط عند
+يستخدم الطلب `store: false` ويطلب `reasoning.encrypted_content` صراحةً. يطبق
+`OpenAiThinkingWireCodec.applyResponsesReasoning` توجيه
+`ResponsesReasoningDirective` إلى `reasoning.{effort,summary}` عند توفره، وإلا
+يُبقى ملخص المزود الافتراضي دون تخمين. يُرسل `max_output_tokens` عند وجوده.
+يعيد codec encrypted reasoning وعناصر assistant message الآمنة فقط عند
 تطابق issuer. تستخدم reasoning IDs لمنع التكرار محليًا ثم تحذف من wire، بينما
 تحفظ حقول assistant `id`, `status`, `phase` الآمنة للمحافظة على الاستمرارية.
 

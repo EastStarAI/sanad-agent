@@ -8,6 +8,8 @@ import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
+import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
@@ -179,6 +181,7 @@ void main() {
       cacheService = ProviderModelCacheService(
         repo,
         runtime,
+        buildDefaultThinkingCapabilityAssembler(),
         cooldown: const Duration(seconds: 2),
       );
     });
@@ -279,6 +282,84 @@ void main() {
       expect(snap, isNotNull);
       expect(snap!.first.value, equals('gpt-4o'));
     });
+
+    test('refresh enriches cached models with thinking_control metadata', () async {
+      repo.createInstance(
+        ProviderInstance(
+          id: 'inst-thinking',
+          templateId: 'openai',
+          displayName: 'OpenAI',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          configRevision: 2,
+          credentialRevision: 1,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+
+      runtime.adapterOverride = MockLLMAdapter(
+        () async => [
+          ModelOption(
+            value: 'o3',
+            label: 'O3',
+            supportsReasoning: true,
+          ),
+        ],
+      );
+
+      final models = await cacheService.refresh('inst-thinking', manual: true);
+      expect(models, hasLength(1));
+      expect(models.first.thinkingControl, isNotNull);
+      expect(
+        models.first.thinkingControl!.status,
+        ThinkingCapabilityStatus.supported,
+      );
+
+      final cached = cacheService.snapshot('inst-thinking');
+      expect(cached?.first.thinkingControl, isNotNull);
+      expect(cached?.first.toJson()['thinking_control'], isNotNull);
+    });
+
+    test(
+      'reasoning output alone does not imply supported thinking controls',
+      () async {
+        repo.createInstance(
+          ProviderInstance(
+            id: 'inst-reasoning-only',
+            templateId: 'openai',
+            displayName: 'OpenAI',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            configRevision: 2,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        runtime.adapterOverride = MockLLMAdapter(
+          () async => [
+            ModelOption(
+              value: 'gpt-test',
+              label: 'GPT Test',
+              supportsReasoning: true,
+            ),
+          ],
+        );
+
+        final models = await cacheService.refresh(
+          'inst-reasoning-only',
+          manual: true,
+        );
+
+        expect(
+          models.first.thinkingControl!.status,
+          ThinkingCapabilityStatus.unsupported,
+        );
+        expect(models.first.supportsReasoningOutput, isTrue);
+      },
+    );
 
     test('refresh coalesces concurrent refreshes', () async {
       repo.createInstance(
@@ -383,11 +464,28 @@ void main() {
         // Should succeed and fall back to the cached 'gpt-4'
         final refreshed = await cacheService.refresh('inst-1', manual: true);
         expect(refreshed.first.value, equals('gpt-4'));
+        expect(
+          refreshed.first.thinkingControl!.status,
+          ThinkingCapabilityStatus.unknown,
+        );
+        expect(
+          refreshed.first.thinkingControl!.source,
+          'live_probe_failed',
+        );
 
         // Check DB metadata has the error string
         final cachedRow = repo.readModelCache('inst-1', 'models')!;
         expect(cachedRow['last_error'], contains('Network disconnected'));
         expect(cachedRow['source'], equals('cache_stale'));
+        final cachedModel = ModelOption.fromJson(
+          Map<String, dynamic>.from(
+            (cachedRow['models'] as List).first as Map,
+          ),
+        );
+        expect(
+          cachedModel.thinkingControl!.status,
+          ThinkingCapabilityStatus.unknown,
+        );
       },
     );
   });

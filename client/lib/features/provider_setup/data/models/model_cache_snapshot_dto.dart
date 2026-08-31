@@ -1,3 +1,5 @@
+import 'package:sanad_client/features/conversations/domain/models/thinking_control.dart';
+
 class ModelCacheInstanceDto {
   final String id;
   final String displayName;
@@ -24,7 +26,11 @@ class ModelCacheInstanceDto {
   factory ModelCacheInstanceDto.fromJson(Map<String, dynamic> json) {
     final models =
         (json['models'] as List?)
-            ?.map((e) => ModelCacheModelDto.fromJson(e is Map<String, dynamic> ? e : {'id': e.toString()}))
+            ?.map(
+              (e) => ModelCacheModelDto.fromJson(
+                e is Map<String, dynamic> ? e : {'id': e.toString()},
+              ),
+            )
             .toList() ??
         const <ModelCacheModelDto>[];
     return ModelCacheInstanceDto(
@@ -57,14 +63,34 @@ class ModelCacheModelDto {
   final String id;
   final String? name;
   final String? ownedBy;
+  final bool supportsReasoningOutput;
+  final ThinkingControlDescriptorDto? thinkingControl;
 
-  const ModelCacheModelDto({required this.id, this.name, this.ownedBy});
+  const ModelCacheModelDto({
+    required this.id,
+    this.name,
+    this.ownedBy,
+    this.supportsReasoningOutput = false,
+    this.thinkingControl,
+  });
 
   factory ModelCacheModelDto.fromJson(Map<String, dynamic> json) {
+    final thinkingRaw = json['thinking_control'];
     return ModelCacheModelDto(
       id: (json['id'] ?? json['value'] ?? '').toString(),
-      name: json['name']?.toString(),
+      name: json['name']?.toString() ?? json['label']?.toString(),
       ownedBy: json['owned_by']?.toString(),
+      supportsReasoningOutput:
+          json['supports_reasoning_output'] as bool? ??
+          json['supports_reasoning'] as bool? ??
+          false,
+      thinkingControl: thinkingRaw is Map<String, dynamic>
+          ? ThinkingControlDescriptorDto.fromJson(thinkingRaw)
+          : thinkingRaw is Map
+          ? ThinkingControlDescriptorDto.fromJson(
+              Map<String, dynamic>.from(thinkingRaw),
+            )
+          : null,
     );
   }
 
@@ -72,6 +98,8 @@ class ModelCacheModelDto {
     'id': id,
     if (name != null) 'name': name,
     if (ownedBy != null) 'owned_by': ownedBy,
+    'supports_reasoning_output': supportsReasoningOutput,
+    if (thinkingControl != null) 'thinking_control': thinkingControl!.toJson(),
   };
 
   @override
@@ -130,7 +158,9 @@ class ModelCacheSnapshotDto {
             .toList() ??
         const <ModelCacheInstanceDto>[];
     final recent =
-        (json['recent'] as List?)?.map((e) => RecentModelDto.fromJson(e as Map<String, dynamic>)).toList() ??
+        (json['recent'] as List?)
+            ?.map((e) => RecentModelDto.fromJson(e as Map<String, dynamic>))
+            .toList() ??
         const <RecentModelDto>[];
     return ModelCacheSnapshotDto(
       instances: instances,

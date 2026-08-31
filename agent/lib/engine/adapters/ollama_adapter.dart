@@ -7,6 +7,8 @@ import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
 import '../../core/models/tool_call.dart';
 import '../../capabilities/models/tool_schema.dart';
+import '../../core/provider_thinking/ollama_thinking_probe.dart';
+import '../../core/provider_thinking/ollama_thinking_wire_codec.dart';
 import 'base_openai_adapter.dart';
 import 'llm_request_options.dart';
 import 'llm_http_exception.dart';
@@ -37,11 +39,9 @@ class OllamaAdapter extends BaseOpenAIAdapter {
           for (var item in modelsList) {
             final name = item['name'] as String;
             final label = _formatOllamaModelLabel(name);
-            final lowercaseName = name.toLowerCase();
+            final metadata = await _probeModelMetadata(name);
             final supportsReasoning =
-                lowercaseName.contains('gemma') ||
-                lowercaseName.contains('deepseek') ||
-                lowercaseName.contains('r1');
+                OllamaThinkingProbe.hasThinkingCapability(metadata) ?? false;
 
             final contextLimit = ModelMetadata.getLimitForModel(name);
 
@@ -52,6 +52,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
                 provider: profile.name,
                 contextWindow: contextLimit,
                 supportsReasoning: supportsReasoning,
+                modelMetadata: metadata,
               ),
             );
           }
@@ -95,6 +96,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     }
 
     final contextLimit = ModelMetadata.getLimitForModel(config.llmModel);
+    final metadata = await _probeModelMetadata(config.llmModel);
     return [
       ModelOption(
         value: config.llmModel,
@@ -102,10 +104,45 @@ class OllamaAdapter extends BaseOpenAIAdapter {
         provider: profile.name,
         contextWindow: contextLimit,
         supportsReasoning:
-            config.llmModel.toLowerCase().contains('gemma') ||
-            config.llmModel.toLowerCase().contains('deepseek'),
+            OllamaThinkingProbe.hasThinkingCapability(metadata) ?? false,
+        modelMetadata: metadata,
       ),
     ];
+  }
+
+  Future<Map<String, Object?>> _probeModelMetadata(String modelName) async {
+    try {
+      final url = Uri.parse('${super.baseUrl}/api/show');
+      final response = await (client ?? http.Client()).post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'name': modelName}),
+      );
+      if (response.statusCode != 200) {
+        return const {};
+      }
+      final data = jsonDecode(response.body);
+      if (data is! Map) {
+        return const {};
+      }
+      final showResponse = data.map(
+        (key, value) => MapEntry(key.toString(), value),
+      );
+      final metadata = OllamaThinkingProbe.metadataFromShowResponse(
+        showResponse,
+      );
+      final parameters = showResponse['parameters']?.toString();
+      if (parameters != null && parameters.isNotEmpty) {
+        return {
+          ...metadata,
+          'ollama_parameters': parameters,
+        };
+      }
+      return metadata;
+    } catch (e) {
+      _logger.warning('Failed to probe Ollama model metadata for $modelName: $e');
+      return const {};
+    }
   }
 
   String _formatOllamaModelLabel(String name) {
@@ -158,17 +195,40 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     return config.contextLimit;
   }
 
-  @override
-  Future<AgentResponse> generateResponse(
-    List<Message> history, {
+  Map<String, dynamic> _buildChatBody({
+    required String resolvedModel,
+    required List<Map<String, dynamic>> messages,
+    required LLMRequestOptions options,
     List<ToolSchema>? tools,
-    String? modelOverride,
-    LLMRequestOptions options = const LLMRequestOptions(),
-  }) async {
-    final url = Uri.parse('${super.baseUrl}/api/chat');
-    final resolvedModel = super.resolveModel(modelOverride);
+    required bool stream,
+  }) {
+    final body = <String, dynamic>{
+      'model': resolvedModel,
+      'messages': messages,
+      'stream': stream,
+    };
 
-    final messages = history.map((m) {
+    if (tools != null && tools.isNotEmpty) {
+      body['tools'] = tools
+          .map(
+            (t) => {
+              'type': 'function',
+              'function': {
+                'name': t.name,
+                'description': t.description,
+                'parameters': t.parameters,
+              },
+            },
+          )
+          .toList(growable: false);
+    }
+
+    OllamaThinkingWireCodec.applyThink(body, options.thinkingDirective);
+    return body;
+  }
+
+  List<Map<String, dynamic>> _historyToMessages(List<Message> history) {
+    return history.map((m) {
       final Map<String, dynamic> data = {
         'role': super.roleToString(m.role),
         'content': m.content ?? '',
@@ -185,31 +245,29 @@ class OllamaAdapter extends BaseOpenAIAdapter {
                 'function': {'name': tc.name, 'arguments': tc.arguments},
               },
             )
-            .toList();
+            .toList(growable: false);
       }
       return data;
-    }).toList();
+    }).toList(growable: false);
+  }
 
-    final body = {
-      'model': resolvedModel,
-      'messages': messages,
-      'stream': false,
-    };
-
-    if (tools != null && tools.isNotEmpty) {
-      body['tools'] = tools
-          .map(
-            (t) => {
-              'type': 'function',
-              'function': {
-                'name': t.name,
-                'description': t.description,
-                'parameters': t.parameters,
-              },
-            },
-          )
-          .toList();
-    }
+  @override
+  Future<AgentResponse> generateResponse(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    final url = Uri.parse('${super.baseUrl}/api/chat');
+    final resolvedModel = super.resolveModel(modelOverride);
+    final messages = _historyToMessages(history);
+    var body = _buildChatBody(
+      resolvedModel: resolvedModel,
+      messages: messages,
+      options: options,
+      tools: tools,
+      stream: false,
+    );
 
     var response = await (client ?? http.Client()).post(
       url,
@@ -220,7 +278,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     if (response.statusCode == 400) {
       final responseBody = response.body;
       if (responseBody.contains('does not support tools')) {
-        body.remove('tools');
+        body = Map<String, dynamic>.from(body)..remove('tools');
         response = await (client ?? http.Client()).post(
           url,
           headers: {'Content-Type': 'application/json'},
@@ -287,50 +345,20 @@ class OllamaAdapter extends BaseOpenAIAdapter {
   }) async* {
     final url = Uri.parse('${super.baseUrl}/api/chat');
     final resolvedModel = super.resolveModel(modelOverride);
-
-    final messages = history.map((m) {
-      final Map<String, dynamic> data = {
-        'role': super.roleToString(m.role),
-        'content': m.content ?? '',
-      };
-
-      if (m.role == MessageRole.tool && m.toolCallId != null) {
-        data['tool_call_id'] = m.toolCallId;
-      }
-      if (m.toolCalls != null && m.toolCalls!.isNotEmpty) {
-        data['tool_calls'] = m.toolCalls!
-            .map(
-              (tc) => {
-                'type': 'function',
-                'function': {'name': tc.name, 'arguments': tc.arguments},
-              },
-            )
-            .toList();
-      }
-      return data;
-    }).toList();
+    final messages = _historyToMessages(history);
 
     final httpClient = client ?? http.Client();
     final request = http.Request('POST', url);
     request.headers['Content-Type'] = 'application/json';
     profile.defaultHeaders.forEach((k, v) => request.headers[k] = v);
 
-    final body = {'model': resolvedModel, 'messages': messages, 'stream': true};
-
-    if (tools != null && tools.isNotEmpty) {
-      body['tools'] = tools
-          .map(
-            (t) => {
-              'type': 'function',
-              'function': {
-                'name': t.name,
-                'description': t.description,
-                'parameters': t.parameters,
-              },
-            },
-          )
-          .toList();
-    }
+    var body = _buildChatBody(
+      resolvedModel: resolvedModel,
+      messages: messages,
+      options: options,
+      tools: tools,
+      stream: true,
+    );
 
     request.body = jsonEncode(body);
     var response = await httpClient.send(request);
@@ -338,7 +366,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     if (response.statusCode == 400) {
       final errorBody = await response.stream.bytesToString();
       if (errorBody.contains('does not support tools')) {
-        body.remove('tools');
+        body = Map<String, dynamic>.from(body)..remove('tools');
         final retryRequest = http.Request('POST', url);
         retryRequest.headers['Content-Type'] = 'application/json';
         retryRequest.body = jsonEncode(body);

@@ -19,6 +19,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_permission_card.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/model_picker_dialog.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/runtime_notice_card.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/route_thinking_mode_selector.dart';
 import '../sidebar/sidebar_composition.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/slash_suggestion_surface.dart';
@@ -351,13 +352,18 @@ class _UnifiedComposerContainer extends StatelessWidget {
           )
         : null;
 
-    final thinkingModeChip = !hasPendingRequest && capabilities.supportsThinkingModeChange
-        ? _ThinkingModeChip(
-            inputSlice: inputSlice,
+    final thinkingModeChip = !hasPendingRequest
+        ? RouteThinkingModeSelector(
             capabilities: capabilities,
-            dimTextColor: dimTextColor,
-            chipBgColor: chipBgColor,
-            borderColor: borderColor,
+            inputSlice: inputSlice,
+            activeAgent: agentSlice.activeAgent,
+            chipBuilder: (context, label, {required enabled}) {
+              return _buildThinkingModeChipShell(
+                context,
+                label: label,
+                enabled: enabled,
+              );
+            },
           )
         : null;
 
@@ -453,6 +459,40 @@ class _UnifiedComposerContainer extends StatelessWidget {
               ],
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildThinkingModeChipShell(
+    BuildContext context, {
+    required String label,
+    required bool enabled,
+  }) {
+    final isCompact = SidebarBreakpoints.isCompact(context);
+    return Opacity(
+      opacity: enabled ? 1 : 0.55,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: isCompact ? 4 : 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: chipBgColor.withValues(alpha: 0.50),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: borderColor),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Symbols.neurology, size: 16, color: dimTextColor),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: GoogleFonts.inter(color: dimTextColor, fontSize: 12),
+            ),
+            if (enabled) ...[
+              const SizedBox(width: 4),
+              Icon(Icons.keyboard_arrow_down, size: 12, color: dimTextColor),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -941,96 +981,6 @@ class _ModelChipState extends State<_ModelChip> {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-class _ThinkingModeChip extends StatelessWidget {
-  final ConversationInputSlice inputSlice;
-  final Capability capabilities;
-  final Color dimTextColor;
-  final Color chipBgColor;
-  final Color borderColor;
-
-  const _ThinkingModeChip({
-    required this.inputSlice,
-    required this.capabilities,
-    required this.dimTextColor,
-    required this.chipBgColor,
-    required this.borderColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final selectedSession = context.select<SessionCubit, Session?>((cubit) => cubit.state.selectedSession);
-    final currentMode = _currentModeLabel(selectedSession);
-    return PopupMenuButton<String>(
-      tooltip: 'Select Thinking Mode',
-      child: _buildChip(context, currentMode),
-      itemBuilder: (context) => capabilities.thinkingModesList
-          .map(
-            (m) => PopupMenuItem(
-              value: m,
-              height: 32,
-              child: Text(m, style: const TextStyle(fontSize: 12)),
-            ),
-          )
-          .toList(),
-      onSelected: (value) {
-        unawaited(
-          context.read<ConversationInputCubit>().selectThinkingMode(
-            scope: capabilities.thinkingModeScope,
-            thinkingMode: value,
-          ),
-        );
-      },
-    );
-  }
-
-  String _currentModeLabel(Session? session) {
-    if (capabilities.thinkingModeScope == CapabilityValueScope.message) {
-      final mode = inputSlice.nextMessageThinkingMode?.trim();
-      if (mode != null && mode.isNotEmpty) return mode;
-      return _firstMode();
-    }
-    final mode = session?.thinkingMode;
-    if (mode != null && mode.isNotEmpty) return mode;
-    final savedMode = inputSlice.nextMessageThinkingMode?.trim();
-    if (savedMode != null && savedMode.isNotEmpty) return savedMode;
-    return _firstMode();
-  }
-
-  String _firstMode() {
-    final modes = capabilities.thinkingModesList;
-    if (modes.contains(SessionMessagesCubit.defaultThinkingMode)) {
-      return SessionMessagesCubit.defaultThinkingMode;
-    }
-    if (modes.isNotEmpty) return modes.first;
-    return SessionMessagesCubit.defaultThinkingMode;
-  }
-
-  Widget _buildChip(BuildContext context, String text) {
-    final isCompact = SidebarBreakpoints.isCompact(context);
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: isCompact ? 4 : 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: chipBgColor.withValues(alpha: 0.50),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: borderColor),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Symbols.neurology, size: 16, color: dimTextColor),
-          const SizedBox(width: 4),
-          Text(
-            text,
-            style: GoogleFonts.inter(color: dimTextColor, fontSize: 12),
-          ),
-          const SizedBox(width: 4),
-          Icon(Icons.keyboard_arrow_down, size: 12, color: dimTextColor),
-        ],
       ),
     );
   }

@@ -69,6 +69,10 @@ class ProviderProfile {
   /// `429` limits; all other templates default to `0`.
   final int defaultRequestsPerMinute;
 
+  /// Optional thinking policy id (Task 43). When omitted, [effectiveThinkingPolicyId]
+  /// derives from [apiMode].
+  final String? thinkingPolicyId;
+
   const ProviderProfile({
     required this.name,
     this.displayName = '',
@@ -91,6 +95,7 @@ class ProviderProfile {
     this.authMethods = const [],
     this.supportsMultipleInstances = true,
     this.defaultRequestsPerMinute = 0,
+    this.thinkingPolicyId,
   });
 
   /// Resolves the effective auth flow, deriving from authType when authFlow
@@ -131,6 +136,26 @@ class ProviderProfile {
 
   /// Whether this is the reserved Custom template.
   bool get isCustom => name == kCustomProviderTemplateId;
+
+  /// Effective thinking policy id for capability resolution (Task 43).
+  ///
+  /// Explicit [thinkingPolicyId] wins. Otherwise only proven apiMode seams map
+  /// to a first-release policy; generic `chat_completions` fails closed to
+  /// `unknown` so OpenAI Chat effort is opted in per template, not assumed.
+  String get effectiveThinkingPolicyId {
+    if (thinkingPolicyId != null && thinkingPolicyId!.isNotEmpty) {
+      return thinkingPolicyId!;
+    }
+    if (isCustom) {
+      return 'unknown';
+    }
+    return switch (apiMode) {
+      'codex_responses' => 'codex_responses_effort',
+      'anthropic_messages' => 'anthropic_thinking',
+      'ollama' => 'ollama_live',
+      _ => 'unknown',
+    };
+  }
 
   /// Serializes the template into a transport-safe map for socket commands.
   /// Secrets are never included here.

@@ -4,6 +4,8 @@ enum CapabilityValueScope { session, message, none }
 
 enum ThinkingStreamMode { delta, snapshot, auto }
 
+enum ThinkingModeSource { device, model }
+
 enum WorkspaceScope { session, none }
 
 enum LocalToolRuntimeScope { workspace, device, none }
@@ -34,6 +36,7 @@ class Capability {
   final CapabilityValueScope modelSelectionScope;
   final CapabilityValueScope thinkingModeScope;
   final ThinkingStreamMode thinkingStreamMode;
+  final ThinkingModeSource thinkingModeSource;
 
   final List<String> thinkingModesList;
   final List<String> workplacesList;
@@ -65,6 +68,7 @@ class Capability {
     this.modelSelectionScope = CapabilityValueScope.none,
     this.thinkingModeScope = CapabilityValueScope.none,
     this.thinkingStreamMode = ThinkingStreamMode.auto,
+    this.thinkingModeSource = ThinkingModeSource.device,
     this.thinkingModesList = const [],
     this.workplacesList = const [],
     this.slashCommandsList = const [],
@@ -99,7 +103,11 @@ class Capability {
       modelSelectionScope: _parseScope(caps['model_selection_scope']),
       thinkingModeScope: _parseScope(caps['thinking_mode_scope']),
       thinkingStreamMode: _parseThinkingStreamMode(caps['thinking_stream_mode']),
-      thinkingModesList: List<String>.from(caps['thinking_modes_list'] ?? []),
+      thinkingModeSource: _parseThinkingModeSource(caps['thinking_mode_source']),
+      thinkingModesList: _parseThinkingModesList(
+        source: _parseThinkingModeSource(caps['thinking_mode_source']),
+        rawList: caps['thinking_modes_list'],
+      ),
       workplacesList: List<String>.from(caps['workplaces_list'] ?? []),
       slashCommandsList: (caps['slash_commands_list'] as List? ?? [])
           .map((e) => SlashCommand.fromJson(e as Map<String, dynamic>))
@@ -136,6 +144,7 @@ class Capability {
         other.modelSelectionScope == modelSelectionScope &&
         other.thinkingModeScope == thinkingModeScope &&
         other.thinkingStreamMode == thinkingStreamMode &&
+        other.thinkingModeSource == thinkingModeSource &&
         _listEquals(other.thinkingModesList, thinkingModesList) &&
         _listEquals(other.workplacesList, workplacesList) &&
         _listEquals(other.slashCommandsList, slashCommandsList);
@@ -168,6 +177,7 @@ class Capability {
     modelSelectionScope,
     thinkingModeScope,
     thinkingStreamMode,
+    thinkingModeSource,
     Object.hashAll(thinkingModesList),
     Object.hashAll(workplacesList),
     Object.hashAll(slashCommandsList),
@@ -202,6 +212,29 @@ class Capability {
         return ThinkingStreamMode.auto;
     }
   }
+
+  static ThinkingModeSource _parseThinkingModeSource(dynamic raw) {
+    switch ((raw ?? '').toString().toLowerCase()) {
+      case 'model':
+        return ThinkingModeSource.model;
+      default:
+        return ThinkingModeSource.device;
+    }
+  }
+
+  static List<String> _parseThinkingModesList({
+    required ThinkingModeSource source,
+    required dynamic rawList,
+  }) {
+    if (source == ThinkingModeSource.model) {
+      return const [];
+    }
+    return List<String>.from(rawList ?? []);
+  }
+
+  /// Whether thinking options must come from the active model snapshot.
+  bool get usesModelThinkingControls =>
+      thinkingModeSource == ThinkingModeSource.model;
 
   static WorkspaceScope _parseWorkspaceScope(dynamic raw) {
     switch ((raw ?? '').toString().toLowerCase()) {

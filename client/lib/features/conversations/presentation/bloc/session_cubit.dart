@@ -8,6 +8,7 @@ import 'package:sanad_client/core/interfaces/socket_service.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
+import 'package:sanad_client/features/conversations/domain/models/thinking_control.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/features/conversations/domain/stores/processing_store.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_attention_state.dart';
@@ -603,13 +604,30 @@ class SessionCubit extends Cubit<SessionState> {
     final title = payload['title'] as String?;
     final model = payload['model'] as String?;
     final modelProvider = payload['model_provider'] as String? ?? payload['provider_id'] as String?;
-    final thinkingMode = payload['thinking_mode'] as String?;
+    final routeRevision = payload['route_revision'];
+    final correctionRaw = payload['thinking_correction'];
+    final hasCorrection = correctionRaw is Map;
+    final hasThinkingModeKey = payload.containsKey('thinking_mode');
+    final thinkingMode = hasThinkingModeKey
+        ? payload['thinking_mode'] as String?
+        : existing.thinkingMode;
+    final thinkingControlRaw = payload['thinking_control'];
 
     final updated = existing.copyWith(
       title: title ?? existing.title,
       model: model ?? existing.model,
       modelProvider: modelProvider ?? existing.modelProvider,
-      thinkingMode: thinkingMode ?? existing.thinkingMode,
+      routeRevision: routeRevision is num ? routeRevision.toInt() : existing.routeRevision,
+      thinkingMode: hasCorrection && !hasThinkingModeKey
+          ? null
+          : (hasThinkingModeKey ? thinkingMode : existing.thinkingMode),
+      clearThinkingMode: hasCorrection && !hasThinkingModeKey,
+      thinkingControl: thinkingControlRaw is Map
+          ? ThinkingControlDescriptorDto.fromJson(
+              Map<String, dynamic>.from(thinkingControlRaw),
+            )
+          : (hasCorrection ? null : existing.thinkingControl),
+      clearThinkingControl: hasCorrection && thinkingControlRaw == null,
       updatedAt: DateTime.now(),
     );
     if (conversationCacheRepository != null) {
@@ -674,6 +692,7 @@ class SessionCubit extends Cubit<SessionState> {
       model: route.model,
       modelProvider: route.providerInstanceId,
       routeRevision: route.routeRevision,
+      clearThinkingControl: true,
       metadata: {
         ...?session.metadata,
         'model': route.model,

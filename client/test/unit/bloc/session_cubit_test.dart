@@ -1251,6 +1251,54 @@ void main() {
     await cubit.close();
   });
 
+  test('session_updated with thinking_correction clears invalid thinking mode', () async {
+    final thinkingSession = session.copyWith(thinkingMode: 'max');
+    final thinkingClient = _FakeDeviceClient(
+      config: agent,
+      controller: socket,
+      initialSessions: [thinkingSession],
+    );
+    agentCubit.registerClient(agent.id, thinkingClient);
+
+    socket.setConnected(true);
+    localSocket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final resolver = DeviceConnectionCoordinator(
+      cloudSocketService: socket,
+      localSocketService: localSocket,
+      currentDeviceId: 'test-device-id',
+    );
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      connectionCoordinator: resolver,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(cubit.state.agentSessions[agent.id]?.single.thinkingMode, 'max');
+
+    localSocket.debugEmitEvent({
+      'type': 'device_event',
+      'event': 'session_updated',
+      'device_id': agent.id,
+      'payload': {
+        'session_id': session.id,
+        'thinking_correction': {
+          'reason': 'thinking_option_unavailable_for_route',
+          'previous_selection_id': 'max',
+          'corrected_at': '2026-01-01T00:00:00Z',
+        },
+      },
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(cubit.state.agentSessions[agent.id]?.single.thinkingMode, isNull);
+
+    resolver.dispose();
+    await cubit.close();
+  });
+
   test('startNewChat for another agent clears that agent previous visible messages', () async {
     final secondAgent = DeviceConfig(id: 'agent-2', name: 'Computer');
     final oldMessage = CanonicalEvent(

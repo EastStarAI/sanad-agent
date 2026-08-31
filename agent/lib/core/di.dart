@@ -62,6 +62,14 @@ import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service
 import 'package:sanad_agent/core/provider_usage/provider_usage_adapter.dart';
 import 'package:sanad_agent/core/provider_usage/provider_usage_di.dart';
 import 'package:sanad_agent/core/provider_usage/provider_usage_service.dart';
+import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
+import 'package:sanad_agent/core/provider_thinking/provider_thinking_policy.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_control_cache_resolver.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_revalidator.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 
 import 'package:sanad_agent/evolution/title_service.dart';
 
@@ -239,10 +247,46 @@ void setupDI() {
     () => getIt<AgentRuntimeService>().defaultAdapter(),
   );
 
+  getIt.registerLazySingleton<ProviderThinkingRegistry>(
+    () => buildProviderThinkingRegistry(),
+  );
+  getIt.registerLazySingleton<ThinkingCapabilityAssembler>(
+    () => ThinkingCapabilityAssembler(getIt<ProviderThinkingRegistry>()),
+  );
+
+  getIt.registerLazySingleton<ThinkingControlCacheResolver>(
+    () => ThinkingControlCacheResolver(getIt<ProviderInstanceRepository>()),
+  );
+  getIt.registerLazySingleton<ThinkingSelectionResolver>(
+    () => ThinkingSelectionResolver(
+      instances: getIt<ProviderInstanceRepository>(),
+      cacheResolver: getIt<ThinkingControlCacheResolver>(),
+      assembler: getIt<ThinkingCapabilityAssembler>(),
+      registry: getIt<ProviderThinkingRegistry>(),
+    ),
+  );
+  getIt.registerLazySingleton<ThinkingRoutePreferenceStore>(
+    () => ThinkingRoutePreferenceStore(getIt<SessionManager>()),
+  );
+  getIt.registerLazySingleton<ThinkingRouteRevalidator>(
+    () => ThinkingRouteRevalidator(
+      resolver: getIt<ThinkingSelectionResolver>(),
+      store: getIt<ThinkingRoutePreferenceStore>(),
+    ),
+  );
+  getIt.registerLazySingleton<ThinkingRouteSessionSync>(
+    () => ThinkingRouteSessionSync(
+      revalidator: getIt<ThinkingRouteRevalidator>(),
+      store: getIt<ThinkingRoutePreferenceStore>(),
+      sessions: getIt<SessionManager>(),
+    ),
+  );
+
   getIt.registerLazySingleton<ProviderModelCacheService>(
     () => ProviderModelCacheService(
       getIt<ProviderInstanceRepository>(),
       getIt<AgentRuntimeService>(),
+      getIt<ThinkingCapabilityAssembler>(),
     ),
   );
 

@@ -6,10 +6,10 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
-import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/provider_route_label.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/route_thinking_mode_selector.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/model_picker_dialog.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
@@ -113,9 +113,19 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
           const SizedBox(width: 12),
           _buildModelSelector(context),
         ],
-        if (capabilities.supportsThinkingModeChange) ...[
+        if (inputSlice.pendingSuspendedRequest == null) ...[
           const SizedBox(width: 12),
-          _buildThinkingModeSelector(context),
+          RouteThinkingModeSelector(
+            capabilities: capabilities,
+            inputSlice: inputSlice,
+            activeAgent: widget.activeAgent,
+            chipBuilder: (context, label, {required enabled}) {
+              return Opacity(
+                opacity: enabled ? 1 : 0.55,
+                child: _buildActionText(label),
+              );
+            },
+          ),
         ],
       ],
     );
@@ -382,35 +392,6 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
     );
   }
 
-  Widget _buildThinkingModeSelector(BuildContext context) {
-    final selectedSession = context.select<SessionCubit, Session?>((cubit) => cubit.state.selectedSession);
-    final currentMode = _currentThinkingModeLabel(
-      selectedSession,
-      nextMessageThinkingMode: widget.inputSlice.nextMessageThinkingMode,
-    );
-    return PopupMenuButton<String>(
-      tooltip: 'Select Thinking Mode',
-      child: _buildActionText(currentMode),
-      itemBuilder: (context) => widget.capabilities.thinkingModesList
-          .map(
-            (m) => PopupMenuItem(
-              value: m,
-              height: 32,
-              child: Text(m, style: const TextStyle(fontSize: 12)),
-            ),
-          )
-          .toList(),
-      onSelected: (value) {
-        unawaited(
-          context.read<ConversationInputCubit>().selectThinkingMode(
-            scope: widget.capabilities.thinkingModeScope,
-            thinkingMode: value,
-          ),
-        );
-      },
-    );
-  }
-
   Widget _buildPermissionModeSelector(BuildContext context) {
     final isLoading = widget.inputSlice.isLoadingPermissionMode;
     final label = isLoading ? 'Loading...' : _permissionModeLabel(widget.inputSlice.permissionMode);
@@ -522,42 +503,8 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
     return null;
   }
 
-  String _currentThinkingModeLabel(
-    Session? session, {
-    String? nextMessageThinkingMode,
-  }) {
-    if (widget.capabilities.thinkingModeScope == CapabilityValueScope.message) {
-      final mode = nextMessageThinkingMode?.trim();
-      if (mode != null && mode.isNotEmpty) {
-        return mode;
-      }
-      return _firstThinkingMode();
-    }
-
-    final mode = session?.thinkingMode;
-    if (mode != null && mode.isNotEmpty) {
-      return mode;
-    }
-
-    final savedMode = nextMessageThinkingMode?.trim();
-    if (savedMode != null && savedMode.isNotEmpty) {
-      return savedMode;
-    }
-
-    return _firstThinkingMode();
-  }
-
   String _firstModelLabel() {
     return 'Select model';
-  }
-
-  String _firstThinkingMode() {
-    final modes = widget.capabilities.thinkingModesList;
-    if (modes.contains(SessionMessagesCubit.defaultThinkingMode)) {
-      return SessionMessagesCubit.defaultThinkingMode;
-    }
-    if (modes.isNotEmpty) return modes.first;
-    return SessionMessagesCubit.defaultThinkingMode;
   }
 
   String _permissionModeLabel(WorkspacePermissionMode mode) {

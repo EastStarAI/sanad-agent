@@ -4,6 +4,8 @@ Map<String, dynamic> buildSessionPayload({
   required SessionState session,
   Map<String, dynamic>? sessionMetadata,
   Map<String, dynamic>? metadataOverrides,
+  Map<String, dynamic>? thinkingControl,
+  Map<String, dynamic>? thinkingCorrection,
 }) {
   final persistedMetadata = sessionMetadata == null
       ? <String, dynamic>{}
@@ -52,6 +54,8 @@ Map<String, dynamic> buildSessionPayload({
     },
     if (thinkingMode != null && thinkingMode.isNotEmpty)
       'thinking_mode': thinkingMode,
+    'thinking_control': ?thinkingControl,
+    'thinking_correction': ?thinkingCorrection,
     if (mergedMetadata['context_tokens'] != null)
       'context_tokens': mergedMetadata['context_tokens'],
     if (mergedMetadata['context_usage'] is Map)

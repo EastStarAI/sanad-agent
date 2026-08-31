@@ -18,6 +18,8 @@ import 'package:sanad_agent/core/provider_runtime/provider_state_service.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
 import 'package:sanad_agent/core/provider_usage/provider_usage_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
@@ -93,6 +95,14 @@ class SanadProtocolBridge {
             : null,
         routeTransitions: getIt.isRegistered<SessionRouteTransitionRepository>()
             ? getIt<SessionRouteTransitionRepository>()
+            : null,
+        thinkingSelectionResolver:
+            getIt.isRegistered<ThinkingSelectionResolver>()
+            ? getIt<ThinkingSelectionResolver>()
+            : null,
+        thinkingPreferenceStore:
+            getIt.isRegistered<ThinkingRoutePreferenceStore>()
+            ? getIt<ThinkingRoutePreferenceStore>()
             : null,
         bridge: this,
       );

@@ -137,6 +137,63 @@ void main() {
     );
   });
 
+  test('model-scoped thinking leaves new users on provider default', () async {
+    socket.autoCapabilitiesPayload = {
+      'supports_workspaces': true,
+      'workspace_required': true,
+      'supports_workspace_selection': true,
+      'local_tool_runtime_scope': 'workspace',
+      'tool_protocol_version': 'tools.v2',
+      'thinking_mode_source': 'model',
+      'supports_thinking_mode_change': true,
+      'thinking_modes_list': <String>[],
+    };
+    await capabilitiesStore.ensureFreshForAgent(agent, force: true);
+    await preferencesRepository.clearPreferences(agent.id);
+    await messagesCubit.close();
+    messagesCubit = _TestSessionMessagesCubit(
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      conversationRepository: conversationRepository,
+      conversationCacheRepository: conversationCacheRepository,
+      preferencesRepository: preferencesRepository,
+      capabilitiesStore: capabilitiesStore,
+      localToolRuntime: localToolRuntime,
+      workspaceRuntimeContext: workspaceRuntimeContext,
+    );
+    await inputCubit.close();
+    inputCubit = ConversationInputCubit(messagesCubit: messagesCubit);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(inputCubit.state.nextMessageThinkingMode, isNull);
+    expect(preferencesRepository.getLastThinkingMode(agent.id), isNull);
+  });
+
+  test('selectThinkingMode null clears model-scoped preference', () async {
+    socket.autoCapabilitiesPayload = {
+      'supports_workspaces': true,
+      'workspace_required': true,
+      'supports_workspace_selection': true,
+      'local_tool_runtime_scope': 'workspace',
+      'tool_protocol_version': 'tools.v2',
+      'thinking_mode_source': 'model',
+      'supports_thinking_mode_change': true,
+    };
+    await capabilitiesStore.ensureFreshForAgent(agent, force: true);
+    messagesCubit.setNextMessagePreferences(thinkingMode: 'high');
+    await Future<void>.delayed(Duration.zero);
+    expect(inputCubit.state.nextMessageThinkingMode, 'high');
+
+    await inputCubit.selectThinkingMode(
+      scope: CapabilityValueScope.message,
+      thinkingMode: null,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(inputCubit.state.nextMessageThinkingMode, isNull);
+    expect(preferencesRepository.getLastThinkingMode(agent.id), isNull);
+  });
+
   test('cache workspace creation updates the composer picker immediately', () async {
     final created = await conversationCacheRepository.createWorkspace(
       agent,

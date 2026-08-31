@@ -49,6 +49,7 @@ import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart'
 import 'package:sanad_agent/core/provider_runtime/provider_credential_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
+import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
@@ -145,7 +146,11 @@ void main() {
     );
     getIt.registerSingleton<AgentRuntimeService>(runtimeService);
 
-    final cacheService = ProviderModelCacheService(repo, runtimeService);
+    final cacheService = ProviderModelCacheService(
+      repo,
+      runtimeService,
+      buildDefaultThinkingCapabilityAssembler(),
+    );
     getIt.registerSingleton<ProviderModelCacheService>(cacheService);
     final recentService = RecentModelSelectionService(repo);
     getIt.registerSingleton<RecentModelSelectionService>(recentService);
@@ -495,7 +500,11 @@ OPENROUTER_API_KEY=sk-or-test
       );
       getIt.registerSingleton<AgentRuntimeService>(runtimeService);
 
-      final cacheService = ProviderModelCacheService(repo, runtimeService);
+      final cacheService = ProviderModelCacheService(
+      repo,
+      runtimeService,
+      buildDefaultThinkingCapabilityAssembler(),
+    );
       getIt.registerSingleton<ProviderModelCacheService>(cacheService);
 
       repo.createInstance(
@@ -568,7 +577,11 @@ OPENROUTER_API_KEY=sk-or-test
       );
       getIt.registerSingleton<AgentRuntimeService>(runtimeService);
 
-      final cacheService = ProviderModelCacheService(repo, runtimeService);
+      final cacheService = ProviderModelCacheService(
+      repo,
+      runtimeService,
+      buildDefaultThinkingCapabilityAssembler(),
+    );
       getIt.registerSingleton<ProviderModelCacheService>(cacheService);
 
       repo.createInstance(

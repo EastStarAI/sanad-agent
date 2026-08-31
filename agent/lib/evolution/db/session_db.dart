@@ -171,7 +171,7 @@ class SessionDB {
       ON CONFLICT(session_id) DO UPDATE SET
         model = excluded.model,
         provider_id = COALESCE(excluded.provider_id, sessions.provider_id),
-        thinking_mode = COALESCE(excluded.thinking_mode, sessions.thinking_mode),
+        thinking_mode = excluded.thinking_mode,
         title = COALESCE(excluded.title, sessions.title),
         title_status = excluded.title_status,
         workspace_id = excluded.workspace_id,

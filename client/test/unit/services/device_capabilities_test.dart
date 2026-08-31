@@ -91,6 +91,26 @@ void main() {
     expect(capability.thinkingStreamMode, ThinkingStreamMode.snapshot);
   });
 
+  test('capability parses model-scoped thinking source', () {
+    final capability = Capability.fromJson({
+      'supports_thinking_mode_change': true,
+      'thinking_mode_source': 'model',
+      'thinking_modes_list': ['fast', 'balanced', 'deep'],
+    });
+
+    expect(capability.usesModelThinkingControls, isTrue);
+    expect(capability.thinkingModesList, isEmpty);
+  });
+
+  test('legacy capability payload keeps device thinking list', () {
+    final capability = Capability.fromJson({
+      'thinking_modes_list': ['fast', 'balanced', 'deep'],
+    });
+
+    expect(capability.usesModelThinkingControls, isFalse);
+    expect(capability.thinkingModesList, ['fast', 'balanced', 'deep']);
+  });
+
   test('capability parses tools v2 workspace and permission fields from JSON', () {
     final capability = Capability.fromJson({
       'supports_workspaces': true,
