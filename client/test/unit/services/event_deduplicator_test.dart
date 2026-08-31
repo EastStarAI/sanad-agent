@@ -29,6 +29,60 @@ void main() {
       expect(d.shouldProcess('evt_1', transport: 'local'), isFalse);
     });
 
+    test('same event_id accepts a materially enriched payload once', () {
+      final d = EventDeduplicator();
+      const initial = {
+        'event_id': 'evt_compaction',
+        'status': 'completed',
+        'estimated_after': 57_630,
+      };
+      const enriched = {
+        'event_id': 'evt_compaction',
+        'status': 'completed',
+        'estimated_after': 57_630,
+        'provider_confirmed_after': 34_922,
+      };
+
+      expect(
+        d.shouldProcess('evt_compaction', transport: 'local', payload: initial),
+        isTrue,
+      );
+      expect(
+        d.shouldProcess('evt_compaction', transport: 'local', payload: enriched),
+        isTrue,
+      );
+      expect(
+        d.shouldProcess('evt_compaction', transport: 'local', payload: enriched),
+        isFalse,
+      );
+    });
+
+    test('payload fingerprint ignores map insertion order', () {
+      final d = EventDeduplicator();
+      expect(
+        d.shouldProcess(
+          'evt_order',
+          transport: 'local',
+          payload: {
+            'a': 1,
+            'nested': {'b': 2, 'c': 3},
+          },
+        ),
+        isTrue,
+      );
+      expect(
+        d.shouldProcess(
+          'evt_order',
+          transport: 'local',
+          payload: {
+            'nested': {'c': 3, 'b': 2},
+            'a': 1,
+          },
+        ),
+        isFalse,
+      );
+    });
+
     test('null or empty event_id is always processed (backward compat)', () {
       final d = EventDeduplicator();
       expect(d.shouldProcess(null, transport: 'local'), isTrue);

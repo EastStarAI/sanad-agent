@@ -34,11 +34,14 @@ This contract applies to `client/lib/features/conversations/data/`.
 - Reapply live events after history hydration with request-id deduplication; legacy rows may use bounded same-session text/timestamp matching.
 - Do not terminal-deduplicate running thinking events needed by later stream chunks.
 - Hydrate runtime notice and queued messages together for the selected session, and retain lightweight recovery markers in session-list metadata.
+- Merge compaction lifecycle rows at the durable retained-tail boundary, before the first later canonical message; never derive their history position by comparing real lifecycle time with synthetic message timestamps.
+- Treat a completed compaction as a context-usage checkpoint for the composer: replace input usage with confirmed-after or estimated-after, discard stale cached-input usage, and retain the latest same-model provider window/model identity when it is more authoritative than legacy compaction metadata.
 
 ## Thin-Client Dispatch
 - Treat workspace UUID as identity; path, display name, and availability are authoritative mutable daemon projections.
 - Send workspace identity and per-message preferences only; do not rebuild workspace bootstrap or system context in the client.
 - Source slash commands, workspace trees, folder mutations, skills, web capabilities, and MCP catalogs from daemon query surfaces.
+- Preserve the daemon's closed slash-entry type through the domain mapper. `runtime_action` and `skill` are behavioral identities, while `source` remains provenance and must not become the primary UI behavior switch.
 - Folder-mutation requests accept only their exact operation-specific canonical acknowledgment; timeout, error, or unrelated events remain failures.
 - Workspace removal accepts only `workspace.removed` for the requested stable
   workspace id, then removes the workspace projection without deleting cached

@@ -212,7 +212,16 @@ matches either its live claim map or the draft's persisted
 The winning client clears its claim metadata only after draft persistence and
 recovery acknowledgement succeed.
 
-## 11. DI Composition
+## 11. Compaction lifecycle projection (Plan 53)
+
+Compaction lifecycle is a typed per-session timeline projection rather than a
+user or assistant message. Live and history transitions fold under the logical
+`compaction_id`; started may advance once to completed or failed, but one
+terminal status cannot replace the other. History ordering follows the
+daemon-provided retained-tail causal position, so cache hydration must preserve
+list order instead of sorting these events by timestamps.
+
+## 12. DI Composition
 
 Registered in `lib/core/di/injection.dart`:
 

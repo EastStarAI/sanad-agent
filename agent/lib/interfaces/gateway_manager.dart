@@ -9,6 +9,7 @@ import 'platforms/base_platform.dart';
 import 'models/delivery/models.dart';
 import 'models/gateway_event.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/interfaces/runtime/compaction_lifecycle_relay.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 
@@ -55,6 +56,7 @@ class GatewayManager {
         _onOrchestratorResponse,
       );
     }
+    CompactionLifecycleRelay.sink = _onOrchestratorResponse;
     if (getIt.isRegistered<RuntimeRecoveryService>()) {
       getIt<RuntimeRecoveryService>().attachNoticeSink(_onRuntimeNotice);
     }

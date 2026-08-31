@@ -7,6 +7,7 @@ import '../../../core/models/message.dart';
 import '../../models/session_execution_snapshot.dart';
 import '../../models/pending_steer_record.dart';
 import '../../models/stop_recovery_outcome.dart';
+import '../session_history_revision_repository.dart';
 import '../agent_state_database.dart';
 import '../persisted_runtime_state_repository.dart';
 import 'pending_input_repository.dart';
@@ -557,6 +558,7 @@ class SessionExecutionStateCoordinator {
           sessionId,
           jsonEncode(historyMessage.toJson()),
         ]);
+        SessionHistoryRevisionRepository.bumpDatabase(tx.db, sessionId);
         tx.db.execute(
           'DELETE FROM suspended_checkpoints WHERE tool_call_id = ?',
           [toolCallId],
@@ -638,6 +640,7 @@ class SessionExecutionStateCoordinator {
         'INSERT INTO messages (session_id, data) VALUES (?, ?)',
         [sessionId, encoded],
       );
+      SessionHistoryRevisionRepository.bumpDatabase(transaction.db, sessionId);
     } else {
       transaction.db.execute('UPDATE messages SET data = ? WHERE id = ?', [
         encoded,

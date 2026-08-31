@@ -6,6 +6,7 @@ import 'db/session_db.dart';
 import 'models/session_query.dart';
 import 'models/session_state.dart';
 import 'models/suspended_checkpoint.dart';
+import 'compaction/model_context_projection.dart';
 import '../core/models/message.dart';
 
 class SessionManager {
@@ -184,6 +185,10 @@ class SessionManager {
 
   List<Message> getMessages(String sessionId) {
     return _db.getMessages(sessionId);
+  }
+
+  List<PersistedMessage> getPersistedMessages(String sessionId) {
+    return _db.getPersistedMessages(sessionId);
   }
 
   /// Persists last-turn metrics (usage, model, context_tokens, etc.) alongside

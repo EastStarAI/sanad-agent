@@ -1,3 +1,8 @@
+---
+title: "Linux Service Lifecycle QA"
+description: "Automated coverage and clean-host integration gates for the Linux Agent service lifecycle."
+---
+
 # Linux Service Lifecycle QA
 
 ## Automated coverage

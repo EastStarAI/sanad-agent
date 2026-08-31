@@ -161,19 +161,34 @@ class _SidebarConversationRowState extends State<SidebarConversationRow> {
                     right: 0,
                   ),
                   minVerticalPadding: 2,
-                  title: Align(
-                    alignment: AlignmentDirectional.centerStart,
-                    child: Text(
-                      displayTitle,
-                      textDirection: titleDirection,
-                      textAlign: TextAlign.start,
-                      maxLines: 1,
-                      style: TextStyle(
-                        color: isSelected ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
-                        fontSize: 12,
-                        fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
+                  title: BlocSelector<DeviceCapabilitiesCubit, DeviceCapabilitiesState, bool>(
+                    selector: (state) => state.getForAgent(widget.device.id).supportsUpdateSessionName,
+                    builder: (context, supportsRename) => GestureDetector(
+                      key: ValueKey('sidebar_session_title:${widget.session.id}'),
+                      behavior: HitTestBehavior.opaque,
+                      onDoubleTap: supportsRename
+                          ? () => _showRenameDialog(
+                              context,
+                              context.read<SessionCubit>(),
+                              widget.device,
+                              widget.session,
+                            )
+                          : null,
+                      child: Align(
+                        alignment: AlignmentDirectional.centerStart,
+                        child: Text(
+                          displayTitle,
+                          textDirection: titleDirection,
+                          textAlign: TextAlign.start,
+                          maxLines: 1,
+                          style: TextStyle(
+                            color: isSelected ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
+                            fontSize: 12,
+                            fontWeight: isSelected ? FontWeight.w500 : FontWeight.normal,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
                       ),
-                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   leading: leadingContainer,

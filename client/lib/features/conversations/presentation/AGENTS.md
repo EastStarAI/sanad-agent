@@ -21,6 +21,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Do not eagerly hydrate history for a session created locally for its first outgoing turn.
 - Block normal message dispatch before session creation when either the provider instance or model selection is absent.
 - Slash queries run only on explicit composer intent and use the daemon query surface, never local skill discovery or mount-time prefetch.
+- Slash suggestion behavior is type-owned, never command-name-owned: `runtime_action` is leading-only and executes immediately when selected by Enter or pointer, while `skill` may appear anywhere and inserts a token for a later submit. Direct typed actions and selected actions converge on one runtime-action dispatcher; future `@` file references remain a separate inline insertion family.
 - Desktop file drops insert paths at the current valid editor selection, replace selected text, and leave the caret immediately after the inserted paths; only an invalid selection falls back to the end.
 - Route every workspace-path picker entry through the shared picker helper. Use
   the native folder picker only for a confirmed same-desktop local device;
@@ -80,6 +81,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Unscoped changes must not rebuild the workspace section; processing, suspension, and selection changes should rebuild only affected rows.
 - Cached content remains visible through offline, refresh, and stale-error states.
 - Preserve labeled, keyboard-focusable controls and 44px-class primary drawer/mobile targets. On macOS, drawer-mode sidebar content starts below the native traffic-light region.
+- On desktop, double-clicking a conversation title invokes the same capability-gated rename dialog as the row menu; keep the gesture scoped to the title so options and timestamps retain their own interactions.
 - Presentation must not synthesize missing cache capabilities; extend the domain/data owner instead.
 
 ## Navigation and Deletion
@@ -96,8 +98,10 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Route replacement after current deletion must prevent the deleted URL from re-entering history.
 
 ## Presentation Fidelity
+- Compaction separators consume the full available conversation width around an intrinsic centered label. Only the centered label is interactive; divider space must not open details. The compact detail card uses daemon-owned effective-input and threshold metrics, replaces the provisional after-estimate with the provider-confirmed value on reconciliation, and recomputes reclaimed context from that value.
 - Running and completed assistant Markdown enter through one application-owned renderer boundary; progressive rendering must not own timeline scrolling, add artificial typing, or be silently bypassed in widget tests.
 - Provider chips render daemon-owned display names and model names, never raw provider UUIDs. Session display metadata is valid only when its provider identity matches the active or staged provider route.
 - Context-usage UI shows only the latest active-session snapshot, includes cached input only when available, and never displays cache-write usage.
+- Compaction timeline labels keep a localized 44-logical-pixel interaction target, remain centered without narrow-width overflow, and expose the same redacted multiline details by hover, tap, and keyboard focus; the surrounding full-width separator remains non-interactive.
 - Composer controls remain horizontally bounded on narrow layouts and expose Material semantics, labels, and keyboard focus.
 - Narrow conversation headers share one navigation/window-action surface across New Conversation and active sessions; native-desktop actions reuse the wide-header geometry and neutral color, and macOS reserves the leading title-bar region for native traffic-light controls.

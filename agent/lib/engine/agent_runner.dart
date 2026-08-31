@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../core/models/message.dart';
 import '../core/models/agent_response.dart';
 import '../core/models/llm_provider_state.dart';
+import '../core/models/llm_usage_snapshot.dart';
 import '../capabilities/registry/tools_registry.dart';
 import '../capabilities/tools/memory_tool.dart';
 import 'adapters/llm_adapter.dart';
@@ -27,7 +28,6 @@ import '../core/provider_runtime/runtime_recovery_exception.dart';
 import '../core/provider_runtime/runtime_recovery_service.dart';
 import '../core/secrets_redactor.dart';
 import 'agent_context_assembler.dart';
-import 'context_engine.dart';
 import 'llm_request_dumper.dart';
 import 'history_healer.dart';
 import 'metrics_tracker.dart';
@@ -43,6 +43,12 @@ import 'runtime/response_continuation_coordinator.dart';
 import 'runtime/steer_coordinator.dart' as steer_lib;
 import 'runtime/tool_execution_coordinator.dart';
 import 'runtime/run_cancellation_scope.dart';
+import '../evolution/compaction/model_projection_builder.dart';
+import '../core/agent_runtime_service.dart';
+import '../evolution/db/session_history_revision_repository.dart';
+import '../engine/compaction/compaction.dart';
+import 'context/context.dart';
+import 'runtime/compaction_coordinator.dart';
 import 'runtime/turn_route_state.dart';
 
 /// Legacy re-exports so existing imports of the steer constants from
@@ -57,7 +63,6 @@ class AgentRunner {
   final ToolsRegistry registry;
   final SessionManager sessionManager;
   final PluginManager pluginManager;
-  final ContextEngine contextEngine;
   final DeferredToolResultResolver? _deferredToolResultResolver;
   late final FileMemoryStore memoryStore;
   late final String sessionId;
@@ -66,6 +71,9 @@ class AgentRunner {
   int _currentTurnStartIndex = 0;
   bool _stopRequested = false;
   bool _allowManualAmbiguousToolRecovery = false;
+  bool _overflowCompactionRetried = false;
+  DateTime? _lastCompactionCompletedAt;
+  static const _compactionCooldown = Duration(seconds: 30);
   bool _providerRequestInFlight = false;
   Completer<void>? _restartDrainRelease;
 
@@ -147,6 +155,10 @@ class AgentRunner {
 
   MetricsTracker? _metricsTracker;
   Future<Map<String, dynamic>?>? _contextUsageSnapshotFuture;
+  ConfirmedInputUsageBaseline? _pendingInputUsageBaseline;
+  ConfirmedInputUsageBaseline? _confirmedInputUsageBaseline;
+  RequestPressureSnapshot? _lastPreflightPressure;
+  bool _autoCompactionBlockedForRun = false;
   String? currentModelStepId;
   String? _authoritativeRunId;
   String? _authoritativeWorkItemId;
@@ -159,6 +171,21 @@ class AgentRunner {
   /// in the current authoritative turn.
   LLMRouteSnapshot? get lastSuccessfulLlmRoute => _lastSuccessfulLlmRoute;
 
+  @visibleForTesting
+  void debugSetConfirmedInputUsageBaseline(
+    ConfirmedInputUsageBaseline baseline,
+  ) {
+    _confirmedInputUsageBaseline = baseline;
+  }
+
+  @visibleForTesting
+  RequestPressureSnapshot? get debugLastPreflightPressure =>
+      _lastPreflightPressure;
+
+  @visibleForTesting
+  ConfirmedInputUsageBaseline? get debugConfirmedInputUsageBaseline =>
+      _confirmedInputUsageBaseline;
+
   void beginAuthoritativeRun(
     String? runId, {
     String? workItemId,
@@ -169,6 +196,7 @@ class AgentRunner {
     _authoritativeWorkItemId = workItemId;
     _authoritativeGeneration = generation;
     _lastSuccessfulLlmRoute = null;
+    _autoCompactionBlockedForRun = false;
     _turnRoute.setTurnRunId(runId);
   }
 
@@ -268,6 +296,122 @@ class AgentRunner {
 
   void _updateMetrics(AgentResponse response) {
     _metricsTracker?.updateMetrics(response);
+    final usage = response.usage;
+    final pending = _pendingInputUsageBaseline;
+    if (usage == null || pending == null) return;
+    final inputTokens = LlmUsageSnapshot.fromProviderUsage(usage).inputTokens;
+    if (inputTokens != null) {
+      _confirmedInputUsageBaseline = pending.copyWithInputTokens(inputTokens);
+      if (getIt.isRegistered<CompactionCoordinator>()) {
+        getIt<CompactionCoordinator>().reconcileLatestProviderUsage(
+          sessionId: sessionId,
+          routeSignature: pending.routeSignature,
+          inputTokens: inputTokens,
+        );
+      }
+    }
+  }
+
+  Future<void> _stageInputUsageBaseline({
+    required List<Message> requestMessages,
+    required List<Map<String, dynamic>> toolSchemas,
+    required String? providerId,
+    required String? modelId,
+  }) async {
+    if (providerId == null ||
+        modelId == null ||
+        !getIt.isRegistered<AgentRuntimeService>()) {
+      _pendingInputUsageBaseline = null;
+      return;
+    }
+    final measurementAdapter = _wireMeasurementAdapter(
+      _turnRoute.adapterForTurn(),
+    );
+    final wireMeasurement = measurementAdapter is WireInputUsageMeasurer
+        ? await (measurementAdapter as WireInputUsageMeasurer).measureInput(
+            requestMessages,
+            tools: registry.allTools.map((tool) => tool.schema).toList(),
+            modelOverride: modelId,
+            options: _requestOptionsForTurn(providerId),
+          )
+        : null;
+    _pendingInputUsageBaseline = ConfirmedInputUsageBaseline(
+      routeSignature: getIt<AgentRuntimeService>().resolveSignature(
+        providerId: providerId,
+        modelId: modelId,
+      ),
+      inputTokens: 0,
+      conversationMessages: requestMessages,
+      systemPrompt: '',
+      runtimeContext: '',
+      toolSchemas: toolSchemas,
+      wireMeasurement: wireMeasurement,
+    );
+  }
+
+  static LLMAdapter _wireMeasurementAdapter(LLMAdapter adapter) =>
+      adapter is RateLimitedLLMAdapter ? adapter.providerAdapter : adapter;
+
+  Future<void> _restoreConfirmedInputUsageBaseline({
+    required List<Message> prospectiveHistory,
+    required WireInputUsageMeasurer measurer,
+    required RouteSignature routeSignature,
+    required String? providerId,
+    required String? modelId,
+    required WireInputMeasurement currentMeasurement,
+  }) async {
+    if (_confirmedInputUsageBaseline != null) return;
+
+    for (var index = prospectiveHistory.length - 1; index >= 0; index--) {
+      final message = prospectiveHistory[index];
+      if (message.role != MessageRole.assistant) continue;
+      final metadata = message.metadata;
+      final usage = metadata?['usage'];
+      final inputTokens = usage is Map ? usage['input_tokens'] : null;
+      if (inputTokens is! num || inputTokens <= 0) continue;
+
+      final recordedModel = metadata?['model']?.toString();
+      final recordedProvider = metadata?['provider']?.toString();
+      final contextUsage = metadata?['context_usage'];
+      final recordedContextProvider = contextUsage is Map
+          ? contextUsage['provider_instance_id']?.toString()
+          : null;
+      final providerMatches =
+          <String?>{
+            routeSignature.providerInstanceId,
+            routeSignature.templateId,
+            providerId,
+          }.contains(recordedProvider) ||
+          <String?>{
+            routeSignature.providerInstanceId,
+            routeSignature.templateId,
+            providerId,
+          }.contains(recordedContextProvider);
+      if (recordedModel != routeSignature.modelId || !providerMatches) {
+        continue;
+      }
+
+      final measuredMessages = prospectiveHistory.sublist(0, index);
+      final toolSchemas = registry.allTools.map((tool) => tool.schema).toList();
+      final measurement = await measurer.measureInput(
+        measuredMessages,
+        tools: toolSchemas,
+        modelOverride: modelId,
+        options: _requestOptionsForTurn(providerId),
+      );
+      if (measurement == null) return;
+      if (!currentMeasurement.extendsMeasurement(measurement)) return;
+      _confirmedInputUsageBaseline = ConfirmedInputUsageBaseline(
+        routeSignature: routeSignature,
+        inputTokens: inputTokens.round(),
+        conversationMessages: measuredMessages,
+        systemPrompt: '',
+        runtimeContext: '',
+        toolSchemas: toolSchemas.map((schema) => schema.toJson()).toList(),
+        wireMeasurement: measurement,
+      );
+      return;
+    }
   }
 
   AgentRunner(
@@ -275,11 +419,9 @@ class AgentRunner {
     this.registry,
     this.sessionManager, {
     PluginManager? pluginManager,
-    ContextEngine? contextEngine,
     String? existingSessionId,
     DeferredToolResultResolver? deferredToolResultResolver,
   }) : pluginManager = pluginManager ?? PluginManager(),
-       contextEngine = contextEngine ?? ContextEngine(adapter: adapter),
        _deferredToolResultResolver = deferredToolResultResolver {
     if (existingSessionId != null) {
       final session = sessionManager.getSession(existingSessionId);
@@ -801,7 +943,8 @@ class AgentRunner {
     required bool streamStarted,
     required Set<String> failedProviderInstanceIds,
   }) async {
-    if (error is RateLimitCancelled || error is ProviderRequestCancelledException) {
+    if (error is RateLimitCancelled ||
+        error is ProviderRequestCancelledException) {
       throw RuntimeRecoveryCancelled(sessionId);
     }
     final recovery = _recoveryService;
@@ -821,6 +964,62 @@ class AgentRunner {
       body: providerBody,
       hasTrustedTemporaryReset: httpRetryAfter != null,
     );
+    if (reason == RuntimeFailureReason.contextOverflow &&
+        !streamStarted &&
+        !_overflowCompactionRetried &&
+        getIt.isRegistered<CompactionCoordinator>() &&
+        getIt.isRegistered<SessionHistoryRevisionRepository>() &&
+        getIt.isRegistered<AgentRuntimeService>()) {
+      _overflowCompactionRetried = true;
+      final coordinator = getIt<CompactionCoordinator>();
+      final revisionRepo = getIt<SessionHistoryRevisionRepository>();
+      final revision = revisionRepo.read(sessionId);
+      if (revision != null) {
+        final timeline = _compactionTimelineForSession();
+        if (timeline.isEmpty) {
+          // Fall through to recovery notice below.
+        } else {
+          final activeBoundary = getIt<ModelProjectionBuilder>()
+              .buildForSession(sessionId)
+              .activeBoundary;
+          final contextWindow = await getContextTokens() ?? 128_000;
+          final policy = getIt.isRegistered<Config>()
+              ? getIt<Config>().compactionPolicyForModel(modelId ?? '')
+              : const CompactionPolicy(threshold: 0.80, targetRatio: 0.10);
+          final targetRequestTokens =
+              (_effectiveInputWindow(contextWindow) * policy.targetRatio)
+                  .round();
+          final routeSignature = getIt<AgentRuntimeService>().resolveSignature(
+            providerId: providerInstanceId,
+            modelId: modelId,
+          );
+          final request = CompactionEngineRequest(
+            compactionId: '',
+            sessionId: sessionId,
+            trigger: CompactionTrigger.overflow,
+            sourceRevision: revision.toCompactionRevision(),
+            routeSignature: routeSignature,
+            contextWindowTokens: contextWindow,
+            timeline: timeline,
+            systemPrompt: contextAssembler.assemble() ?? '',
+            runtimeContext: '',
+            toolSchemas: const [],
+            previousSummary: activeBoundary?.internalSummary,
+            previousSourceRange: activeBoundary?.sourceRange,
+            targetRequestTokens: targetRequestTokens,
+            thresholdRatio: policy.threshold,
+          );
+          final outcome = await coordinator.runCompaction(
+            request: request,
+            force: true,
+          );
+          if (outcome?.status == CompactionStatus.completed) {
+            _refreshCanonicalHistoryAfterCompaction();
+            return true;
+          }
+        }
+      }
+    }
     // When the failure is non-HTTP (no statusCode), retryAfter comes from
     // the fallback delay only — no header to parse.
     final retryAfter = httpRetryAfter ?? _fallbackRetryDelay(reason, attempt);
@@ -999,24 +1198,9 @@ class AgentRunner {
 
     _steerCoordinator.drainPreApiSteer(_RunnerSteerCallbacks(this));
 
-    // Resolve the live turn-scoped adapter before context compression so the
-    // compressor uses the current provider route, never a stale singleton
-    // frozen before a provider was configured.
-    final preRouteAdapter = _turnRoute.adapterForTurn();
-
-    // Apply context compression
-    history = await contextEngine.compressIfNeeded(
-      history,
-      adapter: preRouteAdapter,
-    );
-
-    // Prepare effective history with memory injection
-    var effectiveHistory = _buildEffectiveHistory(
+    var effectiveHistory = await _prepareProviderHistory(
       runtimeSystemPrompt: runtimeSystemPrompt,
     );
-
-    // Run plugins pre-execution
-    effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
 
     _logger.info('🧠 [Agent] Thinking...');
 
@@ -1060,6 +1244,12 @@ class AgentRunner {
         );
         _providerRequestInFlight = true;
         try {
+          await _stageInputUsageBaseline(
+            requestMessages: effectiveHistory,
+            toolSchemas: tools.map((tool) => tool.toJson()).toList(),
+            providerId: provider,
+            modelId: model,
+          );
           response = await route.adapter.generateResponse(
             effectiveHistory,
             tools: tools,
@@ -1354,24 +1544,9 @@ class AgentRunner {
 
     _steerCoordinator.drainPreApiSteer(_RunnerSteerCallbacks(this));
 
-    // Resolve the live turn-scoped adapter before context compression so the
-    // compressor uses the current provider route, never a stale singleton
-    // frozen before a provider was configured.
-    final preRouteAdapter = _turnRoute.adapterForTurn();
-
-    // Apply context compression
-    history = await contextEngine.compressIfNeeded(
-      history,
-      adapter: preRouteAdapter,
-    );
-
-    // Prepare effective history with memory injection
-    var effectiveHistory = _buildEffectiveHistory(
+    var effectiveHistory = await _prepareProviderHistory(
       runtimeSystemPrompt: runtimeSystemPrompt,
     );
-
-    // Run plugins pre-execution
-    effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
 
     String fullContent = '';
     List<ToolCall>? accumulatedToolCalls;
@@ -1427,6 +1602,12 @@ class AgentRunner {
         );
         _providerRequestInFlight = true;
         try {
+          await _stageInputUsageBaseline(
+            requestMessages: effectiveHistory,
+            toolSchemas: tools.map((tool) => tool.toJson()).toList(),
+            providerId: provider,
+            modelId: model,
+          );
           await for (final response in route.adapter.generateStream(
             effectiveHistory,
             tools: tools,
@@ -1837,16 +2018,45 @@ class AgentRunner {
   /// The three-tier structure (stable → context → volatile) inside the
   /// assembled string is ordered for maximum LLM prefix-cache efficiency:
   /// the stable identity block (longest, never changes) lives at the top so
-  /// providers can reuse its cached KV-state across turns.
-  ///
-  ///   system message  ← assembled from stable + context + volatile
-  ///   user message 1
-  ///   agent message 1
-  ///   user message 2
-  ///   ...
+  List<Message> _providerConversationMessages() {
+    if (getIt.isRegistered<ModelProjectionBuilder>()) {
+      try {
+        return getIt<ModelProjectionBuilder>()
+            .buildForSession(sessionId)
+            .conversationMessages;
+      } catch (error) {
+        _logger.warning(
+          'Compaction projection unavailable for $sessionId: $error',
+        );
+      }
+    }
+    return history;
+  }
+
+  String? _contextProviderTemplate() {
+    if (getIt.isRegistered<AgentRuntimeService>()) {
+      try {
+        final routing = _turnRoute.resolveTurnRouting();
+        return getIt<AgentRuntimeService>()
+            .resolveSignature(
+              providerId: routing.providerId,
+              modelId: routing.model,
+            )
+            .templateId;
+      } catch (_) {
+        // Fall through to the static configuration identity.
+      }
+    }
+    return getIt.isRegistered<Config>()
+        ? getIt<Config>().resolveProviderName()
+        : null;
+  }
+
   List<Message> _buildEffectiveHistory({String? runtimeSystemPrompt}) {
-    // history only contains user/assistant/tool messages — safe to copy as-is.
-    final effectiveHistory = List<Message>.from(history);
+    // Provider payload uses active model projection; canonical [history] stays intact.
+    final effectiveHistory = List<Message>.from(
+      _providerConversationMessages(),
+    );
 
     // Update volatile tier with the current turn's live data.
     final memorySections = <String>[];
@@ -1862,11 +2072,7 @@ class AgentRunner {
       memoryContext: memorySections.join('\n\n'),
       sessionId: sessionId,
       model: _turnRoute.effectiveModel ?? activeModel,
-      provider:
-          activeProvider ??
-          (getIt.isRegistered<Config>()
-              ? getIt<Config>().resolveProviderName()
-              : null),
+      provider: _contextProviderTemplate(),
     );
 
     // Update context tier if a per-turn workspace context was supplied.
@@ -1885,6 +2091,262 @@ class AgentRunner {
       );
     }
     return effectiveHistory;
+  }
+
+  Future<List<Message>> _prepareProviderHistory({
+    String? runtimeSystemPrompt,
+  }) async {
+    var effectiveHistory = _buildEffectiveHistory(
+      runtimeSystemPrompt: runtimeSystemPrompt,
+    );
+    effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
+    if (await _maybeRunPreflightCompaction(
+      runtimeSystemPrompt: runtimeSystemPrompt,
+      prospectiveHistory: effectiveHistory,
+    )) {
+      effectiveHistory = _buildEffectiveHistory(
+        runtimeSystemPrompt: runtimeSystemPrompt,
+      );
+      effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
+    }
+    return effectiveHistory;
+  }
+
+  Future<bool> _maybeRunPreflightCompaction({
+    String? runtimeSystemPrompt,
+    required List<Message> prospectiveHistory,
+  }) async {
+    if (_autoCompactionBlockedForRun) {
+      return false;
+    }
+    if (!getIt.isRegistered<CompactionCoordinator>() ||
+        !getIt.isRegistered<SessionHistoryRevisionRepository>() ||
+        !getIt.isRegistered<AgentRuntimeService>()) {
+      return false;
+    }
+    final revisionRepo = getIt<SessionHistoryRevisionRepository>();
+    final revision = revisionRepo.read(sessionId);
+    if (revision == null) {
+      return false;
+    }
+    final timelineEntries = _compactionTimelineForSession();
+    if (timelineEntries.isEmpty) {
+      return false;
+    }
+    final projection = getIt<ModelProjectionBuilder>().buildForSession(
+      sessionId,
+    );
+    final routing = _turnRoute.resolveTurnRouting();
+    final contextWindow = await getContextTokens() ?? 128_000;
+    final policy = getIt.isRegistered<Config>()
+        ? getIt<Config>().compactionPolicyForModel(routing.model ?? '')
+        : const CompactionPolicy(threshold: 0.80, targetRatio: 0.10);
+    final turnAdapter = _wireMeasurementAdapter(_turnRoute.adapterForTurn());
+    final wireMeasurement = turnAdapter is WireInputUsageMeasurer
+        ? await (turnAdapter as WireInputUsageMeasurer).measureInput(
+            prospectiveHistory,
+            tools: registry.allTools.map((tool) => tool.schema).toList(),
+            modelOverride: routing.model,
+            options: _requestOptionsForTurn(routing.providerId),
+          )
+        : null;
+    final wireEstimatedInputTokens =
+        wireMeasurement?.estimatedTokens ??
+        (turnAdapter is WireInputTokenEstimator
+            ? await (turnAdapter as WireInputTokenEstimator)
+                  .estimateInputTokens(
+                    prospectiveHistory,
+                    tools: registry.allTools
+                        .map((tool) => tool.schema)
+                        .toList(),
+                    modelOverride: routing.model,
+                    options: _requestOptionsForTurn(routing.providerId),
+                  )
+            : null);
+    final routeSignature = getIt<AgentRuntimeService>().resolveSignature(
+      providerId: routing.providerId,
+      modelId: routing.model,
+    );
+    if (turnAdapter is WireInputUsageMeasurer && wireMeasurement != null) {
+      await _restoreConfirmedInputUsageBaseline(
+        prospectiveHistory: prospectiveHistory,
+        measurer: turnAdapter as WireInputUsageMeasurer,
+        routeSignature: routeSignature,
+        providerId: routing.providerId,
+        modelId: routing.model,
+        currentMeasurement: wireMeasurement,
+      );
+    }
+    final toolSchemas = registry.allTools
+        .map((tool) => tool.schema.toJson())
+        .toList();
+    RequestPressureSnapshot? preflightPressure;
+    if (getIt.isRegistered<ContextCompactionEngine>()) {
+      final pressure = RequestPressureEvaluator().evaluate(
+        routeSignature: routeSignature,
+        contextWindowTokens: contextWindow,
+        conversationMessages: prospectiveHistory,
+        systemPrompt: '',
+        runtimeContext: '',
+        toolSchemas: toolSchemas,
+        confirmedInputUsage: _confirmedInputUsageBaseline,
+        wireEstimatedInputTokens: wireEstimatedInputTokens,
+        wireMeasurement: wireMeasurement,
+        thresholdRatio: policy.threshold,
+      );
+      preflightPressure = pressure;
+      _lastPreflightPressure = pressure;
+      if (!pressure.exceedsThreshold) {
+        return false;
+      }
+      final withinCooldown =
+          _lastCompactionCompletedAt != null &&
+          DateTime.now().toUtc().difference(_lastCompactionCompletedAt!) <
+              _compactionCooldown;
+      if (withinCooldown &&
+          pressure.estimatedRequestTokens <= pressure.effectiveInputBudget) {
+        return false;
+      }
+    }
+    final request = CompactionEngineRequest(
+      compactionId: '',
+      sessionId: sessionId,
+      trigger: CompactionTrigger.auto,
+      sourceRevision: revision.toCompactionRevision(),
+      routeSignature: routeSignature,
+      contextWindowTokens: contextWindow,
+      preflightPressure: preflightPressure,
+      timeline: timelineEntries,
+      systemPrompt: contextAssembler.assemble() ?? '',
+      runtimeContext: runtimeSystemPrompt ?? '',
+      toolSchemas: toolSchemas,
+      previousSummary: projection.activeBoundary?.internalSummary,
+      previousSourceRange: projection.activeBoundary?.sourceRange,
+      targetRequestTokens:
+          (_effectiveInputWindow(contextWindow) * policy.targetRatio).round(),
+      thresholdRatio: policy.threshold,
+    );
+    final outcome = await getIt<CompactionCoordinator>().runCompaction(
+      request: request,
+      force: true,
+    );
+    if (outcome?.status == CompactionStatus.completed) {
+      _lastCompactionCompletedAt = DateTime.now().toUtc();
+      _autoCompactionBlockedForRun = false;
+      _refreshCanonicalHistoryAfterCompaction();
+      return true;
+    }
+    if (outcome?.status == CompactionStatus.failed) {
+      _autoCompactionBlockedForRun = true;
+    }
+    return false;
+  }
+
+  static int _effectiveInputWindow(int contextWindow) =>
+      calculateEffectiveInputWindow(contextWindow);
+
+  void _refreshCanonicalHistoryAfterCompaction() {
+    final session = sessionManager.getSession(sessionId);
+    if (session != null) {
+      history = session.messages.toList();
+      _healHistory();
+    }
+    _checkpointCoordinator.saveCheckpoint(
+      ctx: _checkpointCtx,
+      resumeHistoryLength: history.length,
+    );
+  }
+
+  /// Test hook for Plan 53d preflight compaction verification.
+  @visibleForTesting
+  Future<List<Message>> debugPrepareProviderHistory({
+    String? runtimeSystemPrompt,
+  }) {
+    return _prepareProviderHistory(runtimeSystemPrompt: runtimeSystemPrompt);
+  }
+
+  @visibleForTesting
+  void debugSaveCheckpointForTesting({
+    required int resumeHistoryLength,
+    required int turnStartIndex,
+  }) {
+    _currentTurnStartIndex = turnStartIndex;
+    _checkpointCoordinator.saveCheckpoint(
+      ctx: _checkpointCtx,
+      checkpointKind:
+          ContinuationCheckpointCoordinator.checkpointKindInitialModelRequest,
+      resumeHistoryLength: resumeHistoryLength,
+    );
+  }
+
+  @visibleForTesting
+  ResumeResult debugRestoreCheckpointForTesting() {
+    final result = _checkpointCoordinator.restoreCheckpointForResume(
+      currentHistoryLength: history.length,
+    );
+    if (result.resumeHistoryLength >= 0 &&
+        history.length > result.resumeHistoryLength) {
+      history = history.take(result.resumeHistoryLength).toList(growable: true);
+    }
+    if (result.savedTurnStartIndex != null) {
+      _currentTurnStartIndex = result.savedTurnStartIndex!;
+    }
+    return result;
+  }
+
+  @visibleForTesting
+  void debugRefreshAfterCompactionForTesting() {
+    _refreshCanonicalHistoryAfterCompaction();
+  }
+
+  /// Test hook for Plan 53d overflow recovery verification.
+  List<IndexedConversationMessage> _compactionTimelineForSession() {
+    if (getIt.isRegistered<ModelProjectionBuilder>()) {
+      final canonical = getIt<ModelProjectionBuilder>().loadCanonicalTimeline(
+        sessionId,
+      );
+      if (canonical.messages.isNotEmpty) {
+        return [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ];
+      }
+    }
+    return history
+        .asMap()
+        .entries
+        .map((entry) {
+          return IndexedConversationMessage(
+            rowId: entry.key + 1,
+            message: entry.value,
+          );
+        })
+        .toList(growable: false);
+  }
+
+  @visibleForTesting
+  Future<bool> debugTryOverflowCompactionRecovery({
+    required Object error,
+    required String? providerInstanceId,
+    required String? modelId,
+    bool streamStarted = false,
+    int attempt = 0,
+  }) async {
+    try {
+      return await _handleRuntimeFailure(
+        error,
+        providerInstanceId: providerInstanceId,
+        modelId: modelId,
+        attempt: attempt,
+        streamStarted: streamStarted,
+        failedProviderInstanceIds: {},
+      );
+    } on RuntimeRecoveryRequired {
+      return false;
+    }
   }
 }
 

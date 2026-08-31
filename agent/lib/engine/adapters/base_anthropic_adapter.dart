@@ -202,8 +202,9 @@ class BaseAnthropicAdapter implements LLMAdapter {
 
   @override
   Future<int> getContextLimit([String? modelOverride]) async {
-    if (config.contextLimit != 4000) return config.contextLimit;
     final resolvedModel = _resolveModel(modelOverride);
+    final configuredLimit = config.contextModelLimit(resolvedModel);
+    if (configuredLimit != null) return configuredLimit;
     return ModelMetadata.getLimitForModel(resolvedModel) ?? 200000;
   }
 

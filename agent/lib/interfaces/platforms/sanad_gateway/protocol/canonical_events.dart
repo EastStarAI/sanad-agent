@@ -259,6 +259,14 @@ class CanonicalEventTypes {
   static const String sessionTurnReplay = 'session.turn_replay';
   static const String sessionTurnReplayResult = 'session.turn_replay_result';
 
+  // ── Plan 53: Context compaction lifecycle ───────────────────────────────
+  static const String contextCompactionStarted = 'context_compaction.started';
+  static const String contextCompactionCompleted =
+      'context_compaction.completed';
+  static const String contextCompactionFailed = 'context_compaction.failed';
+  static const String sessionCompact = 'session.compact';
+  static const String sessionCompactResult = 'session.compact_result';
+
   // ── Task 55: Provider account usage limits ─────────────────────────────
   static const String providerUsageGet = 'provider.usage.get';
   static const String providerUsageResult = 'provider.usage.result';

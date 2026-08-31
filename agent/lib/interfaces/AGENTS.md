@@ -18,10 +18,13 @@ This contract applies to `agent/lib/interfaces/`.
 ## Identity
 - Preserve device, hardware, session, request, work-item, run, generation, model-step, tool-call, origin, and event identities without substituting one for another.
 - `run_id` is immutable execution ownership, `model_step_id` identifies one model invocation, `tool_call_id` pairs tool use/result, and `event_id` is opaque canonical event identity.
+- Compaction lifecycle transitions share one logical `compaction_id` but use distinct deterministic `event_id` values that remain identical across live delivery and history hydration.
+- Hydrated compaction lifecycle placement follows the durable logical tail-end anchor when edit/recovery rewrites its database row id; synthetic display timestamps never decide causal order.
 - Runtime-rich turn metadata enters through typed interface models, not scattered map parsing.
 
 ## Runtime Query Boundary
 - The daemon owns workspace browsing/creation, MCP management, skill inventory/load, slash commands, device settings, provider runtime, and conversation history/list queries.
+- Slash catalog entries use closed semantic types: `runtime_action` identifies a no-argument runtime operation and `skill` identifies model-directed skill insertion. Clients must not infer these semantics from command names or source labels.
 - Query responses must remain transport-neutral and usable over both local and cloud Sanad transports.
 - Cloud `device_id` that does not match the registered device fails closed as
   `wrong_device` before session registration. Remote update, restart, managed

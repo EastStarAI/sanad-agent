@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:logging/logging.dart';
+import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/provider_runtime/session_queue_provider_override.dart';
@@ -30,7 +31,12 @@ import 'session_turn_executor.dart';
 import 'session_recovery_restorer.dart';
 import 'session_turn_request_helpers.dart';
 import 'suspended_checkpoint_store.dart';
+import 'package:sanad_agent/engine/compaction/compaction.dart';
+import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
+import 'package:sanad_agent/engine/runtime/compaction_request_factory.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/engine/runtime/tool_terminalization_service.dart';
+import 'package:uuid/uuid.dart';
 
 class SuspendedRun {
   final GatewayEvent event;
@@ -58,6 +64,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   final Map<String, SuspendedRun> _suspendedEvents = {};
   final Map<String, Future<void>> _stopRequests = {};
   final Set<String> _busySessions = {};
+  final Set<String> _compactingSessions = {};
   final Set<String> _resumingSessions = {};
   bool _controlledRestartDraining = false;
 
@@ -170,6 +177,20 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     return _busySessions.contains(sessionId) ||
         _suspendedEvents.containsKey(sessionId) ||
         persistedState?.findActiveWorkItem(sessionId) != null;
+  }
+
+  bool isSessionCompacting(String sessionId) =>
+      _compactingSessions.contains(sessionId);
+
+  @visibleForTesting
+  void debugEnterCompactionBarrier(String sessionId) {
+    _compactingSessions.add(sessionId);
+  }
+
+  @visibleForTesting
+  void debugExitCompactionBarrier(String sessionId) {
+    _compactingSessions.remove(sessionId);
+    _drainNextQueuedEvent(sessionId);
   }
 
   bool hasSuspendedEvent(String sessionId) =>
@@ -914,6 +935,93 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     );
   }
 
+  /// Plan 53d — manual `/compact` admission when the session is idle.
+  Future<Map<String, dynamic>> handleCompactCommand({
+    required String sessionId,
+    required String requestId,
+  }) async {
+    if (isSessionBusy(sessionId)) {
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': CompactionFailureReason.sessionBusy.wireValue,
+      };
+    }
+    if (isSessionCompacting(sessionId)) {
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': CompactionFailureReason.compactionInProgress.wireValue,
+      };
+    }
+    if (getIt.isRegistered<CompactionBoundaryRepository>()) {
+      final started = getIt<CompactionBoundaryRepository>()
+          .findStartedForSession(sessionId);
+      if (started != null) {
+        return {
+          'session_id': sessionId,
+          'request_id': requestId,
+          'outcome': CompactionFailureReason.compactionInProgress.wireValue,
+        };
+      }
+    }
+    if (!getIt.isRegistered<CompactionCoordinator>() ||
+        !getIt.isRegistered<CompactionBoundaryRepository>()) {
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': 'unavailable',
+      };
+    }
+
+    final compactionId = const Uuid().v4();
+    final engineRequest = await CompactionRequestFactory.forSession(
+      sessionId: sessionId,
+      trigger: CompactionTrigger.manual,
+      compactionId: compactionId,
+    );
+    if (engineRequest == null) {
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': 'invalid_request',
+      };
+    }
+
+    _compactingSessions.add(sessionId);
+    try {
+      final outcome = await getIt<CompactionCoordinator>().runCompaction(
+        request: engineRequest,
+        force: true,
+      );
+      if (outcome == null) {
+        return {
+          'session_id': sessionId,
+          'request_id': requestId,
+          'outcome': 'no_op',
+        };
+      }
+      if (outcome.status == CompactionStatus.completed) {
+        return {
+          'session_id': sessionId,
+          'request_id': requestId,
+          'outcome': 'accepted',
+          'compaction_id': outcome.compactionId,
+        };
+      }
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': 'failed',
+        'failure_reason': outcome.failureReason?.wireValue,
+        'compaction_id': outcome.compactionId,
+      };
+    } finally {
+      _compactingSessions.remove(sessionId);
+      _drainNextQueuedEvent(sessionId);
+    }
+  }
+
   Future<void> handleEvent(GatewayEvent event) async {
     _logger.info('Incoming event for session: ${event.sessionId}');
     _logger.fine('Content: ${event.message.content}');
@@ -1066,6 +1174,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       final hasOlderWork =
           _controlledRestartDraining ||
           isSessionBusy(event.sessionId) ||
+          isSessionCompacting(event.sessionId) ||
           _queueCoordinator.hasQueuedEvents(event.sessionId);
       if (hasOlderWork) {
         _logger.info('Session ${event.sessionId} is busy. Queuing message.');
@@ -1481,7 +1590,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     if (_controlledRestartDraining) {
       return;
     }
-    if (isSessionBusy(sessionId)) {
+    if (isSessionBusy(sessionId) || isSessionCompacting(sessionId)) {
       return;
     }
     final nextRun = _queueCoordinator.claimNext(sessionId);

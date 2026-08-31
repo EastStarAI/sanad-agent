@@ -44,7 +44,9 @@ class OllamaAdapter extends BaseOpenAIAdapter {
                 lowercaseName.contains('deepseek') ||
                 lowercaseName.contains('r1');
 
-            final contextLimit = ModelMetadata.getLimitForModel(name);
+            final contextLimit =
+                config.contextModelLimit(name) ??
+                ModelMetadata.getLimitForModel(name);
 
             options.add(
               ModelOption(
@@ -95,7 +97,9 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       setLastModelsException(e);
     }
 
-    final contextLimit = ModelMetadata.getLimitForModel(config.llmModel);
+    final contextLimit =
+        config.contextModelLimit(config.llmModel) ??
+        ModelMetadata.getLimitForModel(config.llmModel);
     return [
       ModelOption(
         value: config.llmModel,
@@ -128,7 +132,8 @@ class OllamaAdapter extends BaseOpenAIAdapter {
   Future<int> getContextLimit([String? modelOverride]) async {
     final resolvedModel = super.resolveModel(modelOverride);
 
-    if (config.contextLimit != 4000) return config.contextLimit;
+    final configuredLimit = config.contextModelLimit(resolvedModel);
+    if (configuredLimit != null) return configuredLimit;
 
     try {
       final url = Uri.parse('${super.baseUrl}/api/show');
@@ -156,7 +161,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
     if (metadataLimit != null) return metadataLimit;
 
-    return config.contextLimit;
+    return 4000;
   }
 
   @override
@@ -397,69 +402,70 @@ class OllamaAdapter extends BaseOpenAIAdapter {
         transport.throwIfCancelled(operation: 'generateStream');
         if (line.trim().isEmpty) continue;
 
-      final data = jsonDecode(line);
-      final choice = data['message'];
-      if (choice == null) continue;
+        final data = jsonDecode(line);
+        final choice = data['message'];
+        if (choice == null) continue;
 
-      final rawContent = choice['content']?.toString() ?? '';
-      final structuredReasoning = choice['thinking']?.toString();
-      final tagged = structuredReasoning?.isNotEmpty == true
-          ? TaggedReasoningText(content: rawContent)
-          : taggedReasoning.add(rawContent);
-      final done = data['done'] ?? false;
+        final rawContent = choice['content']?.toString() ?? '';
+        final structuredReasoning = choice['thinking']?.toString();
+        final tagged = structuredReasoning?.isNotEmpty == true
+            ? TaggedReasoningText(content: rawContent)
+            : taggedReasoning.add(rawContent);
+        final done = data['done'] ?? false;
 
-      List<ToolCall>? toolCalls;
-      if (choice['tool_calls'] != null) {
-        final toolCallsData = choice['tool_calls'] as List;
-        toolCalls = toolCallsData
-            .map(
-              (tc) => ToolCall(
-                id: tc['id'] ?? '',
-                name: tc['function']['name'],
-                arguments: tc['function']['arguments'] as Map<String, dynamic>,
-              ),
-            )
-            .toList();
+        List<ToolCall>? toolCalls;
+        if (choice['tool_calls'] != null) {
+          final toolCallsData = choice['tool_calls'] as List;
+          toolCalls = toolCallsData
+              .map(
+                (tc) => ToolCall(
+                  id: tc['id'] ?? '',
+                  name: tc['function']['name'],
+                  arguments:
+                      tc['function']['arguments'] as Map<String, dynamic>,
+                ),
+              )
+              .toList();
+        }
+
+        Map<String, dynamic>? usage;
+        if (data['prompt_eval_count'] != null || data['eval_count'] != null) {
+          usage = {
+            'prompt_tokens': data['prompt_eval_count'],
+            'completion_tokens': data['eval_count'],
+          };
+        }
+
+        yield AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            content: tagged.content,
+            reasoning: structuredReasoning?.isNotEmpty == true
+                ? structuredReasoning
+                : tagged.reasoning,
+            toolCalls: toolCalls,
+          ),
+          isToolCall: toolCalls != null && toolCalls.isNotEmpty,
+          usage: usage,
+          model: resolvedModel,
+          provider: profile.name,
+        );
+
+        if (done) break;
       }
 
-      Map<String, dynamic>? usage;
-      if (data['prompt_eval_count'] != null || data['eval_count'] != null) {
-        usage = {
-          'prompt_tokens': data['prompt_eval_count'],
-          'completion_tokens': data['eval_count'],
-        };
+      final pending = taggedReasoning.finish();
+      if (pending.content != null || pending.reasoning != null) {
+        yield AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            content: pending.content,
+            reasoning: pending.reasoning,
+          ),
+          model: resolvedModel,
+          provider: profile.name,
+        );
       }
-
-      yield AgentResponse(
-        message: Message(
-          role: MessageRole.assistant,
-          content: tagged.content,
-          reasoning: structuredReasoning?.isNotEmpty == true
-              ? structuredReasoning
-              : tagged.reasoning,
-          toolCalls: toolCalls,
-        ),
-        isToolCall: toolCalls != null && toolCalls.isNotEmpty,
-        usage: usage,
-        model: resolvedModel,
-        provider: profile.name,
-      );
-
-      if (done) break;
-    }
-
-    final pending = taggedReasoning.finish();
-    if (pending.content != null || pending.reasoning != null) {
-      yield AgentResponse(
-        message: Message(
-          role: MessageRole.assistant,
-          content: pending.content,
-          reasoning: pending.reasoning,
-        ),
-        model: resolvedModel,
-        provider: profile.name,
-      );
-    }
     } finally {
       await transport.dispose();
     }

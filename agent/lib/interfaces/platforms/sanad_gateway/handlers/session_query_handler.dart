@@ -7,7 +7,12 @@ import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
+import 'package:sanad_agent/evolution/compaction/model_context_projection.dart';
 import 'package:sanad_agent/evolution/models/session_route_transition.dart';
+import 'package:sanad_agent/engine/compaction/compaction.dart';
+import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
+import 'package:sanad_agent/evolution/models/compaction_operation_record.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
@@ -32,6 +37,7 @@ class SessionQueryHandler {
   final PersistedRuntimeStateRepository? _persistedState;
   final SessionRouteMutationCoordinator? _routeCoordinator;
   final SessionRouteTransitionRepository? _routeTransitions;
+  final CompactionBoundaryRepository? _compactionBoundaries;
 
   SessionQueryHandler({
     required SessionManager sessionManager,
@@ -41,13 +47,15 @@ class SessionQueryHandler {
     PersistedRuntimeStateRepository? persistedState,
     SessionRouteMutationCoordinator? routeCoordinator,
     SessionRouteTransitionRepository? routeTransitions,
+    CompactionBoundaryRepository? compactionBoundaries,
   }) : _sessionManager = sessionManager,
        _bridge = bridge,
        _orchestrator = orchestrator,
        _runtimeRecovery = runtimeRecovery,
        _persistedState = persistedState,
        _routeCoordinator = routeCoordinator,
-       _routeTransitions = routeTransitions;
+       _routeTransitions = routeTransitions,
+       _compactionBoundaries = compactionBoundaries;
 
   Map<String, dynamic> buildHistoryEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId ?? 'default';
@@ -58,7 +66,12 @@ class SessionQueryHandler {
         .where((checkpoint) => checkpoint.sessionId == sessionId)
         .map((checkpoint) => checkpoint.permissionPayload)
         .firstOrNull;
-    final messages = session?.messages ?? const <Message>[];
+    final persistedMessages = session == null
+        ? const <PersistedMessage>[]
+        : _sessionManager.getPersistedMessages(sessionId);
+    final messages = persistedMessages
+        .map((entry) => entry.message)
+        .toList(growable: false);
     final latestContextUsage = _latestContextUsage(sessionMetadata, messages);
     final requestId = event.payload['request_id'] as String?;
 
@@ -68,6 +81,7 @@ class SessionQueryHandler {
     var index = 0;
 
     final historyMessages = <Map<String, dynamic>>[];
+    final historyStartByMessageRowId = <int, int>{};
     Message? legacyFinalAssistant;
     for (final candidate in messages.reversed) {
       if (candidate.role == MessageRole.assistant &&
@@ -77,7 +91,15 @@ class SessionQueryHandler {
         break;
       }
     }
-    for (final message in messages) {
+    for (
+      var messageIndex = 0;
+      messageIndex < persistedMessages.length;
+      messageIndex++
+    ) {
+      final persistedMessage = persistedMessages[messageIndex];
+      final message = persistedMessage.message;
+      historyStartByMessageRowId[persistedMessage.rowId] =
+          historyMessages.length;
       final msgId = ++index;
       final msgTime = baseTime.add(Duration(seconds: msgId)).toIso8601String();
 
@@ -372,6 +394,44 @@ class SessionQueryHandler {
       }
     }
 
+    final compactionInsertionAnchors = <int>[];
+    for (final operation
+        in _compactionBoundaries?.listLifecycleForSession(sessionId) ??
+            const <CompactionOperationRecord>[]) {
+      final lifecycleRow = _compactionLifecycleHistoryRow(operation);
+      final tailEndRowId = _resolveCompactionHistoryAnchor(
+        operation,
+        persistedMessages,
+      );
+      final firstPostBoundary = persistedMessages
+          .where((entry) => entry.rowId > tailEndRowId)
+          .firstOrNull;
+      final rawInsertionIndex = firstPostBoundary == null
+          ? historyMessages.length - compactionInsertionAnchors.length
+          : historyStartByMessageRowId[firstPostBoundary.rowId];
+      late int insertionIndex;
+      if (rawInsertionIndex != null) {
+        insertionIndex =
+            rawInsertionIndex +
+            compactionInsertionAnchors
+                .where((anchor) => anchor <= rawInsertionIndex)
+                .length;
+        compactionInsertionAnchors.add(rawInsertionIndex);
+      } else {
+        insertionIndex = historyMessages.indexWhere((row) {
+          final createdAt = DateTime.tryParse(
+            row['created_at']?.toString() ?? '',
+          );
+          return createdAt != null &&
+              createdAt.isAfter(operation.startedAt.toUtc());
+        });
+        if (insertionIndex == -1) {
+          insertionIndex = historyMessages.length;
+        }
+      }
+      historyMessages.insert(insertionIndex, lifecycleRow);
+    }
+
     for (final transition
         in _routeTransitions?.findForSession(sessionId) ??
             const <SessionRouteTransition>[]) {
@@ -482,6 +542,29 @@ class SessionQueryHandler {
         },
       ),
     );
+  }
+
+  int _resolveCompactionHistoryAnchor(
+    CompactionOperationRecord operation,
+    List<PersistedMessage> messages,
+  ) {
+    final originalRowId = operation.retainedTailRange.end.rowId;
+    if (messages.any((entry) => entry.rowId == originalRowId)) {
+      return originalRowId;
+    }
+    final fingerprint = operation.retainedTailEndFingerprint;
+    final occurrence = operation.retainedTailEndOccurrence;
+    if (fingerprint == null || occurrence == null) return originalRowId;
+
+    var seen = 0;
+    for (final entry in messages) {
+      if (CompactionMessageAnchor.fingerprint(entry.message) != fingerprint) {
+        continue;
+      }
+      seen++;
+      if (seen == occurrence) return entry.rowId;
+    }
+    return originalRowId;
   }
 
   Map<String, dynamic> buildThreadsEnvelope(CanonicalEvent event) {
@@ -808,6 +891,58 @@ class SessionQueryHandler {
   SessionExecutionSnapshot _executionSnapshot(String sessionId) {
     return _persistedState?.executionSnapshots.getSnapshot(sessionId) ??
         SessionExecutionSnapshot.virtualIdle(sessionId);
+  }
+
+  Map<String, dynamic> _compactionLifecycleHistoryRow(
+    CompactionOperationRecord operation,
+  ) {
+    final wireType = switch (operation.status) {
+      CompactionStatus.started => CanonicalEventTypes.contextCompactionStarted,
+      CompactionStatus.completed =>
+        CanonicalEventTypes.contextCompactionCompleted,
+      CompactionStatus.failed => CanonicalEventTypes.contextCompactionFailed,
+    };
+    final metrics = operation.metrics;
+    final eventId = CompactionLifecycleEvent.eventIdFor(
+      operation.compactionId,
+      operation.status,
+    );
+    return {
+      'id': eventId,
+      'event_id': eventId,
+      'sender': 'system',
+      'type': wireType,
+      'session_id': operation.sessionId,
+      'compaction_id': operation.compactionId,
+      'trigger': operation.trigger.wireValue,
+      'status': operation.status.wireValue,
+      'provider_instance_id': operation.routeSignature.providerInstanceId,
+      'model_id': operation.routeSignature.modelId,
+      'started_at': operation.startedAt.toUtc().toIso8601String(),
+      if (operation.completedAt != null)
+        'completed_at': operation.completedAt!.toUtc().toIso8601String(),
+      if (metrics != null) ...{
+        'context_window_tokens': metrics.contextWindowTokens,
+        if (metrics.effectiveInputBudgetTokens != null)
+          'effective_input_budget_tokens': metrics.effectiveInputBudgetTokens,
+        if (metrics.autoThresholdTokens != null)
+          'auto_threshold_tokens': metrics.autoThresholdTokens,
+        'estimated_request_tokens_before': metrics.estimatedRequestTokensBefore,
+        'estimated_request_tokens_after': metrics.estimatedRequestTokensAfter,
+        'before_measurement_kind': metrics.beforeMeasurementKind.wireValue,
+        if (metrics.providerConfirmedRequestTokensAfter != null)
+          'provider_confirmed_request_tokens_after':
+              metrics.providerConfirmedRequestTokensAfter,
+        'retained_tail_tokens': metrics.retainedTailTokens,
+        if (metrics.duration != null)
+          'duration_ms': metrics.duration!.inMilliseconds,
+      },
+      if (operation.failureReason != null)
+        'failure_reason': operation.failureReason!.wireValue,
+      'created_at': (operation.completedAt ?? operation.startedAt)
+          .toUtc()
+          .toIso8601String(),
+    };
   }
 }
 

@@ -100,6 +100,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [OAuth Recipient Binding QA](docs/qa_maintenance/oauth_recipient_binding_qa.md): Public Client and Agent regression matrix for S256 PKCE, exact callback ownership, P-256 Device Authorization, and Gateway nonce proof.
 - [New Conversation, Composer, and App Bar QA](docs/qa_maintenance/new_conversation_composer_app_bar_qa.md): Focused Plan 32d scenarios for unified composition, device-scoped drafts, responsive actions, and atomic session presentation.
 - [Plan 30 Runtime Recovery Matrix](docs/qa_maintenance/plan30_runtime_recovery_matrix.md): Focused QA ownership for runtime recovery, route confirmation, reconnect hydration, and never-trapped-session behavior.
+- [Plan 50 Cancellation Regression Matrix](docs/qa_maintenance/plan50_cancellation_regression_matrix.md): Verified cancellation, cleanup, delivery-order, and restart-hydration regression coverage for Plan 50.
 - [Provider Account Usage Limits QA Matrix](docs/qa_maintenance/provider_account_usage_limits_qa.md): Regression coverage for provider-instance usage parsing, protocol isolation, freshness, stale responses, and card presentation.
 - [Plan 29 Provider Setup Regression Matrix](docs/qa_maintenance/provider_setup_plan29_regression_matrix.md): Regression coverage targets for the instance-first provider setup runtime.
 - [Release Verification Matrix](docs/qa_maintenance/release_verification.md): Required local and hosted evidence for Sanad release, signing, installation, update, and rollback.
@@ -117,6 +118,9 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [مواصفات قاعدة البيانات المحلية للوكيل](docs/technical/agent_database_schema.md): تصميم جداول قاعدة البيانات المحلية (SQLite - state.db) التابعة للوكيل sanad-agent لحفظ الجلسات وتفاصيل التعليق.
 - [Agent Interface and Runtime Architecture](docs/technical/agent_interface_runtime.md): Architecture of gateway routing, active-run orchestration, Sanad protocol translation, recovery, and local/cloud platform adapters.
 - [معمارية تشغيل الوكيل المحلي](docs/technical/agent_runtime.md): تصميم محرك تشغيل الوكيل (sanad-agent) وتركيب موجه النظام (System Prompt) للـ KV-Cache والتأمين الأمني.
+- [Context Compaction Architecture](docs/technical/context_compaction.md): Durable goal-preserving compaction ownership, vocabulary, and wire-safety rules (Plan 53).
+- [Context Compaction Engine Design](docs/agent_engine/context_compaction_design.md): Engine pipeline, pressure budgeting, goal-preservation sections, and verification fixtures (Plan 53c).
+- [Context Compaction QA](docs/qa_maintenance/context_compaction_qa.md): Automated suites and manual integration scenarios (Plan 53f).
 - [Background Terminal Task Runtime](docs/technical/background_terminal_task_runtime.md): العقد التقني للمهام الطرفية الخلفية المملوكة، والنقل الذري من الجولة، والـPTY والمخرجات، والإيقاظ، والتفاعل الآمن، والتعافي.
 - [Client Portal Authentication](docs/technical/client_authentication.md): Portal-owned login, polling, refresh, credential persistence, and platform presentation architecture for Sanad clients.
 - [Client Conversation Cache Schema](docs/technical/client_conversation_cache_schema.md): Ownership, persistence schema, pagination rules, draft correlation, and stable consumer APIs for the Flutter conversation cache.

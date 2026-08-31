@@ -164,6 +164,9 @@ class ConversationState {
     }
 
     final existing = _events[index];
+    if (event.metadata?['compaction_event'] == true && !_shouldApplyCompactionLifecycle(existing, event)) {
+      return;
+    }
     _events[index] = _merge(existing, event);
   }
 
@@ -300,8 +303,35 @@ class ConversationState {
         );
 
       default:
+        if (existing.metadata?['compaction_event'] == true) {
+          return incoming.copyWith(
+            metadata: {...?existing.metadata, ...?incoming.metadata},
+          );
+        }
         return incoming;
     }
+  }
+
+  bool _shouldApplyCompactionLifecycle(
+    CanonicalEvent existing,
+    CanonicalEvent incoming,
+  ) {
+    final existingStatus = existing.metadata?['compaction_status']?.toString();
+    final incomingStatus = incoming.metadata?['compaction_status']?.toString();
+    final existingRank = _compactionLifecycleRank(existingStatus);
+    final incomingRank = _compactionLifecycleRank(incomingStatus);
+    if (existingRank == 2 && incomingRank == 2) {
+      return existingStatus == incomingStatus;
+    }
+    return incomingRank >= existingRank;
+  }
+
+  int _compactionLifecycleRank(String? status) {
+    return switch (status) {
+      'completed' || 'failed' => 2,
+      'started' => 1,
+      _ => 0,
+    };
   }
 
   int _findMatchingOptimisticUserMessage(CanonicalEvent incoming) {

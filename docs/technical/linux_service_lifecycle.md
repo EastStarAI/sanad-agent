@@ -1,3 +1,8 @@
+---
+title: "Linux Agent Service Lifecycle"
+description: "Technical contract for Linux service selection, ownership, installation transactions, and lifecycle reporting."
+---
+
 # Linux Agent Service Lifecycle
 
 ## Scope

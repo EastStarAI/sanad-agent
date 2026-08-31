@@ -9,6 +9,8 @@ import '../models/session_state.dart';
 import '../models/suspended_checkpoint.dart';
 import '../../core/models/message.dart';
 import 'agent_state_database.dart';
+import 'session_history_revision_repository.dart';
+import '../compaction/model_context_projection.dart';
 
 /// Persistent storage for sessions, messages, scheduled tasks, and suspended
 /// checkpoints.
@@ -412,17 +414,44 @@ class SessionDB {
   void replaceMessages(String sessionId, List<Message> messages) {
     _db.execute('BEGIN TRANSACTION');
     try {
-      _db.execute('DELETE FROM messages WHERE session_id = ?', [sessionId]);
+      final encodedMessages = [
+        for (final message in messages) jsonEncode(message.toJson()),
+      ];
+      final existing = _db.select(
+        'SELECT id, data FROM messages WHERE session_id = ? ORDER BY id ASC',
+        [sessionId],
+      );
+      var unchangedPrefixLength = 0;
+      final comparableLength = existing.length < encodedMessages.length
+          ? existing.length
+          : encodedMessages.length;
+      while (unchangedPrefixLength < comparableLength &&
+          existing[unchangedPrefixLength]['data'] ==
+              encodedMessages[unchangedPrefixLength]) {
+        unchangedPrefixLength++;
+      }
+
+      if (unchangedPrefixLength < existing.length) {
+        _db.execute('DELETE FROM messages WHERE session_id = ? AND id >= ?', [
+          sessionId,
+          existing[unchangedPrefixLength]['id'],
+        ]);
+      }
 
       final stmt = _db.prepare('''
         INSERT INTO messages (session_id, data)
         VALUES (?, ?)
       ''');
 
-      for (var msg in messages) {
-        stmt.execute([sessionId, jsonEncode(msg.toJson())]);
+      for (
+        var index = unchangedPrefixLength;
+        index < encodedMessages.length;
+        index++
+      ) {
+        stmt.execute([sessionId, encodedMessages[index]]);
       }
       stmt.dispose();
+      SessionHistoryRevisionRepository.bumpDatabase(_db, sessionId);
       _db.execute('COMMIT');
     } catch (e) {
       _db.execute('ROLLBACK');
@@ -431,14 +460,25 @@ class SessionDB {
   }
 
   List<Message> getMessages(String sessionId) {
+    return getPersistedMessages(
+      sessionId,
+    ).map((entry) => entry.message).toList(growable: false);
+  }
+
+  List<PersistedMessage> getPersistedMessages(String sessionId) {
     final result = _db.select(
       'SELECT * FROM messages WHERE session_id = ? ORDER BY id ASC',
       [sessionId],
     );
-    return result.map((row) {
-      final data = jsonDecode(row['data'] as String);
-      return Message.fromJson(data);
-    }).toList();
+    return result
+        .map((row) {
+          final data = jsonDecode(row['data'] as String);
+          return PersistedMessage(
+            rowId: row['id'] as int,
+            message: Message.fromJson(data),
+          );
+        })
+        .toList(growable: false);
   }
 
   // Scheduled Tasks persistence

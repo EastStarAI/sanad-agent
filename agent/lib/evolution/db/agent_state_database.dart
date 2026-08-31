@@ -535,6 +535,96 @@ class AgentStateDatabase {
     ''');
     _migrateWorkspaceIdentity(db);
     _migrateLastUserMessageAt(db);
+    _migratePlan53Compaction(db);
+  }
+
+  static void _migratePlan53Compaction(Database db) {
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN history_revision INTEGER NOT NULL DEFAULT 0 CHECK (history_revision >= 0)',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN projection_revision INTEGER NOT NULL DEFAULT 0 CHECK (projection_revision >= 0)',
+    );
+
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS session_compaction_operations (
+        compaction_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        trigger TEXT NOT NULL CHECK (trigger IN ('manual', 'auto', 'overflow')),
+        status TEXT NOT NULL CHECK (status IN ('started', 'completed', 'failed')),
+        source_history_revision INTEGER NOT NULL CHECK (source_history_revision >= 0),
+        source_start_message_id INTEGER NOT NULL,
+        source_end_message_id INTEGER NOT NULL,
+        tail_start_message_id INTEGER NOT NULL,
+        tail_end_message_id INTEGER NOT NULL,
+        tail_end_anchor_fingerprint TEXT,
+        tail_end_anchor_ordinal INTEGER CHECK (tail_end_anchor_ordinal > 0),
+        provider_instance_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        template_id TEXT NOT NULL,
+        protocol TEXT NOT NULL,
+        normalized_base_url TEXT NOT NULL,
+        config_revision INTEGER NOT NULL,
+        credential_revision INTEGER NOT NULL,
+        context_window_tokens INTEGER,
+        effective_input_budget_tokens INTEGER,
+        auto_threshold_tokens INTEGER,
+        estimated_request_tokens_before INTEGER,
+        estimated_request_tokens_after INTEGER,
+        before_measurement_kind TEXT NOT NULL DEFAULT 'estimated'
+          CHECK (before_measurement_kind IN ('estimated', 'confirmed', 'mixed')),
+        provider_confirmed_request_tokens_after INTEGER
+          CHECK (provider_confirmed_request_tokens_after >= 0),
+        retained_tail_tokens INTEGER,
+        duration_ms INTEGER,
+        internal_summary_json TEXT,
+        failure_reason TEXT,
+        failure_detail_json TEXT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE,
+        CHECK (source_end_message_id < tail_start_message_id)
+      );
+    ''');
+
+    _safeAddColumn(
+      db,
+      "ALTER TABLE session_compaction_operations ADD COLUMN before_measurement_kind TEXT NOT NULL DEFAULT 'estimated' CHECK (before_measurement_kind IN ('estimated', 'confirmed', 'mixed'))",
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN effective_input_budget_tokens INTEGER CHECK (effective_input_budget_tokens > 0)',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN auto_threshold_tokens INTEGER CHECK (auto_threshold_tokens > 0)',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN provider_confirmed_request_tokens_after INTEGER CHECK (provider_confirmed_request_tokens_after >= 0)',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN tail_end_anchor_fingerprint TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN tail_end_anchor_ordinal INTEGER CHECK (tail_end_anchor_ordinal > 0)',
+    );
+
+    db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_session_compaction_one_started
+      ON session_compaction_operations(session_id)
+      WHERE status = 'started';
+    ''');
+
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_session_compaction_completed
+      ON session_compaction_operations(session_id, completed_at DESC)
+      WHERE status = 'completed';
+    ''');
   }
 
   static void _migrateWorkspaceIdentity(Database db) {

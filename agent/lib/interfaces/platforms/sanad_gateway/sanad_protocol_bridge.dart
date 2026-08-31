@@ -25,6 +25,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart'
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
@@ -39,6 +40,7 @@ import 'handlers/device_control_command_handler.dart';
 import 'handlers/provider_command_handler.dart';
 import 'handlers/session_query_handler.dart';
 import 'handlers/session_recovery_command_handler.dart';
+import 'handlers/session_compact_command_handler.dart';
 import 'handlers/session_turn_replay_command_handler.dart';
 import 'handlers/workspace_command_handler.dart';
 import 'protocol/canonical_events.dart';
@@ -54,6 +56,7 @@ class SanadProtocolBridge {
   WorkspaceCommandHandler? __workspaceHandler;
   SessionRecoveryCommandHandler? __recoveryHandler;
   SessionTurnReplayCommandHandler? __turnReplayHandler;
+  SessionCompactCommandHandler? __compactHandler;
   DeviceSettingsCommandHandler? __deviceSettingsHandler;
   DeviceControlCommandHandler? __deviceControlHandler;
 
@@ -100,6 +103,9 @@ class SanadProtocolBridge {
             : null,
         routeTransitions: getIt.isRegistered<SessionRouteTransitionRepository>()
             ? getIt<SessionRouteTransitionRepository>()
+            : null,
+        compactionBoundaries: getIt.isRegistered<CompactionBoundaryRepository>()
+            ? getIt<CompactionBoundaryRepository>()
             : null,
         bridge: this,
       );
@@ -176,6 +182,15 @@ class SanadProtocolBridge {
                   getIt.isRegistered<PersistedRuntimeStateRepository>()
                   ? getIt<PersistedRuntimeStateRepository>()
                   : null,
+              bridge: this,
+            )
+          : null;
+
+  SessionCompactCommandHandler? get _compactHandler =>
+      __compactHandler ??=
+          getIt.isRegistered<SessionRunOrchestrator>()
+          ? SessionCompactCommandHandler(
+              orchestrator: getIt<SessionRunOrchestrator>(),
               bridge: this,
             )
           : null;
@@ -586,6 +601,12 @@ class SanadProtocolBridge {
       case 'session.turn_replay':
         event = CanonicalEvent(
           type: CanonicalEventTypes.sessionTurnReplay,
+          sessionId: sessionId,
+          payload: payload,
+        );
+      case 'session.compact':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.sessionCompact,
           sessionId: sessionId,
           payload: payload,
         );
@@ -1093,6 +1114,9 @@ class SanadProtocolBridge {
       // Task 49: historical turn edit/retry.
       case CanonicalEventTypes.sessionTurnReplay:
         await _turnReplayHandler?.handle(event, emitEnvelope);
+        return;
+      case CanonicalEventTypes.sessionCompact:
+        await _compactHandler?.handle(event, emitEnvelope);
         return;
       // Plan 30: runtime recovery commands
       case CanonicalEventTypes.sessionRuntimeRetry:

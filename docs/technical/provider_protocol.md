@@ -223,9 +223,8 @@ current default instance. Provider mutations clear that runtime-owned cache
 through the explicitly injected service; protocol handlers do not inspect or
 reset the dependency container.
 
-The shared `ContextEngine` is provider-neutral. `AgentRunner._streamNextResponse`
-and `_generateResponse` resolve the current turn route and pass its adapter to
-`contextEngine.compressIfNeeded(history, adapter: …)` before every model call.
+Shared context services remain provider-neutral. `AgentRunner._streamNextResponse`
+and `_generateResponse` resolve the current turn route for each model call.
 Title generation likewise resolves its fallback route from `AgentRuntimeService`
 at call time. Together these boundaries allow the first post-onboarding turn and
 background title work to use the newly configured provider without a daemon

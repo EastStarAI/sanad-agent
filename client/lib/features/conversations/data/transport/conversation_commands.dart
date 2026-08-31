@@ -12,6 +12,7 @@ import 'package:sanad_client/features/conversations/domain/stores/device_convers
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/pending_steer_record.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/data/transport/conversation_request_id.dart';
 import 'package:uuid/uuid.dart';
@@ -259,6 +260,27 @@ class ConversationCommands {
     return TurnReplayResult.fromJson(payload);
   }
 
+  Future<SessionCompactResult> compactSession({
+    required String sessionId,
+  }) async {
+    if (!_gateway.isConnected) {
+      return const SessionCompactResult(outcome: 'disconnected');
+    }
+    final requestId = generateConversationRequestId();
+    final result = await _gateway.request(
+      command: 'session.compact',
+      payload: {
+        'session_id': sessionId,
+        'request_id': requestId,
+      },
+      requestId: requestId,
+    );
+    final payload = Map<String, dynamic>.from(
+      result?['payload'] as Map? ?? result ?? const {},
+    );
+    return SessionCompactResult.fromJson(payload);
+  }
+
   Future<void> retryRuntimeNotice({
     required String sessionId,
     String? requestId,
@@ -411,14 +433,22 @@ class ConversationCommands {
       final commands = payload['commands'] as List? ?? [];
       return commands
           .whereType<Map>()
-          .map(
-            (command) => SlashCommandEntry(
+          .map((command) {
+            final type = switch (command['type']?.toString()) {
+              'runtime_action' => SlashCommandType.runtimeAction,
+              'skill' => SlashCommandType.skill,
+              _ => null,
+            };
+            if (type == null) return null;
+            return SlashCommandEntry(
               sourceId: command['source']?.toString() ?? 'runtime',
               command: command['command']?.toString() ?? '',
               insertText: command['command']?.toString() ?? '',
               description: command['description']?.toString(),
-            ),
-          )
+              type: type,
+            );
+          })
+          .whereType<SlashCommandEntry>()
           .where((entry) => entry.command.trim().isNotEmpty)
           .toList(growable: false);
     }

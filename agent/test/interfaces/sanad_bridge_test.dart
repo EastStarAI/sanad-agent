@@ -844,7 +844,7 @@ void main() {
       await bridge.handleCommand(
         {
           'command': 'search_slash_commands',
-          'payload': {'request_id': 'req-5', 'query': 'mcp'},
+          'payload': {'request_id': 'req-5', 'query': 'compact'},
         },
         (envelope) async {
           slashEnvelope = envelope;
@@ -856,7 +856,7 @@ void main() {
         equals(CanonicalEventTypes.slashCommandsList),
       );
       final commands = slashEnvelope?['payload']['commands'] as List<dynamic>;
-      expect(commands.any((entry) => entry['command'] == 'mcp'), isTrue);
+      expect(commands.any((entry) => entry['command'] == 'compact'), isTrue);
     });
 
     test(

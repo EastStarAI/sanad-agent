@@ -480,13 +480,25 @@ The same memory-owned content scanner protects writes and startup prompt
 snapshots. Unsafe source entries remain inspectable and removable on disk but
 are replaced with a blocked marker in the frozen prompt snapshot.
 
-## Context Compression
+## Context Compaction
 
-`ContextEngine` estimates approximately four characters per token and compresses
-older history when the configured context threshold is exceeded. System messages
-and recent conversation remain intact. Compression runs before plugin hooks so
-plugins observe the final effective history, while `AgentRunner` remains the
-only mutable history owner.
+The experimental in-memory `ContextEngine` was removed in Plan 53a. Durable
+goal-preserving compaction (Plan 53b+) keeps canonical `messages` rows intact and
+stores lifecycle rows in `session_compaction_operations`. `ModelProjectionBuilder`
+builds the ephemeral provider conversation from the latest eligible completed
+boundary (projected summary anchor + retained tail + post-boundary messages).
+`AgentRunner` must not mutate canonical history for compression; it attaches the
+projection before each provider call. `AgentContextAssembler` still prepends one
+ephemeral system message per call outside the summary.
+
+The coordinator freezes source/tail ranges, persists the started claim, and
+publishes the session compacting barrier before awaiting summarization. Inputs
+accepted during that await therefore remain durable FIFO work and cannot enter
+the frozen summary snapshot; every post-claim error closes a terminal failed
+row before the barrier is released.
+
+See `docs/technical/context_compaction.md` for ownership, CAS, and wire-safety
+rules. Auto/overflow orchestration and `/compact` UX land in tasks 53d–53e.
 
 ## Run Cancellation Core (Plan 50a)
 

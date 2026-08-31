@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
+
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 
@@ -14,6 +16,7 @@ import 'codex_responses_codec.dart';
 import 'codex_responses_policy.dart';
 import 'codex_responses_sse_accumulator.dart';
 import 'llm_http_exception.dart';
+import 'llm_adapter.dart';
 import 'llm_request_options.dart';
 import 'provider_request_transport.dart';
 import 'provider_state_rejected_exception.dart';
@@ -21,7 +24,8 @@ import 'provider_state_rejected_exception.dart';
 /// Stateless adapter for Responses-compatible Codex endpoints.
 ///
 /// Sync and stream share one request codec and one final response normalizer.
-class CodexResponsesAdapter extends BaseOpenAIAdapter {
+class CodexResponsesAdapter extends BaseOpenAIAdapter
+    implements WireInputTokenEstimator, WireInputUsageMeasurer {
   final _modelsLogger = Logger('CodexResponsesAdapter');
   final CodexModelsService _modelsService;
 
@@ -64,6 +68,52 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
     } finally {
       if (ownsClient) httpClient.close();
     }
+  }
+
+  @override
+  Future<int?> estimateInputTokens(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    return (await measureInput(
+      history,
+      tools: tools,
+      modelOverride: modelOverride,
+      options: options,
+    ))?.estimatedTokens;
+  }
+
+  @override
+  Future<WireInputMeasurement?> measureInput(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    final body = _codec(options).buildRequest(
+      history: history,
+      model: resolveModel(modelOverride),
+      options: options,
+      tools: _policy.normalizeTools(tools),
+    );
+    final measured = <String, dynamic>{
+      'instructions': body['instructions'],
+      'input': body['input'],
+      if (body['tools'] != null) 'tools': body['tools'],
+    };
+    String fingerprint(Object? value) =>
+        sha256.convert(utf8.encode(jsonEncode(value))).toString();
+    final input = (body['input'] as List?) ?? const [];
+    return WireInputMeasurement(
+      estimatedTokens: (jsonEncode(measured).length / 4).ceil(),
+      stableMaterialFingerprint: fingerprint({
+        'instructions': body['instructions'],
+        'tools': body['tools'],
+      }),
+      inputItemFingerprints: input.map(fingerprint).toList(growable: false),
+    );
   }
 
   @override

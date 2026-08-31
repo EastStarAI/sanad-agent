@@ -36,6 +36,7 @@ This contract applies to `agent/`.
 - Engine runtime collaborators mutate history through callbacks and cannot keep parallel history or current-turn state.
 - `AgentContextAssembler` emits one system message ordered stable identity, workspace context, then volatile memory/date/runtime metadata.
 - Provider adapters remain stateless and own wire translation only. Provider-specific endpoint/codec behavior must not leak into the runner.
+- Context-pressure recovery after daemon restart may reuse persisted provider input usage only after the active adapter remeasures the exact historical request prefix; the next request must still prove a strict wire extension on the same route.
 - Visible reasoning, final content, opaque provider continuation state, finish reason, and tool calls remain distinct typed data across streaming and persistence.
 
 ### Protocol and Platform Authority

@@ -7,6 +7,8 @@ import 'package:sanad_client/features/conversations/presentation/widgets/plan_ta
 import 'package:sanad_client/shared/widgets/copy_button.dart';
 import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/compaction_event_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/tool_presentation_helper.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/file_tool_tile.dart';
@@ -197,6 +199,31 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   }
 
   Widget _buildInformational(BuildContext context) {
+    if (widget.event.metadata?['compaction_event'] == true) {
+      final metadata = widget.event.metadata ?? const {};
+      final snapshot = CompactionEventSnapshot(
+        sessionId: widget.event.sessionId ?? '',
+        compactionId: metadata['compaction_id']?.toString() ?? widget.event.id,
+        status: CompactionLifecycleStatus.fromWire(
+          metadata['compaction_status'] ?? widget.event.status.name,
+        ),
+        trigger: CompactionTriggerKind.fromWire(
+          metadata['compaction_trigger'] ?? 'manual',
+        ),
+        failureReason: metadata['failure_reason']?.toString(),
+        contextWindowTokens: metadata['context_window_tokens'] as int?,
+        effectiveInputBudgetTokens: metadata['effective_input_budget_tokens'] as int?,
+        autoThresholdTokens: metadata['auto_threshold_tokens'] as int?,
+        estimatedRequestTokensBefore: metadata['estimated_request_tokens_before'] as int?,
+        estimatedRequestTokensAfter: metadata['estimated_request_tokens_after'] as int?,
+        beforeMeasurementKind: metadata['before_measurement_kind']?.toString(),
+        providerConfirmedRequestTokensAfter: metadata['provider_confirmed_request_tokens_after'] as int?,
+        retainedTailTokens: metadata['retained_tail_tokens'] as int?,
+        durationMs: metadata['duration_ms'] as int?,
+      );
+      return CompactionEventTile(snapshot: snapshot);
+    }
+
     return Semantics(
       label: 'Session route changed',
       child: Padding(
