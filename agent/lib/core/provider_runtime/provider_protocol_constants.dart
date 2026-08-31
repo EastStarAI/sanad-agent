@@ -105,3 +105,112 @@ class CredentialAction {
 /// registered nor a hardcoded gateway name (Plan 29 §7.1). Custom instances
 /// must declare an explicit protocol + base URL at creation time.
 const kCustomProviderTemplateId = 'custom';
+
+/// Canonical GitHub Copilot subscription template id.
+const kGithubCopilotTemplateId = 'github-copilot';
+
+/// Central, non-secret GitHub Copilot OAuth and Copilot API constants.
+///
+/// The Client ID is the public VS Code GitHub App identity used for the
+/// Copilot-internal token exchange. It is not a secret. Classic personal
+/// access tokens (`ghp_*`) are rejected because Copilot's API does not
+/// accept them.
+class GithubCopilotProtocol {
+  GithubCopilotProtocol._();
+
+  static const templateId = kGithubCopilotTemplateId;
+
+  /// Public GitHub App Client ID used by the Copilot device-code exchange.
+  static const clientId = 'Iv1.b507a08c87ecfe98';
+
+  /// Minimum OAuth scope required for Copilot token exchange.
+  static const oauthScope = 'read:user';
+
+  static const deviceCodeUrl = 'https://github.com/login/device/code';
+  static const accessTokenUrl = 'https://github.com/login/oauth/access_token';
+  static const verificationUri = 'https://github.com/login/device';
+  static const tokenExchangeUrl =
+      'https://api.github.com/copilot_internal/v2/token';
+  static const defaultApiBaseUrl = 'https://api.githubcopilot.com';
+
+  static const editorVersion = 'vscode/1.104.1';
+  static const exchangeUserAgent = 'GitHubCopilotChat/0.26.7';
+  static const integrationId = 'vscode-chat';
+  static const openaiIntent = 'conversation-edits';
+
+  static const integrationIdHeader = 'Copilot-Integration-Id';
+  static const openaiIntentHeader = 'Openai-Intent';
+  static const editorVersionHeader = 'Editor-Version';
+  static const initiatorHeader = 'x-initiator';
+  static const visionRequestHeader = 'Copilot-Vision-Request';
+  static const initiatorUser = 'user';
+  static const initiatorAgent = 'agent';
+
+  /// Static headers required on Copilot API requests (dynamic initiator and
+  /// vision headers are applied per request).
+  static const staticRequestHeaders = {
+    integrationIdHeader: integrationId,
+    openaiIntentHeader: openaiIntent,
+    editorVersionHeader: editorVersion,
+  };
+
+  /// Proactive refresh margin: exchange before the Copilot API token expires.
+  static const refreshSafetyMargin = Duration(seconds: 120);
+
+  /// RFC 8628 `slow_down` increment applied to the device-code poll interval.
+  static const slowDownIncrement = Duration(seconds: 5);
+
+  static const defaultPollInterval = Duration(seconds: 5);
+
+  /// RFC 8628 device-code grant type.
+  static const deviceCodeGrantType =
+      'urn:ietf:params:oauth:grant-type:device_code';
+
+  static const githubAccept = 'application/json';
+  static const githubUserAgent = 'sanad-agent';
+
+  /// Fallback when the exchange omits `expires_at`.
+  static const defaultTokenTtl = Duration(seconds: 1800);
+
+  static const classicPatPrefix = 'ghp_';
+
+  static const allowedExactHosts = {
+    'api.githubcopilot.com',
+    'githubcopilot.com',
+    'copilot-proxy.githubusercontent.com',
+  };
+
+  static const allowedHostSuffix = '.githubcopilot.com';
+
+  static const classicPatRejectionMessage =
+      'Classic GitHub personal access tokens (ghp_*) are not supported by '
+      'the Copilot API. Sign in with the GitHub device-code flow instead.';
+
+  static bool isClassicPersonalAccessToken(String token) =>
+      token.trim().startsWith(classicPatPrefix);
+
+  /// Per-request Copilot headers layered on [staticRequestHeaders].
+  ///
+  /// `x-initiator` is `user` for the first model call of a turn and `agent`
+  /// after tool results. `Copilot-Vision-Request` is omitted unless [vision]
+  /// is true.
+  static Map<String, String> dynamicRequestHeaders({
+    required bool afterToolResults,
+    required bool vision,
+  }) {
+    return {
+      initiatorHeader: afterToolResults ? initiatorAgent : initiatorUser,
+      if (vision) visionRequestHeader: 'true',
+    };
+  }
+
+  /// True when [modelId] must use the OpenAI Responses API (`/responses`).
+  ///
+  /// Chat Completions is the default Copilot transport. A model is routed to
+  /// Responses only when its id explicitly names that protocol.
+  static bool usesResponsesApi(String modelId) {
+    final id = modelId.trim().toLowerCase();
+    if (id.isEmpty) return false;
+    return id.split(RegExp(r'[-_./]')).contains('responses');
+  }
+}

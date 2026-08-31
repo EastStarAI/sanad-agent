@@ -61,8 +61,7 @@ failures, Sanad can move to another ready instance that is allowed to receive
 failover while preserving the exact model identity. It does not silently
 replace the selected model with a different one.
 
-Provider templates include hosted APIs, ChatGPT Subscription, local runtimes,
-and custom OpenAI- or Anthropic-compatible endpoints.
+Provider templates include hosted APIs, ChatGPT Subscription, GitHub Copilot Subscription, local runtimes, and custom OpenAI- or Anthropic-compatible endpoints. GitHub Copilot sign-in uses GitHub's device-code flow in Sanad; it does not require the GitHub or Copilot command-line tools.
 
 ### Usage and limits
 

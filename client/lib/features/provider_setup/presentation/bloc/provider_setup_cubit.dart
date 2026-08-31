@@ -29,6 +29,7 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
   Timer? _pollTimer;
   int _pollGeneration = 0;
   int? _activePollGeneration;
+  int? _pollIntervalSeconds;
   int _modelDiscoveryGeneration = 0;
   String? _draftDisplayName;
   String? _draftBaseUrl;
@@ -706,6 +707,9 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
       );
       if (!_isCurrentAuthFlow(generation, sessionId)) return;
       emit(state.copyWith(authPollStatus: poll.status));
+      if (poll.status == AuthPollStatus.pending && poll.interval != null) {
+        _retunePolling(poll.interval!);
+      }
       if (poll.status == AuthPollStatus.approved && poll.authenticated) {
         _stopPolling();
         final instance = state.selectedInstance;
@@ -782,13 +786,25 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
 
   void _startPolling(int intervalSeconds) {
     _stopPolling();
-    final duration = Duration(seconds: intervalSeconds.clamp(1, 30));
-    _pollTimer = Timer.periodic(duration, (_) => pollOnce());
+    final clamped = intervalSeconds.clamp(1, 30);
+    _pollIntervalSeconds = clamped;
+    _pollTimer = Timer.periodic(Duration(seconds: clamped), (_) => pollOnce());
+  }
+
+  /// Applies RFC 8628 `slow_down` without cancelling the current auth generation.
+  void _retunePolling(int intervalSeconds) {
+    final clamped = intervalSeconds.clamp(1, 30);
+    if (_pollTimer == null || _pollIntervalSeconds == clamped) return;
+    _pollTimer?.cancel();
+    _pollTimer = null;
+    _pollIntervalSeconds = clamped;
+    _pollTimer = Timer.periodic(Duration(seconds: clamped), (_) => pollOnce());
   }
 
   void _stopPolling() {
     _pollTimer?.cancel();
     _pollTimer = null;
+    _pollIntervalSeconds = null;
     _pollGeneration++;
     _activePollGeneration = null;
   }

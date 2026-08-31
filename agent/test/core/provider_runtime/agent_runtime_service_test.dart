@@ -6,6 +6,7 @@ import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/core/provider_runtime/copilot_credential_lifecycle.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_endpoint_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
@@ -13,6 +14,8 @@ import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart'
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
+import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
+import 'package:sanad_agent/engine/adapters/copilot_auth_recovery_adapter.dart';
 import 'package:sanad_agent/engine/adapters/missing_provider_adapter.dart';
 
 String _tempStorePath() =>
@@ -430,6 +433,86 @@ void main() {
       final adapter2 = runtime.adapterFor(sig2);
       expect(adapter2, isA<BaseOpenAIAdapter>());
       expect(identical(adapter1, adapter2), isFalse);
+    });
+
+    test('wraps github-copilot adapters for refresh and 401 recovery', () {
+      repo.createInstance(
+        ProviderInstance(
+          id: 'inst-copilot',
+          templateId: kGithubCopilotTemplateId,
+          displayName: 'Copilot Work',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.deviceCode,
+          baseUrl: GithubCopilotProtocol.defaultApiBaseUrl,
+          defaultModel: 'gpt-4o',
+          status: InstanceStatus.ready,
+          isDefault: true,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+      final withLifecycle = AgentRuntimeService(
+        config,
+        repo,
+        credService: credService,
+        copilotLifecycle: CopilotCredentialLifecycle(
+          instances: repo,
+          creds: credService,
+        ),
+      );
+      final wrapped = withLifecycle.adapterFor(withLifecycle.resolveSignature());
+      expect(wrapped, isA<CopilotAuthRecoveryAdapter>());
+
+      final unwrapped = runtime.adapterFor(runtime.resolveSignature());
+      expect(unwrapped, isA<BaseOpenAIAdapter>());
+      expect(unwrapped, isNot(isA<CopilotAuthRecoveryAdapter>()));
+    });
+
+    test('routes Copilot chat models to OpenAI and Responses models to Responses', () {
+      repo.createInstance(
+        ProviderInstance(
+          id: 'inst-copilot-chat',
+          templateId: kGithubCopilotTemplateId,
+          displayName: 'Copilot Chat',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.deviceCode,
+          baseUrl: 'https://api.enterprise.githubcopilot.com',
+          defaultModel: 'gpt-4o',
+          status: InstanceStatus.ready,
+          isDefault: true,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+      repo.createInstance(
+        ProviderInstance(
+          id: 'inst-copilot-responses',
+          templateId: kGithubCopilotTemplateId,
+          displayName: 'Copilot Responses',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.deviceCode,
+          baseUrl: GithubCopilotProtocol.defaultApiBaseUrl,
+          defaultModel: 'gpt-5-responses',
+          status: InstanceStatus.ready,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+
+      final chat = runtime.adapterFor(
+        runtime.resolveSignature(providerId: 'inst-copilot-chat'),
+      );
+      expect(chat, isA<BaseOpenAIAdapter>());
+      expect(chat, isNot(isA<CodexResponsesAdapter>()));
+      expect(
+        (chat as BaseOpenAIAdapter).baseUrl,
+        equals('https://api.enterprise.githubcopilot.com'),
+      );
+
+      final responses = runtime.adapterFor(
+        runtime.resolveSignature(providerId: 'inst-copilot-responses'),
+      );
+      expect(responses, isA<CodexResponsesAdapter>());
     });
   });
 }

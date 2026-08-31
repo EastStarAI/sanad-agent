@@ -88,7 +88,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
     );
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
-      ..headers.addAll(_headers())
+      ..headers.addAll(requestHeaders(options: options, history: history))
       ..body = jsonEncode(body);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
@@ -180,7 +180,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
     );
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
-      ..headers.addAll(_headers())
+      ..headers.addAll(requestHeaders(options: options, history: history))
       ..body = jsonEncode(body);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
@@ -349,12 +349,6 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
   }
 
   String _normalizedBaseUrl() => baseUrl.replaceFirst(RegExp(r'/+$'), '');
-
-  Map<String, String> _headers() => {
-    'Content-Type': 'application/json',
-    if (apiKey.isNotEmpty) 'Authorization': 'Bearer $apiKey',
-    ...profile.defaultHeaders,
-  };
 
   static String? _remaining(String? complete, String emitted) {
     if (complete == null || complete.isEmpty) return null;

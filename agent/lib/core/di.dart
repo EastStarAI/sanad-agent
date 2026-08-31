@@ -55,6 +55,7 @@ import 'package:sanad_agent/core/provider_runtime/model_selection_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_service.dart';
+import 'package:sanad_agent/core/provider_runtime/copilot_credential_lifecycle.dart';
 import 'package:sanad_agent/core/provider_runtime/secret_store.dart';
 import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
@@ -132,6 +133,12 @@ void setupDI() {
     () => ProviderCredentialService(
       getIt<ProviderInstanceRepository>(),
       getIt<SecretStore>(),
+    ),
+  );
+  getIt.registerLazySingleton<CopilotCredentialLifecycle>(
+    () => CopilotCredentialLifecycle(
+      instances: getIt<ProviderInstanceRepository>(),
+      creds: getIt<ProviderCredentialService>(),
     ),
   );
   // Plan 29: instance CRUD + name suggestion + draft/ready lifecycle.
@@ -227,6 +234,7 @@ void setupDI() {
             modelsDevService: getIt<ModelsDevService>(),
             credentialResolver: getIt<ProviderCredentialResolver>(),
             credService: getIt<ProviderCredentialService>(),
+            copilotLifecycle: getIt<CopilotCredentialLifecycle>(),
             rateLimiter: getIt<ProviderRateLimiter>(),
             recoveryService: getIt<RuntimeRecoveryService>(),
           ),

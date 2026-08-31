@@ -9,8 +9,11 @@ import '../../core/models/tool_call.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
 import '../../core/models/model_metadata.dart';
+import '../../core/provider_runtime/copilot_model_catalog.dart';
+import '../../core/provider_runtime/copilot_request_policy.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 import '../../core/provider_runtime/provider_model_id.dart';
+import '../../core/provider_runtime/provider_protocol_constants.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
 import 'models_dev_service.dart';
@@ -106,6 +109,25 @@ class BaseOpenAIAdapter implements LLMAdapter {
             : <String>[];
 
         for (var item in modelsList) {
+          if (profile.name == kGithubCopilotTemplateId) {
+            final parsed = CopilotModelCatalog.tryParse(item);
+            if (parsed == null) continue;
+            options.add(
+              ModelOption(
+                value: parsed.id,
+                label: _formatModelLabel(parsed.id),
+                provider: profile.name,
+                contextWindow:
+                    parsed.contextLimit ??
+                    await _modelContextLimit(parsed.id),
+                supportsReasoning:
+                    parsed.reasoningEffort ||
+                    await _modelSupportsReasoning(parsed.id),
+              ),
+            );
+            continue;
+          }
+
           final id = item['id'] as String;
           final normalizedId = _normalizeModelId(id);
 
@@ -430,7 +452,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
       resolvedModel: resolvedModel,
       options: options,
     );
-    final headers = _requestHeaders();
+    final headers = requestHeaders(options: options, history: history);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
         url: url,
@@ -523,7 +545,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
       adapterSharedClient: client,
     );
     final request = http.Request('POST', url);
-    request.headers.addAll(_requestHeaders());
+    request.headers.addAll(requestHeaders(options: options, history: history));
     final body = await _buildRequestBody(
       history,
       tools: tools,
@@ -863,11 +885,21 @@ class BaseOpenAIAdapter implements LLMAdapter {
     return data;
   }
 
-  Map<String, String> _requestHeaders() => {
-    'Content-Type': 'application/json',
-    if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
-    ...profile.defaultHeaders,
-  };
+  Map<String, String> requestHeaders({
+    LLMRequestOptions options = const LLMRequestOptions(),
+    List<Message> history = const [],
+  }) {
+    return {
+      'Content-Type': 'application/json',
+      if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
+      ...profile.defaultHeaders,
+      if (profile.name == kGithubCopilotTemplateId)
+        ...GithubCopilotProtocol.dynamicRequestHeaders(
+          afterToolResults: options.afterToolResults,
+          vision: CopilotRequestPolicy.historyHasVision(history),
+        ),
+    };
+  }
 
   String _stateIssuer(LLMRequestOptions options) {
     final instance = options.providerInstanceId ?? profile.name;

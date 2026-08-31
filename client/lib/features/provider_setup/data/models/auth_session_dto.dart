@@ -51,11 +51,13 @@ class AuthPollDto {
   final AuthPollStatus status;
   final String? error;
   final bool authenticated;
+  final int? interval;
 
   const AuthPollDto({
     required this.status,
     this.error,
     this.authenticated = false,
+    this.interval,
   });
 
   factory AuthPollDto.fromJson(Map<String, dynamic> json) {
@@ -72,6 +74,9 @@ class AuthPollDto {
       status: status,
       error: json['error']?.toString(),
       authenticated: (json['authenticated'] as bool?) ?? status == AuthPollStatus.approved,
+      interval: json['interval'] is int
+          ? json['interval'] as int
+          : int.tryParse(json['interval']?.toString() ?? ''),
     );
   }
 }

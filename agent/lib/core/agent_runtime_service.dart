@@ -1,3 +1,4 @@
+import 'package:sanad_agent/core/provider_runtime/copilot_credential_lifecycle.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
@@ -11,6 +12,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart'
 import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
+import 'package:sanad_agent/engine/adapters/copilot_auth_recovery_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/missing_provider_adapter.dart';
 import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
@@ -93,6 +95,7 @@ class AgentRuntimeService {
   final ProviderCredentialResolver? _credentialResolver;
   final ProviderInstanceRepository _instanceRepo;
   final ProviderCredentialService? _credService;
+  final CopilotCredentialLifecycle? _copilotLifecycle;
   final ProviderRateLimiter? _rateLimiter;
   final RuntimeRecoveryService? _recoveryService;
 
@@ -102,11 +105,13 @@ class AgentRuntimeService {
     ModelsDevService? modelsDevService,
     ProviderCredentialResolver? credentialResolver,
     ProviderCredentialService? credService,
+    CopilotCredentialLifecycle? copilotLifecycle,
     ProviderRateLimiter? rateLimiter,
     RuntimeRecoveryService? recoveryService,
   }) : _modelsDevService = modelsDevService,
        _credentialResolver = credentialResolver,
        _credService = credService,
+       _copilotLifecycle = copilotLifecycle,
        _rateLimiter = rateLimiter,
        _recoveryService = recoveryService;
   ProviderCredentialService? get credentialService => _credService;
@@ -267,6 +272,20 @@ class AgentRuntimeService {
   }
 
   LLMAdapter _buildAdapter(RouteSignature signature) {
+    final inner = _buildProviderAdapter(signature);
+    final lifecycle = _copilotLifecycle;
+    if (lifecycle == null || signature.templateId != kGithubCopilotTemplateId) {
+      return inner;
+    }
+    return CopilotAuthRecoveryAdapter(
+      inner: inner,
+      rebuild: () => _buildProviderAdapter(signature),
+      lifecycle: lifecycle,
+      instanceId: signature.providerInstanceId,
+    );
+  }
+
+  LLMAdapter _buildProviderAdapter(RouteSignature signature) {
     String? resolvedApiKey;
     if (_credService != null &&
         !signature.providerInstanceId.startsWith('fallback-')) {
@@ -293,6 +312,16 @@ class AgentRuntimeService {
         defaultModelOverride: signature.modelId,
       );
     } else {
+      if (signature.templateId == kGithubCopilotTemplateId &&
+          GithubCopilotProtocol.usesResponsesApi(signature.modelId)) {
+        return CodexResponsesAdapter(
+          _config,
+          profile,
+          baseUrlOverride: signature.normalizedBaseUrl,
+          apiKeyOverride: resolvedApiKey,
+          defaultModelOverride: signature.modelId,
+        );
+      }
       if (profile.apiMode == 'codex_responses') {
         return CodexResponsesAdapter(
           _config,

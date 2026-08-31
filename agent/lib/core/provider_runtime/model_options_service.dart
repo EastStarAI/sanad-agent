@@ -2,8 +2,10 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 
+import 'package:sanad_agent/core/provider_runtime/copilot_model_catalog.dart';
 import 'package:sanad_agent/core/provider_runtime/env_file_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_resolver.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/engine/adapters/codex_models_service.dart';
 import 'package:sanad_agent/engine/adapters/provider_profile.dart';
 import 'package:sanad_agent/engine/adapters/provider_registry.dart';
@@ -135,6 +137,22 @@ class ModelOptionsService {
           'Codex model discovery succeeded (${models.length} models)',
         );
         return models.map((model) => model.value).toList(growable: false);
+      }
+
+      if (profile.name == kGithubCopilotTemplateId) {
+        final headers = <String, String>{
+          ...GithubCopilotProtocol.staticRequestHeaders,
+          if (credential != null && credential.isNotEmpty)
+            'Authorization': 'Bearer $credential',
+        };
+        final resp = await client
+            .get(Uri.parse('$baseUrl/models'), headers: headers)
+            .timeout(const Duration(seconds: 5));
+        if (resp.statusCode != 200) return const [];
+        final decoded = jsonDecode(resp.body);
+        return CopilotModelCatalog.parseList(
+          decoded,
+        ).map((model) => model.id).toList(growable: false);
       }
 
       if (profile.apiMode == 'ollama') {

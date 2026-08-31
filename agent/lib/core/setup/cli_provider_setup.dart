@@ -565,11 +565,14 @@ class CliProviderSetup {
   }
 
   Future<bool> _pollAuth(String sessionId, int intervalSeconds) async {
-    final interval = Duration(seconds: intervalSeconds.clamp(2, 30));
+    var interval = Duration(seconds: intervalSeconds.clamp(2, 30));
     while (true) {
       await Future.delayed(interval);
       stdout.write('.');
       final poll = await _s.auth.poll(sessionId);
+      if (poll.interval != null && poll.interval! > 0) {
+        interval = Duration(seconds: poll.interval!.clamp(2, 30));
+      }
       switch (poll.status) {
         case AuthSessionStatus.approved:
           print('');

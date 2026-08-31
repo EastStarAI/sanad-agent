@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
+
 import '../../core/constants.dart';
 import '../../core/sanad_home/sanad_home_bootstrap.dart';
 import '../../core/models/model_metadata.dart';
@@ -43,6 +45,7 @@ class ModelsDevService {
     'alibaba': 'alibaba',
     'qwen-oauth': 'alibaba',
     'copilot': 'github-copilot',
+    'github-copilot': 'github-copilot',
     'opencode-zen': 'opencode',
     'opencode-go': 'opencode-go',
     'kilocode': 'kilo',

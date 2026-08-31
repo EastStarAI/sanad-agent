@@ -80,6 +80,13 @@ class SecretRecord {
     return now >= (expiresAt! - 60_000);
   }
 
+  /// Whether the access token will expire within [margin].
+  bool isExpiringWithin(Duration margin, {DateTime? now}) {
+    if (expiresAt == null) return false;
+    final epoch = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    return epoch >= (expiresAt! - margin.inMilliseconds);
+  }
+
   SecretRecord copyWith({
     String? apiKey,
     String? accessToken,

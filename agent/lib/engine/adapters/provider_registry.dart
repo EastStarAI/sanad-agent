@@ -39,6 +39,29 @@ class ProviderRegistry {
         'o1',
       ],
     ),
+    // github-copilot
+    ProviderProfile(
+      name: kGithubCopilotTemplateId,
+      displayName: 'GitHub Copilot Subscription',
+      description: 'Access Copilot models via a GitHub Copilot subscription',
+      defaultBaseUrl: GithubCopilotProtocol.defaultApiBaseUrl,
+      envModelName: 'GITHUB_COPILOT_MODEL',
+      envBaseUrlName: 'GITHUB_COPILOT_API_BASE',
+      authType: 'oauth_external',
+      authFlow: 'device_code',
+      apiMode: 'chat_completions',
+      aliases: ['copilot', 'github-copilot'],
+      apiKeyRequirement: ApiKeyRequirement.optional,
+      authMethods: [ProviderAuthMethod.deviceCode],
+      defaultHeaders: GithubCopilotProtocol.staticRequestHeaders,
+      docsUrl: GithubCopilotProtocol.verificationUri,
+      fallbackModels: [
+        'claude-sonnet-4.6',
+        'claude-haiku-4.6',
+        'gpt-5.4',
+        'gpt-4o',
+      ],
+    ),
     // kimi
     ProviderProfile(
       name: 'kimi',
@@ -167,8 +190,7 @@ class ProviderRegistry {
     ProviderProfile(
       name: 'gemini',
       displayName: 'Google Gemini',
-      description:
-          'Official Google Gemini Developer API (via OpenAI compatibility layer)',
+      description: 'Official Google Gemini Developer API (via OpenAI compatibility layer)',
       defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
       envApiKeyName: 'GEMINI_API_KEY',
       envModelName: 'GEMINI_MODEL',
@@ -347,8 +369,7 @@ class ProviderRegistry {
     ProviderProfile(
       name: kCustomProviderTemplateId,
       displayName: 'Custom Provider',
-      description:
-          'Any OpenAI-compatible or Anthropic-compatible endpoint you configure manually',
+      description: 'Any OpenAI-compatible or Anthropic-compatible endpoint you configure manually',
       authType: 'api_key',
       authFlow: 'custom_endpoint',
       apiMode: 'chat_completions',

@@ -44,6 +44,7 @@ class MockAdapter implements LLMAdapter {
   final List<List<Message>> histories = [];
   String? lastModelOverride;
   LLMRequestOptions? lastOptions;
+  final List<LLMRequestOptions> optionHistory = [];
 
   MockAdapter(this.responses);
 
@@ -72,6 +73,7 @@ class MockAdapter implements LLMAdapter {
   }) async {
     lastModelOverride = modelOverride;
     lastOptions = options;
+    optionHistory.add(options);
     lastHistory = List<Message>.from(history);
     histories.add(List<Message>.from(history));
     if (_callCount >= responses.length) {
@@ -1766,6 +1768,9 @@ void main() {
       expect(runner.history.length, 4);
       expect(runner.history[2].role, MessageRole.tool);
       expect(runner.history[2].content, 'tool result');
+      expect(adapter.optionHistory, hasLength(2));
+      expect(adapter.optionHistory[0].afterToolResults, isFalse);
+      expect(adapter.optionHistory[1].afterToolResults, isTrue);
     });
 
     test('runtime starts from the authoritative received time', () async {

@@ -4,11 +4,14 @@ import 'package:test/test.dart';
 
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/provider_runtime/copilot_credential_lifecycle.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_credential_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
+import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
@@ -46,7 +49,12 @@ class MockLLMAdapter implements LLMAdapter {
 class TestAgentRuntimeService extends AgentRuntimeService {
   LLMAdapter? adapterOverride;
 
-  TestAgentRuntimeService(super.config, super.instanceRepo) : super();
+  TestAgentRuntimeService(
+    super.config,
+    super.instanceRepo, {
+    super.copilotLifecycle,
+    super.credService,
+  });
 
   @override
   LLMAdapter adapterFor(RouteSignature signature) {
@@ -452,6 +460,53 @@ void main() {
         final cachedRow = repo.readModelCache('inst-1', 'models')!;
         expect(cachedRow['last_error'], contains('Network disconnected'));
         expect(cachedRow['source'], equals('cache_stale'));
+      },
+    );
+
+    test(
+      'Copilot recovery wrapper preserves fallback model-source metadata',
+      () async {
+        final secrets = SecureFileSecretStore(
+          storePath:
+              '${Directory.systemTemp.path}/sanad-copilot-cache-${DateTime.now().microsecondsSinceEpoch}.json',
+        );
+        final creds = ProviderCredentialService(repo, secrets);
+        final runtimeWithCopilot = TestAgentRuntimeService(
+          config,
+          repo,
+          copilotLifecycle: CopilotCredentialLifecycle(
+            instances: repo,
+            creds: creds,
+          ),
+          credService: creds,
+        );
+        final cache = ProviderModelCacheService(
+          repo,
+          runtimeWithCopilot,
+          cooldown: const Duration(seconds: 2),
+        );
+        repo.createInstance(
+          ProviderInstance(
+            id: 'inst-copilot',
+            templateId: kGithubCopilotTemplateId,
+            displayName: 'Copilot',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.deviceCode,
+            baseUrl: 'not a url',
+            defaultModel: 'gpt-4o',
+            status: InstanceStatus.ready,
+            configRevision: 1,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        final refreshed = await cache.refresh('inst-copilot', manual: true);
+        expect(refreshed, isNotEmpty);
+        final cachedRow = repo.readModelCache('inst-copilot', 'models')!;
+        expect(cachedRow['source'], equals('fallback'));
+        expect(cachedRow['last_error'], isNotNull);
       },
     );
   });

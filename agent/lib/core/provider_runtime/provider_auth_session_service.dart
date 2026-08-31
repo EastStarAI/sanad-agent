@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'package:sanad_agent/core/provider_runtime/copilot_token_exchange_result.dart';
+import 'package:sanad_agent/core/provider_runtime/copilot_token_exchanger.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_store.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_service.dart';
@@ -68,12 +70,21 @@ class AuthSessionPoll {
   final String? errorMessage;
   final ProviderAuthRecord? record;
 
-  AuthSessionPoll({required this.status, this.errorMessage, this.record});
+  /// Updated poll interval in seconds after RFC 8628 `slow_down`.
+  final int? interval;
+
+  AuthSessionPoll({
+    required this.status,
+    this.errorMessage,
+    this.record,
+    this.interval,
+  });
 
   Map<String, dynamic> toMap() => {
     'status': status.name,
     if (errorMessage != null) 'error': errorMessage,
     if (record != null) 'authenticated': true,
+    if (interval != null) 'interval': interval,
   };
 }
 
@@ -99,10 +110,6 @@ class ProviderAuthSessionService {
   /// UUID) so multiple accounts of the same template never overwrite each
   /// other. When null, the legacy provider-keyed `_credStore` is used.
   final ProviderCredentialService? _credService;
-  // Kept for future status transitions that require the instance service.
-  // Currently OAuth approval writes the credential bundle via _credService;
-  // instance readiness is promoted later during model selection.
-  // ignore: unused_field
   final ProviderInstanceService? _instanceService;
   final http.Client Function() _clientFactory;
 
@@ -144,6 +151,8 @@ class ProviderAuthSessionService {
     switch (profile.name) {
       case 'openai-codex':
         return _startCodexDeviceCode(profile, flow);
+      case kGithubCopilotTemplateId:
+        return _startGithubCopilotDeviceCode(profile, flow);
       default:
         if (flow == AuthFlowKind.apiKey ||
             flow == AuthFlowKind.customEndpoint) {
@@ -183,6 +192,12 @@ class ProviderAuthSessionService {
     switch (profile.name) {
       case 'openai-codex':
         return _startCodexDeviceCode(profile, flow, instanceId: instanceId);
+      case kGithubCopilotTemplateId:
+        return _startGithubCopilotDeviceCode(
+          profile,
+          flow,
+          instanceId: instanceId,
+        );
       default:
         throw UnimplementedError(
           'Auth flow $flow for ${profile.name} is not implemented yet.',
@@ -201,7 +216,11 @@ class ProviderAuthSessionService {
       );
     }
     if (session.isCancelled) {
+      _finishSession(session.sessionId);
       return AuthSessionPoll(status: AuthSessionStatus.cancelled);
+    }
+    if (session.providerId == kGithubCopilotTemplateId) {
+      return _pollGithubCopilotDeviceCode(session);
     }
     return _pollCodexDeviceCode(session);
   }
@@ -214,13 +233,13 @@ class ProviderAuthSessionService {
     );
   }
 
-  /// Cancels an in-flight session and cleans up any timers/listeners.
+  /// Cancels an in-flight session. The next [poll] observes `cancelled` and
+  /// then drops the session so secrets are never stored.
   void cancel(String sessionId) {
-    final session = _activeSessions.remove(sessionId);
-    if (session != null) {
-      session.isCancelled = true;
-      session.client.close();
-    }
+    final session = _activeSessions[sessionId];
+    if (session == null) return;
+    session.isCancelled = true;
+    session.client.close();
   }
 
   /// Returns the persisted auth status for a provider, independent of any
@@ -447,6 +466,310 @@ class ProviderAuthSessionService {
         errorMessage: 'Polling failed: HTTP ${pollResp.statusCode}',
       );
     }
+  }
+
+  // ── GitHub Copilot device code ─────────────────────────────────────
+
+  Future<AuthSessionStart> _startGithubCopilotDeviceCode(
+    ProviderProfile profile,
+    AuthFlowKind flow, {
+    String? instanceId,
+  }) async {
+    final client = _clientFactory();
+    final resp = await client.post(
+      Uri.parse(GithubCopilotProtocol.deviceCodeUrl),
+      headers: {
+        'Accept': GithubCopilotProtocol.githubAccept,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': GithubCopilotProtocol.githubUserAgent,
+      },
+      body: {
+        'client_id': GithubCopilotProtocol.clientId,
+        'scope': GithubCopilotProtocol.oauthScope,
+      },
+    );
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      client.close();
+      throw Exception(
+        'Failed to request GitHub device authorization: HTTP ${resp.statusCode}',
+      );
+    }
+    final data = _decodeGithubOAuthBody(resp.body);
+    final userCode = data['user_code']?.toString();
+    final deviceCode = data['device_code']?.toString();
+    if (userCode == null ||
+        userCode.isEmpty ||
+        deviceCode == null ||
+        deviceCode.isEmpty) {
+      client.close();
+      throw Exception('GitHub device authorization response was incomplete.');
+    }
+
+    var interval = GithubCopilotProtocol.defaultPollInterval.inSeconds;
+    final intervalRaw = data['interval'];
+    if (intervalRaw is int) {
+      interval = intervalRaw;
+    } else if (intervalRaw is num) {
+      interval = intervalRaw.toInt();
+    } else if (intervalRaw is String) {
+      interval = int.tryParse(intervalRaw) ?? interval;
+    }
+    if (interval < 1) interval = 1;
+
+    final expiresIn = _coercePositiveSeconds(data['expires_in']) ?? 900;
+    final expiresAt = DateTime.now()
+        .add(Duration(seconds: expiresIn))
+        .millisecondsSinceEpoch;
+
+    final verificationUri = _safeGithubVerificationUri(
+      data['verification_uri']?.toString(),
+    );
+    final verificationUriComplete = _tryGithubVerificationUri(
+      data['verification_uri_complete']?.toString(),
+      allowQuery: true,
+    );
+
+    final sessionId =
+        'copilot-${DateTime.now().microsecondsSinceEpoch}-${_sessionNonce.incrementAndGet()}';
+    _activeSessions[sessionId] = _ActiveSession(
+      sessionId: sessionId,
+      providerId: profile.name,
+      instanceId: instanceId,
+      flow: flow,
+      client: client,
+      handle: {
+        'device_code': deviceCode,
+        'user_code': userCode,
+        'interval': interval,
+        'expires_at': expiresAt,
+      },
+    );
+
+    return AuthSessionStart(
+      sessionId: sessionId,
+      flow: flow,
+      verificationUri: verificationUri,
+      verificationUriComplete: verificationUriComplete,
+      userCode: userCode,
+      interval: interval,
+      expiresAt: expiresAt,
+      handle: _activeSessions[sessionId]!.handle,
+    );
+  }
+
+  Future<AuthSessionPoll> _pollGithubCopilotDeviceCode(
+    _ActiveSession session,
+  ) async {
+    final expiresAt = session.handle['expires_at'];
+    if (expiresAt is int &&
+        DateTime.now().millisecondsSinceEpoch >= expiresAt) {
+      _finishSession(session.sessionId);
+      return AuthSessionPoll(status: AuthSessionStatus.expired);
+    }
+
+    final deviceCode = session.handle['device_code'] as String? ?? '';
+    var interval =
+        session.handle['interval'] as int? ??
+        GithubCopilotProtocol.defaultPollInterval.inSeconds;
+
+    final pollResp = await session.client.post(
+      Uri.parse(GithubCopilotProtocol.accessTokenUrl),
+      headers: {
+        'Accept': GithubCopilotProtocol.githubAccept,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': GithubCopilotProtocol.githubUserAgent,
+      },
+      body: {
+        'client_id': GithubCopilotProtocol.clientId,
+        'device_code': deviceCode,
+        'grant_type': GithubCopilotProtocol.deviceCodeGrantType,
+      },
+    );
+
+    final data = _decodeGithubOAuthBody(pollResp.body);
+    final error = data['error']?.toString();
+    if (error == 'authorization_pending') {
+      return AuthSessionPoll(
+        status: AuthSessionStatus.pending,
+        interval: interval,
+      );
+    }
+    if (error == 'slow_down') {
+      interval += GithubCopilotProtocol.slowDownIncrement.inSeconds;
+      final advertised = _coercePositiveSeconds(data['interval']);
+      if (advertised != null && advertised > interval) {
+        interval = advertised;
+      }
+      session.handle['interval'] = interval;
+      return AuthSessionPoll(
+        status: AuthSessionStatus.pending,
+        interval: interval,
+      );
+    }
+    if (error == 'expired_token') {
+      _finishSession(session.sessionId);
+      return AuthSessionPoll(status: AuthSessionStatus.expired);
+    }
+    if (error == 'access_denied') {
+      _finishSession(session.sessionId);
+      return AuthSessionPoll(
+        status: AuthSessionStatus.error,
+        errorMessage: 'GitHub authorization was denied.',
+      );
+    }
+    if (error != null && error.isNotEmpty) {
+      return AuthSessionPoll(
+        status: AuthSessionStatus.error,
+        errorMessage: 'GitHub authorization failed.',
+      );
+    }
+
+    final githubUserToken = data['access_token']?.toString().trim() ?? '';
+    if (githubUserToken.isEmpty) {
+      if (pollResp.statusCode < 200 || pollResp.statusCode >= 300) {
+        return AuthSessionPoll(
+          status: AuthSessionStatus.error,
+          errorMessage:
+              'GitHub authorization failed: HTTP ${pollResp.statusCode}',
+        );
+      }
+      return AuthSessionPoll(
+        status: AuthSessionStatus.pending,
+        interval: interval,
+      );
+    }
+    if (GithubCopilotProtocol.isClassicPersonalAccessToken(githubUserToken)) {
+      _finishSession(session.sessionId);
+      return AuthSessionPoll(
+        status: AuthSessionStatus.error,
+        errorMessage: GithubCopilotProtocol.classicPatRejectionMessage,
+      );
+    }
+
+    late final CopilotTokenExchangeResult exchanged;
+    try {
+      exchanged = await _exchangeCopilotToken(session.client, githubUserToken);
+    } on CopilotExchangeException catch (e) {
+      _finishSession(session.sessionId);
+      return AuthSessionPoll(
+        status: AuthSessionStatus.error,
+        errorMessage: e.message,
+      );
+    } on FormatException catch (e) {
+      _finishSession(session.sessionId);
+      return AuthSessionPoll(
+        status: AuthSessionStatus.error,
+        errorMessage: e.message,
+      );
+    } catch (_) {
+      _finishSession(session.sessionId);
+      return AuthSessionPoll(
+        status: AuthSessionStatus.error,
+        errorMessage: 'Copilot token exchange failed.',
+      );
+    }
+
+    final identity = extractOAuthAccountIdentity(githubUserToken);
+    final record = ProviderAuthRecord(
+      providerId: session.providerId,
+      accessToken: exchanged.token,
+      refreshToken: githubUserToken,
+      expiresAt: exchanged.expiresAt,
+      scope: data['scope']?.toString(),
+      tokenType: data['token_type']?.toString() ?? 'Bearer',
+      status: 'authenticated',
+      accountLabel: identity.accountLabel,
+      accountName: identity.accountName,
+    );
+
+    if (session.instanceId != null && _credService != null) {
+      final secret = SecretRecord(
+        instanceId: session.instanceId!,
+        accessToken: exchanged.token,
+        refreshToken: githubUserToken,
+        expiresAt: exchanged.expiresAt,
+        scope: data['scope']?.toString(),
+        tokenType: data['token_type']?.toString() ?? 'Bearer',
+        status: 'authenticated',
+        authMethod: ProviderAuthMethod.deviceCode,
+        accountLabel: identity.accountLabel,
+        accountName: identity.accountName,
+      );
+      await _credService.writeOAuthBundle(session.instanceId!, secret);
+      final endpoint = exchanged.accountEndpoint;
+      final instanceService = _instanceService;
+      if (endpoint != null && instanceService != null) {
+        instanceService.updateMetadata(session.instanceId!, baseUrl: endpoint);
+      }
+    } else {
+      await _credStore.write(record);
+    }
+    _finishSession(session.sessionId);
+    return AuthSessionPoll(status: AuthSessionStatus.approved, record: record);
+  }
+
+  Future<CopilotTokenExchangeResult> _exchangeCopilotToken(
+    http.Client client,
+    String githubUserToken,
+  ) {
+    return CopilotTokenExchanger().exchange(
+      client: client,
+      githubUserToken: githubUserToken,
+    );
+  }
+
+  Map<String, dynamic> _decodeGithubOAuthBody(String body) {
+    final trimmed = body.trim();
+    if (trimmed.isEmpty) return const {};
+    if (trimmed.startsWith('{')) {
+      try {
+        final decoded = jsonDecode(trimmed);
+        if (decoded is Map<String, dynamic>) return decoded;
+      } catch (_) {
+        return const {};
+      }
+    }
+    return Uri.splitQueryString(trimmed);
+  }
+
+  String _safeGithubVerificationUri(String? raw, {bool allowQuery = false}) {
+    return _tryGithubVerificationUri(raw, allowQuery: allowQuery) ??
+        GithubCopilotProtocol.verificationUri;
+  }
+
+  String? _tryGithubVerificationUri(String? raw, {bool allowQuery = false}) {
+    if (raw == null || raw.trim().isEmpty) return null;
+    final uri = Uri.tryParse(raw.trim());
+    if (uri == null || uri.scheme.toLowerCase() != 'https') return null;
+    if (uri.userInfo.isNotEmpty) return null;
+    if (uri.host.toLowerCase() != 'github.com') return null;
+    if (uri.path != '/login/device') return null;
+    if (allowQuery && uri.hasQuery) {
+      return Uri(
+        scheme: 'https',
+        host: uri.host,
+        path: uri.path,
+        query: uri.query,
+      ).toString();
+    }
+    return Uri(
+      scheme: 'https',
+      host: uri.host,
+      path: uri.path,
+    ).toString();
+  }
+
+  int? _coercePositiveSeconds(Object? raw) {
+    if (raw is int) return raw > 0 ? raw : null;
+    if (raw is num) {
+      final v = raw.toInt();
+      return v > 0 ? v : null;
+    }
+    if (raw is String) {
+      final v = int.tryParse(raw);
+      if (v != null && v > 0) return v;
+    }
+    return null;
   }
 
   void _finishSession(String sessionId) {

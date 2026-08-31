@@ -137,6 +137,50 @@ CHATGPT_SESSION_TOKEN=codex-token
     expect(captured.url.queryParameters['client_version'], '1.2.3');
     expect(captured.headers['Authorization'], 'Bearer codex-token');
   });
+
+  test('ModelOptionsService filters Copilot live models by policy', () async {
+    final env = envWith('ACTIVE_PROVIDER=github-copilot\n');
+    final credStore = ProviderCredentialStore(
+      storePath: '${tempSanadHome.path}/provider_auth.json',
+    );
+    final resolver = ProviderCredentialResolver(env, credStore);
+    late http.BaseRequest captured;
+    final service = ModelOptionsService(
+      env,
+      resolver,
+      clientFactory: () => _MockClient((request) async {
+        captured = request;
+        return http.Response(
+          jsonEncode({
+            'data': [
+              {
+                'id': 'gpt-4o',
+                'capabilities': {
+                  'supports': {'streaming': true, 'tool_calls': true},
+                },
+                'policy': {'state': 'enabled'},
+              },
+              {
+                'id': 'blocked',
+                'policy': {'state': 'disabled'},
+                'capabilities': {
+                  'supports': {'streaming': true, 'tool_calls': true},
+                },
+              },
+            ],
+          }),
+          200,
+        );
+      }),
+    );
+
+    final result = await service.optionsFor('github-copilot');
+
+    expect(result.source, 'live');
+    expect(result.models, ['gpt-4o']);
+    expect(captured.url.path, endsWith('/models'));
+    expect(captured.headers['Copilot-Integration-Id'], 'vscode-chat');
+  });
 }
 
 class _MockClient extends http.BaseClient {

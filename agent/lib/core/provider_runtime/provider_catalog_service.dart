@@ -8,6 +8,8 @@ import 'package:sanad_agent/engine/adapters/provider_registry.dart';
 /// onboarding/settings UI consume this catalog so neither hardcodes a provider
 /// list.
 class ProviderCatalogService {
+  static const _hiddenUntilImplemented = {'xai-oauth'};
+
   List<ProviderProfile> get allProfiles =>
       List<ProviderProfile>.from(ProviderRegistry.profiles);
 
@@ -22,7 +24,7 @@ class ProviderCatalogService {
 
   bool isVisible(ProviderProfile profile) {
     // Hide account-auth templates whose runtime flow is not implemented yet.
-    return profile.name != 'xai-oauth';
+    return !_hiddenUntilImplemented.contains(profile.name);
   }
 
   /// Returns transport-safe public maps for every supported provider.

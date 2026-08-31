@@ -500,13 +500,17 @@ class AgentRunner {
     _turnRoute.updateTurnRoute(providerId: providerId, modelId: modelId);
   }
 
-  LLMRequestOptions _requestOptionsForTurn(String? providerInstanceId) {
+  LLMRequestOptions _requestOptionsForTurn(
+    String? providerInstanceId, {
+    bool afterToolResults = false,
+  }) {
     return LLMRequestOptions(
       sessionId: sessionId,
       requestId: _turnRoute.turnRequestId,
       providerInstanceId: providerInstanceId,
       thinkingMode: _turnRoute.effectiveThinkingMode,
       cancellationScope: _cancellationScope,
+      afterToolResults: afterToolResults,
     );
   }
 
@@ -986,6 +990,7 @@ class AgentRunner {
     String? runtimeSystemPrompt,
     bool preserveModelStepId = false,
     ResponseContinuationCoordinator? continuation,
+    bool afterToolResults = false,
   }) async {
     continuation ??= ResponseContinuationCoordinator();
     if (!preserveModelStepId || currentModelStepId == null) {
@@ -1064,7 +1069,10 @@ class AgentRunner {
             effectiveHistory,
             tools: tools,
             modelOverride: route.modelOverride,
-            options: _requestOptionsForTurn(provider),
+            options: _requestOptionsForTurn(
+              provider,
+              afterToolResults: afterToolResults,
+            ),
           );
         } finally {
           if (_stopRequested) _providerRequestInFlight = false;
@@ -1147,6 +1155,7 @@ class AgentRunner {
       return await _getNextResponse(
         runtimeSystemPrompt: runtimeSystemPrompt,
         continuation: continuation,
+        afterToolResults: true,
       );
     }
 
@@ -1341,6 +1350,7 @@ class AgentRunner {
     ResponseContinuationCoordinator? continuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
+    bool afterToolResults = false,
   }) async* {
     continuation ??= ResponseContinuationCoordinator();
     if (!preserveModelStepId || currentModelStepId == null) {
@@ -1431,7 +1441,10 @@ class AgentRunner {
             effectiveHistory,
             tools: tools,
             modelOverride: route.modelOverride,
-            options: _requestOptionsForTurn(provider),
+            options: _requestOptionsForTurn(
+              provider,
+              afterToolResults: afterToolResults,
+            ),
           )) {
             if (_stopRequested) return;
             _clearResumingOnProviderProgress();
@@ -1578,6 +1591,7 @@ class AgentRunner {
           continuation: continuation,
           onThoughtDelta: onThoughtDelta,
           onReasoningDelta: onReasoningDelta,
+          afterToolResults: true,
         );
       } else {
         if (_steerCoordinator.hasPendingSteers) {
@@ -1697,6 +1711,7 @@ class AgentRunner {
       onToolEvent: onToolEvent,
       onThoughtDelta: onThoughtDelta,
       onReasoningDelta: onReasoningDelta,
+      afterToolResults: true,
     );
   }
 

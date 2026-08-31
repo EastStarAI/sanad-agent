@@ -16,6 +16,12 @@ class LLMRequestOptions {
   final RunCancellationScope? cancellationScope;
   final ProviderWatchdogConfig watchdogs;
 
+  /// True when this model call continues a turn after tool results.
+  ///
+  /// Copilot maps this to `x-initiator: agent`. The first model request of a
+  /// user turn, and steer/incomplete continuations, keep the default `false`.
+  final bool afterToolResults;
+
   const LLMRequestOptions({
     this.sessionId,
     this.requestId,
@@ -25,5 +31,6 @@ class LLMRequestOptions {
     this.maxOutputTokens,
     this.cancellationScope,
     this.watchdogs = ProviderWatchdogConfig.defaults,
+    this.afterToolResults = false,
   });
 }

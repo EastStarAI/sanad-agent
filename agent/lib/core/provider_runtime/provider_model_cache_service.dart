@@ -6,6 +6,7 @@ import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.d
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
+import 'package:sanad_agent/engine/adapters/copilot_auth_recovery_adapter.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 
 /// Bounded concurrency queue helper to limit parallel tasks.
@@ -172,9 +173,13 @@ class ProviderModelCacheService {
       final adapter = _runtime.adapterFor(signature);
 
       final liveModels = await adapter.getAvailableModels();
-      final source = switch (adapter) {
-        BaseOpenAIAdapter adapter => adapter.availableModelsSource,
-        BaseAnthropicAdapter adapter => adapter.availableModelsSource,
+      final inspected = switch (adapter) {
+        CopilotAuthRecoveryAdapter wrapped => wrapped.inner,
+        _ => adapter,
+      };
+      final source = switch (inspected) {
+        BaseOpenAIAdapter openai => openai.availableModelsSource,
+        BaseAnthropicAdapter anthropic => anthropic.availableModelsSource,
         _ => 'live',
       };
 
@@ -184,10 +189,10 @@ class ProviderModelCacheService {
 
       String? lastError;
       if (source == 'fallback') {
-        if (adapter is BaseOpenAIAdapter) {
-          lastError = adapter.lastModelsException?.toString();
-        } else if (adapter is BaseAnthropicAdapter) {
-          lastError = adapter.lastModelsException?.toString();
+        if (inspected is BaseOpenAIAdapter) {
+          lastError = inspected.lastModelsException?.toString();
+        } else if (inspected is BaseAnthropicAdapter) {
+          lastError = inspected.lastModelsException?.toString();
         }
         lastError ??=
             'Failed to fetch standard models (fell back to local presets).';
