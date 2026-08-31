@@ -544,10 +544,9 @@ class SessionWorkItemRepository {
   }
 
   /// Deletes rows whose `session_id` no longer exists in `sessions`.
-  int cleanupOrphanedWorkItems() {
-    _db.execute('BEGIN TRANSACTION');
-    try {
-      final before = _db.select('''
+  int cleanupOrphanedWorkItems({AgentStateTransaction? transaction}) {
+    int cleanup(AgentStateTransaction tx) {
+      final before = tx.db.select('''
         SELECT COUNT(*) AS count
         FROM session_work_items wi
         WHERE NOT EXISTS (
@@ -556,19 +555,43 @@ class SessionWorkItemRepository {
         ''');
       final count = before.first['count'] as int;
       if (count > 0) {
-        _db.execute('''
+        tx.db.execute('''
           DELETE FROM session_work_items
           WHERE NOT EXISTS (
             SELECT 1 FROM sessions s WHERE s.session_id = session_work_items.session_id
           )
           ''');
       }
-      _db.execute('COMMIT');
       return count;
-    } catch (_) {
-      _db.execute('ROLLBACK');
-      rethrow;
     }
+
+    return transaction == null
+        ? _state.transaction(cleanup)
+        : cleanup(transaction);
+  }
+
+  /// Deletes `completed` and `cancelled` work items whose `updated_at` is
+  /// strictly earlier than [cutoffUtc]. Active and exactly-at-cutoff terminal
+  /// rows are retained. Returns the number of deleted rows.
+  int deleteTerminalWorkItemsOlderThan(
+    DateTime cutoffUtc, {
+    AgentStateTransaction? transaction,
+  }) {
+    int delete(AgentStateTransaction tx) {
+      tx.db.execute(
+        '''
+        DELETE FROM session_work_items
+        WHERE state IN ('completed', 'cancelled')
+          AND updated_at < ?
+        ''',
+        [cutoffUtc.toUtc().toIso8601String()],
+      );
+      return tx.db.updatedRows;
+    }
+
+    return transaction == null
+        ? _state.transaction(delete)
+        : delete(transaction);
   }
 
   int _nextWorkItemSeqInTransaction(

@@ -8,6 +8,7 @@ import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/interfaces/gateway_manager.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
+import 'package:sanad_agent/evolution/db/agent_state_maintenance_service.dart';
 import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
@@ -67,6 +68,11 @@ Future<void> main(List<String> args) async {
 
   // Future: Register more platforms (e.g., SocketPlatform, WebhookPlatform)
 
+  // Task 65 — contained state.db maintenance runs once per boot after DI
+  // and logging, and before orchestrator attach, durable restore, or
+  // opening platform transports.
+  _runAgentStateMaintenanceSafely();
+
   // Gate F.1 — wire the gateway manager to the orchestrator's response +
   // notice streams BEFORE calling `restorePersistedState()` so that any
   // queue-only bootstrap drained during restore (which fires responses and
@@ -91,6 +97,10 @@ Future<void> main(List<String> args) async {
   //   await gatewayManager.stop();
   //   exit(0);
   // });
+}
+
+void _runAgentStateMaintenanceSafely() {
+  runAgentStateMaintenanceSafely(getIt<AgentStateMaintenanceService>());
 }
 
 Future<void> _recoverPendingTitlesSafely(TitleService titleService) async {

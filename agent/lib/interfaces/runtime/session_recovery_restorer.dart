@@ -58,7 +58,6 @@ class SessionRecoveryRestorer {
   Future<void> restorePersistedState() async {
     final store = _getPersistedState();
     if (store == null) return;
-    store.cleanupOrphanedWorkItems();
     _deleteOrphanedRuntimeNotices(store);
 
     final awaitingSuspensions = await _listAwaitingSuspensions();

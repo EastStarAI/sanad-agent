@@ -18,7 +18,8 @@ import '../../core/sanad_home/sanad_home_bootstrap.dart';
 /// consume this shared connection so the runtime never opens `state.db` twice.
 /// It enables `PRAGMA foreign_keys = ON` (required for `ON DELETE CASCADE`) and
 /// owns the schema for every table — sessions, messages, scheduled tasks,
-/// suspended checkpoints, and the Plan 29 provider instance/cache/recent tables.
+/// suspended checkpoints, Plan 29 provider instance/cache/recent tables, and
+/// `agent_maintenance_state`.
 ///
 /// Secrets NEVER live here: API keys and OAuth tokens are stored only in the
 /// `SecretStore` (`provider_secrets.json`).
@@ -85,6 +86,38 @@ class AgentStateDatabase {
 
   /// The underlying SQLite connection, shared by all consumers.
   Database get db => _db;
+
+  /// Whether this owner currently has an open write transaction or savepoint.
+  bool get hasOpenTransaction => _transactionDepth > 0;
+
+  /// Reads SQLite page-layout statistics from the shared connection.
+  AgentStatePageStatistics pageStatistics() {
+    return AgentStatePageStatistics(
+      pageSize: _pragmaInt('page_size'),
+      pageCount: _pragmaInt('page_count'),
+      freelistCount: _pragmaInt('freelist_count'),
+    );
+  }
+
+  /// Rebuilds the database file to reclaim free pages.
+  ///
+  /// SQLite forbids `VACUUM` inside a transaction. This owner rejects the
+  /// call when it holds an open transaction rather than letting SQLite fail
+  /// with a less specific error.
+  void vacuum() {
+    if (_transactionDepth > 0) {
+      throw StateError('VACUUM is not allowed while a transaction is open.');
+    }
+    _db.execute('VACUUM');
+  }
+
+  int _pragmaInt(String name) {
+    final rows = _db.select('PRAGMA $name');
+    final value = rows.first.values.first;
+    if (value is int) return value;
+    if (value is BigInt) return value.toInt();
+    return int.parse(value.toString());
+  }
 
   /// Runs [action] inside the single agent-state connection's write
   /// transaction and exposes a context that repositories can pass between
@@ -533,6 +566,15 @@ class AgentStateDatabase {
       CREATE INDEX IF NOT EXISTS idx_session_route_transitions_created
       ON session_route_transitions(session_id, created_at);
     ''');
+
+    // ── Task 65: agent_maintenance_state ────────────────────────────────
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS agent_maintenance_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    ''');
+
     _migrateWorkspaceIdentity(db);
     _migrateLastUserMessageAt(db);
   }
@@ -980,4 +1022,21 @@ class AgentStateTransaction {
   final Database db;
 
   const AgentStateTransaction._(this.db);
+}
+
+/// Typed SQLite page-layout statistics used by startup vacuum policy.
+class AgentStatePageStatistics {
+  final int pageSize;
+  final int pageCount;
+  final int freelistCount;
+
+  const AgentStatePageStatistics({
+    required this.pageSize,
+    required this.pageCount,
+    required this.freelistCount,
+  });
+
+  int get reclaimableBytes => pageSize * freelistCount;
+
+  double get freeRatio => pageCount == 0 ? 0 : freelistCount / pageCount;
 }

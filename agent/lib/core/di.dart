@@ -23,6 +23,7 @@ import 'package:sanad_agent/capabilities/skills/skill_load_service.dart';
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/db/agent_state_maintenance_service.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
@@ -104,6 +105,9 @@ void setupDI() {
   getIt.registerLazySingleton<PersistedRuntimeStateRepository>(
     () =>
         PersistedRuntimeStateRepository.fromState(getIt<AgentStateDatabase>()),
+  );
+  getIt.registerLazySingleton<AgentStateMaintenanceService>(
+    () => AgentStateMaintenanceService(getIt<AgentStateDatabase>()),
   );
   getIt.registerLazySingleton<SessionRouteTransitionRepository>(
     () => SessionRouteTransitionRepository(getIt<AgentStateDatabase>()),

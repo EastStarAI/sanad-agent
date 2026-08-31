@@ -20,7 +20,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 ## Runtime Collaborators
 - `SessionQueueCoordinator` owns queue projection, FIFO drain, and non-terminal route rewrites.
 - `SessionTurnExecutor` owns active stream subscriptions, turn callbacks, tool event emission, exception routing, and post-terminal title scheduling.
-- `SessionRecoveryRestorer` owns startup reconstruction and classification of queued, waiting, blocked, running, and resuming durable work.
+- `SessionRecoveryRestorer` owns startup reconstruction and classification of queued, waiting, blocked, running, and resuming durable work. It must not run general `state.db` maintenance or retention deletes.
 - Shared request-id and route helpers remain stateless and must not import the orchestrator.
 - Runtime collaborators do not open database connections or duplicate table ownership.
 

@@ -4,7 +4,7 @@
 This contract applies to `agent/lib/evolution/db/runtime/`.
 
 ## Aggregate Owners
-- `SessionWorkItemRepository` owns durable work-item CRUD, FIFO claim, transitions, route rewrites, orphan cleanup, and cancellation.
+- `SessionWorkItemRepository` owns durable work-item CRUD, FIFO claim, transitions, route rewrites, orphan-row SQL, terminal-row prune SQL, and cancellation. Startup timing and retention policy belong to `AgentStateMaintenanceService`, not this aggregate.
 - `RuntimeNoticeRepository` owns persisted runtime notices and hydration.
 - `PendingInputRepository` owns pending-steer lifecycle and durable stop draft-recovery outcomes; pending steers are not work items.
 - `RuntimeStateCleanup` composes cross-table session cleanup through owning repositories on the shared connection.

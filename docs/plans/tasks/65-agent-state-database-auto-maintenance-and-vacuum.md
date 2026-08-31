@@ -1,8 +1,8 @@
 ---
 title: "Task 65: Agent State Database Auto-Maintenance and Vacuum"
 description: "تنظيف عناصر العمل الطرفية القديمة، وفصل تنظيف الأيتام عن استعادة التشغيل، واسترداد مساحة state.db دورياً وفق عتبات آمنة ومحددة."
-status: "ready"
-current_gate: "Gate B — Implementation"
+status: "complete"
+current_gate: "Done"
 priority: "high"
 depends_on: "Task 64 sanad-dev Bootstrap and Complete Component Logs (completed)"
 file_budget: 12
@@ -243,6 +243,13 @@ PRAGMA freelist_count;
 
 ---
 
+## Independent review (worktree)
+
+- Gate A independently verified against locked decisions and current owners: single `AgentStateDatabase` connection, 14-day exclusive terminal retention, model-cache exclusion, 24h/7d stamps, 64MiB+20% vacuum, startup call before attach/restore/start.
+- Gate B independently verified: schema, page statistics, vacuum-in-transaction guard, prune SQL, maintenance repository, injected-clock service, orphan cleanup moved off `SessionRecoveryRestorer`, shared-connection DI, contained daemon wrapper, schema/QA/`AGENTS.md` updates. Class comment on `AgentStateDatabase` was stale and is now aligned.
+- Gate C independently verified after adding vacuum 7-day throttle coverage, zero-row prune stamp coverage, and a wrapper test that continues restore/start after a throw. Focused analyzer and tests passed. The documented full-tree `dart format lib test` command still reports 16 pre-existing files outside this task; Task 65 Dart files are formatted.
+- Gate D independently verified: schema §7, QA run/skip/fail matrix, no stale "orphan cleanup is test-only" claim, Graphify updated, handoff evidence recorded.
+
 ## Gate A — Audit and Decisions (مكتملة)
 
 - [x] التحقق من الاتصال الواحد وملكية الجداول.
@@ -262,25 +269,25 @@ PRAGMA freelist_count;
 
 ## Gate B — Implementation
 
-- [ ] إضافة schema idempotent لـ`agent_maintenance_state`.
-- [ ] إضافة typed page statistics وguard يمنع `VACUUM` داخل transaction.
-- [ ] إضافة terminal prune API إلى `SessionWorkItemRepository` مع row count.
-- [ ] إضافة `AgentMaintenanceStateRepository` واختبارات parsing للطوابع.
-- [ ] إضافة `AgentStateMaintenanceService` بساعة محقونة ونتيجة typed.
-- [ ] نقل orphan cleanup من `SessionRecoveryRestorer` إلى service دون تكرار.
-- [ ] تسجيل service في DI عبر اتصال `AgentStateDatabase` المشترك.
-- [ ] إضافة wrapper الإقلاع المحتوي للفشل قبل restore/platform start.
-- [ ] تحديث `docs/technical/agent_database_schema.md` بجدول وسياسة الصيانة.
-- [ ] إضافة `docs/qa_maintenance/agent_state_database_maintenance_qa.md`.
-- [ ] تحديث أقرب `AGENTS.md` فقط إذا غيّر التنفيذ قانوناً دائماً أو جعل نصاً
+- [x] إضافة schema idempotent لـ`agent_maintenance_state`.
+- [x] إضافة typed page statistics وguard يمنع `VACUUM` داخل transaction.
+- [x] إضافة terminal prune API إلى `SessionWorkItemRepository` مع row count.
+- [x] إضافة `AgentMaintenanceStateRepository` واختبارات parsing للطوابع.
+- [x] إضافة `AgentStateMaintenanceService` بساعة محقونة ونتيجة typed.
+- [x] نقل orphan cleanup من `SessionRecoveryRestorer` إلى service دون تكرار.
+- [x] تسجيل service في DI عبر اتصال `AgentStateDatabase` المشترك.
+- [x] إضافة wrapper الإقلاع المحتوي للفشل قبل restore/platform start.
+- [x] تحديث `docs/technical/agent_database_schema.md` بجدول وسياسة الصيانة.
+- [x] إضافة `docs/qa_maintenance/agent_state_database_maintenance_qa.md`.
+- [x] تحديث أقرب `AGENTS.md` فقط إذا غيّر التنفيذ قانوناً دائماً أو جعل نصاً
       حالياً stale؛ لا تُستخدم العقود كسجل نشاط.
 
 ### B Exit
 
-- [ ] لا يملك `SessionRecoveryRestorer` أي استدعاء صيانة عامة.
-- [ ] لا يفتح أي مالك اتصالاً ثانياً بـ`state.db`.
-- [ ] جميع عمليات الحذف محصورة في الحالات والجداول المعتمدة.
-- [ ] فشل الصيانة لا يمنع استدعاء durable restore أو بدء الـdaemon.
+- [x] لا يملك `SessionRecoveryRestorer` أي استدعاء صيانة عامة.
+- [x] لا يفتح أي مالك اتصالاً ثانياً بـ`state.db`.
+- [x] جميع عمليات الحذف محصورة في الحالات والجداول المعتمدة.
+- [x] فشل الصيانة لا يمنع استدعاء durable restore أو بدء الـdaemon.
 
 ---
 
@@ -335,39 +342,40 @@ backed مركز أو يحدّث اختبار قائم لإثبات ترتيب st
 يربط system ports:
 
 ```bash
-set -o pipefail; fvm dart test --concurrency=1 <focused-daemon-backed-test-path> 2>&1 | tail -5
+set -o pipefail; fvm dart test --concurrency=1 test/evolution/agent_state_maintenance_test.dart --name "daemon-backed" 2>&1 | tail -5
 ```
 
-يستبدل منفذ التنفيذ `<focused-daemon-backed-test-path>` بالمسار الفعلي الذي
-أُضيف أو عُدّل؛ لا يُترك placeholder عند تسليم المهمة.
+المسار الفعلي هو `test/evolution/agent_state_maintenance_test.dart` (لا يربط
+منفذ بوابة؛ `ENABLE_LOCAL_GATEWAY=false`). حارس ترتيب المصدر محدّث في
+`test/guards/test_daemon_provider_startup_contract_guard.dart`.
 
 ### C Exit
 
-- [ ] تمر اختبارات الحدود، rollback، throttling، vacuum، وstartup containment.
-- [ ] يمر analyzer والاختبارات المركزة بالأوامر النهائية الموثقة.
-- [ ] لا تصل الاختبارات إلى قاعدة المستخدم أو مزوّد حي.
+- [x] تمر اختبارات الحدود، rollback، throttling، vacuum، وstartup containment.
+- [x] يمر analyzer والاختبارات المركزة بالأوامر النهائية الموثقة.
+- [x] لا تصل الاختبارات إلى قاعدة المستخدم أو مزوّد حي.
 
 ---
 
 ## Gate D — Documentation and Handoff
 
-- [ ] توثيق جدول maintenance، طوابع النجاح، retention، وvacuum thresholds في
+- [x] توثيق جدول maintenance، طوابع النجاح، retention، وvacuum thresholds في
       `docs/technical/agent_database_schema.md`.
-- [ ] توثيق matrix التشغيل/التخطي/الفشل في
+- [x] توثيق matrix التشغيل/التخطي/الفشل في
       `docs/qa_maintenance/agent_state_database_maintenance_qa.md`.
-- [ ] إزالة أي ادعاء stale بأن orphan cleanup غير مستخدمة في production.
-- [ ] تشغيل `graphify update .` بعد تعديل الكود.
-- [ ] تسجيل الملفات الفعلية المعدلة وأوامر الاختبار ونتائجها في Handoff أدناه.
+- [x] إزالة أي ادعاء stale بأن orphan cleanup غير مستخدمة في production.
+- [x] تشغيل `graphify update .` بعد تعديل الكود.
+- [x] تسجيل الملفات الفعلية المعدلة وأوامر الاختبار ونتائجها في Handoff أدناه.
 
 ### D Exit / Definition of Done
 
-- [ ] ينفذ daemon صيانة واحدة محتواة قبل restore وفتح transports.
-- [ ] تحذف فقط عناصر العمل الطرفية الأقدم من 14 يوماً.
-- [ ] تبقى عناصر العمل النشطة والجلسات والرسائل وكاش الموديلات دون حذف.
-- [ ] لا تعمل prune أكثر من مرة كل 24 ساعة بعد نجاحها.
-- [ ] لا تعمل `VACUUM` أكثر من مرة كل 7 أيام ولا دون 64MiB و20% صفحات حرة.
-- [ ] فشل أي مرحلة لا يمنع daemon من الاستعادة والإقلاع.
-- [ ] الوثائق والاختبارات وGraphify متزامنة مع التنفيذ.
+- [x] ينفذ daemon صيانة واحدة محتواة قبل restore وفتح transports.
+- [x] تحذف فقط عناصر العمل الطرفية الأقدم من 14 يوماً.
+- [x] تبقى عناصر العمل النشطة والجلسات والرسائل وكاش الموديلات دون حذف.
+- [x] لا تعمل prune أكثر من مرة كل 24 ساعة بعد نجاحها.
+- [x] لا تعمل `VACUUM` أكثر من مرة كل 7 أيام ولا دون 64MiB و20% صفحات حرة.
+- [x] فشل أي مرحلة لا يمنع daemon من الاستعادة والإقلاع.
+- [x] الوثائق والاختبارات وGraphify متزامنة مع التنفيذ.
 
 ---
 
@@ -427,9 +435,30 @@ Daemon ready
 
 ## 9. Handoff Evidence (يملؤه المنفذ)
 
-- **Changed files:** pending
-- **Focused tests:** pending
-- **Analyzer:** pending
-- **Daemon-backed verification:** pending
-- **Graphify update:** pending
-- **Known limitations/follow-ups:** provider model cache eviction intentionally excluded
+- **Changed files:**
+  - `agent/bin/daemon.dart`
+  - `agent/lib/core/di.dart`
+  - `agent/lib/evolution/db/agent_state_database.dart`
+  - `agent/lib/evolution/db/agent_state_maintenance_service.dart` (new)
+  - `agent/lib/evolution/db/agent_maintenance_state_repository.dart` (new)
+  - `agent/lib/evolution/db/runtime/session_work_item_repository.dart`
+  - `agent/lib/interfaces/runtime/session_recovery_restorer.dart`
+  - `agent/test/evolution/agent_state_maintenance_test.dart` (new)
+  - `agent/test/guards/test_daemon_provider_startup_contract_guard.dart`
+  - `agent/lib/evolution/db/AGENTS.md`
+  - `agent/lib/evolution/db/runtime/AGENTS.md`
+  - `agent/lib/interfaces/runtime/AGENTS.md`
+  - `docs/technical/agent_database_schema.md`
+  - `docs/technical/agent_runtime.md`
+  - `docs/qa_maintenance/agent_state_database_maintenance_qa.md` (new)
+  - `docs/qa_maintenance/MOC.md`
+  - `docs/llms.txt`
+  - `docs/plans/tasks/65-agent-state-database-auto-maintenance-and-vacuum.md`
+- **Focused tests:** From `agent/`:
+  - `fvm dart test test/evolution/agent_state_maintenance_test.dart` — 27 passed
+  - `fvm dart test test/evolution/runtime_state_repositories_test.dart` — 22 passed
+  - `fvm dart test test/guards/test_daemon_provider_startup_contract_guard.dart` — passed
+- **Analyzer:** `fvm dart analyze` in `agent/` — no issues found. Task 65 Dart files pass `fvm dart format --output=none --set-exit-if-changed` on the changed paths. The documented full-tree `lib test` format command still reports 16 pre-existing files unrelated to this task.
+- **Daemon-backed verification:** `fvm dart test --concurrency=1 test/evolution/agent_state_maintenance_test.dart --name "daemon-backed"` — passed. Uses unique temp `SANAD_HOME` / `SANAD_STATE_HOME`, `SANAD_E2E_TEST_MODE=true`, gateways disabled, and proves old terminal work is pruned while queued work remains.
+- **Graphify update:** `graphify update .` — rebuilt; `graphify-out/graph.json` and `GRAPH_REPORT.md` updated (20122 nodes).
+- **Known limitations/follow-ups:** provider model cache eviction intentionally excluded. File count exceeded the planned 12 because durable ownership required `AGENTS.md` updates in three owners, plus index updates (`docs/llms.txt`, `docs/qa_maintenance/MOC.md`) and a stale call-site sentence in `docs/technical/agent_runtime.md`. Daemon-backed coverage was added to the planned test file rather than a new file. Independent review added vacuum 7-day throttle and zero-row prune stamp tests.
