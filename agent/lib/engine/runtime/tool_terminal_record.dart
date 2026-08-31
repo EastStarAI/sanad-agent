@@ -1,5 +1,12 @@
 /// Canonical terminal status for one tool call.
-enum ToolTerminalStatus { running, done, error, cancelled }
+enum ToolTerminalStatus {
+  running,
+  done,
+  error,
+  cancelled,
+  timedOut,
+  interrupted,
+}
 
 /// Shared payload for live tool events and durable checkpoint/history records.
 class ToolTerminalRecord {
@@ -60,6 +67,37 @@ class ToolTerminalRecord {
       generation: generation,
       revision: revision ?? DateTime.now().microsecondsSinceEpoch,
       status: ToolTerminalStatus.cancelled,
+      reason: reason,
+      message: message,
+      isError: true,
+      startedAt: startedAt?.toUtc() ?? terminalAt,
+      terminalAt: terminalAt,
+      cleanupOutcome: cleanupOutcome,
+    );
+  }
+
+  factory ToolTerminalRecord.interrupted({
+    required String sessionId,
+    required String toolCallId,
+    required String toolName,
+    required String runId,
+    String? modelStepId,
+    required int generation,
+    required String message,
+    String reason = 'daemon_interrupted',
+    String? cleanupOutcome,
+    DateTime? startedAt,
+  }) {
+    final terminalAt = DateTime.now().toUtc();
+    return ToolTerminalRecord(
+      sessionId: sessionId,
+      toolCallId: toolCallId,
+      toolName: toolName,
+      runId: runId,
+      modelStepId: modelStepId,
+      generation: generation,
+      revision: terminalAt.microsecondsSinceEpoch,
+      status: ToolTerminalStatus.interrupted,
       reason: reason,
       message: message,
       isError: true,

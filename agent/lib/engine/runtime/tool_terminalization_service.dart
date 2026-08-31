@@ -105,7 +105,7 @@ class ToolTerminalizationService {
           metadata: record.toHistoryMetadata(modelStepId: modelStepId),
         ),
     };
-    final commit = repo.executionState.commitCancelledToolTerminals(
+    final commit = repo.executionState.commitToolTerminals(
       sessionId: sessionId,
       workItemId: workItemId,
       runId: runId,

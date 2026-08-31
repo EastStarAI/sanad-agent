@@ -49,7 +49,7 @@ void main() {
     expect(history.single.role, MessageRole.assistant);
   });
 
-  test('genuinely abandoned unanswered tool call is still healed', () {
+  test('genuinely abandoned unanswered tool call is marked interrupted', () {
     final session = sessionManager.createSession('test-model');
     final history = [
       Message(
@@ -73,7 +73,34 @@ void main() {
     expect(history, hasLength(2));
     expect(history.last.role, MessageRole.tool);
     expect(history.last.toolCallId, 'abandoned-tool');
-    expect(history.last.content, 'Tool execution cancelled by user.');
+    expect(history.last.content, contains('agent stopped unexpectedly'));
+    expect(history.last.content, isNot(contains('cancelled by user')));
+    expect(history.last.metadata?['reason'], 'daemon_interrupted');
+  });
+
+  test('active executing tool is preserved for restart reconciliation', () {
+    final session = sessionManager.createSession('test-model');
+    final history = [
+      Message(
+        role: MessageRole.assistant,
+        toolCalls: [
+          ToolCall(
+            id: 'active-shell',
+            name: 'shell_execute',
+            arguments: const {},
+          ),
+        ],
+      ),
+    ];
+
+    HistoryHealer.healHistory(
+      history: history,
+      sessionManager: sessionManager,
+      sessionId: session.sessionId,
+      activeToolCallIds: const {'active-shell'},
+    );
+
+    expect(history, hasLength(1));
   });
 
   test('extracts only requester-bound non-terminal deferred results', () {

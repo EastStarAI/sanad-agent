@@ -488,6 +488,22 @@ class SessionExecutionStateCoordinator {
     required int generation,
     required Map<String, Map<String, dynamic>> checkpointOutputs,
     required Map<String, Message> historyMessages,
+  }) => commitToolTerminals(
+    sessionId: sessionId,
+    workItemId: workItemId,
+    runId: runId,
+    generation: generation,
+    checkpointOutputs: checkpointOutputs,
+    historyMessages: historyMessages,
+  );
+
+  ToolTerminalCommitResult commitToolTerminals({
+    required String sessionId,
+    required String workItemId,
+    required String runId,
+    required int generation,
+    required Map<String, Map<String, dynamic>> checkpointOutputs,
+    required Map<String, Message> historyMessages,
   }) {
     return _state.transaction((tx) {
       final active = _workItems.findActiveWorkItem(sessionId);
@@ -515,7 +531,11 @@ class SessionExecutionStateCoordinator {
       final toolStartedAt = Map<String, dynamic>.from(
         metadata['tool_started_at'] as Map? ?? const {},
       );
+      final executingProgress = Map<String, dynamic>.from(
+        metadata['executing_tool_progress'] as Map? ?? const {},
+      );
       final persistedToolIds = <String>{};
+      final persistedToolArguments = <String, Map<String, dynamic>>{};
       final rows = tx.db.select(
         '''
         SELECT data FROM messages
@@ -529,6 +549,9 @@ class SessionExecutionStateCoordinator {
         final decoded = jsonDecode(row['data'] as String);
         if (decoded is! Map) continue;
         final message = Message.fromJson(Map<String, dynamic>.from(decoded));
+        for (final toolCall in message.toolCalls ?? const []) {
+          persistedToolArguments[toolCall.id] = toolCall.arguments;
+        }
         if (message.role == MessageRole.tool && message.toolCallId != null) {
           persistedToolIds.add(message.toolCallId!);
         }
@@ -537,7 +560,7 @@ class SessionExecutionStateCoordinator {
       final committedIds = <String>[];
       for (final entry in checkpointOutputs.entries) {
         final toolCallId = entry.key;
-        final output = entry.value;
+        final output = Map<String, dynamic>.from(entry.value);
         if (!executing.contains(toolCallId) ||
             completedResults.containsKey(toolCallId) ||
             completedOutputs.containsKey(toolCallId) ||
@@ -546,7 +569,7 @@ class SessionExecutionStateCoordinator {
             output['tool_call_id'] != toolCallId ||
             output['run_id'] != runId ||
             output['generation'] != generation ||
-            output['status'] != 'cancelled') {
+            output['status'] == 'running') {
           continue;
         }
         final historyMessage = historyMessages[toolCallId];
@@ -556,10 +579,19 @@ class SessionExecutionStateCoordinator {
           continue;
         }
 
+        // Startup recovery constructs the terminal record from the durable
+        // process snapshot. Recover the arguments from the persisted assistant
+        // call so the provider receives one faithful tool-use/result pair.
+        final originalArguments = persistedToolArguments[toolCallId];
+        if (originalArguments != null) {
+          output['arguments'] = originalArguments;
+        }
+
         completedResults[toolCallId] = output['result']?.toString() ?? '';
         completedOutputs[toolCallId] = output;
         executing.remove(toolCallId);
         toolStartedAt.remove(toolCallId);
+        executingProgress.remove(toolCallId);
         MessageHistoryIdentity.persist(tx.db, sessionId, historyMessage);
         SessionHistoryRevisionRepository.bumpDatabase(tx.db, sessionId);
         tx.db.execute(
@@ -578,12 +610,26 @@ class SessionExecutionStateCoordinator {
       metadata['completed_tool_results'] = completedResults;
       metadata['completed_tool_outputs'] = completedOutputs;
       metadata['checkpoint_kind'] = 'after_tool_result';
+      final restartTerminalizedToolIds = <String>{
+        ...List<String>.from(
+          metadata['restart_terminalized_tool_ids'] as List? ?? const [],
+        ),
+        ...committedIds,
+      };
+      metadata['restart_terminalized_tool_ids'] = restartTerminalizedToolIds
+          .toList();
       if (executing.isEmpty) {
         metadata.remove('currently_executing_tools');
         metadata.remove('tool_started_at');
+        metadata.remove('executing_tool_progress');
       } else {
         metadata['currently_executing_tools'] = executing.toList();
         metadata['tool_started_at'] = toolStartedAt;
+        if (executingProgress.isEmpty) {
+          metadata.remove('executing_tool_progress');
+        } else {
+          metadata['executing_tool_progress'] = executingProgress;
+        }
       }
       _workItems.transitionWorkItemState(
         workItemId: workItemId,

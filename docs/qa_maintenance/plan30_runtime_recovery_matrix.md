@@ -114,6 +114,11 @@ This matrix owns verification for:
 71. **Known provider failure checkpoint settlement**: a definitive live failure such as HTTP 429 clears `model_request_in_flight`, restores the preceding safe checkpoint, and retains established waiting, Change Provider, Retry, and Stop behavior across daemon restart.
 72. **Provider-only restart timeout ownership**: timeout interruption binds to the exact work-item, run, and generation. A stale blocker cannot cancel or block a completed/replaced owner; a matching owner transitions to blocked recovery before its stream is cancelled.
 73. **Unknown provider outcome replay prevention**: a process interruption while `model_request_in_flight` remains durable restores as blocked, makes Retry, Change Provider, and Stop available, and issues no automatic provider request.
+74. **Safe missing-checkpoint repair**: an owned durable user message with no provider/tool/result/deferred evidence is repaired once to `initial_model_request`; ambiguous evidence still blocks, and a failed resume emits no final answer.
+75. **Repeated ask-user force stop**: a daemon-backed isolated test issues `system_ask_user`, kills the daemon with `SIGKILL` twice, reopens the same on-disk state after each kill, and observes the same pending request in `waiting` without a blocked notice. One answer then produces one tool result and one final answer.
+76. **Typed shell interruption**: explicit Stop alone reports `cancelled_by_user`; shutdown reports `agent_interrupted`; timeout reports `timed_out`. Timeout and shutdown preserve bounded partial stdout/stderr, and a structured timeout result remains `isError=true` in the completion event, checkpoint output, and history metadata.
+77. **Crashed shell settlement**: persisted redacted progress, original arguments, and process fingerprint let startup verify/reclaim the owned containment, atomically commit one `interrupted` tool result with unknown outcome, and continue without recovery replay by restoring the original `tool use + tool result` pair to canonical history before provider invocation. A later provider-issued call remains a separate pair; a reused or unverifiable PID is never signaled.
+78. **Notice revision convergence**: a runtime notice older than the accepted execution snapshot is rejected or removed, and a stale notice clear cannot erase a newer notice.
 
 ## Current Status
 

@@ -529,12 +529,31 @@ class AgentRunner {
             sessionId: sessionId,
           )
         : const <String>{};
+    final activeToolCallIds =
+        getIt.isRegistered<PersistedRuntimeStateRepository>()
+        ? getIt<PersistedRuntimeStateRepository>()
+              .findAllWorkItems(sessionId)
+              .where(
+                (item) =>
+                    item.state != SessionWorkState.completed &&
+                    item.state != SessionWorkState.cancelled,
+              )
+              .expand(
+                (item) => List<String>.from(
+                  item.continuationMetadata['currently_executing_tools']
+                          as List? ??
+                      const [],
+                ),
+              )
+              .toSet()
+        : const <String>{};
     HistoryHealer.healHistory(
       history: history,
       sessionManager: sessionManager,
       sessionId: sessionId,
       suspendedToolCallIds: suspendedToolCallIds,
       deferredToolCallIds: deferredToolCallIds,
+      activeToolCallIds: activeToolCallIds,
     );
   }
 
@@ -1488,7 +1507,7 @@ class AgentRunner {
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
   }) async* {
     try {
-      await _restoreCheckpointForResume();
+      await _restoreCheckpointForResume(requestId: requestId);
     } catch (e) {
       _checkpointCoordinator.blockWorkItemOnResumeFailure(e);
       rethrow;
@@ -1904,9 +1923,28 @@ class AgentRunner {
     );
   }
 
-  Future<void> _restoreCheckpointForResume() async {
+  Future<void> _restoreCheckpointForResume({String? requestId}) async {
     final allowAmbiguousToolInterruption = _allowManualAmbiguousToolRecovery;
     _allowManualAmbiguousToolRecovery = false;
+    final activeItem = getIt.isRegistered<PersistedRuntimeStateRepository>()
+        ? getIt<PersistedRuntimeStateRepository>().findActiveWorkItem(sessionId)
+        : null;
+    final expectedRequestId = requestId ?? activeItem?.requestId;
+    final expectedMessage = activeItem?.payload['message']?.toString();
+    final hasOwnedUserMessage = history.any((message) {
+      if (message.role != MessageRole.user) return false;
+      final messageRequestId = message.metadata?['request_id']?.toString();
+      if (expectedRequestId != null && expectedRequestId.isNotEmpty) {
+        return messageRequestId == expectedRequestId;
+      }
+      return expectedMessage != null && message.content == expectedMessage;
+    });
+    _checkpointCoordinator.repairMissingPreProviderCheckpoint(
+      ctx: _checkpointCtx,
+      resumeHistoryLength: history.length,
+      requestId: expectedRequestId,
+      hasOwnedUserMessage: hasOwnedUserMessage,
+    );
     final result = _checkpointCoordinator.restoreCheckpointForResume(
       currentHistoryLength: history.length,
       allowAmbiguousToolInterruption: allowAmbiguousToolInterruption,
@@ -1916,6 +1954,7 @@ class AgentRunner {
     final recoveryToolCallIds = <String>{
       ...result.ambiguousToolCallIds,
       ...result.deferredToolCallIds,
+      ...result.restartTerminalizedToolCallIds,
     }.toList();
     final recoveryBatch = recoveryToolCallIds.isEmpty
         ? null

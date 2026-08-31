@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'dart:async';
+import 'dart:convert';
 import 'package:test/test.dart';
 import 'package:mockito/mockito.dart';
 import 'package:mockito/annotations.dart';
@@ -14,6 +15,7 @@ import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
@@ -2947,6 +2949,31 @@ Use the review skill.''',
           orchestrator.hasSuspendedEvent('session-ask-legacy-blocked'),
           isTrue,
         );
+
+        // A second startup reconciliation without an answer must remain a
+        // pure wait. It must not manufacture a retry, tool result, or final.
+        await orchestrator.restorePersistedState();
+        expect(
+          repo.findWorkItem('work-ask-restart')?.state,
+          SessionWorkState.waiting,
+        );
+        expect(
+          repo.executionSnapshots.getSnapshot('session-ask-restart').state,
+          SessionExecutionState.waiting,
+        );
+        expect(repo.findNotice('session-ask-restart'), isNull);
+        verifyNever(
+          mockAgentRunner.resumeStream(
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            providerId: anyNamed('providerId'),
+            model: anyNamed('model'),
+            thinkingMode: anyNamed('thinkingMode'),
+            onToolEvent: anyNamed('onToolEvent'),
+            onSteerContinuation: anyNamed('onSteerContinuation'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        );
       },
     );
 
@@ -4820,6 +4847,90 @@ Use the review skill.''',
       },
     );
 
+    test(
+      'failed resume publishes recovery notice but no final answer',
+      () async {
+        final stateDb = AgentStateDatabase.inMemory();
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        GetIt.I.registerSingleton<AgentStateDatabase>(stateDb);
+        GetIt.I.registerSingleton<PersistedRuntimeStateRepository>(repo);
+        final recoveryService = RuntimeRecoveryService(
+          MockProviderInstanceRepository(),
+          ProviderRateLimiter(),
+        );
+        recoveryService.attachPersistedState(repo);
+        GetIt.I.registerSingleton<RuntimeRecoveryService>(recoveryService);
+        addTearDown(() {
+          GetIt.I.unregister<AgentStateDatabase>();
+          GetIt.I.unregister<PersistedRuntimeStateRepository>();
+          GetIt.I.unregister<RuntimeRecoveryService>();
+          stateDb.dispose();
+        });
+
+        const sessionId = 'session-failed-resume-no-final';
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) "
+          "VALUES ('$sessionId', 'gpt-4o', '2026-08-31', '2026-08-31')",
+        );
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'work-failed-resume-no-final',
+            sessionId: sessionId,
+            requestId: 'req-failed-resume-no-final',
+            sequence: 0,
+            state: SessionWorkState.blocked,
+            attempt: 0,
+            payload: const {'message': 'resume me', 'eventMetadata': {}},
+            continuationMetadata: const {
+              'checkpoint_kind': 'mystery_checkpoint',
+            },
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+        when(
+          mockAgentRunner.resumeStream(
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            providerId: anyNamed('providerId'),
+            model: anyNamed('model'),
+            thinkingMode: anyNamed('thinkingMode'),
+            onToolEvent: anyNamed('onToolEvent'),
+            onSteerContinuation: anyNamed('onSteerContinuation'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        ).thenAnswer(
+          (_) => Stream<String>.error(StateError('unsafe checkpoint')),
+        );
+
+        final orchestrator = SessionRunOrchestrator();
+        final responses = <GatewayResponse>[];
+        final subscription = orchestrator.responses.listen(responses.add);
+        addTearDown(subscription.cancel);
+        await orchestrator.restorePersistedState();
+        expect(
+          await orchestrator.resumeSuspended(
+            sessionId,
+            recoveryReason: 'manual_retry',
+          ),
+          ResumeSuspendedResult.claimed,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        expect(
+          responses.where(
+            (response) => response.message.role == MessageRole.assistant,
+          ),
+          isEmpty,
+        );
+        expect(
+          repo.findWorkItem('work-failed-resume-no-final')?.state,
+          SessionWorkState.blocked,
+        );
+        expect(repo.findNotice(sessionId)?.status, 'blocked');
+      },
+    );
+
     // ── Gate E.3: blocked then restart allows Change Provider ────────────
 
     test(
@@ -5197,6 +5308,126 @@ Use the review skill.''',
             onReasoningDelta: anyNamed('onReasoningDelta'),
           ),
         ).called(1);
+      },
+    );
+
+    test(
+      'E.3: crashed shell is terminalized with durable partial output and resumed without replay',
+      () async {
+        final stateDb = AgentStateDatabase.inMemory();
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        GetIt.I.registerSingleton<AgentStateDatabase>(stateDb);
+        GetIt.I.registerSingleton<PersistedRuntimeStateRepository>(repo);
+        addTearDown(() {
+          GetIt.I.unregister<AgentStateDatabase>();
+          GetIt.I.unregister<PersistedRuntimeStateRepository>();
+          stateDb.dispose();
+        });
+
+        const sessionId = 'session-crashed-shell';
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) "
+          "VALUES ('$sessionId', 'gpt-4o', '2026-08-31', '2026-08-31')",
+        );
+        stateDb.db.execute(
+          'INSERT INTO messages (session_id, data) VALUES (?, ?)',
+          [
+            sessionId,
+            jsonEncode(
+              Message(
+                role: MessageRole.assistant,
+                toolCalls: [
+                  ToolCall(
+                    id: 'shell-call',
+                    name: 'shell_execute',
+                    arguments: const {
+                      'command': 'printf durable-before-crash; sleep 120',
+                      'timeout_ms': 60000,
+                    },
+                  ),
+                ],
+              ).toJson(),
+            ),
+          ],
+        );
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'work-crashed-shell',
+            sessionId: sessionId,
+            requestId: 'req-crashed-shell',
+            sequence: 0,
+            state: SessionWorkState.running,
+            attempt: 0,
+            payload: const {'message': 'run the command', 'eventMetadata': {}},
+            continuationMetadata: const {
+              'owner_run_id': 'run-crashed-shell',
+              'owner_generation': 3,
+              'checkpoint_kind': AgentRunner.checkpointKindInitialModelRequest,
+              'resume_history_length': 1,
+              'currently_executing_tools': ['shell-call'],
+              'tool_replay_safety': {'shell-call': false},
+              'executing_tool_progress': {
+                'shell-call': {
+                  'tool_name': 'shell_execute',
+                  'status': 'running',
+                  'stdout': 'durable-before-crash',
+                  'stderr': '',
+                },
+              },
+            },
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+        when(
+          mockAgentRunner.resumeStream(
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            providerId: anyNamed('providerId'),
+            model: anyNamed('model'),
+            thinkingMode: anyNamed('thinkingMode'),
+            onToolEvent: anyNamed('onToolEvent'),
+            onSteerContinuation: anyNamed('onSteerContinuation'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        ).thenAnswer((_) => Stream.value('continued after interruption'));
+
+        await SessionRunOrchestrator().restorePersistedState();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+
+        final item = repo.findWorkItem('work-crashed-shell')!;
+        expect(item.state, SessionWorkState.completed);
+        expect(item.continuationMetadata['currently_executing_tools'], isNull);
+        final recoveredOutput =
+            (item.continuationMetadata['completed_tool_outputs']
+                    as Map)['shell-call']
+                as Map;
+        expect(recoveredOutput['arguments'], {
+          'command': 'printf durable-before-crash; sleep 120',
+          'timeout_ms': 60000,
+        });
+        final rows = stateDb.db.select(
+          'SELECT data FROM messages WHERE session_id = ?',
+          [sessionId],
+        );
+        final persisted = rows.map((row) => row['data'].toString()).join('\n');
+        expect(persisted, contains('durable-before-crash'));
+        expect(persisted, contains('interrupted unexpectedly'));
+        expect(persisted, isNot(contains('cancelled by user')));
+        verifyNever(
+          mockAgentRunner.streamMessage(
+            any,
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            providerId: anyNamed('providerId'),
+            model: anyNamed('model'),
+            thinkingMode: anyNamed('thinkingMode'),
+            receivedAt: anyNamed('receivedAt'),
+            onToolEvent: anyNamed('onToolEvent'),
+            onSteerContinuation: anyNamed('onSteerContinuation'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        );
       },
     );
 

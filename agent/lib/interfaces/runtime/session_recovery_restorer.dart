@@ -7,8 +7,11 @@ import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
+import 'package:sanad_agent/engine/runtime/tool_terminal_record.dart';
+import 'package:sanad_agent/capabilities/tools/system/process_tree_controller.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
+import 'package:sanad_agent/evolution/db/runtime/session_execution_state_coordinator.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
@@ -110,6 +113,16 @@ class SessionRecoveryRestorer {
         final isInteractiveWait =
             executingTools.isNotEmpty &&
             executingTools.every(suspendedToolCallIds.contains);
+
+        if (await _terminalizeInterruptedShellTools(store, running)) {
+          resumableWorkItemIds.add(running.workItemId);
+          store.transitionWorkItemState(
+            workItemId: running.workItemId,
+            fromState: SessionWorkState.running,
+            toState: SessionWorkState.queued,
+          );
+          continue;
+        }
 
         if (isInteractiveWait) {
           _logger.info(
@@ -682,6 +695,88 @@ class SessionRecoveryRestorer {
       metadata['tool_replay_safety'] as Map? ?? const {},
     );
     return executingTools.every((toolId) => replaySafety[toolId] == true);
+  }
+
+  Future<bool> _terminalizeInterruptedShellTools(
+    PersistedRuntimeStateRepository store,
+    SessionWorkItem item,
+  ) async {
+    final metadata = item.continuationMetadata;
+    final executing = List<String>.from(
+      metadata['currently_executing_tools'] as List? ?? const [],
+    );
+    final progressByTool = Map<String, dynamic>.from(
+      metadata['executing_tool_progress'] as Map? ?? const {},
+    );
+    if (executing.isEmpty ||
+        !executing.every((toolCallId) {
+          final progress = progressByTool[toolCallId];
+          return progress is Map && progress['tool_name'] == 'shell_execute';
+        })) {
+      return false;
+    }
+    final runId = metadata['owner_run_id']?.toString();
+    final generationRaw = metadata['owner_generation'];
+    final generation = generationRaw is int
+        ? generationRaw
+        : int.tryParse('$generationRaw');
+    if (runId == null || runId.isEmpty || generation == null) return false;
+
+    final outputs = <String, Map<String, dynamic>>{};
+    final messages = <String, Message>{};
+    final startedAt = Map<String, dynamic>.from(
+      metadata['tool_started_at'] as Map? ?? const {},
+    );
+    for (final toolCallId in executing) {
+      final progress = Map<String, dynamic>.from(
+        progressByTool[toolCallId] as Map,
+      );
+      final stdout = progress['stdout']?.toString().trimRight() ?? '';
+      final stderr = progress['stderr']?.toString().trimRight() ?? '';
+      final partial = [
+        if (stdout.isNotEmpty) stdout,
+        if (stderr.isNotEmpty) 'STDERR:\n$stderr',
+      ].join('\n');
+      final fingerprint = ProcessFingerprint.tryParse(progress['process']);
+      final cleanup = fingerprint == null
+          ? null
+          : await ProcessTreeController.terminatePersisted(fingerprint);
+      final interruption =
+          'The execution was interrupted unexpectedly because the agent '
+          'stopped. Its outcome is unknown. Review the partial result before '
+          'proceeding, and check the current system state before re-running '
+          'the same execution.';
+      final message = partial.isEmpty
+          ? interruption
+          : '$partial\n$interruption';
+      final record = ToolTerminalRecord.interrupted(
+        sessionId: item.sessionId,
+        toolCallId: toolCallId,
+        toolName: 'shell_execute',
+        runId: runId,
+        modelStepId: metadata['model_step_id']?.toString(),
+        generation: generation,
+        message: message,
+        cleanupOutcome: cleanup?.outcome.name ?? 'unknown_after_crash',
+        startedAt: DateTime.tryParse(startedAt[toolCallId]?.toString() ?? ''),
+      );
+      outputs[toolCallId] = record.toCheckpointOutput(arguments: const {});
+      messages[toolCallId] = Message(
+        role: MessageRole.tool,
+        content: record.message,
+        toolCallId: toolCallId,
+        metadata: record.toHistoryMetadata(),
+      );
+    }
+    final commit = store.executionState.commitToolTerminals(
+      sessionId: item.sessionId,
+      workItemId: item.workItemId,
+      runId: runId,
+      generation: generation,
+      checkpointOutputs: outputs,
+      historyMessages: messages,
+    );
+    return commit.outcome == ToolTerminalCommitOutcome.committed;
   }
 
   void _scheduleAtomicResume(String sessionId) {

@@ -576,6 +576,10 @@ class SessionTurnExecutor {
       }
       final redactedError = _secretsRedactor.redact(e.toString());
       _logger.severe('Error handling event: $redactedError', e, stack);
+      // The durable recovery notice is the terminal projection for a failed
+      // resume. Emitting an assistant response here is translated into a
+      // misleading `final_answer` even though no continuation succeeded.
+      if (isResume) return;
       final contextUsageOnError = await _captureContextUsage(
         sessionId: event.sessionId,
         agentRunner: agentRunner,

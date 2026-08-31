@@ -79,7 +79,9 @@ class DeviceConversationStore {
   DeviceConversationStore({
     ThinkingStreamMode thinkingStreamMode = ThinkingStreamMode.auto,
     DeviceConversationStoreSnapshot? initialSnapshot,
-  }) : _conversation = ConversationState(thinkingStreamMode: thinkingStreamMode) {
+  }) : _conversation = ConversationState(
+         thinkingStreamMode: thinkingStreamMode,
+       ) {
     if (initialSnapshot != null) {
       _conversation.setHistory(initialSnapshot.messages);
       _currentSessionId = initialSnapshot.currentSessionId;
@@ -92,7 +94,9 @@ class DeviceConversationStore {
       for (final snapshot in initialSnapshot.routeSnapshots.values) {
         _routeRegistry.apply(snapshot);
       }
-      _pendingSuspendedRequestBySessionId.addAll(initialSnapshot.pendingSuspendedRequests);
+      _pendingSuspendedRequestBySessionId.addAll(
+        initialSnapshot.pendingSuspendedRequests,
+      );
       _runtimeNoticeBySessionId.addAll(initialSnapshot.runtimeNotices);
       for (final entry in initialSnapshot.pendingSteers.entries) {
         _pendingSteersBySessionId[entry.key] = Map<String, PendingSteerRecord>.from(entry.value);
@@ -156,12 +160,16 @@ class DeviceConversationStore {
     pendingSuspendedRequest: currentPendingSuspendedRequest,
     runtimeNotice: currentRuntimeNotice,
     executionSnapshots: _executionRegistry.snapshotsBySessionId,
-    pendingSuspendedRequests: Map.unmodifiable(_pendingSuspendedRequestBySessionId),
+    pendingSuspendedRequests: Map.unmodifiable(
+      _pendingSuspendedRequestBySessionId,
+    ),
     runtimeNotices: Map.unmodifiable(_runtimeNoticeBySessionId),
     routeSnapshots: _routeRegistry.routesBySessionId,
     pendingSteers: Map<String, Map<String, PendingSteerRecord>>.unmodifiable({
       for (final entry in _pendingSteersBySessionId.entries)
-        entry.key: Map<String, PendingSteerRecord>.unmodifiable(entry.value),
+        entry.key: Map<String, PendingSteerRecord>.unmodifiable(
+          entry.value,
+        ),
     }),
   );
 
@@ -309,7 +317,10 @@ class DeviceConversationStore {
         (record.state == PendingSteerState.pending || record.state == PendingSteerState.delivering)) {
       return;
     }
-    final byRequest = _pendingSteersBySessionId.putIfAbsent(record.sessionId, () => {});
+    final byRequest = _pendingSteersBySessionId.putIfAbsent(
+      record.sessionId,
+      () => {},
+    );
     final current = byRequest[record.requestId];
     if (current != null && record.revision <= current.revision) return;
     byRequest[record.requestId] = record;
@@ -340,7 +351,10 @@ class DeviceConversationStore {
     _emitMessages();
   }
 
-  void hydratePendingSteers(Iterable<PendingSteerRecord> records, {required String sessionId}) {
+  void hydratePendingSteers(
+    Iterable<PendingSteerRecord> records, {
+    required String sessionId,
+  }) {
     final incomingIds = records
         .where((record) => record.sessionId == sessionId)
         .map((record) => record.requestId)
@@ -359,7 +373,9 @@ class DeviceConversationStore {
 
   void applyStopRecovery(StopDraftRecovery recovery) {
     final recoveredPendingSteerIds = recovery.inputs
-        .where((input) => input.source == 'pending_steer' && input.requestId.isNotEmpty)
+        .where(
+          (input) => input.source == 'pending_steer' && input.requestId.isNotEmpty,
+        )
         .map((input) => input.requestId)
         .toSet();
     if (recoveredPendingSteerIds.isNotEmpty) {
@@ -381,7 +397,9 @@ class DeviceConversationStore {
     // The daemon clears the queue atomically during stop; mirror that in the
     // client projection so queued messages disappear with the recovery event.
     removeQueuedMessagesForSession(recovery.sessionId);
-    if (!_stopRecoveryController.isClosed) _stopRecoveryController.add(recovery);
+    if (!_stopRecoveryController.isClosed) {
+      _stopRecoveryController.add(recovery);
+    }
   }
 
   void applyPendingSteerCancelOutcome(String requestId, String outcome) {
@@ -410,10 +428,15 @@ class DeviceConversationStore {
   }
 
   void applyQueueMutationOutcome(String requestId, String outcome) {
-    final index = _queuedMessages.indexWhere((event) => event.requestId == requestId);
+    final index = _queuedMessages.indexWhere(
+      (event) => event.requestId == requestId,
+    );
     if (index == -1) return;
     _queuedMessages[index] = _queuedMessages[index].copyWith(
-      metadata: {...?_queuedMessages[index].metadata, 'queue_mutation_outcome': outcome},
+      metadata: {
+        ...?_queuedMessages[index].metadata,
+        'queue_mutation_outcome': outcome,
+      },
     );
     _emitQueuedMessages();
   }
@@ -462,7 +485,9 @@ class DeviceConversationStore {
   void setPendingSuspendedRequest(DeviceSuspendedRequest? request) {
     if (request == null) {
       final sessionId = _currentSessionId;
-      if (sessionId != null) _pendingSuspendedRequestBySessionId.remove(sessionId);
+      if (sessionId != null) {
+        _pendingSuspendedRequestBySessionId.remove(sessionId);
+      }
     } else if (request.sessionId.isNotEmpty) {
       _pendingSuspendedRequestBySessionId[request.sessionId] = request;
     }
@@ -474,18 +499,31 @@ class DeviceConversationStore {
     if (notice == null || notice.sessionId.isEmpty) {
       return;
     }
+    final executionRevision = notice.executionRevision;
+    if (executionRevision != null && executionRevision < _executionRegistry.snapshotFor(notice.sessionId).revision) {
+      return;
+    }
     _runtimeNoticeBySessionId[notice.sessionId] = notice;
     _emitRuntimeNotice();
     _emitAttention();
   }
 
-  void clearRuntimeNotice({String? sessionId, String? requestId}) {
+  void clearRuntimeNotice({
+    String? sessionId,
+    String? requestId,
+    int? executionRevision,
+  }) {
     final targetSessionId = sessionId ?? _currentSessionId;
     if (targetSessionId == null || targetSessionId.isEmpty) {
       return;
     }
     final current = _runtimeNoticeBySessionId[targetSessionId];
     if (current == null || (requestId != null && current.requestId != requestId)) {
+      return;
+    }
+    if (executionRevision != null &&
+        current.executionRevision != null &&
+        executionRevision < current.executionRevision!) {
       return;
     }
     if (_runtimeNoticeBySessionId.remove(targetSessionId) != null) {
@@ -514,7 +552,9 @@ class DeviceConversationStore {
     String? requestId,
   }) {
     final current = _pendingSuspendedRequestBySessionId[sessionId];
-    if (current == null || (requestId != null && current.requestId != requestId)) return;
+    if (current == null || (requestId != null && current.requestId != requestId)) {
+      return;
+    }
     _pendingSuspendedRequestBySessionId.remove(sessionId);
     _emitPendingSuspended();
     _emitAttention();
@@ -525,6 +565,11 @@ class DeviceConversationStore {
   ) {
     final result = _executionRegistry.apply(snapshot);
     if (result.changed) {
+      final notice = _runtimeNoticeBySessionId[snapshot.sessionId];
+      if (notice?.executionRevision != null && notice!.executionRevision! < result.current.revision) {
+        _runtimeNoticeBySessionId.remove(snapshot.sessionId);
+        _emitRuntimeNotice();
+      }
       final before = processingSnapshot;
       _syncProcessingProjection();
       _emitProcessingIfChanged(before);
@@ -537,7 +582,10 @@ class DeviceConversationStore {
     Map<String, dynamic> payload, {
     String? expectedSessionId,
   }) => applyExecutionSnapshot(
-    SessionExecutionSnapshot.fromJson(payload, expectedSessionId: expectedSessionId),
+    SessionExecutionSnapshot.fromJson(
+      payload,
+      expectedSessionId: expectedSessionId,
+    ),
   );
 
   SessionExecutionApplyResult hydrateExecutionSnapshot(
@@ -587,11 +635,10 @@ class DeviceConversationStore {
     if (payload.containsKey('runtime_notice') || attention.containsKey('runtime_notice')) {
       final rawNotice = payload['runtime_notice'] ?? attention['runtime_notice'];
       if (rawNotice is Map) {
+        final noticePayload = Map<String, dynamic>.from(rawNotice);
+        noticePayload['execution_revision'] ??= _executionRegistry.snapshotFor(sessionId).revision;
         setRuntimeNotice(
-          RuntimeNotice.fromJson({
-            ...Map<String, dynamic>.from(rawNotice),
-            'session_id': sessionId,
-          }),
+          RuntimeNotice.fromJson({...noticePayload, 'session_id': sessionId}),
         );
       } else {
         clearRuntimeNotice(sessionId: sessionId);
