@@ -171,6 +171,7 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
 #### C. Event Stream Forwarding
 - **Event: `device_event` (Daemon → Backend → Client)**
   - Streams thought outputs, status updates, or tool execution requests.
+  - On the Local Gateway, a session-bound event keeps the logical `device_id` captured when that session was bound (for example, `local-agent`). Unrelated capability, model, or settings commands sharing the WebSocket may carry another device or hardware identity, but cannot overwrite the session event identity. The last socket identity is used only when an event has no session-bound identity.
   - Payload Schema:
     ```json
     {

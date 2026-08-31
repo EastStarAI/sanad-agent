@@ -882,7 +882,7 @@ void main() {
     },
   );
 
-  test('local family broadcast uses the recipient socket device_id', () async {
+  test('local family broadcast preserves session device_id', () async {
     final port = await _reserveFreePort();
     await getIt.reset();
     tempSanadHome = Directory.systemTemp.createTempSync(
@@ -918,6 +918,40 @@ void main() {
         'device_id': 'local-agent',
         'command': 'get_sessions',
         'payload': {'request_id': 'req-sessions'},
+      }),
+    );
+    await frames.moveNext();
+    expect(
+      (jsonDecode(frames.current as String) as Map<String, dynamic>)['type'],
+      equals('device_event'),
+    );
+
+    // Bind the conversation to the logical local alias, then issue an
+    // unrelated hardware-scoped command on the same socket. The latter must
+    // not overwrite the conversation's routing identity.
+    socket.add(
+      jsonEncode({
+        'type': 'execute_command',
+        'device_id': 'local-agent',
+        'command': 'get_session_history',
+        'payload': {
+          'session_id': 'cloud-origin-session',
+          'request_id': 'req-history',
+        },
+      }),
+    );
+    await frames.moveNext();
+    expect(
+      (jsonDecode(frames.current as String) as Map<String, dynamic>)['type'],
+      equals('device_event'),
+    );
+
+    socket.add(
+      jsonEncode({
+        'type': 'execute_command',
+        'device_id': 'hardware-uuid',
+        'command': 'get_sessions',
+        'payload': {'request_id': 'req-hardware-sessions'},
       }),
     );
     await frames.moveNext();

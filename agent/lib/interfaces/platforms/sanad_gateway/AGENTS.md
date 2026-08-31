@@ -14,6 +14,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Use device-first canonical envelopes with explicit device, hardware, session, request, origin, and typed delivery identity.
 - Do not emit legacy agent type fields or legacy thread identity in new payloads.
 - Preserve opaque event id across transport copies and preserve run/model-step/tool-call distinctions.
+- A session-bound Local Gateway response retains the explicit device identity captured for that session. A later unrelated command on the same socket must not replace it with another device or hardware identity; socket identity is fallback-only when no session identity exists.
 - `thinking_mode` is the only session/persistence/protocol field name; do not accept or emit aliases.
 - Every request-correlated response carries the original request id.
 
