@@ -28,6 +28,7 @@ class ToolContext {
   final String? runId;
   final int? generation;
   final RunCancellationScope? cancellationScope;
+  final void Function(Map<String, dynamic> progress)? onExecutionProgress;
 
   ToolContext({
     required this.sessionId,
@@ -36,6 +37,7 @@ class ToolContext {
     this.runId,
     this.generation,
     this.cancellationScope,
+    this.onExecutionProgress,
   });
 
   bool get isCancellationRequested =>

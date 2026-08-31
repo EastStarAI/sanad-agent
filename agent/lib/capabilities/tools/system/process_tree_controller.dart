@@ -25,6 +25,37 @@ class ProcessFingerprint {
     required this.processGroupId,
     required this.usesProcessGroup,
   });
+
+  Map<String, dynamic> toJson() => {
+    'pid': pid,
+    'captured_at': capturedAt.toIso8601String(),
+    'start_identity': startIdentity,
+    'containment_identity': containmentIdentity,
+    'process_group_id': processGroupId,
+    'uses_process_group': usesProcessGroup,
+  };
+
+  static ProcessFingerprint? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final map = Map<String, dynamic>.from(raw);
+    final pid = map['pid'] is int
+        ? map['pid'] as int
+        : int.tryParse(map['pid']?.toString() ?? '');
+    final capturedAt = DateTime.tryParse(map['captured_at']?.toString() ?? '');
+    final startIdentity = map['start_identity']?.toString();
+    if (pid == null || capturedAt == null || startIdentity == null) return null;
+    final processGroupId = map['process_group_id'] is int
+        ? map['process_group_id'] as int
+        : int.tryParse(map['process_group_id']?.toString() ?? '');
+    return ProcessFingerprint(
+      pid: pid,
+      capturedAt: capturedAt,
+      startIdentity: startIdentity,
+      containmentIdentity: map['containment_identity']?.toString() ?? '',
+      processGroupId: processGroupId,
+      usesProcessGroup: map['uses_process_group'] == true,
+    );
+  }
 }
 
 /// Owns one spawned process tree and performs bounded TERM -> grace -> KILL
@@ -250,6 +281,105 @@ class ProcessTreeController {
       reader,
       windowsJob,
     );
+  }
+
+  /// Reclaims a persisted shell containment after the daemon that spawned it
+  /// disappeared. The start identity prevents signalling a reused PID.
+  static Future<ToolProcessCleanupReport> terminatePersisted(
+    ProcessFingerprint fingerprint, {
+    Duration gracePeriod = const Duration(milliseconds: 500),
+  }) async {
+    if (!await _persistedContainmentAlive(fingerprint)) {
+      return ToolProcessCleanupReport(
+        outcome: ToolProcessCleanupOutcome.exited,
+        pid: fingerprint.pid,
+        diagnostics: 'already_exited_after_restart',
+      );
+    }
+    if (_readProcessIdentity(fingerprint.pid) != fingerprint.startIdentity) {
+      return ToolProcessCleanupReport(
+        outcome: ToolProcessCleanupOutcome.ownershipLost,
+        pid: fingerprint.pid,
+        diagnostics: 'fingerprint_mismatch_after_restart',
+      );
+    }
+    try {
+      await _signalPersisted(fingerprint, force: false);
+      if (await _waitForPersistedExit(fingerprint, gracePeriod)) {
+        return ToolProcessCleanupReport(
+          outcome: ToolProcessCleanupOutcome.exited,
+          pid: fingerprint.pid,
+        );
+      }
+      await _signalPersisted(fingerprint, force: true);
+      final exited = await _waitForPersistedExit(
+        fingerprint,
+        const Duration(seconds: 2),
+      );
+      return ToolProcessCleanupReport(
+        outcome: exited
+            ? ToolProcessCleanupOutcome.escalated
+            : ToolProcessCleanupOutcome.failed,
+        pid: fingerprint.pid,
+        diagnostics: exited ? null : 'restart_cleanup_unverified',
+      );
+    } catch (error) {
+      return ToolProcessCleanupReport(
+        outcome: ToolProcessCleanupOutcome.failed,
+        pid: fingerprint.pid,
+        diagnostics: error.toString(),
+      );
+    }
+  }
+
+  static Future<void> _signalPersisted(
+    ProcessFingerprint fingerprint, {
+    required bool force,
+  }) async {
+    if (Platform.isWindows) {
+      await Process.run('taskkill', [
+        '/PID',
+        '${fingerprint.pid}',
+        '/T',
+        if (force) '/F',
+      ]);
+      return;
+    }
+    final signal = force ? ProcessSignal.sigkill : ProcessSignal.sigterm;
+    final target = fingerprint.usesProcessGroup
+        ? -(fingerprint.processGroupId ?? fingerprint.pid)
+        : fingerprint.pid;
+    Process.killPid(target, signal);
+  }
+
+  static Future<bool> _waitForPersistedExit(
+    ProcessFingerprint fingerprint,
+    Duration timeout,
+  ) async {
+    final deadline = DateTime.now().add(timeout);
+    do {
+      if (!await _persistedContainmentAlive(fingerprint)) return true;
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+    } while (DateTime.now().isBefore(deadline));
+    return !await _persistedContainmentAlive(fingerprint);
+  }
+
+  static Future<bool> _persistedContainmentAlive(
+    ProcessFingerprint fingerprint,
+  ) async {
+    if (Platform.isWindows || !fingerprint.usesProcessGroup) {
+      return _readProcessIdentity(fingerprint.pid) != null;
+    }
+    final pgid = fingerprint.processGroupId;
+    if (pgid == null) return false;
+    final result = await Process.run('ps', ['-eo', 'pgid=,stat=']);
+    if (result.exitCode != 0) return false;
+    for (final line in result.stdout.toString().split('\n')) {
+      final match = RegExp(r'^\s*(\d+)\s+(\S+)').firstMatch(line);
+      if (match == null || int.tryParse(match.group(1)!) != pgid) continue;
+      if (!match.group(2)!.startsWith('Z')) return true;
+    }
+    return false;
   }
 
   static String? _readProcessIdentity(int pid) {

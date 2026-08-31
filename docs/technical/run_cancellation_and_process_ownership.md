@@ -90,6 +90,9 @@ effect، وتعلن إذا كانت لا تدعم الإلغاء التعاون�
   `taskkill /T /F` fallback صريحًا فقط إذا تعذر إنشاء الـJob أو إلحاق العملية.
 - تحفظ بصمة تضم PID وهوية وقت البدء الفعلية وهوية containment. يعاد فحص هوية
   البدء قبل الإشارة المتأخرة، لا مجرد اختبار أن رقم PID ما زال حيًا.
+- يحفظ shell أثناء التشغيل snapshot دائمًا ومحدودًا ومنقحًا من stdout/stderr
+  والبصمة. بعد crash تتحقق الاستعادة من البصمة أولًا، ثم تنهي containment
+  المملوكة إن بقيت، وتثبت terminal واحدة باسم `interrupted` من دون إعادة الأمر.
 
 قيود إضافية على الأنظمة الشبيهة بـUnix لمنع تعليق الأوامر غير التفاعلية:
 
@@ -113,6 +116,12 @@ close publication
   -> verify exit and fingerprint
   -> terminalize once
 ```
+
+النتيجة النهائية لا تستنتج أن المستخدم ألغى التنفيذ. وحده Stop الصريح ينتج
+`cancelled_by_user`. انتهاء المهلة ينتج `timed_out` ومعه stdout/stderr المتاحة
+حتى لحظة الإنهاء، وshutdown أو crash ينتج `agent_interrupted` مع
+`cleanup_outcome` و`outcome: unknown`. إذا فُقدت الملكية أو تغيرت هوية PID فلا
+ترسل إشارة، وتسجل `ownership_lost` بدل تخمين نجاح cleanup.
 
 فحص PPID أداة تشخيص أو fallback فقط؛ لا يمثل حد الملكية الأساسي. عدم تطابق
 البصمة يمنع قتل PID ربما أعيد استخدامها.
@@ -155,3 +164,5 @@ cleanup_outcome, started_at, terminal_at
 - exit وStop وtimeout المتزامنة لا تنتج أكثر من terminal.
 - late output لا تعيد tool إلى running ولا تختلف بين live/history.
 - repeated Stop وPID mismatch وcleanup failure لها نتائج ثابتة وقابلة للاستعادة.
+- timeout وshutdown يحتفظان بالمخرجات الجزئية ولا يظهران كإلغاء من المستخدم.
+- SIGKILL ثم startup يغلقان shell المملوكة مرة واحدة، ولا يعيدان تنفيذ الأمر.

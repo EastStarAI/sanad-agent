@@ -44,6 +44,13 @@ may instead close each ambiguous non-idempotent tool with a neutral
 unknown-outcome result and continue the model loop; it never re-executes the
 side effect.
 
+A restart may repair a missing continuation checkpoint only for the narrow
+pre-provider window: the exact owned user message is already durable and there
+is no provider-in-flight marker, executing tool, completed result, or deferred
+result. The repair is persisted as `initial_model_request` with an audit marker.
+Every other missing or unknown checkpoint remains ambiguous and controllably
+blocked. A failed resume publishes no `final_answer`.
+
 ## Controlled Daemon Restart
 
 Controlled restart establishes a global drain across every active session.
@@ -151,6 +158,10 @@ If an older daemon already wrote the false `blocked` state, startup reconciles
 the matching unresolved checkpoint back to `waiting` and removes the stale
 interruption notice.
 
+This classification is stable across repeated force stops. Until a decision is
+received, the same ask-user or permission request remains `waiting`; startup
+does not synthesize a tool result, allocate a new request, or invoke the model.
+
 `SuspendedResumeService` reconstructs runtime context, reapplies the persisted
 permission decision, atomically claims `waiting` or `blocked` work as
 `resuming`, and resumes the assistant stream through normal canonical
@@ -162,6 +173,12 @@ Startup reconciles runtime notices against active non-terminal work before
 hydration. A notice with no active work owner is deleted as orphan state, and a
 global restore-failure fallback may block only sessions that still have active
 work; terminal historical sessions remain idle.
+
+Runtime notices and clears carry the current authoritative execution revision.
+The Client rejects a notice older than its accepted execution snapshot, removes
+an older notice when a newer snapshot arrives, and does not let a stale clear
+remove a newer notice. History hydration binds legacy unversioned notices to the
+execution revision delivered in the same envelope.
 
 ## History Projection
 

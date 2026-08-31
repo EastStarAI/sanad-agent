@@ -98,7 +98,10 @@ class ConversationEventHandler {
       final targetRequestId = payload['target_request_id']?.toString();
       final outcome = payload['outcome']?.toString() ?? '';
       if (targetRequestId != null) {
-        _conversationStore.applyPendingSteerCancelOutcome(targetRequestId, outcome);
+        _conversationStore.applyPendingSteerCancelOutcome(
+          targetRequestId,
+          outcome,
+        );
       }
       return;
     }
@@ -107,10 +110,19 @@ class ConversationEventHandler {
       final targetRequestId = payload['target_request_id']?.toString();
       final outcome = payload['state']?.toString();
       if (targetRequestId != null &&
-          {'deleted', 'cancelled', 'already_removed', 'already_processed', 'promoted'}.contains(outcome)) {
+          {
+            'deleted',
+            'cancelled',
+            'already_removed',
+            'already_processed',
+            'promoted',
+          }.contains(outcome)) {
         _conversationStore.removeQueuedMessage(targetRequestId);
       } else if (targetRequestId != null) {
-        _conversationStore.applyQueueMutationOutcome(targetRequestId, outcome ?? 'unknown');
+        _conversationStore.applyQueueMutationOutcome(
+          targetRequestId,
+          outcome ?? 'unknown',
+        );
       }
       return;
     }
@@ -199,7 +211,10 @@ class ConversationEventHandler {
 
     final createdSessionId = payload['session_id'] as String? ?? payload['id'] as String?;
     if (eventType == 'session_created' && createdSessionId != null) {
-      if (!_conversationStore.adoptCreatedSession(createdSessionId: createdSessionId, requestId: requestId)) {
+      if (!_conversationStore.adoptCreatedSession(
+        createdSessionId: createdSessionId,
+        requestId: requestId,
+      )) {
         return;
       }
     }
@@ -236,6 +251,7 @@ class ConversationEventHandler {
       _conversationStore.clearRuntimeNotice(
         sessionId: eventSessionId,
         requestId: requestId,
+        executionRevision: (payload['execution_revision'] as num?)?.toInt(),
       );
       return;
     }
@@ -253,6 +269,7 @@ class ConversationEventHandler {
         _conversationStore.clearRuntimeNotice(
           sessionId: eventSessionId,
           requestId: requestId,
+          executionRevision: (payload['execution_revision'] as num?)?.toInt(),
         );
       }
       return;
@@ -263,6 +280,7 @@ class ConversationEventHandler {
       _conversationStore.clearRuntimeNotice(
         sessionId: eventSessionId,
         requestId: requestId,
+        executionRevision: (payload['execution_revision'] as num?)?.toInt(),
       );
       return;
     }
