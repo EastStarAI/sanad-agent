@@ -133,5 +133,22 @@ void main() {
         isTrue,
       );
     });
+
+    test('accepts a rewritten retained-tail suffix when start survives', () {
+      final boundary = CompactionOperationRecord.fromCandidate(
+        candidate: _candidate(),
+        startedAt: DateTime.utc(2026, 8, 29),
+        completedAt: DateTime.utc(2026, 8, 29, 1),
+      );
+
+      expect(
+        CompactionBoundaryValidity.isProjectionEligible(
+          boundary: boundary,
+          existingMessageRowIds: {1, 3, 4, 7, 8},
+          currentRevision: const SessionHistoryRevision(5),
+        ),
+        isTrue,
+      );
+    });
   });
 }

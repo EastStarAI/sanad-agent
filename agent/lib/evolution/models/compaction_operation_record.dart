@@ -167,24 +167,32 @@ abstract final class CompactionBoundaryValidity {
     return boundary.sourceHistoryRevision.value <= currentRevision.value;
   }
 
-  /// True when exactly one durable endpoint of a boundary range remains.
+  /// True when durable boundary anchors prove an unsafe partial rewrite.
   ///
   /// `messages.id` is globally AUTOINCREMENT and edit/retry may leave numeric
   /// gaps, so integers between the endpoints are not expected identities.
-  /// Both endpoints missing is treated as superseded history (skip to an older
-  /// boundary or canonical fallback).
+  /// Both source endpoints missing is treated as superseded history. A retained
+  /// tail may legitimately have its old end replaced by recovery/edit suffix
+  /// rows; its start is the durable split anchor and must remain present.
   static bool hasConflictingMessageRowIds({
     required CompactionOperationRecord boundary,
     required Set<int> existingMessageRowIds,
   }) {
-    for (final range in [boundary.sourceRange, boundary.retainedTailRange]) {
-      final startPresent = existingMessageRowIds.contains(range.start.rowId);
-      final endPresent = existingMessageRowIds.contains(range.end.rowId);
-      if (startPresent != endPresent) {
-        return true;
-      }
-    }
-    return false;
+    final sourceStartPresent = existingMessageRowIds.contains(
+      boundary.sourceRange.start.rowId,
+    );
+    final sourceEndPresent = existingMessageRowIds.contains(
+      boundary.sourceRange.end.rowId,
+    );
+    if (sourceStartPresent != sourceEndPresent) return true;
+
+    final tailStartPresent = existingMessageRowIds.contains(
+      boundary.retainedTailRange.start.rowId,
+    );
+    final tailEndPresent = existingMessageRowIds.contains(
+      boundary.retainedTailRange.end.rowId,
+    );
+    return !tailStartPresent && tailEndPresent;
   }
 
   static bool _rangeRowsMissing(
@@ -200,6 +208,6 @@ abstract final class CompactionBoundaryValidity {
     required Set<int> existingMessageRowIds,
   }) {
     return _rangeRowsMissing(boundary.sourceRange, existingMessageRowIds) ||
-        _rangeRowsMissing(boundary.retainedTailRange, existingMessageRowIds);
+        !existingMessageRowIds.contains(boundary.retainedTailRange.start.rowId);
   }
 }

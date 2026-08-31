@@ -586,4 +586,50 @@ void main() {
       CompactionMeasurementKind.estimated,
     );
   });
+
+  test('provider metrics cannot mutate the request system prefix', () async {
+    final now = DateTime.utc(2026, 8, 31);
+    sessions.saveSession(
+      SessionState(
+        sessionId: 'session-stable-provider-prefix',
+        providerId: 'provider-1',
+        model: 'gpt-4o',
+        createdAt: now,
+        updatedAt: now,
+        lastUserMessageAt: now,
+      ),
+    );
+    sessions.replaceMessages('session-stable-provider-prefix', [
+      Message(role: MessageRole.user, content: 'small request'),
+    ]);
+    final preflightAdapter = _PreflightAdapter(
+      contextLimit: 400_000,
+      wireMeasurement: WireInputMeasurement(
+        estimatedTokens: 1_000,
+        stableMaterialFingerprint: 'stable-route',
+        inputItemFingerprints: const ['small-request'],
+      ),
+    );
+    (getIt<AgentRuntimeService>() as _FakeRuntimeService).turnAdapter =
+        preflightAdapter;
+    final usageRunner = AgentRunner(
+      preflightAdapter,
+      ToolsRegistry(),
+      sessionManager,
+      existingSessionId: 'session-stable-provider-prefix',
+    );
+
+    final before = await usageRunner.debugPrepareProviderHistory();
+    usageRunner.activeProvider = 'provider-name-from-response-metrics';
+    final after = await usageRunner.debugPrepareProviderHistory();
+
+    final beforeSystem = before.singleWhere(
+      (message) => message.role == MessageRole.system,
+    );
+    final afterSystem = after.singleWhere(
+      (message) => message.role == MessageRole.system,
+    );
+    expect(beforeSystem.content, contains('Provider: openai'));
+    expect(afterSystem.content, beforeSystem.content);
+  });
 }

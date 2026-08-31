@@ -44,15 +44,23 @@ class ModelProjectionBuilder {
     final byId = {
       for (final entry in timeline.messages) entry.rowId: entry.message,
     };
-    _assertRangePresent(byId, boundary.retainedTailRange, 'retained tail');
+    _assertRetainedTailStartPresent(byId, boundary.retainedTailRange);
+    final retainedTailEndPresent = byId.containsKey(
+      boundary.retainedTailRange.end.rowId,
+    );
     final tailMessages = _messagesForRange(
       timeline.messages,
       boundary.retainedTailRange,
+      includeReplacementSuffix: !retainedTailEndPresent,
     );
-    final postBoundaryMessages = timeline.messages
-        .where((entry) => entry.rowId > boundary.retainedTailRange.end.rowId)
-        .map((entry) => entry.message)
-        .toList(growable: false);
+    final postBoundaryMessages = retainedTailEndPresent
+        ? timeline.messages
+              .where(
+                (entry) => entry.rowId > boundary.retainedTailRange.end.rowId,
+              )
+              .map((entry) => entry.message)
+              .toList(growable: false)
+        : const <Message>[];
 
     final summary = boundary.internalSummary;
     if (summary == null) {
@@ -108,10 +116,14 @@ class ModelProjectionBuilder {
     CompactionOperationRecord boundary,
     List<PersistedMessage> timeline,
   ) {
+    final retainedTailEndPresent = timeline.any(
+      (entry) => entry.rowId == boundary.retainedTailRange.end.rowId,
+    );
     final retainedCallIds = <String>{};
     for (final entry in timeline) {
       if (entry.rowId < boundary.retainedTailRange.start.rowId ||
-          entry.rowId > boundary.retainedTailRange.end.rowId) {
+          (retainedTailEndPresent &&
+              entry.rowId > boundary.retainedTailRange.end.rowId)) {
         continue;
       }
       final message = entry.message;
@@ -148,28 +160,27 @@ class ModelProjectionBuilder {
     }
   }
 
-  void _assertRangePresent(
+  void _assertRetainedTailStartPresent(
     Map<int, Message> byId,
     CompactionMessageRange range,
-    String label,
   ) {
-    for (final id in {range.start.rowId, range.end.rowId}) {
-      if (byId.containsKey(id)) continue;
-      throw ModelProjectionException(
-        'missing $label message row id $id for active boundary',
-      );
-    }
+    final id = range.start.rowId;
+    if (byId.containsKey(id)) return;
+    throw ModelProjectionException(
+      'missing retained tail start row id $id for active boundary',
+    );
   }
 
   List<Message> _messagesForRange(
     List<PersistedMessage> timeline,
-    CompactionMessageRange range,
-  ) {
+    CompactionMessageRange range, {
+    bool includeReplacementSuffix = false,
+  }) {
     return timeline
         .where(
           (entry) =>
               entry.rowId >= range.start.rowId &&
-              entry.rowId <= range.end.rowId,
+              (includeReplacementSuffix || entry.rowId <= range.end.rowId),
         )
         .map((entry) => entry.message)
         .toList(growable: false);

@@ -182,6 +182,26 @@ Next: restart the worktree daemon with the restoration fix, then obtain user-con
 ```
 
 ```text
+Date: 2026-08-31 (live continuation follow-up)
+Gate/status: G1 remediation reopened; merge remains paused
+Observed: natural continuation correctly skipped Auto before the first provider request (provider confirmed 263069), but the next preflight fell back to a 321741 full estimate and completed Auto early
+Root cause: the volatile system prompt read provider identity from response metrics; it changed from configured `openai` before the first request to response label `openai-codex` afterward, invalidating the otherwise strict wire prefix
+Remediation: system prompt provider identity now comes from the resolved route template and remains stable across response-metrics updates; focused regression asserts byte-identical system content before and after a different metrics provider label
+Safety: the single early compaction completed successfully and subsequent provider-confirmed requests are approximately 43–44K; no retry loop or activation failure occurred
+Next: load the stable-prefix fix after the affected turn reaches a safe boundary, then perform a bounded live continuation check; do not merge before confirmation
+```
+
+```text
+Date: 2026-08-31 (post-compaction continuation crash)
+Gate/status: G1/G2 remediation reopened; affected session is blocked and must not be retried before restart with the fix
+Observed: after several successful post-compaction tool loops, projection threw `newest completed boundary references conflicting message row ids`; daemon stayed healthy but the turn terminated blocked
+Root cause: Stop/resume recovery legitimately rewrote the retained-tail suffix, preserving tail start 29464162 but replacing obsolete tail end 29464270 with higher row ids; validity treated the missing old end as corruption
+Remediation: retained-tail start is the durable split anchor; when it survives and the old end is replaced, projection emits summary plus every current row from the start onward. Summarized-source partial rewrites and missing tail start still fail closed
+Next: focused/full verification, restart Agent at the blocked safe boundary, then user-controlled Retry/continuation validation; merge remains paused
+Evidence: agent analyzer clean; full fast suite 1377 passed / 12 skipped; focused projection/pressure suite includes stable provider prefix and retained-tail end rewrite coverage
+```
+
+```text
 Date: 2026-08-31 (delivery follow-up)
 Gate/status: G5 remains complete / in_review
 UI: desktop double-click on the conversation title opens the same capability-gated Rename Session dialog as the row menu; focused sidebar suite 21/21, client analyzer, and live driver verification pass

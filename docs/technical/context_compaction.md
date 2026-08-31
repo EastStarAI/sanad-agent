@@ -75,6 +75,15 @@ Removing `ContextEngine` does **not** alter these independent paths:
   exact request prefix that produced that assistant response. The normal
   strict-extension proof still decides whether the recovered baseline applies
   to the next request, so stale route or wire material fails closed.
+- Provider/model text injected into the volatile system tier comes from the
+  resolved route identity, not response-metrics display state. A provider
+  response therefore cannot mutate the next request prefix and invalidate an
+  otherwise applicable confirmed baseline.
+- The retained-tail start row is the durable projection split anchor. Recovery
+  or edit may replace the old tail end with higher AUTOINCREMENT rows; while
+  the start survives, projection includes every current row from that anchor
+  onward. Partial mutation of the summarized source or loss of the tail start
+  still fails closed.
 
 ### 2.3 Provider context-limit resolution
 

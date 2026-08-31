@@ -4,7 +4,6 @@ import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_summary_projection.dart';
 import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
-import 'package:sanad_agent/evolution/compaction/model_projection_exception.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/session_db.dart';
@@ -175,6 +174,28 @@ void main() {
       final projectionAfter = builder.buildForSession('session-1');
       expect(projectionAfter.activeBoundary?.compactionId, 'cmp-1');
       expect(projectionAfter.conversationMessages.last.content, 'new turn');
+
+      sessions.replaceMessages('session-1', [
+        canonical[0],
+        canonical[1],
+        canonical[2],
+        Message(role: MessageRole.user, content: 'tail-2 recovered'),
+        canonical[4],
+        Message(role: MessageRole.user, content: 'new turn'),
+      ]);
+      final rewrittenProjection = builder.buildForSession('session-1');
+      expect(rewrittenProjection.activeBoundary?.compactionId, 'cmp-1');
+      expect(
+        rewrittenProjection.conversationMessages.map(
+          (message) => message.content,
+        ),
+        containsAllInOrder([
+          'tail-1',
+          'tail-2 recovered',
+          'after-boundary',
+          'new turn',
+        ]),
+      );
     },
   );
 
@@ -320,7 +341,7 @@ void main() {
     );
   });
 
-  test('missing tail row rejects projection instead of silent fallback', () {
+  test('rewritten retained-tail end projects the replacement suffix', () {
     sessions.replaceMessages('session-1', [
       Message(role: MessageRole.user, content: 'one'),
       Message(role: MessageRole.user, content: 'two'),
@@ -366,9 +387,11 @@ void main() {
       ],
     );
 
+    final projection = builder.buildForSession('session-1');
+    expect(projection.usesCompactionBoundary, isTrue);
     expect(
-      () => builder.buildForSession('session-1'),
-      throwsA(isA<ModelProjectionException>()),
+      projection.conversationMessages.map((message) => message.content),
+      containsAllInOrder(['two']),
     );
   });
 

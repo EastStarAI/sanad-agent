@@ -2033,6 +2033,25 @@ class AgentRunner {
     return history;
   }
 
+  String? _contextProviderTemplate() {
+    if (getIt.isRegistered<AgentRuntimeService>()) {
+      try {
+        final routing = _turnRoute.resolveTurnRouting();
+        return getIt<AgentRuntimeService>()
+            .resolveSignature(
+              providerId: routing.providerId,
+              modelId: routing.model,
+            )
+            .templateId;
+      } catch (_) {
+        // Fall through to the static configuration identity.
+      }
+    }
+    return getIt.isRegistered<Config>()
+        ? getIt<Config>().resolveProviderName()
+        : null;
+  }
+
   List<Message> _buildEffectiveHistory({String? runtimeSystemPrompt}) {
     // Provider payload uses active model projection; canonical [history] stays intact.
     final effectiveHistory = List<Message>.from(
@@ -2053,11 +2072,7 @@ class AgentRunner {
       memoryContext: memorySections.join('\n\n'),
       sessionId: sessionId,
       model: _turnRoute.effectiveModel ?? activeModel,
-      provider:
-          activeProvider ??
-          (getIt.isRegistered<Config>()
-              ? getIt<Config>().resolveProviderName()
-              : null),
+      provider: _contextProviderTemplate(),
     );
 
     // Update context tier if a per-turn workspace context was supplied.
