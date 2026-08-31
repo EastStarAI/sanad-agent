@@ -202,6 +202,17 @@ Evidence: agent analyzer clean; full fast suite 1377 passed / 12 skipped; focuse
 ```
 
 ```text
+Date: 2026-08-31 (hydrated lifecycle causal ordering)
+Gate/status: G2 remediation closed; G5 remains in review and merge remains paused
+Observed: reload grouped three earlier failed operations and the later successful operation before the resumed user message, although the successful Auto operation occurred after that message's first tool result
+Root cause: history insertion used only the activation-time `tail_end_message_id`; Stop/Retry suffix replacement deleted that row, so every replacement row had a larger id and was misclassified as post-boundary. Synthetic history timestamps cannot recover this causality
+Remediation: claim persists a metadata-excluding SHA-256 semantic fingerprint and occurrence for the tail-end message; hydration uses the row id while present and otherwise relocates the same logical message before inserting the lifecycle row. No message content is duplicated in the operation table
+Evidence: focused history parity/repository/restart suites pass; full Agent fast suite 1377 passed / 12 skipped; analyzer clean; history parity rewrites the suffix and proves `recovery row < compaction lifecycle < post-compaction response`. The managed daemon reached a safe restart checkpoint, recovered the active work item, and live Flutter hydration placed failed operations before the resumed user message and the completed operation after its retained-tail tool result
+Legacy repair: a consistent SQLite backup passed `PRAGMA integrity_check`; one pre-anchor completed operation was updated under exact id/session/status/null guards with the fingerprint produced by `CompactionMessageAnchor.fingerprint`, then client hydration verified the corrected order
+Next: commit/push the focused remediation to the open PR; keep merge paused until explicit user confirmation
+```
+
+```text
 Date: 2026-08-31 (delivery follow-up)
 Gate/status: G5 remains complete / in_review
 UI: desktop double-click on the conversation title opens the same capability-gated Rename Session dialog as the row menu; focused sidebar suite 21/21, client analyzer, and live driver verification pass

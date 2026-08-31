@@ -1,4 +1,8 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 
 /// Durable compaction operation row shape (Plan 53b).
@@ -13,6 +17,8 @@ class CompactionOperationRecord {
   final CompactionHistoryRevision sourceHistoryRevision;
   final CompactionMessageRange sourceRange;
   final CompactionMessageRange retainedTailRange;
+  final String? retainedTailEndFingerprint;
+  final int? retainedTailEndOccurrence;
   final RouteSignature routeSignature;
   final CompactionMetrics? metrics;
   final CompactionInternalSummary? internalSummary;
@@ -29,6 +35,8 @@ class CompactionOperationRecord {
     required this.sourceHistoryRevision,
     required this.sourceRange,
     required this.retainedTailRange,
+    this.retainedTailEndFingerprint,
+    this.retainedTailEndOccurrence,
     required this.routeSignature,
     this.metrics,
     this.internalSummary,
@@ -101,12 +109,26 @@ class CompactionOperationRecord {
       sourceHistoryRevision: sourceHistoryRevision,
       sourceRange: sourceRange,
       retainedTailRange: retainedTailRange,
+      retainedTailEndFingerprint: retainedTailEndFingerprint,
+      retainedTailEndOccurrence: retainedTailEndOccurrence,
       routeSignature: routeSignature,
       failureReason: failureReason,
       failureDetailJson: failureDetailJson,
       startedAt: startedAt,
       completedAt: completedAt,
     );
+  }
+}
+
+/// Stable, non-secret identity for relocating a retained-tail endpoint after
+/// suffix rewrite assigns the same logical message a new database row id.
+abstract final class CompactionMessageAnchor {
+  CompactionMessageAnchor._();
+
+  static String fingerprint(Message message) {
+    final semantic = Map<String, dynamic>.from(message.toJson())
+      ..remove('metadata');
+    return sha256.convert(utf8.encode(jsonEncode(semantic))).toString();
   }
 }
 

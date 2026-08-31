@@ -19,6 +19,7 @@ This contract applies to `agent/lib/interfaces/`.
 - Preserve device, hardware, session, request, work-item, run, generation, model-step, tool-call, origin, and event identities without substituting one for another.
 - `run_id` is immutable execution ownership, `model_step_id` identifies one model invocation, `tool_call_id` pairs tool use/result, and `event_id` is opaque canonical event identity.
 - Compaction lifecycle transitions share one logical `compaction_id` but use distinct deterministic `event_id` values that remain identical across live delivery and history hydration.
+- Hydrated compaction lifecycle placement follows the durable logical tail-end anchor when edit/recovery rewrites its database row id; synthetic display timestamps never decide causal order.
 - Runtime-rich turn metadata enters through typed interface models, not scattered map parsing.
 
 ## Runtime Query Boundary

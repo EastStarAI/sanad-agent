@@ -142,6 +142,8 @@ Durable compaction lifecycle rows. Internal summaries are stored here, never as 
 | `source_end_message_id` | `INTEGER` | NOT NULL | Inclusive summarized head end |
 | `tail_start_message_id` | `INTEGER` | NOT NULL | Inclusive verbatim tail start |
 | `tail_end_message_id` | `INTEGER` | NOT NULL | Inclusive verbatim tail end |
+| `tail_end_anchor_fingerprint` | `TEXT` | nullable | SHA-256 semantic identity used to relocate a rewritten tail end without storing message content |
+| `tail_end_anchor_ordinal` | `INTEGER` | nullable, > 0 | Occurrence of that semantic identity at claim time |
 | `provider_instance_id` | `TEXT` | NOT NULL | Summarizer route instance |
 | `model_id` | `TEXT` | NOT NULL | Summarizer model |
 | `template_id` | `TEXT` | NOT NULL | Provider template metadata |

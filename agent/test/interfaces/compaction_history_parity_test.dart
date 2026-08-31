@@ -145,6 +145,11 @@ void main() {
       startedAt: startedAt,
       completedAt: startedAt.add(const Duration(seconds: 2)),
     );
+    final durableOperation = boundaries
+        .listCompletedForSession('session-1')
+        .single;
+    expect(durableOperation.retainedTailEndFingerprint, isNotNull);
+    expect(durableOperation.retainedTailEndOccurrence, 1);
     sessions.replaceMessages('session-1', [
       Message(role: MessageRole.user, content: 'one'),
       Message(role: MessageRole.assistant, content: 'two'),
@@ -214,5 +219,43 @@ void main() {
       lessThan(postCompactionResponseIndex),
       reason: 'history must keep compaction before the response it enabled',
     );
+
+    sessions.replaceMessages('session-1', [
+      Message(role: MessageRole.user, content: 'one'),
+      Message(role: MessageRole.assistant, content: 'two'),
+      Message(
+        role: MessageRole.tool,
+        content: 'recovery row inserted before the durable anchor',
+      ),
+      Message(role: MessageRole.user, content: 'three'),
+      Message(
+        role: MessageRole.assistant,
+        content: 'response produced after compaction',
+      ),
+    ]);
+    final rewrittenEnvelope = handler.buildHistoryEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.getSessionHistory,
+        sessionId: 'session-1',
+        payload: {'request_id': 'history-rewritten', 'session_id': 'session-1'},
+      ),
+    );
+    final rewrittenMessages =
+        (rewrittenEnvelope['payload'] as Map<String, dynamic>)['messages']
+            as List;
+    final recoveryIndex = rewrittenMessages.indexWhere(
+      (row) =>
+          row is Map &&
+          row['content'] == 'recovery row inserted before the durable anchor',
+    );
+    final relocatedCompactionIndex = rewrittenMessages.indexWhere(
+      (row) => row is Map && row['compaction_id'] == 'cmp-history',
+    );
+    final rewrittenResponseIndex = rewrittenMessages.indexWhere(
+      (row) =>
+          row is Map && row['content'] == 'response produced after compaction',
+    );
+    expect(recoveryIndex, lessThan(relocatedCompactionIndex));
+    expect(relocatedCompactionIndex, lessThan(rewrittenResponseIndex));
   });
 }

@@ -326,13 +326,17 @@ Partial unique index (B1): at most one `started` row per `session_id`.
 |---|---|
 | Identity | `compaction_id`, `session_id` |
 | Lifecycle | `trigger`, `status`, `started_at`, `completed_at` |
-| Snapshot | `source_history_revision`, `source_start_message_id`, `source_end_message_id`, `tail_start_message_id`, `tail_end_message_id` |
+| Snapshot | `source_history_revision`, `source_start_message_id`, `source_end_message_id`, `tail_start_message_id`, `tail_end_message_id`, semantic `tail_end_anchor_fingerprint`, `tail_end_anchor_ordinal` |
 | Route | `provider_instance_id`, `model_id`, `template_id`, `protocol`, `normalized_base_url`, `config_revision`, `credential_revision` |
 | Metrics | `context_window_tokens`, `estimated_request_tokens_before`, `before_measurement_kind`, `estimated_request_tokens_after`, write-once `provider_confirmed_request_tokens_after`, `retained_tail_tokens`, `duration_ms` |
 | Completed only | `internal_summary_json` (redacted structured summary — **not** a `Message` JSON blob) |
 | Failed only | `failure_reason` (enum wire name), optional `failure_detail_json` (redacted diagnostics, never provider wire) |
 
-**Retention:** rows store summary text and numeric ranges only. Canonical message payloads remain solely in `messages.data`. No duplicate tool/media blobs in compaction rows.
+**Retention:** rows store summary text, numeric ranges, and a one-way semantic
+tail-end fingerprint/occurrence only. Canonical message payloads remain solely
+in `messages.data`; no duplicate tool/media blobs enter compaction rows. The
+fingerprint excludes mutable per-turn metrics and relocates the same logical
+anchor when recovery/edit gives its row a new AUTOINCREMENT id.
 
 The completed lifecycle event may be republished with the same deterministic
 event id after provider reconciliation. Live clients fold that update into the
@@ -409,7 +413,7 @@ Dart helper: `CompactionBoundaryValidity` in `agent/lib/evolution/models/compact
 Projection rules:
 
 1. No eligible completed boundary ⇒ full canonical history (no summary injection).
-2. Active boundary ⇒ `[summary user message] + retained tail verbatim + rows with id > tail_end`.
+2. Active boundary ⇒ `[summary user message] + retained tail verbatim + current rows after the retained suffix`. Projection uses the surviving tail-start endpoint when recovery rewrites the obsolete tail-end row; the semantic tail-end fingerprint is reserved for causal placement of lifecycle events during history hydration.
 3. System prompt and runtime overlays remain outside projection; `AgentContextAssembler` owns them per request (53d wiring).
 4. Repeated compactions use only the newest eligible boundary; prior summaries are not stacked.
 5. Exactly one missing endpoint in the newest completed boundary ⇒ `ModelProjectionException` (no silent reorder fallback). Both endpoints missing skip to older boundaries or rule 1; numeric gaps between present endpoints are normal.

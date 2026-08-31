@@ -399,7 +399,10 @@ class SessionQueryHandler {
         in _compactionBoundaries?.listLifecycleForSession(sessionId) ??
             const <CompactionOperationRecord>[]) {
       final lifecycleRow = _compactionLifecycleHistoryRow(operation);
-      final tailEndRowId = operation.retainedTailRange.end.rowId;
+      final tailEndRowId = _resolveCompactionHistoryAnchor(
+        operation,
+        persistedMessages,
+      );
       final firstPostBoundary = persistedMessages
           .where((entry) => entry.rowId > tailEndRowId)
           .firstOrNull;
@@ -539,6 +542,29 @@ class SessionQueryHandler {
         },
       ),
     );
+  }
+
+  int _resolveCompactionHistoryAnchor(
+    CompactionOperationRecord operation,
+    List<PersistedMessage> messages,
+  ) {
+    final originalRowId = operation.retainedTailRange.end.rowId;
+    if (messages.any((entry) => entry.rowId == originalRowId)) {
+      return originalRowId;
+    }
+    final fingerprint = operation.retainedTailEndFingerprint;
+    final occurrence = operation.retainedTailEndOccurrence;
+    if (fingerprint == null || occurrence == null) return originalRowId;
+
+    var seen = 0;
+    for (final entry in messages) {
+      if (CompactionMessageAnchor.fingerprint(entry.message) != fingerprint) {
+        continue;
+      }
+      seen++;
+      if (seen == occurrence) return entry.rowId;
+    }
+    return originalRowId;
   }
 
   Map<String, dynamic> buildThreadsEnvelope(CanonicalEvent event) {

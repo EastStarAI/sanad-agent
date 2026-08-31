@@ -559,6 +559,8 @@ class AgentStateDatabase {
         source_end_message_id INTEGER NOT NULL,
         tail_start_message_id INTEGER NOT NULL,
         tail_end_message_id INTEGER NOT NULL,
+        tail_end_anchor_fingerprint TEXT,
+        tail_end_anchor_ordinal INTEGER CHECK (tail_end_anchor_ordinal > 0),
         provider_instance_id TEXT NOT NULL,
         model_id TEXT NOT NULL,
         template_id TEXT NOT NULL,
@@ -592,6 +594,14 @@ class AgentStateDatabase {
     _safeAddColumn(
       db,
       'ALTER TABLE session_compaction_operations ADD COLUMN provider_confirmed_request_tokens_after INTEGER CHECK (provider_confirmed_request_tokens_after >= 0)',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN tail_end_anchor_fingerprint TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN tail_end_anchor_ordinal INTEGER CHECK (tail_end_anchor_ordinal > 0)',
     );
 
     db.execute('''

@@ -1,6 +1,9 @@
+import 'dart:convert';
+
 import 'package:sqlite3/sqlite3.dart';
 
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 
 import '../models/compaction_operation_codec.dart';
@@ -57,6 +60,11 @@ class CompactionBoundaryRepository {
           outcome: CompactionClaimOutcome.sessionNotFound,
         );
       }
+      final tailAnchor = _messageAnchorInTransaction(
+        tx,
+        sessionId,
+        retainedTailRange.end.rowId,
+      );
       final record = CompactionOperationRecord(
         compactionId: compactionId,
         sessionId: sessionId,
@@ -65,6 +73,8 @@ class CompactionBoundaryRepository {
         sourceHistoryRevision: revision.toCompactionRevision(),
         sourceRange: sourceRange,
         retainedTailRange: retainedTailRange,
+        retainedTailEndFingerprint: tailAnchor?.fingerprint,
+        retainedTailEndOccurrence: tailAnchor?.occurrence,
         routeSignature: routeSignature,
         startedAt: startedAt,
       );
@@ -75,10 +85,11 @@ class CompactionBoundaryRepository {
             source_history_revision,
             source_start_message_id, source_end_message_id,
             tail_start_message_id, tail_end_message_id,
+            tail_end_anchor_fingerprint, tail_end_anchor_ordinal,
             provider_instance_id, model_id, template_id, protocol,
             normalized_base_url, config_revision, credential_revision,
             started_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ''', CompactionOperationCodec.insertStartedParams(record: record));
       } on SqliteException catch (error) {
         if (_isStartedConflict(error)) {
@@ -194,9 +205,13 @@ class CompactionBoundaryRepository {
         tx.db,
         candidate.sessionId,
       );
+      final persisted = tx.db.select(
+        'SELECT * FROM session_compaction_operations WHERE compaction_id = ?',
+        [candidate.compactionId],
+      );
       return CompactionTerminalResult(
         outcome: CompactionTerminalOutcome.completed,
-        record: completed,
+        record: CompactionOperationCodec.fromRow(persisted),
       );
     });
   }
@@ -418,6 +433,35 @@ class CompactionBoundaryRepository {
       sessionId,
     ]);
     return rows.map((row) => row['id'] as int).toSet();
+  }
+
+  ({String fingerprint, int occurrence})? _messageAnchorInTransaction(
+    AgentStateTransaction tx,
+    String sessionId,
+    int targetRowId,
+  ) {
+    final rows = tx.db.select(
+      'SELECT id, data FROM messages WHERE session_id = ? AND id <= ? ORDER BY id ASC',
+      [sessionId, targetRowId],
+    );
+    final targetRows = rows.where((row) => row['id'] == targetRowId);
+    if (targetRows.isEmpty) return null;
+    final targetMessage = Message.fromJson(
+      jsonDecode(targetRows.first['data'] as String) as Map<String, dynamic>,
+    );
+    final targetFingerprint = CompactionMessageAnchor.fingerprint(
+      targetMessage,
+    );
+    var occurrence = 0;
+    for (final row in rows) {
+      final message = Message.fromJson(
+        jsonDecode(row['data'] as String) as Map<String, dynamic>,
+      );
+      final fingerprint = CompactionMessageAnchor.fingerprint(message);
+      if (fingerprint == targetFingerprint) occurrence++;
+    }
+    if (occurrence == 0) return null;
+    return (fingerprint: targetFingerprint, occurrence: occurrence);
   }
 
   bool _rangesResolve(CompactionCandidate candidate, Set<int> rowIds) {
