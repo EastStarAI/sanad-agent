@@ -697,6 +697,13 @@ output; only an explicit Stop uses `reason=cancelled_by_user`. The event
 envelope keeps the session and opaque event identities; the payload does not
 duplicate tool output in `content`.
 
+The terminal result's error classification is also invariant across surfaces.
+If a structured tool payload declares `isError=true` or `is_error=true`, the
+live `tool_result`, durable checkpoint record, and history message metadata all
+declare the result as an error even when the bounded output begins with partial
+stdout rather than an `Error` prefix. A timeout therefore delivers its captured
+output and timeout reason while remaining machine-classified as failed.
+
 When startup terminalizes a crashed shell, the recovery checkpoint keeps that
 tool call as a pending history-reconciliation member even though process
 execution is already terminal. Before the next provider invocation, canonical

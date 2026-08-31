@@ -14,6 +14,7 @@ This contract applies to `agent/lib/engine/runtime/`.
 - Interactive tools, shell execution, and overlapping file paths force sequential execution.
 - Persist completion checkpoint after each tool needed for restart safety.
 - Bound every tool result before completion events, checkpoint persistence, or history insertion, and enforce an aggregate budget across each tool-call batch; this boundary includes built-in, workspace, MCP, platform, resumed, and future registered tools.
+- Preserve a structured tool result's `isError` or `is_error` classification across its completion event, checkpoint output record, and history metadata. A non-`Error` text prefix does not override an explicit structured failure.
 
 ## Continuation Checkpoints
 - `ContinuationCheckpointCoordinator` owns checkpoint schema and read/write orchestration for the active work item.

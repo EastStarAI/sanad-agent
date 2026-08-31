@@ -430,6 +430,8 @@ typed مع partial output وتستكمل الجولة مرة واحدة؛ user c
 - [x] جعل claim + work transition + execution snapshot ذرية عبر aggregate owner.
 - [x] مسح stale notice بحدث واحد ذي ownership صحيح.
 - [x] ضمان terminal commit قبل final delivery ثم execution `idle`.
+- [x] ضمان تطابق `isError=true` لنتيجة timeout المنظمة عبر الحدث والـcheckpoint
+      وhistory مع الاحتفاظ بالمخرجات الجزئية.
 - [x] منع history أو event أقدم من إعادة blocked بعد revision أحدث.
 - [x] إبقاء Client projection مشتقة من daemon authority دون heuristics موازية.
 - [x] ضمان Stop/Retry/Change Provider/Open Settings تعمل فعلياً لكل حالة معتمدة.

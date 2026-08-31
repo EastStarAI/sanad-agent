@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:test/test.dart';
@@ -171,6 +172,27 @@ class MockTool extends BaseTool {
     Map<String, dynamic> args, {
     ToolContext? context,
   }) async => 'tool result';
+}
+
+class StructuredErrorTool extends BaseTool {
+  @override
+  ToolSchema get schema => ToolSchema(
+    name: 'structured_error_tool',
+    description: 'Returns a structured timeout result with partial output.',
+    parameters: {},
+  );
+
+  @override
+  Future<String> execute(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => jsonEncode({
+    'isError': true,
+    'output':
+        'TIMEOUT_PARTIAL_1\nTIMEOUT_PARTIAL_2\n'
+        'Command timed out after 2000 ms.',
+    'terminal_reason': 'timed_out',
+  });
 }
 
 class DelayedTool extends BaseTool {
@@ -1768,6 +1790,70 @@ void main() {
       expect(runner.history[2].role, MessageRole.tool);
       expect(runner.history[2].content, 'tool result');
     });
+
+    test(
+      'propagates structured tool errors to events and message metadata',
+      () async {
+        registry.registerTool(StructuredErrorTool());
+        for (final parallel in [false, true]) {
+          final toolCallId = parallel
+              ? 'timeout-call-parallel'
+              : 'timeout-call-sequential';
+          final runner = AgentRunner(
+            MockAdapter(const []),
+            registry,
+            sessionManager,
+          );
+          final events = <Map<String, dynamic>>[];
+
+          await runner.executeToolCalls(
+            [
+              ToolCall(
+                id: toolCallId,
+                name: 'structured_error_tool',
+                arguments: const {},
+              ),
+            ],
+            parallel: parallel,
+            onToolEvent:
+                ({
+                  required toolName,
+                  input,
+                  output,
+                  required isError,
+                  required isStart,
+                  toolRunId,
+                }) async {
+                  events.add({
+                    'tool_name': toolName,
+                    'output': output,
+                    'is_error': isError,
+                    'is_start': isStart,
+                    'tool_run_id': toolRunId,
+                  });
+                },
+          );
+
+          final completedEvent = events.singleWhere(
+            (event) => event['is_start'] == false,
+          );
+          expect(completedEvent['tool_run_id'], toolCallId);
+          expect(completedEvent['is_error'], isTrue);
+          expect(completedEvent['output'], contains('TIMEOUT_PARTIAL_1'));
+          expect(completedEvent['output'], contains('timed_out'));
+
+          final toolMessage = runner.history.single;
+          expect(toolMessage.role, MessageRole.tool);
+          expect(toolMessage.toolCallId, toolCallId);
+          expect(toolMessage.metadata?['is_error'], isTrue);
+          expect(toolMessage.content, contains('TIMEOUT_PARTIAL_2'));
+          expect(
+            toolMessage.content,
+            contains('Command timed out after 2000 ms.'),
+          );
+        }
+      },
+    );
 
     test('runtime starts from the authoritative received time', () async {
       final adapter = MockAdapter([
