@@ -70,7 +70,11 @@ Removing `ContextEngine` does **not** alter these independent paths:
   fingerprints prove a strict extension and only the appended wire suffix is
   estimated; a rough full-request estimate must not override that confirmed
   value. Route, prompt, schema, or measured-prefix changes invalidate the
-  baseline.
+  baseline. After daemon restart, the runner may recover the latest persisted
+  assistant `usage.input_tokens` only by rebuilding and adapter-measuring the
+  exact request prefix that produced that assistant response. The normal
+  strict-extension proof still decides whether the recovered baseline applies
+  to the next request, so stale route or wire material fails closed.
 
 ### 2.3 Provider context-limit resolution
 

@@ -34,8 +34,13 @@ import 'package:test/test.dart';
 class _PreflightAdapter implements LLMAdapter, WireInputUsageMeasurer {
   final int contextLimit;
   final WireInputMeasurement? wireMeasurement;
+  final WireInputMeasurement? Function(List<Message>)? wireMeasurementFor;
 
-  _PreflightAdapter({this.contextLimit = 3_000, this.wireMeasurement});
+  _PreflightAdapter({
+    this.contextLimit = 3_000,
+    this.wireMeasurement,
+    this.wireMeasurementFor,
+  });
 
   @override
   Future<WireInputMeasurement?> measureInput(
@@ -43,7 +48,7 @@ class _PreflightAdapter implements LLMAdapter, WireInputUsageMeasurer {
     List<ToolSchema>? tools,
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
-  }) async => wireMeasurement;
+  }) async => wireMeasurementFor?.call(history) ?? wireMeasurement;
 
   @override
   Future<int> getContextLimit([String? modelOverride]) async => contextLimit;
@@ -75,6 +80,8 @@ class _PreflightAdapter implements LLMAdapter, WireInputUsageMeasurer {
 class _FakeRuntimeService extends AgentRuntimeService {
   _FakeRuntimeService(super.config, super.repo);
 
+  LLMAdapter? turnAdapter;
+
   @override
   RouteSignature resolveSignature({String? providerId, String? modelId}) {
     return const RouteSignature(
@@ -87,6 +94,21 @@ class _FakeRuntimeService extends AgentRuntimeService {
       credentialRevision: 1,
     );
   }
+
+  @override
+  LLMAdapter adapterForTurn(
+    RouteSignature signature, {
+    required String sessionId,
+    String? requestId,
+    String? runId,
+  }) =>
+      turnAdapter ??
+      super.adapterForTurn(
+        signature,
+        sessionId: sessionId,
+        requestId: requestId,
+        runId: runId,
+      );
 }
 
 class _FailingSummarizer implements CompactionSummarizer {
@@ -420,7 +442,7 @@ void main() {
       );
 
       await usageRunner.debugPrepareProviderHistory();
-
+      expect(usageRunner.debugConfirmedInputUsageBaseline?.inputTokens, 83_200);
       expect(
         usageRunner.debugLastPreflightPressure?.estimatedRequestTokens,
         lessThan(98_304),
@@ -435,4 +457,133 @@ void main() {
       );
     },
   );
+
+  test(
+    'restores provider usage from persisted assistant metadata after restart',
+    () async {
+      final now = DateTime.utc(2026, 8, 31);
+      sessions.saveSession(
+        SessionState(
+          sessionId: 'session-restored-provider-priority',
+          providerId: 'provider-1',
+          model: 'gpt-4o',
+          createdAt: now,
+          updatedAt: now,
+          lastUserMessageAt: now,
+        ),
+      );
+      sessions.replaceMessages('session-restored-provider-priority', [
+        Message(role: MessageRole.user, content: 'measured prefix'),
+        Message(
+          role: MessageRole.assistant,
+          content: 'provider-confirmed response',
+          metadata: {
+            'model': 'gpt-4o',
+            'provider': 'openai',
+            'usage': {'input_tokens': 83_200},
+          },
+        ),
+        Message(role: MessageRole.user, content: 'small resumed suffix'),
+      ]);
+      final usageRegistry = ToolsRegistry();
+      final preflightAdapter = _PreflightAdapter(
+        contextLimit: 400_000,
+        wireMeasurementFor: (history) {
+          final includesConfirmedResponse = history.any(
+            (message) => message.content == 'provider-confirmed response',
+          );
+          return WireInputMeasurement(
+            estimatedTokens: includesConfirmedResponse ? 99_000 : 98_500,
+            stableMaterialFingerprint: 'stable-wire-material',
+            inputItemFingerprints: includesConfirmedResponse
+                ? const ['measured-prefix', 'small-resumed-suffix']
+                : const ['measured-prefix'],
+          );
+        },
+      );
+      (getIt<AgentRuntimeService>() as _FakeRuntimeService).turnAdapter =
+          preflightAdapter;
+      final usageRunner = AgentRunner(
+        preflightAdapter,
+        usageRegistry,
+        sessionManager,
+        existingSessionId: 'session-restored-provider-priority',
+      );
+
+      final prepared = await usageRunner.debugPrepareProviderHistory();
+
+      expect(
+        prepared.any(
+          (message) => message.content == 'provider-confirmed response',
+        ),
+        isTrue,
+      );
+      expect(usageRunner.debugConfirmedInputUsageBaseline?.inputTokens, 83_200);
+      expect(
+        usageRunner.debugLastPreflightPressure?.estimatedRequestTokens,
+        83_700,
+      );
+      expect(
+        usageRunner.debugLastPreflightPressure?.measurementKind,
+        CompactionMeasurementKind.mixed,
+      );
+      expect(
+        boundaries.listCompletedForSession(
+          'session-restored-provider-priority',
+        ),
+        isEmpty,
+      );
+    },
+  );
+
+  test('does not restore persisted usage from a different route', () async {
+    final now = DateTime.utc(2026, 8, 31);
+    sessions.saveSession(
+      SessionState(
+        sessionId: 'session-stale-provider-usage',
+        providerId: 'provider-1',
+        model: 'gpt-4o',
+        createdAt: now,
+        updatedAt: now,
+        lastUserMessageAt: now,
+      ),
+    );
+    sessions.replaceMessages('session-stale-provider-usage', [
+      Message(role: MessageRole.user, content: 'old route prefix'),
+      Message(
+        role: MessageRole.assistant,
+        content: 'old route response',
+        metadata: {
+          'model': 'gpt-4o',
+          'provider': 'different-provider',
+          'usage': {'input_tokens': 83_200},
+        },
+      ),
+      Message(role: MessageRole.user, content: 'new route suffix'),
+    ]);
+    final preflightAdapter = _PreflightAdapter(
+      contextLimit: 400_000,
+      wireMeasurement: WireInputMeasurement(
+        estimatedTokens: 90_000,
+        stableMaterialFingerprint: 'new-route-material',
+        inputItemFingerprints: const ['new-route-request'],
+      ),
+    );
+    (getIt<AgentRuntimeService>() as _FakeRuntimeService).turnAdapter =
+        preflightAdapter;
+    final usageRunner = AgentRunner(
+      preflightAdapter,
+      ToolsRegistry(),
+      sessionManager,
+      existingSessionId: 'session-stale-provider-usage',
+    );
+
+    await usageRunner.debugPrepareProviderHistory();
+
+    expect(usageRunner.debugConfirmedInputUsageBaseline, isNull);
+    expect(
+      usageRunner.debugLastPreflightPressure?.measurementKind,
+      CompactionMeasurementKind.estimated,
+    );
+  });
 }

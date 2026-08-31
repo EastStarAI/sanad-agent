@@ -8,9 +8,10 @@ import '../adapters/llm_adapter.dart';
 
 /// Provider-confirmed input usage tied to the exact request material it measured.
 ///
-/// The baseline is intentionally in-memory only. Consumers may extend it with a
-/// newly appended message suffix, but must discard it when route, prompt,
-/// schemas, or any measured message changes.
+/// The active baseline is held in memory. After a restart it may be restored
+/// from persisted assistant usage by remeasuring that response's exact request
+/// prefix. Consumers may extend it with a newly appended message suffix, but
+/// must discard it when route, prompt, schemas, or measured messages change.
 @immutable
 class ConfirmedInputUsageBaseline {
   final RouteSignature routeSignature;

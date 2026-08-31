@@ -182,6 +182,10 @@ class AgentRunner {
   RequestPressureSnapshot? get debugLastPreflightPressure =>
       _lastPreflightPressure;
 
+  @visibleForTesting
+  ConfirmedInputUsageBaseline? get debugConfirmedInputUsageBaseline =>
+      _confirmedInputUsageBaseline;
+
   void beginAuthoritativeRun(
     String? runId, {
     String? workItemId,
@@ -347,6 +351,68 @@ class AgentRunner {
 
   static LLMAdapter _wireMeasurementAdapter(LLMAdapter adapter) =>
       adapter is RateLimitedLLMAdapter ? adapter.providerAdapter : adapter;
+
+  Future<void> _restoreConfirmedInputUsageBaseline({
+    required List<Message> prospectiveHistory,
+    required WireInputUsageMeasurer measurer,
+    required RouteSignature routeSignature,
+    required String? providerId,
+    required String? modelId,
+    required WireInputMeasurement currentMeasurement,
+  }) async {
+    if (_confirmedInputUsageBaseline != null) return;
+
+    for (var index = prospectiveHistory.length - 1; index >= 0; index--) {
+      final message = prospectiveHistory[index];
+      if (message.role != MessageRole.assistant) continue;
+      final metadata = message.metadata;
+      final usage = metadata?['usage'];
+      final inputTokens = usage is Map ? usage['input_tokens'] : null;
+      if (inputTokens is! num || inputTokens <= 0) continue;
+
+      final recordedModel = metadata?['model']?.toString();
+      final recordedProvider = metadata?['provider']?.toString();
+      final contextUsage = metadata?['context_usage'];
+      final recordedContextProvider = contextUsage is Map
+          ? contextUsage['provider_instance_id']?.toString()
+          : null;
+      final providerMatches =
+          <String?>{
+            routeSignature.providerInstanceId,
+            routeSignature.templateId,
+            providerId,
+          }.contains(recordedProvider) ||
+          <String?>{
+            routeSignature.providerInstanceId,
+            routeSignature.templateId,
+            providerId,
+          }.contains(recordedContextProvider);
+      if (recordedModel != routeSignature.modelId || !providerMatches) {
+        continue;
+      }
+
+      final measuredMessages = prospectiveHistory.sublist(0, index);
+      final toolSchemas = registry.allTools.map((tool) => tool.schema).toList();
+      final measurement = await measurer.measureInput(
+        measuredMessages,
+        tools: toolSchemas,
+        modelOverride: modelId,
+        options: _requestOptionsForTurn(providerId),
+      );
+      if (measurement == null) return;
+      if (!currentMeasurement.extendsMeasurement(measurement)) return;
+      _confirmedInputUsageBaseline = ConfirmedInputUsageBaseline(
+        routeSignature: routeSignature,
+        inputTokens: inputTokens.round(),
+        conversationMessages: measuredMessages,
+        systemPrompt: '',
+        runtimeContext: '',
+        toolSchemas: toolSchemas.map((schema) => schema.toJson()).toList(),
+        wireMeasurement: measurement,
+      );
+      return;
+    }
+  }
 
   AgentRunner(
     this.adapter,
@@ -2086,6 +2152,16 @@ class AgentRunner {
       providerId: routing.providerId,
       modelId: routing.model,
     );
+    if (turnAdapter is WireInputUsageMeasurer && wireMeasurement != null) {
+      await _restoreConfirmedInputUsageBaseline(
+        prospectiveHistory: prospectiveHistory,
+        measurer: turnAdapter as WireInputUsageMeasurer,
+        routeSignature: routeSignature,
+        providerId: routing.providerId,
+        modelId: routing.model,
+        currentMeasurement: wireMeasurement,
+      );
+    }
     final toolSchemas = registry.allTools
         .map((tool) => tool.schema.toJson())
         .toList();
