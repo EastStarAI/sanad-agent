@@ -463,7 +463,31 @@ class SessionDB {
   void replaceMessages(String sessionId, List<Message> messages) {
     _db.execute('BEGIN TRANSACTION');
     try {
-      _upsertMessageList(sessionId, messages);
+      final existing = getPersistedMessages(sessionId);
+      final assigned = MessageHistoryIdentity.assignIdentities(
+        messages,
+        existingActive: existing
+            .map((entry) => MessageHistoryIdentity.read(entry.message))
+            .toList(growable: false),
+      );
+      var unchangedPrefixLength = 0;
+      final comparableLength = existing.length < assigned.length
+          ? existing.length
+          : assigned.length;
+      while (unchangedPrefixLength < comparableLength &&
+          jsonEncode(existing[unchangedPrefixLength].message.toJson()) ==
+              jsonEncode(assigned[unchangedPrefixLength].toJson())) {
+        unchangedPrefixLength++;
+      }
+      if (unchangedPrefixLength < existing.length) {
+        _db.execute('DELETE FROM messages WHERE session_id = ? AND id >= ?', [
+          sessionId,
+          existing[unchangedPrefixLength].rowId,
+        ]);
+      }
+      for (final message in assigned.skip(unchangedPrefixLength)) {
+        MessageHistoryIdentity.persist(_db, sessionId, message);
+      }
       SessionHistoryRevisionRepository.bumpDatabase(_db, sessionId);
       _db.execute('COMMIT');
     } catch (e) {

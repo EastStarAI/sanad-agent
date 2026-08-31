@@ -55,8 +55,7 @@ class SessionTurnReplayCommandHandler {
         event.payload['request_id']?.toString().trim() ?? '';
     final action = event.payload['action']?.toString() ?? 'retry';
     final confirmed = event.payload['confirmed_replay_unsafe'] == true;
-    final confirmedDropSteers =
-        event.payload['confirmed_drop_steers'] == true;
+    final confirmedDropSteers = event.payload['confirmed_drop_steers'] == true;
     final expectedHistoryRevision = _parseRevision(
       event.payload['expected_history_revision'],
     );
@@ -420,7 +419,7 @@ class SessionTurnReplayCommandHandler {
         TurnReplayInspectionFailure.targetIsNotLatestTurn ||
         TurnReplayInspectionFailure.identityIncomplete => 'stale_turn_boundary',
         TurnReplayInspectionFailure.historyRevisionMismatch =>
-          'history_revision_mismatch',
+          'stale_turn_boundary',
         _ => _failureName(failure),
       };
 }

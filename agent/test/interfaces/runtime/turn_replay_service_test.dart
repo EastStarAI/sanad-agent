@@ -173,14 +173,14 @@ void main() {
       targetRequestId: 'steer-pending',
       targetMessageId: 'missing-message',
       targetTurnId: 'missing-turn',
-      expectedHistoryRevision: 0,
+      expectedHistoryRevision: 1,
     );
     expect(
       inspection.failure,
       TurnReplayInspectionFailure.targetNotReplayableInput,
     );
     expect(sessions.getMessages(sessionId), hasLength(2));
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
   });
 
   test('steer user records are not replay targets', () {
@@ -202,7 +202,7 @@ void main() {
       targetRequestId: 'steer-1',
       targetMessageId: stored.last.metadata?['message_id']?.toString(),
       targetTurnId: stored.last.metadata?['turn_id']?.toString(),
-      expectedHistoryRevision: 0,
+      expectedHistoryRevision: 1,
     );
     expect(
       inspection.failure,
@@ -215,7 +215,7 @@ void main() {
       targetRequestId: 'request-1',
       targetMessageId: root.metadata?['message_id']?.toString(),
       targetTurnId: root.metadata?['turn_id']?.toString(),
-      expectedHistoryRevision: 0,
+      expectedHistoryRevision: 1,
     );
     expect(rootInspection.canReplay, isTrue);
     expect(rootInspection.containsSteers, isTrue);
@@ -256,7 +256,7 @@ void main() {
       targetRequestId: 'request-1',
       targetMessageId: stored.first.metadata?['message_id']?.toString(),
       targetTurnId: stored.first.metadata?['turn_id']?.toString(),
-      expectedHistoryRevision: 0,
+      expectedHistoryRevision: 1,
     );
     final admission = service.admitReplacement(
       inspection: inspection,
@@ -265,8 +265,8 @@ void main() {
       action: 'retry',
     );
     expect(admission, isNotNull);
-    expect(admission!.historyRevision, 1);
-    expect(sessions.getSession(sessionId)!.historyRevision, 1);
+    expect(admission!.historyRevision, 2);
+    expect(sessions.getSession(sessionId)!.historyRevision, 2);
     final active = sessions.getMessages(sessionId);
     expect(active, hasLength(1));
     expect(active.single.content, 'retry first');
@@ -299,7 +299,7 @@ void main() {
       targetRequestId: 'request-2',
       targetMessageId: active.single.metadata?['message_id']?.toString(),
       targetTurnId: active.single.metadata?['turn_id']?.toString(),
-      expectedHistoryRevision: 0,
+      expectedHistoryRevision: 1,
     );
     expect(stale.failure, TurnReplayInspectionFailure.historyRevisionMismatch);
   });
@@ -348,7 +348,7 @@ void main() {
       targetRequestId: 'request-root',
       targetMessageId: stored.first.metadata?['message_id']?.toString(),
       targetTurnId: stored.first.metadata?['turn_id']?.toString(),
-      expectedHistoryRevision: 0,
+      expectedHistoryRevision: 1,
     );
     expect(inspection.canReplay, isTrue);
     expect(inspection.containsSteers, isTrue);
@@ -378,14 +378,14 @@ void main() {
       targetRequestId: 'steer-1',
       targetMessageId: steer['message_id']?.toString(),
       targetTurnId: steer['turn_id']?.toString(),
-      expectedHistoryRevision: 0,
+      expectedHistoryRevision: 1,
     );
 
     expect(
       inspection.failure,
       TurnReplayInspectionFailure.targetNotReplayableInput,
     );
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
     expect(sessions.getMessages(sessionId), hasLength(2));
   });
 
@@ -404,7 +404,7 @@ void main() {
       replacement: user('request-2', 'should not land'),
     );
     expect(rejected, isNull);
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
     final stillActive = sessions.getMessages(sessionId);
     expect(stillActive, hasLength(2));
     expect(stillActive.first.content, 'keep me');
@@ -426,7 +426,7 @@ void main() {
       targetRequestId: 'request-1',
       targetMessageId: original.first.metadata?['message_id']?.toString(),
       targetTurnId: original.first.metadata?['turn_id']?.toString(),
-      expectedHistoryRevision: 0,
+      expectedHistoryRevision: 1,
     );
     state.db.execute('''
       CREATE TRIGGER reject_replay_supersession
@@ -447,7 +447,7 @@ void main() {
       throwsA(anything),
     );
 
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
     final active = sessions.getMessages(sessionId);
     expect(active.map((message) => message.content), ['keep me', 'answer']);
     expect(
@@ -468,7 +468,7 @@ void main() {
       targetRequestId: 'request-1',
       targetMessageId: stored.first.metadata?['message_id']?.toString(),
       targetTurnId: stored.first.metadata?['turn_id']?.toString(),
-      expectedHistoryRevision: 0,
+      expectedHistoryRevision: 1,
     );
     expect(inspection.canReplay, isTrue);
     sessions.saveSessionHistory(sessionId, [
@@ -484,7 +484,7 @@ void main() {
       ),
       isNull,
     );
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 2);
     expect(sessions.getMessages(sessionId).map((message) => message.content), [
       'first',
       'first answer',
@@ -534,7 +534,7 @@ void main() {
           targetRequestId: 'request-root',
           targetMessageId: stored.first.metadata?['message_id']?.toString(),
           targetTurnId: stored.first.metadata?['turn_id']?.toString(),
-          expectedHistoryRevision: 0,
+          expectedHistoryRevision: 1,
         );
     expect(inspection.canReplay, isTrue);
     expect(inspection.containsSteers, isTrue);

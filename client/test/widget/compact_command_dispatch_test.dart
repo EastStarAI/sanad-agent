@@ -16,6 +16,7 @@ import 'package:sanad_client/features/devices/presentation/bloc/device_state.dar
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 
 import '../helpers/fake_conversation_repository.dart';
 import '../helpers/fake_device_preferences_repository.dart';
@@ -340,7 +341,8 @@ void main() {
     expect(validationError, '/compact does not accept arguments.');
     expect(conversationRepository.compactSessionCalls, 0);
     expect(find.text('/compact force'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(ToastUtils.defaultDuration);
+    await tester.pump(const Duration(milliseconds: 500));
   });
 
   testWidgets('session busy compact outcome shows validation feedback', (
@@ -377,7 +379,8 @@ void main() {
       'Session is busy. Try /compact again when idle.',
     );
     expect(find.text('/compact'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(ToastUtils.defaultDuration);
+    await tester.pump(const Duration(milliseconds: 500));
   });
 
   testWidgets('compaction in progress outcome shows validation feedback', (
@@ -414,7 +417,8 @@ void main() {
       'Context compaction is already in progress.',
     );
     expect(find.text('/compact'), findsOneWidget);
-    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(ToastUtils.defaultDuration);
+    await tester.pump(const Duration(milliseconds: 500));
   });
 }
 

@@ -51,7 +51,7 @@ void main() {
     required String targetRequestId,
     String? targetMessageId,
     String? targetTurnId,
-    Object? expectedHistoryRevision = 0,
+    Object? expectedHistoryRevision,
     String action = 'retry',
     String? message,
     bool confirmed = false,
@@ -69,7 +69,9 @@ void main() {
         'target_request_id': targetRequestId,
         'target_message_id': ?targetMessageId,
         'target_turn_id': ?targetTurnId,
-        'expected_history_revision': ?expectedHistoryRevision,
+        'expected_history_revision':
+            expectedHistoryRevision ??
+            sessions.getSession(sessionId)?.historyRevision,
         'action': action,
         'message': ?message,
         'confirmed_replay_unsafe': confirmed,
@@ -132,7 +134,7 @@ void main() {
     expect(orchestrator.stopCount, 0);
     expect(orchestrator.events, isEmpty);
     expect(sessions.getMessages(sessionId), hasLength(1));
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
   });
 
   test('steer targets are rejected before Stop or mutation', () async {
@@ -168,7 +170,7 @@ void main() {
     expect(orchestrator.stopCount, 0);
     expect(orchestrator.events, isEmpty);
     expect(sessions.getMessages(sessionId), hasLength(3));
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
   });
 
   test('embedded steer targets are rejected before Stop or mutation', () async {
@@ -212,7 +214,7 @@ void main() {
     expect(orchestrator.stopCount, 0);
     expect(orchestrator.events, isEmpty);
     expect(sessions.getMessages(sessionId), hasLength(2));
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
   });
 
   test('steer drop confirmation is required before Stop', () async {
@@ -246,7 +248,7 @@ void main() {
     );
     expect(orchestrator.stopCount, 0);
     expect(orchestrator.events, isEmpty);
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
   });
 
   test('unconfirmed unsafe replay does not Stop or mutate history', () async {
@@ -294,7 +296,7 @@ void main() {
     expect(orchestrator.stopCount, 0);
     expect(orchestrator.events, isEmpty);
     expect(sessions.getMessages(sessionId).first.content, 'change the file');
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
   });
 
   test('non-idle snapshot yields session_not_idle without mutation', () async {
@@ -326,7 +328,7 @@ void main() {
     expect(orchestrator.stopCount, 1);
     expect(orchestrator.events, isEmpty);
     expect(sessions.getMessages(sessionId).single.content, 'hello');
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
   });
 
   test('running work that reaches idle is admitted after the wait', () async {
@@ -414,7 +416,7 @@ void main() {
     }
     expect(sessions.getMessages(sessionId).single.content, 'hello');
     expect(sessions.getMessages(otherId).single.content, 'other');
-    expect(sessions.getSession(otherId)!.historyRevision, 0);
+    expect(sessions.getSession(otherId)!.historyRevision, 1);
   });
 
   test('missing execution snapshot state is not dispatch authority', () async {
@@ -481,7 +483,7 @@ void main() {
 
       expect(envelopes.single['payload']['outcome'], 'failed');
       expect(orchestrator.events, isEmpty);
-      expect(sessions.getSession(sessionId)!.historyRevision, 0);
+      expect(sessions.getSession(sessionId)!.historyRevision, 1);
       expect(
         sessions.getMessages(sessionId).map((message) => message.content),
         ['hello', 'answer'],
@@ -516,7 +518,7 @@ void main() {
         (envelope) async => envelopes.add(envelope),
       );
       expect(envelopes.single['payload']['outcome'], 'accepted');
-      expect(envelopes.single['payload']['history_revision'], 1);
+      expect(envelopes.single['payload']['history_revision'], 2);
       expect(orchestrator.events, hasLength(1));
       expect(
         orchestrator.events.single.turnRequest?.requestId,
@@ -688,7 +690,7 @@ void main() {
     );
     expect(envelopes.single['payload']['outcome'], 'stale_turn_boundary');
     expect(orchestrator.events, isEmpty);
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 2);
     expect(sessions.getMessages(sessionId).map((message) => message.content), [
       'hello',
       'newer',
@@ -721,7 +723,7 @@ void main() {
     expect(envelopes.single['payload']['outcome'], 'session_not_idle');
     expect(orchestrator.events, isEmpty);
     expect(sessions.getMessages(sessionId).single.content, 'hello');
-    expect(sessions.getSession(sessionId)!.historyRevision, 0);
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
   });
 }
 
