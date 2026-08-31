@@ -4,6 +4,7 @@ import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/evolution/models/session_query.dart';
 import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
+import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
@@ -112,6 +113,7 @@ class SessionQueryHandler {
           'content': message.content ?? '',
           'created_at': metadata?['received_at'] ?? msgTime,
           'session_id': sessionId,
+          ...MessageHistoryIdentity.wireFields(message),
           ...?metadata == null
               ? null
               : {
@@ -258,15 +260,18 @@ class SessionQueryHandler {
             final text = steer['text']?.toString().trim();
             if (text == null || text.isEmpty) continue;
             final steerId = ++index;
+            final steerMessageId = steer['message_id']?.toString();
             final steerMetadata = <String, dynamic>{
               'steer': true,
-              if (steer['request_id'] != null)
-                'request_id': steer['request_id'],
-              if (steer['received_at'] != null)
-                'received_at': steer['received_at'],
+              'input_kind': MessageHistoryIdentity.steer,
+              'replay_eligible': false,
+              'message_id': ?steerMessageId,
+              'turn_id': ?steer['turn_id'],
+              'request_id': ?steer['request_id'],
+              'received_at': ?steer['received_at'],
             };
             historyMessages.add({
-              'id': steerId,
+              'id': steerMessageId ?? steerId,
               'sender': 'user',
               'type': 'user_message',
               'content': text,
@@ -275,8 +280,11 @@ class SessionQueryHandler {
                   baseTime.add(Duration(seconds: steerId)).toIso8601String(),
               'session_id': sessionId,
               'metadata': steerMetadata,
-              if (steer['request_id'] != null)
-                'request_id': steer['request_id'],
+              'input_kind': MessageHistoryIdentity.steer,
+              'replay_eligible': false,
+              'message_id': ?steerMessageId,
+              'turn_id': ?steer['turn_id'],
+              'request_id': ?steer['request_id'],
             });
           }
         }
@@ -358,10 +366,12 @@ class SessionQueryHandler {
         'sender': 'ai',
         'type': 'final_answer',
         'content': message.content ?? '',
+        'status': 'done',
         'created_at': baseTime
             .add(Duration(seconds: finalAnswerId))
             .toIso8601String(),
         'session_id': sessionId,
+        ...MessageHistoryIdentity.wireFields(message),
         if (meta != null) ...{
           if (meta['run_id'] != null) 'run_id': meta['run_id'],
           if (meta['model_step_id'] != null)
@@ -430,6 +440,31 @@ class SessionQueryHandler {
         }
       }
       historyMessages.insert(insertionIndex, lifecycleRow);
+    }
+
+    if (session != null &&
+        session.forkSequence > 0 &&
+        session.forkedFromMessageId != null &&
+        session.forkedFromTurnId != null) {
+      final eventId = 'fork_${session.sessionId}';
+      historyMessages.add({
+        'id': eventId,
+        'event_id': eventId,
+        'sender': 'system',
+        'type': CanonicalEventTypes.sessionForked,
+        'content': 'Conversation forked',
+        'session_id': session.sessionId,
+        'created_at': session.createdAt.toUtc().toIso8601String(),
+        'metadata': {
+          'informational': true,
+          'informational_kind': 'session_fork',
+          'lineage_id': session.lineageId,
+          'parent_session_id': session.parentSessionId,
+          'forked_from_message_id': session.forkedFromMessageId,
+          'forked_from_turn_id': session.forkedFromTurnId,
+          'fork_sequence': session.forkSequence,
+        },
+      });
     }
 
     for (final transition

@@ -46,6 +46,11 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
     final toolMetadata = (metadata['tool'] is Map) ? (metadata['tool'] as Map).cast<String, dynamic>() : null;
     final canonicalFields = <String, dynamic>{
       'request_id': row['request_id'] ?? metadata['request_id'],
+      'message_id': row['message_id'] ?? metadata['message_id'],
+      'turn_id': row['turn_id'] ?? metadata['turn_id'],
+      'input_kind': row['input_kind'] ?? metadata['input_kind'],
+      'history_status': row['history_status'] ?? metadata['history_status'],
+      'replay_eligible': row['replay_eligible'] ?? metadata['replay_eligible'],
       'session_id': row['session_id'] ?? metadata['session_id'],
       'run_id': row['run_id'] ?? metadata['run_id'],
       'model_step_id': row['model_step_id'] ?? metadata['model_step_id'],
@@ -448,6 +453,22 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       case 'context_compaction.failed':
         return _mapCompactionEvent(event, timestamp);
 
+      case 'session.forked':
+        return CanonicalEvent(
+          id: eventId ?? 'fork_${sessionId ?? timestamp.microsecondsSinceEpoch}',
+          kind: EventKind.informational,
+          status: EventStatus.done,
+          text: text.isNotEmpty ? text : 'Conversation forked',
+          timestamp: timestamp,
+          sessionId: sessionId,
+          eventId: eventId,
+          metadata: {
+            ...?metadata,
+            'informational': true,
+            'informational_kind': 'session_fork',
+          },
+        );
+
       case 'session_route_transition':
         final snapshot = SessionRouteSnapshot.fromJson(event);
         return CanonicalEvent(
@@ -596,6 +617,11 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
     final normalized = <String, dynamic>{
       if (metadata is Map) ...metadata.cast<String, dynamic>(),
       if (event['request_id'] != null) 'request_id': event['request_id'],
+      if (event['message_id'] != null) 'message_id': event['message_id'],
+      if (event['turn_id'] != null) 'turn_id': event['turn_id'],
+      if (event['input_kind'] != null) 'input_kind': event['input_kind'],
+      if (event['history_status'] != null) 'history_status': event['history_status'],
+      if (event['replay_eligible'] != null) 'replay_eligible': event['replay_eligible'],
       if (event['queued'] != null) 'queued': event['queued'],
       if (event['classification'] != null) 'classification': event['classification'],
       if (event['generation'] != null) 'generation': event['generation'],

@@ -28,6 +28,7 @@ import 'package:sanad_client/features/provider_setup/data/models/provider_instan
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:sanad_client/utils/workspace_picker_helper.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
@@ -366,7 +367,8 @@ void main() {
       validationError,
       ConversationInputCubit.missingProviderModelError,
     );
-    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(ToastUtils.defaultDuration);
+    await tester.pump(const Duration(milliseconds: 500));
   });
 
   testWidgets('switching devices loads the target device draft', (tester) async {
@@ -857,6 +859,8 @@ void main() {
 
     expect(conversationRepository.browseWorkspaceTreeRequests, isEmpty);
     expect(conversationRepository.createdWorkspaces.single, containsPair('path', '/picked/local-workspace'));
+    await tester.pump(ToastUtils.defaultDuration);
+    await tester.pump(const Duration(milliseconds: 500));
   });
 
   testWidgets('creates a remote workspace by name without a host path', (tester) async {

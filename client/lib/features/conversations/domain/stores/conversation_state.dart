@@ -17,6 +17,8 @@ class ConversationState {
 
   final List<CanonicalEvent> _events = [];
   ThinkingStreamMode _thinkingStreamMode;
+  final Set<String> _supersededTurnIds = <String>{};
+  final Set<String> _supersededMessageIds = <String>{};
 
   List<CanonicalEvent> get events => List.unmodifiable(_events);
 
@@ -24,6 +26,8 @@ class ConversationState {
 
   void clear() {
     _events.clear();
+    _supersededTurnIds.clear();
+    _supersededMessageIds.clear();
   }
 
   void updateThinkingStreamMode(ThinkingStreamMode value) {
@@ -40,12 +44,14 @@ class ConversationState {
     _events.clear();
     for (final event in history) {
       if (event.kind == EventKind.reasoning) continue;
+      if (_isSuperseded(event)) continue;
       _applyInternal(event);
     }
   }
 
   /// Apply a new event to the state.
   void apply(CanonicalEvent event) {
+    if (_isSuperseded(event)) return;
     _applyInternal(event);
   }
 
@@ -108,13 +114,34 @@ class ConversationState {
     }
   }
 
-  bool truncateAtUserRequest(String requestId) {
-    final index = _events.indexWhere(
-      (event) => event.kind == EventKind.userMessage && event.requestId == requestId,
-    );
-    if (index < 0) return false;
-    _events.removeRange(index, _events.length);
-    return true;
+  /// Hide the superseded root turn by stable identity. Late live events with
+  /// the same `turn_id` or `message_id` are dropped instead of resurrecting it.
+  bool hideSupersededIdentities({
+    String? turnId,
+    String? messageId,
+  }) {
+    if (turnId != null && turnId.isNotEmpty) {
+      _supersededTurnIds.add(turnId);
+    }
+    if (messageId != null && messageId.isNotEmpty) {
+      _supersededMessageIds.add(messageId);
+    }
+    final before = _events.length;
+    _events.removeWhere(_isSuperseded);
+    return _events.length != before;
+  }
+
+  bool _isSuperseded(CanonicalEvent event) {
+    if (event.metadata?['history_status']?.toString() == 'superseded') {
+      return true;
+    }
+    final turnId = event.turnId;
+    final messageId = event.messageId;
+    if (turnId != null && _supersededTurnIds.contains(turnId)) return true;
+    if (messageId != null && _supersededMessageIds.contains(messageId)) {
+      return true;
+    }
+    return false;
   }
 
   void _applyInternal(CanonicalEvent event) {

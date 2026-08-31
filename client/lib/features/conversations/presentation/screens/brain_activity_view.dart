@@ -91,6 +91,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   TextEditingController? _editController;
   String? _editingEventId;
   String? _replayPendingEventId;
+  String? _forkPendingEventId;
   int _openAnchorIndex = 0;
   bool _openAtTail = false;
   bool _hasResolvedOpeningTailAlignment = true;
@@ -168,6 +169,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         oldWidget.sessionId != widget.sessionId || oldWidget.composerSessionId != widget.composerSessionId;
     if (sessionChanged) {
       _cancelInlineEdit(notify: false);
+      _forkPendingEventId = null;
     }
     final messagesChanged = !listEquals(oldWidget.initialMessages, widget.initialMessages);
     final activityChanged = oldWidget.activityEligible != widget.activityEligible;
@@ -272,6 +274,13 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     }
   }
 
+  int _latestReplayableRootIndex(List<CanonicalEvent> messages) {
+    for (int i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].isReplayableRootTurn) return i;
+    }
+    return -1;
+  }
+
   int _lastUserMessageIndex(List<CanonicalEvent> messages) {
     for (int i = messages.length - 1; i >= 0; i--) {
       if (messages[i].kind == EventKind.userMessage) return i;
@@ -280,7 +289,12 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   }
 
   void _prepareInitialSessionPosition() {
-    _openAtTail = widget.followLatestOnOpen;
+    final opensAtForkMarker =
+        _timelineItems.isNotEmpty &&
+        _timelineItems.last.events.any(
+          (event) => event.metadata?['informational_kind'] == 'session_fork',
+        );
+    _openAtTail = widget.followLatestOnOpen || opensAtForkMarker;
     _openingTailAnchorPixels = null;
     _hasResolvedOpeningTailAlignment = true;
     _autoFollowEligible = false;
@@ -620,31 +634,53 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     String? message,
   }) async {
     final requestId = event.requestId;
-    if (requestId == null || requestId.isEmpty || _replayPendingEventId != null) {
+    if (requestId == null || requestId.isEmpty || !event.isReplayableRootTurn || _replayPendingEventId != null) {
       return;
     }
     setState(() => _replayPendingEventId = event.id);
     final cubit = context.read<ConversationInputCubit>();
-    var result = await cubit.replayTurn(
-      targetRequestId: requestId,
-      action: action,
-      message: message,
-    );
-    if (!mounted) return;
-    if (result.requiresConfirmation) {
-      final confirmed = await _confirmUnsafeReplay(result.safety);
-      if (!mounted) return;
-      if (!confirmed) {
-        setState(() => _replayPendingEventId = null);
-        return;
-      }
+    var confirmedUnsafe = false;
+    var confirmedDropSteers = false;
+    var retriedAfterRevisionMismatch = false;
+    late TurnReplayResult result;
+    while (true) {
       result = await cubit.replayTurn(
         targetRequestId: requestId,
+        targetMessageId: event.messageId,
+        targetTurnId: event.turnId,
         action: action,
         message: message,
-        confirmedReplayUnsafe: true,
+        confirmedReplayUnsafe: confirmedUnsafe,
+        confirmedDropSteers: confirmedDropSteers,
       );
       if (!mounted) return;
+      if (result.outcome == 'history_revision_mismatch' &&
+          !retriedAfterRevisionMismatch &&
+          result.historyRevision != null) {
+        retriedAfterRevisionMismatch = true;
+        continue;
+      }
+      if (result.requiresConfirmation && !confirmedUnsafe) {
+        final confirmed = await _confirmUnsafeReplay(result.safety);
+        if (!mounted) return;
+        if (!confirmed) {
+          setState(() => _replayPendingEventId = null);
+          return;
+        }
+        confirmedUnsafe = true;
+        continue;
+      }
+      if (result.requiresSteerDropConfirmation && !confirmedDropSteers) {
+        final confirmed = await _confirmDropSteers();
+        if (!mounted) return;
+        if (!confirmed) {
+          setState(() => _replayPendingEventId = null);
+          return;
+        }
+        confirmedDropSteers = true;
+        continue;
+      }
+      break;
     }
     if (result.isAccepted) {
       _cancelInlineEdit(notify: false);
@@ -652,6 +688,31 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       ToastUtils.showError(context, _turnReplayError(result.outcome));
     }
     setState(() => _replayPendingEventId = null);
+  }
+
+  Future<void> _forkSession(CanonicalEvent event) async {
+    if (!event.isForkableFinalAnswer ||
+        _forkPendingEventId != null ||
+        event.messageId == null ||
+        event.turnId == null) {
+      return;
+    }
+    setState(() => _forkPendingEventId = event.id);
+    final cubit = context.read<ConversationInputCubit>();
+    final result = await cubit.forkSession(
+      targetMessageId: event.messageId!,
+      targetTurnId: event.turnId!,
+    );
+    if (!mounted) return;
+    setState(() => _forkPendingEventId = null);
+    if (result.navigationFailed) {
+      ToastUtils.showError(
+        context,
+        'Fork created, but it could not be opened. Select it from the sidebar.',
+      );
+    } else if (!result.isAccepted) {
+      ToastUtils.showError(context, 'Could not fork this conversation.');
+    }
   }
 
   Future<bool> _confirmUnsafeReplay(TurnReplaySafety safety) async {
@@ -680,11 +741,38 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         false;
   }
 
+  Future<bool> _confirmDropSteers() async {
+    return await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Drop follow-up directions?'),
+            content: const Text(
+              'This turn includes steering messages. Retrying the original request will not send those follow-ups again.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(dialogContext).pop(false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.of(dialogContext).pop(true),
+                child: const Text('Continue'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+  }
+
   String _turnReplayError(String outcome) => switch (outcome) {
     'not_latest_turn' => 'Only the latest user turn can be edited or retried.',
     'turn_boundary_not_found' => 'This message does not have a reliable turn boundary.',
     'session_not_idle' => 'Sanad could not finish stopping the active turn.',
     'already_in_progress' => 'A message edit or retry is already in progress.',
+    'target_not_replayable_input' => 'Steering messages cannot be edited or retried.',
+    'history_revision_mismatch' => 'This conversation changed before the edit could start.',
+    'identity_incomplete' => 'This message does not have a reliable turn boundary.',
+    'steer_reinjection_confirmation_required' => 'Retrying this turn will not send its steering messages again.',
     _ => 'Sanad could not edit or retry this message.',
   };
 
@@ -906,8 +994,9 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   String _toolGroupExpansionId(ConversationTimelineItem item) => 'tool-group:${item.id}';
 
   Widget _buildEventTile(CanonicalEvent event) {
-    final latestUserIndex = _lastUserMessageIndex(_messages);
-    final canReplay = latestUserIndex >= 0 && _messages[latestUserIndex].id == event.id && event.requestId != null;
+    final latestRootIndex = _latestReplayableRootIndex(_messages);
+    final canReplay = latestRootIndex >= 0 && _messages[latestRootIndex].id == event.id;
+    final canFork = event.isForkableFinalAnswer;
     return BlocSelector<ConversationInputCubit, ConversationInputState, String?>(
       selector: (state) => state.pendingSuspendedRequest?.toolName,
       builder: (context, pendingToolName) => EventTile(
@@ -946,6 +1035,9 @@ class _BrainActivityViewState extends State<BrainActivityView> {
               }
             : null,
         onRetry: canReplay ? () => _replayTurn(event, action: TurnReplayAction.retry) : null,
+        canFork: canFork,
+        isForkPending: _forkPendingEventId == event.id,
+        onFork: canFork ? () => _forkSession(event) : null,
       ),
     );
   }

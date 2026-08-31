@@ -1,4 +1,5 @@
 import '../../../../core/models/message.dart';
+import '../../../../evolution/db/message_history_identity.dart';
 import '../../../models/gateway_event.dart';
 import '../protocol/canonical_events.dart';
 
@@ -44,6 +45,7 @@ class AgentToCanonical {
           'metadata': response.message.metadata,
         if (response.message.metadata?['request_id'] != null)
           'request_id': response.message.metadata?['request_id'],
+        ...MessageHistoryIdentity.wireFields(response.message),
       };
     } else if (response.isToolUse) {
       type = 'tool_use';
@@ -102,6 +104,7 @@ class AgentToCanonical {
         if (response.runtimeMs != null) 'runtime_ms': response.runtimeMs,
         if (response.contextTokens != null)
           'context_tokens': response.contextTokens,
+        ...MessageHistoryIdentity.wireFields(response.message),
       };
     } else {
       // Distinguish reasoning content from intermediate thought text.

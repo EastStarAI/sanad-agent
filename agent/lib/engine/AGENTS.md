@@ -18,6 +18,7 @@ This contract applies to `agent/lib/engine/`.
 - `AgentRunner` solely owns `history` and the current-turn start boundary.
 - Runtime collaborators read live state through contexts and mutate through callbacks; they never retain a parallel history list.
 - Persist raw interface request id on every ordinary user message for replay/edit boundaries.
+- Reload persisted active history before appending a user turn so a committed replay replacement is not duplicated.
 - Preserve visible thoughts and reasoning separately from final content and opaque provider state.
 - History healing must not synthesize a tool result while an unresolved suspended checkpoint or a valid requester-bound deferred result owns that tool-call id.
 - Each model invocation mints one model-step id shared by its chunks, reasoning, checkpoint, and assistant message.

@@ -10,6 +10,8 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/constants.dart';
 import '../../core/sanad_home/sanad_home_bootstrap.dart';
+import 'message_history_identity.dart';
+import 'session_lineage.dart';
 
 /// Single owner of the agent's local SQLite connection (`state.db`).
 ///
@@ -181,6 +183,33 @@ class AgentStateDatabase {
       'ALTER TABLE sessions ADD COLUMN route_revision INTEGER NOT NULL DEFAULT 1 CHECK (route_revision > 0)',
     );
     _safeAddColumn(db, 'ALTER TABLE sessions ADD COLUMN route_updated_at TEXT');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN history_revision INTEGER NOT NULL DEFAULT 0',
+    );
+    _safeAddColumn(db, 'ALTER TABLE sessions ADD COLUMN lineage_id TEXT');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN parent_session_id TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN forked_from_message_id TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN forked_from_turn_id TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN fork_sequence INTEGER NOT NULL DEFAULT 0',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN lineage_base_title TEXT',
+    );
+    _safeAddColumn(db, 'ALTER TABLE sessions ADD COLUMN fork_request_id TEXT');
+    SessionLineage.backfill(db);
     db.execute('''
       UPDATE sessions
       SET route_updated_at = updated_at
@@ -193,8 +222,65 @@ class AgentStateDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id TEXT NOT NULL,
         data TEXT NOT NULL,
+        message_id TEXT,
+        turn_id TEXT,
+        history_status TEXT NOT NULL DEFAULT 'active'
+          CHECK (history_status IN ('active', 'superseded')),
+        superseded_by_turn_id TEXT,
+        input_kind TEXT
+          CHECK (input_kind IS NULL OR input_kind IN ('root_turn', 'steer')),
+        request_id TEXT,
+        run_id TEXT,
         FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE
       );
+    ''');
+    _safeAddColumn(db, 'ALTER TABLE messages ADD COLUMN message_id TEXT');
+    _safeAddColumn(db, 'ALTER TABLE messages ADD COLUMN turn_id TEXT');
+    _safeAddColumn(
+      db,
+      "ALTER TABLE messages ADD COLUMN history_status TEXT NOT NULL DEFAULT 'active'",
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE messages ADD COLUMN superseded_by_turn_id TEXT',
+    );
+    _safeAddColumn(db, 'ALTER TABLE messages ADD COLUMN input_kind TEXT');
+    _safeAddColumn(db, 'ALTER TABLE messages ADD COLUMN request_id TEXT');
+    _safeAddColumn(db, 'ALTER TABLE messages ADD COLUMN run_id TEXT');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE messages ADD COLUMN origin_message_id TEXT',
+    );
+    _migrateLastUserMessageAt(db);
+    MessageHistoryIdentity.backfill(db);
+    db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_message_id
+      ON messages(message_id);
+    ''');
+    db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_lineage_sequence
+      ON sessions(lineage_id, fork_sequence);
+    ''');
+    db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_fork_request_id
+      ON sessions(fork_request_id)
+      WHERE fork_request_id IS NOT NULL;
+    ''');
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_sessions_parent
+      ON sessions(parent_session_id);
+    ''');
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_messages_origin
+      ON messages(origin_message_id);
+    ''');
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_messages_session_active_id
+      ON messages(session_id, history_status, id);
+    ''');
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_messages_session_turn
+      ON messages(session_id, turn_id, id);
     ''');
     db.execute('''
       CREATE INDEX IF NOT EXISTS idx_messages_session_id

@@ -1112,6 +1112,9 @@ void main() {
         expect(messages[1]['content'], '**Planning**\n\n**Refining**');
         expect(messages[2]['content'], 'I will update the implementation.');
         expect(messages[3]['content'], 'The fix is complete.');
+        expect(messages[3]['status'], 'done');
+        expect(messages[3]['message_id'], isNotEmpty);
+        expect(messages[3]['turn_id'], isNotEmpty);
       },
     );
 

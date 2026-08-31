@@ -1458,6 +1458,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           lastUserMessageAt: existingSession.lastUserMessageAt,
           routeRevision: existingSession.routeRevision,
           routeUpdatedAt: existingSession.routeUpdatedAt,
+          historyRevision: existingSession.historyRevision,
           messages: existingSession.messages,
         ),
       );

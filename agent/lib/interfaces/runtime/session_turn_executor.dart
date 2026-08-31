@@ -214,19 +214,27 @@ class SessionTurnExecutor {
 
       if (!isResume) {
         final receivedAt = turnRequest.metadata['received_at']?.toString();
+        final durableUser = _findDurableMessage(
+          sessionId: event.sessionId,
+          role: MessageRole.user,
+          requestId: turnRequest.requestId,
+        );
         emitResponse(
           GatewayResponse(
             sessionId: event.sessionId,
             platformId: event.platformId,
-            message: Message(
-              role: MessageRole.user,
-              content: content,
-              metadata: {
-                if (turnRequest.requestId != null)
-                  'request_id': turnRequest.requestId,
-                'received_at': receivedAt,
-              },
-            ),
+            message:
+                durableUser ??
+                Message(
+                  role: MessageRole.user,
+                  content: content,
+                  metadata: {
+                    ...?event.message.metadata,
+                    if (turnRequest.requestId != null)
+                      'request_id': turnRequest.requestId,
+                    'received_at': receivedAt,
+                  },
+                ),
             isComplete: true,
             runId: runId,
           ),
@@ -480,11 +488,16 @@ class SessionTurnExecutor {
 
       agentRunner.markProviderResponseTerminalCommitted();
       sessionManager.clearInFlightSnapshot(event.sessionId);
+      final durableTerminal = _findDurableMessage(
+        sessionId: event.sessionId,
+        role: MessageRole.assistant,
+        runId: activeRun.runId,
+      );
       emitResponse(
         GatewayResponse(
           sessionId: event.sessionId,
           platformId: event.platformId,
-          message: terminalMessage,
+          message: durableTerminal ?? terminalMessage,
           isComplete: true,
           runId: activeRun.runId,
           modelStepId: agentRunner.currentModelStepId,
@@ -828,6 +841,26 @@ class SessionTurnExecutor {
         modelStepId: modelStepId,
       ),
     );
+  }
+
+  Message? _findDurableMessage({
+    required String sessionId,
+    required MessageRole role,
+    String? requestId,
+    String? runId,
+  }) {
+    final messages = getIt<SessionManager>().getMessages(sessionId);
+    for (final message in messages.reversed) {
+      if (message.role != role) continue;
+      final metadata = message.metadata;
+      if (requestId != null && metadata?['request_id'] == requestId) {
+        return message;
+      }
+      if (runId != null && metadata?['run_id'] == runId) {
+        return message;
+      }
+    }
+    return null;
   }
 
   bool _shouldGenerateIntelligentTitle({

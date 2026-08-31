@@ -22,6 +22,13 @@ This contract applies to `agent/lib/evolution/db/`.
 - Removing a workspace record must not cascade into sessions or messages;
   their stable workspace reference remains historical conversation metadata.
 - Preserve raw request identity on accepted user messages and route transitions.
+- Persist `message_id`, `turn_id`, `history_status`, `input_kind`, and
+  `origin_message_id` as first-class message columns. Normal reads return
+  `active` rows only; superseded rows stay stored.
+- `sessions.history_revision` is independent from execution and route revisions. Soft rewind revalidates the latest active root and accepts the replacement user record in one transaction with that compare-and-swap.
+- Session lineage (`lineage_id`, `parent_session_id`, fork target identities,
+  `fork_sequence`) is independent of session lifetime. Deleting a parent
+  nulls `parent_session_id` on children and never cascades to child rows.
 - Canonical user acceptance alone advances session-list user-message ordering.
 - Title compare-and-set, deletion, and route transitions remain atomic with their owning session data.
 

@@ -51,6 +51,47 @@ class CanonicalEvent {
     return value == null || value.isEmpty ? null : value;
   }
 
+  String? get messageId {
+    final value = metadata?['message_id']?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  String? get turnId {
+    final value = metadata?['turn_id']?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  String? get inputKind {
+    final value = metadata?['input_kind']?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  bool get isSteerInput {
+    if (inputKind == 'steer' || metadata?['steer'] == true) return true;
+    final pending = metadata?['pending_steer_state']?.toString();
+    return pending != null && pending.isNotEmpty;
+  }
+
+  bool get isReplayableRootTurn {
+    return kind == EventKind.userMessage &&
+        requestId != null &&
+        messageId != null &&
+        turnId != null &&
+        inputKind == 'root_turn' &&
+        metadata?['replay_eligible'] == true &&
+        !isSteerInput &&
+        metadata?['history_status']?.toString() != 'superseded';
+  }
+
+  bool get isForkableFinalAnswer {
+    return kind == EventKind.finalAnswer &&
+        status == EventStatus.done &&
+        messageId != null &&
+        turnId != null &&
+        metadata?['history_status']?.toString() != 'superseded' &&
+        metadata?['superseded_by_steer'] != true;
+  }
+
   int? get generation => _metadataInt(metadata?['generation']);
 
   int? get revision => _metadataInt(metadata?['revision']);

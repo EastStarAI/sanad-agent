@@ -25,6 +25,7 @@ import 'package:sanad_client/features/conversations/domain/models/message_delive
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
@@ -257,21 +258,40 @@ class SocketConversationClient implements ConversationClient {
   Future<TurnReplayResult> replayTurn({
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) => _commands!.replayTurn(
     sessionId: sessionId,
     targetRequestId: targetRequestId,
+    targetMessageId: targetMessageId,
+    targetTurnId: targetTurnId,
+    expectedHistoryRevision: expectedHistoryRevision,
     action: action,
     message: message,
     providerInstanceId: providerInstanceId,
     modelId: modelId,
     thinkingMode: thinkingMode,
     confirmedReplayUnsafe: confirmedReplayUnsafe,
+    confirmedDropSteers: confirmedDropSteers,
+  );
+
+  @override
+  Future<SessionForkResult> forkSession({
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) => _commands!.forkSession(
+    sessionId: sessionId,
+    targetMessageId: targetMessageId,
+    targetTurnId: targetTurnId,
   );
 
   @override

@@ -37,6 +37,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Stale, recovery-owned, or persistence-failed terminal outcomes do not deliver content.
 - Rejected generated finals produce correlation-safe diagnostics without logging content.
 - Terminal commit persists assistant state before transport publication.
+- Live user echoes and final-answer publications use the committed history row's message/turn identity and eligibility fields; transport must not publish a pre-persistence copy that requires reconnect before Edit, Retry, or Fork becomes available.
 
 ## Stop, Retry, and Route Recovery
 - Atomic stop clears notice, cancel token, suspended state, durable work, and queue ownership, then emits one authoritative clear/stop transition.
@@ -76,6 +77,20 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - A late steer that follows a completed assistant model step publishes that pre-steer segment as a completed thought before resetting terminal accumulation; live and history projections must not discard it.
 - Restart never injects a pending steer into a new generation; unresolved pending/delivering rows become durable draft-recovery outcomes unless history proves delivery.
 - Recovered text and owner tokens never enter logs or broadcast payloads.
+
+## Latest-Root-Turn Replay
+- Replay targets the latest active `root_turn` by `message_id`, `turn_id`, `request_id`, and `expected_history_revision`.
+- Soft rewind and replacement-user acceptance commit atomically; the CAS
+  transaction revalidates the target as the latest active root. History is
+  never truncated, and rewind without a durable replacement is not admitted.
+- Steer is not a replay boundary, including pending, delivered, and
+  embedded steers. Dispatch waits for an authoritative `idle` snapshot
+  after scoped stop. Missing snapshot state is not dispatch authority.
+
+## Materialized Session Fork
+- `session.fork` copies the active prefix through a durable terminal final answer in one transaction.
+- Steer-superseded thoughts, incomplete/failed/cancelled rows, and tool-call asks are not forkable targets.
+- The client sends source session and target identities only. The child starts idle with new message/turn identities.
 
 ## Workspace Filesystem Mutation
 - Resolve stable workspace UUIDs to their current daemon-owned path before filesystem, MCP, skill, or permission access; a missing path remains visible but fails execution until repaired.

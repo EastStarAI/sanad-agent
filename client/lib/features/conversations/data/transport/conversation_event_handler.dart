@@ -124,6 +124,8 @@ class ConversationEventHandler {
         _conversationStore.applyTurnReplayAccepted(
           sessionId: eventSessionId,
           targetRequestId: targetRequestId,
+          targetTurnId: payload['target_turn_id']?.toString(),
+          targetMessageId: payload['target_message_id']?.toString(),
         );
       }
       return;

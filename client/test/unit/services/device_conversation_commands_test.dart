@@ -77,6 +77,9 @@ void main() {
     final future = commands.replayTurn(
       sessionId: 'session-1',
       targetRequestId: 'target-1',
+      targetMessageId: 'message-1',
+      targetTurnId: 'turn-1',
+      expectedHistoryRevision: 4,
       action: TurnReplayAction.edit,
       message: 'edited text',
       providerInstanceId: 'provider-current',
@@ -89,10 +92,14 @@ void main() {
     final payload = command['payload'] as Map<String, dynamic>;
     expect(command['command'], 'session.turn_replay');
     expect(payload['target_request_id'], 'target-1');
+    expect(payload['target_message_id'], 'message-1');
+    expect(payload['target_turn_id'], 'turn-1');
+    expect(payload['expected_history_revision'], 4);
     expect(payload['provider_instance_id'], 'provider-current');
     expect(payload['model_id'], 'model-current');
     expect(payload['thinking_mode'], 'deep');
     expect(payload['confirmed_replay_unsafe'], isTrue);
+    expect(payload['confirmed_drop_steers'], isFalse);
 
     socket.eventRouter.routeEvent({
       'device_id': 'agent-1',
@@ -108,6 +115,43 @@ void main() {
     final result = await future;
     expect(result.isAccepted, isTrue);
     expect(result.safety, TurnReplaySafety.unsafe);
+  });
+
+  test('forkSession sends target identity only and returns the child', () async {
+    final future = commands.forkSession(
+      sessionId: 'session-1',
+      targetMessageId: 'm-final',
+      targetTurnId: 'turn-2',
+    );
+
+    final command = socket.capturedCommands.single;
+    final payload = command['payload'] as Map<String, dynamic>;
+    expect(command['command'], 'session.fork');
+    expect(payload['session_id'], 'session-1');
+    expect(payload['target_message_id'], 'm-final');
+    expect(payload['target_turn_id'], 'turn-2');
+    expect(payload.containsKey('messages'), isFalse);
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session.fork_result',
+      'payload': {
+        'request_id': payload['request_id'],
+        'outcome': 'accepted',
+        'child': {
+          'session_id': 'child-1',
+          'title': '(1) Refactor auth',
+          'created_at': '2026-08-30T00:00:00Z',
+          'updated_at': '2026-08-30T00:00:00Z',
+        },
+      },
+    });
+
+    final result = await future;
+    expect(result.isAccepted, isTrue);
+    expect(result.child?.id, 'child-1');
+    expect(result.child?.title, '(1) Refactor auth');
+    expect(result.child?.deviceId, 'agent-1');
   });
 
   test('getWorkspaces requests available workspaces', () async {

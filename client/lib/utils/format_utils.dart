@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:provider/provider.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
@@ -14,9 +15,14 @@ class EventMetadataFormatter {
     final modelDisplay = event.modelDisplay?.trim();
     final runtimeMs = event.runtimeMs;
     final usage = event.usage;
-    final selectedSession = context.select<SessionCubit, Session?>(
-      (cubit) => cubit.state.selectedSession,
-    );
+    Session? selectedSession;
+    try {
+      selectedSession = context.select<SessionCubit, Session?>(
+        (cubit) => cubit.state.selectedSession,
+      );
+    } on ProviderNotFoundException {
+      selectedSession = null;
+    }
     final contextTokens = event.contextTokens ?? selectedSession?.contextTokens;
 
     final parts = <String>[];

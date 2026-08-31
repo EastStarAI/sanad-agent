@@ -27,7 +27,8 @@ This directory owns the technical specifications of "HOW" the system is structur
 - **[Client Conversation Cache Schema](client_conversation_cache_schema.md):** Device-scoped local cache, drafts, destinations, and recovery data.
 - **[Device Runtime Settings Protocol](device_runtime_settings_protocol.md):** Client/daemon settings commands, ownership, validation, and synchronization.
 - **[Web Search Runtime](web_search_runtime.md):** Daemon-owned providers, DuckDuckGo redirect normalization, fallback behavior, and SSRF filtering.
-- **[Message Turn Replay Protocol](message_turn_replay_protocol.md):** Latest-turn identity, replay safety confirmation, authoritative idle boundary, history replacement, and route payload contract.
+- **[Message Turn Replay Protocol](message_turn_replay_protocol.md):** Latest-root-turn identity, soft rewind, authoritative idle boundary, steer exclusion, and route payload contract.
+- **[Session Fork Protocol](session_fork_protocol.md):** Daemon-authoritative materialized fork, lineage, atomic prefix copy, and idle child admission.
 - **[Run Cancellation and Process Ownership](run_cancellation_and_process_ownership.md):** Run-scoped Stop, provider/tool interruption, process containment, bounded cleanup, and live/history terminal parity.
 - **[Background Terminal Task Runtime](background_terminal_task_runtime.md):** Durable task ownership, atomic shell handoff, PTY supervision, cursor replay, typed wake admission, secure input, and lifecycle recovery.
 - **[Remote Device Control Protocol](remote_device_control_protocol.md):** Typed remote update, restart, admission errors, and correlation rules shared by local and cloud transports.

@@ -9,6 +9,7 @@ import '../../models/pending_steer_record.dart';
 import '../../models/stop_recovery_outcome.dart';
 import '../session_history_revision_repository.dart';
 import '../agent_state_database.dart';
+import '../message_history_identity.dart';
 import '../persisted_runtime_state_repository.dart';
 import 'pending_input_repository.dart';
 import 'session_execution_snapshot_repository.dart';
@@ -516,7 +517,12 @@ class SessionExecutionStateCoordinator {
       );
       final persistedToolIds = <String>{};
       final rows = tx.db.select(
-        'SELECT data FROM messages WHERE session_id = ? ORDER BY id ASC',
+        '''
+        SELECT data FROM messages
+        WHERE session_id = ?
+          AND (history_status = 'active' OR history_status IS NULL)
+        ORDER BY id ASC
+        ''',
         [sessionId],
       );
       for (final row in rows) {
@@ -554,10 +560,7 @@ class SessionExecutionStateCoordinator {
         completedOutputs[toolCallId] = output;
         executing.remove(toolCallId);
         toolStartedAt.remove(toolCallId);
-        tx.db.execute('INSERT INTO messages (session_id, data) VALUES (?, ?)', [
-          sessionId,
-          jsonEncode(historyMessage.toJson()),
-        ]);
+        MessageHistoryIdentity.persist(tx.db, sessionId, historyMessage);
         SessionHistoryRevisionRepository.bumpDatabase(tx.db, sessionId);
         tx.db.execute(
           'DELETE FROM suspended_checkpoints WHERE tool_call_id = ?',
@@ -605,15 +608,20 @@ class SessionExecutionStateCoordinator {
     required Message assistantResult,
   }) {
     final rows = transaction.db.select(
-      'SELECT id, data FROM messages WHERE session_id = ? ORDER BY id DESC',
+      '''
+      SELECT id, data, message_id, turn_id, history_status, input_kind,
+             request_id, run_id, superseded_by_turn_id
+      FROM messages
+      WHERE session_id = ?
+        AND (history_status = 'active' OR history_status IS NULL)
+      ORDER BY id DESC
+      ''',
       [sessionId],
     );
     int? matchingMessageId;
     Message? matchingMessage;
     for (final row in rows) {
-      final decoded = jsonDecode(row['data'] as String);
-      if (decoded is! Map) continue;
-      final message = Message.fromJson(Map<String, dynamic>.from(decoded));
+      final message = MessageHistoryIdentity.fromRow(row);
       if (message.role != MessageRole.assistant) continue;
       final metadata = message.metadata;
       if (metadata?['terminal_work_item_id'] == workItemId ||
@@ -634,18 +642,16 @@ class SessionExecutionStateCoordinator {
         'terminal_generation': generation,
       },
     );
-    final encoded = jsonEncode(durableResult.toJson());
     if (matchingMessageId == null) {
-      transaction.db.execute(
-        'INSERT INTO messages (session_id, data) VALUES (?, ?)',
-        [sessionId, encoded],
-      );
+      MessageHistoryIdentity.persist(transaction.db, sessionId, durableResult);
       SessionHistoryRevisionRepository.bumpDatabase(transaction.db, sessionId);
     } else {
-      transaction.db.execute('UPDATE messages SET data = ? WHERE id = ?', [
-        encoded,
-        matchingMessageId,
-      ]);
+      MessageHistoryIdentity.persist(
+        transaction.db,
+        sessionId,
+        durableResult,
+        sqliteId: matchingMessageId,
+      );
     }
   }
 
