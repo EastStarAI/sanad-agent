@@ -34,6 +34,7 @@ This contract applies to `client/lib/features/conversations/data/`.
 - Reapply live events after history hydration with request-id deduplication; legacy rows may use bounded same-session text/timestamp matching.
 - Do not terminal-deduplicate running thinking events needed by later stream chunks.
 - Hydrate runtime notice and queued messages together for the selected session, and retain lightweight recovery markers in session-list metadata.
+- Preserve `execution_revision` on live notice and notice-clear events; hydration without an explicit notice revision binds the notice to the accepted execution snapshot in the same envelope.
 - Merge compaction lifecycle rows at the durable retained-tail boundary, before the first later canonical message; never derive their history position by comparing real lifecycle time with synthetic message timestamps.
 - Treat a completed compaction as a context-usage checkpoint for the composer: replace input usage with confirmed-after or estimated-after, discard stale cached-input usage, and retain the latest same-model provider window/model identity when it is more authoritative than legacy compaction metadata.
 

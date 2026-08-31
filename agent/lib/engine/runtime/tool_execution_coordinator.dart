@@ -240,6 +240,8 @@ class ToolExecutionCoordinator {
       runId: cancellationScope?.runId,
       generation: cancellationScope?.generation,
       cancellationScope: cancellationScope,
+      onExecutionProgress: (progress) => checkpointCoordinator
+          .saveExecutingToolProgress(toolCall.id, progress),
     );
   }
 

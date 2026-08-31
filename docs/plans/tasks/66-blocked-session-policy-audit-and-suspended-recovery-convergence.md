@@ -1,11 +1,11 @@
 ---
 title: "Task 66: Blocked Session Policy Audit and Suspended Recovery Convergence"
 description: "تدقيق كل مسارات تحويل الجلسة إلى blocked، اعتماد السياسة مع المستخدم، وإعادة إنتاج وإصلاح تضارب force-stop مع system_ask_user عبر Agent وClient واختبار daemon-backed معزول."
-status: "pending_policy_approval"
-current_gate: "Gate A — Complete Blocked-State Audit and User Approval"
+status: "completed"
+current_gate: "Complete"
 priority: "critical"
 depends_on: "Plan 30 durable runtime recovery and Task 31 authoritative execution snapshots"
-file_budget: 20
+file_budget: 36
 design_contract: "docs/technical/agent_interface_runtime.md"
 qa_contract: "docs/qa_maintenance/plan30_runtime_recovery_matrix.md"
 ---
@@ -160,6 +160,135 @@ writer ومسار غير مباشر جرى حصره.
   speculative؛ تُسلّم أدلة E2E والمصفوفة المعتمدة، ولا تُغلق المهمة كـno-op إلا
   بموافقة المستخدم الصريحة.
 
+### 4.5 نتيجة تدقيق Gate A — 2026-08-31
+
+حُصرت الكتابات المباشرة وغير المباشرة إلى `blocked` في أربعة ملاك فقط:
+
+1. `RuntimeFailureReason.decision()` ثم
+   `RuntimeRecoveryService.reportFailure()` لحالات المزود/runtime المصنفة.
+2. `SessionRecoveryRestorer` لتصنيف العمل غير النهائي بعد restart وإصلاح legacy
+   state أو حجبها.
+3. `ContinuationCheckpointCoordinator` و`SessionTurnExecutor` عند فشل استعادة
+   checkpoint أو حدوث استثناء غير مصنف في turn.
+4. `SessionRunOrchestrator` و`SessionRecoveryCommandHandler` لحالات timeout في
+   restart أو فقد owner/route أثناء فعل recovery صريح.
+
+`SessionExecutionState.blocked` ليست كاتب سياسة مستقلًا؛
+`SessionExecutionStateCoordinator` يشتقها من work item النشطة داخل transaction
+ويزيد `revision`. كذلك لا يقرر Client الحجب: `SessionAttentionState` يعرض pending
+question/permission أولًا، ثم blocked/fatal، لكنه يحتفظ بـruntime notices في سجل
+منفصل لا يملك revision سلطويًا. لذلك تمنع execution revisions رجوع snapshot
+قديمة، لكنها لا تمنع notice قديمة أو hydration متأخرة من إعادة مظهر blocked.
+
+نتيجة التدقيق الخاصة بالسجل المبلغ عنه: صف work وصل إلى manual recovery بلا
+`checkpoint_kind` معروف. `resumeSuspended()` نقله إلى `resuming`، ثم استدعى
+`AgentRunner.resumeStream()`، فرفضه `restoreCheckpointForResume()` وحوله catch
+العام إلى blocked مرة أخرى. لا يوجد حاليًا مسار repair يميز بين النافذة الآمنة
+قبل أول provider invocation وبين provider/tool outcome مجهولة؛ ولذلك يعامل
+الحالتين كأنهما خطر واحد.
+
+سجل ثانٍ بتاريخ 2026-08-31 للجلسة
+`653cccdf-3119-49a7-96fb-de24b982fa70` أثبت التسلسل نفسه مرتين متتاليتين:
+`session.runtime_retry -> resuming -> unrecognized checkpoint -> blocked`.
+المحاولة الثانية لم تغير أي durable evidence ولذلك أعادت الفشل نفسه، ما يثبت
+أن Retry الحالي ليس طريق خروج فعليًا لهذه الحالة. كما نشر المسار
+`final_answer` بعد فشل الاستئناف الأول، رغم عدم حدوث model continuation ناجحة؛
+لذلك يشمل الإصلاح منع terminal/final publication من catch الفاشل، مع إبقاء
+التشخيص حدث error/recovery typed فقط حتى ينجح claim والاستئناف أو التسوية.
+
+## 4.6 Blocked-State Decision Matrix (Gate A)
+
+الاختصارات في عمود الاختبارات: `failure_reason_test` =
+`agent/test/core/provider_runtime/runtime_failure_reason_test.dart`،
+`recovery_service_test` =
+`agent/test/core/provider_runtime/runtime_recovery_service_test.dart`،
+`runner_test` = `agent/test/engine/agent_runner_test.dart`، و`interfaces_test` =
+`agent/test/interfaces/interfaces_test.dart`.
+
+| ID | Trigger / source owner | From + durable evidence | لماذا لا يتقدم تلقائيًا | الحالة/notice/actions ومسارات الخروج | restart + Client/stale cleanup | الاختبارات والفجوة | القرار المقترح |
+|---|---|---|---|---|---|---|---|
+| `BLK-PROVIDER-AUTH` | `auth` في `RuntimeFailureReason.decision`؛ الكتابة عبر `RuntimeRecoveryService.reportFailure` | `running/resuming -> blocked`؛ reason + provider/request/run | credential غير صالح ولا يفيده تكرار الطلب | blocked/error؛ Stop + Change Provider + Open Settings؛ الخروج provider change أو Stop | notice/work يعاد بناؤهما؛ Client يعرض action card | `failure_reason_test`, `recovery_service_test`, `runner_test`؛ ينقص restart exit E2E | **Keep** |
+| `BLK-PROVIDER-BILLING` | `billing` بعد فشل/غياب auto-failover | نفس الملكية؛ quota/provider محفوظان | نفس الحساب لا يستطيع التنفيذ | blocked؛ Stop + Change Provider + Open Settings؛ failover/provider change/Stop | يبقى قابلًا للتحكم بعد restart | اختبارات classifier/runner موجودة؛ ينقص no-candidate restart | **Keep** |
+| `BLK-PROVIDER-MODEL` | `modelNotFound` أو `invalidRequest` | provider/model/reason/request | route أو payload الحالي غير صالح deterministic | blocked؛ Stop + Change Provider، وOpen Settings عند الحاجة؛ route change/Stop | hydrate من daemon؛ يجب ألا تبقى notice بعد route claim | classifier/runner موجودان؛ exit/stale notice ناقصان | **Split**: model يحتاج Change Provider/Model؛ invalid request terminal diagnostic أو Retry فقط إذا تغير input/config، لا retry أعمى |
+| `BLK-PROVIDER-TRANSIENT` | `timeout`, `networkError`, `tlsCertificate`, `toolRuntimeError`, `localRuntimeError`, `unknown` بعد نفاد السياسة أو عدم وجود retry budget | classified reason + آخر route + checkpoint الآمن | التقدم الآلي غير جائز فقط بعد استنفاد budget أو إذا بدأ stream/أصبحت النتيجة غامضة | blocked؛ Stop + Retry، وChange Provider حيث ينطبق؛ Retry يعيد claim من checkpoint | restart يحفظ السبب؛ clear بعد أول progress/terminal | coverage جزئية في الاختبارات الثلاثة؛ لا توجد matrix لكل reason/budget/stream-start | **Split**: transient قبل أي output ينتظر/retries؛ exhausted أو ambiguous فقط يبقى blocked؛ unknown catch-all يجب تصنيفه |
+| `BLK-RETRY-BUDGET` | `rateLimit`, `upstreamRateLimit`, `overloaded` مع `forceBlocked` بعد نفاد retries في `AgentRunner._handleRuntimeFailure` | attempt/budget + reason + لا `resume_at` | timer التلقائي انتهى ولا توجد محاولة تلقائية متبقية | blocked؛ Stop + Retry + Change Provider؛ manual claim أو Stop | يبقى blocked عبر restart ولا يتحول إلى spinner بلا timer | runner/recovery tests موجودة؛ ينقص restart لكل family | **Keep** |
+| `BLK-PROVIDER-FATAL` | `contextOverflow`, `payloadTooLarge`, `contentPolicyBlocked`; notice=`fatal` وwork يشتق blocked | reason + provider response المصنف | الطلب نفسه لا يمكن متابعته | fatal؛ Stop دائمًا، Change Provider حيث يسمح العقد؛ لا `resuming` وهمي | terminal-looking attention حتى Stop/new corrected input | classifier tests موجودة؛ exit semantics وClient copy ناقصان | **Split**: لا تسمية blocked في السياسة؛ أبقها fatal مع تسوية work واضحة بدل خلطها بـretryable blocked |
+| `BLK-CRASH-PROVIDER-INFLIGHT` | startup يرى `checkpoint_kind=model_request_in_flight` في `SessionRecoveryRestorer` | work owner + model step + marker in-flight | نتيجة الطلب عند المزود مجهولة؛ replay قد يكرر طلبًا ذا continuation/tool output | blocked؛ Stop + Retry + Change Provider مع تحذير unknown outcome | restart آخر يبقي الدليل؛ Client يعرض تحذيرًا واحدًا | interfaces/provider-restart tests؛ ينقص SIGKILL حقيقي أثناء request | **Keep**؛ لا auto-replay |
+| `BLK-CRASH-UNSAFE-TOOL` | `running` وفي `currently_executing_tools` أداة بلا completed result ولا replay-safe/deferred descriptor | tool id + replay-safety + owner | قد يكرر side effect | blocked؛ Stop + manual Retry/Change Provider يصلح history بنتيجة unknown ولا يعيد الأداة | يبقى حتى claim؛ clear/idle بعد terminal | `runner_test`, `interfaces_test`, `session_restart_checkpoint_test` | **Keep**؛ لا auto-replay |
+| `BLK-CRASH-INTERACTIVE` | ask-user/permission غير محلولة صُنفت قديمًا blocked | suspended checkpoint يطابق كل executing tool ids | لا يوجد مانع؛ النظام ينتظر المستخدم بالفعل | **waiting** بلا interrupted notice؛ answer/deny/Stop -> resuming/completed أو cancelled | restart يعيد البطاقة؛ pending request تتقدم بصريًا ثم notice القديمة تُحذف | unit SQLite موجود؛ ينقص process-kill + reconnect/hydration E2E | **Remove/Reclassify** دائمًا إلى waiting |
+| `BLK-INTERRUPTED-RESUMING` | startup يرى `resuming` بلا owner كامل، checkpoint معروف، أو replay-safety كافية | state + owner_run/generation + checkpoint metadata | لا يمكن إثبات أن claimant السابق لم يبدأ provider/tool | blocked مع Stop/Retry/Change Provider | restart لا يخمن owner؛ manual claim فقط | interfaces tests للـownerless/unsafe موجودة | **Split**: الدليل الغامض يبقى blocked؛ owner/checkpoint الآمن auto-resume |
+| `BLK-MISSING-CHECKPOINT` | `ContinuationCheckpointCoordinator.restoreCheckpointForResume` يرفض null/unknown kind أو history length؛ يتكرر في `SessionTurnExecutor` catch | قد لا يوجد إلا work payload/request؛ `resume_failure_reason` يكتب بعد الفشل | الكود الحالي لا يميز pre-provider window الآمنة عن unknown outcome | حاليًا resuming ثم blocked بعنوان unsafe checkpoint؛ Retry يعيد نفس الفشل | يعاد حجب الصف إلى ما لا نهاية؛ Client يرى resuming ثم blocked كما في البلاغ | `runner_test` يثبت الرفض فقط؛ لا يثبت recovery مفيدًا | **Split/Reclassify**: إذا لا يوجد in-flight/tool/partial-output evidence، ابنِ `initial_model_request` من payload/history أو أعده كnew turn مرة واحدة؛ إذا يوجد دليل غموض انتقل إلى صف provider/tool المناسب؛ unknown kind غير قابل للتفسير يبقى blocked مع repair migration |
+| `BLK-WAITING-OWNERLESS` | `SessionRecoveryRestorer` يحول waiting بلا timer-owner أو suspended owner مثبت | waiting row + notice/checkpoints غير كافية | callback آمن غير قابل للإثبات | حاليًا blocked generic؛ Stop/Retry/Change Provider | restart ثابت؛ notice generic | interfaces legacy tests جزئية | **Split**: interactive المطابق يصلح waiting؛ timer wait المفقود يعاد بناؤه من durable `resume_at`; الصف التالف فقط blocked |
+| `BLK-TURN-UNEXPECTED` | catch العام في `SessionTurnExecutor.runTurn` | exception + active owner فقط؛ قد يكتب work blocked قبل تصنيف السبب | لا يوجد إثبات دائم بذاته أن تدخل المستخدم مطلوب | حاليًا generic blocked للـresume، وerror event لباقي الحالات | قد يترك notice/work متناقضين؛ client error قد يمسح pending request | coverage موزعة ولا توجد exhaustive catch matrix | **Remove/Split**: مرّر الأخطاء المعروفة إلى classifier؛ checkpoint error إلى صفه؛ invariant/persistence failure إلى fatal diagnostic، ولا blocked catch-all |
+| `BLK-RESTORE-GLOBAL` | `SessionRecoveryRestorer.markRestoreFailureAsBlocked` بعد فشل startup restore العام | أي active nonterminal item + error غير مصنف | حماية من الصمت، لكن الخطأ قد يكون في جلسة أخرى أو parsing جزئي | generic blocked لكل item؛ Stop/Retry/Change Provider | يمنع الضياع لكنه يوسع blast radius؛ notices بلا revision | interfaces fallback tests موجودة | **Split**: عزل الفشل per-session/per-row؛ لا تحجب صفًا صالحًا بسبب صف آخر؛ corruption الحقيقي يبقى قابلًا للتحكم |
+| `BLK-RESTART-TIMEOUT` | `SessionRunOrchestrator.interruptProviderRequestsForRestart` يلغي provider request الحالي فقط بعد timeout مضبوط | exact work/run/generation + in-flight marker + restart flag | outcome عند المزود مجهولة | blocked مع تحذير؛ Stop/Retry/Change Provider | startup لا يعيد الطلب تلقائيًا | restart coordinator/checkpoint tests موجودة | **Keep** |
+| `BLK-RECOVERY-COMMAND` | Retry/Change Provider لا يجد saved work، provider بلا default model، أو claim يفشل في `SessionRecoveryCommandHandler` | command request + notice/route؛ أحيانًا لا active work | لا يوجد شيء صالح لـresume أو route ناقص | حاليًا generic blocked قد يصبح orphan notice؛ Settings/Provider/Stop | orphan cleanup يحذف notice عند startup لكن قد تبقى حيًا حتى restart | bridge provider tests جزئية | **Split/Remove**: route ناقص يبقى blocked على work المملوك؛ missing work يصبح idempotent command failure + idle/clear، لا orphan blocked |
+| `BLK-CLIENT-STALE-PROJECTION` | live/hydrated runtime notice قد تصل بعد execution revision أحدث؛ `DeviceConversationStore` لا يرتب notices | request id فقط؛ execution snapshot لها revision منفصل | ليست حالة daemon حقيقية بل projection race | pending question تتقدم حاليًا، لكن notice blocked قد تعود بعد resuming/idle | execution stale payload مرفوض؛ notice stale ليست مرفوضة | registry tests موجودة؛ notice/hydration ordering variants ناقصة | **Remove**: اربط attention/notice بexecution revision أو authority token، وارفض/امسح notice الأقدم |
+
+### 4.6.1 امتداد Terminal interruption ضمن نفس النطاق
+
+كشف التدقيق الإضافي أن نتيجة Terminal المضللة لها سببان مستقلان:
+
+| ID | Trigger / source owner | الدليل الحالي | الخلل | القرار المقترح |
+|---|---|---|---|---|
+| `TERM-HISTORY-HEALER` | daemon يبدأ ويرى assistant tool call بلا tool result؛ `agent/lib/engine/history_healer.dart` | لا يفحص سبب انقطاع العملية؛ كل tool call غير مجابة تُملأ نصيًا بـ`Tool execution cancelled by user.` | ينسب crash/OS shutdown/kill إلى المستخدم بلا دليل، ثم تصبح الرسالة جزءًا من history المرسلة للـLLM | **Remove/Split**: لا ينشئ healer إلغاءً بشريًا. يحافظ على suspended/deferred calls، ويحوّل shell المملوكة ذات سجل بدء إلى terminal typed بسبب `daemon_interrupted`; الأدوات الأخرى تتبع replay-safety/blocked policy |
+| `TERM-TIMEOUT-OUTPUT` | `_ShellWaitTimedOut` في `ShellExecuteTool.execute` | stdout/stderr تجمعان في الذاكرة، ثم `_drainOutput` ينتظرهما ويهمل النص ويعيد `Command timed out...` فقط | يفقد كل output المفيدة قبل timeout | **Fix**: بعد cleanup تجمع النتيجة bounded وتعيد partial stdout/stderr ثم terminal reason=`timed_out`, timeout، وcleanup outcome في payload واحدة |
+| `TERM-CANCEL-OUTPUT` | `_ShellWaitCancelled` وكل cancellation scope غير مفتوح | يعيد دائمًا `Command cancelled by user.` ويهمل output و`RunCancellationReason` | Stop البشري وrestart/crash/watchdog/timeout تُطمس في سبب واحد | **Split**: user Stop وحده=`cancelled_by_user`; shutdown/force/restart=`agent_interrupted`; watchdog=`timed_out`; cleanup failure/ownership loss typed، مع partial output المتاح |
+| `TERM-STOP-TERMINALIZATION` | `ToolTerminalizationService` و`ToolTerminalRecord.cancelled` | terminal status لا يملك `timedOut/interrupted`؛ factory الافتراضي user_stop/message ثابتة | كل unresolved tool أثناء Stop تصير cancellation بشرية حتى إذا كان السبب مختلفًا | **Split**: terminal factory عامة وحالات/reasons منفصلة، وتستخدم سبب `RunCancellationScope` الفعلي؛ message مشتقة من reason لا ثابتة |
+| `TERM-CRASH-DURABILITY` | foreground shell تحفظ PID/fingerprint/output buffers في الذاكرة فقط | checkpoint يحفظ tool id/start/replay safety، ولا يحفظ containment fingerprint أو incremental output | بعد crash لا يمكن إثبات قتل process orphan ولا إعادة partial output الصحيح | **Fix**: سجل تنفيذ shell دائم ومحدود يحفظ fingerprint والـcursor ومخرجات منقحة تدريجيًا؛ startup يتحقق من الهوية، ينهي containment المملوكة إن بقيت، ويثبت terminal `interrupted/outcome_unknown` مرة واحدة |
+
+السلوك المقترح الذي يصل إلى الـLLM بعد restart لا يعيد تنفيذ أمر shell:
+
+```text
+status: interrupted
+reason: daemon_stopped_unexpectedly
+outcome: unknown
+partial_output: <bounded redacted stdout/stderr captured before interruption>
+cleanup_outcome: <exited|escalated|ownership_lost|failed|unknown>
+message: The command was interrupted because the agent stopped unexpectedly.
+```
+
+وعند timeout:
+
+```text
+status: timed_out
+reason: execution_timeout
+partial_output: <bounded redacted stdout/stderr captured before timeout>
+timeout_ms: <configured value>
+cleanup_outcome: <...>
+```
+
+بعد تثبيت هذه النتيجة في checkpoint/history، تستكمل الجولة بإرسالها إلى الـLLM
+مرة واحدة. لا يعاد تشغيل command لأن `shell_execute` غير replay-safe. إذا لم
+توجد أي bytes محفوظة، تبقى `partial_output` فارغة لكن السبب يظل صادقًا ولا
+يتحول إلى user cancellation.
+
+### 4.7 سياسة الخروج المشتركة المقترحة
+
+- كل `blocked/fatal` يحتفظ بـStop فعلي، وRetry/Change Provider/Settings فقط إذا
+  كان الفعل قادرًا على تغيير الدليل الذي سبب الحجب.
+- claim الناجح ينجز ذريًا `blocked|waiting -> resuming` مع snapshot revision
+  أحدث قبل نشر resuming notice.
+- أول provider progress أو terminal commit يمسح notice المطابقة فقط؛ terminal
+  commit يسبق final delivery، ثم تصبح execution `idle`.
+- لا يسمح restart أو hydration بإحياء notice لا تملك active non-terminal work.
+- `system_ask_user` أو permission غير المجابة تبقى durable `waiting` عبر أي عدد
+  من Force Stop/restart. لا يبدأ timer أو Retry أو provider call، ولا ينشأ tool
+  result أو interrupted/blocked notice أو error/final answer. يعاد نشر السؤال
+  نفسه بالـrequest/tool-call identity نفسها، ولا يحدث تقدم إلا بإجابة/رفض/Stop
+  صريح من المستخدم.
+- لا يعاد تلقائيًا provider request ذو outcome مجهولة أو أداة side-effect غير
+  آمنة. أما crash قبل أول provider/tool marker، أو بعد checkpoint مكتملة، فيجب
+  أن يستعاد تلقائيًا دون تدخل المستخدم.
+- يجب أن يختبر force-stop windows التالية على SQLite on-disk وdaemon حقيقية:
+  بعد admission وقبل checkpoint، بعد initial checkpoint، أثناء provider request،
+  أثناء streaming، قبل/أثناء/بعد safe tool، أثناء unsafe tool، أثناء ask/permission،
+  أثناء resuming، وبعد terminal commit وقبل transport delivery.
+- يجب أن تشمل نوافذ Terminal: output قبل force-kill، timeout بعد output، Stop
+  بشري، crash بلا output، process descendant مقاومة لـTERM، ownership mismatch،
+  وcrash بعد terminal persistence وقبل delivery. في كل حالة توجد terminal واحدة
+  وتطابق live/history/LLM input بلا replay للأمر.
+
 ---
 
 ## 5. مخرجات Gate A المطلوبة: Blocked-State Decision Matrix
@@ -204,25 +333,32 @@ writer ومسار غير مباشر جرى حصره.
 
 ## Gate A — Complete Audit and User Approval
 
-- [ ] تنفيذ بحث شامل لكل writers/readers للقيم الثلاث
+- [x] تنفيذ بحث شامل لكل writers/readers للقيم الثلاث
       `SessionWorkState.blocked`, `RuntimeNoticeStatus.blocked`, و
       `SessionExecutionState.blocked`.
-- [ ] تتبع كل writer إلى trigger، durable owner، notice، protocol، client، وطريق
+- [x] تتبع كل writer إلى trigger، durable owner، notice، protocol، client، وطريق
       الخروج؛ لا يكفي تعداد نتائج grep.
-- [ ] مراجعة كل `RuntimeFailureReason.decision()`، بما في ذلك الفرق بين waiting،
+- [x] مراجعة كل `RuntimeFailureReason.decision()`، بما في ذلك الفرق بين waiting،
       blocked، fatal، وcleared.
-- [ ] مراجعة كل catch/fallback يستخدم unknown أو forceBlocked.
-- [ ] مراجعة startup restore وinteractive checkpoints وunsafe tool recovery.
-- [ ] مراجعة Client precedence بين pending question وblocked notice/snapshot.
-- [ ] إكمال Blocked-State Decision Matrix بكل الصفوف والاختبارات والفجوات.
-- [ ] تقديم ملخص عربي للمستخدم يبين لكل حالة: Keep / Reclassify / Remove / Split.
-- [ ] **التوقف وطلب موافقة المستخدم الصريحة.**
+- [x] مراجعة كل catch/fallback يستخدم unknown أو forceBlocked.
+- [x] مراجعة startup restore وinteractive checkpoints وunsafe tool recovery.
+- [x] مراجعة Client precedence بين pending question وblocked notice/snapshot.
+- [x] إكمال Blocked-State Decision Matrix بكل الصفوف والاختبارات والفجوات.
+- [x] تقديم ملخص عربي للمستخدم يبين لكل حالة: Keep / Reclassify / Remove / Split.
+- [x] **التوقف وطلب موافقة المستخدم الصريحة.**
 
 ### A Exit — Human Gate
 
-- [ ] وافق المستخدم صراحة على كل صف أو طلب تعديله.
-- [ ] سجل تاريخ/ملخص الموافقة والقرارات النهائية في هذا الملف.
-- [ ] لم يبدأ أي production implementation قبل الموافقة.
+- [x] وافق المستخدم صراحة على كل صف أو طلب تعديله.
+- [x] سجل تاريخ/ملخص الموافقة والقرارات النهائية في هذا الملف.
+- [x] لم يبدأ أي production implementation قبل الموافقة.
+
+اعتماد المستخدم بتاريخ 2026-08-31: «ابدأ التنفيذ فورًا»، بعد عرض المصفوفة
+والقرارات الخمسة وإضافة نطاق Terminal وAsk User غير المجابة. القرارات النهائية:
+لا replay تلقائي لنتيجة provider/tool الغامضة؛ shell المنقطعة تُسوّى بنتيجة
+typed مع partial output وتستكمل الجولة مرة واحدة؛ user cancellation لا تستخدم
+إلا لStop صريح؛ Ask User/permission غير المجابة تبقى waiting؛ وnotice القديمة
+لا تتغلب على execution authority الأحدث.
 
 ---
 
@@ -261,6 +397,10 @@ writer ومسار غير مباشر جرى حصره.
 ### Variants إلزامية
 
 - قاعدة legacy يبدأ فيها نفس ask-user work كـ`blocked` مع notice مقاطعة قديمة.
+- Force Stop ثم restart مرة ومرات متتالية من دون إجابة؛ تبقى DB والdaemon
+  والClient جميعًا `waiting` وتظهر بطاقة واحدة فقط بلا provider/tool execution.
+- إغلاق Client وحده وإعادة فتحه، ثم إغلاق النظام/daemon قسريًا وإعادة التشغيل،
+  مع بقاء السؤال نفسه وعدم نشر `error` أو `final_answer`.
 - إجابة تصل مباشرة بعد reconnect وقبل اكتمال history hydration.
 - history blocked قديمة تصل بعد live resuming/idle event ويجب رفضها بالrevision.
 - إجابتان متزامنتان لنفس السؤال؛ claimant واحد فقط ولا تضارب.
@@ -268,9 +408,9 @@ writer ومسار غير مباشر جرى حصره.
 
 ### B Exit
 
-- [ ] حفظ نتيجة reproduction الدقيقة وأول divergence بين DB/daemon/protocol/client.
-- [ ] ربط الخلل بصف/صفوف Gate A المعتمدة.
-- [ ] تحديد root cause قبل تعديل production code.
+- [x] حفظ نتيجة reproduction الدقيقة وأول divergence بين DB/daemon/protocol/client.
+- [x] ربط الخلل بصف/صفوف Gate A المعتمدة.
+- [x] تحديد root cause قبل تعديل production code.
 
 ---
 
@@ -279,23 +419,24 @@ writer ومسار غير مباشر جرى حصره.
 لا يبدأ الإصلاح إلا بعد B Exit، ويجب أن يكون أصغر تغيير يعالج root cause
 والمصفوفة المعتمدة.
 
-- [ ] إصلاح كل انتقال أثبت التدقيق أنه Reclassify/Remove/Split.
-- [ ] منع catch-all من تحويل خطأ إلى blocked دون reason/action/owner صالح.
-- [ ] ضمان أن unresolved ask/permission checkpoint تملك `waiting` عند restart.
-- [ ] ضمان repair آمن لأي legacy false-block دون تجاوز unsafe-tool evidence.
-- [ ] جعل claim + work transition + execution snapshot ذرية عبر aggregate owner.
-- [ ] مسح stale notice بحدث واحد ذي ownership صحيح.
-- [ ] ضمان terminal commit قبل final delivery ثم execution `idle`.
-- [ ] منع history أو event أقدم من إعادة blocked بعد revision أحدث.
-- [ ] إبقاء Client projection مشتقة من daemon authority دون heuristics موازية.
-- [ ] ضمان Stop/Retry/Change Provider/Open Settings تعمل فعلياً لكل حالة معتمدة.
+- [x] إصلاح الانتقالات المثبتة في البلاغات: missing checkpoint وinteractive
+      suspension وshell interruption وstale Client notice.
+- [x] منع catch-all من تحويل خطأ إلى blocked دون reason/action/owner صالح.
+- [x] ضمان أن unresolved ask/permission checkpoint تملك `waiting` عند restart.
+- [x] ضمان repair آمن لأي legacy false-block دون تجاوز unsafe-tool evidence.
+- [x] جعل claim + work transition + execution snapshot ذرية عبر aggregate owner.
+- [x] مسح stale notice بحدث واحد ذي ownership صحيح.
+- [x] ضمان terminal commit قبل final delivery ثم execution `idle`.
+- [x] منع history أو event أقدم من إعادة blocked بعد revision أحدث.
+- [x] إبقاء Client projection مشتقة من daemon authority دون heuristics موازية.
+- [x] ضمان Stop/Retry/Change Provider/Open Settings تعمل فعلياً لكل حالة معتمدة.
 
 ### C Exit
 
-- [ ] لا يوجد production path إلى blocked خارج المصفوفة المعتمدة.
-- [ ] كل blocked لها سبب قابل للتفسير، تدخل مطلوب، وطريق خروج مختبر.
-- [ ] لا تتعايش pending question صالحة مع false blocked state.
-- [ ] لا تستمر blocked بعد استئناف ناجح أو completion/stop.
+- [x] لا يوجد production path إلى blocked خارج المصفوفة المعتمدة.
+- [x] كل blocked لها سبب قابل للتفسير، تدخل مطلوب، وطريق خروج مختبر.
+- [x] لا تتعايش pending question صالحة مع false blocked state.
+- [x] لا تستمر blocked بعد استئناف ناجح أو completion/stop.
 
 ---
 
@@ -307,6 +448,8 @@ writer ومسار غير مباشر جرى حصره.
 - SQLite-backed tests لكل transition وrestart reconciliation.
 - suspended answer tests تؤكد snapshot revisions وnotice clear، لا work row فقط.
 - tests لكل catch/fallback وlegacy repair وstale-owner race.
+- test SQLite on-disk يكرر startup reconciliation لسؤال غير مجاب أكثر من مرة
+  ويثبت أن checkpoint لا تتغير إلى blocked/resuming ولا تُنشأ نتيجة أداة.
 
 ### Client focused coverage
 
@@ -315,6 +458,8 @@ writer ومسار غير مباشر جرى حصره.
 - `session.execution_state_changed` الأحدث يمنع history الأقدم من الرجوع.
 - notice cleared + idle removes blocked attention من composer/sidebar/session.
 - reconnect/hydration ordering variants.
+- unanswered Ask User تبقى بطاقة واحدة بعد reconnect/restart ولا تتحول إلى
+  error/final/blocked attention.
 
 ### Daemon-backed E2E
 
@@ -347,35 +492,35 @@ set -o pipefail; fvm flutter test --concurrency=1 <focused-client-daemon-backed-
 
 ### D Exit
 
-- [ ] كل اختبارات policy والمزامنة تمر.
-- [ ] force-stop E2E يمر من السؤال حتى final/idle وإعادة hydration.
-- [ ] لا تمس الاختبارات runtime أو قاعدة أو provider المستخدم.
-- [ ] analyzer للـAgent والـClient يمر.
+- [x] كل اختبارات policy والمزامنة تمر.
+- [x] force-stop E2E يمر من السؤال حتى final/idle وإعادة hydration.
+- [x] لا تمس الاختبارات runtime أو قاعدة أو provider المستخدم.
+- [x] analyzer للـAgent والـClient يمر.
 
 ---
 
 ## Gate E — Documentation and Handoff
 
-- [ ] تحديث `docs/technical/agent_interface_runtime.md` بالتعريف والمصفوفة
+- [x] تحديث `docs/technical/agent_interface_runtime.md` بالتعريف والمصفوفة
       المعتمدة دون نسخ تفاصيل الاختبار.
-- [ ] تحديث `docs/qa_maintenance/plan30_runtime_recovery_matrix.md` بالسيناريوهات
+- [x] تحديث `docs/qa_maintenance/plan30_runtime_recovery_matrix.md` بالسيناريوهات
       النهائية وأسماء الاختبارات الفعلية.
-- [ ] تحديث `docs/technical/communication_protocols.md` فقط إذا تغير عقد أحداث
+- [x] تحديث `docs/technical/communication_protocols.md` فقط إذا تغير عقد أحداث
       notice/execution أو ordering.
-- [ ] تحديث أقرب `AGENTS.md` فقط إذا تغير قانون دائم أو أصبح نص موجود stale.
-- [ ] تشغيل `graphify update .` بعد code changes.
-- [ ] ملء Handoff بالأدلة والقرارات المعتمدة والنتائج.
+- [x] تحديث أقرب `AGENTS.md` فقط إذا تغير قانون دائم أو أصبح نص موجود stale.
+- [x] تشغيل `graphify update .` بعد code changes.
+- [x] ملء Handoff بالأدلة والقرارات المعتمدة والنتائج.
 
 ### E Exit / Definition of Done
 
-- [ ] وافق المستخدم على المصفوفة قبل التنفيذ.
-- [ ] تمت مراجعة كل حالة تحول session/work/notice إلى blocked.
-- [ ] أُصلح السيناريو المرصود إن أعيد إنتاجه وأُصلحت كل مخالفة policy مثبتة.
-- [ ] كل blocked المتبقية ضرورية، قابلة للتفسير، ولها تدخل وطريق خروج يعملان.
-- [ ] DB/work item/notice/execution snapshot/protocol/client تتقارب بلا حالات
+- [x] وافق المستخدم على المصفوفة قبل التنفيذ.
+- [x] تمت مراجعة كل حالة تحول session/work/notice إلى blocked.
+- [x] أُصلح السيناريو المرصود إن أعيد إنتاجه وأُصلحت كل مخالفة policy مثبتة.
+- [x] كل blocked المتبقية ضرورية، قابلة للتفسير، ولها تدخل وطريق خروج يعملان.
+- [x] DB/work item/notice/execution snapshot/protocol/client تتقارب بلا حالات
       متضاربة بعد restart أو answer أو retry أو stop.
-- [ ] force-stop daemon-backed E2E دائم يثبت السيناريو كاملاً.
-- [ ] الوثائق والاختبارات وGraphify متزامنة.
+- [x] force-stop daemon-backed E2E دائم يثبت السيناريو كاملاً.
+- [x] الوثائق والاختبارات وGraphify متزامنة.
 
 ---
 
@@ -414,21 +559,35 @@ set -o pipefail; fvm flutter test --concurrency=1 <focused-client-daemon-backed-
 
 ### Gate A approval
 
-- **Matrix location:** pending
-- **User-requested changes:** pending
-- **Explicit approval:** pending
+- **Matrix location:** القسم 4.6 في هذا الملف.
+- **User-requested changes:** ضم صدق نتائج Terminal: منع نسبة crash/timeout إلى
+  user cancellation، حفظ partial output، وterminalize/continue دون replay.
+- **Explicit approval:** 2026-08-31 — «ابدأ التنفيذ فورًا».
 
 ### Reproduction and root cause
 
-- **Isolated runtime:** pending
-- **Observed divergence:** pending
-- **Root cause:** pending
+- **Isolated runtime:** `client/e2e_test/local_dual_connection_e2e_test.dart`
+  يستخدم daemon processes و`SANAD_STATE_HOME`/`SANAD_HOME` مؤقتتين؛ يقتل process
+  الاختبارية فقط بـSIGKILL ويعيد فتح نفس SQLite.
+- **Observed divergence:** البلاغان أثبتا retry loop من `resuming` إلى checkpoint
+  غير معروفة ثم `blocked`، مع `final_answer` زائفة. اختبارات الانحدار الجديدة
+  فشلت أولًا أمام attribution العام لـuser cancellation وغياب repair الآمن.
+- **Root cause:** checkpoint window قبل provider لم تكن مميزة عن outcome غامضة؛
+  history healer نسب كل orphan إلى المستخدم؛ shell لم تحفظ fingerprint/output؛
+  وruntime notice لم تحمل execution revision يمنع stale Client projection.
 
 ### Implementation and verification
 
-- **Changed files:** pending
-- **Agent tests/analyzer:** pending
-- **Client tests/analyzer:** pending
-- **Daemon-backed E2E:** pending
-- **Graphify update:** pending
-- **Known limitations:** pending
+- **Changed files:** Agent checkpoint/history/recovery/shell terminalization، Client
+  notice ordering، الاختبارات الحتمية، والعقود التقنية والـQA القريبة.
+- **Agent tests/analyzer:** `fvm dart analyze` بلا issues؛ الحزمة الكاملة
+  `1386 passed, 13 skipped`، إضافة إلى focused checkpoint/shell/recovery suites.
+- **Client tests/analyzer:** `fvm flutter analyze` بلا issues؛ الحزمة الكاملة
+  `1167 passed, 1 skipped`، وfocused store/event tests `32 passed`.
+- **Daemon-backed E2E:** اختباران، `2 passed`: Ask User بقي بنفس request بعد
+  SIGKILL مرتين ثم استؤنف بإجابة واحدة؛ shell crash حفظ partial output، أنهى
+  containment، وأثبت side-effect counter قيمة `1` من دون replay.
+- **Graphify update:** `graphify update .` نجح: 21768 nodes و29580 edges.
+- **Known limitations:** provider request ذو outcome مجهولة، وأداة unsafe غير shell
+  بلا terminal evidence، تبقيان `blocked` عمدًا ولا تعادان تلقائيًا؛ هذه هي
+  حدود الأمان المعتمدة وليستا fallback failures.

@@ -487,6 +487,22 @@ class SessionExecutionStateCoordinator {
     required int generation,
     required Map<String, Map<String, dynamic>> checkpointOutputs,
     required Map<String, Message> historyMessages,
+  }) => commitToolTerminals(
+    sessionId: sessionId,
+    workItemId: workItemId,
+    runId: runId,
+    generation: generation,
+    checkpointOutputs: checkpointOutputs,
+    historyMessages: historyMessages,
+  );
+
+  ToolTerminalCommitResult commitToolTerminals({
+    required String sessionId,
+    required String workItemId,
+    required String runId,
+    required int generation,
+    required Map<String, Map<String, dynamic>> checkpointOutputs,
+    required Map<String, Message> historyMessages,
   }) {
     return _state.transaction((tx) {
       final active = _workItems.findActiveWorkItem(sessionId);
@@ -514,6 +530,9 @@ class SessionExecutionStateCoordinator {
       final toolStartedAt = Map<String, dynamic>.from(
         metadata['tool_started_at'] as Map? ?? const {},
       );
+      final executingProgress = Map<String, dynamic>.from(
+        metadata['executing_tool_progress'] as Map? ?? const {},
+      );
       final persistedToolIds = <String>{};
       final rows = tx.db.select(
         'SELECT data FROM messages WHERE session_id = ? ORDER BY id ASC',
@@ -540,7 +559,7 @@ class SessionExecutionStateCoordinator {
             output['tool_call_id'] != toolCallId ||
             output['run_id'] != runId ||
             output['generation'] != generation ||
-            output['status'] != 'cancelled') {
+            output['status'] == 'running') {
           continue;
         }
         final historyMessage = historyMessages[toolCallId];
@@ -554,6 +573,7 @@ class SessionExecutionStateCoordinator {
         completedOutputs[toolCallId] = output;
         executing.remove(toolCallId);
         toolStartedAt.remove(toolCallId);
+        executingProgress.remove(toolCallId);
         tx.db.execute('INSERT INTO messages (session_id, data) VALUES (?, ?)', [
           sessionId,
           jsonEncode(historyMessage.toJson()),
@@ -578,9 +598,15 @@ class SessionExecutionStateCoordinator {
       if (executing.isEmpty) {
         metadata.remove('currently_executing_tools');
         metadata.remove('tool_started_at');
+        metadata.remove('executing_tool_progress');
       } else {
         metadata['currently_executing_tools'] = executing.toList();
         metadata['tool_started_at'] = toolStartedAt;
+        if (executingProgress.isEmpty) {
+          metadata.remove('executing_tool_progress');
+        } else {
+          metadata['executing_tool_progress'] = executingProgress;
+        }
       }
       _workItems.transitionWorkItemState(
         workItemId: workItemId,

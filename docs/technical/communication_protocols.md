@@ -245,6 +245,13 @@ serialized. It lets a client anchor a local display ticker without comparing
 the client clock to the daemon clock. Reopening or reconnecting receives a fresh
 observation through the existing session query snapshot.
 
+`session.runtime_notice` and `session.runtime_notice_cleared` include
+`execution_revision`, copied from the authoritative snapshot after the owning
+work transition commits. A client rejects a notice older than its accepted
+snapshot and rejects a clear older than the notice it would remove. During
+history hydration, an older daemon notice without this field is bound to the
+`execution_snapshot.revision` returned in the same envelope.
+
 Actual changes to `(state, work_item_id, request_id, turn_started_at)` advance
 the per-session revision once. An idempotent recomputation neither advances the
 revision nor publishes another event. A later query may return a greater
@@ -678,13 +685,17 @@ A model step begins before each LLM invocation. Deltas merge only within that st
 
 `tool_use` also carries the `model_step_id` that produced the call and closes that thought projection as completed. An active-run `stopped` event carries `run_id + model_step_id`; the client removes only that unfinished projection. Recovery-only Stop may omit `model_step_id` and must preserve every stored thought because it has no active model projection to cancel.
 
-A cancelled `tool_result` is published only after its durable owner transaction
-commits. Live delivery and `get_session_history` both expose the same
+A terminal `tool_result` is published only after its durable owner transaction
+commits. In addition to `completed`, `failed`, and explicit user `cancelled`, a
+shell may end as `timed_out` or `interrupted`. Live delivery and
+`get_session_history` both expose the same
 `tool_call_id`, `run_id`, `model_step_id`, `generation`, `revision`, `status`,
 `reason`, `started_at`, `terminal_at`, and optional `cleanup_outcome`. Repeated
 Stop or a late success/timeout cannot advance the revision or replace that
-terminal. The event envelope keeps the session and opaque event identities;
-the payload does not duplicate tool output in `content`.
+terminal. Timeout and interruption retain bounded stdout/stderr in the tool
+output; only an explicit Stop uses `reason=cancelled_by_user`. The event
+envelope keeps the session and opaque event identities; the payload does not
+duplicate tool output in `content`.
 
 For an active tool Stop, delivery order is the durable cancelled `tool_result`,
 then `stopped`, then the final `session.execution_state_changed` snapshot for

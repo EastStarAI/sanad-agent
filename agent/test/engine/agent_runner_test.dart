@@ -36,6 +36,7 @@ import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_state_rejected_exception.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
+import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 
 class MockAdapter implements LLMAdapter {
   final List<AgentResponse> responses;
@@ -2112,7 +2113,8 @@ void main() {
 
         expect(runner.history[2].role, MessageRole.tool);
         expect(runner.history[2].toolCallId, 'call_healing_1');
-        expect(runner.history[2].content, contains('cancelled'));
+        expect(runner.history[2].content, contains('interrupted'));
+        expect(runner.history[2].content, isNot(contains('cancelled by user')));
 
         // Verify the healed history was saved to database
         final savedHistory = sessionManager
@@ -3689,6 +3691,76 @@ void main() {
         expect(
           blockedItem.continuationMetadata['resume_failure_reason'],
           contains('recognized checkpoint kind'),
+        );
+      });
+
+      test('resume repairs a missing pre-provider checkpoint once', () async {
+        final session = sessionManager.createSession('gpt-4o');
+        sessionManager.saveSessionHistory(session.sessionId, [
+          Message(
+            role: MessageRole.user,
+            content: 'recover me',
+            metadata: const {'request_id': 'req-missing-checkpoint'},
+          ),
+        ]);
+
+        final stateDb = AgentStateDatabase.inMemory();
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        GetIt.I.registerSingleton<PersistedRuntimeStateRepository>(repo);
+        addTearDown(() {
+          GetIt.I.unregister<PersistedRuntimeStateRepository>();
+          stateDb.dispose();
+        });
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('${session.sessionId}', 'gpt-4o', '2026-08-31', '2026-08-31')",
+        );
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'w-missing-checkpoint',
+            sessionId: session.sessionId,
+            requestId: 'req-missing-checkpoint',
+            sequence: 1,
+            state: SessionWorkState.resuming,
+            attempt: 0,
+            payload: const {'message': 'recover me'},
+            continuationMetadata: const {},
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+        final adapter = MockAdapter([
+          AgentResponse(
+            message: Message(role: MessageRole.assistant, content: 'recovered'),
+          ),
+        ]);
+        final runner = AgentRunner(
+          adapter,
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+
+        expect(
+          await runner.resumeStream(requestId: 'req-missing-checkpoint').join(),
+          'recovered',
+        );
+        expect(
+          repo
+              .findWorkItem('w-missing-checkpoint')!
+              .continuationMetadata['checkpoint_kind'],
+          ContinuationCheckpointCoordinator.checkpointKindInitialModelRequest,
+        );
+        expect(
+          repo
+              .findWorkItem('w-missing-checkpoint')!
+              .continuationMetadata['checkpoint_repaired_after_restart'],
+          isTrue,
+        );
+        expect(
+          adapter.lastHistory!.where(
+            (message) => message.role == MessageRole.user,
+          ),
+          hasLength(1),
         );
       });
 

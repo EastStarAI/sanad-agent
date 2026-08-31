@@ -19,6 +19,8 @@ This contract applies to `agent/lib/engine/runtime/`.
 - `ContinuationCheckpointCoordinator` owns checkpoint schema and read/write orchestration for the active work item.
 - Receive history/current-turn values through an immutable context and return restored values; do not own them.
 - Persist checkpoint kind, completed results, executing tools, replay safety, model step, and owner identity. A provider invocation is durably marked `model_request_in_flight` until its response is saved or the live process receives a definitive request failure; known failures restore the previous safe checkpoint, while startup blocks a genuinely interrupted unknown outcome instead of replaying it automatically.
+- A missing checkpoint may be repaired as `initial_model_request` only when the owned user message is durable and there is no provider-in-flight, executing-tool, completed-result, or deferred-result evidence. Persist the repair marker so retry cannot reinterpret an ambiguous boundary repeatedly.
+- Tools that support crash diagnostics may persist bounded, redacted execution progress under the active checkpoint. Progress is evidence for terminal recovery, never permission to replay an unsafe tool.
 - Persist sequential tool completion and executing-marker removal together.
 - A typed deferred tool result may keep one non-idempotent tool executing only
   when its requester-bound descriptor is durable. Startup resolves that

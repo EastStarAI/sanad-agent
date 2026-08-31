@@ -15,6 +15,7 @@ import 'package:sanad_client/features/provider_setup/data/provider_setup_client_
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/infrastructure/local_gateway/local_gateway_credential_provider.dart';
 import 'package:sanad_client/infrastructure/local_tools/sanad_settings_store.dart';
+import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -642,6 +643,216 @@ void main() {
     timeout: const Timeout(Duration(minutes: 3)),
   );
   test(
+    'keeps ask-user waiting across repeated daemon force stops and resumes once answered',
+    () async {
+      final agentDir = Directory(
+        '${Directory.current.parent.path}${Platform.pathSeparator}agent',
+      );
+      final stateHome = await Directory.systemTemp.createTemp(
+        'sanad-ask-user-restart-state-e2e-',
+      );
+      final sanadHome = await Directory.systemTemp.createTemp(
+        'sanad-ask-user-restart-home-e2e-',
+      );
+      addTearDown(() async {
+        for (final directory in [stateHome, sanadHome]) {
+          if (directory.existsSync()) await directory.delete(recursive: true);
+        }
+      });
+
+      final port = _pickPort();
+      var daemon = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: port,
+        existingStateHome: stateHome,
+        existingSanadHome: sanadHome,
+      );
+      var connection = await _connectConversation(
+        daemon,
+        port: port,
+        hardwareId: 'ask-user-force-stop-e2e',
+      );
+      addTearDown(() async {
+        await connection.dispose();
+        await daemon.stop();
+      });
+      final session = await connection.client.createSession(
+        title: 'Ask User Force Stop E2E',
+      );
+      final pendingRequest = connection.client.pendingSuspendedRequest
+          .firstWhere((request) => request != null)
+          .then((request) => request!);
+      await connection.client.sendMessage(
+        '__SANAD_E2E_ASK_USER_RESTART__',
+        sessionId: session.id,
+      );
+      final originalRequest = await pendingRequest.timeout(
+        const Duration(seconds: 30),
+      );
+      expect(originalRequest.toolName, 'system_ask_user');
+
+      for (var restart = 0; restart < 2; restart++) {
+        await daemon.forceStop();
+        await connection.dispose();
+        daemon = await _startDaemon(
+          sanadagentLocalDir: agentDir,
+          port: port,
+          existingStateHome: stateHome,
+          existingSanadHome: sanadHome,
+        );
+        connection = await _connectConversation(
+          daemon,
+          port: port,
+          hardwareId: 'ask-user-force-stop-e2e',
+        );
+        await connection.client.loadSessionHistory(session.id);
+
+        final restored = connection.client.currentPendingSuspendedRequest;
+        expect(restored, isNotNull);
+        expect(restored!.requestId, originalRequest.requestId);
+        expect(restored.toolName, 'system_ask_user');
+        expect(connection.client.currentRuntimeNotice?.status, isNot('blocked'));
+      }
+
+      final finalAnswer = _waitForFinalAnswer(
+        connection.socket,
+        sessionId: session.id,
+      );
+      await connection.client.respondToSuspendedRequest(
+        connection.client.currentPendingSuspendedRequest!,
+        allow: true,
+        answer: 'Continue',
+      );
+      expect(
+        await finalAnswer.timeout(const Duration(seconds: 30)),
+        'ASK_USER_RESUMED',
+      );
+      expect(connection.client.currentPendingSuspendedRequest, isNull);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'terminalizes a force-stopped shell with partial output and never calls it user cancellation',
+    () async {
+      final agentDir = Directory(
+        '${Directory.current.parent.path}${Platform.pathSeparator}agent',
+      );
+      final stateHome = await Directory.systemTemp.createTemp(
+        'sanad-shell-crash-state-e2e-',
+      );
+      final sanadHome = await Directory.systemTemp.createTemp(
+        'sanad-shell-crash-home-e2e-',
+      );
+      addTearDown(() async {
+        for (final directory in [stateHome, sanadHome]) {
+          if (directory.existsSync()) await directory.delete(recursive: true);
+        }
+      });
+
+      final marker = File(
+        '${stateHome.path}${Platform.pathSeparator}shell-started',
+      );
+      final counter = File(
+        '${stateHome.path}${Platform.pathSeparator}shell-executions',
+      );
+      final command =
+          "printf 'run\\n' >> '${counter.path.replaceAll("'", "'\\''")}'; printf 'CRASH_OUTPUT\\n'; touch '${marker.path.replaceAll("'", "'\\''")}'; sleep 30";
+      final port = _pickPort();
+      var daemon = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: port,
+        existingStateHome: stateHome,
+        existingSanadHome: sanadHome,
+      );
+      var connection = await _connectConversation(
+        daemon,
+        port: port,
+        hardwareId: 'shell-force-stop-e2e',
+      );
+      addTearDown(() async {
+        await connection.dispose();
+        await daemon.stop();
+      });
+      final workspaceDirectory = await Directory(
+        '${stateHome.path}${Platform.pathSeparator}workspace',
+      ).create();
+      final workspace = await connection.client.createWorkspace(
+        path: workspaceDirectory.path,
+        name: 'Shell Crash Workspace',
+      );
+      await connection.client.setWorkspacePermissionMode(
+        workspaceId: workspace.id,
+        workspacePath: workspace.path,
+        mode: WorkspacePermissionMode.fullAccess,
+      );
+      final session = await connection.client.createSession(
+        title: 'Shell Force Stop E2E',
+        workspaceId: workspace.id,
+      );
+      await connection.client.sendMessage(
+        '__SANAD_E2E_SHELL_CRASH__${jsonEncode(command)}',
+        sessionId: session.id,
+        workspaceId: workspace.id,
+      );
+      final markerDeadline = DateTime.now().add(const Duration(seconds: 20));
+      while (!marker.existsSync() && DateTime.now().isBefore(markerDeadline)) {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+      }
+      expect(marker.existsSync(), isTrue);
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+
+      await daemon.forceStop();
+      await connection.dispose();
+      daemon = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: port,
+        existingStateHome: stateHome,
+        existingSanadHome: sanadHome,
+      );
+      connection = await _connectConversation(
+        daemon,
+        port: port,
+        hardwareId: 'shell-force-stop-e2e',
+      );
+
+      final completionDeadline = DateTime.now().add(
+        const Duration(seconds: 30),
+      );
+      do {
+        await connection.client.loadSessionHistory(session.id);
+        if (connection.client.currentMessages.any(
+          (event) => event.text == 'SHELL_INTERRUPTED_RESUMED',
+        )) {
+          break;
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 200));
+      } while (DateTime.now().isBefore(completionDeadline));
+
+      expect(
+        connection.client.currentMessages.any(
+          (event) => event.text == 'SHELL_INTERRUPTED_RESUMED',
+        ),
+        isTrue,
+      );
+      final shellEvent = connection.client.currentMessages.firstWhere(
+        (event) => event.toolCallId == 'e2e-shell-crash-tool-call',
+      );
+      final output = shellEvent.toolOutput.toString();
+      expect(output, contains('CRASH_OUTPUT'));
+      expect(output, contains('interrupted'));
+      expect(output, isNot(contains('cancelled by user')));
+      expect(
+        counter.readAsLinesSync().where((line) => line == 'run').length,
+        1,
+      );
+      expect(connection.client.currentRuntimeNotice?.status, isNot('blocked'));
+    },
+    skip: Platform.isWindows ? 'SIGKILL process-group recovery is Unix-specific.' : false,
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
     'migrates a legacy Home and reconnects after daemon restart without touching workspace files',
     () async {
       final agentDir = Directory(
@@ -893,6 +1104,92 @@ String _getDartExecutablePath() {
   return resolved;
 }
 
+class _E2eConversationConnection {
+  const _E2eConversationConnection({
+    required this.socket,
+    required this.cloudSocket,
+    required this.resolver,
+    required this.capabilitiesStore,
+    required this.registry,
+    required this.client,
+  });
+
+  final SanadSocketService socket;
+  final SanadSocketService cloudSocket;
+  final DeviceConnectionCoordinator resolver;
+  final DeviceCapabilitiesStore capabilitiesStore;
+  final ConversationClientRegistryImpl registry;
+  final ConversationClient client;
+
+  Future<void> dispose() async {
+    registry.dispose();
+    capabilitiesStore.dispose();
+    resolver.dispose();
+    socket.dispose();
+    cloudSocket.dispose();
+  }
+}
+
+Future<_E2eConversationConnection> _connectConversation(
+  _E2eDaemon daemon, {
+  required int port,
+  required String hardwareId,
+}) async {
+  final socket = _localSocket(
+    daemon,
+    url: 'http://127.0.0.1:$port',
+    hardwareId: hardwareId,
+  );
+  final cloudSocket = SanadSocketService(
+    url: 'http://127.0.0.1:65535',
+    hardwareId: hardwareId,
+  );
+  await _waitForLocalSocket(socket);
+  final resolver = DeviceConnectionCoordinator(
+    cloudSocketService: cloudSocket,
+    localSocketService: socket,
+    currentDeviceId: hardwareId,
+  );
+  await resolver.ensureLocalConnection();
+  final capabilitiesStore = DeviceCapabilitiesStore(resolver);
+  final registry = ConversationClientRegistryImpl(resolver, capabilitiesStore);
+  final client = registry.getOrCreateConversationClientForAgent(
+    DeviceConfig(
+      id: 'sanadagent-local-e2e',
+      name: 'SanadAgent Local',
+      hardwareId: hardwareId,
+      isOnline: true,
+    ),
+  );
+  return _E2eConversationConnection(
+    socket: socket,
+    cloudSocket: cloudSocket,
+    resolver: resolver,
+    capabilitiesStore: capabilitiesStore,
+    registry: registry,
+    client: client,
+  );
+}
+
+Future<String> _waitForFinalAnswer(
+  SanadSocketService socket, {
+  required String sessionId,
+}) async {
+  await for (final event in socket.events) {
+    if (event['type'] != 'device_event' || event['event'] != 'final_answer') {
+      continue;
+    }
+    final payload = event['payload'] is Map
+        ? Map<String, dynamic>.from(event['payload'] as Map)
+        : const <String, dynamic>{};
+    final eventSessionId = event['session_id']?.toString() ?? payload['session_id']?.toString();
+    if (eventSessionId == sessionId) {
+      return payload['content']?.toString() ?? '';
+    }
+  }
+  throw StateError('Socket closed before final_answer.');
+}
+
 class _E2eDaemon {
   _E2eDaemon(
     this.process,
@@ -908,6 +1205,13 @@ class _E2eDaemon {
   final bool deleteStateHome;
   final bool deleteSanadHome;
   bool _stopped = false;
+
+  Future<void> forceStop() async {
+    if (_stopped) return;
+    _stopped = true;
+    process.kill(Platform.isWindows ? ProcessSignal.sigterm : ProcessSignal.sigkill);
+    await process.exitCode.timeout(const Duration(seconds: 5));
+  }
 
   Future<void> stop() async {
     if (!_stopped) {

@@ -33,6 +33,14 @@ class E2eFixtureAdapter implements LLMAdapter {
   static const memoryAddToolCallId = 'e2e-memory-add-tool-call';
   static const memoryReadToolCallId = 'e2e-memory-read-tool-call';
   static const memoryEntry = 'User name is Ahmed Memory E2E';
+  static const askUserPrompt = '__SANAD_E2E_ASK_USER_RESTART__';
+  static const askUserToolName = 'system_ask_user';
+  static const askUserToolCallId = 'e2e-ask-user-tool-call';
+  static const askUserResponseText = 'ASK_USER_RESUMED';
+  static const shellCrashPromptPrefix = '__SANAD_E2E_SHELL_CRASH__';
+  static const shellToolName = 'shell_execute';
+  static const shellToolCallId = 'e2e-shell-crash-tool-call';
+  static const shellCrashResponseText = 'SHELL_INTERRUPTED_RESUMED';
 
   const E2eFixtureAdapter();
 
@@ -61,6 +69,98 @@ class E2eFixtureAdapter implements LLMAdapter {
         message: Message(
           role: MessageRole.assistant,
           content: marker ?? 'MISSING_RUNTIME_MARKER',
+        ),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
+    final hasAskUserTool =
+        tools?.any((tool) => tool.name == askUserToolName) ?? false;
+    if (latestUserContent == askUserPrompt && hasAskUserTool) {
+      final hasResult = history.any(
+        (message) =>
+            message.role == MessageRole.tool &&
+            message.toolCallId == askUserToolCallId,
+      );
+      if (!hasResult) {
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: askUserToolCallId,
+                name: askUserToolName,
+                arguments: const {
+                  'question': 'Should this task continue after restart?',
+                },
+              ),
+            ],
+          ),
+          isToolCall: true,
+          model: modelId,
+          provider: providerId,
+          finishReason: LLMFinishReason.toolCalls,
+        );
+      }
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: askUserResponseText,
+        ),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
+    final isShellCrashScenario =
+        latestUserContent?.startsWith(shellCrashPromptPrefix) ?? false;
+    final hasShellTool =
+        tools?.any((tool) => tool.name == shellToolName) ?? false;
+    if (isShellCrashScenario && hasShellTool) {
+      Message? toolResult;
+      for (final message in history) {
+        if (message.role == MessageRole.tool &&
+            message.toolCallId == shellToolCallId) {
+          toolResult = message;
+        }
+      }
+      if (toolResult == null) {
+        final encodedCommand = latestUserContent!.substring(
+          shellCrashPromptPrefix.length,
+        );
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: shellToolCallId,
+                name: shellToolName,
+                arguments: {
+                  'command': jsonDecode(encodedCommand).toString(),
+                  'timeout_ms': 60000,
+                },
+              ),
+            ],
+          ),
+          isToolCall: true,
+          model: modelId,
+          provider: providerId,
+          finishReason: LLMFinishReason.toolCalls,
+        );
+      }
+      final truthfulInterruption =
+          (toolResult.content?.contains('CRASH_OUTPUT') ?? false) &&
+          (toolResult.content?.contains('interrupted') ?? false) &&
+          !(toolResult.content?.contains('cancelled by user') ?? false);
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: truthfulInterruption
+              ? shellCrashResponseText
+              : 'INVALID_SHELL_INTERRUPTION_RESULT',
         ),
         model: modelId,
         provider: providerId,

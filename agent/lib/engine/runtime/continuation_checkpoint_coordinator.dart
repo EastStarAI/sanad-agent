@@ -153,6 +153,20 @@ class ContinuationCheckpointCoordinator {
       }
     }
 
+    final progress = Map<String, dynamic>.from(
+      meta['executing_tool_progress'] as Map? ?? const {},
+    );
+    if (currentlyExecutingToolCallIds != null) {
+      progress.removeWhere(
+        (toolCallId, _) => !currentlyExecutingToolCallIds.contains(toolCallId),
+      );
+      if (progress.isEmpty) {
+        meta.remove('executing_tool_progress');
+      } else {
+        meta['executing_tool_progress'] = progress;
+      }
+    }
+
     final replaySafety = Map<String, dynamic>.from(
       meta['tool_replay_safety'] as Map? ?? const {},
     );
@@ -163,6 +177,32 @@ class ContinuationCheckpointCoordinator {
       meta['tool_replay_safety'] = replaySafety;
     }
 
+    repo.transitionWorkItemState(
+      workItemId: activeItem.workItemId,
+      fromState: activeItem.state,
+      toState: activeItem.state,
+      continuationMetadata: meta,
+    );
+  }
+
+  void saveExecutingToolProgress(
+    String toolCallId,
+    Map<String, dynamic> progress,
+  ) {
+    final repo = _repo;
+    if (repo == null) return;
+    final activeItem = repo.findActiveWorkItem(sessionId);
+    if (activeItem == null) return;
+    final meta = Map<String, dynamic>.from(activeItem.continuationMetadata);
+    final executing = List<String>.from(
+      meta['currently_executing_tools'] as List? ?? const [],
+    );
+    if (!executing.contains(toolCallId)) return;
+    final snapshots = Map<String, dynamic>.from(
+      meta['executing_tool_progress'] as Map? ?? const {},
+    );
+    snapshots[toolCallId] = _secretsRedactor.redactMap(progress);
+    meta['executing_tool_progress'] = snapshots;
     repo.transitionWorkItemState(
       workItemId: activeItem.workItemId,
       fromState: activeItem.state,
@@ -202,6 +242,51 @@ class ContinuationCheckpointCoordinator {
       toState: activeItem.state,
       continuationMetadata: meta,
     );
+  }
+
+  /// Repairs only the crash window after the owned user message was saved and
+  /// before the first provider checkpoint was written.
+  bool repairMissingPreProviderCheckpoint({
+    required CheckpointContext ctx,
+    required int resumeHistoryLength,
+    required bool hasOwnedUserMessage,
+    String? requestId,
+  }) {
+    final repo = _repo;
+    if (repo == null || !hasOwnedUserMessage) return false;
+    final activeItem = repo.findActiveWorkItem(sessionId);
+    if (activeItem == null) return false;
+    final meta = Map<String, dynamic>.from(activeItem.continuationMetadata);
+    if (meta['checkpoint_kind'] != null ||
+        (requestId != null && activeItem.requestId != requestId) ||
+        List<Object?>.from(
+          meta['currently_executing_tools'] as List? ?? const [],
+        ).isNotEmpty ||
+        Map<Object?, Object?>.from(
+          meta['completed_tool_results'] as Map? ?? const {},
+        ).isNotEmpty ||
+        Map<Object?, Object?>.from(
+          meta['completed_tool_outputs'] as Map? ?? const {},
+        ).isNotEmpty ||
+        Map<Object?, Object?>.from(
+          meta['deferred_tool_results'] as Map? ?? const {},
+        ).isNotEmpty) {
+      return false;
+    }
+    meta['checkpoint_kind'] = checkpointKindInitialModelRequest;
+    meta['resume_history_length'] = resumeHistoryLength;
+    meta['currentTurnStartIndex'] = ctx.currentTurnStartIndex;
+    if (ctx.currentModelStepId != null) {
+      meta['model_step_id'] = ctx.currentModelStepId;
+    }
+    meta['checkpoint_repaired_after_restart'] = true;
+    repo.transitionWorkItemState(
+      workItemId: activeItem.workItemId,
+      fromState: activeItem.state,
+      toState: activeItem.state,
+      continuationMetadata: meta,
+    );
+    return true;
   }
 
   /// Restores checkpoint state for a resume operation.
