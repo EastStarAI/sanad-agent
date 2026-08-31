@@ -177,6 +177,7 @@ UI: desktop double-click on the conversation title opens the same capability-gat
 Docs: added missing frontmatter to the Plan 50 regression matrix and both Linux service lifecycle pages, added the missing tracked docs/llms.txt entry without disturbing curated recent entries, and docs wiki lint now succeeds with zero errors; generated docs/llms-full.txt remains untracked by contract
 Regression closeout: isolated AgentRunner tests intentionally omit AgentRuntimeService, so compaction preflight/overflow now fail closed in that harness; full agent suite 1365 passed / 12 skipped and full client suite 1150 passed / 1 skipped
 CI repair: seven Linux-only failures shared one root cause—new compaction tests relied on leaked Sanad Home preparation. Each owning test now prepares and cleans a temporary home explicitly; focused repair bundle 7/7 and analyzer pass
+Context indicator polish: removed the redundant `Measurement: Provider confirmed` line from the compact context-window tooltip and semantics; provider provenance remains available on the compaction event where it explains reconciliation
 ```
 
 ```text
