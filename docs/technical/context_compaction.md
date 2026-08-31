@@ -258,14 +258,16 @@ ship in Gate B1.
 |---|---|---|
 | Canonical messages | `messages(id, session_id, data)` via `SessionDB.getMessages` | **`messages.id`** is the durable identity for `CompactionMessageIdentity`; rows are append-only for compaction (no delete/replace during compression). |
 | Session metadata | `sessions` | Holds model/route/title; **`history_revision` is absent today** and must be added in B1. |
-| Message writers | `session_execution_state_coordinator` (`INSERT`), `SessionDB.replaceMessages` (stable-prefix + changed-suffix rewrite) | Normal turns append rows; replay/supersession (Task 51) uses `replaceMessages` and must bump `history_revision`. |
+| Message writers | `session_execution_state_coordinator` (`INSERT`), `SessionDB.replaceMessages` (semantic-prefix + changed-suffix rewrite) | Normal turns append rows; metadata-only patches preserve row ids; replay/supersession (Task 51) uses `replaceMessages` and must bump `history_revision`. |
 | Execution queue | `session_work_items`, `session_pending_runs` | Orthogonal to compaction snapshot; queued user input during compaction stays here until terminal drain (53d). |
 
-`SessionDB.replaceMessages` preserves the longest byte-identical canonical
-prefix and its existing row IDs, then deletes and reinserts only the changed
-suffix. Ordinary user/assistant appends therefore keep an activated boundary
-eligible; edit/retry still supersedes the changed suffix and bumps
-`history_revision`.
+`SessionDB.replaceMessages` preserves the longest semantically identical
+canonical prefix and its existing row IDs. Exact matches are untouched;
+top-level metadata-only changes update the existing row in place; the first
+role/content/tool/reasoning/provider-state change deletes and reinserts the
+changed suffix. Ordinary appends and response-metadata attachment therefore
+keep an activated boundary eligible, while edit/retry still supersedes the
+changed suffix and bumps `history_revision`.
 | Runtime notices | `session_runtime_notices`, suspended/pending maps | Unrelated to projection boundaries. |
 
 **Findings:**

@@ -18,7 +18,7 @@ This contract applies to `agent/lib/evolution/db/`.
 ## Session Data
 - Workspace identity is an immutable UUID; filesystem path and display name are mutable workspace properties and must never replace it in session or runtime references.
 - Persist workspace id and provider/model route as recoverable session state.
-- Replacing canonical history preserves `messages.id` for the longest byte-identical prefix and rewrites only the changed suffix; appending a turn must not invalidate durable compaction ranges.
+- Replacing canonical history preserves `messages.id` for the longest semantically identical prefix: top-level metadata-only patches update rows in place, while role/content/tool/reasoning/provider-state changes rewrite only the changed suffix. Appending a turn or attaching response metadata must not invalidate durable compaction ranges.
 - Compaction claims persist only a redacted semantic fingerprint and occurrence for the retained-tail end; history hydration uses it to relocate the same logical anchor after suffix row ids are rewritten.
 - Removing a workspace record must not cascade into sessions or messages;
   their stable workspace reference remains historical conversation metadata.

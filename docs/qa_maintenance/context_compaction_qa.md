@@ -85,6 +85,7 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] Two preflight calls after one synthetic Auto failure emit exactly one started/failed lifecycle because the active-run breaker blocks the repeat — `compaction_preflight_integration_test.dart`; activation diagnostics preserve `sourceRevisionStale`; full agent suite 1373 passed / 12 skipped and isolated daemon E2E 3/3 (2026-08-31 live Auto regression remediation).
 - [x] Same-id completed reconciliation bypasses exact-redelivery suppression once, while an identical enriched replay is still dropped; canonical map ordering cannot change the fingerprint — `event_deduplicator_test.dart` + `cross_transport_dedup_test.dart` (2026-08-31 live card remediation).
 - [x] The compaction card uses the confirmed after-value, effective-input denominators, daemon-owned automatic threshold, grouped token values, and no Type/Trigger/Status rows; only the centered 44px label opens it and divider clicks do nothing — `compaction_event_tile_test.dart` (2026-08-31 live card remediation).
+- [x] Top-level metadata-only history patches preserve every semantic prefix `messages.id` and the newest active compaction boundary, so a small post-compaction suffix stays below threshold; real content changes still rewrite the suffix and invalidate the unsafe summary — `model_projection_builder_test.dart` + `compaction_preflight_integration_test.dart` (2026-08-31 Task 53h).
 
 ## Review notes (2026-08-29 evening)
 

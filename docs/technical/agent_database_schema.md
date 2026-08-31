@@ -160,6 +160,7 @@ Normal reads use `history_status = 'active'` ordered by `id`. Audit or recovery 
 - `messages.id` is the **only** durable identity used by compaction source/tail ranges. In-memory list indices inside `AgentRunner` are never persisted on boundary rows.
 - Compaction must not delete or rewrite summarized rows. Canonical history remains fully queryable for timeline pagination (Task 47).
 - `SessionDB.replaceMessages` remains the replay/supersession path (Task 51) and bumps `sessions.history_revision` in the same write path (Plan 53b).
+- A top-level `metadata`-only patch updates the existing row in place because compaction summaries and semantic anchors exclude that envelope. Role, content, tool, reasoning, and provider-state changes still rewrite the changed suffix so an unsafe summary cannot remain active.
 
 ### 3.2.1. `session_compaction_operations` Table (Plan 53b — implemented Gate B1)
 

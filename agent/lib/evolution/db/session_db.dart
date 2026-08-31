@@ -474,10 +474,31 @@ class SessionDB {
       final comparableLength = existing.length < assigned.length
           ? existing.length
           : assigned.length;
-      while (unchangedPrefixLength < comparableLength &&
-          jsonEncode(existing[unchangedPrefixLength].message.toJson()) ==
-              jsonEncode(assigned[unchangedPrefixLength].toJson())) {
+      final metadataUpdates = <({int rowId, Message message})>[];
+      while (unchangedPrefixLength < comparableLength) {
+        final existingMessage = existing[unchangedPrefixLength].message;
+        final replacementMessage = assigned[unchangedPrefixLength];
+        if (jsonEncode(existingMessage.toJson()) ==
+            jsonEncode(replacementMessage.toJson())) {
+          unchangedPrefixLength++;
+          continue;
+        }
+        if (!_sameSemanticMessage(existingMessage, replacementMessage)) {
+          break;
+        }
+        metadataUpdates.add((
+          rowId: existing[unchangedPrefixLength].rowId,
+          message: replacementMessage,
+        ));
         unchangedPrefixLength++;
+      }
+      for (final entry in metadataUpdates) {
+        MessageHistoryIdentity.persist(
+          _db,
+          sessionId,
+          entry.message,
+          sqliteId: entry.rowId,
+        );
       }
       if (unchangedPrefixLength < existing.length) {
         _db.execute('DELETE FROM messages WHERE session_id = ? AND id >= ?', [
@@ -494,6 +515,12 @@ class SessionDB {
       _db.execute('ROLLBACK');
       rethrow;
     }
+  }
+
+  static bool _sameSemanticMessage(Message left, Message right) {
+    final leftJson = left.toJson()..remove('metadata');
+    final rightJson = right.toJson()..remove('metadata');
+    return jsonEncode(leftJson) == jsonEncode(rightJson);
   }
 
   /// Compare-and-swaps [expectedHistoryRevision], revalidates the target as

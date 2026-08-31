@@ -56,6 +56,10 @@ row as typed failed and never mutates canonical history.
 - After a boundary is active, automatic preflight measures summary + retained
   tail + post-boundary rows. It must not remeasure the hidden canonical head,
   otherwise every later turn would retrigger compaction.
+- Persistence keeps `messages.id` stable for top-level metadata-only patches.
+  Usage, model-step, and delivery metadata therefore cannot invalidate an active
+  boundary or force preflight back to the full canonical transcript; a genuine
+  message-semantic edit still rewrites the suffix and rejects an unsafe summary.
 
 ## Tail selection and projection pruning (C1–C2)
 
