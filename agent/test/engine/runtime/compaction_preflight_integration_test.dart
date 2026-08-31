@@ -1,13 +1,17 @@
+import 'dart:io';
+
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
@@ -83,8 +87,12 @@ void main() {
   late CompactionBoundaryRepository boundaries;
   late CompactionCoordinator coordinator;
   late AgentRunner runner;
+  late Directory sanadHome;
 
-  setUp(() {
+  setUp(() async {
+    sanadHome = Directory.systemTemp.createTempSync('compaction_preflight_');
+    setSanadHomeOverride(sanadHome.path);
+    await SanadHomeBootstrap.identity().prepare();
     getIt.allowReassignment = true;
     state = AgentStateDatabase.inMemory();
     getIt.registerSingleton<AgentStateDatabase>(state);
@@ -162,6 +170,8 @@ void main() {
     SessionManager.resetForTesting();
     await getIt.reset();
     state.dispose();
+    setSanadHomeOverride(null);
+    sanadHome.deleteSync(recursive: true);
   });
 
   test('preflight rebuilds provider history from activated projection', () async {

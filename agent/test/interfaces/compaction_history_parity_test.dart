@@ -1,7 +1,11 @@
+import 'dart:io';
+
 import 'package:sanad_agent/core/auth/auth_manager.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_activation_service.dart';
@@ -66,8 +70,12 @@ void main() {
   late SessionManager sessionManager;
   late CompactionBoundaryRepository boundaries;
   late SanadProtocolBridge bridge;
+  late Directory sanadHome;
 
-  setUp(() {
+  setUp(() async {
+    sanadHome = Directory.systemTemp.createTempSync('compaction_history_');
+    setSanadHomeOverride(sanadHome.path);
+    await SanadHomeBootstrap.identity().prepare();
     getIt.allowReassignment = true;
     state = AgentStateDatabase.inMemory();
     getIt.registerSingleton<AgentStateDatabase>(state);
@@ -97,7 +105,7 @@ void main() {
     ]);
   });
 
-  tearDown(() {
+  tearDown(() async {
     SessionManager.resetForTesting();
     if (getIt.isRegistered<AuthManager>()) {
       getIt.unregister<AuthManager>();
@@ -107,6 +115,8 @@ void main() {
     }
     sessions.dispose();
     state.dispose();
+    setSanadHomeOverride(null);
+    sanadHome.deleteSync(recursive: true);
   });
 
   test('session history includes durable compaction lifecycle rows', () {

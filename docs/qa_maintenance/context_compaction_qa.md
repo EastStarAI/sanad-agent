@@ -71,6 +71,7 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] The durable started claim and queue barrier exist before the first summarizer await, and a thrown summarizer closes started→failed without stranding the session — `compaction_coordinator_test.dart` (2026-08-31 independent remediation).
 - [x] Full client fast suite — 1150 passed; 1 skipped (2026-08-31 Task 53g delivery follow-up).
 - [x] Full agent fast suite — 1365 passed; 12 skipped. The isolated-runner regression now skips compaction when `AgentRuntimeService` is intentionally absent; the independently reproduced DelegateTaskTool failure is closed (2026-08-31 Task 53g delivery follow-up).
+- [x] Compaction AgentRunner/history tests prepare and clean an explicit temporary Sanad Home rather than depending on leaked suite order; the focused Linux-CI repair bundle passes 7/7 (2026-08-31 Task 53g delivery follow-up).
 
 ## Review notes (2026-08-29 evening)
 

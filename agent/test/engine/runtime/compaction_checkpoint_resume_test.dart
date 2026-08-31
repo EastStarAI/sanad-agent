@@ -1,13 +1,17 @@
+import 'dart:io';
+
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
@@ -80,8 +84,12 @@ void main() {
   late CompactionCoordinator coordinator;
   late PersistedRuntimeStateRepository persisted;
   late AgentRunner runner;
+  late Directory sanadHome;
 
-  setUp(() {
+  setUp(() async {
+    sanadHome = Directory.systemTemp.createTempSync('compaction_checkpoint_');
+    setSanadHomeOverride(sanadHome.path);
+    await SanadHomeBootstrap.identity().prepare();
     getIt.allowReassignment = true;
     state = AgentStateDatabase.inMemory();
     getIt.registerSingleton<AgentStateDatabase>(state);
@@ -111,10 +119,7 @@ void main() {
     );
     getIt.registerSingleton<CompactionCoordinator>(coordinator);
     getIt.registerSingleton<ModelProjectionBuilder>(
-      ModelProjectionBuilder(
-        sessions: sessions,
-        boundaries: boundaries,
-      ),
+      ModelProjectionBuilder(sessions: sessions, boundaries: boundaries),
     );
     getIt.registerSingleton<SessionHistoryRevisionRepository>(
       SessionHistoryRevisionRepository(state),
@@ -141,7 +146,10 @@ void main() {
       ),
     );
     sessions.replaceMessages('session-checkpoint', [
-      Message(role: MessageRole.user, content: 'goal: retain checkpoint identity'),
+      Message(
+        role: MessageRole.user,
+        content: 'goal: retain checkpoint identity',
+      ),
       for (var i = 0; i < 25; i++)
         Message(role: MessageRole.user, content: 'filler $i ${'x' * 200}'),
     ]);
@@ -168,14 +176,18 @@ void main() {
     SessionManager.resetForTesting();
     await getIt.reset();
     state.dispose();
+    setSanadHomeOverride(null);
+    sanadHome.deleteSync(recursive: true);
   });
 
   test('checkpoint resume stays valid after compaction activation', () async {
     final canonicalLengthBefore = runner.history.length;
-    final revision = getIt<SessionHistoryRevisionRepository>()
-        .read('session-checkpoint')!;
-    final timeline = getIt<ModelProjectionBuilder>()
-        .loadCanonicalTimeline('session-checkpoint');
+    final revision = getIt<SessionHistoryRevisionRepository>().read(
+      'session-checkpoint',
+    )!;
+    final timeline = getIt<ModelProjectionBuilder>().loadCanonicalTimeline(
+      'session-checkpoint',
+    );
     final outcome = await coordinator.runCompaction(
       request: CompactionEngineRequest(
         compactionId: 'cmp-checkpoint',
@@ -205,9 +217,13 @@ void main() {
 
     runner.debugRefreshAfterCompactionForTesting();
 
-    final projection = getIt<ModelProjectionBuilder>()
-        .buildForSession('session-checkpoint');
-    expect(projection.conversationMessages.length, lessThan(canonicalLengthBefore));
+    final projection = getIt<ModelProjectionBuilder>().buildForSession(
+      'session-checkpoint',
+    );
+    expect(
+      projection.conversationMessages.length,
+      lessThan(canonicalLengthBefore),
+    );
 
     final restored = runner.debugRestoreCheckpointForTesting();
     expect(restored.resumeHistoryLength, canonicalLengthBefore);
