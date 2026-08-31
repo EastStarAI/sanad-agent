@@ -105,6 +105,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     _timelineItems = projectConversationTimeline(
       _messages,
       activityEligible: widget.activityEligible,
+      activityIdentity: widget.executionSnapshot?.workItemId,
     );
     _prepareInitialSessionPosition();
     _isOpeningSession = _timelineItems.isEmpty;
@@ -194,6 +195,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       messages,
       previousItems: _timelineItems,
       activityEligible: widget.activityEligible,
+      activityIdentity: widget.executionSnapshot?.workItemId,
     );
     final previousAnchorEventIds = _openAnchorIndex >= 0 && _openAnchorIndex < _timelineItems.length
         ? _timelineItems[_openAnchorIndex].events.map((event) => event.id).toSet()

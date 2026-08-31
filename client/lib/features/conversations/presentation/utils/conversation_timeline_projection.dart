@@ -68,6 +68,7 @@ List<ConversationTimelineItem> projectConversationTimeline(
   List<CanonicalEvent> events, {
   List<ConversationTimelineItem> previousItems = const [],
   bool activityEligible = false,
+  String? activityIdentity,
 }) {
   final items = <ConversationTimelineItem>[];
   final toolRun = <CanonicalEvent>[];
@@ -137,6 +138,7 @@ List<ConversationTimelineItem> projectConversationTimeline(
     currentTurnEvents,
     activityEligible: activityEligible,
     previousActivity: previousActivity,
+    activityIdentity: activityIdentity,
   );
   return List<ConversationTimelineItem>.unmodifiable(items);
 }
@@ -146,19 +148,21 @@ void _appendCurrentActivity(
   List<CanonicalEvent> currentTurnEvents, {
   required bool activityEligible,
   required ConversationTimelineItem? previousActivity,
+  String? activityIdentity,
 }) {
-  if (!activityEligible || currentTurnEvents.isEmpty) return;
+  if (!activityEligible) return;
 
-  final latestEvent = currentTurnEvents.last;
-  if (latestEvent.status == EventStatus.error || latestEvent.kind == EventKind.error) {
+  final latestEvent = currentTurnEvents.isEmpty ? null : currentTurnEvents.last;
+  if (latestEvent != null && (latestEvent.status == EventStatus.error || latestEvent.kind == EventKind.error)) {
     return;
   }
 
-  final activeReasoning = latestEvent.kind == EventKind.reasoning && latestEvent.status == EventStatus.running
+  final activeReasoning =
+      latestEvent != null && latestEvent.kind == EventKind.reasoning && latestEvent.status == EventStatus.running
       ? latestEvent
       : null;
   ConversationTimelineItem? activeGroup;
-  if (latestEvent.kind == EventKind.toolCall && latestEvent.toolName != 'system_ask_user') {
+  if (latestEvent != null && latestEvent.kind == EventKind.toolCall && latestEvent.toolName != 'system_ask_user') {
     for (final item in items.reversed) {
       if (item.isToolGroup && item.containsEventId(latestEvent.id)) {
         activeGroup = item;
@@ -181,18 +185,49 @@ void _appendCurrentActivity(
     activity = runningTool == null
         ? const ConversationActivity.thinking()
         : ConversationActivity.runningTool(runningTool);
+  } else if (previousActivity != null) {
+    // Preserve the last confirmed activity through a temporary first standalone
+    // tool or while the provider is working before the first reasoning/tool
+    // event of the current turn arrives.
+    final previousKind = previousActivity.activity!.kind;
+    final isPreviousStillValid =
+        previousKind == ConversationActivityKind.thinking ||
+        previousKind == ConversationActivityKind.reasoning ||
+        (previousKind == ConversationActivityKind.runningTool &&
+            previousActivity.activity!.event != null &&
+            previousActivity.activity!.event!.status == EventStatus.running);
+    if (isPreviousStillValid) {
+      final isTemporaryStandaloneTool =
+          latestEvent != null && latestEvent.kind == EventKind.toolCall && latestEvent.toolName != 'system_ask_user';
+      if (isTemporaryStandaloneTool) {
+        items.add(previousActivity);
+        return;
+      }
+      activity = previousActivity.activity;
+    }
   }
 
   if (activity == null) {
-    final isTemporaryStandaloneTool =
-        latestEvent.kind == EventKind.toolCall && latestEvent.toolName != 'system_ask_user';
-    if (isTemporaryStandaloneTool && previousActivity != null) {
+    // No reasoning/tool available yet, but the turn is still authoritative
+    // running/resuming. Show a generic working placeholder so the elapsed
+    // timer and activity row remain visible to the user.
+    if (activityIdentity != null && activityIdentity.isNotEmpty) {
+      items.add(
+        ConversationTimelineItem.activity(
+          id: 'conversation-activity:$activityIdentity',
+          activity: const ConversationActivity.thinking(),
+        ),
+      );
+    } else if (previousActivity != null) {
       items.add(previousActivity);
     }
     return;
   }
-  final identityEvent = activeGroup?.events.first ?? activeReasoning!;
-  final turnIdentity = identityEvent.runId ?? identityEvent.sessionId ?? identityEvent.modelStepId ?? identityEvent.id;
+  final identityEvent = activeGroup?.events.first ?? activeReasoning;
+  final turnIdentity = identityEvent != null
+      ? (identityEvent.runId ?? identityEvent.sessionId ?? identityEvent.modelStepId ?? identityEvent.id)
+      : (activityIdentity ?? '');
+  if (turnIdentity.isEmpty) return;
   items.add(
     ConversationTimelineItem.activity(
       id: 'conversation-activity:$turnIdentity',
@@ -335,8 +370,8 @@ class ToolGroupSummary {
         ToolGroupCountMetric(
           key: 'file-read',
           value: fileReads,
-          singularLabel: 'file read',
-          pluralLabel: 'file reads',
+          singularLabel: 'file explore',
+          pluralLabel: 'file explores',
         ),
       );
     }

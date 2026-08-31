@@ -175,6 +175,53 @@ void main() {
       expect(identical(next.last, previous.last), isTrue);
     });
 
+    test('activity renders a generic working row when eligible and silent', () {
+      final items = projectConversationTimeline(
+        const [],
+        activityEligible: true,
+        activityIdentity: 'work-1',
+      );
+      expect(items, hasLength(1));
+      expect(items.single.isActivity, isTrue);
+      expect(items.single.id, 'conversation-activity:work-1');
+      expect(items.single.activity!.kind, ConversationActivityKind.thinking);
+    });
+
+    test('activity renders for an eligible turn before any reasoning/tool event', () {
+      final user = CanonicalEvent(
+        id: 'user',
+        kind: EventKind.userMessage,
+        text: 'start',
+        timestamp: DateTime.utc(2026, 8, 16),
+      );
+      final first = projectConversationTimeline(
+        [user],
+        activityEligible: true,
+        activityIdentity: 'work-1',
+      );
+      expect(first.last.isActivity, isTrue);
+      expect(first.last.id, 'conversation-activity:work-1');
+
+      // When the first reasoning arrives, the activity row replaces the
+      // generic placeholder and stays visible at the tail.
+      final reasoning = CanonicalEvent(
+        id: 'reasoning',
+        kind: EventKind.reasoning,
+        status: EventStatus.running,
+        text: 'checking the next action carefully',
+        runId: 'run-1',
+        timestamp: DateTime.utc(2026, 8, 16),
+      );
+      final second = projectConversationTimeline(
+        [user, reasoning],
+        previousItems: first,
+        activityEligible: true,
+        activityIdentity: 'work-1',
+      );
+      expect(second.last.isActivity, isTrue);
+      expect(second.last.activity!.kind, ConversationActivityKind.reasoning);
+    });
+
     test('puts skill loads first while retaining terminal run wording', () {
       final summary = projectConversationTimeline([
         _tool('terminal', 'shell_execute'),
@@ -245,6 +292,15 @@ void main() {
         'terminal run': 1,
         'web search': 1,
       });
+      expect(
+        summary.headerMetrics.map((metric) => '${metric.value}${metric.suffix}'),
+        [
+          '1 terminal run',
+          '1 web search',
+          '2 file explores',
+          '1 file modified',
+        ],
+      );
       expect(summary.readFiles, {'lib/same.dart'});
       expect(summary.modifiedFiles, {'lib/changed.dart'});
       expect(summary.addedLines, 4);
