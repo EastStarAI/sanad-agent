@@ -36,27 +36,29 @@ class CompactionOperationRecord {
     this.failureDetailJson,
     required this.startedAt,
     this.completedAt,
-  })  : assert(compactionId.isNotEmpty),
-        assert(sessionId.isNotEmpty),
-        assert(
-          status == CompactionStatus.started
-              ? completedAt == null &&
-                    internalSummary == null &&
-                    metrics == null &&
-                    failureReason == null
-              : completedAt != null,
-        ),
-        assert(
-          status == CompactionStatus.completed
-              ? internalSummary != null && metrics != null && failureReason == null
-              : true,
-        ),
-        assert(
-          status == CompactionStatus.failed
-              ? failureReason != null && internalSummary == null
-              : true,
-        ),
-        assert(sourceRange.end.rowId < retainedTailRange.start.rowId);
+  }) : assert(compactionId.isNotEmpty),
+       assert(sessionId.isNotEmpty),
+       assert(
+         status == CompactionStatus.started
+             ? completedAt == null &&
+                   internalSummary == null &&
+                   metrics == null &&
+                   failureReason == null
+             : completedAt != null,
+       ),
+       assert(
+         status == CompactionStatus.completed
+             ? internalSummary != null &&
+                   metrics != null &&
+                   failureReason == null
+             : true,
+       ),
+       assert(
+         status == CompactionStatus.failed
+             ? failureReason != null && internalSummary == null
+             : true,
+       ),
+       assert(sourceRange.end.rowId < retainedTailRange.start.rowId);
 
   bool get isTerminal => status.isTerminal;
 

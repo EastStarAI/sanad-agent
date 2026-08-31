@@ -6,7 +6,7 @@ description: "Ownership boundaries, vocabulary, and wire-safety rules for durabl
 # Context Compaction Architecture
 
 This document is the technical design owner for Plan 53 compaction. It defines
-ownership boundaries and shared vocabulary consumed by tasks 53a–53f. Runtime
+ownership boundaries and shared vocabulary consumed by tasks 53a–53g. Runtime
 laws remain in `agent/lib/engine/AGENTS.md`; this page holds design detail only.
 
 ## 1. Prototype Retirement Inventory (Task 53a Gate A0)
@@ -65,12 +65,18 @@ Removing `ContextEngine` does **not** alter these independent paths:
 
 - `MetricsTracker` accumulates turn usage; `AgentRunner._buildContextUsageSnapshot()` projects latest provider-reported input against the active route's context window.
 - Prototype compression did not feed usage metrics; it only replaced message lists before the provider call.
-- Task 40 live usage remains the verification signal for compaction pressure (task 53c), not the decision owner.
+- Latest provider-reported input usage for the same route and measured request
+  material is the pressure baseline. Only an appended suffix is estimated;
+  route, prompt, schema, or measured-prefix changes invalidate the baseline.
 
 ### 2.3 Provider context-limit resolution
 
 - `LLMAdapter.getContextLimit(model)` and `AgentRunner.getContextTokens()` stay on the turn route.
 - Prototype used the same adapter hook but will be replaced by `RequestPressureSnapshot` (53c) without removing adapter APIs.
+- Task 53g makes `SANAD_HOME/config.yaml` the only user-owned non-secret override:
+  exact normalized `context.modelLimits` first, then live provider metadata,
+  current model metadata, and the provider fallback. Legacy `CONTEXT_LIMIT`
+  cannot impose one window on every model.
 
 ## 3. Ownership Boundaries (Gate A0)
 
@@ -236,8 +242,14 @@ ship in Gate B1.
 |---|---|---|
 | Canonical messages | `messages(id, session_id, data)` via `SessionDB.getMessages` | **`messages.id`** is the durable identity for `CompactionMessageIdentity`; rows are append-only for compaction (no delete/replace during compression). |
 | Session metadata | `sessions` | Holds model/route/title; **`history_revision` is absent today** and must be added in B1. |
-| Message writers | `session_execution_state_coordinator` (`INSERT`), `SessionDB.replaceMessages` (`DELETE` + re-`INSERT`) | Normal turns append rows; replay/supersession (Task 51) uses `replaceMessages` and must bump `history_revision`. |
+| Message writers | `session_execution_state_coordinator` (`INSERT`), `SessionDB.replaceMessages` (stable-prefix + changed-suffix rewrite) | Normal turns append rows; replay/supersession (Task 51) uses `replaceMessages` and must bump `history_revision`. |
 | Execution queue | `session_work_items`, `session_pending_runs` | Orthogonal to compaction snapshot; queued user input during compaction stays here until terminal drain (53d). |
+
+`SessionDB.replaceMessages` preserves the longest byte-identical canonical
+prefix and its existing row IDs, then deletes and reinserts only the changed
+suffix. Ordinary user/assistant appends therefore keep an activated boundary
+eligible; edit/retry still supersedes the changed suffix and bumps
+`history_revision`.
 | Runtime notices | `session_runtime_notices`, suspended/pending maps | Unrelated to projection boundaries. |
 
 **Findings:**
@@ -270,10 +282,18 @@ claim (INSERT started)
       -> failed (typed failure_reason)           => prior projection unchanged
 ```
 
+Range preparation is synchronous and precedes the claim. The claim and
+`context_compaction.started` publication both precede every summarizer `await`,
+so ordinary input admitted during summarization observes `compacting` and stays
+durably queued. Every error after claim closes the same row as failed.
+
 Rules:
 
 1. Terminal transition is **single-writer**: `UPDATE … WHERE status = 'started'`; zero rows updated ⇒ stale/no-op.
-2. Terminal rows are **immutable** — no status rewrite, no summary patch in place.
+2. Terminal lifecycle, ranges, route, summary, and estimates are **immutable**.
+   The sole post-terminal mutation is the write-once transition of
+   `provider_confirmed_request_tokens_after` from null to the first provider
+   input-usage value observed on the same route after activation.
 3. Restart with `started` and no terminal row ⇒ classify `failed` with `interrupted`; never activate partial summary.
 4. `started` and `failed` boundaries do **not** change active model projection.
 5. Only the latest **`completed`** boundary whose ranges still resolve against live `messages.id` values is eligible for projection (see §8.7).
@@ -288,11 +308,16 @@ Partial unique index (B1): at most one `started` row per `session_id`.
 | Lifecycle | `trigger`, `status`, `started_at`, `completed_at` |
 | Snapshot | `source_history_revision`, `source_start_message_id`, `source_end_message_id`, `tail_start_message_id`, `tail_end_message_id` |
 | Route | `provider_instance_id`, `model_id`, `template_id`, `protocol`, `normalized_base_url`, `config_revision`, `credential_revision` |
-| Metrics | `context_window_tokens`, `estimated_request_tokens_before`, `estimated_request_tokens_after`, `retained_tail_tokens`, `duration_ms` |
+| Metrics | `context_window_tokens`, `estimated_request_tokens_before`, `before_measurement_kind`, `estimated_request_tokens_after`, write-once `provider_confirmed_request_tokens_after`, `retained_tail_tokens`, `duration_ms` |
 | Completed only | `internal_summary_json` (redacted structured summary — **not** a `Message` JSON blob) |
 | Failed only | `failure_reason` (enum wire name), optional `failure_detail_json` (redacted diagnostics, never provider wire) |
 
 **Retention:** rows store summary text and numeric ranges only. Canonical message payloads remain solely in `messages.data`. No duplicate tool/media blobs in compaction rows.
+
+The completed lifecycle event may be republished with the same deterministic
+event id after provider reconciliation. Live clients fold that update into the
+existing tile, and history hydration reads the same confirmed value. Later
+tool-loop responses cannot replace the first confirmed value.
 
 **Session column (B1):** add `sessions.history_revision INTEGER NOT NULL DEFAULT 0 CHECK (history_revision >= 0)`, bumped in the same transaction as message insert/delete/replace.
 
@@ -406,8 +431,19 @@ idle|running -> compacting (in-memory barrier + durable started row)
 |---|---|
 | Command | `compact` via gateway session command handler |
 | Events | `context_compaction.started` / `context_compaction.completed` / `context_compaction.failed` |
-| Identities | `session_id`, `compaction_id`, `trigger`, `status` |
+| Identities | `session_id`, logical `compaction_id`, transition-specific `event_id`, `trigger`, `status` |
 | Safe metrics | before/after/retained/window/duration only |
 | Failures | typed `failure_reason` wire names; no summary text or secrets |
 
-`CompactionLifecycleBroadcaster` maps engine lifecycle to gateway responses. History query and live delivery must reuse the same `compaction_id` event identity.
+`CompactionLifecycleBroadcaster` maps engine lifecycle to gateway responses. The
+logical operation keeps one `compaction_id`, while each transition has the
+deterministic identity `context_compaction:<compaction_id>:<status>`. Live
+delivery and history hydration must reconstruct the same transition
+`event_id`; started, completed, and failed must never collapse onto the bare
+operation id.
+
+History merge uses `retained_tail_range.end` as the causal anchor: the logical
+lifecycle row is inserted after that durable message row and before the first
+later canonical message. `started_at` and `completed_at` remain display and
+audit metadata only; they are not compared against synthetic history message
+timestamps.

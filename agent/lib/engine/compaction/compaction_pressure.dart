@@ -24,16 +24,19 @@ class CompactionPressure {
     required this.estimatedRequestTokens,
     this.confirmedInputTokens,
     required this.measurementKind,
-  })  : assert(contextWindowTokens > 0, 'contextWindowTokens must be positive'),
-        assert(
-          outputReservationTokens >= 0 && safetyBufferTokens >= 0,
-          'reservation and buffer must be non-negative',
-        ),
-        assert(estimatedRequestTokens >= 0, 'estimatedRequestTokens must be non-negative'),
-        assert(
-          confirmedInputTokens == null || confirmedInputTokens >= 0,
-          'confirmedInputTokens must be non-negative when set',
-        );
+  }) : assert(contextWindowTokens > 0, 'contextWindowTokens must be positive'),
+       assert(
+         outputReservationTokens >= 0 && safetyBufferTokens >= 0,
+         'reservation and buffer must be non-negative',
+       ),
+       assert(
+         estimatedRequestTokens >= 0,
+         'estimatedRequestTokens must be non-negative',
+       ),
+       assert(
+         confirmedInputTokens == null || confirmedInputTokens >= 0,
+         'confirmedInputTokens must be non-negative when set',
+       );
 
   int get effectiveInputBudget =>
       contextWindowTokens - outputReservationTokens - safetyBufferTokens;

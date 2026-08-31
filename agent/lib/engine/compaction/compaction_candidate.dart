@@ -31,12 +31,12 @@ class CompactionCandidate {
     required this.continuityResult,
     required this.metrics,
     required this.routeSignature,
-  })  : assert(compactionId.isNotEmpty, 'compactionId must be non-empty'),
-        assert(sessionId.isNotEmpty, 'sessionId must be non-empty'),
-        assert(
-          continuityResult.passed,
-          'candidate requires passed continuity validation',
-        );
+  }) : assert(compactionId.isNotEmpty, 'compactionId must be non-empty'),
+       assert(sessionId.isNotEmpty, 'sessionId must be non-empty'),
+       assert(
+         continuityResult.passed,
+         'candidate requires passed continuity validation',
+       );
 
   /// Ensures summarized head ends before retained tail begins.
   bool get rangesAreOrdered =>

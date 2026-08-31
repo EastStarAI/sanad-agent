@@ -162,6 +162,25 @@ file_budget: 15
 ## 11. سجل التقدم
 
 ```text
+Date: 2026-08-31 (independent remediation review, E2→E5)
+Gate/status: 53e complete after reopening E2
+Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction
+Root causes/fixes: (1) Gateway history compared real compaction time with synthetic message time; lifecycle rows now anchor after retained_tail_range.end. (2) equal-rank terminal states could overwrite each other; completed/failed are now immutable except same-status enrichment. (3) the mapper substituted compaction_id for opaque transition event_id; it now preserves/reconstructs the deterministic transition id while retaining one logical tile id. (4) outer padding left InkWell at 17px and the inflexible center row overflowed at 280px; the tile now has a 44px constrained target and flexible two-line center. (5) available fill/reclaim ratios and lifecycle times were omitted from details; they are now rendered without N/A or summary content, with focus-triggered parity.
+Verification: E0 catalog/parser 21/21; E1 client dispatch 4/4 + agent admission 3/3; E2 model/mapper/state 12/12 + agent history/lifecycle 2/2 + bridge provider regressions 31/31; E3/E4 widget 6/6; E5 combined client suite 42/42; client and agent analyzers clean; focused formatters clean.
+File-budget review: the independent remediation spans 19 owning/tracking files rather than 15 because the root fix crosses Gateway causal merge, client data/domain/presentation, their three mandatory leaf contracts, and the task-required technical/product/QA records. No feature or refactor outside Plan 53 was added.
+Next: Task 53f Gate F0.
+```
+
+```text
+Date: 2026-08-31 (independent remediation review)
+Gate/status: 53e reopened at E2
+Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction
+Evidence: a new history-order regression placed the completed compaction row at index 4 after the model response at index 3. The Gateway compared the real operation started_at against synthetic message timestamps instead of the durable retained-tail boundary.
+Fix under verification: history merge anchors lifecycle rows immediately after retained_tail_range.end and before the first later canonical message row. E0 parser/catalog (21 tests) and E1 dispatch/admission (7 tests) remain closed.
+Current gate: E2 — finish live/history, retry, reload, and terminal-dedup verification before E3.
+```
+
+```text
 Date: 2026-08-29
 Gate/status: 53e complete (E0–E5) — gate-by-gate review re-verified
 Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction

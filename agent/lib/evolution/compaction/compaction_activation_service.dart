@@ -19,9 +19,9 @@ class CompactionActivationService {
     required CompactionBoundaryRepository boundaries,
     required SessionProjectionRevisionRepository projectionRevisions,
     CompactionBoundaryChangeSink? changes,
-  })  : _boundaries = boundaries,
-        _projectionRevisions = projectionRevisions,
-        _changes = changes ?? CompactionBoundaryChangeNotifier();
+  }) : _boundaries = boundaries,
+       _projectionRevisions = projectionRevisions,
+       _changes = changes ?? CompactionBoundaryChangeNotifier();
 
   CompactionTerminalResult activateCandidate({
     required CompactionCandidate candidate,

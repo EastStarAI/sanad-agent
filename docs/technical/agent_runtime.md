@@ -491,6 +491,12 @@ boundary (projected summary anchor + retained tail + post-boundary messages).
 projection before each provider call. `AgentContextAssembler` still prepends one
 ephemeral system message per call outside the summary.
 
+The coordinator freezes source/tail ranges, persists the started claim, and
+publishes the session compacting barrier before awaiting summarization. Inputs
+accepted during that await therefore remain durable FIFO work and cannot enter
+the frozen summary snapshot; every post-claim error closes a terminal failed
+row before the barrier is released.
+
 See `docs/technical/context_compaction.md` for ownership, CAS, and wire-safety
 rules. Auto/overflow orchestration and `/compact` UX land in tasks 53d–53e.
 

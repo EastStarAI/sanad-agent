@@ -20,24 +20,24 @@ class CompactionOutcome {
     this.failureReason,
     this.candidate,
     this.queuedMessagesAccepted = 0,
-  })  : assert(compactionId.isNotEmpty, 'compactionId must be non-empty'),
-        assert(status.isTerminal, 'outcome requires terminal status'),
-        assert(
-          status == CompactionStatus.failed
-              ? failureReason != null && candidate == null
-              : failureReason == null,
-          'failed outcomes require failureReason; completed outcomes forbid it',
-        ),
-        assert(
-          status == CompactionStatus.completed
-              ? candidate != null
-              : candidate == null,
-          'completed outcomes require candidate; failed outcomes forbid it',
-        ),
-        assert(
-          queuedMessagesAccepted >= 0,
-          'queuedMessagesAccepted must be non-negative',
-        );
+  }) : assert(compactionId.isNotEmpty, 'compactionId must be non-empty'),
+       assert(status.isTerminal, 'outcome requires terminal status'),
+       assert(
+         status == CompactionStatus.failed
+             ? failureReason != null && candidate == null
+             : failureReason == null,
+         'failed outcomes require failureReason; completed outcomes forbid it',
+       ),
+       assert(
+         status == CompactionStatus.completed
+             ? candidate != null
+             : candidate == null,
+         'completed outcomes require candidate; failed outcomes forbid it',
+       ),
+       assert(
+         queuedMessagesAccepted >= 0,
+         'queuedMessagesAccepted must be non-negative',
+       );
 
   factory CompactionOutcome.completed({
     required CompactionCandidate candidate,

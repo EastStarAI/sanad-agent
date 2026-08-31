@@ -104,16 +104,15 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         'started_at': row['started_at'] ?? metadata['started_at'],
         'completed_at': row['completed_at'] ?? metadata['completed_at'],
         'failure_reason': row['failure_reason'] ?? metadata['failure_reason'],
-        'context_window_tokens':
-            row['context_window_tokens'] ?? metadata['context_window_tokens'],
+        'context_window_tokens': row['context_window_tokens'] ?? metadata['context_window_tokens'],
         'estimated_request_tokens_before':
-            row['estimated_request_tokens_before'] ??
-            metadata['estimated_request_tokens_before'],
+            row['estimated_request_tokens_before'] ?? metadata['estimated_request_tokens_before'],
         'estimated_request_tokens_after':
-            row['estimated_request_tokens_after'] ??
-            metadata['estimated_request_tokens_after'],
-        'retained_tail_tokens':
-            row['retained_tail_tokens'] ?? metadata['retained_tail_tokens'],
+            row['estimated_request_tokens_after'] ?? metadata['estimated_request_tokens_after'],
+        'before_measurement_kind': row['before_measurement_kind'] ?? metadata['before_measurement_kind'],
+        'provider_confirmed_request_tokens_after':
+            row['provider_confirmed_request_tokens_after'] ?? metadata['provider_confirmed_request_tokens_after'],
+        'retained_tail_tokens': row['retained_tail_tokens'] ?? metadata['retained_tail_tokens'],
         'duration_ms': row['duration_ms'] ?? metadata['duration_ms'],
       },
       _ => const <String, dynamic>{},
@@ -488,24 +487,23 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       text: snapshot.timelineLabel,
       timestamp: snapshot.completedAt ?? snapshot.startedAt ?? timestamp,
       sessionId: snapshot.sessionId,
-      eventId: snapshot.compactionId,
+      eventId: event['event_id']?.toString() ?? 'context_compaction:${snapshot.compactionId}:${snapshot.status.name}',
       metadata: {
         'informational': true,
         'compaction_event': true,
         'compaction_id': snapshot.compactionId,
         'compaction_status': snapshot.status.name,
         'compaction_trigger': snapshot.trigger.name,
-        if (snapshot.failureReason != null)
-          'failure_reason': snapshot.failureReason,
-        if (snapshot.contextWindowTokens != null)
-          'context_window_tokens': snapshot.contextWindowTokens,
+        if (snapshot.failureReason != null) 'failure_reason': snapshot.failureReason,
+        if (snapshot.contextWindowTokens != null) 'context_window_tokens': snapshot.contextWindowTokens,
         if (snapshot.estimatedRequestTokensBefore != null)
-          'estimated_request_tokens_before':
-              snapshot.estimatedRequestTokensBefore,
+          'estimated_request_tokens_before': snapshot.estimatedRequestTokensBefore,
         if (snapshot.estimatedRequestTokensAfter != null)
           'estimated_request_tokens_after': snapshot.estimatedRequestTokensAfter,
-        if (snapshot.retainedTailTokens != null)
-          'retained_tail_tokens': snapshot.retainedTailTokens,
+        if (snapshot.beforeMeasurementKind != null) 'before_measurement_kind': snapshot.beforeMeasurementKind,
+        if (snapshot.providerConfirmedRequestTokensAfter != null)
+          'provider_confirmed_request_tokens_after': snapshot.providerConfirmedRequestTokensAfter,
+        if (snapshot.retainedTailTokens != null) 'retained_tail_tokens': snapshot.retainedTailTokens,
         if (snapshot.durationMs != null) 'duration_ms': snapshot.durationMs,
       },
     );

@@ -9,11 +9,7 @@ import 'agent_state_database.dart';
 import 'session_history_revision_repository.dart';
 import 'session_projection_revision_repository.dart';
 
-enum CompactionClaimOutcome {
-  claimed,
-  compactionInProgress,
-  sessionNotFound,
-}
+enum CompactionClaimOutcome { claimed, compactionInProgress, sessionNotFound }
 
 class CompactionClaimResult {
   final CompactionClaimOutcome outcome;
@@ -43,10 +39,7 @@ class CompactionBoundaryRepository {
   final AgentStateDatabase _state;
   final SessionHistoryRevisionRepository _historyRevisions;
 
-  CompactionBoundaryRepository(
-    this._state,
-    this._historyRevisions,
-  );
+  CompactionBoundaryRepository(this._state, this._historyRevisions);
 
   CompactionClaimResult tryClaim({
     required String compactionId,
@@ -76,8 +69,7 @@ class CompactionBoundaryRepository {
         startedAt: startedAt,
       );
       try {
-        tx.db.execute(
-          '''
+        tx.db.execute('''
           INSERT INTO session_compaction_operations (
             compaction_id, session_id, trigger, status,
             source_history_revision,
@@ -87,9 +79,7 @@ class CompactionBoundaryRepository {
             normalized_base_url, config_revision, credential_revision,
             started_at
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ''',
-          CompactionOperationCodec.insertStartedParams(record: record),
-        );
+          ''', CompactionOperationCodec.insertStartedParams(record: record));
       } on SqliteException catch (error) {
         if (_isStartedConflict(error)) {
           return const CompactionClaimResult(
@@ -177,8 +167,8 @@ class CompactionBoundaryRepository {
         UPDATE session_compaction_operations
         SET status = ?, completed_at = ?, internal_summary_json = ?,
             context_window_tokens = ?, estimated_request_tokens_before = ?,
-            estimated_request_tokens_after = ?, retained_tail_tokens = ?,
-            duration_ms = ?
+            estimated_request_tokens_after = ?, before_measurement_kind = ?,
+            retained_tail_tokens = ?, duration_ms = ?
         WHERE compaction_id = ? AND status = ?
         ''',
         [
@@ -188,6 +178,7 @@ class CompactionBoundaryRepository {
           metrics.contextWindowTokens,
           metrics.estimatedRequestTokensBefore,
           metrics.estimatedRequestTokensAfter,
+          metrics.beforeMeasurementKind.wireValue,
           metrics.retainedTailTokens,
           metrics.duration?.inMilliseconds,
           candidate.compactionId,
@@ -207,6 +198,47 @@ class CompactionBoundaryRepository {
         outcome: CompactionTerminalOutcome.completed,
         record: completed,
       );
+    });
+  }
+
+  /// Records the first provider-confirmed input usage after a completed
+  /// compaction without changing its canonical boundary or estimate.
+  CompactionOperationRecord? reconcileProviderUsage({
+    required String compactionId,
+    required int inputTokens,
+  }) {
+    if (inputTokens < 0) return null;
+    return _state.transaction((tx) {
+      final rows = tx.db.select(
+        'SELECT * FROM session_compaction_operations WHERE compaction_id = ?',
+        [compactionId],
+      );
+      if (rows.isEmpty) return null;
+      final existing = CompactionOperationCodec.fromRow(rows);
+      if (existing.status != CompactionStatus.completed ||
+          existing.metrics == null) {
+        return null;
+      }
+      final confirmed = existing.metrics!.providerConfirmedRequestTokensAfter;
+      if (confirmed != null) {
+        return confirmed == inputTokens ? existing : null;
+      }
+      tx.db.execute(
+        '''
+        UPDATE session_compaction_operations
+        SET provider_confirmed_request_tokens_after = ?
+        WHERE compaction_id = ?
+          AND status = ?
+          AND provider_confirmed_request_tokens_after IS NULL
+        ''',
+        [inputTokens, compactionId, CompactionStatus.completed.wireValue],
+      );
+      if (tx.db.updatedRows != 1) return null;
+      final updated = tx.db.select(
+        'SELECT * FROM session_compaction_operations WHERE compaction_id = ?',
+        [compactionId],
+      );
+      return CompactionOperationCodec.fromRow(updated);
     });
   }
 
@@ -268,7 +300,9 @@ class CompactionBoundaryRepository {
   }
 
   int recoverInterruptedStartedOperations({DateTime? completedAt}) {
-    final terminalAt = (completedAt ?? DateTime.now()).toUtc().toIso8601String();
+    final terminalAt = (completedAt ?? DateTime.now())
+        .toUtc()
+        .toIso8601String();
     _state.db.execute(
       '''
       UPDATE session_compaction_operations
@@ -337,7 +371,9 @@ class CompactionBoundaryRepository {
       ''',
       [sessionId, CompactionStatus.completed.wireValue],
     );
-    return rows.map(CompactionOperationCodec.fromSingleRow).toList(growable: false);
+    return rows
+        .map(CompactionOperationCodec.fromSingleRow)
+        .toList(growable: false);
   }
 
   /// All compaction lifecycle rows for history hydration (Plan 53d D6 / 53f F4).
@@ -350,7 +386,9 @@ class CompactionBoundaryRepository {
       ''',
       [sessionId],
     );
-    return rows.map(CompactionOperationCodec.fromSingleRow).toList(growable: false);
+    return rows
+        .map(CompactionOperationCodec.fromSingleRow)
+        .toList(growable: false);
   }
 
   SessionHistoryRevision? historyRevisionForSession(String sessionId) {
@@ -376,10 +414,9 @@ class CompactionBoundaryRepository {
     AgentStateTransaction tx,
     String sessionId,
   ) {
-    final rows = tx.db.select(
-      'SELECT id FROM messages WHERE session_id = ?',
-      [sessionId],
-    );
+    final rows = tx.db.select('SELECT id FROM messages WHERE session_id = ?', [
+      sessionId,
+    ]);
     return rows.map((row) => row['id'] as int).toSet();
   }
 

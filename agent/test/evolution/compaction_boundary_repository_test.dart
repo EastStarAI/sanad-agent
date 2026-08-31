@@ -105,9 +105,16 @@ void main() {
     expect(tables, isNotEmpty);
 
     final columns = state.db.select('PRAGMA table_info(sessions)');
+    expect(columns.map((row) => row['name']), contains('history_revision'));
+    final compactionColumns = state.db.select(
+      'PRAGMA table_info(session_compaction_operations)',
+    );
     expect(
-      columns.map((row) => row['name']),
-      contains('history_revision'),
+      compactionColumns.map((row) => row['name']),
+      containsAll([
+        'before_measurement_kind',
+        'provider_confirmed_request_tokens_after',
+      ]),
     );
   });
 
@@ -136,43 +143,46 @@ void main() {
     expect(second.outcome, CompactionClaimOutcome.compactionInProgress);
   });
 
-  test('completed boundary survives database reopen and drives eligibility', () {
-    final startedAt = DateTime.utc(2026, 8, 29, 1);
-    final claim = boundaries.tryClaim(
-      compactionId: 'cmp-complete',
-      sessionId: 'session-1',
-      trigger: CompactionTrigger.auto,
-      sourceRange: _sourceRange(),
-      retainedTailRange: _tailRange(),
-      routeSignature: _route(),
-      startedAt: startedAt,
-    );
-    final revision = claim.record!.sourceHistoryRevision;
-    final complete = boundaries.completeStarted(
-      candidate: _candidate(
+  test(
+    'completed boundary survives database reopen and drives eligibility',
+    () {
+      final startedAt = DateTime.utc(2026, 8, 29, 1);
+      final claim = boundaries.tryClaim(
         compactionId: 'cmp-complete',
         sessionId: 'session-1',
-        revision: revision,
-      ),
-      startedAt: startedAt,
-      completedAt: DateTime.utc(2026, 8, 29, 2),
-    );
-    expect(complete.outcome, CompactionTerminalOutcome.completed);
+        trigger: CompactionTrigger.auto,
+        sourceRange: _sourceRange(),
+        retainedTailRange: _tailRange(),
+        routeSignature: _route(),
+        startedAt: startedAt,
+      );
+      final revision = claim.record!.sourceHistoryRevision;
+      final complete = boundaries.completeStarted(
+        candidate: _candidate(
+          compactionId: 'cmp-complete',
+          sessionId: 'session-1',
+          revision: revision,
+        ),
+        startedAt: startedAt,
+        completedAt: DateTime.utc(2026, 8, 29, 2),
+      );
+      expect(complete.outcome, CompactionTerminalOutcome.completed);
 
-    final latest = boundaries.findLatestCompletedForSession('session-1');
-    expect(latest?.compactionId, 'cmp-complete');
-    expect(latest?.internalSummary?.currentGoal, 'Goal');
+      final latest = boundaries.findLatestCompletedForSession('session-1');
+      expect(latest?.compactionId, 'cmp-complete');
+      expect(latest?.internalSummary?.currentGoal, 'Goal');
 
-    final rowIds = boundaries.messageRowIdsForSession('session-1');
-    expect(
-      CompactionBoundaryValidity.isProjectionEligible(
-        boundary: latest!,
-        existingMessageRowIds: rowIds,
-        currentRevision: revisions.read('session-1')!,
-      ),
-      isTrue,
-    );
-  });
+      final rowIds = boundaries.messageRowIdsForSession('session-1');
+      expect(
+        CompactionBoundaryValidity.isProjectionEligible(
+          boundary: latest!,
+          existingMessageRowIds: rowIds,
+          currentRevision: revisions.read('session-1')!,
+        ),
+        isTrue,
+      );
+    },
+  );
 
   test('failed and started rows are not returned as latest completed', () {
     final startedAt = DateTime.utc(2026, 8, 29, 1);
@@ -203,7 +213,10 @@ void main() {
       routeSignature: _route(),
       startedAt: startedAt,
     );
-    expect(boundaries.findStartedForSession('session-1')?.compactionId, 'cmp-started');
+    expect(
+      boundaries.findStartedForSession('session-1')?.compactionId,
+      'cmp-started',
+    );
     expect(boundaries.findLatestCompletedForSession('session-1'), isNull);
   });
 
@@ -296,5 +309,51 @@ void main() {
     final json = raw.first['internal_summary_json'] as String;
     expect(json, isNot(contains('sk-12345678901234567890123456789012')));
     expect(json, contains('***'));
+  });
+
+  test('first provider usage reconciles metrics without changing boundary', () {
+    final startedAt = DateTime.utc(2026, 8, 29, 1);
+    final claim = boundaries.tryClaim(
+      compactionId: 'cmp-reconcile',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.auto,
+      sourceRange: _sourceRange(),
+      retainedTailRange: _tailRange(),
+      routeSignature: _route(),
+      startedAt: startedAt,
+    );
+    boundaries.completeStarted(
+      candidate: _candidate(
+        compactionId: 'cmp-reconcile',
+        sessionId: 'session-1',
+        revision: claim.record!.sourceHistoryRevision,
+      ),
+      startedAt: startedAt,
+      completedAt: DateTime.utc(2026, 8, 29, 2),
+    );
+
+    final reconciled = boundaries.reconcileProviderUsage(
+      compactionId: 'cmp-reconcile',
+      inputTokens: 18_750,
+    );
+    expect(reconciled?.metrics?.providerConfirmedRequestTokensAfter, 18_750);
+    expect(reconciled?.sourceRange, _sourceRange());
+    expect(reconciled?.retainedTailRange, _tailRange());
+
+    expect(
+      boundaries.reconcileProviderUsage(
+        compactionId: 'cmp-reconcile',
+        inputTokens: 19_000,
+      ),
+      isNull,
+      reason: 'later tool-loop responses must not replace the first response',
+    );
+    expect(
+      boundaries
+          .findById('cmp-reconcile')
+          ?.metrics
+          ?.providerConfirmedRequestTokensAfter,
+      18_750,
+    );
   });
 }

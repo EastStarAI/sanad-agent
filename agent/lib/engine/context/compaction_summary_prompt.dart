@@ -24,10 +24,7 @@ abstract final class CompactionSummaryPrompt {
   }) {
     if (sourceMessages.isEmpty) {
       return [
-        build(
-          sourceMessages: sourceMessages,
-          previousSummary: previousSummary,
-        ),
+        build(sourceMessages: sourceMessages, previousSummary: previousSummary),
       ];
     }
 
@@ -128,8 +125,7 @@ abstract final class CompactionSummaryPrompt {
         'Active: ${summary.activeState}',
       if ((summary.decisions ?? '').isNotEmpty)
         'Decisions: ${summary.decisions}',
-      if ((summary.blockers ?? '').isNotEmpty)
-        'Blockers: ${summary.blockers}',
+      if ((summary.blockers ?? '').isNotEmpty) 'Blockers: ${summary.blockers}',
       if ((summary.filesAndPaths ?? '').isNotEmpty)
         'Files: ${summary.filesAndPaths}',
       if ((summary.pendingAsks ?? '').isNotEmpty)
@@ -175,7 +171,9 @@ abstract final class CompactionSummaryParser {
       decisions: section('Key Decisions and Rationale'),
       blockers: section('Blockers, Errors, and Unresolved Questions'),
       pendingAsks: section('Pending User Asks'),
-      filesAndPaths: section('Relevant Files, Symbols, IDs, and External State'),
+      filesAndPaths: section(
+        'Relevant Files, Symbols, IDs, and External State',
+      ),
       remainingWork: section('Remaining Work and Safest Next Action').isNotEmpty
           ? section('Remaining Work and Safest Next Action')
           : section('Remaining Work'),

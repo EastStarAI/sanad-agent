@@ -118,6 +118,58 @@ LLM_MODEL=gemma:2b
     expect(config.llmModel, equals('override-model'));
   });
 
+  group('model-aware context compaction YAML', () {
+    test('loads defaults and exact per-model overrides from config.yaml', () {
+      File('${tempSanadHome.path}/config.yaml').writeAsStringSync('''
+context:
+  modelLimits:
+    gpt-5.6-sol: 258000
+    gpt-4o: 128000
+compaction:
+  threshold: 0.80
+  targetRatio: 0.10
+  models:
+    gpt-5.6-sol:
+      threshold: 0.85
+      targetRatio: 0.08
+    gpt-4o:
+      threshold: 0.75
+''');
+
+      final config = Config(environment: const {});
+
+      expect(config.contextModelLimit(' GPT-5.6-SOL '), 258000);
+      expect(config.contextModelLimit('gpt-4o'), 128000);
+      expect(config.contextModelLimit('unlisted'), isNull);
+      expect(config.compactionPolicyForModel('gpt-5.6-sol').threshold, 0.85);
+      expect(config.compactionPolicyForModel('gpt-5.6-sol').targetRatio, 0.08);
+      expect(config.compactionPolicyForModel('gpt-4o').threshold, 0.75);
+      expect(config.compactionPolicyForModel('gpt-4o').targetRatio, 0.10);
+      expect(config.compactionPolicyForModel('unlisted').threshold, 0.80);
+      expect(config.compactionPolicyForModel('unlisted').targetRatio, 0.10);
+    });
+
+    test('ignores legacy CONTEXT_LIMIT and rejects conflicting YAML keys', () {
+      File(
+        '${tempSanadHome.path}/.env',
+      ).writeAsStringSync('CONTEXT_LIMIT=999999\n');
+      expect(Config(environment: const {}).contextModelLimit('gpt-4o'), isNull);
+
+      for (final yaml in [
+        'compaction:\n  thresholdTokens: 1000\n',
+        'compaction:\n  modelThresholds: {}\n',
+        'compaction:\n  threshold: 1.0\n',
+        'context:\n  modelLimits:\n    gpt-4o: 0\n',
+      ]) {
+        File('${tempSanadHome.path}/config.yaml').writeAsStringSync(yaml);
+        expect(
+          () => Config(environment: const {}),
+          throwsA(isA<FormatException>()),
+        );
+      }
+    });
+  });
+
   test('reads logging configuration from environment', () async {
     final envFile = File('${tempSanadHome.path}/.env');
     await envFile.writeAsString('''

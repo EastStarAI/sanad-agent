@@ -15,10 +15,7 @@ RouteSignature _route() {
   );
 }
 
-CompactionMetrics _metrics({
-  int before = 120_000,
-  int after = 40_000,
-}) {
+CompactionMetrics _metrics({int before = 120_000, int after = 40_000}) {
   return CompactionMetrics(
     contextWindowTokens: 128_000,
     estimatedRequestTokensBefore: before,

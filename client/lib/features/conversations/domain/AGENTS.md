@@ -40,6 +40,7 @@ This contract applies to `client/lib/features/conversations/domain/`.
 - `final_answer` and `stopped` remove only the matching running model-step projection and preserve completed prior thoughts.
 - A stop without active model-step identity clears runtime controls only.
 - Preserve steer ordering after its associated tool and before the post-steer final answer; later tool results merge without moving the steer event.
+- Fold compaction transitions by logical `compaction_id`; terminal status is immutable, so hydration or retry may enrich the same terminal status but cannot switch `completed` and `failed`.
 
 ## Snapshot and Attention Safety
 - Apply execution, attention, suspension, route, queue, and runtime-notice updates only to their matching session.

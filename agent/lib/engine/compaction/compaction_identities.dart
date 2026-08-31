@@ -4,13 +4,16 @@ import 'package:meta/meta.dart';
 ///
 /// Compaction ranges must use this type, never transient in-memory list indices.
 @immutable
-class CompactionMessageIdentity implements Comparable<CompactionMessageIdentity> {
+class CompactionMessageIdentity
+    implements Comparable<CompactionMessageIdentity> {
   final int rowId;
 
-  const CompactionMessageIdentity(this.rowId) : assert(rowId > 0, 'rowId must be positive');
+  const CompactionMessageIdentity(this.rowId)
+    : assert(rowId > 0, 'rowId must be positive');
 
   @override
-  int compareTo(CompactionMessageIdentity other) => rowId.compareTo(other.rowId);
+  int compareTo(CompactionMessageIdentity other) =>
+      rowId.compareTo(other.rowId);
 
   @override
   bool operator ==(Object other) =>
@@ -32,13 +35,11 @@ class CompactionMessageRange {
   final CompactionMessageIdentity start;
   final CompactionMessageIdentity end;
 
-  CompactionMessageRange({
-    required this.start,
-    required this.end,
-  }) : assert(
-         start.rowId <= end.rowId,
-         'start identity must not follow end identity',
-       );
+  CompactionMessageRange({required this.start, required this.end})
+    : assert(
+        start.rowId <= end.rowId,
+        'start identity must not follow end identity',
+      );
 
   bool contains(CompactionMessageIdentity identity) =>
       identity.rowId >= start.rowId && identity.rowId <= end.rowId;
@@ -60,14 +61,16 @@ class CompactionMessageRange {
 
 /// Monotonic canonical history revision used for snapshot CAS (Task 53b).
 @immutable
-class CompactionHistoryRevision implements Comparable<CompactionHistoryRevision> {
+class CompactionHistoryRevision
+    implements Comparable<CompactionHistoryRevision> {
   final int value;
 
   const CompactionHistoryRevision(this.value)
     : assert(value >= 0, 'revision must be non-negative');
 
   @override
-  int compareTo(CompactionHistoryRevision other) => value.compareTo(other.value);
+  int compareTo(CompactionHistoryRevision other) =>
+      value.compareTo(other.value);
 
   @override
   bool operator ==(Object other) =>

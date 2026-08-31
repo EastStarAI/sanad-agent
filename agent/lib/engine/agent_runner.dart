@@ -6,6 +6,7 @@ import 'package:uuid/uuid.dart';
 import '../core/models/message.dart';
 import '../core/models/agent_response.dart';
 import '../core/models/llm_provider_state.dart';
+import '../core/models/llm_usage_snapshot.dart';
 import '../capabilities/registry/tools_registry.dart';
 import '../capabilities/tools/memory_tool.dart';
 import 'adapters/llm_adapter.dart';
@@ -154,6 +155,9 @@ class AgentRunner {
 
   MetricsTracker? _metricsTracker;
   Future<Map<String, dynamic>?>? _contextUsageSnapshotFuture;
+  ConfirmedInputUsageBaseline? _pendingInputUsageBaseline;
+  ConfirmedInputUsageBaseline? _confirmedInputUsageBaseline;
+  RequestPressureSnapshot? _lastPreflightPressure;
   String? currentModelStepId;
   String? _authoritativeRunId;
   String? _authoritativeWorkItemId;
@@ -165,6 +169,17 @@ class AgentRunner {
   /// Exact adapter/provider/model route that completed the latest LLM request
   /// in the current authoritative turn.
   LLMRouteSnapshot? get lastSuccessfulLlmRoute => _lastSuccessfulLlmRoute;
+
+  @visibleForTesting
+  void debugSetConfirmedInputUsageBaseline(
+    ConfirmedInputUsageBaseline baseline,
+  ) {
+    _confirmedInputUsageBaseline = baseline;
+  }
+
+  @visibleForTesting
+  RequestPressureSnapshot? get debugLastPreflightPressure =>
+      _lastPreflightPressure;
 
   void beginAuthoritativeRun(
     String? runId, {
@@ -275,6 +290,45 @@ class AgentRunner {
 
   void _updateMetrics(AgentResponse response) {
     _metricsTracker?.updateMetrics(response);
+    final usage = response.usage;
+    final pending = _pendingInputUsageBaseline;
+    if (usage == null || pending == null) return;
+    final inputTokens = LlmUsageSnapshot.fromProviderUsage(usage).inputTokens;
+    if (inputTokens != null) {
+      _confirmedInputUsageBaseline = pending.copyWithInputTokens(inputTokens);
+      if (getIt.isRegistered<CompactionCoordinator>()) {
+        getIt<CompactionCoordinator>().reconcileLatestProviderUsage(
+          sessionId: sessionId,
+          routeSignature: pending.routeSignature,
+          inputTokens: inputTokens,
+        );
+      }
+    }
+  }
+
+  void _stageInputUsageBaseline({
+    required List<Message> requestMessages,
+    required List<Map<String, dynamic>> toolSchemas,
+    required String? providerId,
+    required String? modelId,
+  }) {
+    if (providerId == null ||
+        modelId == null ||
+        !getIt.isRegistered<AgentRuntimeService>()) {
+      _pendingInputUsageBaseline = null;
+      return;
+    }
+    _pendingInputUsageBaseline = ConfirmedInputUsageBaseline(
+      routeSignature: getIt<AgentRuntimeService>().resolveSignature(
+        providerId: providerId,
+        modelId: modelId,
+      ),
+      inputTokens: 0,
+      conversationMessages: requestMessages,
+      systemPrompt: '',
+      runtimeContext: '',
+      toolSchemas: toolSchemas,
+    );
   }
 
   AgentRunner(
@@ -806,7 +860,8 @@ class AgentRunner {
     required bool streamStarted,
     required Set<String> failedProviderInstanceIds,
   }) async {
-    if (error is RateLimitCancelled || error is ProviderRequestCancelledException) {
+    if (error is RateLimitCancelled ||
+        error is ProviderRequestCancelledException) {
       throw RuntimeRecoveryCancelled(sessionId);
     }
     final recovery = _recoveryService;
@@ -830,7 +885,8 @@ class AgentRunner {
         !streamStarted &&
         !_overflowCompactionRetried &&
         getIt.isRegistered<CompactionCoordinator>() &&
-        getIt.isRegistered<SessionHistoryRevisionRepository>()) {
+        getIt.isRegistered<SessionHistoryRevisionRepository>() &&
+        getIt.isRegistered<AgentRuntimeService>()) {
       _overflowCompactionRetried = true;
       final coordinator = getIt<CompactionCoordinator>();
       final revisionRepo = getIt<SessionHistoryRevisionRepository>();
@@ -840,19 +896,21 @@ class AgentRunner {
         if (timeline.isEmpty) {
           // Fall through to recovery notice below.
         } else {
-        var contextWindow = await getContextTokens() ?? 128_000;
-        var targetRequestTokens = (contextWindow * 0.7).round();
-        final routeSignature = getIt<AgentRuntimeService>().resolveSignature(
-          providerId: providerInstanceId,
-          modelId: modelId,
-        );
-        final probeEngine = getIt.isRegistered<ContextCompactionEngine>()
-            ? getIt<ContextCompactionEngine>()
-            : ContextCompactionEngine(
-                summarizer: StructuredCompactionSummarizer(),
-              );
-        final pressure = probeEngine.measurePressure(
-          CompactionEngineRequest(
+          final activeBoundary = getIt<ModelProjectionBuilder>()
+              .buildForSession(sessionId)
+              .activeBoundary;
+          final contextWindow = await getContextTokens() ?? 128_000;
+          final policy = getIt.isRegistered<Config>()
+              ? getIt<Config>().compactionPolicyForModel(modelId ?? '')
+              : const CompactionPolicy(threshold: 0.80, targetRatio: 0.10);
+          final targetRequestTokens =
+              (_effectiveInputWindow(contextWindow) * policy.targetRatio)
+                  .round();
+          final routeSignature = getIt<AgentRuntimeService>().resolveSignature(
+            providerId: providerInstanceId,
+            modelId: modelId,
+          );
+          final request = CompactionEngineRequest(
             compactionId: '',
             sessionId: sessionId,
             trigger: CompactionTrigger.overflow,
@@ -863,37 +921,19 @@ class AgentRunner {
             systemPrompt: contextAssembler.assemble() ?? '',
             runtimeContext: '',
             toolSchemas: const [],
+            previousSummary: activeBoundary?.internalSummary,
+            previousSourceRange: activeBoundary?.sourceRange,
             targetRequestTokens: targetRequestTokens,
-          ),
-        );
-        if (!pressure.exceedsThreshold &&
-            pressure.estimatedRequestTokens <= targetRequestTokens) {
-          contextWindow = (pressure.estimatedRequestTokens * 1.15)
-              .ceil()
-              .clamp(1024, contextWindow);
-          targetRequestTokens = (contextWindow * 0.7).round();
-        }
-        final request = CompactionEngineRequest(
-          compactionId: '',
-          sessionId: sessionId,
-          trigger: CompactionTrigger.overflow,
-          sourceRevision: revision.toCompactionRevision(),
-          routeSignature: routeSignature,
-          contextWindowTokens: contextWindow,
-          timeline: timeline,
-          systemPrompt: contextAssembler.assemble() ?? '',
-          runtimeContext: '',
-          toolSchemas: const [],
-          targetRequestTokens: targetRequestTokens,
-        );
-        final outcome = await coordinator.runCompaction(
-          request: request,
-          force: true,
-        );
-        if (outcome?.status == CompactionStatus.completed) {
-          _refreshCanonicalHistoryAfterCompaction();
-          return true;
-        }
+            thresholdRatio: policy.threshold,
+          );
+          final outcome = await coordinator.runCompaction(
+            request: request,
+            force: true,
+          );
+          if (outcome?.status == CompactionStatus.completed) {
+            _refreshCanonicalHistoryAfterCompaction();
+            return true;
+          }
         }
       }
     }
@@ -1121,6 +1161,12 @@ class AgentRunner {
         );
         _providerRequestInFlight = true;
         try {
+          _stageInputUsageBaseline(
+            requestMessages: effectiveHistory,
+            toolSchemas: tools.map((tool) => tool.toJson()).toList(),
+            providerId: provider,
+            modelId: model,
+          );
           response = await route.adapter.generateResponse(
             effectiveHistory,
             tools: tools,
@@ -1473,6 +1519,12 @@ class AgentRunner {
         );
         _providerRequestInFlight = true;
         try {
+          _stageInputUsageBaseline(
+            requestMessages: effectiveHistory,
+            toolSchemas: tools.map((tool) => tool.toJson()).toList(),
+            providerId: provider,
+            modelId: model,
+          );
           await for (final response in route.adapter.generateStream(
             effectiveHistory,
             tools: tools,
@@ -1900,7 +1952,9 @@ class AgentRunner {
 
   List<Message> _buildEffectiveHistory({String? runtimeSystemPrompt}) {
     // Provider payload uses active model projection; canonical [history] stays intact.
-    final effectiveHistory = List<Message>.from(_providerConversationMessages());
+    final effectiveHistory = List<Message>.from(
+      _providerConversationMessages(),
+    );
 
     // Update volatile tier with the current turn's live data.
     final memorySections = <String>[];
@@ -1950,6 +2004,7 @@ class AgentRunner {
     effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
     if (await _maybeRunPreflightCompaction(
       runtimeSystemPrompt: runtimeSystemPrompt,
+      prospectiveHistory: effectiveHistory,
     )) {
       effectiveHistory = _buildEffectiveHistory(
         runtimeSystemPrompt: runtimeSystemPrompt,
@@ -1961,9 +2016,11 @@ class AgentRunner {
 
   Future<bool> _maybeRunPreflightCompaction({
     String? runtimeSystemPrompt,
+    required List<Message> prospectiveHistory,
   }) async {
     if (!getIt.isRegistered<CompactionCoordinator>() ||
-        !getIt.isRegistered<SessionHistoryRevisionRepository>()) {
+        !getIt.isRegistered<SessionHistoryRevisionRepository>() ||
+        !getIt.isRegistered<AgentRuntimeService>()) {
       return false;
     }
     final revisionRepo = getIt<SessionHistoryRevisionRepository>();
@@ -1975,35 +2032,77 @@ class AgentRunner {
     if (timelineEntries.isEmpty) {
       return false;
     }
+    final projection = getIt<ModelProjectionBuilder>().buildForSession(
+      sessionId,
+    );
     final routing = _turnRoute.resolveTurnRouting();
     final contextWindow = await getContextTokens() ?? 128_000;
-    final request = CompactionEngineRequest(
-      compactionId: '',
-      sessionId: sessionId,
-      trigger: CompactionTrigger.auto,
-      sourceRevision: revision.toCompactionRevision(),
-      routeSignature: getIt<AgentRuntimeService>().resolveSignature(
-        providerId: routing.providerId,
-        modelId: routing.model,
-      ),
-      contextWindowTokens: contextWindow,
-      timeline: timelineEntries,
-      systemPrompt: contextAssembler.assemble() ?? '',
-      runtimeContext: runtimeSystemPrompt ?? '',
-      toolSchemas: registry.allTools.map((t) => t.schema.toJson()).toList(),
-      targetRequestTokens: (contextWindow * 0.7).round(),
+    final policy = getIt.isRegistered<Config>()
+        ? getIt<Config>().compactionPolicyForModel(routing.model ?? '')
+        : const CompactionPolicy(threshold: 0.80, targetRatio: 0.10);
+    final turnAdapter = _turnRoute.adapterForTurn();
+    final wireEstimatedInputTokens = turnAdapter is WireInputTokenEstimator
+        ? await (turnAdapter as WireInputTokenEstimator).estimateInputTokens(
+            prospectiveHistory,
+            tools: registry.allTools.map((tool) => tool.schema).toList(),
+            modelOverride: routing.model,
+            options: _requestOptionsForTurn(routing.providerId),
+          )
+        : null;
+    final routeSignature = getIt<AgentRuntimeService>().resolveSignature(
+      providerId: routing.providerId,
+      modelId: routing.model,
     );
+    final toolSchemas = registry.allTools
+        .map((tool) => tool.schema.toJson())
+        .toList();
+    RequestPressureSnapshot? preflightPressure;
     if (getIt.isRegistered<ContextCompactionEngine>()) {
-      final pressure = getIt<ContextCompactionEngine>().measurePressure(request);
-      final withinCooldown = _lastCompactionCompletedAt != null &&
+      final pressure = RequestPressureEvaluator().evaluate(
+        routeSignature: routeSignature,
+        contextWindowTokens: contextWindow,
+        conversationMessages: prospectiveHistory,
+        systemPrompt: '',
+        runtimeContext: '',
+        toolSchemas: toolSchemas,
+        confirmedInputUsage: _confirmedInputUsageBaseline,
+        wireEstimatedInputTokens: wireEstimatedInputTokens,
+        thresholdRatio: policy.threshold,
+      );
+      preflightPressure = pressure;
+      _lastPreflightPressure = pressure;
+      if (!pressure.exceedsThreshold) {
+        return false;
+      }
+      final withinCooldown =
+          _lastCompactionCompletedAt != null &&
           DateTime.now().toUtc().difference(_lastCompactionCompletedAt!) <
               _compactionCooldown;
       if (withinCooldown && !pressure.exceedsThreshold) {
         return false;
       }
     }
+    final request = CompactionEngineRequest(
+      compactionId: '',
+      sessionId: sessionId,
+      trigger: CompactionTrigger.auto,
+      sourceRevision: revision.toCompactionRevision(),
+      routeSignature: routeSignature,
+      contextWindowTokens: contextWindow,
+      preflightPressure: preflightPressure,
+      timeline: timelineEntries,
+      systemPrompt: contextAssembler.assemble() ?? '',
+      runtimeContext: runtimeSystemPrompt ?? '',
+      toolSchemas: toolSchemas,
+      previousSummary: projection.activeBoundary?.internalSummary,
+      previousSourceRange: projection.activeBoundary?.sourceRange,
+      targetRequestTokens:
+          (_effectiveInputWindow(contextWindow) * policy.targetRatio).round(),
+      thresholdRatio: policy.threshold,
+    );
     final outcome = await getIt<CompactionCoordinator>().runCompaction(
       request: request,
+      force: true,
     );
     if (outcome?.status == CompactionStatus.completed) {
       _lastCompactionCompletedAt = DateTime.now().toUtc();
@@ -2012,6 +2111,9 @@ class AgentRunner {
     }
     return false;
   }
+
+  static int _effectiveInputWindow(int contextWindow) =>
+      calculateEffectiveInputWindow(contextWindow);
 
   void _refreshCanonicalHistoryAfterCompaction() {
     final session = sessionManager.getSession(sessionId);
@@ -2070,8 +2172,9 @@ class AgentRunner {
   /// Test hook for Plan 53d overflow recovery verification.
   List<IndexedConversationMessage> _compactionTimelineForSession() {
     if (getIt.isRegistered<ModelProjectionBuilder>()) {
-      final canonical =
-          getIt<ModelProjectionBuilder>().loadCanonicalTimeline(sessionId);
+      final canonical = getIt<ModelProjectionBuilder>().loadCanonicalTimeline(
+        sessionId,
+      );
       if (canonical.messages.isNotEmpty) {
         return [
           for (final entry in canonical.messages)
@@ -2082,12 +2185,16 @@ class AgentRunner {
         ];
       }
     }
-    return history.asMap().entries.map((entry) {
-      return IndexedConversationMessage(
-        rowId: entry.key + 1,
-        message: entry.value,
-      );
-    }).toList(growable: false);
+    return history
+        .asMap()
+        .entries
+        .map((entry) {
+          return IndexedConversationMessage(
+            rowId: entry.key + 1,
+            message: entry.value,
+          );
+        })
+        .toList(growable: false);
   }
 
   @visibleForTesting

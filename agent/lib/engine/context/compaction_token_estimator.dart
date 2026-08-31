@@ -19,9 +19,7 @@ abstract final class CompactionTokenEstimator {
     r'data:[^;]+;base64,([A-Za-z0-9+/=\s]+)',
     caseSensitive: false,
   );
-  static final RegExp _longBase64Pattern = RegExp(
-    r'^[A-Za-z0-9+/=\s]{500,}$',
-  );
+  static final RegExp _longBase64Pattern = RegExp(r'^[A-Za-z0-9+/=\s]{500,}$');
 
   static int estimateText(String? text) {
     if (text == null || text.isEmpty) {

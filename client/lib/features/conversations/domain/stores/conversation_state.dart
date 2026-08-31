@@ -164,8 +164,7 @@ class ConversationState {
     }
 
     final existing = _events[index];
-    if (event.metadata?['compaction_event'] == true &&
-        !_shouldApplyCompactionLifecycle(existing, event)) {
+    if (event.metadata?['compaction_event'] == true && !_shouldApplyCompactionLifecycle(existing, event)) {
       return;
     }
     _events[index] = _merge(existing, event);
@@ -319,8 +318,12 @@ class ConversationState {
   ) {
     final existingStatus = existing.metadata?['compaction_status']?.toString();
     final incomingStatus = incoming.metadata?['compaction_status']?.toString();
-    return _compactionLifecycleRank(incomingStatus) >=
-        _compactionLifecycleRank(existingStatus);
+    final existingRank = _compactionLifecycleRank(existingStatus);
+    final incomingRank = _compactionLifecycleRank(incomingStatus);
+    if (existingRank == 2 && incomingRank == 2) {
+      return existingStatus == incomingStatus;
+    }
+    return incomingRank >= existingRank;
   }
 
   int _compactionLifecycleRank(String? status) {

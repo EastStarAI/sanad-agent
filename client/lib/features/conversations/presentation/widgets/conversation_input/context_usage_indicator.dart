@@ -52,6 +52,7 @@ class _ContextUsageIndicatorState extends State<ContextUsageIndicator> {
 
   String _tooltipText(LlmUsageSnapshot usage, double fraction) {
     final lines = <String>[
+      'Measurement: Provider confirmed',
       'Context window:${(fraction * 100).round()}% full',
       '${_formatTokens(usage.inputTokens!)} / ${_formatTokens(usage.contextWindowTokens!)} tokens used',
     ];

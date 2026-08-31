@@ -111,10 +111,7 @@ void main() {
       ),
     );
     getIt.registerSingleton<ModelProjectionBuilder>(
-      ModelProjectionBuilder(
-        sessions: sessions,
-        boundaries: boundaries,
-      ),
+      ModelProjectionBuilder(sessions: sessions, boundaries: boundaries),
     );
     getIt.registerSingleton<SessionHistoryRevisionRepository>(
       SessionHistoryRevisionRepository(state),
@@ -172,7 +169,15 @@ void main() {
       modelId: 'gpt-4o',
     );
 
-    expect(recovered, isTrue);
+    expect(
+      recovered,
+      isTrue,
+      reason: boundaries
+          .listLifecycleForSession('session-overflow')
+          .map((operation) => operation.failureReason)
+          .toList()
+          .toString(),
+    );
     expect(triggers, contains(CompactionTrigger.overflow));
   });
 
@@ -204,20 +209,23 @@ void main() {
     expect(triggers, isEmpty);
   });
 
-  test('skips overflow compaction after visible stream output started', () async {
-    final recovered = await runner.debugTryOverflowCompactionRecovery(
-      error: const LlmHttpException(
-        statusCode: 400,
-        body: 'maximum context length exceeded',
-        headers: {},
-        operation: 'chat.completions',
-      ),
-      providerInstanceId: 'provider-1',
-      modelId: 'gpt-4o',
-      streamStarted: true,
-    );
+  test(
+    'skips overflow compaction after visible stream output started',
+    () async {
+      final recovered = await runner.debugTryOverflowCompactionRecovery(
+        error: const LlmHttpException(
+          statusCode: 400,
+          body: 'maximum context length exceeded',
+          headers: {},
+          operation: 'chat.completions',
+        ),
+        providerInstanceId: 'provider-1',
+        modelId: 'gpt-4o',
+        streamStarted: true,
+      );
 
-    expect(recovered, isFalse);
-    expect(triggers, isEmpty);
-  });
+      expect(recovered, isFalse);
+      expect(triggers, isEmpty);
+    },
+  );
 }

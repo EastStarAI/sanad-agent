@@ -34,6 +34,7 @@ This contract applies to `client/lib/features/conversations/data/`.
 - Reapply live events after history hydration with request-id deduplication; legacy rows may use bounded same-session text/timestamp matching.
 - Do not terminal-deduplicate running thinking events needed by later stream chunks.
 - Hydrate runtime notice and queued messages together for the selected session, and retain lightweight recovery markers in session-list metadata.
+- Merge compaction lifecycle rows at the durable retained-tail boundary, before the first later canonical message; never derive their history position by comparing real lifecycle time with synthetic message timestamps.
 
 ## Thin-Client Dispatch
 - Treat workspace UUID as identity; path, display name, and availability are authoritative mutable daemon projections.

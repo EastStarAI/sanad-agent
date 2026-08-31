@@ -4,6 +4,16 @@ import '../../capabilities/models/tool_schema.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'llm_request_options.dart';
 
+/// Optional protocol owner for estimating only material placed on the wire.
+abstract interface class WireInputTokenEstimator {
+  Future<int?> estimateInputTokens(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  });
+}
+
 abstract class LLMAdapter {
   Future<int> getContextLimit([String? modelOverride]);
 

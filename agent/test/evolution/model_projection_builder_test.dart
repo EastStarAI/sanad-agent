@@ -68,41 +68,23 @@ void main() {
     expect(projection.conversationMessages.first.content, 'hello');
   });
 
-  test('with boundary projection returns summary user message tail and post rows', () {
-    sessions.replaceMessages('session-1', [
-      Message(role: MessageRole.user, content: 'old-1'),
-      Message(role: MessageRole.user, content: 'old-2'),
-      Message(role: MessageRole.assistant, content: 'tail-1'),
-      Message(role: MessageRole.user, content: 'tail-2'),
-      Message(role: MessageRole.user, content: 'after-boundary'),
-    ]);
+  test(
+    'with boundary projection returns summary user message tail and post rows',
+    () {
+      final canonical = [
+        Message(role: MessageRole.user, content: 'old-1'),
+        Message(role: MessageRole.user, content: 'old-2'),
+        Message(role: MessageRole.assistant, content: 'tail-1'),
+        Message(role: MessageRole.user, content: 'tail-2'),
+        Message(role: MessageRole.user, content: 'after-boundary'),
+      ];
+      sessions.replaceMessages('session-1', canonical);
 
-    final startedAt = DateTime.utc(2026, 8, 29, 1);
-    boundaries.tryClaim(
-      compactionId: 'cmp-1',
-      sessionId: 'session-1',
-      trigger: CompactionTrigger.auto,
-      sourceRange: CompactionMessageRange(
-        start: const CompactionMessageIdentity(1),
-        end: const CompactionMessageIdentity(2),
-      ),
-      retainedTailRange: CompactionMessageRange(
-        start: const CompactionMessageIdentity(3),
-        end: const CompactionMessageIdentity(4),
-      ),
-      routeSignature: _route(),
-      startedAt: startedAt,
-    );
-    const summary = CompactionInternalSummary(
-      currentGoal: 'Finish feature',
-      remainingWork: 'Run tests',
-    );
-    boundaries.completeStarted(
-      candidate: CompactionCandidate(
+      final startedAt = DateTime.utc(2026, 8, 29, 1);
+      boundaries.tryClaim(
         compactionId: 'cmp-1',
         sessionId: 'session-1',
         trigger: CompactionTrigger.auto,
-        sourceRevision: const CompactionHistoryRevision(1),
         sourceRange: CompactionMessageRange(
           start: const CompactionMessageIdentity(1),
           end: const CompactionMessageIdentity(2),
@@ -111,40 +93,90 @@ void main() {
           start: const CompactionMessageIdentity(3),
           end: const CompactionMessageIdentity(4),
         ),
-        internalSummary: summary,
-        continuityResult: CompactionContinuityResult.fromSummary(summary),
-        metrics: CompactionMetrics(
-          contextWindowTokens: 100_000,
-          estimatedRequestTokensBefore: 80_000,
-          estimatedRequestTokensAfter: 20_000,
-          retainedTailTokens: 5_000,
-        ),
         routeSignature: _route(),
-      ),
-      startedAt: startedAt,
-      completedAt: DateTime.utc(2026, 8, 29, 2),
-    );
+        startedAt: startedAt,
+      );
+      const summary = CompactionInternalSummary(
+        currentGoal: 'Finish feature',
+        remainingWork: 'Run tests',
+      );
+      boundaries.completeStarted(
+        candidate: CompactionCandidate(
+          compactionId: 'cmp-1',
+          sessionId: 'session-1',
+          trigger: CompactionTrigger.auto,
+          sourceRevision: const CompactionHistoryRevision(1),
+          sourceRange: CompactionMessageRange(
+            start: const CompactionMessageIdentity(1),
+            end: const CompactionMessageIdentity(2),
+          ),
+          retainedTailRange: CompactionMessageRange(
+            start: const CompactionMessageIdentity(3),
+            end: const CompactionMessageIdentity(4),
+          ),
+          internalSummary: summary,
+          continuityResult: CompactionContinuityResult.fromSummary(summary),
+          metrics: CompactionMetrics(
+            contextWindowTokens: 100_000,
+            estimatedRequestTokensBefore: 80_000,
+            estimatedRequestTokensAfter: 20_000,
+            retainedTailTokens: 5_000,
+          ),
+          routeSignature: _route(),
+        ),
+        startedAt: startedAt,
+        completedAt: DateTime.utc(2026, 8, 29, 2),
+      );
 
-    final projection = builder.buildForSession('session-1');
-    expect(projection.usesCompactionBoundary, isTrue);
-    expect(projection.conversationMessages, hasLength(4));
-    expect(projection.conversationMessages.first.role, MessageRole.user);
-    expect(
-      projection.conversationMessages.first.metadata?[
-        CompactionSummaryProjection.projectionMetadataKey
-      ],
-      isTrue,
-    );
-    expect(projection.conversationMessages.first.content, contains('Finish feature'));
-    expect(
-      projection.conversationMessages.any((m) => m.content == 'after-boundary'),
-      isTrue,
-    );
-    expect(
-      projection.conversationMessages.any((m) => m.role == MessageRole.system),
-      isFalse,
-    );
-  });
+      final projection = builder.buildForSession('session-1');
+      expect(projection.usesCompactionBoundary, isTrue);
+      expect(projection.conversationMessages, hasLength(4));
+      expect(projection.conversationMessages.first.role, MessageRole.user);
+      expect(
+        projection
+            .conversationMessages
+            .first
+            .metadata?[CompactionSummaryProjection.projectionMetadataKey],
+        isTrue,
+      );
+      expect(
+        projection.conversationMessages.first.content,
+        contains('Finish feature'),
+      );
+      expect(
+        projection.conversationMessages.any(
+          (m) => m.content == 'after-boundary',
+        ),
+        isTrue,
+      );
+      expect(
+        projection.conversationMessages.any(
+          (m) => m.role == MessageRole.system,
+        ),
+        isFalse,
+      );
+
+      final rowIdsBefore = builder
+          .loadCanonicalTimeline('session-1')
+          .messages
+          .map((entry) => entry.rowId)
+          .toList();
+      sessions.replaceMessages('session-1', [
+        ...canonical,
+        Message(role: MessageRole.user, content: 'new turn'),
+      ]);
+      final timelineAfter = builder.loadCanonicalTimeline('session-1');
+      expect(
+        timelineAfter.messages
+            .take(rowIdsBefore.length)
+            .map((entry) => entry.rowId),
+        rowIdsBefore,
+      );
+      final projectionAfter = builder.buildForSession('session-1');
+      expect(projectionAfter.activeBoundary?.compactionId, 'cmp-1');
+      expect(projectionAfter.conversationMessages.last.content, 'new turn');
+    },
+  );
 
   test('reload builds identical projection from storage only', () {
     sessions.replaceMessages('session-1', [
@@ -209,8 +241,14 @@ void main() {
       ),
     ).buildForSession('session-1');
 
-    expect(second.conversationMessages.length, first.conversationMessages.length);
-    expect(second.conversationMessages.last.content, first.conversationMessages.last.content);
+    expect(
+      second.conversationMessages.length,
+      first.conversationMessages.length,
+    );
+    expect(
+      second.conversationMessages.last.content,
+      first.conversationMessages.last.content,
+    );
   });
 
   test('missing tail row rejects projection instead of silent fallback', () {
@@ -272,10 +310,18 @@ void main() {
         role: MessageRole.assistant,
         content: '',
         toolCalls: [
-          ToolCall(id: 'tool-1', name: 'read_file', arguments: {'path': 'a.txt'}),
+          ToolCall(
+            id: 'tool-1',
+            name: 'read_file',
+            arguments: {'path': 'a.txt'},
+          ),
         ],
       ),
-      Message(role: MessageRole.tool, content: 'file contents', toolCallId: 'tool-1'),
+      Message(
+        role: MessageRole.tool,
+        content: 'file contents',
+        toolCallId: 'tool-1',
+      ),
       Message(role: MessageRole.user, content: 'thanks'),
     ]);
 
@@ -333,6 +379,78 @@ void main() {
     );
     expect(toolResult, hasLength(1));
     expect(toolResult.first.toolCallId, 'tool-1');
+  });
+
+  test('rejects boundary whose tail starts inside a tool batch', () {
+    sessions.replaceMessages('session-1', [
+      Message(role: MessageRole.user, content: 'run tools'),
+      Message(
+        role: MessageRole.assistant,
+        toolCalls: [
+          ToolCall(id: 'tool-1', name: 'read_file', arguments: const {}),
+          ToolCall(id: 'tool-2', name: 'search', arguments: const {}),
+          ToolCall(id: 'tool-3', name: 'write_file', arguments: const {}),
+        ],
+      ),
+      for (final id in const ['tool-1', 'tool-2', 'tool-3'])
+        Message(role: MessageRole.tool, content: id, toolCallId: id),
+      Message(role: MessageRole.user, content: 'continue'),
+    ]);
+
+    final startedAt = DateTime.utc(2026, 8, 30);
+    final source = CompactionMessageRange(
+      start: const CompactionMessageIdentity(1),
+      end: const CompactionMessageIdentity(2),
+    );
+    final tail = CompactionMessageRange(
+      start: const CompactionMessageIdentity(3),
+      end: const CompactionMessageIdentity(6),
+    );
+    boundaries.tryClaim(
+      compactionId: 'cmp-orphaned-tool-results',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.auto,
+      sourceRange: source,
+      retainedTailRange: tail,
+      routeSignature: _route(),
+      startedAt: startedAt,
+    );
+    const summary = CompactionInternalSummary(
+      currentGoal: 'Continue safely',
+      remainingWork: 'Send the next request',
+    );
+    boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-orphaned-tool-results',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.auto,
+        sourceRevision: const CompactionHistoryRevision(1),
+        sourceRange: source,
+        retainedTailRange: tail,
+        internalSummary: summary,
+        continuityResult: CompactionContinuityResult.fromSummary(summary),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 10_000,
+          estimatedRequestTokensBefore: 8_000,
+          estimatedRequestTokensAfter: 2_000,
+          retainedTailTokens: 500,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: startedAt,
+      completedAt: startedAt.add(const Duration(seconds: 1)),
+    );
+
+    final projection = builder.buildForSession('session-1');
+
+    expect(projection.usesCompactionBoundary, isFalse);
+    expect(projection.conversationMessages, hasLength(6));
+    expect(
+      projection.conversationMessages.where(
+        (message) => message.role == MessageRole.tool,
+      ),
+      hasLength(3),
+    );
   });
 
   test('uses newest eligible boundary and keeps single summary anchor', () {
@@ -417,11 +535,15 @@ void main() {
     final projection = builder.buildForSession('session-1');
     expect(projection.activeBoundary?.compactionId, 'cmp-new');
     expect(projection.conversationMessages.first.content, contains('New goal'));
-    expect(projection.conversationMessages.first.content, isNot(contains('Old goal')));
+    expect(
+      projection.conversationMessages.first.content,
+      isNot(contains('Old goal')),
+    );
     expect(
       projection.conversationMessages.where(
         (message) =>
-            message.metadata?[CompactionSummaryProjection.projectionMetadataKey] ==
+            message.metadata?[CompactionSummaryProjection
+                .projectionMetadataKey] ==
             true,
       ),
       hasLength(1),

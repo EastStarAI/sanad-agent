@@ -266,9 +266,31 @@ the request.
 
 ## Accessibility and responsive behavior
 
+Context compaction appears as one centered timeline separator per logical
+operation. Manual and automatic/overflow labels remain distinct, running state
+uses progress, and terminal success or failure replaces that same tile. The
+interaction target is at least 44 logical pixels and opens the same redacted
+multiline metrics through desktop hover, touch/click, or keyboard focus; narrow
+layouts may wrap the centered label but must not overflow.
+Details expose one `Trigger` field and do not repeat it as a redundant `Type`.
+Until the daemon supplies provider-confirmed metric provenance, before/after
+and reclaimed token values are labeled `Estimated` rather than presented as
+provider facts. After reconciliation, the same tile shows `Provider confirmed
+after` as the authoritative value and removes the superseded after-estimate
+from user-facing details; persistence may retain that estimate for bounded
+diagnostics. Reclaimed tokens are recomputed against that confirmed after-value;
+the label remains `Estimated` whenever the before-value is not itself confirmed.
+The separator dividers consume the full conversation width around the intrinsic
+centered label in both LTR and RTL layouts.
+
 Primary actions provide semantic labels and tooltips. Narrow layouts retain
 touch-friendly targets, and the composer grows for multiline input without
 hiding send, stop, permission, provider, model, or thinking controls.
+
+On desktop, double-clicking a conversation title in the sidebar opens the same
+capability-gated `Rename Session` dialog as choosing `Rename` from its options
+menu. The gesture belongs to the title only; the options control and relative
+timestamp keep their existing interactions.
 
 Realtime voice exists as a separate experimental path and is not part of the
 stable interface described here. See

@@ -24,7 +24,7 @@ class CompactionLifecycleBroadcaster {
     _sink(
       GatewayResponse(
         sessionId: event.sessionId,
-        eventId: event.compactionId,
+        eventId: event.eventId,
         message: Message(
           role: MessageRole.system,
           metadata: {
@@ -42,6 +42,11 @@ class CompactionLifecycleBroadcaster {
                     metrics.estimatedRequestTokensBefore,
                 'estimated_request_tokens_after':
                     metrics.estimatedRequestTokensAfter,
+                'before_measurement_kind':
+                    metrics.beforeMeasurementKind.wireValue,
+                if (metrics.providerConfirmedRequestTokensAfter != null)
+                  'provider_confirmed_request_tokens_after':
+                      metrics.providerConfirmedRequestTokensAfter,
                 'retained_tail_tokens': metrics.retainedTailTokens,
                 if (metrics.duration != null)
                   'duration_ms': metrics.duration!.inMilliseconds,

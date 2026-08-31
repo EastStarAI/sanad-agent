@@ -126,6 +126,14 @@ Budget exceeded because A2 added eight typed modules plus tests; no further spli
 ## 9. سجل التقدم
 
 ```text
+Date: 2026-08-31 (independent remediation review)
+Gate/status: A0–A2 passed; A3 repaired and re-closed
+Evidence: prototype search found no production `ContextEngine`/`compressIfNeeded`; dependency audit found no Flutter/interfaces/SessionDB imports in compaction types; format check is clean; analyzer clean; A1 18/18, A2 8/8, and A3 focused suite 94/94 passed
+Repair: formatted seven 53a-owned type/test files that failed the non-mutating format gate; no behavioral production change
+Next: Task 53b Gate B0
+```
+
+```text
 Date: 2026-08-29
 Gate/status: 53a complete (A0–A3) — gate-by-gate review re-verified
 Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction
@@ -150,5 +158,3 @@ A3: A3 focused suite 94/94 passed; MOC + context_compaction.md present; no proto
 Findings: no fixes required
 Next: Task 53b Gate B0
 ```
-
-

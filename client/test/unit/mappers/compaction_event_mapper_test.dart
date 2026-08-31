@@ -38,6 +38,8 @@ void main() {
         'context_window_tokens': 128000,
         'estimated_request_tokens_before': 90000,
         'estimated_request_tokens_after': 25000,
+        'before_measurement_kind': 'mixed',
+        'provider_confirmed_request_tokens_after': 22000,
         'retained_tail_tokens': 5000,
       },
     });
@@ -47,6 +49,8 @@ void main() {
     expect(event.metadata?['compaction_trigger'], 'auto');
     expect(event.metadata?['estimated_request_tokens_before'], 90000);
     expect(event.metadata?['estimated_request_tokens_after'], 25000);
+    expect(event.metadata?['before_measurement_kind'], 'mixed');
+    expect(event.metadata?['provider_confirmed_request_tokens_after'], 22000);
   });
 
   test('maps overflow failed compaction as auto-like terminal error', () {
@@ -72,6 +76,7 @@ void main() {
     final payload = {
       'session_id': 'session-1',
       'compaction_id': 'cmp-stable',
+      'event_id': 'context_compaction:cmp-stable:completed',
       'trigger': 'manual',
       'status': 'completed',
       'started_at': '2026-08-29T04:00:00.000Z',
@@ -92,5 +97,7 @@ void main() {
 
     expect(live!.id, history.id);
     expect(live.id, 'compaction_cmp-stable');
+    expect(live.eventId, history.eventId);
+    expect(live.eventId, 'context_compaction:cmp-stable:completed');
   });
 }

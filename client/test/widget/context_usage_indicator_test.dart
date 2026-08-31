@@ -29,6 +29,7 @@ void main() {
     await tester.pump();
 
     expect(find.textContaining('Cached input: 120k tokens'), findsOneWidget);
+    expect(find.textContaining('Provider confirmed'), findsOneWidget);
     expect(find.textContaining('Cache write'), findsNothing);
   });
 

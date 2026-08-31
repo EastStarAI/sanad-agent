@@ -46,10 +46,7 @@ List<IndexedConversationMessage> _fixtureTimeline() {
     ),
     IndexedConversationMessage(
       rowId: 3,
-      message: Message(
-        role: MessageRole.user,
-        content: 'path: $pathLine',
-      ),
+      message: Message(role: MessageRole.user, content: 'path: $pathLine'),
     ),
     IndexedConversationMessage(
       rowId: 4,
@@ -73,13 +70,14 @@ List<IndexedConversationMessage> _fixtureTimeline() {
 CompactionEngineRequest _request({
   required List<IndexedConversationMessage> timeline,
   CompactionInternalSummary? previousSummary,
+  RouteSignature? routeSignature,
 }) {
   return CompactionEngineRequest(
     compactionId: 'cmp-fixture',
     sessionId: 'session-fixture',
     trigger: CompactionTrigger.auto,
     sourceRevision: const CompactionHistoryRevision(1),
-    routeSignature: _route(),
+    routeSignature: routeSignature ?? _route(),
     contextWindowTokens: 4_000,
     timeline: timeline,
     systemPrompt: 'system prompt',
@@ -91,33 +89,99 @@ CompactionEngineRequest _request({
 }
 
 void main() {
-  test('three repeated compactions retain OAuth goal and auth path anchors', () async {
-    final engine = ContextCompactionEngine(
-      summarizer: StructuredCompactionSummarizer(),
-    );
-    final timeline = _fixtureTimeline();
+  test(
+    'provider protocol matrix preserves the same compaction invariants',
+    () async {
+      final engine = ContextCompactionEngine(
+        summarizer: StructuredCompactionSummarizer(),
+      );
+      final routes = <RouteSignature>[
+        _route(),
+        const RouteSignature(
+          providerInstanceId: 'anthropic-1',
+          templateId: 'anthropic',
+          protocol: 'anthropic_compatible',
+          normalizedBaseUrl: 'https://api.anthropic.com',
+          modelId: 'claude-test',
+          configRevision: 1,
+          credentialRevision: 1,
+        ),
+        const RouteSignature(
+          providerInstanceId: 'codex-1',
+          templateId: 'codex',
+          protocol: 'codex_responses',
+          normalizedBaseUrl: 'https://api.openai.com/v1',
+          modelId: 'gpt-test',
+          configRevision: 1,
+          credentialRevision: 1,
+        ),
+        const RouteSignature(
+          providerInstanceId: 'ollama-1',
+          templateId: 'ollama',
+          protocol: 'openai_compatible',
+          normalizedBaseUrl: 'http://127.0.0.1:11434/v1',
+          modelId: 'local-test',
+          configRevision: 1,
+          credentialRevision: 1,
+        ),
+      ];
 
-    final first = await engine.buildCandidate(_request(timeline: timeline));
-    expect(first, isNotNull);
-    expect(first!.internalSummary.currentGoal.toLowerCase(), contains('oauth'));
+      for (final route in routes) {
+        final candidate = await engine.buildCandidate(
+          _request(timeline: _fixtureTimeline(), routeSignature: route),
+        );
+        expect(candidate, isNotNull, reason: route.protocol);
+        expect(candidate!.routeSignature, route);
+        expect(candidate.continuityResult.passed, isTrue);
+        expect(
+          candidate.metrics.estimatedRequestTokensAfter,
+          lessThan(candidate.metrics.estimatedRequestTokensBefore),
+        );
+      }
+    },
+  );
 
-    final second = await engine.buildCandidate(
-      _request(timeline: timeline, previousSummary: first.internalSummary),
-    );
-    expect(second, isNotNull);
-    expect(second!.internalSummary.currentGoal.toLowerCase(), contains('oauth'));
-    expect(
-      second.internalSummary.filesAndPaths,
-      contains('auth_manager.dart'),
-    );
+  test(
+    'three repeated compactions retain OAuth goal and auth path anchors',
+    () async {
+      final engine = ContextCompactionEngine(
+        summarizer: StructuredCompactionSummarizer(),
+      );
+      final timeline = _fixtureTimeline();
 
-    final third = await engine.buildCandidate(
-      _request(timeline: timeline, previousSummary: second.internalSummary),
-    );
-    expect(third, isNotNull);
-    expect(third!.internalSummary.currentGoal.toLowerCase(), contains('oauth'));
-    expect(third.metrics.estimatedRequestTokensAfter,
-        lessThan(third.metrics.estimatedRequestTokensBefore));
-    expect(third.continuityResult.passed, isTrue);
-  });
+      final first = await engine.buildCandidate(_request(timeline: timeline));
+      expect(first, isNotNull);
+      expect(
+        first!.internalSummary.currentGoal.toLowerCase(),
+        contains('oauth'),
+      );
+
+      final second = await engine.buildCandidate(
+        _request(timeline: timeline, previousSummary: first.internalSummary),
+      );
+      expect(second, isNotNull);
+      expect(
+        second!.internalSummary.currentGoal.toLowerCase(),
+        contains('oauth'),
+      );
+      expect(
+        second.internalSummary.filesAndPaths,
+        contains('auth_manager.dart'),
+      );
+
+      final third = await engine.buildCandidate(
+        _request(timeline: timeline, previousSummary: second.internalSummary),
+      );
+      expect(third, isNotNull);
+      expect(
+        third!.internalSummary.currentGoal.toLowerCase(),
+        contains('oauth'),
+      );
+      expect(
+        third.metrics.estimatedRequestTokensAfter,
+        lessThan(third.metrics.estimatedRequestTokensBefore),
+      );
+      expect(third.continuityResult.passed, isTrue);
+    },
+  );
 }

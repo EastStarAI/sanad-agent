@@ -28,8 +28,12 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart
 import 'package:test/test.dart';
 
 class _PreflightAdapter implements LLMAdapter {
+  final int contextLimit;
+
+  _PreflightAdapter({this.contextLimit = 3_000});
+
   @override
-  Future<int> getContextLimit([String? modelOverride]) async => 3_000;
+  Future<int> getContextLimit([String? modelOverride]) async => contextLimit;
 
   @override
   Future<List<ModelOption>> getAvailableModels() async => const [];
@@ -108,18 +112,13 @@ void main() {
     );
     getIt.registerSingleton<CompactionCoordinator>(coordinator);
     getIt.registerSingleton<ModelProjectionBuilder>(
-      ModelProjectionBuilder(
-        sessions: sessions,
-        boundaries: boundaries,
-      ),
+      ModelProjectionBuilder(sessions: sessions, boundaries: boundaries),
     );
     getIt.registerSingleton<SessionHistoryRevisionRepository>(
       SessionHistoryRevisionRepository(state),
     );
     getIt.registerSingleton<ContextCompactionEngine>(
-      ContextCompactionEngine(
-        summarizer: StructuredCompactionSummarizer(),
-      ),
+      ContextCompactionEngine(summarizer: StructuredCompactionSummarizer()),
     );
     final repo = ProviderInstanceRepository.fromDatabase(state.db);
     getIt.registerSingleton<ProviderInstanceRepository>(repo);
@@ -143,9 +142,12 @@ void main() {
       ),
     );
     sessions.replaceMessages('session-preflight', [
-      Message(role: MessageRole.user, content: 'goal: run preflight compaction'),
-      for (var i = 0; i < 30; i++)
-        Message(role: MessageRole.user, content: 'filler $i ${'x' * 200}'),
+      Message(
+        role: MessageRole.user,
+        content: 'goal: run preflight compaction',
+      ),
+      for (var i = 0; i < 60; i++)
+        Message(role: MessageRole.user, content: 'filler $i ${'x' * 500}'),
     ]);
 
     runner = AgentRunner(
@@ -164,10 +166,12 @@ void main() {
 
   test('preflight rebuilds provider history from activated projection', () async {
     final canonicalLength = runner.history.length;
-    final revision = getIt<SessionHistoryRevisionRepository>()
-        .read('session-preflight')!;
-    final timeline = getIt<ModelProjectionBuilder>()
-        .loadCanonicalTimeline('session-preflight');
+    final revision = getIt<SessionHistoryRevisionRepository>().read(
+      'session-preflight',
+    )!;
+    final timeline = getIt<ModelProjectionBuilder>().loadCanonicalTimeline(
+      'session-preflight',
+    );
     final outcome = await coordinator.runCompaction(
       request: CompactionEngineRequest(
         compactionId: 'cmp-preflight',
@@ -194,19 +198,109 @@ void main() {
       force: true,
     );
     expect(outcome?.status, CompactionStatus.completed);
-    expect(boundaries.findLatestCompletedForSession('session-preflight'), isNotNull);
+    expect(
+      boundaries.findLatestCompletedForSession('session-preflight'),
+      isNotNull,
+    );
 
+    sessions.replaceMessages('session-preflight', [
+      ...sessions.getMessages('session-preflight'),
+      Message(
+        role: MessageRole.user,
+        content: 'small follow-up after compaction',
+      ),
+    ]);
     final history = await runner.debugPrepareProviderHistory();
+    expect(
+      boundaries.listCompletedForSession('session-preflight'),
+      hasLength(1),
+      reason:
+          'an active compacted projection below the trigger must not compact again',
+    );
     expect(history.where((m) => m.role == MessageRole.system), isNotEmpty);
     expect(history.length, lessThan(canonicalLength + 2));
     expect(
       history.any(
         (message) =>
-            message.metadata?[CompactionSummaryProjection.projectionMetadataKey] ==
+            message.metadata?[CompactionSummaryProjection
+                .projectionMetadataKey] ==
             true,
       ),
       isTrue,
     );
     expect(runner.history.length, canonicalLength);
   });
+
+  test(
+    'next preflight uses provider input baseline instead of full estimate',
+    () async {
+      final now = DateTime.utc(2026, 8, 31);
+      sessions.saveSession(
+        SessionState(
+          sessionId: 'session-provider-baseline',
+          providerId: 'provider-1',
+          model: 'gpt-4o',
+          createdAt: now,
+          updatedAt: now,
+          lastUserMessageAt: now,
+        ),
+      );
+      sessions.replaceMessages('session-provider-baseline', [
+        Message(
+          role: MessageRole.user,
+          content: 'goal: preserve provider usage',
+        ),
+        for (var index = 0; index < 30; index++)
+          Message(
+            role: MessageRole.user,
+            content: 'short estimated history $index ${'x' * 200}',
+          ),
+      ]);
+      final usageRegistry = ToolsRegistry();
+      final usageRunner = AgentRunner(
+        _PreflightAdapter(contextLimit: 10_000),
+        usageRegistry,
+        sessionManager,
+        existingSessionId: 'session-provider-baseline',
+      );
+
+      await usageRunner.debugPrepareProviderHistory();
+      expect(
+        boundaries.listCompletedForSession('session-provider-baseline'),
+        isEmpty,
+      );
+      usageRunner.debugSetConfirmedInputUsageBaseline(
+        ConfirmedInputUsageBaseline(
+          routeSignature: getIt<AgentRuntimeService>().resolveSignature(
+            providerId: 'provider-1',
+            modelId: 'gpt-4o',
+          ),
+          inputTokens: 7_500,
+          conversationMessages: const [],
+          systemPrompt: '',
+          runtimeContext: '',
+          toolSchemas: usageRegistry.allTools
+              .map((tool) => tool.schema.toJson())
+              .toList(),
+        ),
+      );
+
+      sessions.replaceMessages('session-provider-baseline', [
+        ...sessions.getMessages('session-provider-baseline'),
+        Message(role: MessageRole.user, content: 'small suffix'),
+      ]);
+      await usageRunner.debugPrepareProviderHistory();
+
+      expect(
+        usageRunner.debugLastPreflightPressure?.measurementKind,
+        CompactionMeasurementKind.mixed,
+      );
+      expect(
+        usageRunner.debugLastPreflightPressure?.estimatedRequestTokens,
+        greaterThan(7_000),
+        reason:
+            '7,500 provider-confirmed input tokens must drive admission even when the chars/4 estimate is small',
+      );
+    },
+  );
 }

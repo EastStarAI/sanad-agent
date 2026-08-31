@@ -72,6 +72,30 @@ void main() {
       expect(state.events.single.metadata?['compaction_status'], 'completed');
     });
 
+    test('rejects conflicting terminal transition after failure', () {
+      final state = ConversationState();
+      state.apply(
+        _compactionEvent(
+          compactionId: 'cmp-terminal',
+          status: 'failed',
+          text: 'Context compaction failed',
+          eventStatus: EventStatus.error,
+        ),
+      );
+      state.apply(
+        _compactionEvent(
+          compactionId: 'cmp-terminal',
+          status: 'completed',
+          text: 'Context compacted',
+          eventStatus: EventStatus.done,
+        ),
+      );
+
+      expect(state.events, hasLength(1));
+      expect(state.events.single.text, 'Context compaction failed');
+      expect(state.events.single.metadata?['compaction_status'], 'failed');
+    });
+
     test('history hydration folds started then completed into one tile', () {
       final state = ConversationState();
       state.setHistory([

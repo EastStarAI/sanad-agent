@@ -1,8 +1,46 @@
 import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/models/message.dart';
 
 import '../compaction/compaction_enums.dart';
 import '../compaction/compaction_pressure.dart';
+
+/// Provider-confirmed input usage tied to the exact request material it measured.
+///
+/// The baseline is intentionally in-memory only. Consumers may extend it with a
+/// newly appended message suffix, but must discard it when route, prompt,
+/// schemas, or any measured message changes.
+@immutable
+class ConfirmedInputUsageBaseline {
+  final RouteSignature routeSignature;
+  final int inputTokens;
+  final List<Message> conversationMessages;
+  final String systemPrompt;
+  final String runtimeContext;
+  final List<Map<String, dynamic>> toolSchemas;
+
+  ConfirmedInputUsageBaseline({
+    required this.routeSignature,
+    required this.inputTokens,
+    required List<Message> conversationMessages,
+    required this.systemPrompt,
+    required this.runtimeContext,
+    required List<Map<String, dynamic>> toolSchemas,
+  }) : assert(inputTokens >= 0),
+       conversationMessages = List.unmodifiable(conversationMessages),
+       toolSchemas = List.unmodifiable(toolSchemas);
+
+  ConfirmedInputUsageBaseline copyWithInputTokens(int value) {
+    return ConfirmedInputUsageBaseline(
+      routeSignature: routeSignature,
+      inputTokens: value,
+      conversationMessages: conversationMessages,
+      systemPrompt: systemPrompt,
+      runtimeContext: runtimeContext,
+      toolSchemas: toolSchemas,
+    );
+  }
+}
 
 /// Components included in the next provider request estimate (Plan 53c C0).
 @immutable
@@ -12,6 +50,8 @@ class RequestPressureComponents {
   final int runtimeContextTokens;
   final int toolSchemaTokens;
   final int mediaTokens;
+  final int reasoningTokens;
+  final int providerReplayTokens;
 
   const RequestPressureComponents({
     required this.historyTokens,
@@ -19,12 +59,16 @@ class RequestPressureComponents {
     required this.runtimeContextTokens,
     required this.toolSchemaTokens,
     required this.mediaTokens,
+    this.reasoningTokens = 0,
+    this.providerReplayTokens = 0,
   }) : assert(
          historyTokens >= 0 &&
              systemPromptTokens >= 0 &&
              runtimeContextTokens >= 0 &&
              toolSchemaTokens >= 0 &&
-             mediaTokens >= 0,
+             mediaTokens >= 0 &&
+             reasoningTokens >= 0 &&
+             providerReplayTokens >= 0,
        );
 
   int get total =>
@@ -32,7 +76,9 @@ class RequestPressureComponents {
       systemPromptTokens +
       runtimeContextTokens +
       toolSchemaTokens +
-      mediaTokens;
+      mediaTokens +
+      reasoningTokens +
+      providerReplayTokens;
 }
 
 /// Full prospective request pressure snapshot (Plan 53c Gate C0).
@@ -47,6 +93,7 @@ class RequestPressureSnapshot {
   final int estimatedRequestTokens;
   final int? confirmedInputTokens;
   final CompactionMeasurementKind measurementKind;
+  final double thresholdRatio;
 
   const RequestPressureSnapshot({
     required this.routeSignature,
@@ -58,14 +105,21 @@ class RequestPressureSnapshot {
     required this.estimatedRequestTokens,
     this.confirmedInputTokens,
     required this.measurementKind,
+    this.thresholdRatio = 1.0,
   });
 
   int get effectiveInputBudget {
     final window = inputLimitTokens ?? contextWindowTokens;
-    return window - outputReservationTokens - safetyBufferTokens;
+    return calculateEffectiveInputWindow(
+      window,
+      outputReservationTokens: outputReservationTokens,
+      safetyBufferTokens: safetyBufferTokens,
+    );
   }
 
-  bool get exceedsThreshold => estimatedRequestTokens > effectiveInputBudget;
+  int get thresholdTokens => (effectiveInputBudget * thresholdRatio).floor();
+
+  bool get exceedsThreshold => estimatedRequestTokens > thresholdTokens;
 
   CompactionPressure toCompactionPressure() {
     return CompactionPressure(
@@ -78,4 +132,16 @@ class RequestPressureSnapshot {
       measurementKind: measurementKind,
     );
   }
+}
+
+int calculateEffectiveInputWindow(
+  int window, {
+  int outputReservationTokens = 4096,
+  int safetyBufferTokens = 1024,
+}) {
+  final requestedReservation = outputReservationTokens + safetyBufferTokens;
+  if (requestedReservation < window) {
+    return window - requestedReservation;
+  }
+  return (window * 0.75).floor().clamp(1, window);
 }

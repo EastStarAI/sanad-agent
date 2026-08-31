@@ -17,8 +17,8 @@ class ModelProjectionBuilder {
   ModelProjectionBuilder({
     required SessionDB sessions,
     required CompactionBoundaryRepository boundaries,
-  })  : _sessions = sessions,
-        _boundaries = boundaries;
+  }) : _sessions = sessions,
+       _boundaries = boundaries;
 
   CanonicalConversationTimeline loadCanonicalTimeline(String sessionId) {
     return CanonicalConversationTimeline(
@@ -90,14 +90,42 @@ class ModelProjectionBuilder {
     final completed = _boundaries.listCompletedForSession(sessionId);
     for (final boundary in completed) {
       if (CompactionBoundaryValidity.isProjectionEligible(
-        boundary: boundary,
-        existingMessageRowIds: rowIds,
-        currentRevision: revision,
-      )) {
+            boundary: boundary,
+            existingMessageRowIds: rowIds,
+            currentRevision: revision,
+          ) &&
+          _retainedTailPreservesToolPairs(boundary, timeline)) {
         return boundary;
       }
     }
     return null;
+  }
+
+  bool _retainedTailPreservesToolPairs(
+    CompactionOperationRecord boundary,
+    List<PersistedMessage> timeline,
+  ) {
+    final retainedCallIds = <String>{};
+    for (final entry in timeline) {
+      if (entry.rowId < boundary.retainedTailRange.start.rowId ||
+          entry.rowId > boundary.retainedTailRange.end.rowId) {
+        continue;
+      }
+      final message = entry.message;
+      if (message.role == MessageRole.assistant) {
+        for (final call in message.toolCalls ?? const []) {
+          retainedCallIds.add(call.id);
+        }
+      } else if (message.role == MessageRole.tool) {
+        final toolCallId = message.toolCallId?.trim();
+        if (toolCallId == null ||
+            toolCallId.isEmpty ||
+            !retainedCallIds.contains(toolCallId)) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   void _rejectConflictingNewestBoundary(String sessionId, Set<int> rowIds) {

@@ -99,37 +99,40 @@ void main() {
     );
   }
 
-  test('successful activation bumps projection revision and publishes once', () {
-    final startedAt = DateTime.utc(2026, 8, 29, 1);
-    boundaries.tryClaim(
-      compactionId: 'cmp-activate',
-      sessionId: 'session-1',
-      trigger: CompactionTrigger.manual,
-      sourceRange: CompactionMessageRange(
-        start: const CompactionMessageIdentity(1),
-        end: const CompactionMessageIdentity(1),
-      ),
-      retainedTailRange: CompactionMessageRange(
-        start: const CompactionMessageIdentity(2),
-        end: const CompactionMessageIdentity(3),
-      ),
-      routeSignature: _route(),
-      startedAt: startedAt,
-    );
+  test(
+    'successful activation bumps projection revision and publishes once',
+    () {
+      final startedAt = DateTime.utc(2026, 8, 29, 1);
+      boundaries.tryClaim(
+        compactionId: 'cmp-activate',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.manual,
+        sourceRange: CompactionMessageRange(
+          start: const CompactionMessageIdentity(1),
+          end: const CompactionMessageIdentity(1),
+        ),
+        retainedTailRange: CompactionMessageRange(
+          start: const CompactionMessageIdentity(2),
+          end: const CompactionMessageIdentity(3),
+        ),
+        routeSignature: _route(),
+        startedAt: startedAt,
+      );
 
-    expect(projectionRevisions.read('session-1')!.value, 0);
+      expect(projectionRevisions.read('session-1')!.value, 0);
 
-    final result = service().activateCandidate(
-      candidate: _candidate(id: 'cmp-activate'),
-      startedAt: startedAt,
-      completedAt: DateTime.utc(2026, 8, 29, 2),
-    );
+      final result = service().activateCandidate(
+        candidate: _candidate(id: 'cmp-activate'),
+        startedAt: startedAt,
+        completedAt: DateTime.utc(2026, 8, 29, 2),
+      );
 
-    expect(result.outcome, CompactionTerminalOutcome.completed);
-    expect(projectionRevisions.read('session-1')!.value, 1);
-    expect(activated?.projectionRevision.value, 1);
-    expect(activated?.boundary.compactionId, 'cmp-activate');
-  });
+      expect(result.outcome, CompactionTerminalOutcome.completed);
+      expect(projectionRevisions.read('session-1')!.value, 1);
+      expect(activated?.projectionRevision.value, 1);
+      expect(activated?.boundary.compactionId, 'cmp-activate');
+    },
+  );
 
   test('failed activation does not bump projection revision', () {
     final startedAt = DateTime.utc(2026, 8, 29, 1);
@@ -258,7 +261,10 @@ void main() {
     );
 
     expect(result.outcome, CompactionTerminalOutcome.missingMessageRows);
-    expect(boundaries.findStartedForSession('session-1')?.compactionId, 'cmp-missing');
+    expect(
+      boundaries.findStartedForSession('session-1')?.compactionId,
+      'cmp-missing',
+    );
     expect(projectionRevisions.read('session-1')!.value, 0);
   });
 }

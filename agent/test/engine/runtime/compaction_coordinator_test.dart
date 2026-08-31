@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
@@ -22,6 +24,26 @@ RouteSignature _route() => const RouteSignature(
   configRevision: 1,
   credentialRevision: 1,
 );
+
+class _BlockingSummarizer implements CompactionSummarizer {
+  final entered = Completer<void>();
+  final release = Completer<void>();
+  final _delegate = StructuredCompactionSummarizer();
+
+  @override
+  Future<String> summarize({required String prompt}) async {
+    if (!entered.isCompleted) entered.complete();
+    await release.future;
+    return _delegate.summarize(prompt: prompt);
+  }
+}
+
+class _ThrowingSummarizer implements CompactionSummarizer {
+  @override
+  Future<String> summarize({required String prompt}) {
+    throw StateError('synthetic summarizer failure');
+  }
+}
 
 List<IndexedConversationMessage> _heavyTimeline() {
   return [
@@ -142,7 +164,109 @@ void main() {
     expect(lifecycle, isEmpty);
   });
 
-  test('force manual compaction emits started then completed lifecycle', () async {
+  test(
+    'force manual compaction emits started then completed lifecycle',
+    () async {
+      sessions.replaceMessages(
+        'session-a',
+        _heavyTimeline().map((entry) => entry.message).toList(),
+      );
+      final canonical = ModelProjectionBuilder(
+        sessions: sessions,
+        boundaries: boundaries,
+      ).loadCanonicalTimeline('session-a');
+      final outcome = await coordinator.runCompaction(
+        request: requestFor(
+          sessionId: 'session-a',
+          timeline: [
+            for (final entry in canonical.messages)
+              IndexedConversationMessage(
+                rowId: entry.rowId,
+                message: entry.message,
+              ),
+          ],
+          trigger: CompactionTrigger.manual,
+        ),
+        force: true,
+      );
+
+      expect(
+        outcome?.status,
+        CompactionStatus.completed,
+        reason: outcome?.failureReason?.wireValue,
+      );
+      expect(lifecycle.map((e) => e.status), [
+        CompactionStatus.started,
+        CompactionStatus.completed,
+      ]);
+      expect(lifecycle.first.trigger, CompactionTrigger.manual);
+      expect(boundaries.findLatestCompletedForSession('session-a'), isNotNull);
+    },
+  );
+
+  test(
+    'first provider response persists and republishes confirmed after',
+    () async {
+      sessions.replaceMessages(
+        'session-a',
+        _heavyTimeline().map((entry) => entry.message).toList(),
+      );
+      final canonical = ModelProjectionBuilder(
+        sessions: sessions,
+        boundaries: boundaries,
+      ).loadCanonicalTimeline('session-a');
+      final outcome = await coordinator.runCompaction(
+        request: requestFor(
+          sessionId: 'session-a',
+          timeline: [
+            for (final entry in canonical.messages)
+              IndexedConversationMessage(
+                rowId: entry.rowId,
+                message: entry.message,
+              ),
+          ],
+          trigger: CompactionTrigger.manual,
+        ),
+        force: true,
+      );
+
+      expect(
+        coordinator.reconcileLatestProviderUsage(
+          sessionId: 'session-a',
+          routeSignature: _route(),
+          inputTokens: 1_250,
+        ),
+        isTrue,
+      );
+      expect(lifecycle.map((event) => event.status), [
+        CompactionStatus.started,
+        CompactionStatus.completed,
+        CompactionStatus.completed,
+      ]);
+      expect(lifecycle.last.eventId, lifecycle[1].eventId);
+      expect(
+        lifecycle.last.metrics?.providerConfirmedRequestTokensAfter,
+        1_250,
+      );
+      expect(
+        boundaries
+            .findById(outcome!.compactionId)
+            ?.metrics
+            ?.providerConfirmedRequestTokensAfter,
+        1_250,
+      );
+      expect(
+        coordinator.reconcileLatestProviderUsage(
+          sessionId: 'session-a',
+          routeSignature: _route(),
+          inputTokens: 1_500,
+        ),
+        isFalse,
+      );
+    },
+  );
+
+  test('claims and emits started before awaiting the summarizer', () async {
     sessions.replaceMessages(
       'session-a',
       _heavyTimeline().map((entry) => entry.message).toList(),
@@ -151,7 +275,68 @@ void main() {
       sessions: sessions,
       boundaries: boundaries,
     ).loadCanonicalTimeline('session-a');
-    final outcome = await coordinator.runCompaction(
+    final summarizer = _BlockingSummarizer();
+    final blockingCoordinator = CompactionCoordinator(
+      engine: ContextCompactionEngine(summarizer: summarizer),
+      boundaries: boundaries,
+      activation: CompactionActivationService(
+        boundaries: boundaries,
+        projectionRevisions: SessionProjectionRevisionRepository(state),
+      ),
+      projectionBuilder: ModelProjectionBuilder(
+        sessions: sessions,
+        boundaries: boundaries,
+      ),
+      onLifecycleEvent: lifecycle.add,
+    );
+
+    final pending = blockingCoordinator.runCompaction(
+      request: requestFor(
+        sessionId: 'session-a',
+        timeline: [
+          for (final entry in canonical.messages)
+            IndexedConversationMessage(
+              rowId: entry.rowId,
+              message: entry.message,
+            ),
+        ],
+        trigger: CompactionTrigger.manual,
+      ),
+      force: true,
+    );
+    await summarizer.entered.future;
+
+    expect(boundaries.findStartedForSession('session-a'), isNotNull);
+    expect(lifecycle.map((event) => event.status), [CompactionStatus.started]);
+
+    summarizer.release.complete();
+    expect((await pending)?.status, CompactionStatus.completed);
+  });
+
+  test('summarizer failure closes the early claim as typed failed', () async {
+    sessions.replaceMessages(
+      'session-a',
+      _heavyTimeline().map((entry) => entry.message).toList(),
+    );
+    final canonical = ModelProjectionBuilder(
+      sessions: sessions,
+      boundaries: boundaries,
+    ).loadCanonicalTimeline('session-a');
+    final failingCoordinator = CompactionCoordinator(
+      engine: ContextCompactionEngine(summarizer: _ThrowingSummarizer()),
+      boundaries: boundaries,
+      activation: CompactionActivationService(
+        boundaries: boundaries,
+        projectionRevisions: SessionProjectionRevisionRepository(state),
+      ),
+      projectionBuilder: ModelProjectionBuilder(
+        sessions: sessions,
+        boundaries: boundaries,
+      ),
+      onLifecycleEvent: lifecycle.add,
+    );
+
+    final outcome = await failingCoordinator.runCompaction(
       request: requestFor(
         sessionId: 'session-a',
         timeline: [
@@ -166,48 +351,47 @@ void main() {
       force: true,
     );
 
-    expect(outcome?.status, CompactionStatus.completed,
-        reason: outcome?.failureReason?.wireValue);
-    expect(lifecycle.map((e) => e.status), [
-      CompactionStatus.started,
-      CompactionStatus.completed,
-    ]);
-    expect(lifecycle.first.trigger, CompactionTrigger.manual);
-    expect(boundaries.findLatestCompletedForSession('session-a'), isNotNull);
-  });
-
-  test('concurrent claim returns compactionInProgress without second started event', () async {
-    boundaries.tryClaim(
-      compactionId: 'cmp-in-flight',
-      sessionId: 'session-a',
-      trigger: CompactionTrigger.auto,
-      sourceRange: CompactionMessageRange(
-        start: const CompactionMessageIdentity(1),
-        end: const CompactionMessageIdentity(1),
-      ),
-      retainedTailRange: CompactionMessageRange(
-        start: const CompactionMessageIdentity(2),
-        end: const CompactionMessageIdentity(3),
-      ),
-      routeSignature: _route(),
-      startedAt: DateTime.utc(2026, 8, 29),
-    );
-
-    final outcome = await coordinator.runCompaction(
-      request: requestFor(
-        sessionId: 'session-a',
-        timeline: _heavyTimeline(),
-      ),
-      force: true,
-    );
-
     expect(outcome?.status, CompactionStatus.failed);
-    expect(
-      outcome?.failureReason,
-      CompactionFailureReason.compactionInProgress,
-    );
-    expect(lifecycle, isEmpty);
+    expect(outcome?.failureReason, CompactionFailureReason.summarizationFailed);
+    expect(boundaries.findStartedForSession('session-a'), isNull);
+    expect(lifecycle.map((event) => event.status), [
+      CompactionStatus.started,
+      CompactionStatus.failed,
+    ]);
   });
+
+  test(
+    'concurrent claim returns compactionInProgress without second started event',
+    () async {
+      boundaries.tryClaim(
+        compactionId: 'cmp-in-flight',
+        sessionId: 'session-a',
+        trigger: CompactionTrigger.auto,
+        sourceRange: CompactionMessageRange(
+          start: const CompactionMessageIdentity(1),
+          end: const CompactionMessageIdentity(1),
+        ),
+        retainedTailRange: CompactionMessageRange(
+          start: const CompactionMessageIdentity(2),
+          end: const CompactionMessageIdentity(3),
+        ),
+        routeSignature: _route(),
+        startedAt: DateTime.utc(2026, 8, 29),
+      );
+
+      final outcome = await coordinator.runCompaction(
+        request: requestFor(sessionId: 'session-a', timeline: _heavyTimeline()),
+        force: true,
+      );
+
+      expect(outcome?.status, CompactionStatus.failed);
+      expect(
+        outcome?.failureReason,
+        CompactionFailureReason.compactionInProgress,
+      );
+      expect(lifecycle, isEmpty);
+    },
+  );
 
   test('session B boundary is unaffected by session A compaction', () async {
     sessions.replaceMessages(

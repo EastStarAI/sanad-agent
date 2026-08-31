@@ -152,6 +152,8 @@ Durable compaction lifecycle rows. Internal summaries are stored here, never as 
 | `context_window_tokens` | `INTEGER` | Nullable | Present when terminal metrics recorded |
 | `estimated_request_tokens_before` | `INTEGER` | Nullable | Pre-compaction estimate |
 | `estimated_request_tokens_after` | `INTEGER` | Nullable | Post-compaction estimate |
+| `before_measurement_kind` | `TEXT` | NOT NULL DEFAULT `estimated`, CHECK `estimated\|confirmed\|mixed` | Provenance of the pre-compaction pressure value |
+| `provider_confirmed_request_tokens_after` | `INTEGER` | Nullable, `>= 0` | First provider-reported input usage after the completed boundary became active; write-once reconciliation |
 | `retained_tail_tokens` | `INTEGER` | Nullable | Tail budget metric |
 | `duration_ms` | `INTEGER` | Nullable | Wall duration when terminal |
 | `internal_summary_json` | `TEXT` | Nullable | Redacted structured summary; **completed only** |

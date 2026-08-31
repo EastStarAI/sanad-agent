@@ -8,8 +8,10 @@ import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
+import 'package:sanad_agent/evolution/compaction/model_context_projection.dart';
 import 'package:sanad_agent/evolution/models/session_route_transition.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
+import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
 import 'package:sanad_agent/evolution/models/compaction_operation_record.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
@@ -64,7 +66,12 @@ class SessionQueryHandler {
         .where((checkpoint) => checkpoint.sessionId == sessionId)
         .map((checkpoint) => checkpoint.permissionPayload)
         .firstOrNull;
-    final messages = session?.messages ?? const <Message>[];
+    final persistedMessages = session == null
+        ? const <PersistedMessage>[]
+        : _sessionManager.getPersistedMessages(sessionId);
+    final messages = persistedMessages
+        .map((entry) => entry.message)
+        .toList(growable: false);
     final latestContextUsage = _latestContextUsage(sessionMetadata, messages);
     final requestId = event.payload['request_id'] as String?;
 
@@ -74,6 +81,7 @@ class SessionQueryHandler {
     var index = 0;
 
     final historyMessages = <Map<String, dynamic>>[];
+    final historyStartByMessageRowId = <int, int>{};
     Message? legacyFinalAssistant;
     for (final candidate in messages.reversed) {
       if (candidate.role == MessageRole.assistant &&
@@ -83,7 +91,15 @@ class SessionQueryHandler {
         break;
       }
     }
-    for (final message in messages) {
+    for (
+      var messageIndex = 0;
+      messageIndex < persistedMessages.length;
+      messageIndex++
+    ) {
+      final persistedMessage = persistedMessages[messageIndex];
+      final message = persistedMessage.message;
+      historyStartByMessageRowId[persistedMessage.rowId] =
+          historyMessages.length;
       final msgId = ++index;
       final msgTime = baseTime.add(Duration(seconds: msgId)).toIso8601String();
 
@@ -378,6 +394,41 @@ class SessionQueryHandler {
       }
     }
 
+    final compactionInsertionAnchors = <int>[];
+    for (final operation
+        in _compactionBoundaries?.listLifecycleForSession(sessionId) ??
+            const <CompactionOperationRecord>[]) {
+      final lifecycleRow = _compactionLifecycleHistoryRow(operation);
+      final tailEndRowId = operation.retainedTailRange.end.rowId;
+      final firstPostBoundary = persistedMessages
+          .where((entry) => entry.rowId > tailEndRowId)
+          .firstOrNull;
+      final rawInsertionIndex = firstPostBoundary == null
+          ? historyMessages.length - compactionInsertionAnchors.length
+          : historyStartByMessageRowId[firstPostBoundary.rowId];
+      late int insertionIndex;
+      if (rawInsertionIndex != null) {
+        insertionIndex =
+            rawInsertionIndex +
+            compactionInsertionAnchors
+                .where((anchor) => anchor <= rawInsertionIndex)
+                .length;
+        compactionInsertionAnchors.add(rawInsertionIndex);
+      } else {
+        insertionIndex = historyMessages.indexWhere((row) {
+          final createdAt = DateTime.tryParse(
+            row['created_at']?.toString() ?? '',
+          );
+          return createdAt != null &&
+              createdAt.isAfter(operation.startedAt.toUtc());
+        });
+        if (insertionIndex == -1) {
+          insertionIndex = historyMessages.length;
+        }
+      }
+      historyMessages.insert(insertionIndex, lifecycleRow);
+    }
+
     for (final transition
         in _routeTransitions?.findForSession(sessionId) ??
             const <SessionRouteTransition>[]) {
@@ -433,23 +484,6 @@ class SessionQueryHandler {
         }
       }
       historyMessages.insert(insertionIndex, transitionRow);
-    }
-
-    for (final operation
-        in _compactionBoundaries?.listLifecycleForSession(sessionId) ??
-            const <CompactionOperationRecord>[]) {
-      final lifecycleRow = _compactionLifecycleHistoryRow(operation);
-      var insertionIndex = historyMessages.indexWhere((row) {
-        final createdAt = DateTime.tryParse(
-          row['created_at']?.toString() ?? '',
-        );
-        return createdAt != null &&
-            createdAt.isAfter(operation.startedAt.toUtc());
-      });
-      if (insertionIndex == -1) {
-        insertionIndex = historyMessages.length;
-      }
-      historyMessages.insert(insertionIndex, lifecycleRow);
     }
 
     final inFlight = _sessionManager.getInFlightSnapshot(sessionId);
@@ -843,9 +877,13 @@ class SessionQueryHandler {
       CompactionStatus.failed => CanonicalEventTypes.contextCompactionFailed,
     };
     final metrics = operation.metrics;
+    final eventId = CompactionLifecycleEvent.eventIdFor(
+      operation.compactionId,
+      operation.status,
+    );
     return {
-      'id': operation.compactionId,
-      'event_id': operation.compactionId,
+      'id': eventId,
+      'event_id': eventId,
       'sender': 'system',
       'type': wireType,
       'session_id': operation.sessionId,
@@ -859,6 +897,10 @@ class SessionQueryHandler {
         'context_window_tokens': metrics.contextWindowTokens,
         'estimated_request_tokens_before': metrics.estimatedRequestTokensBefore,
         'estimated_request_tokens_after': metrics.estimatedRequestTokensAfter,
+        'before_measurement_kind': metrics.beforeMeasurementKind.wireValue,
+        if (metrics.providerConfirmedRequestTokensAfter != null)
+          'provider_confirmed_request_tokens_after':
+              metrics.providerConfirmedRequestTokensAfter,
         'retained_tail_tokens': metrics.retainedTailTokens,
         if (metrics.duration != null)
           'duration_ms': metrics.duration!.inMilliseconds,

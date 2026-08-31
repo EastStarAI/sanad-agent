@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
 
@@ -13,13 +14,16 @@ import 'request_pressure_snapshot.dart';
 /// stable schemas are not re-encoded every preflight, while different routes
 /// never share a cached value.
 class RequestPressureEvaluator {
+  static final Logger _logger = Logger('RequestPressureEvaluator');
+  static const int defaultOutputReservationTokens = 4096;
+  static const int defaultSafetyBufferTokens = 1024;
   final int outputReservationTokens;
   final int safetyBufferTokens;
   final Map<String, int> _toolSchemaTokenCache;
 
   RequestPressureEvaluator({
-    this.outputReservationTokens = 4096,
-    this.safetyBufferTokens = 1024,
+    this.outputReservationTokens = defaultOutputReservationTokens,
+    this.safetyBufferTokens = defaultSafetyBufferTokens,
     Map<String, int>? toolSchemaTokenCache,
   }) : _toolSchemaTokenCache = toolSchemaTokenCache ?? <String, int>{};
 
@@ -31,10 +35,13 @@ class RequestPressureEvaluator {
     required String systemPrompt,
     required String runtimeContext,
     required List<Map<String, dynamic>> toolSchemas,
-    int? confirmedInputTokens,
+    ConfirmedInputUsageBaseline? confirmedInputUsage,
+    int? wireEstimatedInputTokens,
+    double thresholdRatio = 1.0,
   }) {
-    final historyTokens =
-        CompactionTokenEstimator.estimateMessages(conversationMessages);
+    final historyTokens = CompactionTokenEstimator.estimateMessages(
+      conversationMessages,
+    );
     final systemTokens = CompactionTokenEstimator.estimateText(systemPrompt);
     final runtimeTokens = CompactionTokenEstimator.estimateText(runtimeContext);
     final schemaTokens = _cachedToolSchemaTokens(
@@ -51,12 +58,26 @@ class RequestPressureEvaluator {
       toolSchemaTokens: schemaTokens,
       mediaTokens: mediaTokens,
     );
-    final estimated = components.total;
-    final measurementKind = _measurementKind(
-      estimated: estimated,
-      confirmed: confirmedInputTokens,
+    final baselineDelta = _baselineDeltaTokens(
+      baseline: confirmedInputUsage,
+      routeSignature: routeSignature,
+      conversationMessages: conversationMessages,
+      systemPrompt: systemPrompt,
+      runtimeContext: runtimeContext,
+      toolSchemas: toolSchemas,
     );
-    return RequestPressureSnapshot(
+    final confirmedInputTokens = baselineDelta == null
+        ? null
+        : confirmedInputUsage!.inputTokens;
+    final estimated = baselineDelta == null
+        ? wireEstimatedInputTokens ?? components.total
+        : confirmedInputTokens! + baselineDelta;
+    final measurementKind = confirmedInputTokens == null
+        ? CompactionMeasurementKind.estimated
+        : baselineDelta == 0
+        ? CompactionMeasurementKind.confirmed
+        : CompactionMeasurementKind.mixed;
+    final snapshot = RequestPressureSnapshot(
       routeSignature: routeSignature,
       contextWindowTokens: contextWindowTokens,
       inputLimitTokens: inputLimitTokens,
@@ -66,7 +87,18 @@ class RequestPressureEvaluator {
       estimatedRequestTokens: estimated,
       confirmedInputTokens: confirmedInputTokens,
       measurementKind: measurementKind,
+      thresholdRatio: thresholdRatio,
     );
+    _logger.fine(
+      'request_pressure route=${routeSignature.providerInstanceId}/'
+      '${routeSignature.modelId}/${routeSignature.protocol} '
+      'measurement=${measurementKind.wireValue} '
+      'history=${components.historyTokens} system=${components.systemPromptTokens} '
+      'runtime=${components.runtimeContextTokens} tools=${components.toolSchemaTokens} '
+      'media=${components.mediaTokens} reasoning=${components.reasoningTokens} '
+      'replay=${components.providerReplayTokens} total=${snapshot.estimatedRequestTokens}',
+    );
+    return snapshot;
   }
 
   int _cachedToolSchemaTokens({
@@ -95,16 +127,32 @@ class RequestPressureEvaluator {
     ).toString();
   }
 
-  CompactionMeasurementKind _measurementKind({
-    required int estimated,
-    required int? confirmed,
+  int? _baselineDeltaTokens({
+    required ConfirmedInputUsageBaseline? baseline,
+    required RouteSignature routeSignature,
+    required List<Message> conversationMessages,
+    required String systemPrompt,
+    required String runtimeContext,
+    required List<Map<String, dynamic>> toolSchemas,
   }) {
-    if (confirmed == null) {
-      return CompactionMeasurementKind.estimated;
+    if (baseline == null ||
+        baseline.routeSignature != routeSignature ||
+        baseline.systemPrompt != systemPrompt ||
+        baseline.runtimeContext != runtimeContext ||
+        jsonEncode(baseline.toolSchemas) != jsonEncode(toolSchemas) ||
+        conversationMessages.length < baseline.conversationMessages.length) {
+      return null;
     }
-    if (confirmed == estimated) {
-      return CompactionMeasurementKind.confirmed;
+    for (var index = 0; index < baseline.conversationMessages.length; index++) {
+      if (jsonEncode(baseline.conversationMessages[index].toJson()) !=
+          jsonEncode(conversationMessages[index].toJson())) {
+        return null;
+      }
     }
-    return CompactionMeasurementKind.mixed;
+    final suffix = conversationMessages.skip(
+      baseline.conversationMessages.length,
+    );
+    return CompactionTokenEstimator.estimateMessages(suffix) +
+        CompactionTokenEstimator.estimateMediaTokens(suffix);
   }
 }

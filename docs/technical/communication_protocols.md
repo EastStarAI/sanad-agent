@@ -641,7 +641,7 @@ Every `device_event` carries a canonical delivery contract alongside the existin
 External families (`telegram`/`whatsapp`/`cli`) use `origin` delivery and never enter `sanad_client` synchronization, including for runtime suspension prompts. A `tool_permission_request` fans out only when the captured run origin belongs to `sanad_client`; local, cloud, web, and mobile Sanad Client transports are one logical platform family.
 
 ### 6.4. Event Identity & Deduplication
-- `event_id` is minted once at event creation as a UUID-backed identifier and preserved across all local/cloud copies. It is NOT regenerated per transport, NOT derived from content/timestamp alone, and NOT reused.
+- `event_id` is minted once at event creation and preserved across all local/cloud copies. It is NOT regenerated per transport, NOT derived from content/timestamp alone, and NOT reused. Most producers use UUID-backed ids; durable lifecycle producers may use a deterministic opaque transition id when history must reconstruct the exact live identity. Compaction uses `context_compaction:<compaction_id>:<status>` while retaining one logical `compaction_id` for tile folding.
 - The Flutter client currently applies a temporary mitigation that deduplicates by `event_id + transport` via a shared `EventDeduplicator` injected into both transports by `DeviceConnectionCoordinator`. This still blocks repeated deliveries on the same transport while allowing one cloud copy and one local copy of the same logical event.
 - Incoming `device_event` debug logging happens after this check, so a dropped transport copy is not reported as a second applied event.
 - The dedupe cache is bounded (LRU + age), in-memory only, independent of the durable conversation log, and cleared on full logout — NOT on a same-device transport switch.
@@ -692,3 +692,14 @@ then `stopped`, then the final `session.execution_state_changed` snapshot for
 `stopped`; only snapshot publication is deferred to preserve wire order.
 
 `get_session_history` emits these same identities and ordering. Legacy rows without a model-step identity use deterministic message/segment order. Canonical history is consumed directly and is never converted through a legacy model that requires numeric IDs; route-transition UUIDs therefore remain valid.
+
+Compaction history is causally anchored after the durable retained-tail end row
+and before the first later canonical message. Its real lifecycle timestamps are
+display metadata, not the merge key, because ordinary history rows may carry
+synthetic timestamps. A terminal `completed` or `failed` transition is
+immutable for its logical `compaction_id`. A completed transition may be
+republished with the same deterministic `event_id` exactly once when
+`provider_confirmed_request_tokens_after` becomes available; status, causal
+position, ranges, estimate fields, and summary do not change. Payloads expose
+`before_measurement_kind` and keep the confirmed after-value distinct from
+`estimated_request_tokens_after`.

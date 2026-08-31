@@ -120,10 +120,70 @@ void main() {
       SessionHistoryRevisionRepository(reopened),
     );
 
-    final lifecycle = reopenedBoundaries.listLifecycleForSession('session-restart');
+    final lifecycle = reopenedBoundaries.listLifecycleForSession(
+      'session-restart',
+    );
     expect(lifecycle, hasLength(1));
     expect(lifecycle.single.status, CompactionStatus.completed);
     expect(lifecycle.single.compactionId, 'cmp-restart');
     expect(lifecycle.single.internalSummary?.currentGoal, 'Goal');
+  });
+
+  test('reopen converts an unactivated started row to interrupted failure', () {
+    final state = AgentStateDatabase.atPath(tempDir.path);
+    final sessions = SessionDB.fromState(state);
+    final boundaries = CompactionBoundaryRepository(
+      state,
+      SessionHistoryRevisionRepository(state),
+    );
+    final now = DateTime.utc(2026, 8, 29);
+    sessions.saveSession(
+      SessionState(
+        sessionId: 'session-restart',
+        model: 'gpt-4o',
+        createdAt: now,
+        updatedAt: now,
+        lastUserMessageAt: now,
+      ),
+    );
+    sessions.replaceMessages('session-restart', [
+      Message(role: MessageRole.user, content: 'one'),
+      Message(role: MessageRole.assistant, content: 'two'),
+      Message(role: MessageRole.user, content: 'three'),
+    ]);
+    boundaries.tryClaim(
+      compactionId: 'cmp-interrupted-restart',
+      sessionId: 'session-restart',
+      trigger: CompactionTrigger.auto,
+      sourceRange: CompactionMessageRange(
+        start: const CompactionMessageIdentity(1),
+        end: const CompactionMessageIdentity(1),
+      ),
+      retainedTailRange: CompactionMessageRange(
+        start: const CompactionMessageIdentity(2),
+        end: const CompactionMessageIdentity(3),
+      ),
+      routeSignature: _route(),
+      startedAt: now,
+    );
+    state.dispose();
+
+    final reopened = AgentStateDatabase.atPath(tempDir.path);
+    addTearDown(reopened.dispose);
+    final reopenedBoundaries = CompactionBoundaryRepository(
+      reopened,
+      SessionHistoryRevisionRepository(reopened),
+    );
+    reopenedBoundaries.recoverInterruptedStartedOperations(
+      completedAt: now.add(const Duration(seconds: 1)),
+    );
+
+    final row = reopenedBoundaries.findById('cmp-interrupted-restart');
+    expect(row?.status, CompactionStatus.failed);
+    expect(row?.failureReason, CompactionFailureReason.interrupted);
+    expect(
+      reopenedBoundaries.findLatestCompletedForSession('session-restart'),
+      isNull,
+    );
   });
 }

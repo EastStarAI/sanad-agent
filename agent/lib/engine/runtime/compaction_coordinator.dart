@@ -1,4 +1,5 @@
 import 'package:meta/meta.dart';
+import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/context/context.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_activation_service.dart';
@@ -28,6 +29,11 @@ class CompactionLifecycleEvent {
     required this.startedAt,
     this.completedAt,
   });
+
+  String get eventId => eventIdFor(compactionId, status);
+
+  static String eventIdFor(String compactionId, CompactionStatus status) =>
+      'context_compaction:$compactionId:${status.wireValue}';
 }
 
 /// Session-scoped compaction orchestration (Plan 53d).
@@ -44,12 +50,61 @@ class CompactionCoordinator {
     required CompactionActivationService activation,
     required ModelProjectionBuilder projectionBuilder,
     this.onLifecycleEvent,
-  })  : _engine = engine,
-        _boundaries = boundaries,
-        _activation = activation,
-        _projectionBuilder = projectionBuilder;
+  }) : _engine = engine,
+       _boundaries = boundaries,
+       _activation = activation,
+       _projectionBuilder = projectionBuilder;
 
   ModelProjectionBuilder get projectionBuilder => _projectionBuilder;
+
+  /// Reconciles the immutable compaction estimate with the first provider
+  /// response that used its projection, then republishes the same completed
+  /// logical event so live clients advance from estimated to confirmed.
+  bool reconcileProviderUsage({
+    required String compactionId,
+    required int inputTokens,
+  }) {
+    final record = _boundaries.reconcileProviderUsage(
+      compactionId: compactionId,
+      inputTokens: inputTokens,
+    );
+    if (record == null ||
+        record.metrics == null ||
+        record.completedAt == null) {
+      return false;
+    }
+    _emit(
+      CompactionLifecycleEvent(
+        compactionId: record.compactionId,
+        sessionId: record.sessionId,
+        trigger: record.trigger,
+        status: CompactionStatus.completed,
+        metrics: record.metrics,
+        startedAt: record.startedAt,
+        completedAt: record.completedAt,
+      ),
+    );
+    return true;
+  }
+
+  bool reconcileLatestProviderUsage({
+    required String sessionId,
+    required RouteSignature routeSignature,
+    required int inputTokens,
+  }) {
+    for (final record in _boundaries.listCompletedForSession(sessionId)) {
+      final metrics = record.metrics;
+      if (record.routeSignature == routeSignature &&
+          metrics != null &&
+          metrics.providerConfirmedRequestTokensAfter == null) {
+        return reconcileProviderUsage(
+          compactionId: record.compactionId,
+          inputTokens: inputTokens,
+        );
+      }
+    }
+    return false;
+  }
 
   Future<CompactionOutcome?> runCompaction({
     required CompactionEngineRequest request,
@@ -66,50 +121,28 @@ class CompactionCoordinator {
       routeSignature: request.routeSignature,
       contextWindowTokens: request.contextWindowTokens,
       inputLimitTokens: request.inputLimitTokens,
-      confirmedInputTokens: request.confirmedInputTokens,
+      confirmedInputUsage: request.confirmedInputUsage,
+      preflightPressure: request.preflightPressure,
       timeline: request.timeline,
       systemPrompt: request.systemPrompt,
       runtimeContext: request.runtimeContext,
       toolSchemas: request.toolSchemas,
       previousSummary: request.previousSummary,
+      previousSourceRange: request.previousSourceRange,
       targetRequestTokens: request.targetRequestTokens,
+      thresholdRatio: request.thresholdRatio,
     );
 
-    if (!force) {
-      final pressure = _engine.measurePressure(engineRequest);
-      if (!pressure.exceedsThreshold &&
-          pressure.estimatedRequestTokens <= engineRequest.targetRequestTokens) {
-        return null;
-      }
-    }
-
-    CompactionCandidate candidate;
-    try {
-      final built = await _engine.buildCandidate(engineRequest, force: force);
-      if (built == null) {
-        return null;
-      }
-      candidate = built;
-    } on CompactionEngineFailure catch (error) {
-      if (force &&
-          request.trigger == CompactionTrigger.manual &&
-          error.reason == CompactionFailureReason.projectionStillOverBudget) {
-        return null;
-      }
-      return CompactionOutcome.failed(
-        compactionId: compactionId,
-        trigger: request.trigger,
-        failureReason: error.reason,
-      );
-    }
+    final selection = _engine.prepareSelection(engineRequest, force: force);
+    if (selection == null) return null;
 
     final startedAt = DateTime.now().toUtc();
     final claim = _boundaries.tryClaim(
       compactionId: compactionId,
       sessionId: request.sessionId,
       trigger: request.trigger,
-      sourceRange: candidate.sourceRange,
-      retainedTailRange: candidate.retainedTailRange,
+      sourceRange: selection.sourceRange,
+      retainedTailRange: selection.retainedTailRange,
       routeSignature: request.routeSignature,
       startedAt: startedAt,
     );
@@ -117,7 +150,8 @@ class CompactionCoordinator {
       return CompactionOutcome.failed(
         compactionId: compactionId,
         trigger: request.trigger,
-        failureReason: claim.outcome == CompactionClaimOutcome.compactionInProgress
+        failureReason:
+            claim.outcome == CompactionClaimOutcome.compactionInProgress
             ? CompactionFailureReason.compactionInProgress
             : CompactionFailureReason.claimLost,
       );
@@ -132,6 +166,38 @@ class CompactionCoordinator {
         startedAt: startedAt,
       ),
     );
+
+    CompactionCandidate candidate;
+    try {
+      final built = await _engine.buildCandidate(
+        engineRequest,
+        force: force,
+        preparedSelection: selection,
+      );
+      if (built == null) {
+        return _failClaimed(
+          request: request,
+          compactionId: compactionId,
+          startedAt: startedAt,
+          failureReason: CompactionFailureReason.summarizationFailed,
+        );
+      }
+      candidate = built;
+    } on CompactionEngineFailure catch (error) {
+      return _failClaimed(
+        request: request,
+        compactionId: compactionId,
+        failureReason: error.reason,
+        startedAt: startedAt,
+      );
+    } catch (_) {
+      return _failClaimed(
+        request: request,
+        compactionId: compactionId,
+        failureReason: CompactionFailureReason.summarizationFailed,
+        startedAt: startedAt,
+      );
+    }
 
     final activation = _activation.activateCandidate(
       candidate: candidate.copyWithCompactionId(compactionId),
@@ -178,6 +244,36 @@ class CompactionCoordinator {
 
   void _emit(CompactionLifecycleEvent event) {
     onLifecycleEvent?.call(event);
+  }
+
+  CompactionOutcome _failClaimed({
+    required CompactionEngineRequest request,
+    required String compactionId,
+    required DateTime startedAt,
+    required CompactionFailureReason failureReason,
+  }) {
+    final completedAt = DateTime.now().toUtc();
+    _activation.failOperation(
+      compactionId: compactionId,
+      failureReason: failureReason,
+      completedAt: completedAt,
+    );
+    _emit(
+      CompactionLifecycleEvent(
+        compactionId: compactionId,
+        sessionId: request.sessionId,
+        trigger: request.trigger,
+        status: CompactionStatus.failed,
+        failureReason: failureReason,
+        startedAt: startedAt,
+        completedAt: completedAt,
+      ),
+    );
+    return CompactionOutcome.failed(
+      compactionId: compactionId,
+      trigger: request.trigger,
+      failureReason: failureReason,
+    );
   }
 }
 

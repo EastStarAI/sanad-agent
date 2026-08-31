@@ -46,35 +46,62 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
         child: InkWell(
           onTap: () => _tooltipKey.currentState?.ensureTooltipVisible(),
+          onFocusChange: (focused) {
+            if (focused) {
+              _tooltipKey.currentState?.ensureTooltipVisible();
+            } else {
+              Tooltip.dismissAllToolTips();
+            }
+          },
           customBorder: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(8),
           ),
           child: Tooltip(
             key: _tooltipKey,
             message: _detailText(snapshot),
-            child: Row(
-              children: [
-                Expanded(child: Divider(color: colorScheme.outlineVariant)),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      indicator,
-                      const SizedBox(width: 8),
-                      Text(
-                        snapshot.timelineLabel,
-                        style: GoogleFonts.inter(
-                          fontSize: 12,
-                          color: colorScheme.onSurfaceVariant,
-                          fontWeight: FontWeight.w500,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: 44),
+              child: LayoutBuilder(
+                builder: (context, constraints) => Row(
+                  children: [
+                    Expanded(
+                      child: Divider(color: colorScheme.outlineVariant),
+                    ),
+                    ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: constraints.maxWidth * 0.75,
+                      ),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            indicator,
+                            const SizedBox(width: 8),
+                            Flexible(
+                              child: Text(
+                                snapshot.timelineLabel,
+                                maxLines: 2,
+                                textAlign: TextAlign.center,
+                                overflow: TextOverflow.ellipsis,
+                                style: GoogleFonts.inter(
+                                  fontSize: 12,
+                                  color: colorScheme.onSurfaceVariant,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
+                    ),
+                    Expanded(
+                      child: Divider(color: colorScheme.outlineVariant),
+                    ),
+                  ],
                 ),
-                Expanded(child: Divider(color: colorScheme.outlineVariant)),
-              ],
+              ),
             ),
           ),
         ),
@@ -84,7 +111,6 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
 
   String _detailText(CompactionEventSnapshot snapshot) {
     final lines = <String>[
-      'Type: ${snapshot.trigger == CompactionTriggerKind.manual ? 'Manual' : 'Auto'}',
       'Trigger: ${snapshot.detailTriggerLabel}',
       'Status: ${snapshot.status.name}',
     ];
@@ -92,17 +118,60 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
       lines.add('Context window: ${snapshot.contextWindowTokens}');
     }
     if (snapshot.estimatedRequestTokensBefore != null) {
-      lines.add('Before: ${snapshot.estimatedRequestTokensBefore} tokens');
+      final measurement = switch (snapshot.beforeMeasurementKind) {
+        'confirmed' => 'Provider confirmed before',
+        'mixed' => 'Confirmed + estimated tail before',
+        _ => 'Estimated before',
+      };
+      lines.add(
+        _tokenLine(
+          measurement,
+          snapshot.estimatedRequestTokensBefore!,
+          snapshot.contextWindowTokens,
+        ),
+      );
     }
-    if (snapshot.estimatedRequestTokensAfter != null) {
-      lines.add('After: ${snapshot.estimatedRequestTokensAfter} tokens');
+    if (snapshot.providerConfirmedRequestTokensAfter != null) {
+      lines.add(
+        _tokenLine(
+          'Provider confirmed after',
+          snapshot.providerConfirmedRequestTokensAfter!,
+          snapshot.contextWindowTokens,
+        ),
+      );
     }
-    final reclaimed = snapshot.reclaimedTokens;
-    if (reclaimed != null) {
-      lines.add('Reclaimed: $reclaimed tokens');
+    if (snapshot.estimatedRequestTokensAfter != null && snapshot.providerConfirmedRequestTokensAfter == null) {
+      lines.add(
+        _tokenLine(
+          'Estimated after',
+          snapshot.estimatedRequestTokensAfter!,
+          snapshot.contextWindowTokens,
+        ),
+      );
+    }
+    final before = snapshot.estimatedRequestTokensBefore;
+    final confirmedAfter = snapshot.providerConfirmedRequestTokensAfter;
+    final reclaimed = before != null && confirmedAfter != null
+        ? (before - confirmedAfter).clamp(0, before).toInt()
+        : snapshot.reclaimedTokens;
+    if (reclaimed != null && before != null) {
+      final reclaimedLabel = snapshot.beforeMeasurementKind == 'confirmed' && confirmedAfter != null
+          ? 'Provider confirmed reclaimed'
+          : 'Estimated reclaimed';
+      lines.add(
+        '$reclaimedLabel: $reclaimed tokens (${_percentage(reclaimed, before)})',
+      );
     }
     if (snapshot.retainedTailTokens != null) {
       lines.add('Retained tail: ${snapshot.retainedTailTokens} tokens');
+    }
+    if (snapshot.startedAt != null) {
+      lines.add('Started: ${snapshot.startedAt!.toUtc().toIso8601String()}');
+    }
+    if (snapshot.completedAt != null) {
+      lines.add(
+        'Completed: ${snapshot.completedAt!.toUtc().toIso8601String()}',
+      );
     }
     if (snapshot.durationMs != null) {
       lines.add('Duration: ${snapshot.durationMs} ms');
@@ -111,5 +180,15 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
       lines.add('Failure: ${snapshot.failureReason}');
     }
     return lines.join('\n');
+  }
+
+  String _tokenLine(String label, int tokens, int? contextWindowTokens) {
+    final window = contextWindowTokens;
+    if (window == null || window <= 0) return '$label: $tokens tokens';
+    return '$label: $tokens tokens (${_percentage(tokens, window)})';
+  }
+
+  String _percentage(int numerator, int denominator) {
+    return '${(numerator / denominator * 100).toStringAsFixed(1)}%';
   }
 }

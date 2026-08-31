@@ -20,13 +20,16 @@ class CompactionEngineRequest {
   final RouteSignature routeSignature;
   final int contextWindowTokens;
   final int? inputLimitTokens;
-  final int? confirmedInputTokens;
+  final ConfirmedInputUsageBaseline? confirmedInputUsage;
+  final RequestPressureSnapshot? preflightPressure;
   final List<IndexedConversationMessage> timeline;
   final String systemPrompt;
   final String runtimeContext;
   final List<Map<String, dynamic>> toolSchemas;
   final CompactionInternalSummary? previousSummary;
+  final CompactionMessageRange? previousSourceRange;
   final int targetRequestTokens;
+  final double thresholdRatio;
 
   const CompactionEngineRequest({
     required this.compactionId,
@@ -36,13 +39,16 @@ class CompactionEngineRequest {
     required this.routeSignature,
     required this.contextWindowTokens,
     this.inputLimitTokens,
-    this.confirmedInputTokens,
+    this.confirmedInputUsage,
+    this.preflightPressure,
     required this.timeline,
     required this.systemPrompt,
     required this.runtimeContext,
     required this.toolSchemas,
     this.previousSummary,
+    this.previousSourceRange,
     required this.targetRequestTokens,
+    this.thresholdRatio = 0.80,
   });
 }
 
@@ -60,14 +66,16 @@ class ContextCompactionEngine {
     CompactionToolPruner? toolPruner,
     CompactionContinuityValidator? continuityValidator,
     CompactionSummarizer? summarizer,
-  })  : _pressureEvaluator = pressureEvaluator ?? RequestPressureEvaluator(),
-        _tailSelector = tailSelector ?? const CompactionTailSelector(),
-        _toolPruner = toolPruner ?? const CompactionToolPruner(),
-        _continuityValidator =
-            continuityValidator ?? CompactionContinuityValidator(),
-        _summarizer = summarizer ?? StructuredCompactionSummarizer();
+  }) : _pressureEvaluator = pressureEvaluator ?? RequestPressureEvaluator(),
+       _tailSelector = tailSelector ?? const CompactionTailSelector(),
+       _toolPruner = toolPruner ?? const CompactionToolPruner(),
+       _continuityValidator =
+           continuityValidator ?? CompactionContinuityValidator(),
+       _summarizer = summarizer ?? StructuredCompactionSummarizer();
 
   RequestPressureSnapshot measurePressure(CompactionEngineRequest request) {
+    final preflight = request.preflightPressure;
+    if (preflight != null) return preflight;
     return _pressureEvaluator.evaluate(
       routeSignature: request.routeSignature,
       contextWindowTokens: request.contextWindowTokens,
@@ -76,26 +84,40 @@ class ContextCompactionEngine {
       systemPrompt: request.systemPrompt,
       runtimeContext: request.runtimeContext,
       toolSchemas: request.toolSchemas,
-      confirmedInputTokens: request.confirmedInputTokens,
+      confirmedInputUsage: request.confirmedInputUsage,
+      thresholdRatio: request.thresholdRatio,
+    );
+  }
+
+  CompactionRangeSelection? prepareSelection(
+    CompactionEngineRequest request, {
+    bool force = false,
+  }) {
+    final pressure = measurePressure(request);
+    if (!force && !pressure.exceedsThreshold) {
+      return null;
+    }
+    final progressCap = (pressure.components.historyTokens * 0.50).floor();
+    final tailBudget =
+        progressCap > 0 && progressCap < request.targetRequestTokens
+        ? progressCap
+        : request.targetRequestTokens;
+    return _tailSelector.select(
+      timeline: request.timeline,
+      tailTokenBudget: tailBudget,
+      previousSourceEnd: request.previousSourceRange,
     );
   }
 
   Future<CompactionCandidate?> buildCandidate(
     CompactionEngineRequest request, {
     bool force = false,
+    CompactionRangeSelection? preparedSelection,
   }) async {
     final pressure = measurePressure(request);
-    if (!force &&
-        !pressure.exceedsThreshold &&
-        pressure.estimatedRequestTokens <= request.targetRequestTokens) {
-      return null;
-    }
-
-    final tailBudget = (request.targetRequestTokens * 0.35).round();
-    final selection = _tailSelector.select(
-      timeline: request.timeline,
-      tailTokenBudget: tailBudget,
-    );
+    final selection =
+        preparedSelection ?? prepareSelection(request, force: force);
+    if (selection == null) return null;
     final prunedSource = _toolPruner.pruneSourceMessages(
       selection.sourceMessages,
       protectedTailStartRowId: selection.retainedTailRange.start.rowId,
@@ -119,8 +141,9 @@ class ContextCompactionEngine {
     }
     if (request.previousSummary != null) {
       summary = CompactionInternalSummary(
-        previousSummaryAnchor:
-            CompactionSummaryPrompt.formatSummary(request.previousSummary!),
+        previousSummaryAnchor: CompactionSummaryPrompt.formatSummary(
+          request.previousSummary!,
+        ),
         currentGoal: summary.currentGoal,
         successCriteria: summary.successCriteria,
         constraints: summary.constraints,
@@ -173,45 +196,64 @@ class ContextCompactionEngine {
       projectedSummary,
       ...projectedTail.map((entry) => entry.message),
     ];
-    var afterTokens = _pressureEvaluator.evaluate(
-      routeSignature: request.routeSignature,
-      contextWindowTokens: request.contextWindowTokens,
-      inputLimitTokens: request.inputLimitTokens,
-      conversationMessages: projectedMessages,
-      systemPrompt: request.systemPrompt,
-      runtimeContext: request.runtimeContext,
-      toolSchemas: request.toolSchemas,
-      confirmedInputTokens: request.confirmedInputTokens,
-    ).estimatedRequestTokens;
+    var afterTokens = _pressureEvaluator
+        .evaluate(
+          routeSignature: request.routeSignature,
+          contextWindowTokens: request.contextWindowTokens,
+          inputLimitTokens: request.inputLimitTokens,
+          conversationMessages: projectedMessages,
+          systemPrompt: request.systemPrompt,
+          runtimeContext: request.runtimeContext,
+          toolSchemas: request.toolSchemas,
+          confirmedInputUsage: request.confirmedInputUsage,
+        )
+        .estimatedRequestTokens;
 
     // C1: a single oversized recent tool/media payload must still produce a
     // measurable candidate via projection-only pruning (canonical rows untouched).
-    if (afterTokens > request.targetRequestTokens) {
+    final effectiveInputBudget = pressure.effectiveInputBudget;
+    var retainedTailTokens = CompactionTokenEstimator.estimateMessages(
+      projectedTail.map((entry) => entry.message),
+    );
+    if (afterTokens > effectiveInputBudget ||
+        retainedTailTokens > request.targetRequestTokens) {
       projectedTail = _toolPruner.pruneOversizedForProjection(projectedTail);
       projectedMessages = <Message>[
         projectedSummary,
         ...projectedTail.map((entry) => entry.message),
       ];
-      afterTokens = _pressureEvaluator.evaluate(
-        routeSignature: request.routeSignature,
-        contextWindowTokens: request.contextWindowTokens,
-        inputLimitTokens: request.inputLimitTokens,
-        conversationMessages: projectedMessages,
-        systemPrompt: request.systemPrompt,
-        runtimeContext: request.runtimeContext,
-        toolSchemas: request.toolSchemas,
-        confirmedInputTokens: request.confirmedInputTokens,
-      ).estimatedRequestTokens;
+      afterTokens = _pressureEvaluator
+          .evaluate(
+            routeSignature: request.routeSignature,
+            contextWindowTokens: request.contextWindowTokens,
+            inputLimitTokens: request.inputLimitTokens,
+            conversationMessages: projectedMessages,
+            systemPrompt: request.systemPrompt,
+            runtimeContext: request.runtimeContext,
+            toolSchemas: request.toolSchemas,
+            confirmedInputUsage: request.confirmedInputUsage,
+          )
+          .estimatedRequestTokens;
+      retainedTailTokens = CompactionTokenEstimator.estimateMessages(
+        projectedTail.map((entry) => entry.message),
+      );
     }
 
-    if (afterTokens > request.targetRequestTokens) {
+    if (afterTokens > effectiveInputBudget ||
+        retainedTailTokens > request.targetRequestTokens) {
       throw CompactionEngineFailure(
         CompactionFailureReason.projectionStillOverBudget,
         estimatedAfterTokens: afterTokens,
       );
     }
 
-    final beforeTokens = pressure.estimatedRequestTokens;
+    var beforeTokens = pressure.estimatedRequestTokens;
+    if (request.trigger == CompactionTrigger.overflow &&
+        beforeTokens <= effectiveInputBudget) {
+      // A provider overflow is authoritative evidence that the request crossed
+      // the usable input budget even when the fallback estimate was low.
+      beforeTokens = effectiveInputBudget + 1;
+    }
     if (afterTokens >= beforeTokens) {
       throw CompactionEngineFailure(
         CompactionFailureReason.projectionStillOverBudget,
@@ -232,9 +274,8 @@ class ContextCompactionEngine {
         contextWindowTokens: request.contextWindowTokens,
         estimatedRequestTokensBefore: beforeTokens,
         estimatedRequestTokensAfter: afterTokens,
-        retainedTailTokens: CompactionTokenEstimator.estimateMessages(
-          projectedTail.map((entry) => entry.message),
-        ),
+        beforeMeasurementKind: pressure.measurementKind,
+        retainedTailTokens: retainedTailTokens,
       ),
       routeSignature: request.routeSignature,
     );

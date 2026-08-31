@@ -136,6 +136,15 @@ file_budget: 14
 ## 10. سجل التقدم
 
 ```text
+Date: 2026-08-31 (independent remediation review)
+Gate/status: B0–B3 passed; B4 repaired and re-closed
+Evidence: B1 7/7, B2 8/8, B3 4/4, combined persistence/projection suite 24/24, format check and analyzer clean
+Root causes verified: `SessionDB.replaceMessages` previously recreated every row and invalidated durable range identities on ordinary append; projection eligibility previously accepted retained tool results without their owning assistant call. The current regression tests prove stable-prefix row preservation and canonical fallback for unsafe persisted boundaries.
+Repair: formatted nine 53b-owned production/test files that failed the static format gate; no semantic rewrite of the existing user fixes
+Next: Task 53c Gate C0
+```
+
+```text
 Date: 2026-08-29
 Gate/status: 53b complete (B0–B4) — gate-by-gate review re-verified + B4 doc fixes
 Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction
@@ -158,5 +167,3 @@ B1–B4: repository/migration/projection/activation present; focused suite 23/23
 Findings: no fixes required; Anthropic/OpenAI wire maps omit Message.metadata (summary marker internal-only)
 Next: Task 53c Gate C0
 ```
-
-

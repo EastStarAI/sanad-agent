@@ -55,6 +55,11 @@ abstract final class CompactionOperationCodec {
         estimatedRequestTokensBefore: before,
         estimatedRequestTokensAfter:
             row['estimated_request_tokens_after'] as int,
+        beforeMeasurementKind: CompactionMeasurementKind.values.firstWhere(
+          (value) => value.wireValue == row['before_measurement_kind'],
+        ),
+        providerConfirmedRequestTokensAfter:
+            row['provider_confirmed_request_tokens_after'] as int?,
         retainedTailTokens: row['retained_tail_tokens'] as int,
         duration: _durationFromMs(row['duration_ms'] as int?),
       );

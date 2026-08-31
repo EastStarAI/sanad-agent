@@ -22,6 +22,7 @@ This contract applies to `agent/lib/evolution/`.
 - Canonical `messages` rows are never deleted or replaced by compaction; model projection reads the latest eligible completed boundary plus live message rows.
 - `messages.id` is the durable identity for source/tail ranges; `sessions.history_revision` (B1) provides CAS for snapshot activation.
 - `CompactionBoundaryRepository` owns claim, terminal transition, and latest-boundary reads; see `docs/technical/context_compaction.md` §8.
+- Completed boundary identity, ranges, summary, route, and estimates are immutable. The repository alone may reconcile `provider_confirmed_request_tokens_after` exactly once from null to the first same-route provider response; later responses are no-ops.
 - `SessionHistoryRevisionRepository` bumps `sessions.history_revision` on canonical message insert/replace; compaction activation CAS depends on it.
 - `ModelProjectionBuilder` (B2) in `agent/lib/evolution/compaction/` builds ephemeral provider conversation payloads: one projected user summary anchor, verbatim retained tail, and post-boundary messages. System/runtime context stays in `AgentContextAssembler`.
 - `CompactionActivationService` (B3) completes or fails a started operation atomically, bumps projection revision only after successful commit, and publishes one boundary change for interface consumers; it does not drain queued work.

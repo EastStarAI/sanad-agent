@@ -17,16 +17,23 @@ class StructuredCompactionSummarizer implements CompactionSummarizer {
         prompt.contains('"name": "tool"')) {
       throw StateError('compaction summarizer must not execute tools');
     }
-    final goalMatch =
-        RegExp(r'goal:\s*(.+)', caseSensitive: false).firstMatch(prompt);
-    final pathMatch =
-        RegExp(r'path:\s*(.+)', caseSensitive: false).firstMatch(prompt);
-    final blockerMatch =
-        RegExp(r'blocker:\s*(.+)', caseSensitive: false).firstMatch(prompt);
+    final goalMatch = RegExp(
+      r'goal:\s*(.+)',
+      caseSensitive: false,
+    ).firstMatch(prompt);
+    final pathMatch = RegExp(
+      r'path:\s*(.+)',
+      caseSensitive: false,
+    ).firstMatch(prompt);
+    final blockerMatch = RegExp(
+      r'blocker:\s*(.+)',
+      caseSensitive: false,
+    ).firstMatch(prompt);
     final goal = goalMatch?.group(1)?.trim() ?? 'Continue current task';
     final path = pathMatch?.group(1)?.trim();
     final blocker = blockerMatch?.group(1)?.trim() ?? 'None recorded.';
-    final body = '''
+    final body =
+        '''
 Current Goal and Success Criteria: $goal
 Active Constraints and User Preferences: Preserve existing user preferences.
 Completed Work and Verified Results: Prior work captured in checkpoint.

@@ -166,6 +166,24 @@ file_budget: 14
 ## 12. سجل التقدم
 
 ```text
+Date: 2026-08-31 (independent remediation review)
+Gate/status: C0 reopened for provider-usage drift
+Regression: provider reported 7,500 input tokens while RequestPressureEvaluator returned 8 and left the trusted value informational; the focused test failed with expected 7,500 / actual 8
+Repair: bind confirmed input usage to exact route + measured request material, use it as the pressure baseline, estimate only an appended suffix, and invalidate it on route/model/prompt/schema/measured-prefix changes
+Verification: format/analyzer clean; engine + preflight suites 22/22 passed, including exact-baseline parity, suffix-only growth, invalidation, and real preflight consumption
+Next: Gate C1
+```
+
+```text
+Date: 2026-08-31 (independent remediation review, closure)
+Gate/status: C0 repaired; C1–C4 passed; C5 format repair completed; 53c complete
+Evidence: provider-baseline regression first failed expected 7,500 / actual 8; format/analyzer clean; engine + fixture + preflight suites 27/27; no SessionDB/interfaces/Flutter imports under engine/context or engine/compaction
+Additional coverage: route/prefix invalidation, suffix-only estimation, full parallel-tool batch retention, provider-state-preserving argument pruning, bounded/redacted summary passes, reasoning stripping, one repair attempt, no-progress rejection, and three repeated compactions
+Root cause: confirmed provider input usage was stored as metadata but `estimatedRequestTokens` and every preflight branch continued to use a full chars/4 reconstruction. The fixed baseline is route/material-bound and participates directly in admission.
+Next: Task 53d Gate D0
+```
+
+```text
 Date: 2026-08-29
 Gate/status: 53c complete (C0–C5) — gate-by-gate review closed with C0–C4 fixes
 Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction

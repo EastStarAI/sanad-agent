@@ -328,8 +328,8 @@ class BaseOpenAIAdapter implements LLMAdapter {
   @override
   Future<int> getContextLimit([String? modelOverride]) async {
     final resolvedModel = _resolveModel(modelOverride);
-
-    if (config.contextLimit != 4000) return config.contextLimit;
+    final configuredLimit = config.contextModelLimit(resolvedModel);
+    if (configuredLimit != null) return configuredLimit;
 
     // 1. LM Studio local probe (reference-style)
     if (profile.name == 'lm-studio') {
@@ -405,7 +405,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
     if (metadataLimit != null) return metadataLimit;
 
-    return config.contextLimit;
+    return 4000;
   }
 
   String _resolveModel(String? override) {

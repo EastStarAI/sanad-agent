@@ -51,6 +51,7 @@ void main() {
                 'compact failed: ${execution.result['failure_reason'] ?? execution.result}',
           );
           expect(execution.result['compaction_id'], isNotEmpty);
+          expect(execution.lifecycle, ['started', 'completed']);
 
           final history = await client.loadSessionHistory(
             sessionId: sessionId,
@@ -65,7 +66,10 @@ void main() {
           );
           expect(compactionRows.first['trigger'], 'manual');
           expect(compactionRows.first['status'], 'completed');
-          expect(compactionRows.first.containsKey('internal_summary_json'), isFalse);
+          expect(
+            compactionRows.first.containsKey('internal_summary_json'),
+            isFalse,
+          );
         } finally {
           await client.close();
         }
@@ -101,6 +105,7 @@ void main() {
         }
 
         await h.killDaemon();
+        await h.appendPostCompactionResponse(sessionId);
 
         final client2 = await h.startDaemon();
         try {
@@ -113,8 +118,77 @@ void main() {
           expect(compactionRows, hasLength(1));
           expect(compactionRows.first['compaction_id'], compactionId);
           expect(compactionRows.first['status'], 'completed');
+          expect(
+            compactionRows.first['event_id'],
+            'context_compaction:$compactionId:completed',
+          );
+          final messages = history['messages'] as List;
+          final compactionIndex = messages.indexWhere(
+            (row) => row is Map && row['compaction_id'] == compactionId,
+          );
+          final responseIndex = messages.indexWhere(
+            (row) =>
+                row is Map &&
+                row['content'] == 'response produced after compaction',
+          );
+          expect(compactionIndex, lessThan(responseIndex));
         } finally {
           await client2.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+  );
+
+  test(
+    'F.53.3 auto compaction preserves one follow-up through the daemon',
+    () async {
+      final h = await _CompactionHarness.create();
+      try {
+        final sessionId = 'plan53-auto-queue-${_unique()}';
+        await h.seedSession(
+          sessionId: sessionId,
+          providerInstanceId: h.providerInstanceId,
+        );
+
+        final client = await h.startDaemon();
+        try {
+          final execution = await client.executeAutoWithQueuedFollowUp(
+            sessionId: sessionId,
+            firstRequestId: 'auto-first-${_unique()}',
+            queuedRequestId: 'auto-queued-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(execution.compactionIds, hasLength(1));
+          expect(execution.lifecycle, ['started', 'completed']);
+          expect(execution.finalAnswers, 2);
+          // The deterministic summarizer can complete before the follow-up
+          // frame is admitted; either way the follow-up executes exactly once.
+          expect(execution.queuedClassifications, lessThanOrEqualTo(1));
+
+          final history = await client.loadSessionHistory(
+            sessionId: sessionId,
+            requestId: 'history-auto-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(_compactionRows(history), hasLength(1));
+          final messages = history['messages'] as List;
+          expect(
+            messages.where(
+              (row) =>
+                  row is Map && row['content'] == 'queued during compaction',
+            ),
+            hasLength(1),
+          );
+          expect(
+            messages.where(
+              (row) => row is Map && row['content'] == 'e2e-success',
+            ),
+            hasLength(2),
+          );
+        } finally {
+          await client.close();
         }
       } finally {
         await h.dispose();
@@ -179,6 +253,7 @@ class _CompactionHarness {
     await envFile.writeAsString('''
 SANAD_HOME=${sanadHome.path}
 SANAD_STATE_HOME=${sanadStateHome.path}
+SANAD_E2E_TEST_MODE=true
 ENABLE_LOCAL_GATEWAY=true
 ENABLE_GATEWAY=false
 LOCAL_GATEWAY_PORT=$gatewayPort
@@ -222,16 +297,18 @@ LOG_LEVEL=INFO
 
   Future<void> _seedSecretForInstance(String instanceId) async {
     final secretFile = File('${sanadHome.path}/provider_secrets.json');
-    await secretFile.writeAsString(jsonEncode(<String, dynamic>{
-      'instances': <String, dynamic>{
-        instanceId: <String, dynamic>{
-          'instance_id': instanceId,
-          'auth_method': _authMethod,
-          'api_key': 'fake-plan53-test-key',
-          'updated_at': DateTime.now().toUtc().toIso8601String(),
+    await secretFile.writeAsString(
+      jsonEncode(<String, dynamic>{
+        'instances': <String, dynamic>{
+          instanceId: <String, dynamic>{
+            'instance_id': instanceId,
+            'auth_method': _authMethod,
+            'api_key': 'fake-plan53-test-key',
+            'updated_at': DateTime.now().toUtc().toIso8601String(),
+          },
         },
-      },
-    }));
+      }),
+    );
   }
 
   Future<void> seedSession({
@@ -258,10 +335,23 @@ LOG_LEVEL=INFO
           content: 'goal: daemon compaction e2e validation',
         ),
         for (var i = 0; i < 80; i++)
-          Message(
-            role: MessageRole.user,
-            content: 'filler $i ${'x' * 300}',
-          ),
+          Message(role: MessageRole.user, content: 'filler $i ${'x' * 300}'),
+      ]);
+    } finally {
+      stateDb.dispose();
+    }
+  }
+
+  Future<void> appendPostCompactionResponse(String sessionId) async {
+    final stateDb = AgentStateDatabase.atPath(sanadStateHome.path);
+    try {
+      final sessions = SessionDB.fromState(stateDb);
+      sessions.replaceMessages(sessionId, [
+        ...sessions.getMessages(sessionId),
+        Message(
+          role: MessageRole.assistant,
+          content: 'response produced after compaction',
+        ),
       ]);
     } finally {
       stateDb.dispose();
@@ -277,6 +367,7 @@ LOG_LEVEL=INFO
         ...Platform.environment,
         'SANAD_HOME': sanadHome.path,
         'SANAD_STATE_HOME': sanadStateHome.path,
+        'SANAD_E2E_TEST_MODE': 'true',
         'ENABLE_LOCAL_GATEWAY': 'true',
         'ENABLE_GATEWAY': 'false',
         'LOCAL_GATEWAY_PORT': '$gatewayPort',
@@ -334,13 +425,24 @@ LOG_LEVEL=INFO
 }
 
 class _CompactionExecution {
-  const _CompactionExecution({
-    required this.result,
-    required this.lifecycle,
-  });
+  const _CompactionExecution({required this.result, required this.lifecycle});
 
   final Map<String, dynamic> result;
   final List<String> lifecycle;
+}
+
+class _AutoQueueExecution {
+  const _AutoQueueExecution({
+    required this.compactionIds,
+    required this.lifecycle,
+    required this.finalAnswers,
+    required this.queuedClassifications,
+  });
+
+  final Set<String> compactionIds;
+  final List<String> lifecycle;
+  final int finalAnswers;
+  final int queuedClassifications;
 }
 
 class _CompactionClient {
@@ -414,8 +516,10 @@ class _CompactionClient {
           eventName == CanonicalEventTypes.contextCompactionCompleted) {
         final compactionId = payload['compaction_id']?.toString();
         if (compactionId == null || compactionId.isEmpty) continue;
-        final lifecycle =
-            lifecycleById.putIfAbsent(compactionId, () => <String>[]);
+        final lifecycle = lifecycleById.putIfAbsent(
+          compactionId,
+          () => <String>[],
+        );
         lifecycle.add(
           eventName == CanonicalEventTypes.contextCompactionStarted
               ? 'started'
@@ -437,6 +541,96 @@ class _CompactionClient {
     }
     throw TimeoutException(
       'Timed out waiting for session.compact_result on $sessionId',
+      timeout,
+    );
+  }
+
+  Future<_AutoQueueExecution> executeAutoWithQueuedFollowUp({
+    required String sessionId,
+    required String firstRequestId,
+    required String queuedRequestId,
+    required Duration timeout,
+  }) async {
+    void sendThink(
+      String requestId,
+      String message, {
+      String deliveryIntent = 'auto',
+    }) {
+      _send(<String, dynamic>{
+        'type': 'execute_command',
+        'command': 'think',
+        'payload': <String, dynamic>{
+          'request_id': requestId,
+          'session_id': sessionId,
+          'message': message,
+          'provider_instance_id': 'e2e-provider',
+          'model': 'e2e-model',
+          'delivery_intent': deliveryIntent,
+        },
+      });
+    }
+
+    sendThink(firstRequestId, 'trigger automatic compaction');
+    final compactionIds = <String>{};
+    final lifecycle = <String>[];
+    var finalAnswers = 0;
+    var queuedClassifications = 0;
+    var queuedFollowUpSent = false;
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final remaining = deadline.difference(DateTime.now());
+      final moved = await frames.moveNext().timeout(remaining);
+      if (!moved) break;
+      final frame =
+          jsonDecode(frames.current as String) as Map<String, dynamic>;
+      if (frame['type'] != 'device_event') continue;
+      final payload = frame['payload'] is Map
+          ? Map<String, dynamic>.from(frame['payload'] as Map)
+          : <String, dynamic>{};
+      if ((payload['session_id'] ?? frame['session_id']) != sessionId) continue;
+      final eventName = frame['event']?.toString();
+      if (eventName == CanonicalEventTypes.contextCompactionStarted ||
+          eventName == CanonicalEventTypes.contextCompactionCompleted ||
+          eventName == CanonicalEventTypes.contextCompactionFailed) {
+        final compactionId = payload['compaction_id']?.toString();
+        if (compactionId != null && compactionId.isNotEmpty) {
+          compactionIds.add(compactionId);
+        }
+        lifecycle.add(switch (eventName) {
+          CanonicalEventTypes.contextCompactionStarted => 'started',
+          CanonicalEventTypes.contextCompactionCompleted => 'completed',
+          _ => 'failed',
+        });
+        if (eventName == CanonicalEventTypes.contextCompactionStarted &&
+            !queuedFollowUpSent) {
+          queuedFollowUpSent = true;
+          sendThink(
+            queuedRequestId,
+            'queued during compaction',
+            deliveryIntent: 'queue',
+          );
+        }
+        continue;
+      }
+      if (eventName == CanonicalEventTypes.sessionMessageClassified &&
+          payload['classification'] == 'queue') {
+        queuedClassifications++;
+      }
+      if (eventName == CanonicalEventTypes.finalAnswer) {
+        finalAnswers++;
+        if (finalAnswers == 2) {
+          return _AutoQueueExecution(
+            compactionIds: compactionIds,
+            lifecycle: lifecycle,
+            finalAnswers: finalAnswers,
+            queuedClassifications: queuedClassifications,
+          );
+        }
+      }
+    }
+    throw TimeoutException(
+      'Timed out waiting for auto compaction and queued follow-up on $sessionId '
+      '(lifecycle=$lifecycle, finals=$finalAnswers)',
       timeout,
     );
   }

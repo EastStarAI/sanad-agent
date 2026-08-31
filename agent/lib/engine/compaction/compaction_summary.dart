@@ -35,10 +35,7 @@ class CompactionInternalSummary {
   });
 
   /// Required sections validated before a boundary may activate.
-  static const requiredSectionKeys = <String>[
-    'currentGoal',
-    'remainingWork',
-  ];
+  static const requiredSectionKeys = <String>['currentGoal', 'remainingWork'];
 
   /// Returns missing required section keys for [continuity validation].
   List<String> missingRequiredSections() {
@@ -141,7 +138,8 @@ class CompactionContinuityResult {
           repairAttempts == other.repairAttempts;
 
   @override
-  int get hashCode => Object.hash(passed, Object.hashAll(missingAnchors), repairAttempts);
+  int get hashCode =>
+      Object.hash(passed, Object.hashAll(missingAnchors), repairAttempts);
 }
 
 bool _listEquals<T>(List<T> a, List<T> b) {

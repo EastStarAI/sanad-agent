@@ -1,3 +1,8 @@
+---
+title: "Context Compaction QA"
+description: "Automated and daemon-backed regression matrix for durable context compaction."
+---
+
 # Context Compaction QA (Plan 53)
 
 ## Scope
@@ -13,6 +18,7 @@ Verification matrix for durable goal-preserving context compaction across agent 
 | Model projection (53b B2) | `cd agent && fvm dart test test/evolution/model_projection_builder_test.dart` | Projection, reload, tail pairing |
 | Activation (53b B3) | `cd agent && fvm dart test test/evolution/compaction_activation_service_test.dart` | Projection revision, stale completion |
 | Engine (53c) | `cd agent && fvm dart test test/engine/context_compaction_engine_test.dart test/engine/context_compaction_fixture_test.dart` | Pressure, tail, repeated anchor, redaction validation |
+| Model policy (53g) | `cd agent && fvm dart test test/core/config_test.dart test/engine/adapters_test.dart test/engine/adapters/codex_responses_adapter_test.dart` | YAML defaults/validation, exact model windows, codec-native wire estimate |
 | Overflow recovery (53d D4) | `cd agent && fvm dart test test/engine/runtime/compaction_overflow_recovery_test.dart test/core/provider_runtime/runtime_failure_reason_test.dart` | 400 context-overflow classify, one-shot recovery, stream guard |
 | Preflight/checkpoint (53d D2/D7) | `cd agent && fvm dart test test/engine/runtime/compaction_preflight_integration_test.dart test/engine/runtime/compaction_checkpoint_resume_test.dart` | Provider history rebuild + checkpoint resume after activation |
 | Restart persistence (53f F2) | `cd agent && fvm dart test test/evolution/compaction_restart_persistence_test.dart` | Boundary survives DB reopen |
@@ -45,8 +51,26 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] Checkpoint resume stays valid after compaction activation (53d D2) — `compaction_checkpoint_resume_test.dart` (2026-08-29).
 - [x] Reconnect/hydration dedupes started→completed lifecycle tiles (53e E2) — `conversation_state_compaction_test.dart` (2026-08-29).
 - [x] Full agent/client analyze clean after integration pass (53f F5) — agent + client analyze clean after review fixes (2026-08-29).
-- [x] Daemon-backed E2E manual compact + restart history hydration (53f F5) — `context_compaction_daemon_e2e_test.dart` (2026-08-29 evening re-review: 2/2).
-- [ ] Full agent fast suite — 1239 passed; 1 pre-existing unrelated failure (`evolution_tracks_test.dart` DelegateTaskTool DI).
+- [x] Daemon-backed E2E manual compact, restart causal history hydration, proactive ratio-based auto compaction, and one explicit follow-up executed exactly once without an unnecessary second attempt — `context_compaction_daemon_e2e_test.dart` (2026-08-31 Task 53g: 3/3). The unit/integration barrier suites own deterministic queue classification because the fixture summarizer may complete before the follow-up frame is admitted.
+- [x] Multi-tool retained-tail boundary preserves the owning assistant call batch — `context_compaction_engine_test.dart` (2026-08-30 live regression repair).
+- [x] Persisted orphan-output boundaries fall back to canonical history — `model_projection_builder_test.dart` (2026-08-30 live regression repair).
+- [x] Started/completed/failed lifecycle transitions use distinct deterministic transport `event_id` values while sharing one `compaction_id`, and completed history hydration reproduces the live identity — `compaction_lifecycle_broadcaster_test.dart` + `compaction_history_parity_test.dart` (2026-08-31 independent remediation).
+- [x] Flutter preserves that opaque transition `event_id` for transport parity while folding all statuses into one logical `compaction_<compaction_id>` timeline tile — `compaction_event_mapper_test.dart` (2026-08-31 independent remediation).
+- [x] A normal post-compaction message preserves canonical prefix row IDs, keeps the active boundary eligible, and measures the compacted projection without producing another boundary — `model_projection_builder_test.dart` + `compaction_preflight_integration_test.dart` (2026-08-31 live regression repair).
+- [x] Provider-reported input usage is the route/material-bound preflight baseline; unchanged requests match exactly, new suffixes alone are estimated, and route/prefix changes invalidate it — `context_compaction_engine_test.dart` + `compaction_preflight_integration_test.dart` (2026-08-31 independent remediation).
+- [x] The 463K/359K and 116K/82K drift class is reproduced without transcript data: generic estimation counted visible content/reasoning plus Codex replay alternatives; codec-native estimation returns the wire-only 359K/82K values — `context_compaction_engine_test.dart` (2026-08-31 Task 53g).
+- [x] YAML defaults, strict validation, exact per-model inheritance, legacy `CONTEXT_LIMIT` rejection, two distinct model policies, and unlisted fallback are covered by `config_test.dart`; adapter fallback is covered by `adapters_test.dart` (2026-08-31 Task 53g).
+- [x] Ratio boundaries below/at/above threshold, retained suffix target, atomic tool groups, repeated compaction, preflight/tool loop, and one-shot overflow recovery pass focused engine/runtime coverage (2026-08-31 Task 53g).
+- [x] History places a lifecycle row at the durable retained-tail boundary before the first model response produced afterward, independent of synthetic message timestamps — `compaction_history_parity_test.dart` (2026-08-31 independent remediation).
+- [x] A logical compaction cannot regress or switch between terminal `completed` and `failed` states during retry/reload reconciliation — `conversation_state_compaction_test.dart` (2026-08-31 independent remediation).
+- [x] Compaction tiles keep a 44px interaction target, render all six manual/auto lifecycle labels at 280px/2x text scale without overflow, and expose identical redacted metrics by tap, hover, and keyboard focus; unconfirmed token metrics are labeled Estimated — `compaction_event_tile_test.dart` (2026-08-31 independent remediation).
+- [x] The first provider response after activation writes one confirmed after-value, republishes the same completed event id, survives hydration, and cannot be replaced by later tool-loop responses — `compaction_boundary_repository_test.dart` + `compaction_coordinator_test.dart` + live provider verification (2026-08-31 Task 53g).
+- [x] Compaction separators fill the conversation width symmetrically while retaining narrow/large-text safety; reconciled details show `Provider confirmed after` and suppress the superseded pre-confirmation estimate — `compaction_event_tile_test.dart` + live UI verification (2026-08-31 Task 53g).
+- [x] Compaction details expose one trigger label without the redundant `Type: Auto` / `Trigger: Auto` pair — `compaction_event_tile_test.dart` + live UI verification (2026-08-31 Task 53g).
+- [x] Once after-usage is confirmed, the user-facing reclaimed value is recomputed from it rather than the superseded after-estimate; provenance remains estimated when before-usage is estimated — `compaction_event_tile_test.dart` (2026-08-31 Task 53g).
+- [x] The durable started claim and queue barrier exist before the first summarizer await, and a thrown summarizer closes started→failed without stranding the session — `compaction_coordinator_test.dart` (2026-08-31 independent remediation).
+- [x] Full client fast suite — 1150 passed; 1 skipped (2026-08-31 Task 53g delivery follow-up).
+- [x] Full agent fast suite — 1365 passed; 12 skipped. The isolated-runner regression now skips compaction when `AgentRuntimeService` is intentionally absent; the independently reproduced DelegateTaskTool failure is closed (2026-08-31 Task 53g delivery follow-up).
 
 ## Review notes (2026-08-29 evening)
 

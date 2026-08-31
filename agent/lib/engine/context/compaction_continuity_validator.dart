@@ -35,7 +35,7 @@ class CompactionContinuityValidator {
   final SecretsRedactor _redactor;
 
   CompactionContinuityValidator({SecretsRedactor? redactor})
-      : _redactor = redactor ?? const SecretsRedactor();
+    : _redactor = redactor ?? const SecretsRedactor();
 
   List<CompactionContinuityAnchor> extractAnchors(
     List<IndexedConversationMessage> sourceMessages,
@@ -44,10 +44,7 @@ class CompactionContinuityValidator {
     for (final entry in sourceMessages) {
       final content = entry.message.content ?? '';
       void addLabeled(String label, {bool critical = true}) {
-        final pattern = RegExp(
-          '$label:\\s*(.+)',
-          caseSensitive: false,
-        );
+        final pattern = RegExp('$label:\\s*(.+)', caseSensitive: false);
         final match = pattern.firstMatch(content);
         if (match != null) {
           anchors.add(

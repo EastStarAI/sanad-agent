@@ -174,6 +174,33 @@ file_budget: 15
 ## 13. سجل التقدم
 
 ```text
+Date: 2026-08-31 (F3 barrier remediation, D0→D7 re-review)
+Gate/status: 53d complete after reopening D0/D3
+Root cause: CompactionCoordinator awaited the full summarizer before tryClaim and before publishing started, so the longest part of the operation had no compacting barrier and concurrent user input could compete with the frozen snapshot instead of entering the durable queue.
+Fix: prepare source/tail ranges synchronously, persist the exclusive started claim and publish started before the first summarizer await; close every post-claim engine or summarizer error as one typed failed transition.
+Verification: blocking-summarizer regression observes the durable claim and started event before release; throwing-summarizer regression leaves no started row and emits started→failed; D0–D7 orchestration/replay/queue/overflow/AgentRunner bundle 143/143; analyzer clean.
+Next: resume 53f F3.
+```
+
+```text
+Date: 2026-08-31 (independent remediation review, D6→D7)
+Gate/status: 53d complete after reopening D6
+Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction
+Root cause: the live broadcaster let GatewayResponse mint a transport event id, while history hydration used the bare compaction_id; a terminal transition therefore changed identity after reload and could not coexist safely with started/failed transitions.
+Fix: derive each lifecycle event id deterministically as context_compaction:<compaction_id>:<status> in the canonical lifecycle event and use it in both broadcaster and history hydration. The logical compaction_id remains shared.
+Verification: lifecycle/history regressions 2/2; D7 orchestration bundle (coordinator, preflight, checkpoint, overflow, queue, command admission, failure classification, lifecycle/history, replay, AgentRunner) 141/141; agent analyzer clean; focused formatter clean.
+Next: Task 53e Gate E0.
+```
+
+```text
+Date: 2026-08-31 (independent remediation review)
+Gate/status: 53d reopened at D6
+Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction
+Evidence: new live/history parity regression failed because the live completed transition received a generated transport event id while history reconstructed event_id from the bare compaction id.
+Current gate: D6 — make every lifecycle transition identity deterministic and identical across live delivery and history reload, then rerun the focused contract suite before D7.
+```
+
+```text
 Date: 2026-08-29
 Gate/status: 53d complete (D0–D7) — gate-by-gate review closed with D3 admission fix
 Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction
@@ -195,4 +222,3 @@ Fix: D6 docs in context_compaction.md used underscore event names; aligned to wi
 Findings: D3 admission order correct (busy vs compacting); queue during compacting via isSessionCompacting; overflow recovery gated on !streamStarted + one retry
 Next: Task 53e Gate E0
 ```
-

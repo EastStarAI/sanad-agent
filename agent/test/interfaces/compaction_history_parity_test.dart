@@ -3,6 +3,7 @@ import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
+import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_activation_service.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_boundary_change.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
@@ -15,6 +16,8 @@ import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/session_query_handler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
+import 'package:sanad_agent/interfaces/models/gateway_event.dart';
+import 'package:sanad_agent/interfaces/runtime/compaction_lifecycle_broadcaster.dart';
 import 'package:test/test.dart';
 
 RouteSignature _route() => const RouteSignature(
@@ -132,6 +135,15 @@ void main() {
       startedAt: startedAt,
       completedAt: startedAt.add(const Duration(seconds: 2)),
     );
+    sessions.replaceMessages('session-1', [
+      Message(role: MessageRole.user, content: 'one'),
+      Message(role: MessageRole.assistant, content: 'two'),
+      Message(role: MessageRole.user, content: 'three'),
+      Message(
+        role: MessageRole.assistant,
+        content: 'response produced after compaction',
+      ),
+    ]);
 
     final handler = SessionQueryHandler(
       sessionManager: sessionManager,
@@ -161,9 +173,36 @@ void main() {
     expect(compactionRows.first['trigger'], 'manual');
     expect(compactionRows.first['status'], 'completed');
     expect(compactionRows.first.containsKey('internal_summary_json'), isFalse);
+    expect(compactionRows.first['estimated_request_tokens_before'], 80_000);
+
+    final liveResponses = <GatewayResponse>[];
+    CompactionLifecycleBroadcaster(liveResponses.add).handle(
+      CompactionLifecycleEvent(
+        compactionId: 'cmp-history',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.manual,
+        status: CompactionStatus.completed,
+        metrics: _candidate(id: 'cmp-history').metrics,
+        startedAt: startedAt,
+        completedAt: startedAt.add(const Duration(seconds: 2)),
+      ),
+    );
     expect(
-      compactionRows.first['estimated_request_tokens_before'],
-      80_000,
+      compactionRows.first['event_id'],
+      liveResponses.single.eventId,
+      reason: 'reload must preserve the live completed transition identity',
+    );
+    final compactionIndex = messages.indexWhere(
+      (row) => row is Map && row['compaction_id'] == 'cmp-history',
+    );
+    final postCompactionResponseIndex = messages.indexWhere(
+      (row) =>
+          row is Map && row['content'] == 'response produced after compaction',
+    );
+    expect(
+      compactionIndex,
+      lessThan(postCompactionResponseIndex),
+      reason: 'history must keep compaction before the response it enabled',
     );
   });
 }

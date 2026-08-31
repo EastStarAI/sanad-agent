@@ -569,6 +569,10 @@ class AgentStateDatabase {
         context_window_tokens INTEGER,
         estimated_request_tokens_before INTEGER,
         estimated_request_tokens_after INTEGER,
+        before_measurement_kind TEXT NOT NULL DEFAULT 'estimated'
+          CHECK (before_measurement_kind IN ('estimated', 'confirmed', 'mixed')),
+        provider_confirmed_request_tokens_after INTEGER
+          CHECK (provider_confirmed_request_tokens_after >= 0),
         retained_tail_tokens INTEGER,
         duration_ms INTEGER,
         internal_summary_json TEXT,
@@ -580,6 +584,15 @@ class AgentStateDatabase {
         CHECK (source_end_message_id < tail_start_message_id)
       );
     ''');
+
+    _safeAddColumn(
+      db,
+      "ALTER TABLE session_compaction_operations ADD COLUMN before_measurement_kind TEXT NOT NULL DEFAULT 'estimated' CHECK (before_measurement_kind IN ('estimated', 'confirmed', 'mixed'))",
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN provider_confirmed_request_tokens_after INTEGER CHECK (provider_confirmed_request_tokens_after >= 0)',
+    );
 
     db.execute('''
       CREATE UNIQUE INDEX IF NOT EXISTS idx_session_compaction_one_started

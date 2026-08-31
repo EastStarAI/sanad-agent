@@ -80,6 +80,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Unscoped changes must not rebuild the workspace section; processing, suspension, and selection changes should rebuild only affected rows.
 - Cached content remains visible through offline, refresh, and stale-error states.
 - Preserve labeled, keyboard-focusable controls and 44px-class primary drawer/mobile targets. On macOS, drawer-mode sidebar content starts below the native traffic-light region.
+- On desktop, double-clicking a conversation title invokes the same capability-gated rename dialog as the row menu; keep the gesture scoped to the title so options and timestamps retain their own interactions.
 - Presentation must not synthesize missing cache capabilities; extend the domain/data owner instead.
 
 ## Navigation and Deletion
@@ -96,8 +97,10 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Route replacement after current deletion must prevent the deleted URL from re-entering history.
 
 ## Presentation Fidelity
+- Compaction separators consume the full available conversation width around an intrinsic centered label. Their details preserve estimate provenance and advance the same logical tile to a separately labeled provider-confirmed after value when reconciliation arrives.
 - Running and completed assistant Markdown enter through one application-owned renderer boundary; progressive rendering must not own timeline scrolling, add artificial typing, or be silently bypassed in widget tests.
 - Provider chips render daemon-owned display names and model names, never raw provider UUIDs. Session display metadata is valid only when its provider identity matches the active or staged provider route.
 - Context-usage UI shows only the latest active-session snapshot, includes cached input only when available, and never displays cache-write usage.
+- Compaction timeline controls keep a 44-logical-pixel interaction target, remain centered without narrow-width overflow, and expose the same redacted multiline details by hover, tap, and keyboard focus.
 - Composer controls remain horizontally bounded on narrow layouts and expose Material semantics, labels, and keyboard focus.
 - Narrow conversation headers share one navigation/window-action surface across New Conversation and active sessions; native-desktop actions reuse the wide-header geometry and neutral color, and macOS reserves the leading title-bar region for native traffic-light controls.

@@ -50,7 +50,11 @@ This contract applies to `agent/lib/engine/`.
 ## Context Compaction Engine (Plan 53c)
 - Goal-preserving engine code lives under `engine/context/` (`ContextCompactionEngine`, pressure evaluator, tail selector, tool pruner, summary prompt/parser, continuity validator).
 - The engine must not import SessionDB, protocol translators, or Flutter. It returns a typed `CompactionCandidate` or `CompactionEngineFailure` only.
-- Prospective request pressure owns preflight decisions; confirmed provider usage is a verification signal only.
+- Provider-confirmed input usage for the same route and measured request material is the preflight baseline; only a newly appended suffix is estimated. Route, prompt, schema, or measured-prefix changes invalidate the baseline and fall back to an explicitly estimated projection.
+- When confirmed usage is absent, a provider adapter may measure its actual wire projection; the Codex Responses path must not count visible content plus replay alternatives or visible reasoning that the codec omits.
+- Automatic compaction triggers at the model policy ratio of the effective input window (default `0.80`) and budgets the connected retained suffix independently (default `0.10`).
+- Preflight pressure measures the active model projection, not the full canonical transcript behind an eligible compaction boundary; repeated compaction summarizes only rows after the previous source range while carrying the previous summary as an anchor.
 - Summarizer prompts are redacted, tool-free, and split into a bounded number of passes when source material exceeds the summarizer window.
+- The coordinator prepares immutable source/tail ranges, persists the exclusive started claim, and publishes the compacting barrier before awaiting any summarizer pass; every post-claim error must close that row as a typed terminal failure.
 - Oversized retained-tail tool/media payloads may be pruned in projection-only copies for re-measurement; canonical history is never mutated.
 - Design detail: `docs/agent_engine/context_compaction_design.md`.

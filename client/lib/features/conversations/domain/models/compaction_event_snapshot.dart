@@ -5,13 +5,12 @@ enum CompactionLifecycleStatus {
   completed,
   failed;
 
-  static CompactionLifecycleStatus fromWire(Object? value) =>
-      switch (value?.toString()) {
-        'started' => CompactionLifecycleStatus.started,
-        'completed' => CompactionLifecycleStatus.completed,
-        'failed' => CompactionLifecycleStatus.failed,
-        final other => throw FormatException('Unknown compaction status: $other'),
-      };
+  static CompactionLifecycleStatus fromWire(Object? value) => switch (value?.toString()) {
+    'started' => CompactionLifecycleStatus.started,
+    'completed' => CompactionLifecycleStatus.completed,
+    'failed' => CompactionLifecycleStatus.failed,
+    final other => throw FormatException('Unknown compaction status: $other'),
+  };
 }
 
 enum CompactionTriggerKind {
@@ -19,13 +18,12 @@ enum CompactionTriggerKind {
   auto,
   overflow;
 
-  static CompactionTriggerKind fromWire(Object? value) =>
-      switch (value?.toString()) {
-        'manual' => CompactionTriggerKind.manual,
-        'auto' => CompactionTriggerKind.auto,
-        'overflow' => CompactionTriggerKind.overflow,
-        final other => throw FormatException('Unknown compaction trigger: $other'),
-      };
+  static CompactionTriggerKind fromWire(Object? value) => switch (value?.toString()) {
+    'manual' => CompactionTriggerKind.manual,
+    'auto' => CompactionTriggerKind.auto,
+    'overflow' => CompactionTriggerKind.overflow,
+    final other => throw FormatException('Unknown compaction trigger: $other'),
+  };
 
   bool get isAutoLike => this == auto || this == overflow;
 }
@@ -39,6 +37,8 @@ class CompactionEventSnapshot extends Equatable {
   final int? contextWindowTokens;
   final int? estimatedRequestTokensBefore;
   final int? estimatedRequestTokensAfter;
+  final String? beforeMeasurementKind;
+  final int? providerConfirmedRequestTokensAfter;
   final int? retainedTailTokens;
   final int? durationMs;
   final DateTime? startedAt;
@@ -53,6 +53,8 @@ class CompactionEventSnapshot extends Equatable {
     this.contextWindowTokens,
     this.estimatedRequestTokensBefore,
     this.estimatedRequestTokensAfter,
+    this.beforeMeasurementKind,
+    this.providerConfirmedRequestTokensAfter,
     this.retainedTailTokens,
     this.durationMs,
     this.startedAt,
@@ -89,6 +91,10 @@ class CompactionEventSnapshot extends Equatable {
       ),
       estimatedRequestTokensAfter: _nullableInt(
         json['estimated_request_tokens_after'],
+      ),
+      beforeMeasurementKind: _nullableString(json['before_measurement_kind']),
+      providerConfirmedRequestTokensAfter: _nullableInt(
+        json['provider_confirmed_request_tokens_after'],
       ),
       retainedTailTokens: _nullableInt(json['retained_tail_tokens']),
       durationMs: _nullableInt(json['duration_ms']),
@@ -157,6 +163,8 @@ class CompactionEventSnapshot extends Equatable {
     contextWindowTokens,
     estimatedRequestTokensBefore,
     estimatedRequestTokensAfter,
+    beforeMeasurementKind,
+    providerConfirmedRequestTokensAfter,
     retainedTailTokens,
     durationMs,
     startedAt,

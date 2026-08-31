@@ -145,6 +145,17 @@ file_budget: 12
 ## 11. سجل التقدم
 
 ```text
+Date: 2026-08-31 (independent remediation review, F0→F5)
+Gate/status: 53f complete after F3 reopened 53d D0/D3
+F0/F1: deterministic provider-protocol matrix (OpenAI-compatible, Anthropic-compatible, Codex Responses, Ollama/local) plus repeated goal-retention fixtures pass; no external provider or secret is used.
+F2: completed boundary and interrupted started boundary survive database reopen with deterministic completed/failed projection; concurrency and session isolation pass.
+F3: early durable compaction barrier, tool/replay/overflow/queue bundle 143/143. Daemon E2E proves manual lifecycle, restart hydration/causal order, proactive auto compaction, one explicitly queued follow-up executed exactly once, and only one completed lifecycle when a later attempt fails.
+F4: composer/domain/mapper/timeline suite 42/42, including 44px target, hover/tap/focus parity, 280px width, and 2x text scale.
+F5: agent and client analyzers clean; focused Dart formatters clean; daemon E2E 3/3; full client fast suite 1147 passed / 1 skipped; full agent fast suite 1357 passed / 12 skipped / 1 unrelated pre-existing DelegateTaskTool DI failure reproduced independently. Graphify updated (21624 nodes, 29364 edges).
+Remaining scope: Plan 53 stays in_progress because 53g YAML/model-policy gates are explicitly excluded from this remediation. Adapter-native estimated wire measurement and provider-confirmed post-compaction provenance remain 53g work.
+```
+
+```text
 Date: 2026-08-29
 Gate/status: 53f complete (F0–F5) — gate-by-gate review re-verified
 Owner/worktree: feat/plan-53-context-compaction @ .agent/worktrees/53-context-compaction
@@ -168,4 +179,21 @@ Cross-task fix during 53d D6: docs event names aligned to context_compaction.sta
 Findings: full agent fast suite still has 1 pre-existing unrelated DI failure (evolution_tracks_test DelegateTaskTool) — documented in QA
 Plan 53 remains in_review for human finalization
 Next: human review → plan complete (no commit/push unless requested)
+```
+
+```text
+Date: 2026-08-30 (live auto-compaction regression repair)
+Gate/status: F3/F4 reopened and re-closed
+Evidence: a real Codex Responses request after auto-compaction contained three orphan function_call_output items; the retained-tail selector now expands across complete multi-tool batches, persisted unsafe boundaries fall back to canonical history, and lifecycle transitions mint distinct transport event_id values so completed is not deduplicated behind started
+Verification: focused engine/projection/history/lifecycle suites passed (28 agent tests), client compaction-state/mapper/transport-dedup suites passed (20 tests), and agent analyzer is clean; live restart verification is recorded in the parent plan
+Next: retry the blocked live turn against the repaired runtime
+```
+
+```text
+Date: 2026-08-31 (post-compaction retrigger regression repair)
+Gate/status: F2/F3 reopened and re-closed
+Evidence: each ordinary history save replaced every canonical message row, invalidating durable boundary IDs; preflight also measured the hidden canonical head instead of the active projection
+Fix: preserve the unchanged canonical row-ID prefix, measure active projection pressure, and advance repeated-compaction source ranges beyond the prior summarized range
+Verification: 56 focused persistence/engine/runtime tests pass; agent analyzer clean; controlled restart healthy; the affected live session's latest boundary was conditionally rebased after a consistent database backup (516/516 referenced rows present)
+Next: one live follow-up turn should run without a new compaction event
 ```
