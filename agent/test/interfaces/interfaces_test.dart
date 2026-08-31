@@ -4800,6 +4800,14 @@ Use the review skill.''',
               'message': 'Retry after block',
               'eventMetadata': {},
             },
+            continuationMetadata: const {
+              'checkpoint_kind': 'model_request_in_flight',
+              'checkpoint_before_model_request': 'after_tool_result',
+              'restart_interrupted_provider_request': true,
+              'resume_history_length': 1,
+              'currentTurnStartIndex': 0,
+              'model_step_id': 'interrupted-provider-step',
+            },
             createdAt: DateTime.now(),
             updatedAt: DateTime.now(),
           ),
@@ -4816,7 +4824,23 @@ Use the review skill.''',
             onThoughtDelta: anyNamed('onThoughtDelta'),
             onReasoningDelta: anyNamed('onReasoningDelta'),
           ),
-        ).thenAnswer((_) => Stream.value('retried successfully'));
+        ).thenAnswer((_) {
+          final claimed = repo.findWorkItem('work-blocked-retry');
+          expect(claimed?.state, SessionWorkState.resuming);
+          expect(
+            claimed?.continuationMetadata['checkpoint_kind'],
+            'after_tool_result',
+          );
+          expect(
+            claimed?.continuationMetadata,
+            isNot(contains('checkpoint_before_model_request')),
+          );
+          expect(
+            claimed?.continuationMetadata,
+            isNot(contains('restart_interrupted_provider_request')),
+          );
+          return Stream.value('retried successfully');
+        });
 
         final orchestrator = SessionRunOrchestrator();
         await orchestrator.restorePersistedState();
@@ -4824,7 +4848,10 @@ Use the review skill.''',
         expect(recoveryService.activeNotice(sessionId), isNull);
 
         // Simulate a retry: resume the suspended run
-        final resumed = await orchestrator.resumeSuspended(sessionId);
+        final resumed = await orchestrator.resumeSuspended(
+          sessionId,
+          recoveryReason: 'manual_retry',
+        );
         expect(resumed, equals(ResumeSuspendedResult.claimed));
 
         await Future<void>.delayed(const Duration(milliseconds: 100));

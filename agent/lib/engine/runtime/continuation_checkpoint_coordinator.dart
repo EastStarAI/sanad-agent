@@ -35,6 +35,32 @@ class ContinuationCheckpointCoordinator {
     checkpointKindAfterToolResult,
   };
 
+  /// Returns metadata that atomically reclaims a provider request explicitly
+  /// interrupted by a forced restart. The caller must persist this metadata in
+  /// the same transition that claims the blocked work item for resume.
+  ///
+  /// A null result means the interruption does not contain enough evidence to
+  /// identify the checkpoint that safely preceded the provider request.
+  static Map<String, dynamic>? metadataForInterruptedProviderRetry(
+    Map<String, dynamic> metadata,
+  ) {
+    if (metadata['checkpoint_kind'] != checkpointKindModelRequestInFlight ||
+        metadata['restart_interrupted_provider_request'] != true ||
+        List<Object?>.from(
+          metadata['currently_executing_tools'] as List? ?? const [],
+        ).isNotEmpty) {
+      return null;
+    }
+    final previousKind = metadata['checkpoint_before_model_request']
+        ?.toString();
+    if (!_allowedKinds.contains(previousKind)) return null;
+
+    return Map<String, dynamic>.from(metadata)
+      ..['checkpoint_kind'] = previousKind
+      ..remove('checkpoint_before_model_request')
+      ..remove('restart_interrupted_provider_request');
+  }
+
   final String sessionId;
 
   /// Secrets redactor applied to every tool-output record persisted in the

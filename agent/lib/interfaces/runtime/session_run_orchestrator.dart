@@ -236,6 +236,25 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         (providerInstanceId != null && providerInstanceId.isNotEmpty) ||
         (modelId != null && modelId.isNotEmpty);
     try {
+      final activeItem = persistedState?.findActiveWorkItem(sessionId);
+      Map<String, dynamic>? claimedContinuationMetadata;
+      if (activeItem != null &&
+          (recoveryReason == 'manual_retry' ||
+              recoveryReason == 'provider_changed') &&
+          activeItem.continuationMetadata['checkpoint_kind'] ==
+              ContinuationCheckpointCoordinator
+                  .checkpointKindModelRequestInFlight &&
+          activeItem
+                  .continuationMetadata['restart_interrupted_provider_request'] ==
+              true) {
+        claimedContinuationMetadata =
+            ContinuationCheckpointCoordinator.metadataForInterruptedProviderRetry(
+              activeItem.continuationMetadata,
+            );
+        if (claimedContinuationMetadata == null) {
+          return ResumeSuspendedResult.unsafeCheckpoint;
+        }
+      }
       final resumedRequest = overrideTurnRoute(
         suspended.request,
         providerInstanceId: providerInstanceId,
@@ -254,7 +273,6 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           modelId: modelId,
         );
       }
-      final activeItem = persistedState?.findActiveWorkItem(sessionId);
       if (activeItem != null) {
         if (activeItem.state == SessionWorkState.resuming) {
           return ResumeSuspendedResult.alreadyResuming;
@@ -263,6 +281,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           workItemId: activeItem.workItemId,
           fromState: activeItem.state,
           toState: SessionWorkState.resuming,
+          continuationMetadata: claimedContinuationMetadata,
         );
       }
       _busySessions.add(sessionId);
@@ -1978,4 +1997,5 @@ enum ResumeSuspendedResult {
   alreadyResuming,
   missing,
   restartDraining,
+  unsafeCheckpoint,
 }

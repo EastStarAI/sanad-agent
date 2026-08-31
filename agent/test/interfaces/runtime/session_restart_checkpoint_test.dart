@@ -41,6 +41,44 @@ void main() {
   });
 
   test(
+    'manual retry restores the safe checkpoint before a forced provider interruption',
+    () {
+      final repaired =
+          ContinuationCheckpointCoordinator.metadataForInterruptedProviderRetry(
+            const {
+              'checkpoint_kind': 'model_request_in_flight',
+              'checkpoint_before_model_request': 'after_tool_result',
+              'restart_interrupted_provider_request': true,
+              'currently_executing_tools': <String>[],
+              'resume_history_length': 3,
+            },
+          );
+
+      expect(repaired, isNotNull);
+      expect(repaired?['checkpoint_kind'], 'after_tool_result');
+      expect(repaired, isNot(contains('checkpoint_before_model_request')));
+      expect(repaired, isNot(contains('restart_interrupted_provider_request')));
+      expect(repaired?['resume_history_length'], 3);
+    },
+  );
+
+  test(
+    'manual retry rejects an interrupted provider without a safe predecessor',
+    () {
+      final repaired =
+          ContinuationCheckpointCoordinator.metadataForInterruptedProviderRetry(
+            const {
+              'checkpoint_kind': 'model_request_in_flight',
+              'checkpoint_before_model_request': 'unknown',
+              'restart_interrupted_provider_request': true,
+            },
+          );
+
+      expect(repaired, isNull);
+    },
+  );
+
+  test(
     'controlled restart waits for the active tool result checkpoint',
     () async {
       persisted.executionState.enqueueWorkItem(

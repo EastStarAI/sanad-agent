@@ -953,6 +953,98 @@ void main() {
       expect(runner.history.length, 2); // user + assistant
     });
 
+    test(
+      'controlled restart parks an active tool loop before its next provider request',
+      () async {
+        final adapter = MockAdapter([
+          AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              toolCalls: [
+                ToolCall(
+                  id: 'restart-boundary-tool',
+                  name: 'test_tool',
+                  arguments: const {},
+                ),
+              ],
+            ),
+            isToolCall: true,
+          ),
+          AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: 'continued once',
+            ),
+          ),
+        ]);
+        late final AgentRunner runner;
+        final drainStarted = Completer<void>();
+        runner = AgentRunner(adapter, registry, sessionManager);
+
+        var completed = false;
+        final streaming = runner
+            .streamMessage(
+              'start',
+              onToolEvent:
+                  ({
+                    required toolName,
+                    input,
+                    output,
+                    required isError,
+                    required isStart,
+                    toolRunId,
+                  }) async {
+                    if (!isStart && !drainStarted.isCompleted) {
+                      runner.beginControlledRestartDrain();
+                      drainStarted.complete();
+                    }
+                  },
+            )
+            .toList()
+            .whenComplete(() => completed = true);
+
+        await drainStarted.future;
+        await Future<void>.delayed(Duration.zero);
+
+        expect(adapter._callCount, 1);
+        expect(runner.providerRequestInFlight, isFalse);
+        expect(completed, isFalse);
+
+        runner.cancelControlledRestartDrain();
+        await streaming;
+
+        expect(adapter._callCount, 2);
+        expect(completed, isTrue);
+      },
+    );
+
+    test(
+      'controlled restart started before a turn consumes no provider request',
+      () async {
+        final adapter = MockAdapter([
+          AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: 'started after release',
+            ),
+          ),
+        ]);
+        final runner = AgentRunner(adapter, registry, sessionManager)
+          ..beginControlledRestartDrain();
+
+        final streaming = runner.streamMessage('start').toList();
+        await Future<void>.delayed(Duration.zero);
+
+        expect(adapter._callCount, 0);
+        expect(runner.providerRequestInFlight, isFalse);
+
+        runner.cancelControlledRestartDrain();
+        await streaming;
+
+        expect(adapter._callCount, 1);
+      },
+    );
+
     test('passes per-turn request options to synchronous adapters', () async {
       final adapter = MockAdapter([
         AgentResponse(

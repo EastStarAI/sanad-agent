@@ -106,9 +106,30 @@ class AgentRunner {
     if (release != null && !release.isCompleted) release.complete();
   }
 
-  Future<void> _waitForControlledRestartDrain() async {
-    final release = _restartDrainRelease;
-    if (release != null) await release.future;
+  /// Atomically claims permission to invoke the provider after any restart
+  /// drain has been released.
+  ///
+  /// The drain check and the durable/in-memory in-flight markers deliberately
+  /// execute without an intervening await. This prevents a restart safety
+  /// scan from observing a safe checkpoint after this run has passed its gate
+  /// but before it becomes visible as a provider blocker.
+  Future<bool> _claimProviderRequestAfterRestartDrain() async {
+    while (true) {
+      final release = _restartDrainRelease;
+      if (release != null) {
+        await release.future;
+        continue;
+      }
+      if (_stopRequested) return false;
+      _checkpointCoordinator.saveCheckpoint(
+        ctx: _checkpointCtx,
+        checkpointKind: ContinuationCheckpointCoordinator
+            .checkpointKindModelRequestInFlight,
+        resumeHistoryLength: history.length,
+      );
+      _providerRequestInFlight = true;
+      return true;
+    }
   }
 
   static const checkpointKindInitialModelRequest =
@@ -1242,8 +1263,6 @@ class AgentRunner {
       runtimeSystemPrompt: runtimeSystemPrompt,
     );
 
-    _logger.info('🧠 [Agent] Thinking...');
-
     final routing = _turnRoute.resolveTurnRouting();
     var model = routing.model;
     var provider = routing.providerId;
@@ -1256,33 +1275,27 @@ class AgentRunner {
       activeModel = model;
     }
 
-    if (LLMRequestDumper.isEnabled) {
-      await LLMRequestDumper.dumpRequest(
-        sessionId: sessionId,
-        history: effectiveHistory,
-        tools: tools,
-        model: model,
-        provider: provider,
-        baseUrl: baseUrl,
-        apiKey: apiKey,
-      );
-    }
-
     AgentResponse response;
     final attemptsByProviderInstanceId = <String, int>{};
     final failedProviderInstanceIds = <String>{};
     while (true) {
       try {
         final route = _turnRoute.routeForTurn();
-        await _waitForControlledRestartDrain();
-        if (_stopRequested) return Message(role: MessageRole.assistant);
-        _checkpointCoordinator.saveCheckpoint(
-          ctx: _checkpointCtx,
-          checkpointKind: ContinuationCheckpointCoordinator
-              .checkpointKindModelRequestInFlight,
-          resumeHistoryLength: history.length,
-        );
-        _providerRequestInFlight = true;
+        if (!await _claimProviderRequestAfterRestartDrain()) {
+          return Message(role: MessageRole.assistant);
+        }
+        _logger.info('🧠 [Agent] Thinking...');
+        if (LLMRequestDumper.isEnabled) {
+          await LLMRequestDumper.dumpRequest(
+            sessionId: sessionId,
+            history: effectiveHistory,
+            tools: tools,
+            model: model,
+            provider: provider,
+            baseUrl: baseUrl,
+            apiKey: apiKey,
+          );
+        }
         try {
           await _stageInputUsageBaseline(
             requestMessages: effectiveHistory,
@@ -1452,7 +1465,9 @@ class AgentRunner {
         metadata: {
           if (effectiveRequestId != null && effectiveRequestId.isNotEmpty)
             'request_id': effectiveRequestId,
-          'received_at': (receivedAt ?? DateTime.now()).toUtc().toIso8601String(),
+          'received_at': (receivedAt ?? DateTime.now())
+              .toUtc()
+              .toIso8601String(),
         },
       ),
       effectiveRequestId,
@@ -1602,8 +1617,6 @@ class AgentRunner {
     Message? lastMessage;
     var streamStarted = false;
 
-    _logger.info('🧠 [Agent] Thinking...');
-
     final routing = _turnRoute.resolveTurnRouting();
     var model = routing.model;
     var provider = routing.providerId;
@@ -1616,33 +1629,25 @@ class AgentRunner {
       activeModel = model;
     }
 
-    if (LLMRequestDumper.isEnabled) {
-      await LLMRequestDumper.dumpRequest(
-        sessionId: sessionId,
-        history: effectiveHistory,
-        tools: tools,
-        model: model,
-        provider: provider,
-        baseUrl: baseUrl,
-        apiKey: apiKey,
-      );
-    }
-
     final attemptsByProviderInstanceId = <String, int>{};
     final failedProviderInstanceIds = <String>{};
     while (true) {
       if (_stopRequested) return;
       try {
         final route = _turnRoute.routeForTurn();
-        await _waitForControlledRestartDrain();
-        if (_stopRequested) return;
-        _checkpointCoordinator.saveCheckpoint(
-          ctx: _checkpointCtx,
-          checkpointKind: ContinuationCheckpointCoordinator
-              .checkpointKindModelRequestInFlight,
-          resumeHistoryLength: history.length,
-        );
-        _providerRequestInFlight = true;
+        if (!await _claimProviderRequestAfterRestartDrain()) return;
+        _logger.info('🧠 [Agent] Thinking...');
+        if (LLMRequestDumper.isEnabled) {
+          await LLMRequestDumper.dumpRequest(
+            sessionId: sessionId,
+            history: effectiveHistory,
+            tools: tools,
+            model: model,
+            provider: provider,
+            baseUrl: baseUrl,
+            apiKey: apiKey,
+          );
+        }
         try {
           await _stageInputUsageBaseline(
             requestMessages: effectiveHistory,
