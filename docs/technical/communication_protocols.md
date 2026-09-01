@@ -171,6 +171,7 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
 #### C. Event Stream Forwarding
 - **Event: `device_event` (Daemon → Backend → Client)**
   - Streams thought outputs, status updates, or tool execution requests.
+  - On the Local Gateway, a session-bound event keeps the logical `device_id` captured when that session was bound (for example, `local-agent`). Unrelated capability, model, or settings commands sharing the WebSocket may carry another device or hardware identity, but cannot overwrite the session event identity. The last socket identity is used only when an event has no session-bound identity.
   - Payload Schema:
     ```json
     {
@@ -297,7 +298,7 @@ projection when one is persisted. The client displays `cached_tokens` as
 - `workspace_id` and `unscoped_only=true` are mutually exclusive; invalid combinations must return a structured query error instead of silently falling back.
 - `limit` is server-owned: missing uses the daemon default, invalid/non-positive values are rejected, and oversized values are capped centrally.
 - Ordering is authoritative: `last_user_message_at DESC`, then `session_id DESC`.
-- Only canonical user acceptance updates `last_user_message_at`. Assistant/tool/system events must not reorder the session list.
+- After session creation, only canonical user acceptance updates `last_user_message_at`. Fork creation initializes the child at its commit time so it appears first; assistant/tool/system events must not reorder the session list.
 - Session/workspace/provider/model updates must preserve the stored `last_user_message_at`; only a newly accepted canonical user message may advance it.
 - The cursor is opaque to clients and encodes the normalized ordering pair (`last_user_message_at`, `session_id`).
 - `sessions_list` responses that carry a `request_id` are request-scoped snapshots. Clients must not treat filtered/paginated responses as the shared default sidebar stream automatically.

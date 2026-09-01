@@ -9,6 +9,7 @@ class Session {
   final String? modelDisplay;
   final String? modelProvider;
   final int? routeRevision;
+  final int historyRevision;
   final String? thinkingMode;
   final String? reasoningLevel;
   final int? contextTokens;
@@ -29,6 +30,7 @@ class Session {
     this.modelDisplay,
     this.modelProvider,
     this.routeRevision,
+    this.historyRevision = 0,
     this.thinkingMode,
     this.reasoningLevel,
     this.contextTokens,
@@ -53,6 +55,7 @@ class Session {
       modelDisplay: json['model_display']?.toString(),
       modelProvider: json['provider_instance_id']?.toString(),
       routeRevision: json['route_revision'] is num ? (json['route_revision'] as num).toInt() : null,
+      historyRevision: json['history_revision'] is num ? (json['history_revision'] as num).toInt() : 0,
       thinkingMode: json['thinking_mode']?.toString(),
       reasoningLevel: json['reasoning_level']?.toString(),
       contextTokens: json['context_tokens'] is num ? (json['context_tokens'] as num).toInt() : null,
@@ -75,6 +78,7 @@ class Session {
     String? modelDisplay,
     String? modelProvider,
     int? routeRevision,
+    int? historyRevision,
     String? thinkingMode,
     String? reasoningLevel,
     int? contextTokens,
@@ -95,6 +99,7 @@ class Session {
       modelDisplay: modelDisplay ?? this.modelDisplay,
       modelProvider: modelProvider ?? this.modelProvider,
       routeRevision: routeRevision ?? this.routeRevision,
+      historyRevision: historyRevision ?? this.historyRevision,
       thinkingMode: thinkingMode ?? this.thinkingMode,
       reasoningLevel: reasoningLevel ?? this.reasoningLevel,
       contextTokens: contextTokens ?? this.contextTokens,

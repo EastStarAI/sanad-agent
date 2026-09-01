@@ -516,6 +516,53 @@ void main() {
   });
 
   group('CompactionContinuityValidator', () {
+    test('ignores semantic labels quoted by tool output', () {
+      final validator = CompactionContinuityValidator();
+
+      final anchors = validator.extractAnchors([
+        IndexedConversationMessage(
+          rowId: 1,
+          message: Message(
+            role: MessageRole.tool,
+            content: 'goal: fixture goal\nblocker: fixture blocker',
+            toolCallId: 'call-read-source',
+          ),
+        ),
+      ]);
+
+      expect(
+        anchors,
+        contains(
+          isA<CompactionContinuityAnchor>()
+              .having((anchor) => anchor.key, 'key', 'tool_side_effect')
+              .having((anchor) => anchor.value, 'value', 'call-read-source'),
+        ),
+      );
+      expect(
+        anchors.where((anchor) => anchor.key != 'tool_side_effect'),
+        isEmpty,
+      );
+    });
+
+    test('keeps user-authored semantic labels as continuity anchors', () {
+      final validator = CompactionContinuityValidator();
+
+      final anchors = validator.extractAnchors([
+        IndexedConversationMessage(
+          rowId: 1,
+          message: Message(
+            role: MessageRole.user,
+            content: 'goal: preserve drafts\nblocker: stale composer state',
+          ),
+        ),
+      ]);
+
+      expect(
+        anchors.where((anchor) => anchor.critical).map((anchor) => anchor.key),
+        containsAll(['goal', 'blocker']),
+      );
+    });
+
     test('redacts secret-like tokens before anchor validation', () {
       final validator = CompactionContinuityValidator();
       const secret = 'sk-ant-api03-test-secret-value';
@@ -785,6 +832,53 @@ Remaining Work and Safest Next Action: Run verification
           lessThan(candidate.metrics.estimatedRequestTokensBefore),
         );
         expect(candidate.metrics.retainedTailTokens, lessThanOrEqualTo(500));
+        expect(
+          candidate.internalSummary.currentGoal,
+          contains('ship compaction'),
+        );
+      });
+
+      test('tool output labels do not fail candidate continuity', () async {
+        final timeline = <IndexedConversationMessage>[
+          ..._timeline().take(4),
+          IndexedConversationMessage(
+            rowId: 5,
+            message: Message(
+              role: MessageRole.assistant,
+              toolCalls: [
+                ToolCall(
+                  id: 'call-read-plan',
+                  name: 'file_read',
+                  arguments: const {'path': 'docs/plan.md'},
+                ),
+              ],
+            ),
+          ),
+          IndexedConversationMessage(
+            rowId: 6,
+            message: Message(
+              role: MessageRole.tool,
+              toolCallId: 'call-read-plan',
+              content:
+                  'goal: quoted fixture goal\nblocker: quoted fixture blocker',
+            ),
+          ),
+          for (var rowId = 7; rowId <= 42; rowId++)
+            IndexedConversationMessage(
+              rowId: rowId,
+              message: Message(
+                role: MessageRole.user,
+                content: 'filler message $rowId ${'x' * 120}',
+              ),
+            ),
+        ];
+
+        final candidate = await ContextCompactionEngine().buildCandidate(
+          _request(timeline: timeline),
+        );
+
+        expect(candidate, isNotNull);
+        expect(candidate!.continuityResult.passed, isTrue);
         expect(
           candidate.internalSummary.currentGoal,
           contains('ship compaction'),

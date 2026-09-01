@@ -27,7 +27,8 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Desktop Authentication Exchange QA](desktop_authentication_exchange_qa.md): Bidirectional login, refresh, logout, reconnect, and credential-free Local Gateway exchange coverage.
 - [Device Name Editing QA](device_name_editing_qa.md): Device rename validation, synchronization, and failure coverage.
 - [Provider Account Usage Limits QA](provider_account_usage_limits_qa.md): Regression coverage for instance isolation, capability discovery, freshness, stale responses, and usage-card presentation.
-- [Message Edit and Retry QA](message_edit_retry_qa.md): Coverage for inline editing, idle-boundary ordering, side-effect confirmation, latest-turn identity, navigation cancellation, and current route selection.
+- [Message Edit and Retry QA](message_edit_retry_qa.md): Coverage for inline editing, idle-boundary ordering, side-effect and steer-drop confirmation, root-turn identity, navigation cancellation, and current route selection.
+- [Conversation Fork QA](conversation_fork_qa.md): Coverage for materialized fork, lineage, parent/child independence, and delete behavior.
 - [Remote Device Control QA](remote_device_control_qa.md): Gate-linked pass/fail coverage for remote Agent update, restart, managed workspaces, and redacted MCP management, starting from the current cloud freeze.
 - [Remote Workspace Folder Management QA](workspace_folder_management_qa.md): Coverage for local native picker continuity and managed-remote create/browse.
 - [Remote MCP Management Boundary QA](remote_mcp_management_qa.md): Coverage for cloud MCP configuration admission, redaction, confirmation tickets, local continuity, and preserved MCP tool use in cloud-origin turns.

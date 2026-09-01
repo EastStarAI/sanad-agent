@@ -25,6 +25,11 @@ class ConversationEventHandler {
     'thinking',
     'tool_call',
   };
+  static const Set<String> _sessionTimelineEvents = {
+    'context_compaction.started',
+    'context_compaction.completed',
+    'context_compaction.failed',
+  };
 
   final String _deviceId;
   final ConversationCommandGateway _gateway;
@@ -108,7 +113,9 @@ class ConversationEventHandler {
 
     if (eventType == 'session.queued_message_changed' || eventType == 'session.queued_message_delete_result') {
       final targetRequestId = payload['target_request_id']?.toString();
-      final outcome = payload['state']?.toString();
+      final outcome = eventType == 'session.queued_message_delete_result'
+          ? payload['outcome']?.toString()
+          : payload['state']?.toString();
       if (targetRequestId != null &&
           {
             'deleted',
@@ -136,6 +143,8 @@ class ConversationEventHandler {
         _conversationStore.applyTurnReplayAccepted(
           sessionId: eventSessionId,
           targetRequestId: targetRequestId,
+          targetTurnId: payload['target_turn_id']?.toString(),
+          targetMessageId: payload['target_message_id']?.toString(),
         );
       }
       return;
@@ -219,7 +228,7 @@ class ConversationEventHandler {
       }
     }
 
-    if (_streamingEvents.contains(eventType)) {
+    if (_streamingEvents.contains(eventType) || _sessionTimelineEvents.contains(eventType)) {
       if (!_conversationStore.shouldAcceptStreamingEvent(eventSessionId)) {
         return;
       }

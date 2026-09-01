@@ -38,6 +38,7 @@ import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 import 'handlers/device_settings_command_handler.dart';
 import 'handlers/device_control_command_handler.dart';
 import 'handlers/provider_command_handler.dart';
+import 'handlers/session_fork_command_handler.dart';
 import 'handlers/session_query_handler.dart';
 import 'handlers/session_recovery_command_handler.dart';
 import 'handlers/session_compact_command_handler.dart';
@@ -57,6 +58,7 @@ class SanadProtocolBridge {
   SessionRecoveryCommandHandler? __recoveryHandler;
   SessionTurnReplayCommandHandler? __turnReplayHandler;
   SessionCompactCommandHandler? __compactHandler;
+  SessionForkCommandHandler? __forkHandler;
   DeviceSettingsCommandHandler? __deviceSettingsHandler;
   DeviceControlCommandHandler? __deviceControlHandler;
 
@@ -182,18 +184,29 @@ class SanadProtocolBridge {
                   getIt.isRegistered<PersistedRuntimeStateRepository>()
                   ? getIt<PersistedRuntimeStateRepository>()
                   : null,
+              compactionBoundaries:
+                  getIt.isRegistered<CompactionBoundaryRepository>()
+                  ? getIt<CompactionBoundaryRepository>()
+                  : null,
               bridge: this,
             )
           : null;
 
   SessionCompactCommandHandler? get _compactHandler =>
-      __compactHandler ??=
-          getIt.isRegistered<SessionRunOrchestrator>()
-          ? SessionCompactCommandHandler(
-              orchestrator: getIt<SessionRunOrchestrator>(),
-              bridge: this,
-            )
-          : null;
+      __compactHandler ??= getIt.isRegistered<SessionRunOrchestrator>()
+      ? SessionCompactCommandHandler(
+          orchestrator: getIt<SessionRunOrchestrator>(),
+          bridge: this,
+        )
+      : null;
+
+  SessionForkCommandHandler? get _forkHandler =>
+      __forkHandler ??= getIt.isRegistered<SessionManager>()
+      ? SessionForkCommandHandler(
+          sessionManager: getIt<SessionManager>(),
+          bridge: this,
+        )
+      : null;
 
   GatewayEvent? translateCommand(Map<String, dynamic> data, String platformId) {
     return CanonicalToAgent.translate(data, platformId);
@@ -607,6 +620,12 @@ class SanadProtocolBridge {
       case 'session.compact':
         event = CanonicalEvent(
           type: CanonicalEventTypes.sessionCompact,
+          sessionId: sessionId,
+          payload: payload,
+        );
+      case 'session.fork':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.sessionFork,
           sessionId: sessionId,
           payload: payload,
         );
@@ -1117,6 +1136,9 @@ class SanadProtocolBridge {
         return;
       case CanonicalEventTypes.sessionCompact:
         await _compactHandler?.handle(event, emitEnvelope);
+        return;
+      case CanonicalEventTypes.sessionFork:
+        await _forkHandler?.handle(event, emitEnvelope);
         return;
       // Plan 30: runtime recovery commands
       case CanonicalEventTypes.sessionRuntimeRetry:

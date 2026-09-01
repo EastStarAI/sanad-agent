@@ -97,6 +97,42 @@ void main() {
     expect(find.text('old answer 0'), findsNothing);
   });
 
+  testWidgets('forked session opens at the trailing fork marker', (tester) async {
+    final messages = [
+      for (var i = 0; i < 1000; i += 1) _event('fork-old-$i', EventKind.finalAnswer, 'fork old answer $i'),
+      CanonicalEvent(
+        id: 'fork_child-1',
+        kind: EventKind.informational,
+        text: 'Conversation forked',
+        timestamp: DateTime.utc(2026, 8, 31),
+        metadata: const {
+          'informational_kind': 'session_fork',
+          'fork_sequence': 1,
+        },
+      ),
+    ];
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: messages,
+      initialViewportAnchorEventId: 'fork-old-0',
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Conversation forked'), findsOneWidget);
+    expect(find.text('fork old answer 0'), findsNothing);
+    expect(
+      _eventBottom(tester, 'fork_child-1'),
+      lessThanOrEqualTo(_visibleTimelineBottom(tester)),
+    );
+  });
+
   testWidgets('restores a saved event for an idle session', (tester) async {
     final messages = [
       for (var i = 0; i < 1000; i += 1) _event('old-$i', EventKind.finalAnswer, 'old answer $i'),
@@ -523,7 +559,13 @@ void main() {
         kind: EventKind.userMessage,
         text: 'editable prompt',
         timestamp: DateTime.utc(2026, 7, 18),
-        metadata: const {'request_id': 'request-editable'},
+        metadata: const {
+          'request_id': 'request-editable',
+          'message_id': 'message-editable',
+          'turn_id': 'turn-editable',
+          'input_kind': 'root_turn',
+          'replay_eligible': true,
+        },
       ),
     ];
 
@@ -556,6 +598,85 @@ void main() {
 
     expect(find.byKey(const Key('inline_message_editor')), findsNothing);
     expect(find.text('editable prompt'), findsOneWidget);
+  });
+
+  testWidgets('completed compaction hides replay actions for earlier messages', (
+    tester,
+  ) async {
+    CanonicalEvent replayableUser(String id, DateTime timestamp) => CanonicalEvent(
+      id: id,
+      kind: EventKind.userMessage,
+      text: id,
+      timestamp: timestamp,
+      metadata: {
+        'request_id': 'request-$id',
+        'message_id': 'message-$id',
+        'turn_id': 'turn-$id',
+        'input_kind': 'root_turn',
+        'replay_eligible': true,
+      },
+    );
+    final failedCompaction = CanonicalEvent(
+      id: 'failed-compaction',
+      kind: EventKind.informational,
+      status: EventStatus.error,
+      text: 'Context compaction failed',
+      timestamp: DateTime.utc(2026, 7, 18, 0, 1),
+      metadata: const {
+        'compaction_event': true,
+        'compaction_status': 'failed',
+      },
+    );
+    final compaction = CanonicalEvent(
+      id: 'compaction',
+      kind: EventKind.informational,
+      status: EventStatus.done,
+      text: 'Context compacted',
+      timestamp: DateTime.utc(2026, 7, 18, 0, 1),
+      metadata: const {
+        'compaction_event': true,
+        'compaction_status': 'completed',
+      },
+    );
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [
+        replayableUser('before-compaction', DateTime.utc(2026, 7, 18)),
+        failedCompaction,
+      ],
+    );
+    await tester.pump();
+
+    expect(find.byTooltip('Edit message'), findsOneWidget);
+    expect(find.byTooltip('Retry message'), findsOneWidget);
+
+    messagesController.add([
+      replayableUser('before-compaction', DateTime.utc(2026, 7, 18)),
+      failedCompaction,
+      compaction,
+    ]);
+    await tester.pump();
+    await tester.pump();
+    expect(find.byTooltip('Edit message'), findsNothing);
+    expect(find.byTooltip('Retry message'), findsNothing);
+
+    messagesController.add([
+      replayableUser('before-compaction', DateTime.utc(2026, 7, 18)),
+      failedCompaction,
+      compaction,
+      replayableUser('after-compaction', DateTime.utc(2026, 7, 18, 0, 2)),
+    ]);
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byTooltip('Edit message'), findsOneWidget);
+    expect(find.byTooltip('Retry message'), findsOneWidget);
   });
 
   testWidgets('followed thinking and final answer growth minimally clears the composer', (tester) async {

@@ -17,6 +17,8 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonica
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
+import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/message.dart';
@@ -330,11 +332,17 @@ _startResumeRuntime({
   required LLMAdapter adapter,
 }) async {
   await getIt.reset();
+  // ignore: invalid_use_of_visible_for_testing_member
+  SessionManager.resetForTesting();
   getIt.allowReassignment = true;
 
   getIt.registerSingleton<AuthManager>(MockAuthManager());
   getIt.registerSingleton<Config>(TestLocalConfig(port));
+  getIt.registerSingleton<AgentStateDatabase>(AgentStateDatabase());
   getIt.registerSingleton<SessionManager>(SessionManager());
+  getIt.registerSingleton<PersistedRuntimeStateRepository>(
+    PersistedRuntimeStateRepository.fromState(getIt<AgentStateDatabase>()),
+  );
   getIt.registerSingleton<LLMAdapter>(adapter);
   getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
   getIt.registerSingleton<PlatformRuntimeBridge>(PlatformRuntimeBridge());
@@ -615,6 +623,12 @@ void main() {
         ),
         Message(role: MessageRole.assistant, content: 'Old answer'),
       ]);
+      final target = sessions.getMessages(session.sessionId).first;
+      final targetMessageId = target.metadata?['message_id']?.toString();
+      final targetTurnId = target.metadata?['turn_id']?.toString();
+      final historyRevision = sessions
+          .getSession(session.sessionId)!
+          .historyRevision;
 
       final socket = await connectAuthenticatedLocalGateway(
         port: port,
@@ -631,6 +645,9 @@ void main() {
             'session_id': session.sessionId,
             'request_id': 'preflight-request',
             'target_request_id': 'target-request',
+            'target_message_id': targetMessageId,
+            'target_turn_id': targetTurnId,
+            'expected_history_revision': historyRevision,
             'action': 'edit',
             'message': 'Edited request',
           },
@@ -656,6 +673,9 @@ void main() {
             'session_id': session.sessionId,
             'request_id': 'replacement-request',
             'target_request_id': 'target-request',
+            'target_message_id': targetMessageId,
+            'target_turn_id': targetTurnId,
+            'expected_history_revision': historyRevision,
             'action': 'edit',
             'message': 'Edited request',
             'confirmed_replay_unsafe': true,
@@ -669,8 +689,20 @@ void main() {
         CanonicalEventTypes.sessionTurnReplayResult,
       );
       expect(accepted['payload']['outcome'], equals('accepted'));
-      await _waitForEvent(frames, 'user_message');
-      await _waitForEvent(frames, CanonicalEventTypes.finalAnswer);
+      final liveUser = await _waitForEvent(frames, 'user_message');
+      final liveAnswer = await _waitForEvent(
+        frames,
+        CanonicalEventTypes.finalAnswer,
+      );
+      expect(liveUser['payload']['message_id'], isNotEmpty);
+      expect(liveUser['payload']['turn_id'], isNotEmpty);
+      expect(liveUser['payload']['input_kind'], equals('root_turn'));
+      expect(liveUser['payload']['replay_eligible'], isTrue);
+      expect(liveAnswer['payload']['message_id'], isNotEmpty);
+      expect(
+        liveAnswer['payload']['turn_id'],
+        equals(liveUser['payload']['turn_id']),
+      );
 
       final messages = sessions.getMessages(session.sessionId);
       expect(
@@ -683,6 +715,16 @@ void main() {
         equals('replacement-request'),
       );
       expect(messages.last.content, equals('Replay complete.'));
+      expect(
+        sessions.getMessages(session.sessionId, includeSuperseded: true),
+        hasLength(greaterThan(messages.length)),
+      );
+      expect(
+        sessions
+            .getMessages(session.sessionId, includeSuperseded: true)
+            .any((message) => message.content == 'Original request'),
+        isTrue,
+      );
 
       await frames.cancel();
       await socket.close();
@@ -691,7 +733,156 @@ void main() {
     },
   );
 
-  test('local family broadcast uses the recipient socket device_id', () async {
+  test(
+    'local daemon forks a middle final answer into an independent child',
+    () async {
+      final port = await _reserveFreePort();
+      final workspaceDir = Directory('${tempSanadHome.path}/fork-workspace')
+        ..createSync(recursive: true);
+      final runtime = await _startResumeRuntime(
+        port: port,
+        workspacePath: workspaceDir.path,
+        adapter: ReplayScenarioLlmAdapter(),
+      );
+      final sessions = getIt<SessionManager>();
+      final session = sessions.createSession('ollama/gemma:2b');
+      sessions.updateSessionTitle(session.sessionId, 'Refactor auth');
+      sessions.saveSessionHistory(session.sessionId, [
+        Message(
+          role: MessageRole.user,
+          content: 'one',
+          metadata: const {
+            'request_id': 'req-1',
+            'message_id': 'm-u1',
+            'turn_id': 'turn-1',
+          },
+        ),
+        Message(
+          role: MessageRole.assistant,
+          content: 'first',
+          finishReason: LLMFinishReason.stop,
+          metadata: const {'message_id': 'm-a1', 'turn_id': 'turn-1'},
+        ),
+        Message(
+          role: MessageRole.user,
+          content: 'two',
+          metadata: const {
+            'request_id': 'req-2',
+            'message_id': 'm-u2',
+            'turn_id': 'turn-2',
+          },
+        ),
+        Message(
+          role: MessageRole.assistant,
+          content: 'second final',
+          finishReason: LLMFinishReason.stop,
+          metadata: const {'message_id': 'm-a2', 'turn_id': 'turn-2'},
+        ),
+        Message(
+          role: MessageRole.user,
+          content: 'three',
+          metadata: const {
+            'request_id': 'req-3',
+            'message_id': 'm-u3',
+            'turn_id': 'turn-3',
+          },
+        ),
+        Message(
+          role: MessageRole.assistant,
+          content: 'third',
+          finishReason: LLMFinishReason.stop,
+          metadata: const {'message_id': 'm-a3', 'turn_id': 'turn-3'},
+        ),
+      ]);
+
+      final socket = await connectAuthenticatedLocalGateway(
+        port: port,
+        sanadHomePath: tempSanadHome.path,
+      );
+      final frames = StreamIterator<dynamic>(socket);
+      await _nextFrame(frames);
+      socket.add(
+        jsonEncode({
+          'type': 'execute_command',
+          'command': CanonicalEventTypes.sessionFork,
+          'device_id': 'local-device-1',
+          'payload': {
+            'session_id': session.sessionId,
+            'request_id': 'fork-e2e',
+            'target_message_id': 'm-a2',
+            'target_turn_id': 'turn-2',
+          },
+        }),
+      );
+      final accepted = await _waitForEvent(
+        frames,
+        CanonicalEventTypes.sessionForkResult,
+      );
+      expect(accepted['payload']['outcome'], equals('accepted'));
+      expect(accepted['payload']['fork_sequence'], 1);
+      final childId =
+          (accepted['payload']['child'] as Map)['session_id'] as String;
+
+      final parent = sessions.getSession(session.sessionId)!;
+      final child = sessions.getSession(childId)!;
+      expect(parent.messages, hasLength(6));
+      expect(child.messages, hasLength(4));
+      expect(child.title, '(1) Refactor auth');
+      expect(child.messages.last.content, 'second final');
+      expect(
+        child.messages.map((message) => message.content),
+        isNot(contains('three')),
+      );
+
+      sessions.saveSessionHistory(session.sessionId, [
+        ...sessions.getMessages(session.sessionId),
+        Message(
+          role: MessageRole.user,
+          content: 'parent only',
+          metadata: const {'request_id': 'req-parent'},
+        ),
+      ]);
+      sessions.saveSessionHistory(childId, [
+        ...child.messages,
+        Message(
+          role: MessageRole.user,
+          content: 'child only',
+          metadata: const {'request_id': 'req-child'},
+        ),
+      ]);
+      expect(
+        sessions
+            .getMessages(session.sessionId)
+            .map((message) => message.content),
+        containsAll(['three', 'parent only']),
+      );
+      expect(
+        sessions
+            .getMessages(session.sessionId)
+            .map((message) => message.content),
+        isNot(contains('child only')),
+      );
+      expect(
+        sessions.getMessages(childId).map((message) => message.content),
+        contains('child only'),
+      );
+      expect(
+        sessions.getMessages(childId).map((message) => message.content),
+        isNot(contains('parent only')),
+      );
+      expect(
+        sessions.getMessages(childId).map((message) => message.content),
+        isNot(contains('three')),
+      );
+
+      await frames.cancel();
+      await socket.close();
+      await runtime.platform.dispose();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    },
+  );
+
+  test('local family broadcast preserves session device_id', () async {
     final port = await _reserveFreePort();
     await getIt.reset();
     tempSanadHome = Directory.systemTemp.createTempSync(
@@ -727,6 +918,40 @@ void main() {
         'device_id': 'local-agent',
         'command': 'get_sessions',
         'payload': {'request_id': 'req-sessions'},
+      }),
+    );
+    await frames.moveNext();
+    expect(
+      (jsonDecode(frames.current as String) as Map<String, dynamic>)['type'],
+      equals('device_event'),
+    );
+
+    // Bind the conversation to the logical local alias, then issue an
+    // unrelated hardware-scoped command on the same socket. The latter must
+    // not overwrite the conversation's routing identity.
+    socket.add(
+      jsonEncode({
+        'type': 'execute_command',
+        'device_id': 'local-agent',
+        'command': 'get_session_history',
+        'payload': {
+          'session_id': 'cloud-origin-session',
+          'request_id': 'req-history',
+        },
+      }),
+    );
+    await frames.moveNext();
+    expect(
+      (jsonDecode(frames.current as String) as Map<String, dynamic>)['type'],
+      equals('device_event'),
+    );
+
+    socket.add(
+      jsonEncode({
+        'type': 'execute_command',
+        'device_id': 'hardware-uuid',
+        'command': 'get_sessions',
+        'payload': {'request_id': 'req-hardware-sessions'},
       }),
     );
     await frames.moveNext();

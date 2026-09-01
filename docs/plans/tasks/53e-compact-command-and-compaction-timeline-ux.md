@@ -37,15 +37,15 @@ file_budget: 15
 - [x] exact `/compact` token مع عدم وجود user text إضافي ينفذ canonical `compact` command ولا يرسل `think`/message command.
 - [x] arguments أو trailing non-whitespace text تعيد validation محلية واضحة وتبقي draft دون إرسالها كرسالة.
 - [x] Escape/backspace/selection تتعامل مع command token كوحدة قابلة للإزالة دون تلويث plain-text export.
-- [x] إذا session busy، يعرض typed busy feedback وتبقى draft/command قابلة للمحاولة لاحقًا.
-- [x] إذا compaction started، يزال command draft فقط بعد canonical acceptance، لا بمجرد ضغط Enter.
+- [x] إذا session busy، يعرض typed busy feedback بعد استهلاك runtime command وإغلاق suggestions؛ إعادة المحاولة تكون باستدعاء جديد لا بإبقاء command كنص رسالة.
+- [x] بعد local validation، يستهلك client runtime command فور بدء dispatch ويحفظ draft فارغة دون انتظار النتيجة النهائية للضغط.
 - [x] command ثانية أثناء compaction تعرض in-progress outcome ولا تنشئ operation إضافية.
 - [x] الرسائل العادية تبقى قابلة للإرسال أثناء compaction وتدخل queue وفق 53d.
 
 ### E1 Exit
 
 - [x] repository/transport يسجل command واحدة ولا يسجل user message باسم `/compact`.
-- [x] failure قبل acceptance لا يمسح composer draft.
+- [x] failure لا يعيد runtime command إلى composer؛ drafts الخاصة برسائل المستخدم العادية تبقى خارج مسار control action.
 - [x] skill tokens في رسالة عادية تصدر كما كانت قبل المهمة.
 
 ## 4. Gate E2 — domain mapping وlive/history state

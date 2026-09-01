@@ -57,20 +57,30 @@ Controlled restart establishes a global drain across every active session.
 New turns are queued durably, while queued successors, restored work, retries,
 and automatic resumes cannot claim execution until the drain is cancelled or
 the replacement process restores them. A provider request already in flight is
-a restart blocker: the daemon waits for it to complete and persist. If every
-remaining blocker at timeout is a provider request, the daemon revalidates the
-exact work-item, run, and generation owner before cancelling that stream,
-records blocked recovery, and proceeds with restart. A stale timeout snapshot
-cannot cancel a request that already completed. Startup never replays an
+a restart blocker: the daemon waits for it to complete and persist. The
+configured timeout is an observation window, not permission for an ordinary
+restart to interrupt a provider request; provider-only windows repeat until
+the request reaches a safe checkpoint. At that boundary the active run is
+parked: it cannot begin another provider request or tool batch while the drain
+owns admission. Provider admission atomically checks the drain and commits the
+durable plus in-memory in-flight markers without an asynchronous gap, so the
+restart safety scan cannot accept a checkpoint that the same run immediately
+invalidates. Only `force=true` may revalidate the
+exact work-item, run, and generation owner, cancel that stream, record blocked
+recovery, and proceed with restart. A stale timeout snapshot cannot cancel a
+request that already completed. Startup never replays an
 interrupted request automatically. The durable `model_request_in_flight` marker
 makes an unexpected crash or forced exit fail closed rather than silently
 replaying an unknown provider outcome; a definitive live failure such as rate
 limit restores the preceding safe checkpoint and retains its normal recovery
-policy. Retry or Change Provider is explicit.
+policy. Retry or Change Provider is explicit and atomically restores the
+recognized `checkpoint_before_model_request` while claiming the work as
+`resuming`; an absent or unknown predecessor remains blocked without invoking
+the provider.
 The default safety timeout is 60 seconds and callers may provide
-`timeout_seconds` between 1 and 3600. A provider-only timeout follows the
-bounded cancellation policy above. Any other timeout fails without exiting
-unless `force=true` was explicitly supplied.
+`timeout_seconds` between 1 and 3600. Each provider-only timeout repeats the
+ordinary wait described above. Any other timeout fails without exiting unless
+`force=true` was explicitly supplied.
 
 The restart endpoint emits one response. For ordinary callers it waits until
 all active work is restart-safe, flushes the success response, then exits. If
@@ -84,6 +94,14 @@ Restart evaluation runs independently from HTTP acceptance, so health,
 permanent stop, and unrelated WebSocket traffic remain available during the
 wait. Permanent stop cancels the pending restart and owns the only subsequent
 exit.
+
+An unresolved interactive tool is already restart-safe when every unfinished
+tool-call id is covered by a durable `awaiting_permission` checkpoint and no
+provider request is in flight. Ordinary restart exits from that boundary
+without waiting for the user, cancelling the tool, or requiring force. Startup
+then changes the preserved running owner to `waiting` and republishes the same
+Ask User or permission request identity. Partial coverage never hides another
+unresolved tool in the same batch; that batch remains a restart blocker.
 
 A forced timeout deliberately preserves ambiguous durable tool state for
 startup recovery. Automatic startup remains fail-closed. Any later manual
@@ -167,7 +185,11 @@ permission decision, atomically claims `waiting` or `blocked` work as
 `resuming`, and resumes the assistant stream through normal canonical
 delivery. It restores the original run/generation owner and commits the work
 item as `completed` before publishing the terminal response. Resume never uses
-an ad-hoc transport side channel.
+an ad-hoc transport side channel. Once the terminal commit succeeds, it also
+reconciles the orchestrator projection: the restored suspension and stale busy
+ownership are removed and the durable FIFO is allowed to drain. This prevents
+an `idle` database snapshot from coexisting with admission that still queues
+new messages.
 
 Startup reconciles runtime notices against active non-terminal work before
 hydration. A notice with no active work owner is deleted as orphan state, and a

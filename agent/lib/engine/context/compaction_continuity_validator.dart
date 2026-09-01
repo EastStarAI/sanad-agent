@@ -57,16 +57,20 @@ class CompactionContinuityValidator {
         }
       }
 
+      // Only user-authored text may establish semantic continuity anchors.
+      // Tool output and assistant content commonly quote source files, logs,
+      // and JSON containing labels such as `goal:` or `blocker:`; treating
+      // those incidental strings as user intent makes valid compactions fail.
       if (entry.message.role == MessageRole.user) {
         addLabeled('goal');
         addLabeled('constraints', critical: false);
         addLabeled('pending ask');
         addLabeled('pending_ask');
         addLabeled('ask');
+        addLabeled('path', critical: false);
+        addLabeled('blocker');
+        addLabeled('decision', critical: false);
       }
-      addLabeled('path', critical: false);
-      addLabeled('blocker');
-      addLabeled('decision', critical: false);
       if (entry.message.role == MessageRole.tool &&
           (entry.message.toolCallId ?? '').isNotEmpty) {
         anchors.add(

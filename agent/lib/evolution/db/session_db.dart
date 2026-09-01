@@ -9,8 +9,24 @@ import '../models/session_state.dart';
 import '../models/suspended_checkpoint.dart';
 import '../../core/models/message.dart';
 import 'agent_state_database.dart';
+import 'compaction_boundary_repository.dart';
 import 'session_history_revision_repository.dart';
 import '../compaction/model_context_projection.dart';
+import 'message_history_identity.dart';
+import 'session_fork_copy.dart';
+
+/// Result of an atomic soft-rewind plus replacement-user commit.
+class SoftRewindAdmissionCommit {
+  final int historyRevision;
+  final String replacementMessageId;
+  final String replacementTurnId;
+
+  const SoftRewindAdmissionCommit({
+    required this.historyRevision,
+    required this.replacementMessageId,
+    required this.replacementTurnId,
+  });
+}
 
 /// Persistent storage for sessions, messages, scheduled tasks, and suspended
 /// checkpoints.
@@ -23,6 +39,7 @@ import '../compaction/model_context_projection.dart';
 /// [SessionDB.fromState].
 class SessionDB {
   late Database _db;
+  late CompactionBoundaryRepository _compactionBoundaries;
 
   /// The owner this instance is responsible for disposing. Non-null only for
   /// the default constructor (standalone); `null` when sharing an injected
@@ -30,7 +47,12 @@ class SessionDB {
   final AgentStateDatabase? _disposeOwnedState;
 
   SessionDB() : _disposeOwnedState = AgentStateDatabase() {
-    _db = _disposeOwnedState!.db;
+    final state = _disposeOwnedState!;
+    _db = state.db;
+    _compactionBoundaries = CompactionBoundaryRepository(
+      state,
+      SessionHistoryRevisionRepository(state),
+    );
   }
 
   /// Shares a single [AgentStateDatabase] connection without taking
@@ -39,6 +61,10 @@ class SessionDB {
   /// `ProviderInstanceRepository` share one `state.db` connection.
   SessionDB.fromState(AgentStateDatabase state) : _disposeOwnedState = null {
     _db = state.db;
+    _compactionBoundaries = CompactionBoundaryRepository(
+      state,
+      SessionHistoryRevisionRepository(state),
+    );
   }
 
   void dispose() {
@@ -172,9 +198,20 @@ class SessionDB {
         updated_at,
         last_user_message_at,
         route_revision,
-        route_updated_at
+        route_updated_at,
+        history_revision,
+        lineage_id,
+        parent_session_id,
+        forked_from_message_id,
+        forked_from_turn_id,
+        fork_sequence,
+        lineage_base_title,
+        fork_request_id
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, ?), ?, ?)
+      VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, ?), ?, ?, COALESCE(?, 0),
+        ?, ?, ?, ?, COALESCE(?, 0), ?, ?
+      )
       ON CONFLICT(session_id) DO UPDATE SET
         model = excluded.model,
         provider_id = COALESCE(excluded.provider_id, sessions.provider_id),
@@ -199,6 +236,14 @@ class SessionDB {
       normalizedCreatedAt,
       session.routeRevision,
       _normalizeDateTime(session.routeUpdatedAt),
+      session.historyRevision,
+      session.lineageId,
+      session.parentSessionId,
+      session.forkedFromMessageId,
+      session.forkedFromTurnId,
+      session.forkSequence,
+      session.lineageBaseTitle,
+      session.forkRequestId,
       normalizedLastUserMessageAt,
     ]);
     stmt.dispose();
@@ -382,8 +427,23 @@ class SessionDB {
   }
 
   void deleteSession(String sessionId) {
-    _db.execute('DELETE FROM sessions WHERE session_id = ?', [sessionId]);
-    // Foreign key with ON DELETE CASCADE will handle messages
+    const savepoint = 'sanad_delete_session';
+    _db.execute('SAVEPOINT $savepoint');
+    try {
+      _db.execute(
+        'UPDATE sessions SET parent_session_id = NULL '
+        'WHERE parent_session_id = ?',
+        [sessionId],
+      );
+      _db.execute('DELETE FROM sessions WHERE session_id = ?', [sessionId]);
+      _db.execute('RELEASE SAVEPOINT $savepoint');
+    } catch (_) {
+      _db.execute('ROLLBACK TO SAVEPOINT $savepoint');
+      _db.execute('RELEASE SAVEPOINT $savepoint');
+      rethrow;
+    }
+    // Foreign key with ON DELETE CASCADE handles this session's owned rows
+    // only. Children survive and lose their parent link in the same commit.
   }
 
   /// Saves (upserts) arbitrary metrics metadata for the last completed turn
@@ -414,43 +474,52 @@ class SessionDB {
   void replaceMessages(String sessionId, List<Message> messages) {
     _db.execute('BEGIN TRANSACTION');
     try {
-      final encodedMessages = [
-        for (final message in messages) jsonEncode(message.toJson()),
-      ];
-      final existing = _db.select(
-        'SELECT id, data FROM messages WHERE session_id = ? ORDER BY id ASC',
-        [sessionId],
+      final existing = getPersistedMessages(sessionId);
+      final assigned = MessageHistoryIdentity.assignIdentities(
+        messages,
+        existingActive: existing
+            .map((entry) => MessageHistoryIdentity.read(entry.message))
+            .toList(growable: false),
       );
       var unchangedPrefixLength = 0;
-      final comparableLength = existing.length < encodedMessages.length
+      final comparableLength = existing.length < assigned.length
           ? existing.length
-          : encodedMessages.length;
-      while (unchangedPrefixLength < comparableLength &&
-          existing[unchangedPrefixLength]['data'] ==
-              encodedMessages[unchangedPrefixLength]) {
+          : assigned.length;
+      final metadataUpdates = <({int rowId, Message message})>[];
+      while (unchangedPrefixLength < comparableLength) {
+        final existingMessage = existing[unchangedPrefixLength].message;
+        final replacementMessage = assigned[unchangedPrefixLength];
+        if (jsonEncode(existingMessage.toJson()) ==
+            jsonEncode(replacementMessage.toJson())) {
+          unchangedPrefixLength++;
+          continue;
+        }
+        if (!_sameSemanticMessage(existingMessage, replacementMessage)) {
+          break;
+        }
+        metadataUpdates.add((
+          rowId: existing[unchangedPrefixLength].rowId,
+          message: replacementMessage,
+        ));
         unchangedPrefixLength++;
       }
-
+      for (final entry in metadataUpdates) {
+        MessageHistoryIdentity.persist(
+          _db,
+          sessionId,
+          entry.message,
+          sqliteId: entry.rowId,
+        );
+      }
       if (unchangedPrefixLength < existing.length) {
         _db.execute('DELETE FROM messages WHERE session_id = ? AND id >= ?', [
           sessionId,
-          existing[unchangedPrefixLength]['id'],
+          existing[unchangedPrefixLength].rowId,
         ]);
       }
-
-      final stmt = _db.prepare('''
-        INSERT INTO messages (session_id, data)
-        VALUES (?, ?)
-      ''');
-
-      for (
-        var index = unchangedPrefixLength;
-        index < encodedMessages.length;
-        index++
-      ) {
-        stmt.execute([sessionId, encodedMessages[index]]);
+      for (final message in assigned.skip(unchangedPrefixLength)) {
+        MessageHistoryIdentity.persist(_db, sessionId, message);
       }
-      stmt.dispose();
       SessionHistoryRevisionRepository.bumpDatabase(_db, sessionId);
       _db.execute('COMMIT');
     } catch (e) {
@@ -459,23 +528,169 @@ class SessionDB {
     }
   }
 
-  List<Message> getMessages(String sessionId) {
+  static bool _sameSemanticMessage(Message left, Message right) {
+    final leftJson = left.toJson()..remove('metadata');
+    final rightJson = right.toJson()..remove('metadata');
+    return jsonEncode(leftJson) == jsonEncode(rightJson);
+  }
+
+  /// Compare-and-swaps [expectedHistoryRevision], revalidates the target as
+  /// the latest active root turn, soft-rewinds that tail, and inserts
+  /// [replacement] in one transaction. Returns `null` when the session is
+  /// missing, the revision does not match, or the target is no longer the
+  /// latest active root.
+  SoftRewindAdmissionCommit? commitSoftRewindAdmission({
+    required String sessionId,
+    required int expectedHistoryRevision,
+    required String targetMessageId,
+    required String targetTurnId,
+    required String targetRequestId,
+    required Message replacement,
+  }) {
+    _db.execute('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      final row = _db.select(
+        'SELECT history_revision FROM sessions WHERE session_id = ? LIMIT 1',
+        [sessionId],
+      );
+      if (row.isEmpty) {
+        _db.execute('ROLLBACK');
+        return null;
+      }
+      final current = (row.first['history_revision'] as num?)?.toInt() ?? 0;
+      if (current != expectedHistoryRevision) {
+        _db.execute('ROLLBACK');
+        return null;
+      }
+      final active = getMessages(sessionId);
+      final targetIndex = _latestReplayableRootIndex(
+        active,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+        targetRequestId: targetRequestId,
+      );
+      if (targetIndex < 0) {
+        _db.execute('ROLLBACK');
+        return null;
+      }
+      final assignedReplacement = MessageHistoryIdentity.assignIdentities([
+        replacement,
+      ]).single;
+      final replacementIdentity = MessageHistoryIdentity.read(
+        assignedReplacement,
+      );
+      final superseded = [
+        for (final message in active.skip(targetIndex))
+          MessageHistoryIdentity.markSuperseded(
+            message,
+            byTurnId: replacementIdentity.turnId,
+          ),
+      ];
+      _upsertMessageList(sessionId, [
+        ...active.take(targetIndex),
+        assignedReplacement,
+        ...superseded,
+      ]);
+      final next = current + 1;
+      _db.execute(
+        'UPDATE sessions SET history_revision = ?, updated_at = ? WHERE session_id = ?',
+        [next, _normalizeDateTime(DateTime.now()), sessionId],
+      );
+      _db.execute('COMMIT');
+      return SoftRewindAdmissionCommit(
+        historyRevision: next,
+        replacementMessageId: replacementIdentity.messageId,
+        replacementTurnId: replacementIdentity.turnId,
+      );
+    } catch (e) {
+      _db.execute('ROLLBACK');
+      rethrow;
+    }
+  }
+
+  static int _latestReplayableRootIndex(
+    List<Message> messages, {
+    required String targetMessageId,
+    required String targetTurnId,
+    required String targetRequestId,
+  }) {
+    final latestRootIndex = messages.lastIndexWhere(
+      MessageHistoryIdentity.isRootUser,
+    );
+    if (latestRootIndex < 0) return -1;
+    final target = messages[latestRootIndex];
+    final identity = MessageHistoryIdentity.read(target);
+    if (!identity.replayEligible ||
+        identity.messageId != targetMessageId ||
+        identity.turnId != targetTurnId ||
+        identity.requestId != targetRequestId) {
+      return -1;
+    }
+    return latestRootIndex;
+  }
+
+  void _upsertMessageList(String sessionId, List<Message> messages) {
+    final existingActive = getMessages(
+      sessionId,
+    ).map(MessageHistoryIdentity.read).toList(growable: false);
+    final assigned = MessageHistoryIdentity.assignIdentities(
+      messages,
+      existingActive: existingActive,
+    );
+    final incomingIds = <String>{};
+    for (final message in assigned) {
+      final persisted = MessageHistoryIdentity.persist(_db, sessionId, message);
+      incomingIds.add(MessageHistoryIdentity.read(persisted).messageId);
+    }
+    if (incomingIds.isEmpty) {
+      _db.execute(
+        "DELETE FROM messages WHERE session_id = ? AND history_status = 'active'",
+        [sessionId],
+      );
+      return;
+    }
+    final placeholders = List.filled(incomingIds.length, '?').join(', ');
+    _db.execute(
+      '''
+      DELETE FROM messages
+      WHERE session_id = ?
+        AND history_status = 'active'
+        AND message_id NOT IN ($placeholders)
+      ''',
+      [sessionId, ...incomingIds],
+    );
+  }
+
+  List<Message> getMessages(
+    String sessionId, {
+    bool includeSuperseded = false,
+  }) {
     return getPersistedMessages(
       sessionId,
+      includeSuperseded: includeSuperseded,
     ).map((entry) => entry.message).toList(growable: false);
   }
 
-  List<PersistedMessage> getPersistedMessages(String sessionId) {
+  List<PersistedMessage> getPersistedMessages(
+    String sessionId, {
+    bool includeSuperseded = false,
+  }) {
     final result = _db.select(
-      'SELECT * FROM messages WHERE session_id = ? ORDER BY id ASC',
+      includeSuperseded
+          ? 'SELECT * FROM messages WHERE session_id = ? ORDER BY id ASC'
+          : '''
+            SELECT * FROM messages
+            WHERE session_id = ?
+              AND (history_status = 'active' OR history_status IS NULL)
+            ORDER BY id ASC
+            ''',
       [sessionId],
     );
     return result
         .map((row) {
-          final data = jsonDecode(row['data'] as String);
           return PersistedMessage(
             rowId: row['id'] as int,
-            message: Message.fromJson(data),
+            message: MessageHistoryIdentity.fromRow(row),
           );
         })
         .toList(growable: false);
@@ -652,4 +867,244 @@ class SessionDB {
       toolCallId,
     ]);
   }
+
+  /// Creates a child session and copies the active prefix through [targetTurnId]
+  /// in one write transaction. Runtime work is not copied.
+  SessionForkCommit commitFork({
+    required String sourceSessionId,
+    required String requestId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) {
+    if (sourceSessionId.isEmpty ||
+        requestId.isEmpty ||
+        targetMessageId.isEmpty ||
+        targetTurnId.isEmpty) {
+      return const SessionForkCommit(
+        outcome: SessionForkOutcome.invalidRequest,
+      );
+    }
+
+    const maxAttempts = 8;
+    Object? lastError;
+    for (var attempt = 0; attempt < maxAttempts; attempt++) {
+      _db.execute('BEGIN IMMEDIATE TRANSACTION');
+      try {
+        final existing = _db.select(
+          '''
+          SELECT session_id, parent_session_id,
+                 forked_from_message_id, forked_from_turn_id
+          FROM sessions
+          WHERE fork_request_id = ?
+          LIMIT 1
+          ''',
+          [requestId],
+        );
+        if (existing.isNotEmpty) {
+          final row = existing.first;
+          final matchesCommand =
+              row['parent_session_id'] == sourceSessionId &&
+              row['forked_from_message_id'] == targetMessageId &&
+              row['forked_from_turn_id'] == targetTurnId;
+          if (!matchesCommand) {
+            _db.execute('ROLLBACK');
+            return const SessionForkCommit(
+              outcome: SessionForkOutcome.invalidRequest,
+            );
+          }
+          final childId = row['session_id'] as String;
+          _db.execute('COMMIT');
+          return SessionForkCommit(
+            outcome: SessionForkOutcome.alreadyExists,
+            child: getSession(childId),
+          );
+        }
+
+        final parent = getSession(sourceSessionId);
+        if (parent == null) {
+          _db.execute('ROLLBACK');
+          return const SessionForkCommit(
+            outcome: SessionForkOutcome.sessionNotFound,
+          );
+        }
+
+        final activePersisted = getPersistedMessages(sourceSessionId);
+        final active = activePersisted
+            .map((entry) => entry.message)
+            .toList(growable: false);
+        final target = _findActive(
+          active,
+          messageId: targetMessageId,
+          turnId: targetTurnId,
+        );
+        if (target == null) {
+          final stored = getMessages(sourceSessionId, includeSuperseded: true);
+          final found = _findActive(
+            stored,
+            messageId: targetMessageId,
+            turnId: targetTurnId,
+            ignoreStatus: true,
+          );
+          _db.execute('ROLLBACK');
+          return SessionForkCommit(
+            outcome: found == null
+                ? SessionForkOutcome.targetNotFound
+                : SessionForkOutcome.targetNotForkable,
+          );
+        }
+        if (!SessionForkCopy.isForkableFinalAnswer(target)) {
+          _db.execute('ROLLBACK');
+          return const SessionForkCommit(
+            outcome: SessionForkOutcome.targetNotForkable,
+          );
+        }
+
+        final prefix = SessionForkCopy.activePrefixThroughTurn(
+          activeMessages: active,
+          targetMessageId: targetMessageId,
+          targetTurnId: targetTurnId,
+        );
+        if (prefix.isEmpty) {
+          _db.execute('ROLLBACK');
+          return const SessionForkCommit(
+            outcome: SessionForkOutcome.targetNotFound,
+          );
+        }
+        final sourcePrefix = activePersisted
+            .take(prefix.length)
+            .toList(growable: false);
+
+        final lineageId = parent.lineageId;
+        final sequence = _nextForkSequence(lineageId);
+        final baseTitle = SessionForkCopy.baseTitleOf(
+          parent.lineageBaseTitle,
+          parent.title,
+        );
+        final now = DateTime.now().toUtc();
+        final child = SessionState(
+          sessionId: const Uuid().v4(),
+          model: parent.model,
+          providerId: parent.providerId,
+          thinkingMode: parent.thinkingMode,
+          title: SessionForkCopy.forkTitle(sequence, baseTitle),
+          titleStatus: SessionTitleStatus.finalized,
+          workspaceId: parent.workspaceId,
+          createdAt: now,
+          updatedAt: now,
+          // Fork creation is new sidebar activity even though the materialized
+          // user rows preserve their historical timestamps.
+          lastUserMessageAt: now,
+          routeRevision: parent.routeRevision,
+          routeUpdatedAt: parent.routeUpdatedAt,
+          historyRevision: 0,
+          lineageId: lineageId,
+          parentSessionId: parent.sessionId,
+          forkedFromMessageId: targetMessageId,
+          forkedFromTurnId: targetTurnId,
+          forkSequence: sequence,
+          lineageBaseTitle: baseTitle,
+          forkRequestId: requestId,
+        );
+        saveSession(child);
+        if (parent.lineageBaseTitle == null ||
+            parent.lineageBaseTitle!.trim().isEmpty) {
+          _db.execute(
+            '''
+            UPDATE sessions
+            SET lineage_base_title = ?
+            WHERE session_id = ?
+              AND (lineage_base_title IS NULL OR TRIM(lineage_base_title) = '')
+            ''',
+            [baseTitle, parent.sessionId],
+          );
+        }
+        final rewrittenPrefix = SessionForkCopy.rewritePrefix(prefix);
+        final childRowIdBySourceRowId = <int, int>{};
+        for (var index = 0; index < rewrittenPrefix.length; index++) {
+          MessageHistoryIdentity.persist(
+            _db,
+            child.sessionId,
+            rewrittenPrefix[index],
+          );
+          childRowIdBySourceRowId[sourcePrefix[index].rowId] =
+              _db.lastInsertRowId;
+        }
+        _compactionBoundaries.cloneTerminalOperationsForFork(
+          sourceSessionId: sourceSessionId,
+          childSessionId: child.sessionId,
+          childRowIdBySourceRowId: childRowIdBySourceRowId,
+          sourcePrefixEndRowId: sourcePrefix.last.rowId,
+          childHistoryRevision: child.historyRevision,
+        );
+        _db.execute('COMMIT');
+        return SessionForkCommit(
+          outcome: SessionForkOutcome.accepted,
+          child: getSession(child.sessionId),
+        );
+      } catch (error) {
+        _db.execute('ROLLBACK');
+        lastError = error;
+        if (error is SqliteException && _isLineageSequenceConflict(error)) {
+          continue;
+        }
+        return const SessionForkCommit(outcome: SessionForkOutcome.failed);
+      }
+    }
+    if (lastError != null) {
+      return const SessionForkCommit(outcome: SessionForkOutcome.failed);
+    }
+    return const SessionForkCommit(outcome: SessionForkOutcome.failed);
+  }
+
+  int _nextForkSequence(String lineageId) {
+    final row = _db.select(
+      'SELECT MAX(fork_sequence) AS max_seq FROM sessions WHERE lineage_id = ?',
+      [lineageId],
+    );
+    final current = (row.first['max_seq'] as num?)?.toInt() ?? 0;
+    return current + 1;
+  }
+
+  static Message? _findActive(
+    List<Message> messages, {
+    required String messageId,
+    required String turnId,
+    bool ignoreStatus = false,
+  }) {
+    for (final message in messages) {
+      final identity = MessageHistoryIdentity.read(message);
+      if (identity.messageId != messageId || identity.turnId != turnId) {
+        continue;
+      }
+      if (!ignoreStatus &&
+          identity.historyStatus != MessageHistoryIdentity.active) {
+        continue;
+      }
+      return message;
+    }
+    return null;
+  }
+
+  static bool _isLineageSequenceConflict(SqliteException error) {
+    final text = error.message;
+    return text.contains('idx_sessions_lineage_sequence') ||
+        text.contains('UNIQUE constraint failed');
+  }
+}
+
+enum SessionForkOutcome {
+  accepted,
+  alreadyExists,
+  targetNotFound,
+  targetNotForkable,
+  sessionNotFound,
+  invalidRequest,
+  failed,
+}
+
+class SessionForkCommit {
+  final SessionForkOutcome outcome;
+  final SessionState? child;
+
+  const SessionForkCommit({required this.outcome, this.child});
 }

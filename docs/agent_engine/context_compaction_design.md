@@ -56,6 +56,10 @@ row as typed failed and never mutates canonical history.
 - After a boundary is active, automatic preflight measures summary + retained
   tail + post-boundary rows. It must not remeasure the hidden canonical head,
   otherwise every later turn would retrigger compaction.
+- Persistence keeps `messages.id` stable for top-level metadata-only patches.
+  Usage, model-step, and delivery metadata therefore cannot invalidate an active
+  boundary or force preflight back to the full canonical transcript; a genuine
+  message-semantic edit still rewrites the suffix and rejects an unsafe summary.
 
 ## Tail selection and projection pruning (C1–C2)
 
@@ -92,9 +96,14 @@ Structured summary sections:
 9. Remaining Work and Safest Next Action
 10. Critical Context That Must Not Be Lost
 
-Continuity anchors extracted before summarization must survive validation. One
-bounded repair attempt is allowed; weak fallback summaries never activate a
-boundary. Failures may carry `CompactionAntiThrashingHints` for 53d cooldown.
+Continuity anchors extracted before summarization must survive validation.
+Semantic labels (`goal`, `blocker`, `pending ask`, `decision`, `path`) establish
+intent only when they occur in user-authored messages. Assistant content and
+tool output frequently quote source, logs, JSON, or plans containing the same
+labels and therefore cannot create semantic anchors; tool effects retain their
+typed `tool_call_id` supporting anchor instead. One bounded repair attempt is
+allowed; weak fallback summaries never activate a boundary. Failures may carry
+`CompactionAntiThrashingHints` for 53d cooldown.
 One failed Auto attempt also opens a per-run breaker so later tool-loop model
 steps cannot repeat compaction work; manual compaction and a new run remain
 eligible.

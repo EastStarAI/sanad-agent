@@ -108,7 +108,7 @@ file_budget: 14
 
 ## 7. Gate C4 — Continuity validation وanti-degradation
 
-- [x] استخراج continuity anchors typed قبل التلخيص: user goals، pending asks، constraints، paths/IDs، tool side effects، blockers، والnext action المثبتة.
+- [x] استخراج continuity anchors typed قبل التلخيص: semantic labels من رسائل المستخدم فقط، وtool side effects من الهوية typed؛ لا تتحول labels المقتبسة داخل tool/assistant output إلى user intent حرجة.
 - [x] تصنيف anchors إلى critical وsupporting؛ critical missing تمنع activation.
 - [x] التحقق من required sections، الحجم، redaction، وanchor coverage بعد summary.
 - [x] عند نقص قابل للإصلاح، تنفيذ repair attempt واحدة محدودة تحمل missing anchors فقط.

@@ -158,6 +158,20 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     );
   }
 
+  /// Reconciles the in-memory projection after a restart-restored suspended
+  /// decision commits its original durable work item as terminal.
+  ///
+  /// [SuspendedResumeService] owns reconstructing the lost interactive tool
+  /// continuation, but the orchestrator remains the admission and queue-drain
+  /// authority. The durable terminal commit must already have removed active
+  /// work before this method is called.
+  void reconcilePersistedSuspendedTerminal(String sessionId) {
+    if (persistedState?.findActiveWorkItem(sessionId) != null) return;
+    _suspendedEvents.remove(sessionId);
+    _busySessions.remove(sessionId);
+    _drainNextQueuedEvent(sessionId);
+  }
+
   bool acknowledgeStopRecovery(
     String sessionId,
     String stopRequestId, {
@@ -236,6 +250,25 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         (providerInstanceId != null && providerInstanceId.isNotEmpty) ||
         (modelId != null && modelId.isNotEmpty);
     try {
+      final activeItem = persistedState?.findActiveWorkItem(sessionId);
+      Map<String, dynamic>? claimedContinuationMetadata;
+      if (activeItem != null &&
+          (recoveryReason == 'manual_retry' ||
+              recoveryReason == 'provider_changed') &&
+          activeItem.continuationMetadata['checkpoint_kind'] ==
+              ContinuationCheckpointCoordinator
+                  .checkpointKindModelRequestInFlight &&
+          activeItem
+                  .continuationMetadata['restart_interrupted_provider_request'] ==
+              true) {
+        claimedContinuationMetadata =
+            ContinuationCheckpointCoordinator.metadataForInterruptedProviderRetry(
+              activeItem.continuationMetadata,
+            );
+        if (claimedContinuationMetadata == null) {
+          return ResumeSuspendedResult.unsafeCheckpoint;
+        }
+      }
       final resumedRequest = overrideTurnRoute(
         suspended.request,
         providerInstanceId: providerInstanceId,
@@ -254,7 +287,6 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           modelId: modelId,
         );
       }
-      final activeItem = persistedState?.findActiveWorkItem(sessionId);
       if (activeItem != null) {
         if (activeItem.state == SessionWorkState.resuming) {
           return ResumeSuspendedResult.alreadyResuming;
@@ -263,6 +295,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           workItemId: activeItem.workItemId,
           fromState: activeItem.state,
           toState: SessionWorkState.resuming,
+          continuationMetadata: claimedContinuationMetadata,
         );
       }
       _busySessions.add(sessionId);
@@ -762,6 +795,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     if (store == null) return ControlledRestartCheckpointResult.safe;
     final elapsed = Stopwatch()..start();
     while (true) {
+      final awaitingInteractiveTools = <String, Set<String>>{};
+      for (final checkpoint in await _listAwaitingSuspensions()) {
+        awaitingInteractiveTools
+            .putIfAbsent(checkpoint.sessionId, () => <String>{})
+            .add(checkpoint.toolCallId);
+      }
       final blockers = <ControlledRestartBlocker>[];
       for (final sessionId in store.findAllSessionIdsWithWorkItems()) {
         final item = store.findActiveWorkItem(sessionId);
@@ -810,6 +849,20 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
                       toolCallId == requesterToolCallId);
                 })
                 .toList(growable: false);
+        final awaitingForSession =
+            awaitingInteractiveTools[sessionId] ?? const <String>{};
+        final isDurableInteractiveWait =
+            (item.state == SessionWorkState.running ||
+                item.state == SessionWorkState.waiting) &&
+            !providerRequestInFlight &&
+            executingTools.isNotEmpty &&
+            executingTools.every(awaitingForSession.contains);
+        if (isDurableInteractiveWait) {
+          // The unresolved checkpoint owns every unfinished tool call. The
+          // replacement daemon will restore this exact work as `waiting` and
+          // publish no interruption result until the user answers or denies.
+          continue;
+        }
         final requesterCompletionSafe =
             !requireRequesterCompletion ||
             sessionId != requesterSessionId ||
@@ -1458,6 +1511,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           lastUserMessageAt: existingSession.lastUserMessageAt,
           routeRevision: existingSession.routeRevision,
           routeUpdatedAt: existingSession.routeUpdatedAt,
+          historyRevision: existingSession.historyRevision,
           messages: existingSession.messages,
         ),
       );
@@ -1977,4 +2031,5 @@ enum ResumeSuspendedResult {
   alreadyResuming,
   missing,
   restartDraining,
+  unsafeCheckpoint,
 }

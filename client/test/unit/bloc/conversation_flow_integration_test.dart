@@ -24,6 +24,8 @@ import 'package:sanad_client/features/conversations/presentation/bloc/conversati
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../helpers/fake_device_repository.dart';
@@ -189,6 +191,68 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       expect(conversationRepository.loadedHistorySessionIds, contains(session1.id));
+    });
+
+    test('replay confirmation resubmission re-reads the current route', () async {
+      socket.setConnected(true);
+      conversationRepository.transportReady = true;
+      agentRepository.seedAgents([agent], activeAgentId: agent.id);
+      agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+      wire();
+      await Future<void>.delayed(Duration.zero);
+      await sessionCubit.selectSession(session1);
+      await Future<void>.delayed(Duration.zero);
+      messagesCubit.setNextMessagePreferences(
+        providerId: 'provider-before',
+        model: 'model-before',
+        thinkingMode: 'balanced',
+      );
+      conversationRepository.replayResults.addAll(const [
+        TurnReplayResult(
+          outcome: 'confirmation_required',
+          safety: TurnReplaySafety.unsafe,
+          requiresConfirmation: true,
+        ),
+        TurnReplayResult(
+          outcome: 'accepted',
+          safety: TurnReplaySafety.unsafe,
+          requiresConfirmation: false,
+          historyRevision: 1,
+        ),
+      ]);
+
+      final preflight = await messagesCubit.replayTurn(
+        targetRequestId: 'request-root',
+        targetMessageId: 'message-root',
+        targetTurnId: 'turn-root',
+        action: TurnReplayAction.retry,
+      );
+      expect(preflight.requiresConfirmation, isTrue);
+
+      messagesCubit.setNextMessagePreferences(
+        providerId: 'provider-after',
+        model: 'model-after',
+        thinkingMode: 'deep',
+      );
+      final accepted = await messagesCubit.replayTurn(
+        targetRequestId: 'request-root',
+        targetMessageId: 'message-root',
+        targetTurnId: 'turn-root',
+        action: TurnReplayAction.retry,
+        confirmedReplayUnsafe: true,
+      );
+      expect(accepted.isAccepted, isTrue);
+
+      final before = conversationRepository.replayRequests.first;
+      final after = conversationRepository.replayRequests.last;
+      expect(before['provider_instance_id'], 'provider-before');
+      expect(before['model_id'], 'model-before');
+      expect(before['thinking_mode'], 'balanced');
+      expect(before['confirmed_replay_unsafe'], isFalse);
+      expect(after['provider_instance_id'], 'provider-after');
+      expect(after['model_id'], 'model-after');
+      expect(after['thinking_mode'], 'deep');
+      expect(after['confirmed_replay_unsafe'], isTrue);
     });
 
     test('switching sessions clears previous and loads new history', () async {
@@ -446,6 +510,158 @@ void main() {
     });
   });
 
+  group('fork: navigate to child or stay on failure', () {
+    test('accepted fork selects the child and keeps the parent listed', () async {
+      socket.setConnected(true);
+      conversationRepository.transportReady = true;
+      agentRepository.seedAgents([agent], activeAgentId: agent.id);
+      agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+      wire();
+      await Future<void>.delayed(Duration.zero);
+      await sessionCubit.selectSession(session1);
+      await Future<void>.delayed(Duration.zero);
+
+      final child = Session(
+        id: 'child-fork-1',
+        title: '(1) First session',
+        deviceId: agent.id,
+        createdAt: DateTime(2026, 8, 30),
+        updatedAt: DateTime(2026, 8, 30),
+      );
+      conversationRepository.forkResult = SessionForkResult(
+        outcome: 'accepted',
+        child: child,
+      );
+
+      final result = await inputCubit.forkSession(
+        targetMessageId: 'm-final',
+        targetTurnId: 'turn-1',
+      );
+
+      expect(result.isAccepted, isTrue);
+      expect(sessionCubit.state.selectedSession?.id, 'child-fork-1');
+      expect(
+        sessionCubit.state.agentSessions[agent.id]?.map((item) => item.id),
+        containsAll([session1.id, 'child-fork-1']),
+      );
+      expect(conversationRepository.forkRequests.single['session_id'], session1.id);
+      expect(
+        conversationRepository.forkRequests.single.containsKey('messages'),
+        isFalse,
+      );
+    });
+
+    test('already_exists still opens the existing child', () async {
+      socket.setConnected(true);
+      conversationRepository.transportReady = true;
+      agentRepository.seedAgents([agent], activeAgentId: agent.id);
+      agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+      wire();
+      await Future<void>.delayed(Duration.zero);
+      await sessionCubit.selectSession(session1);
+      await Future<void>.delayed(Duration.zero);
+
+      final child = Session(
+        id: 'child-fork-existing',
+        title: '(1) First session',
+        deviceId: agent.id,
+        createdAt: DateTime(2026, 8, 30),
+        updatedAt: DateTime(2026, 8, 30),
+      );
+      conversationRepository.forkResult = SessionForkResult(
+        outcome: 'already_exists',
+        child: child,
+      );
+
+      final result = await inputCubit.forkSession(
+        targetMessageId: 'm-final',
+        targetTurnId: 'turn-1',
+      );
+
+      expect(result.isAccepted, isTrue);
+      expect(sessionCubit.state.selectedSession?.id, 'child-fork-existing');
+      expect(
+        sessionCubit.state.agentSessions[agent.id]?.map((item) => item.id),
+        containsAll([session1.id, 'child-fork-existing']),
+      );
+    });
+
+    test('navigation failure keeps the committed child in the sidebar', () async {
+      socket.setConnected(true);
+      conversationRepository.transportReady = true;
+      agentRepository.seedAgents([agent], activeAgentId: agent.id);
+      agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+      sessionCubit = _NavigationFailingSessionCubit(
+        agentCubit: agentCubit,
+        socketService: socket,
+        conversationRepository: conversationRepository,
+      );
+      messagesCubit = SessionMessagesCubit(
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        conversationRepository: conversationRepository,
+        preferencesRepository: FakeDevicePreferencesRepository(),
+      );
+      inputCubit = ConversationInputCubit(messagesCubit: messagesCubit);
+      await Future<void>.delayed(Duration.zero);
+      await sessionCubit.selectSession(session1);
+      await Future<void>.delayed(Duration.zero);
+
+      final child = Session(
+        id: 'child-fork-navigation-failed',
+        title: '(1) First session',
+        deviceId: agent.id,
+        createdAt: DateTime(2026, 8, 30),
+        updatedAt: DateTime(2026, 8, 30),
+      );
+      conversationRepository.forkResult = SessionForkResult(
+        outcome: 'accepted',
+        child: child,
+      );
+      (sessionCubit as _NavigationFailingSessionCubit).failSelection = true;
+
+      final result = await inputCubit.forkSession(
+        targetMessageId: 'm-final',
+        targetTurnId: 'turn-1',
+      );
+
+      expect(result.isAccepted, isTrue);
+      expect(result.navigationFailed, isTrue);
+      expect(sessionCubit.state.selectedSession?.id, session1.id);
+      expect(
+        sessionCubit.state.agentSessions[agent.id]?.map((item) => item.id),
+        contains('child-fork-navigation-failed'),
+      );
+    });
+
+    test('failed fork keeps the original session selected', () async {
+      socket.setConnected(true);
+      conversationRepository.transportReady = true;
+      agentRepository.seedAgents([agent], activeAgentId: agent.id);
+      agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+      wire();
+      await Future<void>.delayed(Duration.zero);
+      await sessionCubit.selectSession(session1);
+      await Future<void>.delayed(Duration.zero);
+
+      conversationRepository.forkResult = const SessionForkResult(
+        outcome: 'target_not_forkable',
+      );
+
+      final result = await inputCubit.forkSession(
+        targetMessageId: 'm-final',
+        targetTurnId: 'turn-1',
+      );
+
+      expect(result.isAccepted, isFalse);
+      expect(sessionCubit.state.selectedSession?.id, session1.id);
+      expect(
+        sessionCubit.state.agentSessions[agent.id]?.map((item) => item.id),
+        isNot(contains('child-fork-1')),
+      );
+    });
+  });
+
   // ── Step 8: Logout resets the chain ───────────────────────────────────────
 
   group('step 8: logout clears all cached state', () {
@@ -467,4 +683,22 @@ void main() {
       expect(messagesCubit.state.messages, isEmpty);
     });
   });
+}
+
+class _NavigationFailingSessionCubit extends SessionCubit {
+  _NavigationFailingSessionCubit({
+    required super.agentCubit,
+    required super.socketService,
+    required super.conversationRepository,
+  });
+
+  bool failSelection = false;
+
+  @override
+  Future<void> selectSession(Session session) {
+    if (failSelection) {
+      throw StateError('navigation failed');
+    }
+    return super.selectSession(session);
+  }
 }
