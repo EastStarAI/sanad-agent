@@ -2,7 +2,7 @@
 
 ## الحالة
 
-- **الحالة:** اكتمل إصلاح تكافؤ أهلية Edit/Retry بين live history والـhydration والتحقق منه.
+- **الحالة:** اكتمل pagination وإصلاح تكافؤ أهلية Edit/Retry بين live history والـhydration والتحقق منهما.
 - **الفرع:** `docs/task-84-conversation-history-pagination`.
 - **البوابة الحالية:** G8 — مغلقة.
 - **نسبة العمل المتبقي:** 0%.
