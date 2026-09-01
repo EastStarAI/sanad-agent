@@ -27,6 +27,8 @@ class ConversationCommands {
   int _historyHydrationGeneration = 0;
   Future<List<CanonicalEvent>>? _olderHistoryLoad;
   String? _olderHistoryCursor;
+  Future<List<CanonicalEvent>>? _newerHistoryLoad;
+  String? _newerHistoryCursor;
 
   ConversationCommands({
     required ConversationCommandGateway gateway,
@@ -766,10 +768,18 @@ class ConversationCommands {
     String? anchorEventId,
   }) async {
     final generation = ++_historyHydrationGeneration;
-    final baselineEventIds = _conversationStore.currentSessionId == sessionId
-        ? _conversationStore.currentMessages.map((event) => event.id).toSet()
-        : const <String>{};
-    _conversationStore.activateSession(sessionId);
+    final restoredRetainedHistory = _conversationStore.activateSession(
+      sessionId,
+    );
+    final retainedEvents = List<CanonicalEvent>.from(
+      _conversationStore.currentMessages,
+    );
+    final retainedHistoryIsComplete =
+        restoredRetainedHistory &&
+        retainedEvents.isNotEmpty &&
+        !_conversationStore.historyHasMore &&
+        !_conversationStore.historyHasNewer;
+    final baselineEventIds = retainedEvents.map((event) => event.id).toSet();
 
     final requestId = generateConversationRequestId();
     final result = await _gateway.request(
@@ -835,10 +845,15 @@ class ConversationCommands {
         return events;
       }
 
+      final hydratedEvents = retainedHistoryIsComplete
+          ? _mergeRetainedHistoryWithHydration(retainedEvents, events)
+          : events;
       _conversationStore.setHistory(
-        events,
-        hasMore: payload['has_more'] == true,
-        nextCursor: payload['next_cursor']?.toString(),
+        hydratedEvents,
+        hasMore: retainedHistoryIsComplete ? false : payload['has_more'] == true,
+        nextCursor: retainedHistoryIsComplete ? null : payload['next_cursor']?.toString(),
+        hasNewer: retainedHistoryIsComplete ? false : payload['has_newer'] == true,
+        nextNewerCursor: retainedHistoryIsComplete ? null : payload['next_newer_cursor']?.toString(),
       );
       _conversationStore.setQueuedMessages(queuedEvents);
       _conversationStore.hydratePendingSteers(
@@ -860,7 +875,7 @@ class ConversationCommands {
           // The durable payload remains available for a later hydration retry.
         }
       }
-      final historyIdentityKeys = events.expand(_reconciliationIdentityKeys).toSet();
+      final historyIdentityKeys = hydratedEvents.expand(_reconciliationIdentityKeys).toSet();
       for (final event in transientEvents) {
         if (_isAlreadyRepresentedInHistory(
           event,
@@ -879,6 +894,22 @@ class ConversationCommands {
       'History hydration failed phase=request session_id=$sessionId request_id=$requestId',
     );
     throw StateError('Session history request failed');
+  }
+
+  List<CanonicalEvent> _mergeRetainedHistoryWithHydration(
+    List<CanonicalEvent> retained,
+    List<CanonicalEvent> hydrated,
+  ) {
+    final hydratedById = {
+      for (final event in hydrated) event.id: event,
+    };
+    final merged = <CanonicalEvent>[
+      for (final event in retained) hydratedById.remove(event.id) ?? event,
+    ];
+    merged.addAll(
+      hydrated.where((event) => hydratedById.remove(event.id) != null),
+    );
+    return merged;
   }
 
   Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
@@ -943,6 +974,68 @@ class ConversationCommands {
       events,
       hasMore: payload['has_more'] == true,
       nextCursor: payload['next_cursor']?.toString(),
+      requestedCursor: cursor,
+    );
+    return List<CanonicalEvent>.from(_conversationStore.currentMessages);
+  }
+
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) {
+    final cursor = _conversationStore.historyNextNewerCursor;
+    if (_conversationStore.currentSessionId != sessionId || !_conversationStore.historyHasNewer || cursor == null) {
+      return Future.value(
+        List<CanonicalEvent>.from(_conversationStore.currentMessages),
+      );
+    }
+    final existing = _newerHistoryLoad;
+    if (existing != null && _newerHistoryCursor == cursor) return existing;
+
+    final generation = _historyHydrationGeneration;
+    final load = _loadNewerSessionHistory(
+      sessionId: sessionId,
+      cursor: cursor,
+      generation: generation,
+    );
+    _newerHistoryCursor = cursor;
+    _newerHistoryLoad = load;
+    return load.whenComplete(() {
+      if (identical(_newerHistoryLoad, load)) {
+        _newerHistoryLoad = null;
+        _newerHistoryCursor = null;
+      }
+    });
+  }
+
+  Future<List<CanonicalEvent>> _loadNewerSessionHistory({
+    required String sessionId,
+    required String cursor,
+    required int generation,
+  }) async {
+    final requestId = generateConversationRequestId();
+    final result = await _gateway.request(
+      command: 'get_session_history',
+      payload: {
+        'request_id': requestId,
+        'session_id': sessionId,
+        'limit': 100,
+        'cursor': cursor,
+      },
+      requestId: requestId,
+    );
+    if (result == null) {
+      throw StateError('Newer session history request failed');
+    }
+    if (generation != _historyHydrationGeneration || _conversationStore.currentSessionId != sessionId) {
+      return List<CanonicalEvent>.from(_conversationStore.currentMessages);
+    }
+    final payload = Map<String, dynamic>.from(result['payload'] as Map? ?? {});
+    _throwHistoryError(payload);
+    final events = _mapper.mapHistory(
+      payload['messages'] as List? ?? const [],
+    );
+    _conversationStore.appendHistory(
+      events,
+      hasNewer: payload['has_newer'] == true,
+      nextNewerCursor: payload['next_newer_cursor']?.toString(),
       requestedCursor: cursor,
     );
     return List<CanonicalEvent>.from(_conversationStore.currentMessages);

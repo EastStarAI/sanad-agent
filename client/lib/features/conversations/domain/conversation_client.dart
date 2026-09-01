@@ -175,9 +175,15 @@ abstract class ConversationClient {
     String anchorEventId,
   ) => loadSessionHistory(sessionId);
 
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) => loadSessionHistory(sessionId);
+
   bool get historyHasMore => false;
 
   String? get historyNextCursor => null;
+
+  bool get historyHasNewer => false;
+
+  String? get historyNextNewerCursor => null;
   Future<void> updateSessionTitle(String sessionId, String title);
   Future<void> deleteSession(String sessionId);
   Future<void> respondToSuspendedRequest(

@@ -37,6 +37,7 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Missing `--within` scope | Fails; it never broadens to the complete tree |
 | Exact keyed tap | Scrolls into view, taps the requested element, and returns coordinates |
 | Invalid tap index | Fails with match count; it never clamps to another element |
+| Keyed offset scroll | Targets the exact Scrollable, emits forward/reverse user intent, returns post-motion offset plus min/max extents, and activates the same pagination/follow rules as mouse or trackpad input. |
 | Scroll until visible | Repeats through Flutter Driver until the target is visible or times out |
 | Driver starts before any automation command | Flutter Driver text emulation is disabled; clicking an editable field accepts normal physical-keyboard characters and system IME input. |
 | Keyed automated text entry | `sanad-dev ui enter-text` focuses the exact field and updates its `EditableTextState` through the Sanad extension; follow-up inspection shows the new value without echoing it in the action result. |

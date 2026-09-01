@@ -220,7 +220,13 @@ abstract class ConversationRepository {
     String anchorEventId,
   ) => loadSessionHistory(agent, sessionId);
 
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) => loadSessionHistory(agent, sessionId);
+
   bool historyHasMore(DeviceConfig agent) => false;
+  bool historyHasNewer(DeviceConfig agent) => false;
   Future<void> updateSessionTitle(
     DeviceConfig agent,
     String sessionId,

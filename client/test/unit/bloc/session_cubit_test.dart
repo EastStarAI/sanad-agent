@@ -2344,10 +2344,21 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
   ) => loadSessionHistory(sessionId);
 
   @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) async {
+    return _currentMessages;
+  }
+
+  @override
   bool get historyHasMore => historyHasMoreValue;
 
   @override
   String? get historyNextCursor => historyNextCursorValue;
+
+  @override
+  bool get historyHasNewer => false;
+
+  @override
+  String? get historyNextNewerCursor => null;
 
   @override
   Future<Session> createSession({

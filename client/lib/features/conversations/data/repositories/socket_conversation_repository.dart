@@ -450,7 +450,18 @@ class SocketConversationRepository implements ConversationRepository {
   }
 
   @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) {
+    return _clientFor(agent).loadNewerSessionHistory(sessionId);
+  }
+
+  @override
   bool historyHasMore(DeviceConfig agent) => _clientFor(agent).historyHasMore;
+
+  @override
+  bool historyHasNewer(DeviceConfig agent) => _clientFor(agent).historyHasNewer;
 
   @override
   Future<void> updateSessionTitle(

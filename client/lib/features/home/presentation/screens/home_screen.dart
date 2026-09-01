@@ -782,6 +782,10 @@ class _MainContent extends StatelessWidget {
       isOlderHistoryLoading: messagesState.isOlderHistoryLoading,
       olderHistoryError: messagesState.olderHistoryError,
       onLoadOlderHistory: messagesCubit.loadOlderHistory,
+      hasNewerHistory: messagesState.hasNewerHistory,
+      isNewerHistoryLoading: messagesState.isNewerHistoryLoading,
+      newerHistoryError: messagesState.newerHistoryError,
+      onLoadNewerHistory: messagesCubit.loadNewerHistory,
       onLoadAnchoredHistory: messagesCubit.loadAnchoredHistory,
       onSendMessage: (text, {intent = MessageDeliveryIntent.auto}) async {
         await inputCubit.sendMessage(text, intent: intent);

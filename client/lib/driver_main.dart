@@ -5,6 +5,7 @@ import 'dart:developer' as developer;
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 
 void main() {
   // Enable integration testing with the Flutter Driver extension.
@@ -650,11 +651,25 @@ void main() {
         );
       }
 
+      final emitsUserIntent = (targetOffset - position.pixels).abs() > 0.5;
+      if (emitsUserIntent) {
+        UserScrollNotification(
+          metrics: position,
+          context: scrollableState!.context,
+          direction: targetOffset < position.pixels ? ScrollDirection.forward : ScrollDirection.reverse,
+        ).dispatch(scrollableState!.context);
+      }
       await position.animateTo(
         targetOffset,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
+      if (emitsUserIntent) {
+        ScrollEndNotification(
+          metrics: position,
+          context: scrollableState!.context,
+        ).dispatch(scrollableState!.context);
+      }
 
       return developer.ServiceExtensionResponse.result(
         json.encode({

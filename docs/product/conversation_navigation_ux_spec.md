@@ -93,12 +93,22 @@ The `NavigationHistoryController` maintains three stacks:
 
 - Opening a conversation displays its newest bounded page without waiting for
   the complete transcript.
-- Scrolling upward toward the beginning prefetches one older page. If prefetch
-  does not run or fails, an English **Show earlier** / **Retry earlier messages**
-  action remains keyboard accessible.
-- Loading older messages never blanks the conversation. The first visible event
-  keeps the same screen position after prepend, and live responses may continue
-  at the tail without duplication.
+- Scrolling toward either loaded boundary prefetches the next older/newer page
+  before the boundary enters view. Short slices auto-fill in both directions.
+  Pagination and retry buttons never appear inside the transcript.
+- Loading older messages never blanks the conversation or forces the viewport
+  back to the tail. The first visible event keeps the same screen position after
+  prepend, and live responses may continue at the tail without duplication.
+- An anchored slice can be browsed in both directions. Downward intent loads the
+  next newer page without tail-follow until the reader explicitly reaches the
+  newest boundary.
+- Tool calls that form one visible run remain one group when a newer page joins
+  them. Historical reasoning hidden from the timeline does not create an
+  invisible group boundary; visible messages, thinking rows, final answers, and
+  `system_ask_user` remain explicit boundaries.
+- Each conversation owns its saved top-visible event independently. Navigating
+  away and back restores that event instead of reusing another conversation's
+  offset or reopening at the tail.
 - A short first page may auto-fill at most three older pages, then stops at a
   filled viewport, exhaustion, or error.
 - When no older page remains, the earlier-history control disappears.

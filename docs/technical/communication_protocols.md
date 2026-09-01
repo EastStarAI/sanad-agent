@@ -281,11 +281,18 @@ derived again from the durable work rows owned by the new process.
 
 - `cursor`: an opaque older-page cursor returned as `next_cursor`;
 - `anchor_event_id`: a stable `history:<session>:<row>:<kind>:<ordinal>` event
-  identity used to restore an idle reading position.
+  identity used to restore an idle reading position. An anchor page begins at
+  the owning persistence row and reads newer rows in chronological order, so
+  even the oldest saved anchor restores following context instead of a
+  single-row timeline. `has_more`/`next_cursor` still describe rows older than
+  that anchor.
 
-The `session_history` response contains `page_kind` (`tail | older | anchor`),
-chronological `messages`, `has_more`, optional `next_cursor`, and
-`history_revision`. The daemon bounds each page to 1 MiB of persisted message
+The `session_history` response contains `page_kind` (`tail | older | anchor | newer`),
+chronological `messages`, older-direction `has_more`/optional `next_cursor`,
+newer-direction `has_newer`/optional `next_newer_cursor`, and
+`history_revision`. An anchor response may expose both directions. Both cursors
+are opaque, session-bound, fingerprinted keyset cursors; a newer cursor carries
+its direction internally and cannot be reinterpreted as an older cursor. The daemon bounds each page to 1 MiB of persisted message
 JSON while retaining at least one oversized record so the cursor always
 advances. One persistence row is projected atomically, so reasoning, thought,
 tool-use, and final-answer fan-out never splits across pages.

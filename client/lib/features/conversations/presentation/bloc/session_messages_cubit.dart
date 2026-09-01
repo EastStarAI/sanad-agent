@@ -201,8 +201,11 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           isHistoryLoading: false,
           showDelayedLoading: false,
           hasOlderHistory: currentAgent != null && conversationRepository.historyHasMore(currentAgent),
+          hasNewerHistory: currentAgent != null && conversationRepository.historyHasNewer(currentAgent),
           isOlderHistoryLoading: false,
           clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
         ),
       );
       return;
@@ -279,8 +282,11 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           isHistoryLoading: false,
           showDelayedLoading: false,
           hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
           isOlderHistoryLoading: false,
           clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
         ),
       );
     } else if (agent != null) {
@@ -348,8 +354,11 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         state.copyWith(
           messages: conversationRepository.currentMessages(agent),
           hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
           isOlderHistoryLoading: false,
           clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
         ),
       );
     } catch (error, stackTrace) {
@@ -364,6 +373,49 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         state.copyWith(
           isOlderHistoryLoading: false,
           olderHistoryError: 'Could not load earlier messages.',
+        ),
+      );
+    }
+  }
+
+  Future<void> loadNewerHistory() async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || state.isNewerHistoryLoading || !state.hasNewerHistory) {
+      return;
+    }
+    final generation = _requestGeneration;
+    emit(
+      state.copyWith(
+        isNewerHistoryLoading: true,
+        clearNewerHistoryError: true,
+      ),
+    );
+    try {
+      await conversationRepository.loadNewerSessionHistory(agent, sessionId);
+      if (isClosed || generation != _requestGeneration || state.activeSessionId != sessionId) {
+        return;
+      }
+      emit(
+        state.copyWith(
+          messages: conversationRepository.currentMessages(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
+        ),
+      );
+    } catch (error, stackTrace) {
+      if (isClosed || generation != _requestGeneration) return;
+      _logger.warning(
+        'Newer history load failed device_id=${agent.id} '
+        'session_id=$sessionId error_type=${error.runtimeType}',
+        error,
+        stackTrace,
+      );
+      emit(
+        state.copyWith(
+          isNewerHistoryLoading: false,
+          newerHistoryError: 'Could not load later messages.',
         ),
       );
     }
@@ -390,8 +442,11 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         state.copyWith(
           messages: conversationRepository.currentMessages(agent),
           hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
           isOlderHistoryLoading: false,
           clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
         ),
       );
     } catch (error, stackTrace) {
@@ -478,8 +533,11 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           isHistoryLoading: false,
           showDelayedLoading: false,
           hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
           isOlderHistoryLoading: false,
           clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
         ),
       );
     } catch (error, stackTrace) {

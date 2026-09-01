@@ -221,10 +221,21 @@ class _TestConversationClient implements ConversationClient {
   }
 
   @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) {
+    throw UnimplementedError();
+  }
+
+  @override
   bool get historyHasMore => false;
 
   @override
   String? get historyNextCursor => null;
+
+  @override
+  bool get historyHasNewer => false;
+
+  @override
+  String? get historyNextNewerCursor => null;
 
   @override
   Future<List<SlashCommandEntry>> searchSlashCommands({String? query, String? workspaceId}) {

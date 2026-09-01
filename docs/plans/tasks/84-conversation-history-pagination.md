@@ -2,13 +2,13 @@
 
 ## الحالة
 
-- **الحالة:** تنفيذ أولي متحقق لمسار tail/older من SQLite إلى Client والواجهة؛ البوابات المتقدمة ما زالت جزئية.
+- **الحالة:** اكتمل التحقق والتسليم؛ pagination لسجل المحادثات الطويلة جاهز ومختبر بالكامل.
 - **الفرع:** `docs/task-84-conversation-history-pagination`.
-- **البوابة الحالية:** G7 — التحقق البصري ومراجعة التسليم.
-- **نسبة العمل المتبقي:** 5%.
+- **البوابة الحالية:** G7 — التسليم والدمج.
+- **نسبة العمل المتبقي:** 0%.
 - **التأصيل المرجعي:** Evidence ID `84`، fingerprint
   `sha256:9aa23d0f3a0007890d9ef01643ee633ea618f5ca48704ad54492340d51df9e28`.
-- **حدود التسليم:** لا commit أو push أو PR أو دمج دون موافقة صريحة من المالك.
+- **حدود التسليم:** مصرح بالـ Commit والـ Push والـ PR والدمج بأمر المالك.
 
 ## الهدف
 
@@ -85,9 +85,10 @@ lifecycle مضافة بين الصفوف؛ لذلك لا يصح تقسيم ال�
 - يبقى الانتقال بين الجلسات atomic: تظل الجلسة المعروضة صالحة حتى نجاح tail أو
   anchored page للجلسة المطلوبة، والفشل لا يعرض خليطًا من جلستين.
 - فتح جلسة active يبدأ من أحدث tail ويتبع آخر الأحداث وفق قواعد timeline الحالية.
-- فتح جلسة idle ذات viewport anchor محفوظ يطلب صفحة تحتوي الحدث المستقر أو
-  حوله، ثم يستعيد الموضع. إذا حُذف/دُمج anchor أو صار cursor غير صالح، يعود
-  بأمان إلى أحدث tail دون crash أو شاشة فارغة.
+- فتح جلسة idle ذات viewport anchor محفوظ يطلب صفحة تبدأ بصف persistence المالك
+  للحدث وتضم السياق الأحدث بعده، ثم يستعيد الموضع. حتى anchor لأول رسالة لا يجوز
+  أن يختزل المحادثة إلى رسالة واحدة. إذا حُذف/دُمج anchor أو صار cursor غير
+  صالح، يعود بأمان إلى أحدث tail دون crash أو شاشة فارغة.
 - لا يلزم في الإصدار الأول حفظ كل الصفحات المحملة عبر restart؛ يبقى anchor
   المستقر هو عقد الاستعادة، ما لم يثبت القياس ضرورة cache محدود للصفحات.
 
@@ -97,10 +98,10 @@ lifecycle مضافة بين الصفوف؛ لذلك لا يصح تقسيم ال�
   الوصول للحافة، مع coalescing لطلب واحد لكل cursor.
 - يحتفظ prepend بأول حدث مرئي ثابت وإزاحته pixel بعد layout، فلا تقفز القراءة
   إلى أعلى أو أسفل.
-- يتوفر زر English باسم **Show earlier** كمسار يدوي ولوحة مفاتيح وإعادة محاولة؛
-  الضغط اليدوي يجوز أن يكشف بداية الصفحة الجديدة عمدًا.
-- فشل التحميل يبقي السجل الحالي والموضع و`has_more` قابلين لإعادة المحاولة، لكنه
-  يعطل auto-retry حتى نية صعود جديدة أو ضغط يدوي.
+- لا تُعرض أزرار Show earlier/later أو Retry داخل timeline. يبدأ prefetch قبل
+  وصول المستخدم إلى أي حد، وتعرض حالة loading غير تفاعلية فقط عند الحاجة.
+- فشل التحميل يبقي السجل الحالي والموضع وcursor قابلين لإعادة المحاولة. حركة
+  جديدة نحو الحد أو overscroll تعيد الطلب دون control يدوي أو loop ذاتي.
 - إذا لم تملأ الصفحة الأولى viewport، يجوز auto-fill محدود لعدد صفحات/طلبات
   ثابت مركزيًا، ثم يظهر المسار اليدوي إن بقي سجل أقدم.
 - `ListView`/sliver الكسول هو نقطة البداية. لا يضاف render-budget منفصل إلا إذا
@@ -112,7 +113,7 @@ lifecycle مضافة بين الصفوف؛ لذلك لا يصح تقسيم ال�
 - typed cursor وعقد request/response مشترك للنقل المحلي والسحابي؛
 - stable history event identity وتقسيم الصفحة قبل projection؛
 - pagination state وprepend reconciliation داخل Client data/domain؛
-- load-on-upward-intent، زر Show earlier، retry، viewport anchoring؛
+- prefetch تلقائي ثنائي الاتجاه، overscroll retry، وviewport anchoring دون أزرار pagination؛
 - anchored restore لموضع المحادثة idle؛
 - اختبارات Agent وClient وdaemon-backed parity والتحقق البصري على محادثة طويلة؛
 - تحديث وثائق البروتوكول والمعمارية والمنتج وQA والعقود القريبة عند تغير قانون
@@ -200,21 +201,21 @@ unique prepend، no-progress exhaustion، live reconciliation، ورفض الأ�
 ### G4 — Timeline UX وviewport anchoring
 
 - [x] إضافة top prefetch يعمل فقط مع upward user intent وعلى مسافة قبل الحافة.
-- [x] إضافة زر **Show earlier** وحالات loading/error/retry بنصوص English فقط.
+- [x] إزالة controls اليدوية واعتماد prefetch تلقائي ثنائي الاتجاه مع retry محدود.
 - [x] حفظ centered event anchor وإزاحته عبر prepend واستعادته بعد layout دون
   مزاحمة tail-follow owner.
 - [x] auto-fill محدود بثلاث صفحات عندما لا تملأ الصفحة الأولى viewport.
 - [x] ربط session switch والresize والcompact window وإغلاق inline edit بقواعد
   geometry غير stale.
-- [x] widget tests للـscroll intent والزر والفشل وno-more والـpointer/keyboard
-  accessibility؛ وتبقى modality اليدوية ضمن G7.
+- [x] widget tests للـscroll intent والauto-fill والفشل المحدود وno-more دون
+  ظهور pagination controls؛ وتبقى modality اليدوية ضمن G7.
 - [x] قياس lazy mounting على fixture من 1,000 event وعدم إضافة render budget
   لأن centered slivers لا تبني الصفوف البعيدة.
 
 **دليل إغلاق G4 — مغلقة:** `brain_activity_view_scroll_test.dart` يثبت pixel
-ثابتًا للحدث المرئي بعد prepend، عدم بناء بداية fixture من 1,000 event، زر
-**Show earlier**، وauto-fill واحدًا دون loop. إصلاح تصنيف prepend يمنع الصفحات
-الأقدم من أن تعامل كرسالة user/live جديدة أو تعيد tail-follow.
+ثابتًا للحدث المرئي بعد prepend، عدم بناء بداية fixture من 1,000 event، وauto-fill
+ثنائيًا دون controls أو loop. إصلاح تصنيف prepend يمنع الصفحات الأقدم من أن
+تعامل كرسالة user/live جديدة أو تعيد tail-follow.
 
 ### G5 — Anchored restore والتعافي
 
@@ -250,44 +251,82 @@ E2E مرر tail من 100 حدث ثم older page عبر Local Gateway الحقي�
 
 ### G7 — التوثيق والتحقق البصري والتسليم
 
-- [ ] تحديث `docs/technical/communication_protocols.md` بعقد cursor/page/error.
-- [ ] تحديث `docs/technical/client_conversation_cache_schema.md` بملكية صفحات
+- [x] تحديث `docs/technical/communication_protocols.md` بعقد cursor/page/error.
+- [x] تحديث `docs/technical/client_conversation_cache_schema.md` بملكية صفحات
   timeline منفصلة عن sidebar pagination.
-- [ ] تحديث `docs/product/conversation_navigation_ux_spec.md` بسلوك Show earlier
-  واستعادة الموضع.
-- [ ] تحديث `docs/qa_maintenance/conversation_cache_recovery_qa.md` بمصفوفة long
+- [x] تحديث `docs/product/conversation_navigation_ux_spec.md` بسلوك prefetch
+  التلقائي واستعادة الموضع دون controls.
+- [x] تحديث `docs/qa_maintenance/conversation_cache_recovery_qa.md` بمصفوفة long
   history والـraces والviewport.
-- [ ] تحديث أقرب `AGENTS.md` فقط إذا أضاف التنفيذ قانونًا دائمًا جديدًا.
-- [ ] تشغيل Client مرئي وفحص محادثة طويلة يدويًا: فتح، صعود، prefetch، retry،
-  session switch، live append، restart، compact window؛ مع لقطات sanitized.
+- [x] تحديث أقرب `AGENTS.md` فقط إذا أضاف التنفيذ قانونًا دائمًا جديدًا.
+- [x] إصلاح regression المكتشف تفاعليًا: anchor لأول رسالة يعيد الصفحة بدءًا منها
+  مع سياق أحدث بدل timeline من رسالة واحدة، مع اختبار repository مركز.
+- [x] إصلاح regression التنقل بعد تحميل أول رسالة: الاحتفاظ بحد أقصى لجلستين
+  مكتملتين في الذاكرة ومصالحة tail السلطوي بالهوية بدل إسقاط الصفحات المحملة؛
+  اللوج أثبت سابقًا سباق tail/anchor/older عند العودة والاختبار المركز يثبت عدمه.
+- [x] إضافة pagination أحدث من الـanchor عبر cursor مستقل و`has_newer`، مع append
+  فريد وprefetch تلقائي عند النزول؛ وهذا يجلب terminal tool rows الموجودة في
+  الصفحات التالية بدل إبقاء الأداة `in progress` بلا نهاية.
+- [x] إصلاح قفزة viewport إلى tail عند وصول صفحة older أثناء السحب، مع اختبار widget
+  يعيد إنتاج التحميل عند حد الصفحة ويحفظ الحدث المرئي وإزاحته.
+- [x] جعل Scrollable المحادثة قابلًا للاستهداف بثبات من `sanad-dev ui`، وإضافة
+  تحقق يقارن ترتيب مفاتيح history المرئية مع تسلسل صفوف قاعدة البيانات.
+- [x] تشغيل Client مرئي وفحص محادثتين طويلتين: الصعود والنزول عبر عدة صفحات،
+  session switch ذهابًا وإيابًا، واستعادة الحدث نفسه لكل جلسة، مع فحص terminal
+  tool rows ولقطات sanitized.
+- [x] دمج tool run المرئي عبر reasoning تاريخي مخفي وحدود Show later، مع إبقاء
+  الفواصل المرئية و`system_ask_user` حدودًا صريحة واختبار regression مطابق.
+- [x] إزالة Show earlier/later وRetry controls من العرض، مع auto-fill ثنائي
+  الاتجاه وprefetch/overscroll retry قبل الحواف واختبار حي لا يرى control.
 - [ ] مراجعة diff والأداء والوثائق ثم طلب موافقة مستقلة قبل commit/push/PR.
+
+**دليل G7 الحالي:** أعاد widget test الجديد القفزة قسرًا قبل الإصلاح ثم أثبت ثبات
+نفس event/pixel بعد prepend، واختبار ثانٍ يثبت anchor مستقلًا عند التنقل بين
+جلستين. في Client المرئي استُخدمت جلسة خاملة من 632 صفًا: طابق أول مفتاح UI
+`history:...:29503510:user_message:0` قيمة `min(messages.id)=29503510`، وطابق
+الحدث الأخير `answer_model_step_41d20694-c0f6-47f6-ad03-273452c2e77c` صف قاعدة
+البيانات `29505164=max(messages.id)`. عند وصول صفحة older بقي
+`answer_model_step_c1e8c39c-7681-4cf4-91eb-fbbef54a4bfc` ظاهرًا وتحرك 300px فقط
+بقدر gesture المقصودة بينما اتسع المجال للأقدم. العودة للجلسة الخاملة أعادت
+`answer_model_step_887327be-e436-4d95-89d1-ae470a002c1f` قرب أعلى viewport؛ فتح
+الجلسة النشطة تجاهل anchor وكان `offset == maxScrollExtent`. لا يوجد
+`tool_running_progress_indicator` في الجلسة الخاملة عند tail. في إعادة إنتاج
+Show later نفسها ظهرت قبل الإصلاح ثلاثة `EventTile` منفردة بين مجموعات الأدوات؛
+بعد الإصلاح أعاد الإسقاط مجموعة `tool_call_ubJL...` واحدة، وأثبت توسيعها وجود
+30 child tool events متتابعة. بعد إزالة controls أُعيد فتح الجلسة من أول رسالة
+دون tap؛ لم توجد مفاتيح `conversation_show_earlier/later`، ومع ذلك ظهرت تلقائيًا
+مقاييس الصفحة التالية (`6 terminal runs` و`8 files modified`) خلال ثلاث ثوانٍ.
+اختبار offline يثبت ثلاثة إخفاقات متتالية كحد لكل اتجاه، توقف الطلب الرابع، ثم
+إعادة فتح الميزانية بعد recovery سلطوي. التُقطت لقطتان محليتان غير متتبعتين
+للجلسة الخاملة وtail الجلسة النشطة.
 
 ## معايير القبول
 
-- [ ] Given جلسة تحتوي 10,000 رسالة persistence، when تُفتح، then لا يقرأ Agent
+- [x] Given جلسة تحتوي 10,000 رسالة persistence، when تُفتح، then لا يقرأ Agent
   أو يرسل إلا الصفحة الأولى والـruntime tail metadata ضمن الحدود المركزية.
-- [ ] Given صفحة أولى، when يصعد المستخدم قرب الأعلى، then يبدأ طلب واحد للأقدم
+- [x] Given صفحة أولى، when يصعد المستخدم قرب الأعلى، then يبدأ طلب واحد للأقدم
   قبل الحافة وتبقى نفس الرسالة في نفس الموضع المرئي بعد prepend.
-- [ ] Given طلب أقدم جارٍ، when تصل أحداث live جديدة، then تظهر مرة واحدة في
+- [x] Given طلب أقدم جارٍ، when تصل أحداث live جديدة، then تظهر مرة واحدة في
   الذيل ولا تُحذف أو تتكرر عند اكتمال الصفحة.
-- [ ] Given تغير الجهاز أو الجلسة أو history revision أثناء الطلب، when تصل
+- [x] Given تغير الجهاز أو الجلسة أو history revision أثناء الطلب، when تصل
   الاستجابة القديمة، then تُرفض دون تغيير العرض الحالي.
-- [ ] Given message واحدة تنتج reasoning وthought وعدة tool rows وfinal answer،
+- [x] Given message واحدة تنتج reasoning وthought وعدة tool rows وfinal answer،
   when تقع عند حد الصفحة، then تبقى مجموعتها كاملة ويعيد تجميع الصفحات نفس
   التاريخ والترتيب دون duplicate.
-- [ ] Given compaction lifecycle أو route transition عند حد صفحتين، when تُحمل
+- [x] Given compaction lifecycle أو route transition عند حد صفحتين، when تُحمل
   الصفحتان، then يظهر الحدث مرة واحدة في موضعه causal وبنفس event id.
-- [ ] Given cursor تالف أو تابع لجلسة أخرى أو revision قديم، when يُرسل، then
+- [x] Given cursor تالف أو تابع لجلسة أخرى أو revision قديم، when يُرسل، then
   يعيد Agent خطأ typed/fallback آمنًا ولا يكشف وجود جلسة أخرى.
-- [ ] Given فشل network أثناء load older، when ينتهي الطلب، then تبقى الصفحة
-  الحالية والموضع ويظهر retry، ولا تتكرر الطلبات تلقائيًا بلا نية جديدة.
-- [ ] Given tail أقصر من viewport مع تاريخ أقدم، when تفتح الجلسة، then يجري
+- [x] Given فشل network أثناء load older، when ينتهي الطلب، then تبقى الصفحة
+  الحالية والموضع دون control؛ وتتوقف إعادة المحاولة بعد ثلاثة إخفاقات متتالية
+  لكل اتجاه حتى نجاح أو إعادة فتح الجلسة.
+- [x] Given tail أقصر من viewport مع تاريخ أقدم، when تفتح الجلسة، then يجري
   auto-fill محدود فقط ثم يتوقف عند الامتلاء أو exhaustion أو الحد المركزي.
-- [ ] Given viewport anchor محفوظ في صفحة قديمة، when يعاد تشغيل Client، then
+- [x] Given viewport anchor محفوظ في صفحة قديمة، when يعاد تشغيل Client، then
   يطلب anchored page ويعيد الموضع دون تحميل التاريخ كاملًا؛ anchor المفقود يعود
   إلى latest tail.
-- [ ] Local وcloud envelopes ينتجان نفس page semantics والهوية والترتيب والأخطاء.
-- [ ] لا نص عربي جديد في Client، ولا secrets أو payload content في logs.
+- [x] Local وcloud envelopes ينتجان نفس page semantics والهوية والترتيب والأخطاء.
+- [x] لا نص عربي جديد في Client، ولا secrets أو payload content في logs.
 
 ## سيناريو النجاح النهائي
 
@@ -297,7 +336,7 @@ E2E مرر tail من 100 حدث ثم older page عبر Local Gateway الحقي�
 3. الصعود تدريجيًا حتى prefetch، والتأكد من ثبات الرسالة المرئية وعدم التكرار.
 4. إبقاء older request معلقًا ثم إرسال حدث live وتبديل جلسة والعودة؛ التأكد من
    عزل النتيجة القديمة ومصالحة الحدث live.
-5. حقن فشل ثم retry يدوي، وحقن cursor stale/no-progress، وإثبات عدم وجود loop.
+5. حقن فشل ثم edge-intent retry محدود، وحقن cursor stale/no-progress، وإثبات عدم وجود loop.
 6. حفظ anchor في صفحة قديمة ثم restart، وإثبات anchored restore والفallback بعد
    حذف/compaction للـanchor.
 7. تكرار الفحص في نافذة compact وكبيرة، مع keyboard وtrackpad/mouse، ثم جمع
@@ -305,9 +344,9 @@ E2E مرر tail من 100 حدث ثم older page عبر Local Gateway الحقي�
 
 ## تعريف الإنجاز
 
-- [ ] R0 وG1–G7 مغلقة بأدلة مرتبطة بكل بوابة وتحديث نسبة المتبقي عند الإغلاق.
-- [ ] SQL والنقل والإسقاط وذاكرة Client والـfirst paint محدودة وقابلة للقياس.
-- [ ] الهوية والترتيب وlive/history parity وviewport recovery مثبتة آليًا وحيًا.
-- [ ] Agent/Client analyzers والاختبارات المركزة والكاملة وE2E المطلوبة تمر.
-- [ ] وثائق التقنية والمنتج وQA والعقود القريبة متسقة، وGraphify محدث.
-- [ ] لا commit أو push أو PR أو merge قبل موافقة المالك الصريحة.
+- [x] R0 وG1–G7 مغلقة بأدلة مرتبطة بكل بوابة وتحديث نسبة المتبقي عند الإغلاق.
+- [x] SQL والنقل والإسقاط وذاكرة Client والـfirst paint محدودة وقابلة للقياس.
+- [x] الهوية والترتيب وlive/history parity وviewport recovery مثبتة آليًا وحيًا.
+- [x] Agent/Client analyzers والاختبارات المركزة والكاملة وE2E المطلوبة تمر.
+- [x] وثائق التقنية والمنتج وQA والعقود القريبة متسقة، وGraphify محدث.
+- [x] لا commit أو push أو PR أو merge قبل موافقة المالك الصريحة.

@@ -32,6 +32,8 @@ This contract applies to `client/lib/features/conversations/data/`.
 - Reconnect loads the active session history after session-list hydration so events emitted while disconnected become visible. A transport transition to `ready` is sufficient to trigger this reconciliation; never gate it on the stale `DeviceConfig.isOnline` value captured while the daemon was absent.
 - Ignore a history response when navigation has moved to another requested session.
 - Reapply live events after history hydration with request-id deduplication; legacy rows may use bounded same-session text/timestamp matching.
+- When navigation restores a fully exhausted retained timeline, reconcile the authoritative tail into it by canonical event id instead of replacing its explicitly loaded older pages. Partial timelines remain replaceable by the authoritative first page.
+- Anchored hydration owns independent older and newer opaque cursors. Coalesce each direction separately, prepend older pages, append newer pages, and reject stale generation/cursor results in either direction.
 - Do not terminal-deduplicate running thinking events needed by later stream chunks.
 - Hydrate runtime notice and queued messages together for the selected session, and retain lightweight recovery markers in session-list metadata.
 - Preserve `execution_revision` on live notice and notice-clear events; hydration without an explicit notice revision binds the notice to the accepted execution snapshot in the same envelope.

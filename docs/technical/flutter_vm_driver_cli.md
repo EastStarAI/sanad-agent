@@ -34,7 +34,7 @@ semantics without mocking `SystemChannels.textInput`. It never returns the text
 value. The controller falls back to legacy Flutter Driver `enterText` only for
 older instrumented Clients that do not advertise the Sanad extension.
 
-The controller selects the isolate that advertises the required extension rather than assuming the first VM isolate is the Flutter UI isolate. Missing scopes and invalid indexes fail closed. Scoped, indexed, and coordinate taps never fall back to an unscoped selector. Offset scrolling uses the custom extension; scroll-until-visible remains a Flutter Driver operation and succeeds only after the target becomes visible.
+The controller selects the isolate that advertises the required extension rather than assuming the first VM isolate is the Flutter UI isolate. Missing scopes and invalid indexes fail closed. Scoped, indexed, and coordinate taps never fall back to an unscoped selector. Offset scrolling uses the custom extension and emits user-scroll intent before moving the viewport, so pagination, follow opt-out, and viewport persistence react as they do to mouse or trackpad input. The returned offset and min/max extents are measured after the motion. Scroll-until-visible remains a Flutter Driver operation and succeeds only after the target becomes visible.
 
 Snapshot output is a flat list of typed elements with optional key, text, hint, tooltip, semantic label/role/selection state, and global bounds. Framework wrappers and icon-font glyphs may be suppressed, while tooltips and actionable semantics are consolidated into the keyed element. Obscured text-field values are never exposed. JSON mode emits one machine-parseable result object.
 

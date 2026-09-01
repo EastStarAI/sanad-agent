@@ -148,7 +148,7 @@ void main() {
     );
   });
 
-  test('loads a bounded page ending at a stable anchor row', () {
+  test('loads a bounded page beginning at a stable anchor row', () {
     db.replaceMessages('session-1', messages(6));
     final persisted = db.getPersistedMessages('session-1');
     final anchor = persisted[3];
@@ -160,10 +160,44 @@ void main() {
     );
 
     expect(page.messages.map((entry) => entry.message.content), [
-      'message-3',
       'message-4',
+      'message-5',
     ]);
     expect(page.hasMore, isTrue);
+  });
+
+  test('oldest anchor restores following context instead of one row', () {
+    db.replaceMessages('session-1', messages(6));
+    final oldest = db.getPersistedMessages('session-1').first;
+
+    final page = db.getPersistedMessagePage(
+      'session-1',
+      limit: 3,
+      anchorRowId: oldest.rowId,
+    );
+
+    expect(page.messages.map((entry) => entry.message.content), [
+      'message-1',
+      'message-2',
+      'message-3',
+    ]);
+    expect(page.hasMore, isFalse);
+    expect(page.nextCursor, isNull);
+    expect(page.hasNewer, isTrue);
+    expect(page.nextNewerCursor, isNotNull);
+
+    final newer = db.getPersistedMessagePage(
+      'session-1',
+      limit: 3,
+      cursor: page.nextNewerCursor,
+    );
+    expect(newer.messages.map((entry) => entry.message.content), [
+      'message-4',
+      'message-5',
+      'message-6',
+    ]);
+    expect(newer.hasNewer, isFalse);
+    expect(newer.nextNewerCursor, isNull);
   });
 
   test('rejects a missing anchor without revealing another session', () {

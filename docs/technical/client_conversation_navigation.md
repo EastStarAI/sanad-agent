@@ -75,12 +75,16 @@ requests, ignores stale completions after session or device changes, prepends
 only newly discovered canonical event ids, and retains the current page when an
 older-page request fails.
 
-The timeline offers an English **Show earlier** action and automatically
-prefetches when a manual upward scroll approaches the start. Loading and retry
-states remain inside the upward-growing sliver. Because older rows are inserted
-before the centered anchor sliver, the currently visible event retains its
-viewport position rather than jumping when a page arrives. Exhausted history
-removes the control.
+The timeline prefetches automatically when manual motion approaches either
+loaded boundary. Short anchored slices alternate bounded older/newer auto-fill
+until content fills the viewport, a direction exhausts, or the three-page
+per-direction budget is reached. No pagination or retry control is rendered in
+the transcript. After an error, automatic fill stops; fresh edge intent or
+over-scroll may retry up to three consecutive failures per direction. Success
+resets that direction's failure budget, while session navigation resets both.
+Because older rows are inserted before the centered anchor sliver, the currently
+visible event retains its viewport position rather than jumping when a page
+arrives.
 
 ## Timeline Opening Position
 

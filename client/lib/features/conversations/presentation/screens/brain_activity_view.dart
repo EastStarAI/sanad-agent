@@ -48,6 +48,10 @@ class BrainActivityView extends StatefulWidget {
   final bool isOlderHistoryLoading;
   final String? olderHistoryError;
   final Future<void> Function()? onLoadOlderHistory;
+  final bool hasNewerHistory;
+  final bool isNewerHistoryLoading;
+  final String? newerHistoryError;
+  final Future<void> Function()? onLoadNewerHistory;
   final Future<void> Function(String eventId)? onLoadAnchoredHistory;
 
   const BrainActivityView({
@@ -69,6 +73,10 @@ class BrainActivityView extends StatefulWidget {
     this.isOlderHistoryLoading = false,
     this.olderHistoryError,
     this.onLoadOlderHistory,
+    this.hasNewerHistory = false,
+    this.isNewerHistoryLoading = false,
+    this.newerHistoryError,
+    this.onLoadNewerHistory,
     this.onLoadAnchoredHistory,
   });
 
@@ -80,8 +88,11 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   static const double _bottomFollowThreshold = 1;
   static const Duration _newAgentFollowScrollDuration = Duration(milliseconds: 280);
   static const int _maxAutomaticHistoryFillPages = 3;
+  static const int _maxHistoryRetryAttempts = 3;
 
-  final ScrollController _scrollController = ScrollController();
+  final ScrollController _scrollController = ScrollController(
+    keepScrollOffset: false,
+  );
   final GlobalKey _conversationAnchorKey = GlobalKey();
   final GlobalKey _scrollViewportKey = GlobalKey();
   final GlobalKey _composerKey = GlobalKey();
@@ -110,7 +121,13 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   bool _autoFollowEligible = false;
   bool _isFollowingTail = false;
   String? _attemptedAnchorEventId;
-  int _automaticHistoryFillPages = 0;
+  int _automaticOlderHistoryFillPages = 0;
+  int _automaticNewerHistoryFillPages = 0;
+  int _olderHistoryFailureCount = 0;
+  int _newerHistoryFailureCount = 0;
+  bool _olderHistoryRequestPending = false;
+  bool _newerHistoryRequestPending = false;
+  bool _preferOlderAutoFill = true;
 
   @override
   void initState() {
@@ -173,20 +190,36 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   }
 
   void _maybeAutoFillHistory() {
-    if (!mounted ||
-        _automaticHistoryFillPages >= _maxAutomaticHistoryFillPages ||
-        !widget.hasOlderHistory ||
-        widget.isOlderHistoryLoading ||
-        widget.olderHistoryError != null ||
-        widget.onLoadOlderHistory == null ||
-        !_scrollController.hasClients) {
-      return;
-    }
+    if (!mounted || !_scrollController.hasClients) return;
     final position = _scrollController.position;
     final contentExtent = position.maxScrollExtent - position.minScrollExtent;
     if (contentExtent > position.viewportDimension + 1) return;
-    _automaticHistoryFillPages++;
-    unawaited(widget.onLoadOlderHistory!());
+
+    final canLoadOlder =
+        _automaticOlderHistoryFillPages < _maxAutomaticHistoryFillPages &&
+        widget.hasOlderHistory &&
+        !widget.isOlderHistoryLoading &&
+        !_olderHistoryRequestPending &&
+        widget.olderHistoryError == null &&
+        widget.onLoadOlderHistory != null;
+    final canLoadNewer =
+        _automaticNewerHistoryFillPages < _maxAutomaticHistoryFillPages &&
+        widget.hasNewerHistory &&
+        !widget.isNewerHistoryLoading &&
+        !_newerHistoryRequestPending &&
+        widget.newerHistoryError == null &&
+        widget.onLoadNewerHistory != null;
+    if (!canLoadOlder && !canLoadNewer) return;
+
+    if (canLoadOlder && (!canLoadNewer || _preferOlderAutoFill)) {
+      _automaticOlderHistoryFillPages++;
+      _preferOlderAutoFill = false;
+      _requestOlderHistory();
+      return;
+    }
+    _automaticNewerHistoryFillPages++;
+    _preferOlderAutoFill = true;
+    _requestNewerHistory();
   }
 
   // ── Stream subscription ──────────────────────────────────────────────────
@@ -218,8 +251,44 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     if (sessionChanged) {
       _cancelInlineEdit(notify: false);
       _attemptedAnchorEventId = null;
-      _automaticHistoryFillPages = 0;
+      _automaticOlderHistoryFillPages = 0;
+      _automaticNewerHistoryFillPages = 0;
+      _olderHistoryFailureCount = 0;
+      _newerHistoryFailureCount = 0;
+      _olderHistoryRequestPending = false;
+      _newerHistoryRequestPending = false;
+      _preferOlderAutoFill = true;
       _forkPendingEventId = null;
+    }
+    if (!sessionChanged && oldWidget.isOlderHistoryLoading && !widget.isOlderHistoryLoading) {
+      _olderHistoryRequestPending = false;
+      _olderHistoryFailureCount = widget.olderHistoryError == null
+          ? 0
+          : _olderHistoryFailureCount < _maxHistoryRetryAttempts
+          ? _olderHistoryFailureCount + 1
+          : _maxHistoryRetryAttempts;
+    }
+    if (!sessionChanged && oldWidget.isNewerHistoryLoading && !widget.isNewerHistoryLoading) {
+      _newerHistoryRequestPending = false;
+      _newerHistoryFailureCount = widget.newerHistoryError == null
+          ? 0
+          : _newerHistoryFailureCount < _maxHistoryRetryAttempts
+          ? _newerHistoryFailureCount + 1
+          : _maxHistoryRetryAttempts;
+    }
+    if (!sessionChanged &&
+        oldWidget.olderHistoryError != null &&
+        widget.olderHistoryError == null &&
+        !widget.isOlderHistoryLoading) {
+      _olderHistoryFailureCount = 0;
+      _olderHistoryRequestPending = false;
+    }
+    if (!sessionChanged &&
+        oldWidget.newerHistoryError != null &&
+        widget.newerHistoryError == null &&
+        !widget.isNewerHistoryLoading) {
+      _newerHistoryFailureCount = 0;
+      _newerHistoryRequestPending = false;
     }
     final messagesChanged = !listEquals(oldWidget.initialMessages, widget.initialMessages);
     final activityChanged = oldWidget.activityEligible != widget.activityEligible;
@@ -232,17 +301,25 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       _applyMessages(
         widget.initialMessages,
         isOpeningSession: sessionChanged || _isOpeningSession || anchorBecameAvailable,
+        isHistoricalAppend: oldWidget.isNewerHistoryLoading && !widget.isNewerHistoryLoading,
       );
     } else if (oldWidget.isOlderHistoryLoading != widget.isOlderHistoryLoading ||
         oldWidget.hasOlderHistory != widget.hasOlderHistory ||
-        oldWidget.olderHistoryError != widget.olderHistoryError) {
+        oldWidget.olderHistoryError != widget.olderHistoryError ||
+        oldWidget.isNewerHistoryLoading != widget.isNewerHistoryLoading ||
+        oldWidget.hasNewerHistory != widget.hasNewerHistory ||
+        oldWidget.newerHistoryError != widget.newerHistoryError) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoFillHistory());
     }
   }
 
   // ── Scroll helpers ───────────────────────────────────────────────────────
 
-  void _applyMessages(List<CanonicalEvent> messages, {required bool isOpeningSession}) {
+  void _applyMessages(
+    List<CanonicalEvent> messages, {
+    required bool isOpeningSession,
+    bool isHistoricalAppend = false,
+  }) {
     final previousMessages = _messages;
     final previousWasEmpty = previousMessages.isEmpty;
     final wasFollowingTail = _isFollowingTail;
@@ -255,6 +332,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       final message = messages[index];
       if (!previousIds.contains(message.id)) appendedNewEvents.add(message);
     }
+    if (isHistoricalAppend) appendedNewEvents.clear();
     final containsNewUserMessage = appendedNewEvents.any(
       (message) => message.kind == EventKind.userMessage,
     );
@@ -462,19 +540,68 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     return position.maxScrollExtent - position.pixels <= _bottomFollowThreshold;
   }
 
+  void _requestOlderHistory() {
+    if (!widget.hasOlderHistory ||
+        widget.isOlderHistoryLoading ||
+        _olderHistoryRequestPending ||
+        _olderHistoryFailureCount >= _maxHistoryRetryAttempts ||
+        widget.onLoadOlderHistory == null) {
+      return;
+    }
+    _olderHistoryRequestPending = true;
+    unawaited(widget.onLoadOlderHistory!());
+  }
+
+  void _requestNewerHistory() {
+    if (!widget.hasNewerHistory ||
+        widget.isNewerHistoryLoading ||
+        _newerHistoryRequestPending ||
+        _newerHistoryFailureCount >= _maxHistoryRetryAttempts ||
+        widget.onLoadNewerHistory == null) {
+      return;
+    }
+    _newerHistoryRequestPending = true;
+    unawaited(widget.onLoadNewerHistory!());
+  }
+
+  void _prefetchNearEdge(
+    ScrollMetrics metrics, {
+    required bool towardOlder,
+  }) {
+    if (towardOlder) {
+      if (metrics.pixels - metrics.minScrollExtent <= 600) {
+        _requestOlderHistory();
+      }
+      return;
+    }
+    if (metrics.maxScrollExtent - metrics.pixels <= 600) {
+      _requestNewerHistory();
+    }
+  }
+
   bool _handleScrollNotification(ScrollNotification notification) {
     if (notification is UserScrollNotification && notification.direction != ScrollDirection.idle) {
       _hasPendingManualScrollAnchor = true;
-      if (notification.direction == ScrollDirection.forward &&
-          widget.hasOlderHistory &&
-          !widget.isOlderHistoryLoading &&
-          widget.onLoadOlderHistory != null &&
-          notification.metrics.pixels - notification.metrics.minScrollExtent <= 600) {
-        unawaited(widget.onLoadOlderHistory!());
-      }
+      _prefetchNearEdge(
+        notification.metrics,
+        towardOlder: notification.direction == ScrollDirection.forward,
+      );
       _autoFollowEligible = false;
       _isFollowingTail = false;
       _scrollGeneration++;
+    }
+    if (notification is ScrollUpdateNotification) {
+      final delta = notification.scrollDelta;
+      if (delta != null && delta != 0) {
+        _prefetchNearEdge(notification.metrics, towardOlder: delta < 0);
+      }
+    }
+    if (notification is OverscrollNotification) {
+      if (notification.overscroll < 0) {
+        _requestOlderHistory();
+      } else if (notification.overscroll > 0) {
+        _requestNewerHistory();
+      }
     }
     if (notification is ScrollEndNotification && _hasPendingManualScrollAnchor) {
       _hasPendingManualScrollAnchor = false;
@@ -865,30 +992,6 @@ class _BrainActivityViewState extends State<BrainActivityView> {
 
   // ── Build ────────────────────────────────────────────────────────────────
 
-  Widget _buildOlderHistoryControl() {
-    if (!widget.hasOlderHistory && widget.olderHistoryError == null) {
-      return const SizedBox.shrink();
-    }
-    return Padding(
-      key: const Key('conversation_show_earlier'),
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Center(
-        child: widget.isOlderHistoryLoading
-            ? const SizedBox.square(
-                dimension: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
-            : TextButton.icon(
-                onPressed: widget.onLoadOlderHistory == null ? null : () => unawaited(widget.onLoadOlderHistory!()),
-                icon: const Icon(Icons.expand_less),
-                label: Text(
-                  widget.olderHistoryError == null ? 'Show earlier' : 'Retry earlier messages',
-                ),
-              ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final topPadding = MediaQuery.paddingOf(context).top + 48.0;
@@ -957,59 +1060,55 @@ class _BrainActivityViewState extends State<BrainActivityView> {
                               key: _scrollViewportKey,
                               child: NotificationListener<ScrollNotification>(
                                 onNotification: _handleScrollNotification,
-                                child: CustomScrollView(
+                                child: KeyedSubtree(
                                   key: ValueKey(
-                                    '${widget.sessionId ?? 'new'}:'
-                                    '${_openAtTail ? 'tail' : 'event'}:'
-                                    '$_openAnchorIndex',
+                                    'conversation-timeline:${widget.sessionId ?? 'new'}',
                                   ),
-                                  controller: _scrollController,
-                                  center: _conversationAnchorKey,
-                                  anchor: anchor,
-                                  slivers: [
-                                    SliverPadding(
-                                      padding: EdgeInsets.fromLTRB(8, topPadding, 8, 0),
-                                      sliver: SliverList.builder(
-                                        itemCount:
-                                            _openAnchorIndex +
-                                            ((widget.hasOlderHistory || widget.olderHistoryError != null) ? 1 : 0),
-                                        itemBuilder: (context, index) {
-                                          if (index == _openAnchorIndex) {
-                                            return _buildOlderHistoryControl();
-                                          }
-                                          final itemIndex = _openAnchorIndex - index - 1;
-                                          final item = _timelineItems[itemIndex];
-                                          return Center(
-                                            child: ConstrainedBox(
-                                              constraints: const BoxConstraints(
-                                                maxWidth: SidebarBreakpoints.maxConversationWidth,
+                                  child: CustomScrollView(
+                                    key: const Key('conversation_timeline_scroll'),
+                                    controller: _scrollController,
+                                    center: _conversationAnchorKey,
+                                    anchor: anchor,
+                                    slivers: [
+                                      SliverPadding(
+                                        padding: EdgeInsets.fromLTRB(8, topPadding, 8, 0),
+                                        sliver: SliverList.builder(
+                                          itemCount: _openAnchorIndex,
+                                          itemBuilder: (context, index) {
+                                            final itemIndex = _openAnchorIndex - index - 1;
+                                            final item = _timelineItems[itemIndex];
+                                            return Center(
+                                              child: ConstrainedBox(
+                                                constraints: const BoxConstraints(
+                                                  maxWidth: SidebarBreakpoints.maxConversationWidth,
+                                                ),
+                                                child: _buildViewportTrackedItem(item),
                                               ),
-                                              child: _buildViewportTrackedItem(item),
-                                            ),
-                                          );
-                                        },
+                                            );
+                                          },
+                                        ),
                                       ),
-                                    ),
-                                    SliverPadding(
-                                      key: _conversationAnchorKey,
-                                      padding: EdgeInsets.fromLTRB(8, 8, 8, bottomPadding),
-                                      sliver: SliverList.builder(
-                                        itemCount: _timelineItems.length - _openAnchorIndex,
-                                        itemBuilder: (context, index) {
-                                          final itemIndex = _openAnchorIndex + index;
-                                          final item = _timelineItems[itemIndex];
-                                          return Center(
-                                            child: ConstrainedBox(
-                                              constraints: const BoxConstraints(
-                                                maxWidth: SidebarBreakpoints.maxConversationWidth,
+                                      SliverPadding(
+                                        key: _conversationAnchorKey,
+                                        padding: EdgeInsets.fromLTRB(8, 8, 8, bottomPadding),
+                                        sliver: SliverList.builder(
+                                          itemCount: _timelineItems.length - _openAnchorIndex,
+                                          itemBuilder: (context, index) {
+                                            final itemIndex = _openAnchorIndex + index;
+                                            final item = _timelineItems[itemIndex];
+                                            return Center(
+                                              child: ConstrainedBox(
+                                                constraints: const BoxConstraints(
+                                                  maxWidth: SidebarBreakpoints.maxConversationWidth,
+                                                ),
+                                                child: _buildViewportTrackedItem(item),
                                               ),
-                                              child: _buildViewportTrackedItem(item),
-                                            ),
-                                          );
-                                        },
+                                            );
+                                          },
+                                        ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ),
                             );

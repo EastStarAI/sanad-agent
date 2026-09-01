@@ -118,6 +118,9 @@ class SessionQueryHandler {
         .firstOrNull;
     final request = SessionHistoryRequest.fromPayload(event.payload);
     final cursor = request.cursor;
+    final cursorDirection = cursor == null
+        ? null
+        : SessionHistoryCursor.decode(cursor).direction;
     final anchorRowId = request.anchorRowIdForSession(sessionId);
     final page = session == null
         ? const SessionHistoryPage(
@@ -140,6 +143,8 @@ class SessionQueryHandler {
         ? 'anchor'
         : cursor == null
         ? 'tail'
+        : cursorDirection == SessionHistoryCursorDirection.newer
+        ? 'newer'
         : 'older';
     final includesRuntimeState = cursor == null;
     final isTailPage = pageKind == 'tail';
@@ -642,6 +647,9 @@ class SessionQueryHandler {
           'page_kind': pageKind,
           'has_more': page.hasMore,
           if (page.nextCursor != null) 'next_cursor': page.nextCursor,
+          'has_newer': page.hasNewer,
+          if (page.nextNewerCursor != null)
+            'next_newer_cursor': page.nextNewerCursor,
           'history_revision': page.historyRevision,
           'messages': historyMessages,
           if (includesRuntimeState) ...{

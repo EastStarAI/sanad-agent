@@ -717,7 +717,7 @@ class SessionDB {
         );
       }
       final boundaryRows = _db.select(
-        '''SELECT id, data FROM messages
+        '''SELECT * FROM messages
            WHERE session_id = ? AND id = ?
              AND (history_status = 'active' OR history_status IS NULL)''',
         [sessionId, decodedCursor.beforeRowId],
@@ -751,27 +751,46 @@ class SessionDB {
       }
     }
 
-    final boundaryRowId = decodedCursor?.beforeRowId ?? anchorRowId;
-    final boundaryOperator = decodedCursor == null && anchorRowId != null
-        ? '<='
-        : '<';
+    final isAnchoredPage = anchorRowId != null;
+    final isNewerPage =
+        decodedCursor?.direction == SessionHistoryCursorDirection.newer;
+    final boundaryRowId = decodedCursor?.beforeRowId;
+    final readsForward = isAnchoredPage || isNewerPage;
     final rows = _db.select(
-      boundaryRowId == null
+      isAnchoredPage
           ? '''
-            SELECT id, data FROM messages
+            SELECT * FROM messages
+            WHERE session_id = ? AND id >= ?
+              AND (history_status = 'active' OR history_status IS NULL)
+            ORDER BY id ASC
+            LIMIT ?
+            '''
+          : isNewerPage
+          ? '''
+            SELECT * FROM messages
+            WHERE session_id = ? AND id > ?
+              AND (history_status = 'active' OR history_status IS NULL)
+            ORDER BY id ASC
+            LIMIT ?
+            '''
+          : boundaryRowId == null
+          ? '''
+            SELECT * FROM messages
             WHERE session_id = ?
               AND (history_status = 'active' OR history_status IS NULL)
             ORDER BY id DESC
             LIMIT ?
             '''
           : '''
-            SELECT id, data FROM messages
-            WHERE session_id = ? AND id $boundaryOperator ?
+            SELECT * FROM messages
+            WHERE session_id = ? AND id < ?
               AND (history_status = 'active' OR history_status IS NULL)
             ORDER BY id DESC
             LIMIT ?
             ''',
-      boundaryRowId == null
+      isAnchoredPage
+          ? [sessionId, anchorRowId, limit + 1]
+          : boundaryRowId == null
           ? [sessionId, limit + 1]
           : [sessionId, boundaryRowId, limit + 1],
     );
@@ -787,11 +806,26 @@ class SessionDB {
       selectedRows.add(row);
       persistedBytes += rowBytes;
     }
-    final hasMore = rows.length > selectedRows.length;
-    final messages = selectedRows.reversed
+    final hasMore = isAnchoredPage
+        ? _db
+              .select(
+                '''SELECT 1 FROM messages
+               WHERE session_id = ? AND id < ?
+                 AND (history_status = 'active' OR history_status IS NULL)
+               LIMIT 1''',
+                [sessionId, anchorRowId],
+              )
+              .isNotEmpty
+        : !isNewerPage && rows.length > selectedRows.length;
+    final hasNewer = readsForward && rows.length > selectedRows.length;
+    final chronologicalRows = readsForward
+        ? selectedRows
+        : selectedRows.reversed;
+    final messages = chronologicalRows
         .map(_persistedMessageFromRow)
         .toList(growable: false);
     final oldest = messages.firstOrNull;
+    final newest = messages.lastOrNull;
     final nextCursor = hasMore && oldest != null
         ? SessionHistoryCursor(
             sessionId: sessionId,
@@ -802,10 +836,23 @@ class SessionDB {
             ),
           ).encode()
         : null;
+    final nextNewerCursor = hasNewer && newest != null
+        ? SessionHistoryCursor(
+            sessionId: sessionId,
+            beforeRowId: newest.rowId,
+            historyRevision: historyRevision,
+            boundaryFingerprint: SessionHistoryCursor.fingerprint(
+              newest.message,
+            ),
+            direction: SessionHistoryCursorDirection.newer,
+          ).encode()
+        : null;
     return SessionHistoryPage(
       messages: messages,
       hasMore: hasMore,
       nextCursor: nextCursor,
+      hasNewer: hasNewer,
+      nextNewerCursor: nextNewerCursor,
       historyRevision: historyRevision,
       persistedBytes: persistedBytes,
     );

@@ -581,10 +581,21 @@ class SocketConversationClient implements ConversationClient {
   }
 
   @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) {
+    return _commands!.loadNewerSessionHistory(sessionId);
+  }
+
+  @override
   bool get historyHasMore => _store.historyHasMore;
 
   @override
   String? get historyNextCursor => _store.historyNextCursor;
+
+  @override
+  bool get historyHasNewer => _store.historyHasNewer;
+
+  @override
+  String? get historyNextNewerCursor => _store.historyNextNewerCursor;
 
   Future<void> synchronizeAfterReconnect() async {
     await getSessions();

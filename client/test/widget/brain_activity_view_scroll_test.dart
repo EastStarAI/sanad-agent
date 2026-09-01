@@ -127,6 +127,69 @@ void main() {
     expect(after, moreOrLessEquals(before, epsilon: 1));
   });
 
+  testWidgets('older page arriving during upward scroll preserves the visible event', (tester) async {
+    final tail = [
+      for (var i = 0; i < 30; i += 1) _event('tail-$i', EventKind.finalAnswer, _lines(4)),
+    ];
+    final older = [
+      for (var i = 0; i < 30; i += 1) _event('older-$i', EventKind.finalAnswer, _lines(4)),
+    ];
+    final notifier = ValueNotifier<List<CanonicalEvent>>(tail);
+    final releasePage = Completer<void>();
+    var calls = 0;
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: notifier.value,
+      messagesNotifier: notifier,
+      followLatestOnOpen: true,
+      hasOlderHistory: true,
+      onLoadOlderHistory: () async {
+        calls += 1;
+        await releasePage.future;
+        notifier.value = [...older, ...tail];
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+
+    for (var attempt = 0; attempt < 10 && calls == 0; attempt += 1) {
+      await tester.drag(
+        find.byType(CustomScrollView),
+        const Offset(0, 500),
+      );
+      await tester.pump();
+    }
+    expect(calls, 1);
+    final visible = _topVisibleKnownEvent(tester, tail.map((event) => event.id));
+    final before = tester.getTopLeft(find.byKey(ValueKey(visible))).dy;
+
+    releasePage.complete();
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(ValueKey(visible)), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(ValueKey(visible))).dy,
+      moreOrLessEquals(before, epsilon: 1),
+    );
+    expect(
+      _timelineController(tester).offset,
+      isNot(
+        moreOrLessEquals(
+          _timelineController(tester).position.maxScrollExtent,
+          epsilon: 1,
+        ),
+      ),
+    );
+    notifier.dispose();
+  });
+
   testWidgets('an anchored response reopens the saved event at the visible top', (tester) async {
     const anchorId = 'history:session-1:42:user_message:0';
     final notifier = ValueNotifier<List<CanonicalEvent>>([
@@ -207,7 +270,7 @@ void main() {
     expect(calls, 1);
   });
 
-  testWidgets('shows an accessible earlier-history action and invokes it once', (tester) async {
+  testWidgets('upward overscroll prefetches older history without a visible control', (tester) async {
     var calls = 0;
     final messages = [
       _event('user-1', EventKind.userMessage, 'current prompt'),
@@ -230,9 +293,101 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Show earlier'), findsOneWidget);
-    await tester.tap(find.text('Show earlier'));
+    expect(find.text('Show earlier'), findsNothing);
+    expect(find.text('Retry earlier messages'), findsNothing);
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, 500));
     await tester.pump();
+    expect(calls, 1);
+  });
+
+  testWidgets('offline overscroll retries stop after three consecutive failures', (tester) async {
+    final status = ValueNotifier<(bool, String?)>((false, 'offline'));
+    var calls = 0;
+
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: SizedBox(
+        width: 800,
+        height: 600,
+        child: ValueListenableBuilder<(bool, String?)>(
+          valueListenable: status,
+          builder: (_, pagination, _) => BrainActivityView(
+            messagesStream: null,
+            initialMessages: [
+              _event('offline-anchor', EventKind.userMessage, 'offline prompt'),
+              _event('offline-answer', EventKind.finalAnswer, _lines(100)),
+            ],
+            onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+            sessionId: 'offline-session',
+            initialViewportAnchorEventId: 'offline-anchor',
+            hasOlderHistory: true,
+            isOlderHistoryLoading: pagination.$1,
+            olderHistoryError: pagination.$2,
+            onLoadOlderHistory: () async {
+              calls += 1;
+              status.value = (true, null);
+            },
+            visualState: ConversationVisualState.activeSession,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    for (var attempt = 0; attempt < 4; attempt += 1) {
+      await tester.drag(
+        find.byType(CustomScrollView),
+        const Offset(0, 500),
+      );
+      await tester.pump();
+      if (status.value.$1) {
+        status.value = (false, 'offline');
+        await tester.pump();
+      }
+    }
+
+    expect(calls, 3);
+    expect(find.text('Retry earlier messages'), findsNothing);
+
+    status.value = (false, null);
+    await tester.pump();
+    await tester.drag(
+      find.byType(CustomScrollView),
+      const Offset(0, 500),
+    );
+    await tester.pump();
+    expect(calls, 4, reason: 'authoritative recovery resets the retry budget');
+    status.dispose();
+  });
+
+  testWidgets('short anchored page auto-fills newer history before any control is visible', (tester) async {
+    var calls = 0;
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [
+        _event('anchor', EventKind.userMessage, 'restored prompt'),
+      ],
+      initialViewportAnchorEventId: 'anchor',
+      hasNewerHistory: true,
+      onLoadNewerHistory: () async {
+        calls += 1;
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Show later'), findsNothing);
+    expect(find.text('Retry later messages'), findsNothing);
     expect(calls, 1);
   });
 
@@ -622,6 +777,76 @@ void main() {
     expect(messages.map((event) => event.id), contains(recordedAnchors.last));
   });
 
+  testWidgets('switching idle sessions restores each saved visible event independently', (tester) async {
+    final sessionOne = [
+      for (var i = 0; i < 40; i += 1) _event('session-one-$i', EventKind.finalAnswer, _lines(4)),
+    ];
+    final sessionTwo = [
+      for (var i = 0; i < 40; i += 1) _event('session-two-$i', EventKind.finalAnswer, _lines(4)),
+    ];
+    final anchors = <String, String>{
+      'session-one': 'session-one-20',
+      'session-two': 'session-two-10',
+    };
+    final selected = ValueNotifier<(String, List<CanonicalEvent>)>(
+      ('session-one', sessionOne),
+    );
+
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: SizedBox(
+        width: 800,
+        height: 600,
+        child: ValueListenableBuilder<(String, List<CanonicalEvent>)>(
+          valueListenable: selected,
+          builder: (_, fixture, _) => BrainActivityView(
+            messagesStream: null,
+            initialMessages: fixture.$2,
+            onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+            sessionId: fixture.$1,
+            initialViewportAnchorEventId: anchors[fixture.$1],
+            onViewportAnchorChanged: (eventId) {
+              anchors[fixture.$1] = eventId;
+            },
+            visualState: ConversationVisualState.activeSession,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.drag(
+      find.byKey(const Key('chat_messages_list')),
+      const Offset(0, 300),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    final savedSessionOne = anchors['session-one']!;
+
+    selected.value = ('session-two', sessionTwo);
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    expect(
+      find.byKey(ValueKey(anchors['session-two']!)),
+      findsOneWidget,
+    );
+
+    selected.value = ('session-one', sessionOne);
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(ValueKey(savedSessionOne)), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(ValueKey(savedSessionOne))).dy,
+      lessThan(180),
+    );
+    selected.dispose();
+  });
+
   testWidgets('manual opt-out survives reasoning tool final and informational events until manual return', (
     tester,
   ) async {
@@ -1005,6 +1230,8 @@ Future<void> _pumpBrainActivityView(
   ValueChanged<String>? onViewportAnchorChanged,
   bool hasOlderHistory = false,
   Future<void> Function()? onLoadOlderHistory,
+  bool hasNewerHistory = false,
+  Future<void> Function()? onLoadNewerHistory,
   Future<void> Function(String eventId)? onLoadAnchoredHistory,
   ValueNotifier<List<CanonicalEvent>>? messagesNotifier,
 }) {
@@ -1018,6 +1245,8 @@ Future<void> _pumpBrainActivityView(
     onViewportAnchorChanged: onViewportAnchorChanged,
     hasOlderHistory: hasOlderHistory,
     onLoadOlderHistory: onLoadOlderHistory,
+    hasNewerHistory: hasNewerHistory,
+    onLoadNewerHistory: onLoadNewerHistory,
     onLoadAnchoredHistory: onLoadAnchoredHistory,
     visualState: ConversationVisualState.activeSession,
   );
@@ -1047,6 +1276,24 @@ CanonicalEvent _event(String id, EventKind kind, String text) {
 
 ScrollController _timelineController(WidgetTester tester) {
   return tester.widget<CustomScrollView>(find.byType(CustomScrollView)).controller!;
+}
+
+String _topVisibleKnownEvent(
+  WidgetTester tester,
+  Iterable<String> eventIds,
+) {
+  final visibleTop = tester.getTopLeft(find.byKey(const Key('chat_messages_list'))).dy + 48;
+  final visibleBottom = _visibleTimelineBottom(tester);
+  final candidates = <(String, double)>[];
+  for (final eventId in eventIds) {
+    final finder = find.byKey(ValueKey(eventId));
+    if (finder.evaluate().isEmpty) continue;
+    final rect = tester.getRect(finder);
+    if (rect.bottom <= visibleTop || rect.top >= visibleBottom) continue;
+    candidates.add((eventId, rect.top));
+  }
+  candidates.sort((left, right) => left.$2.compareTo(right.$2));
+  return candidates.first.$1;
 }
 
 double _eventBottom(WidgetTester tester, String eventId) {

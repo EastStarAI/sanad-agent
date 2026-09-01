@@ -45,8 +45,10 @@ class FakeConversationRepository implements ConversationRepository {
   final List<String> activatedSessionIds = [];
   final List<String> loadedHistorySessionIds = [];
   final List<String> loadedOlderHistorySessionIds = [];
+  final List<String> loadedNewerHistorySessionIds = [];
   final List<(String sessionId, String eventId)> loadedAnchorRequests = [];
   bool historyHasMoreValue = false;
+  bool historyHasNewerValue = false;
   Future<List<CanonicalEvent>> Function(DeviceConfig agent, String sessionId)? loadOlderHistoryHandler;
   Future<List<CanonicalEvent>> Function(
     DeviceConfig agent,
@@ -670,7 +672,19 @@ class FakeConversationRepository implements ConversationRepository {
   }
 
   @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) async {
+    loadedNewerHistorySessionIds.add(sessionId);
+    return currentMessages(agent);
+  }
+
+  @override
   bool historyHasMore(DeviceConfig agent) => historyHasMoreValue;
+
+  @override
+  bool historyHasNewer(DeviceConfig agent) => historyHasNewerValue;
 
   @override
   Future<void> updateSessionTitle(DeviceConfig agent, String sessionId, String title) async {

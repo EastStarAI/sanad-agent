@@ -97,6 +97,8 @@ class SessionHistoryRequest {
   }
 }
 
+enum SessionHistoryCursorDirection { older, newer }
+
 class SessionHistoryCursor {
   static const int currentVersion = 1;
 
@@ -104,12 +106,14 @@ class SessionHistoryCursor {
   final int beforeRowId;
   final int historyRevision;
   final String boundaryFingerprint;
+  final SessionHistoryCursorDirection direction;
 
   const SessionHistoryCursor({
     required this.sessionId,
     required this.beforeRowId,
     required this.historyRevision,
     required this.boundaryFingerprint,
+    this.direction = SessionHistoryCursorDirection.older,
   });
 
   String encode() {
@@ -120,6 +124,7 @@ class SessionHistoryCursor {
         'b': beforeRowId,
         'r': historyRevision,
         'f': boundaryFingerprint,
+        if (direction == SessionHistoryCursorDirection.newer) 'd': 'newer',
       }),
     );
     return base64Url.encode(bytes).replaceAll('=', '');
@@ -170,11 +175,20 @@ class SessionHistoryCursor {
           'cursor fingerprint is invalid',
         );
       }
+      final rawDirection = json['d'];
+      if (rawDirection != null && rawDirection != 'newer') {
+        throw const SessionHistoryCursorFormatException(
+          'cursor direction is invalid',
+        );
+      }
       return SessionHistoryCursor(
         sessionId: sessionId,
         beforeRowId: beforeRowId,
         historyRevision: historyRevision,
         boundaryFingerprint: fingerprint,
+        direction: rawDirection == 'newer'
+            ? SessionHistoryCursorDirection.newer
+            : SessionHistoryCursorDirection.older,
       );
     } on SessionHistoryCursorFormatException {
       rethrow;
@@ -195,6 +209,8 @@ class SessionHistoryPage {
   final List<PersistedMessage> messages;
   final bool hasMore;
   final String? nextCursor;
+  final bool hasNewer;
+  final String? nextNewerCursor;
   final int historyRevision;
   final int persistedBytes;
 
@@ -202,6 +218,8 @@ class SessionHistoryPage {
     required this.messages,
     required this.hasMore,
     required this.nextCursor,
+    this.hasNewer = false,
+    this.nextNewerCursor,
     required this.historyRevision,
     this.persistedBytes = 0,
   });
