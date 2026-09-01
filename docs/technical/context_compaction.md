@@ -467,6 +467,13 @@ idle|running -> compacting (in-memory barrier + durable started row)
 | Safe metrics | before/after/retained/window/duration only |
 | Failures | typed `failure_reason` wire names; no summary text or secrets |
 
+After local validation, selecting or submitting `/compact` consumes the runtime
+command immediately: the client clears the composer, closes slash suggestions,
+and persists the cleared draft before awaiting the daemon result. A typed busy,
+in-progress, or terminal failure remains user-visible feedback, but command text
+is not restored because it is an executed control action rather than an unsent
+conversation message.
+
 `CompactionLifecycleBroadcaster` maps engine lifecycle to gateway responses. The
 logical operation keeps one `compaction_id`, while each transition has the
 deterministic identity `context_compaction:<compaction_id>:<status>`. Live

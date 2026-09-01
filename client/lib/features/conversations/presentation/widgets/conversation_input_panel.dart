@@ -314,13 +314,15 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
       _showValidationError('Create or select a session before running /compact.');
       return;
     }
+    _draftSaveDebouncer?.cancel();
+    _chatController.clear();
+    _slashCommandsCubit.clear();
+    _hasUnsavedDraftChanges = false;
+    _saveDraftNow();
+
     final result = await _inputCubit.compactSession();
     if (!mounted) return;
     if (result.accepted) {
-      _chatController.clear();
-      _slashCommandsCubit.clear();
-      _hasUnsavedDraftChanges = false;
-      _saveDraftNow();
       return;
     }
     if (result.sessionBusy) {

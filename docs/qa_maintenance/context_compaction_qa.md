@@ -17,14 +17,14 @@ Verification matrix for durable goal-preserving context compaction across agent 
 | Boundary repository (53b B1) | `cd agent && fvm dart test test/evolution/compaction_boundary_repository_test.dart` | Claim, CAS, redaction |
 | Model projection (53b B2) | `cd agent && fvm dart test test/evolution/model_projection_builder_test.dart` | Projection, reload, tail pairing |
 | Activation (53b B3) | `cd agent && fvm dart test test/evolution/compaction_activation_service_test.dart` | Projection revision, stale completion |
-| Engine (53c) | `cd agent && fvm dart test test/engine/context_compaction_engine_test.dart test/engine/context_compaction_fixture_test.dart` | Pressure, tail, repeated anchor, redaction validation |
+| Engine (53c) | `cd agent && fvm dart test test/engine/context_compaction_engine_test.dart test/engine/context_compaction_fixture_test.dart` | Pressure, tail, repeated anchor, redaction validation, and rejection of incidental semantic labels quoted by tool output |
 | Model policy (53g) | `cd agent && fvm dart test test/core/config_test.dart test/engine/adapters_test.dart test/engine/adapters/codex_responses_adapter_test.dart` | YAML defaults/validation, exact model windows, codec-native wire estimate |
 | Overflow recovery (53d D4) | `cd agent && fvm dart test test/engine/runtime/compaction_overflow_recovery_test.dart test/core/provider_runtime/runtime_failure_reason_test.dart` | 400 context-overflow classify, one-shot recovery, stream guard |
 | Preflight/checkpoint (53d D2/D7) | `cd agent && fvm dart test test/engine/runtime/compaction_preflight_integration_test.dart test/engine/runtime/compaction_checkpoint_resume_test.dart` | Provider history rebuild + checkpoint resume after activation |
 | Restart persistence (53f F2) | `cd agent && fvm dart test test/evolution/compaction_restart_persistence_test.dart` | Boundary survives DB reopen |
 | Daemon E2E (53f F5) | `cd agent && fvm dart test --concurrency=1 --timeout=120s e2e_test/context_compaction_daemon_e2e_test.dart` | Manual compact + restart history hydration over real daemon |
 | Slash catalog (53e E0) | `cd agent && fvm dart test test/interfaces/local_workspace_compact_slash_test.dart test/interfaces/sanad_bridge_test.dart` | `/compact` runtime command exposed |
-| Client dispatch (53e E5) | `cd client && fvm flutter test test/widget/compact_command_dispatch_test.dart test/unit/services/skill_composer_utils_test.dart test/unit/bloc/composer_slash_commands_cubit_test.dart` | Partial Enter/click immediate action, exact `/compact`, mid-message exclusion, skill insert-then-submit, duplicate/args/busy feedback |
+| Client dispatch (53e E5) | `cd client && fvm flutter test test/widget/compact_command_dispatch_test.dart test/unit/services/skill_composer_utils_test.dart test/unit/bloc/composer_slash_commands_cubit_test.dart` | Partial Enter/click immediate action, exact `/compact`, command consumption on typed failure, mid-message exclusion, skill insert-then-submit, duplicate/args/busy feedback |
 
 ## Manual scenarios (53f)
 

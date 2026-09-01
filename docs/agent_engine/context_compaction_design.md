@@ -96,9 +96,14 @@ Structured summary sections:
 9. Remaining Work and Safest Next Action
 10. Critical Context That Must Not Be Lost
 
-Continuity anchors extracted before summarization must survive validation. One
-bounded repair attempt is allowed; weak fallback summaries never activate a
-boundary. Failures may carry `CompactionAntiThrashingHints` for 53d cooldown.
+Continuity anchors extracted before summarization must survive validation.
+Semantic labels (`goal`, `blocker`, `pending ask`, `decision`, `path`) establish
+intent only when they occur in user-authored messages. Assistant content and
+tool output frequently quote source, logs, JSON, or plans containing the same
+labels and therefore cannot create semantic anchors; tool effects retain their
+typed `tool_call_id` supporting anchor instead. One bounded repair attempt is
+allowed; weak fallback summaries never activate a boundary. Failures may carry
+`CompactionAntiThrashingHints` for 53d cooldown.
 One failed Auto attempt also opens a per-run breaker so later tool-loop model
 steps cannot repeat compaction work; manual compaction and a new run remain
 eligible.

@@ -345,7 +345,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
   });
 
-  testWidgets('session busy compact outcome shows validation feedback', (
+  testWidgets('session busy compact outcome consumes command and shows feedback', (
     tester,
   ) async {
     conversationRepository.compactSessionResult = const SessionCompactResult(
@@ -378,14 +378,16 @@ void main() {
       validationError,
       'Session is busy. Try /compact again when idle.',
     );
-    expect(find.text('/compact'), findsOneWidget);
+    expect(find.text('/compact'), findsNothing);
+    expect(
+      find.byKey(const Key('slash_suggestion_runtime_action_compact')),
+      findsNothing,
+    );
     await tester.pump(ToastUtils.defaultDuration);
     await tester.pump(const Duration(milliseconds: 500));
   });
 
-  testWidgets('compaction in progress outcome shows validation feedback', (
-    tester,
-  ) async {
+  testWidgets('compaction in progress outcome consumes command and shows feedback', (tester) async {
     conversationRepository.compactSessionResult = const SessionCompactResult(
       outcome: 'compaction_in_progress',
     );
@@ -416,10 +418,58 @@ void main() {
       validationError,
       'Context compaction is already in progress.',
     );
-    expect(find.text('/compact'), findsOneWidget);
+    expect(find.text('/compact'), findsNothing);
+    expect(
+      find.byKey(const Key('slash_suggestion_runtime_action_compact')),
+      findsNothing,
+    );
     await tester.pump(ToastUtils.defaultDuration);
     await tester.pump(const Duration(milliseconds: 500));
   });
+
+  testWidgets(
+    'terminal compact failure consumes command and reports the typed reason',
+    (tester) async {
+      conversationRepository.compactSessionResult = const SessionCompactResult(
+        outcome: 'failed',
+        failureReason: 'continuityValidationFailed',
+      );
+      String? validationError;
+      ConversationInputPanel.debugOnValidationError = (message) {
+        validationError = message;
+      };
+
+      await pumpTestApp(
+        tester,
+        agentCubit: agentCubit,
+        sessionCubit: sessionCubit,
+        sessionMessagesCubit: sessionMessagesCubit,
+        capabilities: capabilities,
+        child: ConversationInputPanel(
+          sessionId: 'session-compact',
+          onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+        ),
+      );
+
+      await tester.enterText(find.byKey(const Key('chat_input')), '/co');
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.sendKeyEvent(LogicalKeyboardKey.enter);
+      await tester.pumpAndSettle();
+
+      expect(conversationRepository.compactSessionCalls, 1);
+      expect(
+        validationError,
+        'Context compaction failed: continuityValidationFailed',
+      );
+      expect(find.text('/compact'), findsNothing);
+      expect(
+        find.byKey(const Key('slash_suggestion_runtime_action_compact')),
+        findsNothing,
+      );
+      await tester.pump(ToastUtils.defaultDuration);
+      await tester.pump(const Duration(milliseconds: 500));
+    },
+  );
 }
 
 class _TestSessionMessagesCubit extends SessionMessagesCubit {
