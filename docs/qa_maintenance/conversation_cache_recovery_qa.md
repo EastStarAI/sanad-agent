@@ -84,6 +84,23 @@ description: "QA scenarios for persistent conversation snapshots, draft acceptan
 3. Trigger two overlapping flushes while the first storage write is delayed.
 4. **Expected:** The newest snapshot remains persisted after both writes finish.
 
+## Long-History Pagination Matrix
+
+| Scenario | Expected result |
+|---|---|
+| Open a 10,000-row session | Initial daemon query returns at most 100 rows and 1 MiB of persisted JSON; Client paints the tail without building remote rows. |
+| Scroll upward with mouse, trackpad, or touch | One older request starts near the top; repeated notifications coalesce by cursor. |
+| Keyboard activate **Show earlier** | The same older request path runs and focus remains usable while loading. |
+| Older page arrives | Stable event ids prepend once and the first visible event retains its pixel position. |
+| Live append during older request | The live event remains once at the tail after the older merge. |
+| Network failure | Existing messages and viewport remain; **Retry earlier messages** appears and automatic retry stops. |
+| Response repeats its cursor or returns no progress | Pagination becomes exhausted and cannot loop. |
+| Switch session/device during request | Late command and Cubit generations are ignored; no foreign timeline mutation appears. |
+| Restore an old saved viewport event | Client sends `anchor_event_id`, opens that bounded page, and aligns the event near the visible top. |
+| Missing/deleted/compacted anchor | Agent returns `anchor_not_found`; Client retains the newest tail without repeated requests. |
+| Tool-heavy row at a page boundary | Reasoning, thought, tool use/results, and final projection remain one stable fan-out group. |
+| Compact and large window resize | No geometry jump, stale inline edit, overflow, or unintended tail-follow activation. |
+
 ## Automated Test Coverage
 
 | Scenario | Test file |
@@ -94,3 +111,8 @@ description: "QA scenarios for persistent conversation snapshots, draft acceptan
 | Repository facade integration | `test/unit/repositories/conversation_cache_repository_test.dart` |
 | Production `SessionCubit` cache projection | `test/unit/bloc/session_cubit_test.dart` |
 | Agent-late reconnect active-history hydration | `test/unit/services/connection_registries_test.dart` |
+| Agent keyset/cursor/anchor/10k bounds | `agent/test/evolution/session_history_pagination_test.dart` |
+| Canonical fan-out and compaction page placement | `agent/test/interfaces/sanad_bridge_test.dart`, `agent/test/interfaces/compaction_history_parity_test.dart` |
+| Client coalescing/merge/failure/stale generation | `client/test/unit/services/device_conversation_commands_test.dart`, `client/test/unit/bloc/session_cubit_test.dart` |
+| Pixel anchoring, auto-fill, manual action, saved anchor | `client/test/widget/brain_activity_view_scroll_test.dart` |
+| Spawned-daemon local socket pagination | `client/e2e_test/local_dual_connection_e2e_test.dart` |

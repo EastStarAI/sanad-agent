@@ -105,9 +105,8 @@ class SocketConversationRepository implements ConversationRepository {
   ) => _clientFor(agent).currentAttentionStates;
 
   @override
-  Map<String, SessionRouteSnapshot> currentRouteSnapshots(
-    DeviceConfig agent,
-  ) => _clientFor(agent).currentRouteSnapshots;
+  Map<String, SessionRouteSnapshot> currentRouteSnapshots(DeviceConfig agent) =>
+      _clientFor(agent).currentRouteSnapshots;
 
   @override
   void activateSession(DeviceConfig agent, String sessionId) {
@@ -170,20 +169,22 @@ class SocketConversationRepository implements ConversationRepository {
     required String requestId,
     required String sessionId,
   }) {
-    return _clientFor(agent).steerMessage(
-      message,
-      requestId: requestId,
-      sessionId: sessionId,
-    );
+    return _clientFor(agent).steerMessage(message, requestId: requestId, sessionId: sessionId);
   }
 
   @override
-  Future<String?> deleteQueuedMessage(DeviceConfig agent, {required String requestId, required String sessionId}) =>
-      _clientFor(agent).deleteQueuedMessage(requestId: requestId, sessionId: sessionId);
+  Future<String?> deleteQueuedMessage(
+    DeviceConfig agent, {
+    required String requestId,
+    required String sessionId,
+  }) => _clientFor(agent).deleteQueuedMessage(requestId: requestId, sessionId: sessionId);
 
   @override
-  Future<String?> cancelPendingSteer(DeviceConfig agent, {required String requestId, required String sessionId}) =>
-      _clientFor(agent).cancelPendingSteer(requestId: requestId, sessionId: sessionId);
+  Future<String?> cancelPendingSteer(
+    DeviceConfig agent, {
+    required String requestId,
+    required String sessionId,
+  }) => _clientFor(agent).cancelPendingSteer(requestId: requestId, sessionId: sessionId);
 
   @override
   Future<String?> stop(
@@ -302,12 +303,18 @@ class SocketConversationRepository implements ConversationRepository {
   }
 
   @override
-  Future<SessionQueryResult> getSessions(DeviceConfig agent, {SessionQueryRequest? query}) {
+  Future<SessionQueryResult> getSessions(
+    DeviceConfig agent, {
+    SessionQueryRequest? query,
+  }) {
     return _clientFor(agent).getSessions(query: query);
   }
 
   @override
-  Future<SessionQueryResult> refreshSessions(DeviceConfig agent, {SessionQueryRequest? query}) {
+  Future<SessionQueryResult> refreshSessions(
+    DeviceConfig agent, {
+    SessionQueryRequest? query,
+  }) {
     return _clientFor(agent).refreshSessions(query: query);
   }
 
@@ -341,11 +348,7 @@ class SocketConversationRepository implements ConversationRepository {
     String? name,
     String? description,
   }) {
-    return _clientFor(agent).createWorkspace(
-      path: path,
-      name: name,
-      description: description,
-    );
+    return _clientFor(agent).createWorkspace(path: path, name: name, description: description);
   }
 
   @override
@@ -354,10 +357,7 @@ class SocketConversationRepository implements ConversationRepository {
     required String workspaceId,
     required String displayName,
   }) {
-    return _clientFor(agent).renameWorkspace(
-      workspaceId: workspaceId,
-      displayName: displayName,
-    );
+    return _clientFor(agent).renameWorkspace(workspaceId: workspaceId, displayName: displayName);
   }
 
   @override
@@ -374,10 +374,7 @@ class SocketConversationRepository implements ConversationRepository {
     required String workspaceId,
     required String newPath,
   }) {
-    return _clientFor(agent).relocateWorkspace(
-      workspaceId: workspaceId,
-      newPath: newPath,
-    );
+    return _clientFor(agent).relocateWorkspace(workspaceId: workspaceId, newPath: newPath);
   }
 
   @override
@@ -386,10 +383,7 @@ class SocketConversationRepository implements ConversationRepository {
     required String parentPath,
     required String name,
   }) {
-    return _clientFor(agent).createFolder(
-      parentPath: parentPath,
-      name: name,
-    );
+    return _clientFor(agent).createFolder(parentPath: parentPath, name: name);
   }
 
   @override
@@ -402,20 +396,47 @@ class SocketConversationRepository implements ConversationRepository {
   }
 
   @override
-  Future<void> deleteFolder(
-    DeviceConfig agent, {
-    required String path,
-  }) {
+  Future<void> deleteFolder(DeviceConfig agent, {required String path}) {
     return _clientFor(agent).deleteFolder(path: path);
   }
 
   @override
-  Future<List<CanonicalEvent>> loadSessionHistory(DeviceConfig agent, String sessionId) {
+  Future<List<CanonicalEvent>> loadSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) {
     return _clientFor(agent).loadSessionHistory(sessionId);
   }
 
   @override
-  Future<void> updateSessionTitle(DeviceConfig agent, String sessionId, String title) {
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) {
+    return _clientFor(agent).loadOlderSessionHistory(sessionId);
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+    String anchorEventId,
+  ) {
+    return _clientFor(agent).loadAnchoredSessionHistory(
+      sessionId,
+      anchorEventId,
+    );
+  }
+
+  @override
+  bool historyHasMore(DeviceConfig agent) => _clientFor(agent).historyHasMore;
+
+  @override
+  Future<void> updateSessionTitle(
+    DeviceConfig agent,
+    String sessionId,
+    String title,
+  ) {
     return _clientFor(agent).updateSessionTitle(sessionId, title);
   }
 
@@ -443,7 +464,10 @@ class SocketConversationRepository implements ConversationRepository {
   }
 
   @override
-  Future<WorkspacePolicy> getWorkspacePolicy(DeviceConfig agent, String workspacePath) {
+  Future<WorkspacePolicy> getWorkspacePolicy(
+    DeviceConfig agent,
+    String workspacePath,
+  ) {
     return _clientFor(agent).getWorkspacePolicy(workspacePath);
   }
 
@@ -462,7 +486,10 @@ class SocketConversationRepository implements ConversationRepository {
   }
 
   @override
-  Stream<WorkspacePolicy> watchWorkspacePolicy(DeviceConfig agent, String workspaceId) {
+  Stream<WorkspacePolicy> watchWorkspacePolicy(
+    DeviceConfig agent,
+    String workspaceId,
+  ) {
     return _clientFor(agent).watchWorkspacePolicy(workspaceId);
   }
 

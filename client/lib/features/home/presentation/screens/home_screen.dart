@@ -747,6 +747,7 @@ class _MainContent extends StatelessWidget {
     required ConversationVisualState visualState,
   }) {
     final inputCubit = context.read<ConversationInputCubit>();
+    final messagesCubit = context.read<SessionMessagesCubit>();
     final cacheRepository = context.read<ConversationCacheRepository>();
     final sessionId = messagesState.activeSessionId;
     final composerSessionId = messagesState.requestedSessionId ?? sessionId;
@@ -777,6 +778,11 @@ class _MainContent extends StatelessWidget {
             ),
       visualState: visualState,
       pendingSteerCancellationRequestIds: messagesState.pendingSteerCancellationRequestIds,
+      hasOlderHistory: messagesState.hasOlderHistory,
+      isOlderHistoryLoading: messagesState.isOlderHistoryLoading,
+      olderHistoryError: messagesState.olderHistoryError,
+      onLoadOlderHistory: messagesCubit.loadOlderHistory,
+      onLoadAnchoredHistory: messagesCubit.loadAnchoredHistory,
       onSendMessage: (text, {intent = MessageDeliveryIntent.auto}) async {
         await inputCubit.sendMessage(text, intent: intent);
       },

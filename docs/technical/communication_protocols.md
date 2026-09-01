@@ -260,17 +260,40 @@ observation, not conflicting execution authority. Delivery uses `platform_family
 runtime mints one `event_id` before GatewayManager fan-out, and local and cloud
 copies retain that same identity and payload.
 
-`session_history` always contains `execution_snapshot`. Every row in a
-paginated `sessions_list` contains its own `execution_snapshot` as well. A
-session with no persisted snapshot row is represented explicitly as
-`idle/revision=0`, with null work/request identities and the Unix epoch as its
-stable virtual timestamp. Missing terminal, in-flight, or runtime-notice
-events must not be interpreted as evidence of idle state.
+A tail or anchored `session_history` contains `execution_snapshot`; an `older`
+page intentionally omits all runtime-only projections. Every row in a paginated
+`sessions_list` contains its own `execution_snapshot`. A session with no
+persisted snapshot row is represented explicitly as `idle/revision=0`, with
+null work/request identities and the Unix epoch as its stable virtual timestamp.
+Missing terminal, in-flight, or runtime-notice events must not be interpreted as
+evidence of idle state.
 
 On daemon restart, execution snapshots are recomputed from restored durable
 work. `running`, `waiting`, `blocked`, and safely normalized `resuming` work
 remain non-idle; a process-local `stopping` projection is discarded and
 derived again from the durable work rows owned by the new process.
+
+### Session history page contract
+
+`get_session_history` accepts `session_id`, optional `limit` (`1..200`, default
+`100`), and exactly one optional mode selector:
+
+- `cursor`: an opaque older-page cursor returned as `next_cursor`;
+- `anchor_event_id`: a stable `history:<session>:<row>:<kind>:<ordinal>` event
+  identity used to restore an idle reading position.
+
+The `session_history` response contains `page_kind` (`tail | older | anchor`),
+chronological `messages`, `has_more`, optional `next_cursor`, and
+`history_revision`. The daemon bounds each page to 1 MiB of persisted message
+JSON while retaining at least one oversized record so the cursor always
+advances. One persistence row is projected atomically, so reasoning, thought,
+tool-use, and final-answer fan-out never splits across pages.
+
+Errors are request-correlated under `payload.error`: `invalid_request`,
+`invalid_limit`, `invalid_cursor`, `stale_cursor`, or `anchor_not_found`. Cursors
+bind session id, row boundary, history revision, and a redacted boundary
+fingerprint. A cross-session, deleted, or rewritten boundary fails closed.
+Local and cloud transports dispatch this same handler and envelope.
 
 ### Live context usage projection
 

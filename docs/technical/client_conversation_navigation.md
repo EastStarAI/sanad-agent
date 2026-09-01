@@ -66,6 +66,22 @@ fields; it cannot overwrite non-empty local intent awaiting confirmation. This
 keeps the composer sendable across runtime-source handoff while preserving
 daemon route authority once hydration completes.
 
+## Incremental History Loading
+
+The initial atomic session swap requests only the newest history page. The
+conversation client keeps the daemon's opaque cursor per device and exposes
+whether another page exists. `SessionMessagesCubit` serializes older-page
+requests, ignores stale completions after session or device changes, prepends
+only newly discovered canonical event ids, and retains the current page when an
+older-page request fails.
+
+The timeline offers an English **Show earlier** action and automatically
+prefetches when a manual upward scroll approaches the start. Loading and retry
+states remain inside the upward-growing sliver. Because older rows are inserted
+before the centered anchor sliver, the currently visible event retains its
+viewport position rather than jumping when a page arrives. Exhausted history
+removes the control.
+
 ## Timeline Opening Position
 
 The conversation timeline uses a centered sliver layout so a long history can

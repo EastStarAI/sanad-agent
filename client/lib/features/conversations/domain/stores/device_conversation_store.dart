@@ -29,6 +29,8 @@ class DeviceConversationStoreSnapshot {
   final Map<String, RuntimeNotice> runtimeNotices;
   final Map<String, SessionRouteSnapshot> routeSnapshots;
   final Map<String, Map<String, PendingSteerRecord>> pendingSteers;
+  final bool historyHasMore;
+  final String? historyNextCursor;
 
   const DeviceConversationStoreSnapshot({
     required this.messages,
@@ -44,6 +46,8 @@ class DeviceConversationStoreSnapshot {
     this.runtimeNotices = const {},
     this.routeSnapshots = const {},
     this.pendingSteers = const {},
+    this.historyHasMore = false,
+    this.historyNextCursor,
   });
 }
 
@@ -75,6 +79,8 @@ class DeviceConversationStore {
   final List<CanonicalEvent> _queuedMessages = [];
   final Map<String, Map<String, PendingSteerRecord>> _pendingSteersBySessionId = {};
   final Set<(String, String)> _stopRecoveredPendingSteerKeys = {};
+  bool _historyHasMore = false;
+  String? _historyNextCursor;
 
   DeviceConversationStore({
     ThinkingStreamMode thinkingStreamMode = ThinkingStreamMode.auto,
@@ -101,6 +107,8 @@ class DeviceConversationStore {
       for (final entry in initialSnapshot.pendingSteers.entries) {
         _pendingSteersBySessionId[entry.key] = Map<String, PendingSteerRecord>.from(entry.value);
       }
+      _historyHasMore = initialSnapshot.historyHasMore;
+      _historyNextCursor = initialSnapshot.historyNextCursor;
       final pending = initialSnapshot.pendingSuspendedRequest;
       if (pending != null && pending.sessionId.isNotEmpty) {
         _pendingSuspendedRequestBySessionId[pending.sessionId] = pending;
@@ -130,6 +138,8 @@ class DeviceConversationStore {
   List<CanonicalEvent> get currentMessages => _conversation.events;
   List<CanonicalEvent> get currentQueuedMessages => List.unmodifiable(_queuedMessages);
   String? get currentSessionId => _currentSessionId;
+  bool get historyHasMore => _historyHasMore;
+  String? get historyNextCursor => _historyNextCursor;
   bool get isDraftSession => _isDraftSession;
   String? get pendingSessionRequestId => _pendingSessionRequestId;
   DeviceSuspendedRequest? get currentPendingSuspendedRequest =>
@@ -171,6 +181,8 @@ class DeviceConversationStore {
           entry.value,
         ),
     }),
+    historyHasMore: _historyHasMore,
+    historyNextCursor: _historyNextCursor,
   );
 
   Map<String, SessionRouteSnapshot> get currentRouteSnapshots => _routeRegistry.routesBySessionId;
@@ -206,6 +218,8 @@ class DeviceConversationStore {
     _pendingSessionRequestId = null;
     _conversation.clear();
     _queuedMessages.clear();
+    _historyHasMore = false;
+    _historyNextCursor = null;
     _emitMessages();
     _emitQueuedMessages();
     _emitPendingSuspended();
@@ -218,6 +232,8 @@ class DeviceConversationStore {
     _pendingSessionRequestId = null;
     _conversation.clear();
     _queuedMessages.clear();
+    _historyHasMore = false;
+    _historyNextCursor = null;
     _emitMessages();
     _emitQueuedMessages();
     _emitPendingSuspended();
@@ -441,9 +457,32 @@ class DeviceConversationStore {
     _emitQueuedMessages();
   }
 
-  void setHistory(List<CanonicalEvent> events) {
+  void setHistory(
+    List<CanonicalEvent> events, {
+    bool hasMore = false,
+    String? nextCursor,
+  }) {
     _conversation.setHistory(events);
+    _historyHasMore = hasMore && nextCursor != null;
+    _historyNextCursor = _historyHasMore ? nextCursor : null;
     _emitMessages();
+  }
+
+  bool prependHistory(
+    List<CanonicalEvent> events, {
+    required bool hasMore,
+    required String? nextCursor,
+    required String requestedCursor,
+  }) {
+    if (_historyNextCursor != requestedCursor) return false;
+    final existingIds = _conversation.events.map((event) => event.id).toSet();
+    final older = events.where((event) => existingIds.add(event.id)).toList(growable: false);
+    _conversation.setHistory([...older, ..._conversation.events]);
+    final advanced = nextCursor != null && nextCursor != requestedCursor;
+    _historyHasMore = hasMore && advanced;
+    _historyNextCursor = _historyHasMore ? nextCursor : null;
+    _emitMessages();
+    return older.isNotEmpty || !_historyHasMore;
   }
 
   void applyTurnReplayAccepted({

@@ -68,8 +68,14 @@ abstract class ConversationClient {
     required String requestId,
     required String sessionId,
   });
-  Future<String?> deleteQueuedMessage({required String requestId, required String sessionId});
-  Future<String?> cancelPendingSteer({required String requestId, required String sessionId});
+  Future<String?> deleteQueuedMessage({
+    required String requestId,
+    required String sessionId,
+  });
+  Future<String?> cancelPendingSteer({
+    required String requestId,
+    required String sessionId,
+  });
   Future<String?> stop({
     String? sessionId,
     String? requestId,
@@ -146,13 +152,21 @@ abstract class ConversationClient {
     required String workspaceId,
     required String newPath,
   });
-  Future<void> createFolder({
-    required String parentPath,
-    required String name,
-  });
+  Future<void> createFolder({required String parentPath, required String name});
   Future<void> renameFolder({required String path, required String newName});
   Future<void> deleteFolder({required String path});
   Future<List<CanonicalEvent>> loadSessionHistory(String sessionId);
+
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(String sessionId) => loadSessionHistory(sessionId);
+
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    String sessionId,
+    String anchorEventId,
+  ) => loadSessionHistory(sessionId);
+
+  bool get historyHasMore => false;
+
+  String? get historyNextCursor => null;
   Future<void> updateSessionTitle(String sessionId, String title);
   Future<void> deleteSession(String sessionId);
   Future<void> respondToSuspendedRequest(

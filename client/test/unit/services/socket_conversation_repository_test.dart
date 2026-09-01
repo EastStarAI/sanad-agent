@@ -207,6 +207,25 @@ class _TestConversationClient implements ConversationClient {
   }
 
   @override
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(String sessionId) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    String sessionId,
+    String anchorEventId,
+  ) {
+    throw UnimplementedError();
+  }
+
+  @override
+  bool get historyHasMore => false;
+
+  @override
+  String? get historyNextCursor => null;
+
+  @override
   Future<List<SlashCommandEntry>> searchSlashCommands({String? query, String? workspaceId}) {
     throw UnimplementedError();
   }

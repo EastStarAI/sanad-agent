@@ -89,6 +89,20 @@ The `NavigationHistoryController` maintains three stacks:
 - Same invariants as local deletion.
 - If current, fallback is applied immediately without a confirmation dialog.
 
+## Long Conversation History
+
+- Opening a conversation displays its newest bounded page without waiting for
+  the complete transcript.
+- Scrolling upward toward the beginning prefetches one older page. If prefetch
+  does not run or fails, an English **Show earlier** / **Retry earlier messages**
+  action remains keyboard accessible.
+- Loading older messages never blanks the conversation. The first visible event
+  keeps the same screen position after prepend, and live responses may continue
+  at the tail without duplication.
+- A short first page may auto-fill at most three older pages, then stops at a
+  filled viewport, exhaustion, or error.
+- When no older page remains, the earlier-history control disappears.
+
 ## Restart Recovery
 
 - The last typed `ConversationDestination` per device is restored from `ConversationCacheStore`.
@@ -96,6 +110,9 @@ The `NavigationHistoryController` maintains three stacks:
 - New Conversation restores its nullable workspace preselection; `null` means no workspace is selected. A workspace known to be removed is dropped.
 - `lastSelectedSessionId` is used only to inherit previous session context and never determines the restart route.
 - A missing saved destination defaults to New Conversation. If a saved session was deleted while offline, recovery also falls back to New Conversation.
+- An idle session with a saved viewport event requests the bounded page containing
+  that event and reopens it near the visible top. Active work always opens at the
+  live tail. A missing, compacted, or stale event safely retains the newest tail.
 
 ## Test Scenarios
 

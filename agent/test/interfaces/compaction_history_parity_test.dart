@@ -167,15 +167,35 @@ void main() {
       bridge: bridge,
       compactionBoundaries: boundaries,
     );
-    final envelope = handler.buildHistoryEnvelope(
+    final tailEnvelope = handler.buildHistoryEnvelope(
       CanonicalEvent(
         type: CanonicalEventTypes.getSessionHistory,
         sessionId: 'session-1',
-        payload: {'request_id': 'history-req', 'session_id': 'session-1'},
+        payload: {
+          'request_id': 'history-tail',
+          'session_id': 'session-1',
+          'limit': 1,
+        },
       ),
     );
-    final payload = envelope['payload'] as Map<String, dynamic>;
-    final messages = payload['messages'] as List;
+    final tailPayload = tailEnvelope['payload'] as Map<String, dynamic>;
+    final olderEnvelope = handler.buildHistoryEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.getSessionHistory,
+        sessionId: 'session-1',
+        payload: {
+          'request_id': 'history-older',
+          'session_id': 'session-1',
+          'limit': 1,
+          'cursor': tailPayload['next_cursor'],
+        },
+      ),
+    );
+    final olderPayload = olderEnvelope['payload'] as Map<String, dynamic>;
+    final messages = [
+      ...(olderPayload['messages'] as List),
+      ...(tailPayload['messages'] as List),
+    ];
     final compactionRows = messages
         .whereType<Map>()
         .map((row) => Map<String, dynamic>.from(row))
@@ -186,6 +206,8 @@ void main() {
         .toList();
 
     expect(compactionRows, hasLength(1));
+    expect(tailPayload, contains('execution_snapshot'));
+    expect(olderPayload, isNot(contains('execution_snapshot')));
     expect(compactionRows.first['compaction_id'], 'cmp-history');
     expect(compactionRows.first['trigger'], 'manual');
     expect(compactionRows.first['status'], 'completed');

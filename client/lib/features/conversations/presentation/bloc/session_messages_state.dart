@@ -37,6 +37,9 @@ class SessionMessagesState extends Equatable {
   final bool isHistoryLoading;
   final String? historyLoadError;
   final bool showDelayedLoading;
+  final bool hasOlderHistory;
+  final bool isOlderHistoryLoading;
+  final String? olderHistoryError;
 
   const SessionMessagesState({
     this.messages = const [],
@@ -67,6 +70,9 @@ class SessionMessagesState extends Equatable {
     this.isHistoryLoading = false,
     this.historyLoadError,
     this.showDelayedLoading = false,
+    this.hasOlderHistory = false,
+    this.isOlderHistoryLoading = false,
+    this.olderHistoryError,
   });
 
   SessionMessagesState copyWith({
@@ -113,6 +119,10 @@ class SessionMessagesState extends Equatable {
     String? historyLoadError,
     bool clearHistoryLoadError = false,
     bool? showDelayedLoading,
+    bool? hasOlderHistory,
+    bool? isOlderHistoryLoading,
+    String? olderHistoryError,
+    bool clearOlderHistoryError = false,
   }) {
     return SessionMessagesState(
       messages: messages ?? this.messages,
@@ -155,6 +165,9 @@ class SessionMessagesState extends Equatable {
       isHistoryLoading: isHistoryLoading ?? this.isHistoryLoading,
       historyLoadError: clearHistoryLoadError ? null : historyLoadError ?? this.historyLoadError,
       showDelayedLoading: showDelayedLoading ?? this.showDelayedLoading,
+      hasOlderHistory: hasOlderHistory ?? this.hasOlderHistory,
+      isOlderHistoryLoading: isOlderHistoryLoading ?? this.isOlderHistoryLoading,
+      olderHistoryError: clearOlderHistoryError ? null : olderHistoryError ?? this.olderHistoryError,
     );
   }
 
@@ -198,5 +211,8 @@ class SessionMessagesState extends Equatable {
     isHistoryLoading,
     historyLoadError,
     showDelayedLoading,
+    hasOlderHistory,
+    isOlderHistoryLoading,
+    olderHistoryError,
   ];
 }

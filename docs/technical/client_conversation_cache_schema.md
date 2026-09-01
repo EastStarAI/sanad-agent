@@ -128,7 +128,23 @@ Sidebar refreshes intentionally request the unscoped section and eligible worksp
 - Editing after dispatch clears the pending request marker before writing newer text, so acceptance of the older request cannot clear a newer draft.
 - Snapshot consumers detect canonical cleanup from the immutable snapshot event itself; an unrelated cache emission while a debounce is pending never clears the editor.
 
-## 6. Persistence
+## 6. Timeline History Pagination
+
+Sidebar pagination remains owned by `ConversationCacheStore`; transcript pages
+are a separate transient resource owned by the per-device
+`DeviceConversationStore` behind `ConversationClient`. The store keeps the
+current session's opaque older cursor and `hasMore`, never exposes the cursor to
+widgets, and clears that resource on session activation.
+
+The initial tail replaces the timeline atomically. Older pages prepend only
+canonical event ids not already present and advance only when the returned
+cursor differs from the requested cursor. A matching in-flight request is
+coalesced; session/device switches and newer hydration generations reject late
+results. Failure leaves the visible timeline and runtime projections unchanged.
+Cursor and loaded transcript pages are intentionally not persisted; only the
+stable viewport event id survives restart and may trigger an anchored request.
+
+## 7. Persistence
 
 - Backend: `SharedPreferencesConversationCachePersistence` (cross-platform, no secrets).
 - Codec: `ConversationCacheCodec` — single namespaced JSON blob under the stable key `sanad_conversation_cache`. Schema compatibility and safe invalidation are owned by the payload codec.
@@ -155,12 +171,12 @@ Sidebar refreshes intentionally request the unscoped section and eligible worksp
   recovered user text, and are removed after successful apply/acknowledgement.
 - No tokens, credentials, or raw transport payloads are stored.
 
-## 7. Logout / Cleanup Boundary
+## 8. Logout / Cleanup Boundary
 
 - `clearCloudUserScope(Set<String> cloudDeviceIds)` removes cloud-device cache and drafts while preserving local desktop inventory.
 - `clearDevice(deviceId)` removes all keys for one device.
 
-## 8. Consumer API
+## 9. Consumer API
 
 `ConversationCacheRepository` (`lib/features/conversations/data/repositories/conversation_cache_repository.dart`) is the intent-based facade. Widgets/cubits call:
 
@@ -180,7 +196,7 @@ Sidebar refreshes intentionally request the unscoped section and eligible worksp
 - `prependRecoveredSessionDraft` and Stop-recovery acknowledgement correlation
   keyed by `deviceId + sessionId + stopRequestId`
 
-## 9. Pending input projection boundary (Task 36)
+## 10. Pending input projection boundary (Task 36)
 
 `DeviceConversationStore` owns the live per-session projections for queued
 messages and pending steers. Pending steers are keyed by the daemon's raw

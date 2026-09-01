@@ -97,6 +97,145 @@ void main() {
     expect(find.text('old answer 0'), findsNothing);
   });
 
+  testWidgets('prepending an older page preserves the visible anchor pixel', (tester) async {
+    final tail = [
+      _event('current-user', EventKind.userMessage, 'current prompt'),
+      _event('current-answer', EventKind.finalAnswer, _lines(30)),
+    ];
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: tail,
+      initialViewportAnchorEventId: 'current-user',
+    );
+    await tester.pump();
+    final before = tester.getTopLeft(find.text('current prompt')).dy;
+
+    messagesController.add([
+      _event('older-user', EventKind.userMessage, 'older prompt'),
+      _event('older-answer', EventKind.finalAnswer, _lines(20)),
+      ...tail,
+    ]);
+    await tester.pump();
+    await tester.pump();
+
+    final after = tester.getTopLeft(find.text('current prompt')).dy;
+    expect(after, moreOrLessEquals(before, epsilon: 1));
+  });
+
+  testWidgets('an anchored response reopens the saved event at the visible top', (tester) async {
+    const anchorId = 'history:session-1:42:user_message:0';
+    final notifier = ValueNotifier<List<CanonicalEvent>>([
+      _event('tail-user', EventKind.userMessage, 'tail prompt'),
+    ]);
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: notifier.value,
+      messagesNotifier: notifier,
+      initialViewportAnchorEventId: anchorId,
+      onLoadAnchoredHistory: (_) async {
+        notifier.value = [
+          _event('history:session-1:41:final_answer:0', EventKind.finalAnswer, _lines(20)),
+          _event(anchorId, EventKind.userMessage, 'restored prompt'),
+          _event('history:session-1:43:final_answer:0', EventKind.finalAnswer, _lines(10)),
+        ];
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('restored prompt'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('restored prompt')).dy, lessThan(160));
+  });
+
+  testWidgets('requests a missing saved anchor once before falling back', (tester) async {
+    final requestedAnchors = <String>[];
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [
+        _event('tail-user', EventKind.userMessage, 'tail prompt'),
+      ],
+      initialViewportAnchorEventId: 'history:session-1:42:user_message:0',
+      onLoadAnchoredHistory: (eventId) async {
+        requestedAnchors.add(eventId);
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(requestedAnchors, ['history:session-1:42:user_message:0']);
+  });
+
+  testWidgets('a short first page auto-fills once without a request loop', (tester) async {
+    var calls = 0;
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [
+        _event('short-user', EventKind.userMessage, 'short prompt'),
+      ],
+      hasOlderHistory: true,
+      onLoadOlderHistory: () async {
+        calls += 1;
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    expect(calls, 1);
+  });
+
+  testWidgets('shows an accessible earlier-history action and invokes it once', (tester) async {
+    var calls = 0;
+    final messages = [
+      _event('user-1', EventKind.userMessage, 'current prompt'),
+      _event('answer-1', EventKind.finalAnswer, _lines(100)),
+    ];
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: messages,
+      initialViewportAnchorEventId: 'user-1',
+      hasOlderHistory: true,
+      onLoadOlderHistory: () async {
+        calls += 1;
+      },
+    );
+    await tester.pump();
+
+    expect(find.text('Show earlier'), findsOneWidget);
+    await tester.tap(find.text('Show earlier'));
+    await tester.pump();
+    expect(calls, 1);
+  });
+
   testWidgets('restores a saved event for an idle session', (tester) async {
     final messages = [
       for (var i = 0; i < 1000; i += 1) _event('old-$i', EventKind.finalAnswer, 'old answer $i'),
@@ -743,7 +882,25 @@ Future<void> _pumpBrainActivityView(
   String? initialViewportAnchorEventId,
   bool followLatestOnOpen = false,
   ValueChanged<String>? onViewportAnchorChanged,
+  bool hasOlderHistory = false,
+  Future<void> Function()? onLoadOlderHistory,
+  Future<void> Function(String eventId)? onLoadAnchoredHistory,
+  ValueNotifier<List<CanonicalEvent>>? messagesNotifier,
 }) {
+  Widget buildView(List<CanonicalEvent> messages) => BrainActivityView(
+    messagesStream: messagesController.stream,
+    initialMessages: messages,
+    onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+    sessionId: sessionId,
+    initialViewportAnchorEventId: initialViewportAnchorEventId,
+    followLatestOnOpen: followLatestOnOpen,
+    onViewportAnchorChanged: onViewportAnchorChanged,
+    hasOlderHistory: hasOlderHistory,
+    onLoadOlderHistory: onLoadOlderHistory,
+    onLoadAnchoredHistory: onLoadAnchoredHistory,
+    visualState: ConversationVisualState.activeSession,
+  );
+
   return pumpTestApp(
     tester,
     agentCubit: agentCubit,
@@ -753,16 +910,12 @@ Future<void> _pumpBrainActivityView(
     child: SizedBox(
       width: 800,
       height: 600,
-      child: BrainActivityView(
-        messagesStream: messagesController.stream,
-        initialMessages: initialMessages,
-        onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
-        sessionId: sessionId,
-        initialViewportAnchorEventId: initialViewportAnchorEventId,
-        followLatestOnOpen: followLatestOnOpen,
-        onViewportAnchorChanged: onViewportAnchorChanged,
-        visualState: ConversationVisualState.activeSession,
-      ),
+      child: messagesNotifier == null
+          ? buildView(initialMessages)
+          : ValueListenableBuilder<List<CanonicalEvent>>(
+              valueListenable: messagesNotifier,
+              builder: (_, messages, _) => buildView(messages),
+            ),
     ),
   );
 }

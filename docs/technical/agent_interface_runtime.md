@@ -180,6 +180,20 @@ an older notice when a newer snapshot arrives, and does not let a stale clear
 remove a newer notice. History hydration binds legacy unversioned notices to the
 execution revision delivered in the same envelope.
 
+## History Pagination
+
+`get_session_history` accepts an optional opaque `before_cursor` and a bounded
+`limit`. The response returns canonical chronological messages plus
+`next_cursor` and `has_more`. The cursor is a base64url-encoded JSON keyset made
+from the oldest row's `(created_at, id)` pair; malformed cursors fail with
+`invalid_before_cursor` instead of silently changing the requested page.
+
+The database query orders by `(created_at DESC, id DESC)`, fetches one sentinel
+row beyond the requested limit, and reverses the retained page before returning
+it. This gives stable boundaries when messages share a timestamp and avoids
+offset drift as new tail messages arrive. The initial request uses the same
+protocol with no cursor, so the daemon never hydrates an unbounded transcript.
+
 ## History Projection
 
 Live and reconstructed history use the same canonical identities and payload

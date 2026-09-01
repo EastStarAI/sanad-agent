@@ -199,6 +199,9 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           clearRequestedSessionId: true,
           isHistoryLoading: false,
           showDelayedLoading: false,
+          hasOlderHistory: currentAgent != null && conversationRepository.historyHasMore(currentAgent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
         ),
       );
       return;
@@ -274,6 +277,9 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           clearRequestedSessionId: true,
           isHistoryLoading: false,
           showDelayedLoading: false,
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
         ),
       );
     } else if (agent != null) {
@@ -317,6 +323,85 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       ),
     );
     unawaited(_loadHistoryForAtomicSwap(agent, sessionId, generation));
+  }
+
+  Future<void> loadOlderHistory() async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || state.isOlderHistoryLoading || !state.hasOlderHistory) {
+      return;
+    }
+    final generation = _requestGeneration;
+    emit(
+      state.copyWith(
+        isOlderHistoryLoading: true,
+        clearOlderHistoryError: true,
+      ),
+    );
+    try {
+      await conversationRepository.loadOlderSessionHistory(agent, sessionId);
+      if (isClosed || generation != _requestGeneration || state.activeSessionId != sessionId) {
+        return;
+      }
+      emit(
+        state.copyWith(
+          messages: conversationRepository.currentMessages(agent),
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+        ),
+      );
+    } catch (error, stackTrace) {
+      if (isClosed || generation != _requestGeneration) return;
+      _logger.warning(
+        'Older history load failed device_id=${agent.id} '
+        'session_id=$sessionId error_type=${error.runtimeType}',
+        error,
+        stackTrace,
+      );
+      emit(
+        state.copyWith(
+          isOlderHistoryLoading: false,
+          olderHistoryError: 'Could not load earlier messages.',
+        ),
+      );
+    }
+  }
+
+  Future<void> loadAnchoredHistory(String anchorEventId) async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || anchorEventId.trim().isEmpty) {
+      return;
+    }
+    if (state.messages.any((event) => event.id == anchorEventId)) return;
+    final generation = ++_requestGeneration;
+    try {
+      await conversationRepository.loadAnchoredSessionHistory(
+        agent,
+        sessionId,
+        anchorEventId,
+      );
+      if (isClosed || generation != _requestGeneration || state.activeSessionId != sessionId) {
+        return;
+      }
+      emit(
+        state.copyWith(
+          messages: conversationRepository.currentMessages(agent),
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+        ),
+      );
+    } catch (error, stackTrace) {
+      if (isClosed || generation != _requestGeneration) return;
+      _logger.fine(
+        'Saved history anchor unavailable device_id=${agent.id} '
+        'session_id=$sessionId error_type=${error.runtimeType}',
+        error,
+        stackTrace,
+      );
+    }
   }
 
   /// Invalidates a deleted session even when it is merely the presentation
@@ -391,6 +476,9 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           clearRequestedSessionId: true,
           isHistoryLoading: false,
           showDelayedLoading: false,
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
         ),
       );
     } catch (error, stackTrace) {

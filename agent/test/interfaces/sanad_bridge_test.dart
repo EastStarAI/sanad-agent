@@ -1289,6 +1289,95 @@ void main() {
     );
 
     test(
+      'history pages preserve fan-out identity and tail-only runtime state',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-paged-history';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'gpt-5.5',
+            createdAt: DateTime.parse('2026-07-14T01:00:00Z'),
+            updatedAt: DateTime.parse('2026-07-14T01:01:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Inspect'),
+          Message(
+            role: MessageRole.assistant,
+            reasoning: 'Planning',
+            content: 'Reading',
+            toolCalls: [
+              ToolCall(
+                id: 'tool-page-1',
+                name: 'file_read',
+                arguments: const {'path': 'lib/main.dart'},
+              ),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'tool-page-1',
+            content: 'contents',
+          ),
+          Message(role: MessageRole.assistant, content: 'Done'),
+        ]);
+
+        Future<Map<String, dynamic>> page({
+          String? cursor,
+          String? anchor,
+        }) async {
+          Map<String, dynamic>? emitted;
+          await bridge.handleCommand({
+            'command': 'get_session_history',
+            'payload': {
+              'request_id': 'req-${cursor ?? anchor ?? 'tail'}',
+              'session_id': sessionId,
+              'limit': 1,
+              'cursor': ?cursor,
+              'anchor_event_id': ?anchor,
+            },
+          }, (envelope) async => emitted = envelope);
+          return Map<String, dynamic>.from(emitted!['payload'] as Map);
+        }
+
+        final tail = await page();
+        final page3 = await page(cursor: tail['next_cursor'] as String);
+        final page2 = await page(cursor: page3['next_cursor'] as String);
+        final page1 = await page(cursor: page2['next_cursor'] as String);
+        final allRows = [
+          page1,
+          page2,
+          page3,
+          tail,
+        ].expand((payload) => payload['messages'] as List).cast<Map>().toList();
+        final eventIds = allRows.map((row) => row['event_id']).toList();
+
+        expect(eventIds.toSet(), hasLength(eventIds.length));
+        expect(page2['messages'].map((row) => row['type']), [
+          'reasoning',
+          'thought',
+          'tool_use',
+        ]);
+        expect(tail, contains('execution_snapshot'));
+        expect(page3, isNot(contains('execution_snapshot')));
+        expect(page1['has_more'], isFalse);
+
+        final anchorId = page2['messages'][1]['event_id'] as String;
+        final anchored = await page(anchor: anchorId);
+        expect(anchored['page_kind'], 'anchor');
+        expect(
+          (anchored['messages'] as List).any(
+            (row) => row['event_id'] == anchorId,
+          ),
+          isTrue,
+        );
+        expect(anchored, contains('execution_snapshot'));
+      },
+    );
+
+    test(
       'get_session_history restores typed tool errors without relying on text prefixes',
       () async {
         final bridge = SanadProtocolBridge();

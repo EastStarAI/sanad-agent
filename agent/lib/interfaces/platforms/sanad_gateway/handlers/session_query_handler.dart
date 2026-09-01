@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/evolution/models/session_query.dart';
+import 'package:sanad_agent/evolution/models/session_history_page.dart';
 import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
@@ -58,6 +59,54 @@ class SessionQueryHandler {
        _compactionBoundaries = compactionBoundaries;
 
   Map<String, dynamic> buildHistoryEnvelope(CanonicalEvent event) {
+    try {
+      return _buildHistoryEnvelope(event);
+    } on SessionHistoryCursorFormatException catch (error) {
+      return _buildHistoryErrorEnvelope(event, 'invalid_cursor', error.message);
+    } on SessionHistoryCursorStaleException catch (error) {
+      return _buildHistoryErrorEnvelope(event, 'stale_cursor', error.reason);
+    } on SessionHistoryAnchorNotFoundException {
+      return _buildHistoryErrorEnvelope(
+        event,
+        'anchor_not_found',
+        'The requested history anchor is unavailable.',
+      );
+    } on RangeError catch (error) {
+      return _buildHistoryErrorEnvelope(
+        event,
+        'invalid_limit',
+        error.message.toString(),
+      );
+    } on FormatException catch (error) {
+      return _buildHistoryErrorEnvelope(
+        event,
+        'invalid_request',
+        error.message.toString(),
+      );
+    }
+  }
+
+  Map<String, dynamic> _buildHistoryErrorEnvelope(
+    CanonicalEvent event,
+    String code,
+    String message,
+  ) {
+    final sessionId =
+        event.sessionId ?? event.payload['session_id']?.toString();
+    return _bridge.buildAgentEventEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.sessionHistory,
+        sessionId: sessionId,
+        payload: {
+          'request_id': event.payload['request_id'],
+          'session_id': ?sessionId,
+          'error': {'code': code, 'message': message},
+        },
+      ),
+    );
+  }
+
+  Map<String, dynamic> _buildHistoryEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId ?? 'default';
     final session = _sessionManager.getSession(sessionId);
     final sessionMetadata = _sessionManager.getSessionMetadata(sessionId);
@@ -66,12 +115,33 @@ class SessionQueryHandler {
         .where((checkpoint) => checkpoint.sessionId == sessionId)
         .map((checkpoint) => checkpoint.permissionPayload)
         .firstOrNull;
-    final persistedMessages = session == null
-        ? const <PersistedMessage>[]
-        : _sessionManager.getPersistedMessages(sessionId);
+    final request = SessionHistoryRequest.fromPayload(event.payload);
+    final cursor = request.cursor;
+    final anchorRowId = request.anchorRowIdForSession(sessionId);
+    final page = session == null
+        ? const SessionHistoryPage(
+            messages: <PersistedMessage>[],
+            hasMore: false,
+            nextCursor: null,
+            historyRevision: 0,
+          )
+        : _sessionManager.getPersistedMessagePage(
+            sessionId,
+            limit: request.limit,
+            cursor: cursor,
+            anchorRowId: anchorRowId,
+          );
+    final persistedMessages = page.messages;
     final messages = persistedMessages
         .map((entry) => entry.message)
         .toList(growable: false);
+    final pageKind = anchorRowId != null
+        ? 'anchor'
+        : cursor == null
+        ? 'tail'
+        : 'older';
+    final includesRuntimeState = cursor == null;
+    final isTailPage = pageKind == 'tail';
     final latestContextUsage = _latestContextUsage(sessionMetadata, messages);
     final requestId = event.payload['request_id'] as String?;
 
@@ -380,6 +450,13 @@ class SessionQueryHandler {
       });
     }
 
+    _assignStableHistoryEventIds(
+      sessionId: sessionId,
+      persistedMessages: persistedMessages,
+      historyStartByMessageRowId: historyStartByMessageRowId,
+      historyMessages: historyMessages,
+    );
+
     if (latestContextUsage != null &&
         !historyMessages.any((row) => row['context_usage'] != null)) {
       for (final row in historyMessages.reversed) {
@@ -395,14 +472,22 @@ class SessionQueryHandler {
     }
 
     final compactionInsertionAnchors = <int>[];
+    final firstPageRowId = persistedMessages.firstOrNull?.rowId;
+    final lastPageRowId = persistedMessages.lastOrNull?.rowId;
     for (final operation
         in _compactionBoundaries?.listLifecycleForSession(sessionId) ??
             const <CompactionOperationRecord>[]) {
-      final lifecycleRow = _compactionLifecycleHistoryRow(operation);
       final tailEndRowId = _resolveCompactionHistoryAnchor(
         operation,
         persistedMessages,
       );
+      if (firstPageRowId == null ||
+          lastPageRowId == null ||
+          tailEndRowId < firstPageRowId ||
+          tailEndRowId > lastPageRowId) {
+        continue;
+      }
+      final lifecycleRow = _compactionLifecycleHistoryRow(operation);
       final firstPostBoundary = persistedMessages
           .where((entry) => entry.rowId > tailEndRowId)
           .firstOrNull;
@@ -474,8 +559,17 @@ class SessionQueryHandler {
           insertionIndex = lastMatch + 1;
         }
       }
+      if (insertionIndex == -1 &&
+          requestId != null &&
+          requestId.isNotEmpty &&
+          !isTailPage) {
+        continue;
+      }
+      if (insertionIndex == -1 && !isTailPage) {
+        continue;
+      }
       if (insertionIndex == -1) {
-        // Fallback for legacy rows without a request_id: real-time ordering.
+        // Legacy transitions without request identity remain tail-only.
         insertionIndex = historyMessages.indexWhere((row) {
           final createdAt = DateTime.tryParse(
             row['created_at']?.toString() ?? '',
@@ -510,38 +604,82 @@ class SessionQueryHandler {
         payload: {
           'request_id': requestId,
           'session_id': sessionId,
-          'execution_snapshot': _executionSnapshot(sessionId).toPayload(),
-          if (session != null)
-            ...buildSessionPayload(
-              session: session,
-              sessionMetadata: sessionMetadata,
-              metadataOverrides: {'context_usage': ?latestContextUsage},
-            ),
-          'context_usage': ?latestContextUsage,
+          'page_kind': pageKind,
+          'has_more': page.hasMore,
+          if (page.nextCursor != null) 'next_cursor': page.nextCursor,
+          'history_revision': page.historyRevision,
           'messages': historyMessages,
-          'queued_messages': queuedEvents
-              .map(
-                (e) => {
-                  'sender': 'user',
-                  'type': 'user_message',
-                  'content': e.message.content ?? '',
-                  'session_id': sessionId,
-                  'metadata': {
-                    'queued': true,
-                    'request_id': _queuedRequestIdFor(e),
+          if (includesRuntimeState) ...{
+            'execution_snapshot': _executionSnapshot(sessionId).toPayload(),
+            if (session != null)
+              ...buildSessionPayload(
+                session: session,
+                sessionMetadata: sessionMetadata,
+                metadataOverrides: {'context_usage': ?latestContextUsage},
+              ),
+            'context_usage': ?latestContextUsage,
+            'queued_messages': queuedEvents
+                .map(
+                  (e) => {
+                    'sender': 'user',
+                    'type': 'user_message',
+                    'content': e.message.content ?? '',
+                    'session_id': sessionId,
+                    'metadata': {
+                      'queued': true,
+                      'request_id': _queuedRequestIdFor(e),
+                    },
                   },
-                },
-              )
-              .toList(),
-          'pending_steers': pendingSteers,
-          if (stopRecovery != null)
-            'stop_draft_recovery': stopRecovery.toPayload(),
-          ...?runtimeNotice == null ? null : {'runtime_notice': runtimeNotice},
-          'pending_permission_request': pendingPermissionRequest,
-          'in_flight': inFlight,
+                )
+                .toList(),
+            'pending_steers': pendingSteers,
+            if (stopRecovery != null)
+              'stop_draft_recovery': stopRecovery.toPayload(),
+            ...?runtimeNotice == null
+                ? null
+                : {'runtime_notice': runtimeNotice},
+            'pending_permission_request': pendingPermissionRequest,
+            'in_flight': inFlight,
+          },
         },
       ),
     );
+  }
+
+  void _assignStableHistoryEventIds({
+    required String sessionId,
+    required List<PersistedMessage> persistedMessages,
+    required Map<int, int> historyStartByMessageRowId,
+    required List<Map<String, dynamic>> historyMessages,
+  }) {
+    for (
+      var messageIndex = 0;
+      messageIndex < persistedMessages.length;
+      messageIndex++
+    ) {
+      final persisted = persistedMessages[messageIndex];
+      final start = historyStartByMessageRowId[persisted.rowId];
+      if (start == null) continue;
+      final end = messageIndex + 1 < persistedMessages.length
+          ? historyStartByMessageRowId[persistedMessages[messageIndex + 1]
+                    .rowId] ??
+                historyMessages.length
+          : historyMessages.length;
+      final ordinals = <String, int>{};
+      for (var rowIndex = start; rowIndex < end; rowIndex++) {
+        final row = historyMessages[rowIndex];
+        final kind = row['type']?.toString() ?? 'event';
+        final ordinal = ordinals.update(
+          kind,
+          (value) => value + 1,
+          ifAbsent: () => 0,
+        );
+        final eventId = 'history:$sessionId:${persisted.rowId}:$kind:$ordinal';
+        row['id'] = eventId;
+        row['event_id'] = eventId;
+        row['source_message_row_id'] = persisted.rowId;
+      }
+    }
   }
 
   int _resolveCompactionHistoryAnchor(

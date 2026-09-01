@@ -43,6 +43,16 @@ class FakeConversationRepository implements ConversationRepository {
 
   final List<String> activatedSessionIds = [];
   final List<String> loadedHistorySessionIds = [];
+  final List<String> loadedOlderHistorySessionIds = [];
+  final List<(String sessionId, String eventId)> loadedAnchorRequests = [];
+  bool historyHasMoreValue = false;
+  Future<List<CanonicalEvent>> Function(DeviceConfig agent, String sessionId)? loadOlderHistoryHandler;
+  Future<List<CanonicalEvent>> Function(
+    DeviceConfig agent,
+    String sessionId,
+    String anchorEventId,
+  )?
+  loadAnchoredHistoryHandler;
   final List<String> sentMessages = [];
   final List<Map<String, String?>> sentMessageRequests = [];
   final List<Map<String, String?>> steerMessageRequests = [];
@@ -594,6 +604,32 @@ class FakeConversationRepository implements ConversationRepository {
     loadedHistorySessionIds.add(sessionId);
     return const [];
   }
+
+  @override
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) async {
+    loadedOlderHistorySessionIds.add(sessionId);
+    final handler = loadOlderHistoryHandler;
+    if (handler != null) return handler(agent, sessionId);
+    return currentMessages(agent);
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+    String anchorEventId,
+  ) async {
+    loadedAnchorRequests.add((sessionId, anchorEventId));
+    final handler = loadAnchoredHistoryHandler;
+    if (handler != null) return handler(agent, sessionId, anchorEventId);
+    return currentMessages(agent);
+  }
+
+  @override
+  bool historyHasMore(DeviceConfig agent) => historyHasMoreValue;
 
   @override
   Future<void> updateSessionTitle(DeviceConfig agent, String sessionId, String title) async {
