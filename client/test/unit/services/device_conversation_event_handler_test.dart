@@ -67,6 +67,42 @@ void main() {
     expect(store.isSessionProcessing('session-2'), isTrue);
   });
 
+  test('compaction lifecycle updates only its active session timeline', () async {
+    for (final status in ['started', 'completed', 'failed']) {
+      socket.eventRouter.routeEvent(
+        _envelope('context_compaction.$status', {
+          'session_id': 'session-2',
+          'compaction_id': 'background-compaction-$status',
+          'trigger': 'manual',
+          'status': status,
+          'started_at': '2026-09-01T05:00:00.000Z',
+          if (status != 'started') 'completed_at': '2026-09-01T05:00:01.000Z',
+        }),
+      );
+    }
+    await Future<void>.delayed(Duration.zero);
+
+    expect(store.currentMessages, isEmpty);
+
+    socket.eventRouter.routeEvent(
+      _envelope('context_compaction.completed', {
+        'session_id': 'session-1',
+        'compaction_id': 'active-compaction',
+        'trigger': 'manual',
+        'status': 'completed',
+        'started_at': '2026-09-01T05:00:01.000Z',
+        'completed_at': '2026-09-01T05:00:02.000Z',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(store.currentMessages, hasLength(1));
+    expect(
+      store.currentMessages.single.metadata,
+      containsPair('compaction_id', 'active-compaction'),
+    );
+  });
+
   test('stopped removes only the active model step and preserves completed thoughts', () async {
     socket.eventRouter.routeEvent(
       _envelope('thought_stream', {
@@ -558,6 +594,33 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(store.currentMessages.isEmpty, state == 'cancelled');
     }
+  });
+
+  test('queued delete result consumes daemon outcome and removes the row', () async {
+    store.setQueuedMessages([
+      CanonicalEvent(
+        id: 'user-queued-delete',
+        kind: EventKind.userMessage,
+        text: 'remove me',
+        timestamp: DateTime.utc(2026, 9, 1),
+        sessionId: 'session-1',
+        metadata: const {
+          'request_id': 'queued-delete-request',
+          'queued': true,
+        },
+      ),
+    ]);
+
+    socket.eventRouter.routeEvent(
+      _envelope('session.queued_message_delete_result', {
+        'session_id': 'session-1',
+        'target_request_id': 'queued-delete-request',
+        'outcome': 'deleted',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(store.currentQueuedMessages, isEmpty);
   });
 
   test('background pending steer lifecycle never leaks into the active conversation', () async {

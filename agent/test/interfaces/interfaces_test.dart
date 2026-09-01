@@ -2974,6 +2974,20 @@ Use the review skill.''',
             onReasoningDelta: anyNamed('onReasoningDelta'),
           ),
         );
+
+        repo.transitionWorkItemState(
+          workItemId: 'work-ask-restart',
+          fromState: SessionWorkState.waiting,
+          toState: SessionWorkState.resuming,
+        );
+        repo.transitionWorkItemState(
+          workItemId: 'work-ask-restart',
+          fromState: SessionWorkState.resuming,
+          toState: SessionWorkState.completed,
+        );
+        orchestrator.reconcilePersistedSuspendedTerminal('session-ask-restart');
+        expect(orchestrator.hasSuspendedEvent('session-ask-restart'), isFalse);
+        expect(orchestrator.isSessionBusy('session-ask-restart'), isFalse);
       },
     );
 
@@ -3129,6 +3143,7 @@ Use the review skill.''',
           platformRuntimeBridge: PlatformRuntimeBridge(),
           checkpointStore: checkpointStore,
         );
+        final terminalCommittedSessions = <String>[];
         final service = SuspendedResumeService(
           checkpointStore: checkpointStore,
           sessionManager: mockSessionManager,
@@ -3140,6 +3155,7 @@ Use the review skill.''',
           permissionManager: permissionManager,
           persistedState: repo,
           runtimeRecovery: runtimeRecovery,
+          onTerminalCommitted: terminalCommittedSessions.add,
         );
         final statesAtDelivery = <SessionWorkState?>[];
         final responses = <GatewayResponse>[];
@@ -3164,6 +3180,7 @@ Use the review skill.''',
         expect(responses.last.isComplete, isTrue);
         expect(responses.last.message.content, 'continued');
         expect(statesAtDelivery.last, SessionWorkState.completed);
+        expect(terminalCommittedSessions, [sessionId]);
         verify(
           mockAgentRunner.endAuthoritativeRun('run-persisted-answer'),
         ).called(1);

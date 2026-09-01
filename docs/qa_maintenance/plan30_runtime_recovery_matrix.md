@@ -121,6 +121,9 @@ This matrix owns verification for:
 78. **Notice revision convergence**: a runtime notice older than the accepted execution snapshot is rejected or removed, and a stale notice clear cannot erase a newer notice.
 79. **Force-interrupted provider Retry**: Retry or Change Provider atomically claims the blocked work as `resuming` and restores its recognized `checkpoint_before_model_request` before invoking the provider. Missing or unknown predecessor evidence leaves the session blocked and issues no provider request.
 80. **Atomic provider admission under restart drain**: when drain starts before a turn, the provider call count remains zero. When it starts while a provider/tool loop is active, the current provider response and durable tool result may finish, but the run parks before its next provider request. Cancelling drain releases exactly one next request; successful restart exits without consuming it in the old process.
+81. **Interactive ordinary-restart boundary**: a live Ask User or permission wait whose every unresolved tool call has an `awaiting_permission` checkpoint is immediately restart-safe. A daemon-backed process test must prove the ordinary `/restart` response is `safe`, the same request identity resumes after startup without a fabricated tool result, and a mixed batch with any uncovered tool remains blocked from restart.
+82. **Persisted-answer admission convergence**: after a restart-restored answer commits the original work as `completed`, the orchestrator removes its suspended/busy projection. The next automatic message enters as a new turn instead of being queued against stale ownership, and any already queued FIFO work may drain.
+83. **Queued-delete response parity**: `session.queued_message_delete_result` consumes its canonical `outcome` field. `deleted` and `already_removed` remove the matching raw request row from the Client without optimistic mutation.
 
 ## Current Status
 

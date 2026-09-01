@@ -44,6 +44,7 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] Goal/pending/decision anchors survive three compactions (53f F1) — `context_compaction_fixture_test.dart` (2026-08-29).
 - [x] Session A compaction does not affect Session B (53f F2/F3) — `compaction_coordinator_test.dart` (2026-08-29).
 - [x] Live/history parity for compaction lifecycle events (53f F4) — `compaction_event_mapper_test.dart` + mapper history fix (2026-08-29).
+- [x] Live compaction lifecycle events remain isolated by explicit `session_id`; a background conversation cannot add or replace a tile in the active timeline — `device_conversation_event_handler_test.dart` (2026-09-01 regression repair).
 - [x] Overflow recovery one retry before visible stream (53d D4) — `compaction_overflow_recovery_test.dart` + 400 classify fix (2026-08-29).
 - [x] Client `/compact` dispatch and validation outcomes (53e E5) — `compact_command_dispatch_test.dart` (2026-08-29).
 - [x] Typed composer selection keeps leading-only `runtime_action` separate from anywhere-insertable `skill`, executes partial Enter/click immediately, coalesces duplicate Enter, and rejects stale slash-search responses after the action closes the surface — focused client suites (2026-08-31 remediation).

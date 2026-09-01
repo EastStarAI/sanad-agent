@@ -626,3 +626,48 @@ set -o pipefail; fvm flutter test --concurrency=1 <focused-client-daemon-backed-
 - **Known limitations:** provider request ذو outcome مجهولة، وأداة unsafe غير shell
   بلا terminal evidence، تبقيان `blocked` عمدًا ولا تعادان تلقائيًا؛ هذه هي
   حدود الأمان المعتمدة وليستا fallback failures.
+
+---
+
+## Gate G — Interactive Ordinary-Restart and Admission Convergence Regression
+
+أعاد البلاغ الحي فتح المهمة لأن الاختبارات السابقة أثبتت startup بعد Force Stop
+لكنها لم تختبر أن الانتظار التفاعلي نفسه checkpoint آمنة للـRestart العادي، ولم
+تثبت تنظيف projection الـorchestrator بعد إجابة مستعادة.
+
+### القرارات المثبتة
+
+- Ask User وطلب permission غير المجابين نقطة restart آمنة إذا كانت كل الأدوات
+  غير المكتملة مغطاة بـ`awaiting_permission` ولا يوجد provider request جارٍ.
+- Restart العادي لا ينتظر الإجابة ولا يحتاج Force ولا يصنع tool result؛ startup
+  يعيد نفس الطلب كـ`waiting` بالهوية نفسها.
+- بعد terminal commit للإجابة المستعادة، تزال ملكية suspension/busy الداخلية
+  ويعود admission إلى durable state؛ الرسالة التالية turn جديدة طبيعية.
+- نتيجة حذف queued message تستخدم `outcome` في command result، ويجب أن تختفي
+  الرسالة من الواجهة عند `deleted` أو `already_removed`.
+
+### التنفيذ والقبول
+
+- [x] إضافة بوابة restart للانتظار التفاعلي الكامل مع fail-closed عند التغطية
+      الجزئية لأدوات batch.
+- [x] ربط terminal commit في `SuspendedResumeService` بتسوية projection لدى
+      `SessionRunOrchestrator` وتصريف FIFO.
+- [x] تصحيح Client لاستهلاك `outcome` من نتيجة حذف queued message.
+- [x] اختبارات مركزة لـAsk User وpermission والتغطية الجزئية وتنظيف ownership
+      وحذف الصف من الواجهة.
+- [x] مرور analyzers والاختبارات المركزة النهائية وتحديث Graphify.
+- [x] لا restart للعميل ولا اختبار تفاعلي قبل طلب المستخدم الصريح.
+
+### Gate G Evidence
+
+- Agent focused: `83 passed` في checkpoint/orchestrator suites؛ والحزمة الكاملة
+  `1472 passed, 13 skipped`.
+- Client focused: `26 passed` في event-handler suite؛ والحزمة الكاملة
+  `1191 passed, 1 skipped`.
+- Daemon-backed E2E: `F.2.9` مرّ عبر مزود HTTP حتمي وprocessين حقيقيين؛ قبل
+  Restart كان `system_ask_user` معلقًا، وقَبِل `/restart` العادي الحالة كـ`safe`،
+  ثم استُخدمت هوية الطلب نفسها بعد الإقلاع بلا tool result مصطنعة. بعد الإجابة
+  اكتملت الجولة وقُبلت رسالة جديدة كـturn طبيعي (`1 passed`).
+- `fvm dart analyze` و`fvm flutter analyze`: بلا issues.
+- `graphify update .`: اكتمل إلى `22124 nodes` و`30117 edges`.
+- لم تُعد تشغيل نسخة Agent أو Client، ولم يُنفذ اختبار UI تفاعلي في هذه الدورة.

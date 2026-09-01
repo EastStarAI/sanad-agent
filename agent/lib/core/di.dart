@@ -395,6 +395,8 @@ void setupDI() {
       runtimeContextBuilder: getIt<RuntimeContextBuilder>(),
       workspaceRuntimeService: getIt<LocalWorkspaceRuntimeService>(),
       permissionManager: getIt<PermissionManager>(),
+      onTerminalCommitted: (sessionId) => getIt<SessionRunOrchestrator>()
+          .reconcilePersistedSuspendedTerminal(sessionId),
     ),
   );
   getIt.registerLazySingleton<ServerSanadGatewayPlatform>(
