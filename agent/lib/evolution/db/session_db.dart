@@ -5,6 +5,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/session_query.dart';
+import '../models/session_history_page.dart';
 import '../models/session_state.dart';
 import '../models/suspended_checkpoint.dart';
 import '../../core/models/message.dart';
@@ -686,14 +687,182 @@ class SessionDB {
             ''',
       [sessionId],
     );
-    return result
-        .map((row) {
-          return PersistedMessage(
-            rowId: row['id'] as int,
-            message: MessageHistoryIdentity.fromRow(row),
-          );
-        })
+    return result.map(_persistedMessageFromRow).toList(growable: false);
+  }
+
+  SessionHistoryPage getPersistedMessagePage(
+    String sessionId, {
+    int limit = defaultSessionHistoryPageSize,
+    String? cursor,
+    int? anchorRowId,
+    int maxPersistedBytes = defaultSessionHistoryPageBytes,
+  }) {
+    if (limit <= 0 || limit > maxSessionHistoryPageSize) {
+      throw RangeError.range(limit, 1, maxSessionHistoryPageSize, 'limit');
+    }
+
+    final revisionRows = _db.select(
+      'SELECT history_revision FROM sessions WHERE session_id = ?',
+      [sessionId],
+    );
+    final historyRevision = revisionRows.isEmpty
+        ? 0
+        : revisionRows.first['history_revision'] as int;
+    SessionHistoryCursor? decodedCursor;
+    if (cursor != null) {
+      decodedCursor = SessionHistoryCursor.decode(cursor);
+      if (decodedCursor.sessionId != sessionId) {
+        throw const SessionHistoryCursorStaleException(
+          'cursor_session_mismatch',
+        );
+      }
+      final boundaryRows = _db.select(
+        '''SELECT * FROM messages
+           WHERE session_id = ? AND id = ?
+             AND (history_status = 'active' OR history_status IS NULL)''',
+        [sessionId, decodedCursor.beforeRowId],
+      );
+      if (boundaryRows.isEmpty) {
+        throw const SessionHistoryCursorStaleException(
+          'cursor_boundary_missing',
+        );
+      }
+      final boundary = _persistedMessageFromRow(boundaryRows.first);
+      if (SessionHistoryCursor.fingerprint(boundary.message) !=
+          decodedCursor.boundaryFingerprint) {
+        throw const SessionHistoryCursorStaleException(
+          'cursor_boundary_changed',
+        );
+      }
+    }
+
+    if (decodedCursor != null && anchorRowId != null) {
+      throw ArgumentError('cursor and anchorRowId are mutually exclusive');
+    }
+    if (anchorRowId != null) {
+      final anchorRows = _db.select(
+        '''SELECT 1 FROM messages
+           WHERE session_id = ? AND id = ?
+             AND (history_status = 'active' OR history_status IS NULL)''',
+        [sessionId, anchorRowId],
+      );
+      if (anchorRows.isEmpty) {
+        throw const SessionHistoryAnchorNotFoundException();
+      }
+    }
+
+    final isAnchoredPage = anchorRowId != null;
+    final isNewerPage =
+        decodedCursor?.direction == SessionHistoryCursorDirection.newer;
+    final boundaryRowId = decodedCursor?.beforeRowId;
+    final readsForward = isAnchoredPage || isNewerPage;
+    final rows = _db.select(
+      isAnchoredPage
+          ? '''
+            SELECT * FROM messages
+            WHERE session_id = ? AND id >= ?
+              AND (history_status = 'active' OR history_status IS NULL)
+            ORDER BY id ASC
+            LIMIT ?
+            '''
+          : isNewerPage
+          ? '''
+            SELECT * FROM messages
+            WHERE session_id = ? AND id > ?
+              AND (history_status = 'active' OR history_status IS NULL)
+            ORDER BY id ASC
+            LIMIT ?
+            '''
+          : boundaryRowId == null
+          ? '''
+            SELECT * FROM messages
+            WHERE session_id = ?
+              AND (history_status = 'active' OR history_status IS NULL)
+            ORDER BY id DESC
+            LIMIT ?
+            '''
+          : '''
+            SELECT * FROM messages
+            WHERE session_id = ? AND id < ?
+              AND (history_status = 'active' OR history_status IS NULL)
+            ORDER BY id DESC
+            LIMIT ?
+            ''',
+      isAnchoredPage
+          ? [sessionId, anchorRowId, limit + 1]
+          : boundaryRowId == null
+          ? [sessionId, limit + 1]
+          : [sessionId, boundaryRowId, limit + 1],
+    );
+    final selectedRows = <Row>[];
+    var persistedBytes = 0;
+    for (final row in rows) {
+      if (selectedRows.length >= limit) break;
+      final rowBytes = utf8.encode(row['data'] as String).length;
+      if (selectedRows.isNotEmpty &&
+          persistedBytes + rowBytes > maxPersistedBytes) {
+        break;
+      }
+      selectedRows.add(row);
+      persistedBytes += rowBytes;
+    }
+    final hasMore = isAnchoredPage
+        ? _db
+              .select(
+                '''SELECT 1 FROM messages
+               WHERE session_id = ? AND id < ?
+                 AND (history_status = 'active' OR history_status IS NULL)
+               LIMIT 1''',
+                [sessionId, anchorRowId],
+              )
+              .isNotEmpty
+        : !isNewerPage && rows.length > selectedRows.length;
+    final hasNewer = readsForward && rows.length > selectedRows.length;
+    final chronologicalRows = readsForward
+        ? selectedRows
+        : selectedRows.reversed;
+    final messages = chronologicalRows
+        .map(_persistedMessageFromRow)
         .toList(growable: false);
+    final oldest = messages.firstOrNull;
+    final newest = messages.lastOrNull;
+    final nextCursor = hasMore && oldest != null
+        ? SessionHistoryCursor(
+            sessionId: sessionId,
+            beforeRowId: oldest.rowId,
+            historyRevision: historyRevision,
+            boundaryFingerprint: SessionHistoryCursor.fingerprint(
+              oldest.message,
+            ),
+          ).encode()
+        : null;
+    final nextNewerCursor = hasNewer && newest != null
+        ? SessionHistoryCursor(
+            sessionId: sessionId,
+            beforeRowId: newest.rowId,
+            historyRevision: historyRevision,
+            boundaryFingerprint: SessionHistoryCursor.fingerprint(
+              newest.message,
+            ),
+            direction: SessionHistoryCursorDirection.newer,
+          ).encode()
+        : null;
+    return SessionHistoryPage(
+      messages: messages,
+      hasMore: hasMore,
+      nextCursor: nextCursor,
+      hasNewer: hasNewer,
+      nextNewerCursor: nextNewerCursor,
+      historyRevision: historyRevision,
+      persistedBytes: persistedBytes,
+    );
+  }
+
+  PersistedMessage _persistedMessageFromRow(Row row) {
+    return PersistedMessage(
+      rowId: row['id'] as int,
+      message: MessageHistoryIdentity.fromRow(row),
+    );
   }
 
   // Scheduled Tasks persistence

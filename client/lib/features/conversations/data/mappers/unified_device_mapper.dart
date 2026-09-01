@@ -100,9 +100,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         'output': row['output'] ?? metadata['output'] ?? toolMetadata?['output'],
         'status': row['status'] ?? metadata['status'],
       },
-      'plan' => <String, dynamic>{
-        'plan': row['plan'] ?? metadata['plan'],
-      },
+      'plan' => <String, dynamic>{'plan': row['plan'] ?? metadata['plan']},
       'context_compaction.started' ||
       'context_compaction.completed' ||
       'context_compaction.failed' => <String, dynamic>{
@@ -155,9 +153,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
     final usage = event['usage'];
     final rawContextUsage = event['context_usage'];
     final contextUsage = rawContextUsage is Map
-        ? LlmUsageSnapshot.fromJson(
-            Map<String, dynamic>.from(rawContextUsage),
-          )
+        ? LlmUsageSnapshot.fromJson(Map<String, dynamic>.from(rawContextUsage))
         : null;
     final runtimeMs = event['runtime_ms'] is num ? (event['runtime_ms'] as num).toInt() : null;
     final contextTokens = event['context_tokens'] is num ? (event['context_tokens'] as num).toInt() : null;
@@ -169,15 +165,18 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       // Legacy rows persisted as 'text' before the refactor.
       case 'text':
         return CanonicalEvent(
-          id: requestId != null && requestId.isNotEmpty
-              ? 'user_$requestId'
-              : 'user_${timestamp.millisecondsSinceEpoch}_${text.hashCode}',
+          id:
+              eventId ??
+              (requestId != null && requestId.isNotEmpty
+                  ? 'user_$requestId'
+                  : 'user_${timestamp.millisecondsSinceEpoch}_${text.hashCode}'),
           kind: EventKind.userMessage,
           status: EventStatus.done,
           text: text,
           timestamp: timestamp,
           sessionId: sessionId,
           runId: runId,
+          eventId: eventId,
           model: model,
           modelDisplay: modelDisplay,
           provider: provider,
@@ -331,10 +330,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
           id: _toolId(toolCallId, eventId, timestamp),
           kind: EventKind.toolCall,
           status: isCancelled ? EventStatus.cancelled : (isError ? EventStatus.error : EventStatus.done),
-          tool: {
-            'name': event['tool'] ?? '',
-            'output': output,
-          },
+          tool: {'name': event['tool'] ?? '', 'output': output},
           timestamp: timestamp,
           sessionId: sessionId,
           runId: runId,
@@ -571,11 +567,8 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
   ) => 'reasoning_${modelStepId ?? runId ?? eventId ?? timestamp.millisecondsSinceEpoch}';
 
   // Same id for tool_use + matching tool_result so they fold together.
-  String _toolId(
-    String? toolCallId,
-    String? eventId,
-    DateTime timestamp,
-  ) => 'tool_${toolCallId ?? eventId ?? timestamp.microsecondsSinceEpoch}';
+  String _toolId(String? toolCallId, String? eventId, DateTime timestamp) =>
+      'tool_${toolCallId ?? eventId ?? timestamp.microsecondsSinceEpoch}';
 
   String? _stringId(dynamic value) {
     final normalized = value?.toString().trim();

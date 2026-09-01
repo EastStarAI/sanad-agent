@@ -84,6 +84,28 @@ description: "QA scenarios for persistent conversation snapshots, draft acceptan
 3. Trigger two overlapping flushes while the first storage write is delayed.
 4. **Expected:** The newest snapshot remains persisted after both writes finish.
 
+## Long-History Pagination Matrix
+
+| Scenario | Expected result |
+|---|---|
+| Open a 10,000-row session | Initial daemon query returns at most 100 rows and 1 MiB of persisted JSON; Client paints the tail without building remote rows. |
+| Scroll upward with mouse, trackpad, or touch | One older request starts near the top; repeated notifications coalesce by cursor. |
+| Pagination controls | **Show earlier**, **Show later**, and retry actions are absent; short slices auto-fill before a boundary control could enter view. |
+| Older page arrives during an upward gesture | Stable event ids prepend once, the first visible event retains its pixel position, and the viewport never resets to the tail. |
+| Driver scroll verification | `conversation_timeline_scroll` is targetable; each action reports offset/min/max and emits user intent so page prefetch and saved-anchor behavior can be checked against ordered database rows. |
+| Browse down after anchored hydration | Newer pages append in database order without activating tail-follow; reaching the true newest boundary is explicit. |
+| Switch between two long sessions | Each session restores its own saved top-visible event and can continue paging in either direction without borrowing the other session's offset. |
+| Live append during older request | The live event remains once at the tail after the older merge. |
+| Network/offline failure | Existing messages and viewport remain with no retry control. Auto-fill stops; fresh edge intent/overscroll permits at most three consecutive retries per direction, then emits no further requests until success or session reset. |
+| Response repeats its cursor or returns no progress | Pagination becomes exhausted and cannot loop. |
+| Switch session/device during request | Late command and Cubit generations are ignored; no foreign timeline mutation appears. |
+| Restore an old saved viewport event | Client sends `anchor_event_id`; the bounded page begins at that row, includes newer context, and aligns the event near the visible top. An oldest-row anchor must not collapse the timeline to one message. |
+| Navigate away after exhausting older history, then return | The Client restores the fully loaded in-memory timeline, reconciles the authoritative tail by event id, and permits scrolling from the first message through the newest message without another anchor/tail race. |
+| Restore an anchor with more than one forward page | Short content auto-fills newer pages; otherwise downward intent prefetches one newer cursor at a time before the loaded edge. Tool uses split from terminal rows only transiently and reconcile when the next bounded page arrives. |
+| Missing/deleted/compacted anchor | Agent returns `anchor_not_found`; Client retains the newest tail without repeated requests. |
+| Tool-heavy run crosses a newer-page boundary | Reprojection merges every tool call in the same visible run into one group. Hidden historical reasoning cannot leave singleton tools below the group; visible timeline rows and `system_ask_user` still split groups. |
+| Compact and large window resize | No geometry jump, stale inline edit, overflow, or unintended tail-follow activation. |
+
 ## Automated Test Coverage
 
 | Scenario | Test file |
@@ -94,3 +116,8 @@ description: "QA scenarios for persistent conversation snapshots, draft acceptan
 | Repository facade integration | `test/unit/repositories/conversation_cache_repository_test.dart` |
 | Production `SessionCubit` cache projection | `test/unit/bloc/session_cubit_test.dart` |
 | Agent-late reconnect active-history hydration | `test/unit/services/connection_registries_test.dart` |
+| Agent keyset/cursor/anchor/10k bounds | `agent/test/evolution/session_history_pagination_test.dart` |
+| Canonical fan-out and compaction page placement | `agent/test/interfaces/sanad_bridge_test.dart`, `agent/test/interfaces/compaction_history_parity_test.dart` |
+| Client coalescing/merge/failure/stale generation | `client/test/unit/services/device_conversation_commands_test.dart`, `client/test/unit/bloc/session_cubit_test.dart` |
+| Pixel anchoring, auto-fill, manual action, saved anchor | `client/test/widget/brain_activity_view_scroll_test.dart` |
+| Spawned-daemon local socket pagination | `client/e2e_test/local_dual_connection_e2e_test.dart` |

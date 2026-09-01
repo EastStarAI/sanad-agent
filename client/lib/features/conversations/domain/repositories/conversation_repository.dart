@@ -43,9 +43,7 @@ abstract class ConversationRepository {
   Map<String, SessionAttentionState> currentAttentionStates(
     DeviceConfig agent,
   ) => const {};
-  Map<String, SessionRouteSnapshot> currentRouteSnapshots(
-    DeviceConfig agent,
-  ) => const {};
+  Map<String, SessionRouteSnapshot> currentRouteSnapshots(DeviceConfig agent) => const {};
 
   void activateSession(DeviceConfig agent, String sessionId);
   void beginNewSession(DeviceConfig agent);
@@ -76,8 +74,16 @@ abstract class ConversationRepository {
     required String requestId,
     required String sessionId,
   });
-  Future<String?> deleteQueuedMessage(DeviceConfig agent, {required String requestId, required String sessionId});
-  Future<String?> cancelPendingSteer(DeviceConfig agent, {required String requestId, required String sessionId});
+  Future<String?> deleteQueuedMessage(
+    DeviceConfig agent, {
+    required String requestId,
+    required String sessionId,
+  });
+  Future<String?> cancelPendingSteer(
+    DeviceConfig agent, {
+    required String requestId,
+    required String sessionId,
+  });
   Future<String?> stop(
     DeviceConfig agent, {
     String? sessionId,
@@ -148,8 +154,14 @@ abstract class ConversationRepository {
     String? model,
     String? thinkingMode,
   });
-  Future<SessionQueryResult> getSessions(DeviceConfig agent, {SessionQueryRequest? query});
-  Future<SessionQueryResult> refreshSessions(DeviceConfig agent, {SessionQueryRequest? query});
+  Future<SessionQueryResult> getSessions(
+    DeviceConfig agent, {
+    SessionQueryRequest? query,
+  });
+  Future<SessionQueryResult> refreshSessions(
+    DeviceConfig agent, {
+    SessionQueryRequest? query,
+  });
   Future<List<DeviceWorkspace>> getWorkspaces(DeviceConfig agent);
   Future<List<SlashCommandEntry>> searchSlashCommands(
     DeviceConfig agent, {
@@ -191,12 +203,35 @@ abstract class ConversationRepository {
     required String path,
     required String newName,
   });
-  Future<void> deleteFolder(
-    DeviceConfig agent, {
-    required String path,
-  });
-  Future<List<CanonicalEvent>> loadSessionHistory(DeviceConfig agent, String sessionId);
-  Future<void> updateSessionTitle(DeviceConfig agent, String sessionId, String title);
+  Future<void> deleteFolder(DeviceConfig agent, {required String path});
+  Future<List<CanonicalEvent>> loadSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  );
+
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) => loadSessionHistory(agent, sessionId);
+
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+    String anchorEventId,
+  ) => loadSessionHistory(agent, sessionId);
+
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) => loadSessionHistory(agent, sessionId);
+
+  bool historyHasMore(DeviceConfig agent) => false;
+  bool historyHasNewer(DeviceConfig agent) => false;
+  Future<void> updateSessionTitle(
+    DeviceConfig agent,
+    String sessionId,
+    String title,
+  );
   Future<void> deleteSession(DeviceConfig agent, String sessionId);
   Future<void> respondToSuspendedRequest(
     DeviceConfig agent,
@@ -206,12 +241,18 @@ abstract class ConversationRepository {
     String? comment,
     String? answer,
   });
-  Future<WorkspacePolicy> getWorkspacePolicy(DeviceConfig agent, String workspacePath);
+  Future<WorkspacePolicy> getWorkspacePolicy(
+    DeviceConfig agent,
+    String workspacePath,
+  );
   Future<WorkspacePolicy> setWorkspacePermissionMode(
     DeviceConfig agent, {
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
   });
-  Stream<WorkspacePolicy> watchWorkspacePolicy(DeviceConfig agent, String workspaceId);
+  Stream<WorkspacePolicy> watchWorkspacePolicy(
+    DeviceConfig agent,
+    String workspaceId,
+  );
 }

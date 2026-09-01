@@ -20,6 +20,40 @@ import 'package:sanad_client/utils/app_platform.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+Future<void> _appendPersistedHistoryFixture(
+  Directory sanadHome, {
+  required String sessionId,
+  required int count,
+}) async {
+  String sqlQuote(String value) => "'${value.replaceAll("'", "''")}'";
+  final statements = <String>['BEGIN IMMEDIATE;'];
+  for (var index = 0; index < count; index++) {
+    final data = jsonEncode({
+      'role': 'user',
+      'content': 'pagination-fixture-$index',
+    });
+    statements.add(
+      'INSERT INTO messages (session_id, data) VALUES '
+      '(${sqlQuote(sessionId)}, ${sqlQuote(data)});',
+    );
+  }
+  statements
+    ..add(
+      'UPDATE sessions SET history_revision = history_revision + 1 '
+      'WHERE session_id = ${sqlQuote(sessionId)};',
+    )
+    ..add('COMMIT;');
+  final result = await Process.run('sqlite3', [
+    '${sanadHome.path}${Platform.pathSeparator}state.db',
+    statements.join('\n'),
+  ]);
+  if (result.exitCode != 0) {
+    throw StateError(
+      'Failed to seed bounded pagination fixture: ${result.stderr}',
+    );
+  }
+}
+
 class _NoopPortalAuthClient extends PortalAuthClient {
   _NoopPortalAuthClient() : super(dio: Dio());
 
@@ -259,8 +293,18 @@ void main() {
 
       expect(finalAnswer, 'e2e-success');
 
+      await _appendPersistedHistoryFixture(
+        daemon.stateHome,
+        sessionId: sessionId,
+        count: 105,
+      );
       final history = await conversationClient.loadSessionHistory(sessionId);
-      expect(history, isNotEmpty);
+      expect(history, hasLength(100));
+      expect(conversationClient.historyHasMore, isTrue);
+      final withOlder = await conversationClient.loadOlderSessionHistory(sessionId);
+      expect(withOlder.length, greaterThan(100));
+      expect(withOlder.map((event) => event.id).toSet(), hasLength(withOlder.length));
+      expect(conversationClient.historyHasMore, isFalse);
 
       await conversationClient.updateSessionTitle(sessionId, 'Local E2E Updated');
       final sessionsAfterUpdate = await conversationClient.getSessions();

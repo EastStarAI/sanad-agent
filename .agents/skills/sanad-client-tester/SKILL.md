@@ -121,6 +121,7 @@ To inspect the application's interface dynamically without rendering heavy exter
 
     # Scroll scrollable areas
     sanad-dev ui scroll --key device_workspace_sidebar_scroll --dy -300
+    sanad-dev ui scroll --key conversation_timeline_scroll --direction up --json
 
     # Wait for elements to appear/disappear
     sanad-dev ui wait-for --key chat_input --timeout 10
@@ -163,6 +164,7 @@ These general-purpose tools are permanently located in the workspace:
 * **Never Abort mid-Driver Run:** Do not cancel a driver script while a tap or text entry operation is active to prevent the UI thread from hanging in a "Guarded" state.
 * **Guarded Recovery:** If a `Guarded function conflict` occurs, immediately trigger a **Hot Restart** using the developer utility: `sanad-dev restart client` to reset the service.
 * **Target Scaffolds over Slivers:** Tapping items inside `CustomScrollView` (Slivers) may hang on macOS. Target outer Scaffolds or static layouts first.
+* **Conversation Pagination Scrolls:** Target `conversation_timeline_scroll`, not the outer `chat_messages_list` container. Keyed offset scrolls emit user intent, so they exercise pagination, follow opt-out, and saved-anchor persistence. Record the returned offset/min/max, then snapshot visible keyed events after a page settles; compare stable history row ids with a read-only database snapshot when validating first/tail boundaries.
 * **Unsynchronized Legacy Flutter Driver Operations:** Wrap Flutter Driver fallback actions such as legacy `tap`, `enterText`, and scroll-until-visible inside `await driver.runUnsynchronized(() async { ... })` when screens contain ongoing animations, thinking indicators, progress bars, or active thought streams. The primary Sanad `enter-text` path is a VM service extension that updates `EditableTextState` while keeping the operating-system text channel active; do not globally enable Flutter Driver text-entry emulation around it.
 * **No Hardcoded Machine Paths:** Do not hardcode absolute, machine-specific paths in driver interaction scripts for dynamic selector keys such as workspaces. Read paths dynamically or inject them through environment variables to preserve cross-platform compatibility.
 

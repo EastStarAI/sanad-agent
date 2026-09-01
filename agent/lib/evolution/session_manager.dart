@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 import 'db/agent_state_database.dart';
 import 'db/session_db.dart';
 import 'models/session_query.dart';
+import 'models/session_history_page.dart';
 import 'models/session_state.dart';
 import 'models/suspended_checkpoint.dart';
 import 'compaction/model_context_projection.dart';
@@ -227,6 +228,20 @@ class SessionManager {
 
   List<PersistedMessage> getPersistedMessages(String sessionId) {
     return _db.getPersistedMessages(sessionId);
+  }
+
+  SessionHistoryPage getPersistedMessagePage(
+    String sessionId, {
+    int limit = defaultSessionHistoryPageSize,
+    String? cursor,
+    int? anchorRowId,
+  }) {
+    return _db.getPersistedMessagePage(
+      sessionId,
+      limit: limit,
+      cursor: cursor,
+      anchorRowId: anchorRowId,
+    );
   }
 
   /// Persists last-turn metrics (usage, model, context_tokens, etc.) alongside

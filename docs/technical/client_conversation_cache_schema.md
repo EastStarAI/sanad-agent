@@ -128,7 +128,41 @@ Sidebar refreshes intentionally request the unscoped section and eligible worksp
 - Editing after dispatch clears the pending request marker before writing newer text, so acceptance of the older request cannot clear a newer draft.
 - Snapshot consumers detect canonical cleanup from the immutable snapshot event itself; an unrelated cache emission while a debounce is pending never clears the editor.
 
-## 6. Persistence
+## 6. Timeline History Pagination
+
+Sidebar pagination remains owned by `ConversationCacheStore`; transcript pages
+are a separate transient resource owned by the per-device
+`DeviceConversationStore` behind `ConversationClient`. An anchored slice owns
+independent opaque older/newer cursors and exhaustion state. Widgets receive
+only typed load intents and booleans; they never read or construct cursors.
+
+The initial tail replaces a partial timeline atomically. Older pages prepend by
+canonical identity; newer pages apply in chronological order so a terminal tool
+row can enrich its matching running tool even when the pair crosses a page
+boundary. Presentation reprojects the complete loaded slice after either merge;
+hidden reasoning rows do not split a visible tool run, while visible events and
+`system_ask_user` remain grouping boundaries. Each direction coalesces its matching in-flight cursor and advances
+only when the returned cursor differs from the requested one. Session/device
+switches and newer hydration generations reject late results. Failure leaves the
+visible timeline and runtime projections unchanged.
+
+At most two recently visited timelines that are exhausted in both directions
+may remain in memory. Reopening one reconciles the authoritative tail by event
+identity instead of discarding pages the user explicitly loaded. Partial slices
+remain replaceable and do not become cache authority. Cursor and loaded
+transcript pages are never persisted; only the per-device/session stable
+viewport event id survives restart and may trigger an anchored request. Flutter
+page-storage offsets are not authoritative, so conversation scrolling disables
+the framework offset cache and restores through the saved event id.
+
+Presentation renders no pagination/retry controls. Short slices alternate older
+and newer auto-fill with a three-page budget per direction; longer slices
+prefetch before a physical scroll reaches either loaded edge. Errors stop
+automatic fill. Fresh edge intent or overscroll can retry at most three
+consecutive failures per direction; successful or authoritative recovery resets
+that direction, and session activation resets both.
+
+## 7. Persistence
 
 - Backend: `SharedPreferencesConversationCachePersistence` (cross-platform, no secrets).
 - Codec: `ConversationCacheCodec` — single namespaced JSON blob under the stable key `sanad_conversation_cache`. Schema compatibility and safe invalidation are owned by the payload codec.
@@ -155,12 +189,12 @@ Sidebar refreshes intentionally request the unscoped section and eligible worksp
   recovered user text, and are removed after successful apply/acknowledgement.
 - No tokens, credentials, or raw transport payloads are stored.
 
-## 7. Logout / Cleanup Boundary
+## 8. Logout / Cleanup Boundary
 
 - `clearCloudUserScope(Set<String> cloudDeviceIds)` removes cloud-device cache and drafts while preserving local desktop inventory.
 - `clearDevice(deviceId)` removes all keys for one device.
 
-## 8. Consumer API
+## 9. Consumer API
 
 `ConversationCacheRepository` (`lib/features/conversations/data/repositories/conversation_cache_repository.dart`) is the intent-based facade. Widgets/cubits call:
 
@@ -180,7 +214,7 @@ Sidebar refreshes intentionally request the unscoped section and eligible worksp
 - `prependRecoveredSessionDraft` and Stop-recovery acknowledgement correlation
   keyed by `deviceId + sessionId + stopRequestId`
 
-## 9. Pending input projection boundary (Task 36)
+## 10. Pending input projection boundary (Task 36)
 
 `DeviceConversationStore` owns the live per-session projections for queued
 messages and pending steers. Pending steers are keyed by the daemon's raw

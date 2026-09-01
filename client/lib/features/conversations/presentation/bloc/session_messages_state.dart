@@ -37,6 +37,12 @@ class SessionMessagesState extends Equatable {
   final bool isHistoryLoading;
   final String? historyLoadError;
   final bool showDelayedLoading;
+  final bool hasOlderHistory;
+  final bool isOlderHistoryLoading;
+  final String? olderHistoryError;
+  final bool hasNewerHistory;
+  final bool isNewerHistoryLoading;
+  final String? newerHistoryError;
 
   const SessionMessagesState({
     this.messages = const [],
@@ -67,6 +73,12 @@ class SessionMessagesState extends Equatable {
     this.isHistoryLoading = false,
     this.historyLoadError,
     this.showDelayedLoading = false,
+    this.hasOlderHistory = false,
+    this.isOlderHistoryLoading = false,
+    this.olderHistoryError,
+    this.hasNewerHistory = false,
+    this.isNewerHistoryLoading = false,
+    this.newerHistoryError,
   });
 
   SessionMessagesState copyWith({
@@ -113,6 +125,14 @@ class SessionMessagesState extends Equatable {
     String? historyLoadError,
     bool clearHistoryLoadError = false,
     bool? showDelayedLoading,
+    bool? hasOlderHistory,
+    bool? isOlderHistoryLoading,
+    String? olderHistoryError,
+    bool clearOlderHistoryError = false,
+    bool? hasNewerHistory,
+    bool? isNewerHistoryLoading,
+    String? newerHistoryError,
+    bool clearNewerHistoryError = false,
   }) {
     return SessionMessagesState(
       messages: messages ?? this.messages,
@@ -155,6 +175,12 @@ class SessionMessagesState extends Equatable {
       isHistoryLoading: isHistoryLoading ?? this.isHistoryLoading,
       historyLoadError: clearHistoryLoadError ? null : historyLoadError ?? this.historyLoadError,
       showDelayedLoading: showDelayedLoading ?? this.showDelayedLoading,
+      hasOlderHistory: hasOlderHistory ?? this.hasOlderHistory,
+      isOlderHistoryLoading: isOlderHistoryLoading ?? this.isOlderHistoryLoading,
+      olderHistoryError: clearOlderHistoryError ? null : olderHistoryError ?? this.olderHistoryError,
+      hasNewerHistory: hasNewerHistory ?? this.hasNewerHistory,
+      isNewerHistoryLoading: isNewerHistoryLoading ?? this.isNewerHistoryLoading,
+      newerHistoryError: clearNewerHistoryError ? null : newerHistoryError ?? this.newerHistoryError,
     );
   }
 
@@ -198,5 +224,11 @@ class SessionMessagesState extends Equatable {
     isHistoryLoading,
     historyLoadError,
     showDelayedLoading,
+    hasOlderHistory,
+    isOlderHistoryLoading,
+    olderHistoryError,
+    hasNewerHistory,
+    isNewerHistoryLoading,
+    newerHistoryError,
   ];
 }

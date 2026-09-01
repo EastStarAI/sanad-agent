@@ -5,7 +5,7 @@ This contract applies to `client/lib/features/conversations/domain/`.
 
 ## Store Ownership
 - `ConversationCacheStore` is the sole in-memory owner of conversation cache, drafts, workspace expansion, pagination state, and per-device destinations.
-- `DeviceConversationStore` owns canonical timeline state; `ProcessingStore` and attention/execution registries own their respective authoritative projections.
+- `DeviceConversationStore` owns canonical timeline state; `ProcessingStore` and attention/execution registries own their respective authoritative projections. It owns independent older/newer history cursors for an anchored slice and may retain at most two recently visited timelines exhausted in both directions so same-runtime navigation does not discard pages the user explicitly loaded; this retention is not persisted cache authority.
 - Cubits and widgets must not create parallel cache maps, cursors, drafts, processing sets, or recovery stores.
 - `SessionCubit.agentSessions` is a compatibility projection from the cache store, not a second owner.
 

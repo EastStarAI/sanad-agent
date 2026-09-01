@@ -499,6 +499,47 @@ void main() {
     await sessionCubit.close();
   });
 
+  test('SessionMessagesCubit coalesces older loads and preserves history on failure', () async {
+    socket.setConnected(true);
+    client.historyHasMoreValue = true;
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final sessionCubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+    );
+    final messagesCubit = SessionMessagesCubit(
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      conversationRepository: conversationRepository,
+      preferencesRepository: FakeDevicePreferencesRepository(),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await sessionCubit.selectSession(session);
+    await Future<void>.delayed(Duration.zero);
+    expect(messagesCubit.state.hasOlderHistory, isTrue);
+
+    final completer = Completer<List<CanonicalEvent>>();
+    client.olderHistoryCompleter = completer;
+    final first = messagesCubit.loadOlderHistory();
+    final second = messagesCubit.loadOlderHistory();
+    expect(client.loadedOlderHistorySessionIds, [session.id]);
+    completer.complete(const []);
+    await Future.wait([first, second]);
+
+    final retainedMessages = messagesCubit.state.messages;
+    client.olderHistoryCompleter = null;
+    client.olderHistoryError = StateError('network');
+    await messagesCubit.loadOlderHistory();
+
+    expect(messagesCubit.state.messages, retainedMessages);
+    expect(messagesCubit.state.olderHistoryError, isNotNull);
+    expect(messagesCubit.state.hasOlderHistory, isTrue);
+
+    await messagesCubit.close();
+    await sessionCubit.close();
+  });
+
   test('replay result projects the authoritative history revision', () async {
     socket.setConnected(true);
     agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
@@ -2048,6 +2089,11 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
   int getSessionsCalls = 0;
   String? activatedSessionId;
   final List<String> loadedHistorySessionIds = [];
+  final List<String> loadedOlderHistorySessionIds = [];
+  bool historyHasMoreValue = false;
+  String? historyNextCursorValue;
+  Completer<List<CanonicalEvent>>? olderHistoryCompleter;
+  Object? olderHistoryError;
   final List<String> deletedSessionIds = [];
   int beginNewSessionCalls = 0;
   DeviceProcessingSnapshot _processingSnapshot = const DeviceProcessingSnapshot();
@@ -2280,6 +2326,39 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
     loadedHistorySessionIds.add(sessionId);
     return const [];
   }
+
+  @override
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(String sessionId) async {
+    loadedOlderHistorySessionIds.add(sessionId);
+    final error = olderHistoryError;
+    if (error != null) throw error;
+    final completer = olderHistoryCompleter;
+    if (completer != null) return completer.future;
+    return _currentMessages;
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    String sessionId,
+    String anchorEventId,
+  ) => loadSessionHistory(sessionId);
+
+  @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) async {
+    return _currentMessages;
+  }
+
+  @override
+  bool get historyHasMore => historyHasMoreValue;
+
+  @override
+  String? get historyNextCursor => historyNextCursorValue;
+
+  @override
+  bool get historyHasNewer => false;
+
+  @override
+  String? get historyNextNewerCursor => null;
 
   @override
   Future<Session> createSession({

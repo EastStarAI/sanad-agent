@@ -104,6 +104,9 @@ List<ConversationTimelineItem> projectConversationTimeline(
   }
 
   for (final event in events) {
+    if (event.kind == EventKind.reasoning) {
+      continue;
+    }
     final isAskUser = event.kind == EventKind.toolCall && event.toolName == 'system_ask_user';
     if (isAskUser) {
       flushTools();
@@ -119,9 +122,7 @@ List<ConversationTimelineItem> projectConversationTimeline(
     }
 
     flushTools();
-    if (event.kind != EventKind.reasoning) {
-      items.add(reuseOrCreate([event], asGroup: false));
-    }
+    items.add(reuseOrCreate([event], asGroup: false));
   }
 
   flushTools();

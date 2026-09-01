@@ -619,6 +619,304 @@ void main() {
     expect(store.currentMessages.single.text, 'done');
   });
 
+  test('loadOlderSessionHistory coalesces and prepends stable unique events', () async {
+    final initial = commands.loadSessionHistory('session-1');
+    final initialPayload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': initialPayload['request_id'],
+        'has_more': true,
+        'next_cursor': 'cursor-1',
+        'messages': [
+          {
+            'id': 'history:session-1:2:user_message:0',
+            'event_id': 'history:session-1:2:user_message:0',
+            'type': 'user_message',
+            'content': 'newer',
+            'created_at': '2026-01-02T00:00:00Z',
+          },
+        ],
+      },
+    });
+    await initial;
+    socket.clearCaptured();
+
+    final first = commands.loadOlderSessionHistory('session-1');
+    final second = commands.loadOlderSessionHistory('session-1');
+
+    expect(socket.capturedCommands, hasLength(1));
+    final olderPayload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    expect(olderPayload['cursor'], 'cursor-1');
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': olderPayload['request_id'],
+        'has_more': false,
+        'messages': [
+          {
+            'id': 'history:session-1:1:user_message:0',
+            'event_id': 'history:session-1:1:user_message:0',
+            'type': 'user_message',
+            'content': 'older',
+            'created_at': '2026-01-01T00:00:00Z',
+          },
+          {
+            'id': 'history:session-1:2:user_message:0',
+            'event_id': 'history:session-1:2:user_message:0',
+            'type': 'user_message',
+            'content': 'newer duplicate',
+            'created_at': '2026-01-02T00:00:00Z',
+          },
+        ],
+      },
+    });
+    await Future.wait([first, second]);
+
+    expect(store.currentMessages.map((event) => event.text), ['older', 'newer']);
+    expect(store.historyHasMore, isFalse);
+    expect(store.historyNextCursor, isNull);
+  });
+
+  test('complete loaded history survives session navigation and tail refresh', () async {
+    store.activateSession('session-1');
+    store.setHistory([
+      CanonicalEvent(
+        id: 'history:session-1:1:user_message:0',
+        kind: EventKind.userMessage,
+        text: 'oldest',
+        timestamp: DateTime.utc(2026, 1, 1),
+      ),
+      CanonicalEvent(
+        id: 'history:session-1:2:user_message:0',
+        kind: EventKind.userMessage,
+        text: 'newer',
+        timestamp: DateTime.utc(2026, 1, 2),
+      ),
+    ]);
+
+    final other = commands.loadSessionHistory('session-2');
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'messages': [_historyRow('other', 'other session')],
+      },
+    });
+    await other;
+    socket.clearCaptured();
+
+    final restored = commands.loadSessionHistory('session-1');
+    expect(store.currentMessages.map((event) => event.text), [
+      'oldest',
+      'newer',
+    ]);
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': true,
+        'next_cursor': 'tail-cursor',
+        'messages': [
+          _historyRow('history:session-1:2:user_message:0', 'newer refreshed'),
+          _historyRow('history:session-1:3:user_message:0', 'latest'),
+        ],
+      },
+    });
+    await restored;
+
+    expect(store.currentMessages.map((event) => event.text), [
+      'oldest',
+      'newer refreshed',
+      'latest',
+    ]);
+    expect(store.historyHasMore, isFalse);
+    expect(store.historyNextCursor, isNull);
+  });
+
+  test('anchored history sends the stable event id and replaces only on success', () async {
+    final tail = commands.loadSessionHistory('session-1');
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'messages': [_historyRow('tail', 'tail')],
+      },
+    });
+    await tail;
+    socket.clearCaptured();
+
+    final anchored = commands.loadAnchoredSessionHistory(
+      'session-1',
+      'history:session-1:42:user_message:0',
+    );
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    expect(payload['anchor_event_id'], 'history:session-1:42:user_message:0');
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'page_kind': 'anchor',
+        'messages': [_historyRow('anchor', 'anchored')],
+      },
+    });
+    await anchored;
+
+    expect(store.currentMessages.single.text, 'anchored');
+  });
+
+  test('anchored history appends bounded newer pages without duplicates', () async {
+    final anchored = commands.loadAnchoredSessionHistory(
+      'session-1',
+      'history:session-1:1:user_message:0',
+    );
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'page_kind': 'anchor',
+        'has_newer': true,
+        'next_newer_cursor': 'newer-1',
+        'messages': [_historyRow('event-1', 'first')],
+      },
+    });
+    await anchored;
+    socket.clearCaptured();
+
+    final newer = commands.loadNewerSessionHistory('session-1');
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    expect(payload['cursor'], 'newer-1');
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'page_kind': 'newer',
+        'has_newer': false,
+        'messages': [
+          _historyRow('event-1', 'first duplicate'),
+          _historyRow('event-2', 'second'),
+        ],
+      },
+    });
+    await newer;
+
+    expect(store.currentMessages.map((event) => event.text), [
+      'first duplicate',
+      'second',
+    ]);
+    expect(store.historyHasNewer, isFalse);
+    expect(store.historyNextNewerCursor, isNull);
+  });
+
+  test('newer page resolves a tool left running at the anchor boundary', () async {
+    final anchored = commands.loadAnchoredSessionHistory(
+      'session-1',
+      'history:session-1:1:tool_use:0',
+    );
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_newer': true,
+        'next_newer_cursor': 'tool-newer',
+        'messages': [
+          {
+            'id': 'tool-use',
+            'type': 'tool_use',
+            'tool': 'shell_execute',
+            'input': {'command': 'echo done'},
+            'tool_call_id': 'call-page-boundary',
+            'model_step_id': 'step-boundary',
+            'session_id': 'session-1',
+            'created_at': '2026-09-01T00:00:00Z',
+          },
+        ],
+      },
+    });
+    await anchored;
+    expect(store.currentMessages.single.status, EventStatus.running);
+    socket.clearCaptured();
+
+    final newer = commands.loadNewerSessionHistory('session-1');
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_newer': false,
+        'messages': [
+          {
+            'id': 'tool-result',
+            'type': 'tool_result',
+            'tool': 'shell_execute',
+            'output': 'done',
+            'status': 'done',
+            'tool_call_id': 'call-page-boundary',
+            'model_step_id': 'step-boundary',
+            'session_id': 'session-1',
+            'created_at': '2026-09-01T00:00:01Z',
+          },
+        ],
+      },
+    });
+    await newer;
+
+    expect(store.currentMessages, hasLength(1));
+    expect(store.currentMessages.single.status, EventStatus.done);
+    expect(store.currentMessages.single.toolOutput, 'done');
+  });
+
+  test('older no-progress cursor exhausts pagination without a request loop', () async {
+    final initial = commands.loadSessionHistory('session-1');
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': true,
+        'next_cursor': 'same-cursor',
+        'messages': [_historyRow('new', 'new')],
+      },
+    });
+    await initial;
+    socket.clearCaptured();
+
+    final older = commands.loadOlderSessionHistory('session-1');
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': true,
+        'next_cursor': 'same-cursor',
+        'messages': const [],
+      },
+    });
+    await older;
+
+    expect(store.historyHasMore, isFalse);
+    socket.clearCaptured();
+    await commands.loadOlderSessionHistory('session-1');
+    expect(socket.capturedCommands, isEmpty);
+  });
+
   test('loadSessionHistory restores in-flight snapshot and preserves newer live chunks', () async {
     final future = commands.loadSessionHistory('session-1');
 
@@ -1282,3 +1580,13 @@ void main() {
     expect(store.currentPendingSuspendedRequest, isNotNull);
   });
 }
+
+Map<String, dynamic> _historyRow(String id, String content) => {
+  'id': id,
+  'event_id': id,
+  'sender': 'user',
+  'type': 'user_message',
+  'content': content,
+  'created_at': '2026-01-01T00:00:00Z',
+  'session_id': 'session-1',
+};

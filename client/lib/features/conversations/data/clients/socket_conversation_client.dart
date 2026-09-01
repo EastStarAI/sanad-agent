@@ -1,4 +1,5 @@
 import 'package:logging/logging.dart';
+
 import 'dart:async';
 
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -210,12 +211,19 @@ class SocketConversationClient implements ConversationClient {
   }
 
   @override
-  Future<String?> deleteQueuedMessage({required String requestId, required String sessionId}) =>
-      _commands!.deleteQueuedMessage(requestId: requestId, sessionId: sessionId);
+  Future<String?> deleteQueuedMessage({
+    required String requestId,
+    required String sessionId,
+  }) => _commands!.deleteQueuedMessage(
+    requestId: requestId,
+    sessionId: sessionId,
+  );
 
   @override
-  Future<String?> cancelPendingSteer({required String requestId, required String sessionId}) =>
-      _commands!.cancelPendingSteer(requestId: requestId, sessionId: sessionId);
+  Future<String?> cancelPendingSteer({
+    required String requestId,
+    required String sessionId,
+  }) => _commands!.cancelPendingSteer(requestId: requestId, sessionId: sessionId);
 
   @override
   Future<String?> stop({
@@ -295,9 +303,8 @@ class SocketConversationClient implements ConversationClient {
   );
 
   @override
-  Future<SessionCompactResult> compactSession({
-    required String sessionId,
-  }) => _commands!.compactSession(sessionId: sessionId);
+  Future<SessionCompactResult> compactSession({required String sessionId}) =>
+      _commands!.compactSession(sessionId: sessionId);
 
   @override
   Future<void> retryRuntimeNotice({
@@ -374,17 +381,19 @@ class SocketConversationClient implements ConversationClient {
       if (isLegacyDefault) {
         return await _fetchLegacyDefaultSessions();
       }
-      return await _fetchSessionQuery(
-        resolvedQuery,
-        queryKey: queryKey,
-      );
+      return await _fetchSessionQuery(resolvedQuery, queryKey: queryKey);
     } catch (error) {
-      _logger.severe('[SocketConversationClient] Failed to fetch sessions: $error');
+      _logger.severe(
+        '[SocketConversationClient] Failed to fetch sessions: $error',
+      );
       if (exactCached != null) {
         return exactCached;
       }
       if (isLegacyDefault && _lastSessionsSnapshot != null) {
-        return SessionQueryResult(sessions: _lastSessionsSnapshot!, hasMore: false);
+        return SessionQueryResult(
+          sessions: _lastSessionsSnapshot!,
+          hasMore: false,
+        );
       }
       rethrow;
     }
@@ -492,10 +501,7 @@ class SocketConversationClient implements ConversationClient {
     String? workspaceId,
     String? path,
   }) {
-    return _commands!.browseWorkspaceTree(
-      workspaceId: workspaceId,
-      path: path,
-    );
+    return _commands!.browseWorkspaceTree(workspaceId: workspaceId, path: path);
   }
 
   @override
@@ -560,6 +566,36 @@ class SocketConversationClient implements ConversationClient {
   Future<List<CanonicalEvent>> loadSessionHistory(String sessionId) {
     return _commands!.loadSessionHistory(sessionId);
   }
+
+  @override
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(String sessionId) {
+    return _commands!.loadOlderSessionHistory(sessionId);
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    String sessionId,
+    String anchorEventId,
+  ) {
+    return _commands!.loadAnchoredSessionHistory(sessionId, anchorEventId);
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) {
+    return _commands!.loadNewerSessionHistory(sessionId);
+  }
+
+  @override
+  bool get historyHasMore => _store.historyHasMore;
+
+  @override
+  String? get historyNextCursor => _store.historyNextCursor;
+
+  @override
+  bool get historyHasNewer => _store.historyHasNewer;
+
+  @override
+  String? get historyNextNewerCursor => _store.historyNextNewerCursor;
 
   Future<void> synchronizeAfterReconnect() async {
     await getSessions();
@@ -638,7 +674,9 @@ class SocketConversationClient implements ConversationClient {
       mapper: _mapper,
     );
     _sessionEventsSubscription = gateway.events.listen(_forwardSessionEvent);
-    _socketLifecycleSubscription = socketService.lifecycleStateStream.listen((state) {
+    _socketLifecycleSubscription = socketService.lifecycleStateStream.listen((
+      state,
+    ) {
       if (state != SocketLifecycleState.ready) {
         _sessionsHydrationPending = true;
       }
@@ -744,10 +782,7 @@ class SocketConversationClient implements ConversationClient {
     final requestId = generateConversationRequestId();
     final result = await gateway.request(
       command: 'workspace.get_policy',
-      payload: {
-        'request_id': requestId,
-        'workspace_path': workspacePath,
-      },
+      payload: {'request_id': requestId, 'workspace_path': workspacePath},
       requestId: requestId,
     );
     if (result != null) {

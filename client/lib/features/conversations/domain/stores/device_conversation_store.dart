@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'dart:collection';
+
 import 'package:sanad_client/features/conversations/domain/models/device_processing_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
@@ -15,6 +17,22 @@ import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/stores/conversation_state.dart';
 
+class _RetainedSessionHistory {
+  final List<CanonicalEvent> messages;
+  final bool hasMore;
+  final String? nextCursor;
+  final bool hasNewer;
+  final String? nextNewerCursor;
+
+  const _RetainedSessionHistory({
+    required this.messages,
+    required this.hasMore,
+    required this.nextCursor,
+    required this.hasNewer,
+    required this.nextNewerCursor,
+  });
+}
+
 class DeviceConversationStoreSnapshot {
   final List<CanonicalEvent> messages;
   final String? currentSessionId;
@@ -29,6 +47,10 @@ class DeviceConversationStoreSnapshot {
   final Map<String, RuntimeNotice> runtimeNotices;
   final Map<String, SessionRouteSnapshot> routeSnapshots;
   final Map<String, Map<String, PendingSteerRecord>> pendingSteers;
+  final bool historyHasMore;
+  final String? historyNextCursor;
+  final bool historyHasNewer;
+  final String? historyNextNewerCursor;
 
   const DeviceConversationStoreSnapshot({
     required this.messages,
@@ -44,10 +66,16 @@ class DeviceConversationStoreSnapshot {
     this.runtimeNotices = const {},
     this.routeSnapshots = const {},
     this.pendingSteers = const {},
+    this.historyHasMore = false,
+    this.historyNextCursor,
+    this.historyHasNewer = false,
+    this.historyNextNewerCursor,
   });
 }
 
 class DeviceConversationStore {
+  static const int _maxRetainedSessionHistories = 2;
+
   final ConversationState _conversation;
   final StreamController<List<CanonicalEvent>> _messagesController = StreamController<List<CanonicalEvent>>.broadcast();
   final StreamController<List<CanonicalEvent>> _queuedMessagesController =
@@ -75,6 +103,12 @@ class DeviceConversationStore {
   final List<CanonicalEvent> _queuedMessages = [];
   final Map<String, Map<String, PendingSteerRecord>> _pendingSteersBySessionId = {};
   final Set<(String, String)> _stopRecoveredPendingSteerKeys = {};
+  bool _historyHasMore = false;
+  String? _historyNextCursor;
+  bool _historyHasNewer = false;
+  String? _historyNextNewerCursor;
+  final LinkedHashMap<String, _RetainedSessionHistory> _retainedSessionHistories =
+      LinkedHashMap<String, _RetainedSessionHistory>();
 
   DeviceConversationStore({
     ThinkingStreamMode thinkingStreamMode = ThinkingStreamMode.auto,
@@ -101,6 +135,10 @@ class DeviceConversationStore {
       for (final entry in initialSnapshot.pendingSteers.entries) {
         _pendingSteersBySessionId[entry.key] = Map<String, PendingSteerRecord>.from(entry.value);
       }
+      _historyHasMore = initialSnapshot.historyHasMore;
+      _historyNextCursor = initialSnapshot.historyNextCursor;
+      _historyHasNewer = initialSnapshot.historyHasNewer;
+      _historyNextNewerCursor = initialSnapshot.historyNextNewerCursor;
       final pending = initialSnapshot.pendingSuspendedRequest;
       if (pending != null && pending.sessionId.isNotEmpty) {
         _pendingSuspendedRequestBySessionId[pending.sessionId] = pending;
@@ -130,6 +168,10 @@ class DeviceConversationStore {
   List<CanonicalEvent> get currentMessages => _conversation.events;
   List<CanonicalEvent> get currentQueuedMessages => List.unmodifiable(_queuedMessages);
   String? get currentSessionId => _currentSessionId;
+  bool get historyHasMore => _historyHasMore;
+  String? get historyNextCursor => _historyNextCursor;
+  bool get historyHasNewer => _historyHasNewer;
+  String? get historyNextNewerCursor => _historyNextNewerCursor;
   bool get isDraftSession => _isDraftSession;
   String? get pendingSessionRequestId => _pendingSessionRequestId;
   DeviceSuspendedRequest? get currentPendingSuspendedRequest =>
@@ -171,6 +213,10 @@ class DeviceConversationStore {
           entry.value,
         ),
     }),
+    historyHasMore: _historyHasMore,
+    historyNextCursor: _historyNextCursor,
+    historyHasNewer: _historyHasNewer,
+    historyNextNewerCursor: _historyNextNewerCursor,
   );
 
   Map<String, SessionRouteSnapshot> get currentRouteSnapshots => _routeRegistry.routesBySessionId;
@@ -199,25 +245,63 @@ class DeviceConversationStore {
   bool isSessionProcessing(String? sessionId) => processingSnapshot.isSessionProcessing(sessionId);
   bool canStopSession(String? sessionId) => sessionId != null && attentionStateFor(sessionId).executionSnapshot.canStop;
 
-  void activateSession(String sessionId) {
-    if (_currentSessionId == sessionId) return;
+  bool activateSession(String sessionId) {
+    if (_currentSessionId == sessionId) return false;
+    _retainCurrentSessionHistory();
     _currentSessionId = sessionId;
     _isDraftSession = false;
     _pendingSessionRequestId = null;
-    _conversation.clear();
+    final retained = _retainedSessionHistories.remove(sessionId);
+    if (retained == null) {
+      _conversation.clear();
+      _historyHasMore = false;
+      _historyNextCursor = null;
+      _historyHasNewer = false;
+      _historyNextNewerCursor = null;
+    } else {
+      _conversation.setHistory(retained.messages);
+      _historyHasMore = retained.hasMore;
+      _historyNextCursor = retained.nextCursor;
+      _historyHasNewer = retained.hasNewer;
+      _historyNextNewerCursor = retained.nextNewerCursor;
+    }
     _queuedMessages.clear();
     _emitMessages();
     _emitQueuedMessages();
     _emitPendingSuspended();
     _emitRuntimeNotice();
+    return retained != null;
+  }
+
+  void _retainCurrentSessionHistory() {
+    final sessionId = _currentSessionId;
+    if (sessionId == null || _isDraftSession || _conversation.events.isEmpty) {
+      return;
+    }
+    _retainedSessionHistories.remove(sessionId);
+    _retainedSessionHistories[sessionId] = _RetainedSessionHistory(
+      messages: List<CanonicalEvent>.from(_conversation.events),
+      hasMore: _historyHasMore,
+      nextCursor: _historyNextCursor,
+      hasNewer: _historyHasNewer,
+      nextNewerCursor: _historyNextNewerCursor,
+    );
+    while (_retainedSessionHistories.length > _maxRetainedSessionHistories) {
+      _retainedSessionHistories.remove(_retainedSessionHistories.keys.first);
+    }
   }
 
   void beginNewSession() {
+    _retainCurrentSessionHistory();
     _currentSessionId = null;
     _isDraftSession = true;
     _pendingSessionRequestId = null;
     _conversation.clear();
     _queuedMessages.clear();
+    _historyHasMore = false;
+    _historyNextCursor = null;
+    _historyHasNewer = false;
+    _historyNextNewerCursor = null;
     _emitMessages();
     _emitQueuedMessages();
     _emitPendingSuspended();
@@ -441,9 +525,54 @@ class DeviceConversationStore {
     _emitQueuedMessages();
   }
 
-  void setHistory(List<CanonicalEvent> events) {
+  void setHistory(
+    List<CanonicalEvent> events, {
+    bool hasMore = false,
+    String? nextCursor,
+    bool hasNewer = false,
+    String? nextNewerCursor,
+  }) {
     _conversation.setHistory(events);
+    _historyHasMore = hasMore && nextCursor != null;
+    _historyNextCursor = _historyHasMore ? nextCursor : null;
+    _historyHasNewer = hasNewer && nextNewerCursor != null;
+    _historyNextNewerCursor = _historyHasNewer ? nextNewerCursor : null;
     _emitMessages();
+  }
+
+  bool prependHistory(
+    List<CanonicalEvent> events, {
+    required bool hasMore,
+    required String? nextCursor,
+    required String requestedCursor,
+  }) {
+    if (_historyNextCursor != requestedCursor) return false;
+    final existingIds = _conversation.events.map((event) => event.id).toSet();
+    final older = events.where((event) => existingIds.add(event.id)).toList(growable: false);
+    _conversation.setHistory([...older, ..._conversation.events]);
+    final advanced = nextCursor != null && nextCursor != requestedCursor;
+    _historyHasMore = hasMore && advanced;
+    _historyNextCursor = _historyHasMore ? nextCursor : null;
+    _emitMessages();
+    return older.isNotEmpty || !_historyHasMore;
+  }
+
+  bool appendHistory(
+    List<CanonicalEvent> events, {
+    required bool hasNewer,
+    required String? nextNewerCursor,
+    required String requestedCursor,
+  }) {
+    if (_historyNextNewerCursor != requestedCursor) return false;
+    final newer = List<CanonicalEvent>.from(events);
+    for (final event in newer) {
+      _conversation.apply(event);
+    }
+    final advanced = nextNewerCursor != null && nextNewerCursor != requestedCursor;
+    _historyHasNewer = hasNewer && advanced;
+    _historyNextNewerCursor = _historyHasNewer ? nextNewerCursor : null;
+    _emitMessages();
+    return newer.isNotEmpty || !_historyHasNewer;
   }
 
   void applyTurnReplayAccepted({

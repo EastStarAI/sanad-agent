@@ -89,6 +89,30 @@ The `NavigationHistoryController` maintains three stacks:
 - Same invariants as local deletion.
 - If current, fallback is applied immediately without a confirmation dialog.
 
+## Long Conversation History
+
+- Opening a conversation displays its newest bounded page without waiting for
+  the complete transcript.
+- Scrolling toward either loaded boundary prefetches the next older/newer page
+  before the boundary enters view. Short slices auto-fill in both directions.
+  Pagination and retry buttons never appear inside the transcript.
+- Loading older messages never blanks the conversation or forces the viewport
+  back to the tail. The first visible event keeps the same screen position after
+  prepend, and live responses may continue at the tail without duplication.
+- An anchored slice can be browsed in both directions. Downward intent loads the
+  next newer page without tail-follow until the reader explicitly reaches the
+  newest boundary.
+- Tool calls that form one visible run remain one group when a newer page joins
+  them. Historical reasoning hidden from the timeline does not create an
+  invisible group boundary; visible messages, thinking rows, final answers, and
+  `system_ask_user` remain explicit boundaries.
+- Each conversation owns its saved top-visible event independently. Navigating
+  away and back restores that event instead of reusing another conversation's
+  offset or reopening at the tail.
+- A short first page may auto-fill at most three older pages, then stops at a
+  filled viewport, exhaustion, or error.
+- When no older page remains, the earlier-history control disappears.
+
 ## Restart Recovery
 
 - The last typed `ConversationDestination` per device is restored from `ConversationCacheStore`.
@@ -96,6 +120,9 @@ The `NavigationHistoryController` maintains three stacks:
 - New Conversation restores its nullable workspace preselection; `null` means no workspace is selected. A workspace known to be removed is dropped.
 - `lastSelectedSessionId` is used only to inherit previous session context and never determines the restart route.
 - A missing saved destination defaults to New Conversation. If a saved session was deleted while offline, recovery also falls back to New Conversation.
+- An idle session with a saved viewport event requests the bounded page containing
+  that event and reopens it near the visible top. Active work always opens at the
+  live tail. A missing, compacted, or stale event safely retains the newest tail.
 
 ## Test Scenarios
 

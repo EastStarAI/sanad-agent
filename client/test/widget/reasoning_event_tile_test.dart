@@ -77,6 +77,67 @@ void main() {
     },
   );
 
+  testWidgets(
+    'MarkdownBody key uses balanced milestone keys during streaming and stable final key on completion',
+    (tester) async {
+      // 1. Single line short running stream -> stream_1_0
+      await _pumpEvent(
+        tester,
+        _event(
+          kind: EventKind.thinking,
+          status: EventStatus.running,
+          text: 'thinking step 1',
+        ),
+      );
+      expect(
+        find.byKey(const ValueKey('event-1_stream_1_0')),
+        findsOneWidget,
+      );
+
+      // 2. Intra-word addition in same line & bucket does not thrash key
+      await _pumpEvent(
+        tester,
+        _event(
+          kind: EventKind.thinking,
+          status: EventStatus.running,
+          text: 'thinking step 1 with extra words',
+        ),
+      );
+      expect(
+        find.byKey(const ValueKey('event-1_stream_1_0')),
+        findsOneWidget,
+      );
+
+      // 3. Newline milestone advances stream key to rebuild AST cleanly
+      await _pumpEvent(
+        tester,
+        _event(
+          kind: EventKind.thinking,
+          status: EventStatus.running,
+          text: 'thinking step 1\nstep 2',
+        ),
+      );
+      expect(
+        find.byKey(const ValueKey('event-1_stream_2_0')),
+        findsOneWidget,
+      );
+
+      // 4. Completed event uses stable final key
+      await _pumpEvent(
+        tester,
+        _event(
+          kind: EventKind.finalAnswer,
+          status: EventStatus.done,
+          text: 'final answer content',
+        ),
+      );
+      expect(
+        find.byKey(const ValueKey('event-1_final')),
+        findsOneWidget,
+      );
+    },
+  );
+
   testWidgets('streaming thinking renders no header label or icon', (tester) async {
     await _pumpEvent(
       tester,
