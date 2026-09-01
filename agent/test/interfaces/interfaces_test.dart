@@ -236,6 +236,7 @@ Use the review skill.''',
         updatedAt: DateTime.now(),
       );
     });
+    when(mockSessionManager.getMessages(any)).thenReturn(const []);
 
     when(mockSessionManager.saveSessionMetadata(any, any)).thenReturn(null);
     when(mockSessionManager.getSessionMetadata(any)).thenReturn(null);
@@ -2973,6 +2974,20 @@ Use the review skill.''',
             onReasoningDelta: anyNamed('onReasoningDelta'),
           ),
         );
+
+        repo.transitionWorkItemState(
+          workItemId: 'work-ask-restart',
+          fromState: SessionWorkState.waiting,
+          toState: SessionWorkState.resuming,
+        );
+        repo.transitionWorkItemState(
+          workItemId: 'work-ask-restart',
+          fromState: SessionWorkState.resuming,
+          toState: SessionWorkState.completed,
+        );
+        orchestrator.reconcilePersistedSuspendedTerminal('session-ask-restart');
+        expect(orchestrator.hasSuspendedEvent('session-ask-restart'), isFalse);
+        expect(orchestrator.isSessionBusy('session-ask-restart'), isFalse);
       },
     );
 
@@ -3128,6 +3143,7 @@ Use the review skill.''',
           platformRuntimeBridge: PlatformRuntimeBridge(),
           checkpointStore: checkpointStore,
         );
+        final terminalCommittedSessions = <String>[];
         final service = SuspendedResumeService(
           checkpointStore: checkpointStore,
           sessionManager: mockSessionManager,
@@ -3139,6 +3155,7 @@ Use the review skill.''',
           permissionManager: permissionManager,
           persistedState: repo,
           runtimeRecovery: runtimeRecovery,
+          onTerminalCommitted: terminalCommittedSessions.add,
         );
         final statesAtDelivery = <SessionWorkState?>[];
         final responses = <GatewayResponse>[];
@@ -3163,6 +3180,7 @@ Use the review skill.''',
         expect(responses.last.isComplete, isTrue);
         expect(responses.last.message.content, 'continued');
         expect(statesAtDelivery.last, SessionWorkState.completed);
+        expect(terminalCommittedSessions, [sessionId]);
         verify(
           mockAgentRunner.endAuthoritativeRun('run-persisted-answer'),
         ).called(1);
@@ -4799,6 +4817,14 @@ Use the review skill.''',
               'message': 'Retry after block',
               'eventMetadata': {},
             },
+            continuationMetadata: const {
+              'checkpoint_kind': 'model_request_in_flight',
+              'checkpoint_before_model_request': 'after_tool_result',
+              'restart_interrupted_provider_request': true,
+              'resume_history_length': 1,
+              'currentTurnStartIndex': 0,
+              'model_step_id': 'interrupted-provider-step',
+            },
             createdAt: DateTime.now(),
             updatedAt: DateTime.now(),
           ),
@@ -4815,7 +4841,23 @@ Use the review skill.''',
             onThoughtDelta: anyNamed('onThoughtDelta'),
             onReasoningDelta: anyNamed('onReasoningDelta'),
           ),
-        ).thenAnswer((_) => Stream.value('retried successfully'));
+        ).thenAnswer((_) {
+          final claimed = repo.findWorkItem('work-blocked-retry');
+          expect(claimed?.state, SessionWorkState.resuming);
+          expect(
+            claimed?.continuationMetadata['checkpoint_kind'],
+            'after_tool_result',
+          );
+          expect(
+            claimed?.continuationMetadata,
+            isNot(contains('checkpoint_before_model_request')),
+          );
+          expect(
+            claimed?.continuationMetadata,
+            isNot(contains('restart_interrupted_provider_request')),
+          );
+          return Stream.value('retried successfully');
+        });
 
         final orchestrator = SessionRunOrchestrator();
         await orchestrator.restorePersistedState();
@@ -4823,7 +4865,10 @@ Use the review skill.''',
         expect(recoveryService.activeNotice(sessionId), isNull);
 
         // Simulate a retry: resume the suspended run
-        final resumed = await orchestrator.resumeSuspended(sessionId);
+        final resumed = await orchestrator.resumeSuspended(
+          sessionId,
+          recoveryReason: 'manual_retry',
+        );
         expect(resumed, equals(ResumeSuspendedResult.claimed));
 
         await Future<void>.delayed(const Duration(milliseconds: 100));

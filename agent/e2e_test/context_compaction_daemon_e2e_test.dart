@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:sanad_agent/core/models/llm_finish_reason.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
@@ -142,7 +143,88 @@ void main() {
   );
 
   test(
-    'F.53.3 auto compaction preserves one follow-up through the daemon',
+    'F.53.3 fork materializes completed compaction through the real daemon',
+    () async {
+      final h = await _CompactionHarness.create();
+      try {
+        final sessionId = 'plan53-fork-${_unique()}';
+        await h.seedSession(
+          sessionId: sessionId,
+          providerInstanceId: h.providerInstanceId,
+        );
+
+        final firstClient = await h.startDaemon();
+        late String sourceCompactionId;
+        try {
+          final execution = await firstClient.executeCompact(
+            sessionId: sessionId,
+            requestId: 'compact-fork-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(execution.result['outcome'], 'accepted');
+          sourceCompactionId = execution.result['compaction_id'] as String;
+        } finally {
+          await firstClient.close();
+        }
+        await h.killDaemon();
+        await h.appendPostCompactionResponse(sessionId);
+
+        final secondClient = await h.startDaemon();
+        try {
+          final sourceHistory = await secondClient.loadSessionHistory(
+            sessionId: sessionId,
+            requestId: 'history-before-fork-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          final target = (sourceHistory['messages'] as List)
+              .whereType<Map>()
+              .map(Map<String, dynamic>.from)
+              .singleWhere(
+                (row) => row['content'] == 'response produced after compaction',
+              );
+          final forkResult = await secondClient.executeFork(
+            sessionId: sessionId,
+            requestId: 'fork-${_unique()}',
+            targetMessageId: target['message_id'] as String,
+            targetTurnId: target['turn_id'] as String,
+            timeout: const Duration(seconds: 30),
+          );
+          expect(forkResult['outcome'], 'accepted');
+          final child = Map<String, dynamic>.from(forkResult['child'] as Map);
+          final childSessionId = child['session_id'] as String;
+
+          final childHistory = await secondClient.loadSessionHistory(
+            sessionId: childSessionId,
+            requestId: 'history-child-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          final childCompactions = _compactionRows(childHistory);
+          expect(childCompactions, hasLength(1));
+          expect(
+            childCompactions.single['compaction_id'],
+            isNot(sourceCompactionId),
+          );
+          final messages = childHistory['messages'] as List;
+          final compactionIndex = messages.indexWhere(
+            (row) => row is Map && row['compaction_id'] != null,
+          );
+          final finalIndex = messages.indexWhere(
+            (row) =>
+                row is Map &&
+                row['content'] == 'response produced after compaction',
+          );
+          expect(compactionIndex, lessThan(finalIndex));
+        } finally {
+          await secondClient.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+  );
+
+  test(
+    'F.53.4 auto compaction preserves one follow-up through the daemon',
     () async {
       final h = await _CompactionHarness.create();
       try {
@@ -351,6 +433,7 @@ LOG_LEVEL=INFO
         Message(
           role: MessageRole.assistant,
           content: 'response produced after compaction',
+          finishReason: LLMFinishReason.stop,
         ),
       ]);
     } finally {
@@ -711,6 +794,49 @@ class _CompactionClient {
     }
     throw TimeoutException(
       'Timed out waiting for compaction lifecycle on $sessionId ($order)',
+      timeout,
+    );
+  }
+
+  Future<Map<String, dynamic>> executeFork({
+    required String sessionId,
+    required String requestId,
+    required String targetMessageId,
+    required String targetTurnId,
+    required Duration timeout,
+  }) async {
+    _send(<String, dynamic>{
+      'type': 'protocol_event',
+      'event': <String, dynamic>{
+        'type': CanonicalEventTypes.sessionFork,
+        'session_id': sessionId,
+        'payload': <String, dynamic>{
+          'session_id': sessionId,
+          'request_id': requestId,
+          'target_message_id': targetMessageId,
+          'target_turn_id': targetTurnId,
+        },
+      },
+    });
+
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final remaining = deadline.difference(DateTime.now());
+      final moved = await frames.moveNext().timeout(remaining);
+      if (!moved) break;
+      final frame =
+          jsonDecode(frames.current as String) as Map<String, dynamic>;
+      if (frame['type'] != 'device_event' ||
+          frame['event'] != CanonicalEventTypes.sessionForkResult) {
+        continue;
+      }
+      final payload = frame['payload'] is Map
+          ? Map<String, dynamic>.from(frame['payload'] as Map)
+          : <String, dynamic>{};
+      if (payload['request_id'] == requestId) return payload;
+    }
+    throw TimeoutException(
+      'Timed out waiting for session.fork_result on $sessionId',
       timeout,
     );
   }

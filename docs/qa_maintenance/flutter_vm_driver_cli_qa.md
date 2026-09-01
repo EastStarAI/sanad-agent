@@ -38,7 +38,11 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Exact keyed tap | Scrolls into view, taps the requested element, and returns coordinates |
 | Invalid tap index | Fails with match count; it never clamps to another element |
 | Scroll until visible | Repeats through Flutter Driver until the target is visible or times out |
-| Text entry during animation/streaming | Runs unsynchronized and remains responsive |
+| Driver starts before any automation command | Flutter Driver text emulation is disabled; clicking an editable field accepts normal physical-keyboard characters and system IME input. |
+| Keyed automated text entry | `sanad-dev ui enter-text` focuses the exact field and updates its `EditableTextState` through the Sanad extension; follow-up inspection shows the new value without echoing it in the action result. |
+| Automated entry followed by physical typing | The system text channel was never mocked, so physical typing remains functional after the automated command. |
+| Older instrumented Client without the Sanad text extension | Controller falls back to legacy Flutter Driver `enterText` and reports both bounded errors if neither path succeeds. |
+| Text entry during animation/streaming | Runs unsynchronized where legacy fallback is required and remains responsive. |
 | Wait for presence/absence | Returns success only for the requested terminal condition |
 | Screenshot | Produces a non-empty PNG outside tracked source artifacts |
 | Batch JSON mode | Emits exactly one parseable JSON result and a nonzero status when any step fails |

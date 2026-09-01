@@ -106,9 +106,30 @@ class AgentRunner {
     if (release != null && !release.isCompleted) release.complete();
   }
 
-  Future<void> _waitForControlledRestartDrain() async {
-    final release = _restartDrainRelease;
-    if (release != null) await release.future;
+  /// Atomically claims permission to invoke the provider after any restart
+  /// drain has been released.
+  ///
+  /// The drain check and the durable/in-memory in-flight markers deliberately
+  /// execute without an intervening await. This prevents a restart safety
+  /// scan from observing a safe checkpoint after this run has passed its gate
+  /// but before it becomes visible as a provider blocker.
+  Future<bool> _claimProviderRequestAfterRestartDrain() async {
+    while (true) {
+      final release = _restartDrainRelease;
+      if (release != null) {
+        await release.future;
+        continue;
+      }
+      if (_stopRequested) return false;
+      _checkpointCoordinator.saveCheckpoint(
+        ctx: _checkpointCtx,
+        checkpointKind: ContinuationCheckpointCoordinator
+            .checkpointKindModelRequestInFlight,
+        resumeHistoryLength: history.length,
+      );
+      _providerRequestInFlight = true;
+      return true;
+    }
   }
 
   static const checkpointKindInitialModelRequest =
@@ -487,6 +508,25 @@ class AgentRunner {
     sessionManager.saveSessionHistory(sessionId, history);
   }
 
+  void _reloadPersistedHistory() {
+    final session = sessionManager.getSession(sessionId);
+    if (session != null) {
+      history = session.messages.toList();
+    }
+  }
+
+  int _appendOrReuseUserMessage(Message userMessage, String? requestId) {
+    if (requestId != null && requestId.isNotEmpty && history.isNotEmpty) {
+      final last = history.last;
+      if (last.role == MessageRole.user &&
+          last.metadata?['request_id']?.toString() == requestId) {
+        return history.length - 1;
+      }
+    }
+    history.add(userMessage);
+    return history.length - 1;
+  }
+
   bool _hasPersistableAssistantState(Message message) {
     return (message.content?.isNotEmpty ?? false) ||
         (message.toolCalls?.isNotEmpty ?? false) ||
@@ -602,21 +642,23 @@ class AgentRunner {
     );
     try {
       _turnRoute.applyTurnSwitchIfNeeded();
+      _reloadPersistedHistory();
 
-      _currentTurnStartIndex = history.length;
-      final userMessage = Message(
-        role: MessageRole.user,
-        content: userContent ?? '',
-        metadata: {
-          if (effectiveRequestId != null && effectiveRequestId.isNotEmpty)
-            'request_id': effectiveRequestId,
-          'received_at': (receivedAt ?? DateTime.now())
-              .toUtc()
-              .toIso8601String(),
-        },
+      _currentTurnStartIndex = _appendOrReuseUserMessage(
+        Message(
+          role: MessageRole.user,
+          content: userContent ?? '',
+          metadata: {
+            if (effectiveRequestId != null && effectiveRequestId.isNotEmpty)
+              'request_id': effectiveRequestId,
+            'received_at': (receivedAt ?? DateTime.now())
+                .toUtc()
+                .toIso8601String(),
+          },
+        ),
+        effectiveRequestId,
       );
-      history.add(userMessage);
-      await pluginManager.notifyMessage(userMessage);
+      await pluginManager.notifyMessage(history[_currentTurnStartIndex]);
       _saveHistory();
       _beginModelStep();
       _checkpointCoordinator.saveCheckpoint(
@@ -1221,8 +1263,6 @@ class AgentRunner {
       runtimeSystemPrompt: runtimeSystemPrompt,
     );
 
-    _logger.info('🧠 [Agent] Thinking...');
-
     final routing = _turnRoute.resolveTurnRouting();
     var model = routing.model;
     var provider = routing.providerId;
@@ -1235,33 +1275,27 @@ class AgentRunner {
       activeModel = model;
     }
 
-    if (LLMRequestDumper.isEnabled) {
-      await LLMRequestDumper.dumpRequest(
-        sessionId: sessionId,
-        history: effectiveHistory,
-        tools: tools,
-        model: model,
-        provider: provider,
-        baseUrl: baseUrl,
-        apiKey: apiKey,
-      );
-    }
-
     AgentResponse response;
     final attemptsByProviderInstanceId = <String, int>{};
     final failedProviderInstanceIds = <String>{};
     while (true) {
       try {
         final route = _turnRoute.routeForTurn();
-        await _waitForControlledRestartDrain();
-        if (_stopRequested) return Message(role: MessageRole.assistant);
-        _checkpointCoordinator.saveCheckpoint(
-          ctx: _checkpointCtx,
-          checkpointKind: ContinuationCheckpointCoordinator
-              .checkpointKindModelRequestInFlight,
-          resumeHistoryLength: history.length,
-        );
-        _providerRequestInFlight = true;
+        if (!await _claimProviderRequestAfterRestartDrain()) {
+          return Message(role: MessageRole.assistant);
+        }
+        _logger.info('🧠 [Agent] Thinking...');
+        if (LLMRequestDumper.isEnabled) {
+          await LLMRequestDumper.dumpRequest(
+            sessionId: sessionId,
+            history: effectiveHistory,
+            tools: tools,
+            model: model,
+            provider: provider,
+            baseUrl: baseUrl,
+            apiKey: apiKey,
+          );
+        }
         try {
           await _stageInputUsageBaseline(
             requestMessages: effectiveHistory,
@@ -1422,19 +1456,23 @@ class AgentRunner {
       requestId: effectiveRequestId,
     );
     _turnRoute.applyTurnSwitchIfNeeded();
+    _reloadPersistedHistory();
 
-    _currentTurnStartIndex = history.length;
-    final userMessage = Message(
-      role: MessageRole.user,
-      content: userContent ?? '',
-      metadata: {
-        if (effectiveRequestId != null && effectiveRequestId.isNotEmpty)
-          'request_id': effectiveRequestId,
-        'received_at': (receivedAt ?? DateTime.now()).toUtc().toIso8601String(),
-      },
+    _currentTurnStartIndex = _appendOrReuseUserMessage(
+      Message(
+        role: MessageRole.user,
+        content: userContent ?? '',
+        metadata: {
+          if (effectiveRequestId != null && effectiveRequestId.isNotEmpty)
+            'request_id': effectiveRequestId,
+          'received_at': (receivedAt ?? DateTime.now())
+              .toUtc()
+              .toIso8601String(),
+        },
+      ),
+      effectiveRequestId,
     );
-    history.add(userMessage);
-    await pluginManager.notifyMessage(userMessage);
+    await pluginManager.notifyMessage(history[_currentTurnStartIndex]);
     _saveHistory();
     _beginModelStep();
     _checkpointCoordinator.saveCheckpoint(
@@ -1579,8 +1617,6 @@ class AgentRunner {
     Message? lastMessage;
     var streamStarted = false;
 
-    _logger.info('🧠 [Agent] Thinking...');
-
     final routing = _turnRoute.resolveTurnRouting();
     var model = routing.model;
     var provider = routing.providerId;
@@ -1593,33 +1629,25 @@ class AgentRunner {
       activeModel = model;
     }
 
-    if (LLMRequestDumper.isEnabled) {
-      await LLMRequestDumper.dumpRequest(
-        sessionId: sessionId,
-        history: effectiveHistory,
-        tools: tools,
-        model: model,
-        provider: provider,
-        baseUrl: baseUrl,
-        apiKey: apiKey,
-      );
-    }
-
     final attemptsByProviderInstanceId = <String, int>{};
     final failedProviderInstanceIds = <String>{};
     while (true) {
       if (_stopRequested) return;
       try {
         final route = _turnRoute.routeForTurn();
-        await _waitForControlledRestartDrain();
-        if (_stopRequested) return;
-        _checkpointCoordinator.saveCheckpoint(
-          ctx: _checkpointCtx,
-          checkpointKind: ContinuationCheckpointCoordinator
-              .checkpointKindModelRequestInFlight,
-          resumeHistoryLength: history.length,
-        );
-        _providerRequestInFlight = true;
+        if (!await _claimProviderRequestAfterRestartDrain()) return;
+        _logger.info('🧠 [Agent] Thinking...');
+        if (LLMRequestDumper.isEnabled) {
+          await LLMRequestDumper.dumpRequest(
+            sessionId: sessionId,
+            history: effectiveHistory,
+            tools: tools,
+            model: model,
+            provider: provider,
+            baseUrl: baseUrl,
+            apiKey: apiKey,
+          );
+        }
         try {
           await _stageInputUsageBaseline(
             requestMessages: effectiveHistory,

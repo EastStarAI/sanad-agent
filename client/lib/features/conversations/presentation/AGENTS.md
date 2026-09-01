@@ -22,6 +22,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Block normal message dispatch before session creation when either the provider instance or model selection is absent.
 - Slash queries run only on explicit composer intent and use the daemon query surface, never local skill discovery or mount-time prefetch.
 - Slash suggestion behavior is type-owned, never command-name-owned: `runtime_action` is leading-only and executes immediately when selected by Enter or pointer, while `skill` may appear anywhere and inserts a token for a later submit. Direct typed actions and selected actions converge on one runtime-action dispatcher; future `@` file references remain a separate inline insertion family.
+- A locally valid runtime action is consumed from the composer as soon as dispatch starts: clear its text, close suggestions, and persist the cleared draft independently of the daemon outcome. Typed failure feedback remains visible but must not restore command text as though it were an unsent user message.
 - Desktop file drops insert paths at the current valid editor selection, replace selected text, and leave the caret immediately after the inserted paths; only an invalid selection falls back to the end.
 - Route every workspace-path picker entry through the shared picker helper. Use
   the native folder picker only for a confirmed same-desktop local device;

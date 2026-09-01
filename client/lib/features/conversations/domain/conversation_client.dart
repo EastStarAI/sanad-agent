@@ -14,6 +14,7 @@ import 'package:sanad_client/features/conversations/domain/models/message_delive
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
 abstract class ConversationClient {
@@ -95,12 +96,16 @@ abstract class ConversationClient {
   Future<TurnReplayResult> replayTurn({
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) async => const TurnReplayResult(
     outcome: 'unsupported',
     safety: TurnReplaySafety.unknown,
@@ -109,6 +114,12 @@ abstract class ConversationClient {
   Future<SessionCompactResult> compactSession({
     required String sessionId,
   }) async => const SessionCompactResult(outcome: 'unsupported');
+
+  Future<SessionForkResult> forkSession({
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async => const SessionForkResult(outcome: 'unsupported');
   Future<void> retryRuntimeNotice({
     required String sessionId,
     String? requestId,

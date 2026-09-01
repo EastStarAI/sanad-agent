@@ -14,6 +14,7 @@ import 'package:sanad_client/features/conversations/domain/models/pending_steer_
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/data/transport/conversation_request_id.dart';
 import 'package:uuid/uuid.dart';
 
@@ -229,12 +230,16 @@ class ConversationCommands {
   Future<TurnReplayResult> replayTurn({
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) async {
     if (!_gateway.isConnected) {
       return const TurnReplayResult(
@@ -250,8 +255,12 @@ class ConversationCommands {
         'session_id': sessionId,
         'request_id': requestId,
         'target_request_id': targetRequestId,
+        if (targetMessageId != null && targetMessageId.isNotEmpty) 'target_message_id': targetMessageId,
+        if (targetTurnId != null && targetTurnId.isNotEmpty) 'target_turn_id': targetTurnId,
+        if (expectedHistoryRevision != null) 'expected_history_revision': expectedHistoryRevision,
         'action': action.name,
         'confirmed_replay_unsafe': confirmedReplayUnsafe,
+        'confirmed_drop_steers': confirmedDropSteers,
         if (message != null) 'message': message,
         if (providerInstanceId != null && providerInstanceId.trim().isNotEmpty)
           'provider_instance_id': providerInstanceId.trim(),
@@ -282,6 +291,41 @@ class ConversationCommands {
       result?['payload'] as Map? ?? result ?? const {},
     );
     return SessionCompactResult.fromJson(payload);
+  }
+
+  Future<SessionForkResult> forkSession({
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async {
+    if (!_gateway.isConnected) {
+      return const SessionForkResult(outcome: 'disconnected');
+    }
+    final requestId = generateConversationRequestId();
+    final result = await _gateway.request(
+      command: 'session.fork',
+      payload: {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'target_message_id': targetMessageId,
+        'target_turn_id': targetTurnId,
+      },
+      requestId: requestId,
+      timeout: const Duration(seconds: 30),
+    );
+    final payload = Map<String, dynamic>.from(
+      result?['payload'] as Map? ?? result ?? const {},
+    );
+    final parsed = SessionForkResult.fromJson(payload);
+    final deviceId = result?['device_id']?.toString();
+    if (parsed.child == null || deviceId == null || deviceId.isEmpty) {
+      return parsed;
+    }
+    return SessionForkResult(
+      outcome: parsed.outcome,
+      child: parsed.child!.copyWith(deviceId: deviceId),
+      navigationFailed: parsed.navigationFailed,
+    );
   }
 
   Future<void> retryRuntimeNotice({
@@ -915,6 +959,10 @@ class ConversationCommands {
 
   Iterable<String> _reconciliationIdentityKeys(CanonicalEvent event) sync* {
     if (event.id.isNotEmpty) yield 'id:${event.id}';
+    final messageId = event.messageId;
+    if (messageId != null && messageId.isNotEmpty) {
+      yield 'message:$messageId';
+    }
     if (event.modelStepId != null && event.modelStepId!.isNotEmpty) {
       yield 'model_step:${event.kind.name}:${event.modelStepId}';
     }

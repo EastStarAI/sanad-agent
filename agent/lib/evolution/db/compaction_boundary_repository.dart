@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:sqlite3/sqlite3.dart';
+import 'package:uuid/uuid.dart';
 
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
@@ -409,6 +410,125 @@ class CompactionBoundaryRepository {
         .toList(growable: false);
   }
 
+  /// Copies every terminal lifecycle event that occurs before the forked
+  /// message prefix ends. Callers own the surrounding transaction.
+  int cloneTerminalOperationsForFork({
+    required String sourceSessionId,
+    required String childSessionId,
+    required Map<int, int> childRowIdBySourceRowId,
+    required int sourcePrefixEndRowId,
+    required int childHistoryRevision,
+  }) {
+    final rows = _state.db.select(
+      '''
+      SELECT * FROM session_compaction_operations
+      WHERE session_id = ?
+        AND status != ?
+        AND tail_end_message_id < ?
+      ORDER BY started_at ASC, compaction_id ASC
+      ''',
+      [
+        sourceSessionId,
+        CompactionStatus.started.wireValue,
+        sourcePrefixEndRowId,
+      ],
+    );
+    var copied = 0;
+    for (final row in rows) {
+      final sourceStart =
+          childRowIdBySourceRowId[row['source_start_message_id'] as int];
+      final sourceEnd =
+          childRowIdBySourceRowId[row['source_end_message_id'] as int];
+      final tailStart =
+          childRowIdBySourceRowId[row['tail_start_message_id'] as int];
+      final tailEnd =
+          childRowIdBySourceRowId[row['tail_end_message_id'] as int];
+      if (sourceStart == null ||
+          sourceEnd == null ||
+          tailStart == null ||
+          tailEnd == null) {
+        continue;
+      }
+      final childAnchor = _messageAnchor(_state.db, childSessionId, tailEnd);
+      _state.db.execute(
+        '''
+        INSERT INTO session_compaction_operations (
+          compaction_id, session_id, trigger, status,
+          source_history_revision,
+          source_start_message_id, source_end_message_id,
+          tail_start_message_id, tail_end_message_id,
+          tail_end_anchor_fingerprint, tail_end_anchor_ordinal,
+          provider_instance_id, model_id, template_id, protocol,
+          normalized_base_url, config_revision, credential_revision,
+          context_window_tokens, effective_input_budget_tokens,
+          auto_threshold_tokens, estimated_request_tokens_before,
+          estimated_request_tokens_after, before_measurement_kind,
+          provider_confirmed_request_tokens_after, retained_tail_tokens,
+          duration_ms, internal_summary_json, failure_reason,
+          failure_detail_json, started_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''',
+        [
+          const Uuid().v4(),
+          childSessionId,
+          row['trigger'],
+          row['status'],
+          childHistoryRevision,
+          sourceStart,
+          sourceEnd,
+          tailStart,
+          tailEnd,
+          childAnchor?.fingerprint,
+          childAnchor?.occurrence,
+          row['provider_instance_id'],
+          row['model_id'],
+          row['template_id'],
+          row['protocol'],
+          row['normalized_base_url'],
+          row['config_revision'],
+          row['credential_revision'],
+          row['context_window_tokens'],
+          row['effective_input_budget_tokens'],
+          row['auto_threshold_tokens'],
+          row['estimated_request_tokens_before'],
+          row['estimated_request_tokens_after'],
+          row['before_measurement_kind'],
+          row['provider_confirmed_request_tokens_after'],
+          row['retained_tail_tokens'],
+          row['duration_ms'],
+          row['internal_summary_json'],
+          row['failure_reason'],
+          row['failure_detail_json'],
+          row['started_at'],
+          row['completed_at'],
+        ],
+      );
+      copied++;
+    }
+    return copied;
+  }
+
+  bool targetPrecedesCompletedCompaction({
+    required String sessionId,
+    required String messageId,
+  }) {
+    final rows = _state.db.select(
+      '''
+      SELECT 1
+      FROM messages AS message
+      JOIN session_compaction_operations AS compaction
+        ON compaction.session_id = message.session_id
+      WHERE message.session_id = ?
+        AND message.message_id = ?
+        AND compaction.status = ?
+        AND message.id <= compaction.tail_end_message_id
+      LIMIT 1
+      ''',
+      [sessionId, messageId, CompactionStatus.completed.wireValue],
+    );
+    return rows.isNotEmpty;
+  }
+
   SessionHistoryRevision? historyRevisionForSession(String sessionId) {
     return SessionHistoryRevisionRepository(_state).read(sessionId);
   }
@@ -442,8 +562,14 @@ class CompactionBoundaryRepository {
     AgentStateTransaction tx,
     String sessionId,
     int targetRowId,
+  ) => _messageAnchor(tx.db, sessionId, targetRowId);
+
+  ({String fingerprint, int occurrence})? _messageAnchor(
+    Database db,
+    String sessionId,
+    int targetRowId,
   ) {
-    final rows = tx.db.select(
+    final rows = db.select(
       'SELECT id, data FROM messages WHERE session_id = ? AND id <= ? ORDER BY id ASC',
       [sessionId, targetRowId],
     );

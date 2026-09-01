@@ -900,7 +900,11 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         if (targetSocket != null) {
           await _sendToSocket(
             targetSocket,
-            _withSocketIdentity(envelope, targetSocket),
+            _withSocketIdentity(
+              envelope,
+              targetSocket,
+              preserveEnvelopeDeviceId: deviceId?.isNotEmpty == true,
+            ),
           );
         } else {
           _logger.warning(
@@ -911,7 +915,14 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       case DeliveryScope.platformFamily:
         // Fan out to every connected local Sanad Client socket.
         for (final client in _clients.toList()) {
-          await _sendToSocket(client, _withSocketIdentity(envelope, client));
+          await _sendToSocket(
+            client,
+            _withSocketIdentity(
+              envelope,
+              client,
+              preserveEnvelopeDeviceId: deviceId?.isNotEmpty == true,
+            ),
+          );
         }
       case DeliveryScope.hardware:
         final target = delivery.targetHardwareId;
@@ -929,7 +940,14 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
           );
         }
         for (final socket in matched) {
-          await _sendToSocket(socket, _withSocketIdentity(envelope, socket));
+          await _sendToSocket(
+            socket,
+            _withSocketIdentity(
+              envelope,
+              socket,
+              preserveEnvelopeDeviceId: deviceId?.isNotEmpty == true,
+            ),
+          );
         }
       case DeliveryScope.device:
         // App → daemon direction: not applicable on the local server platform
@@ -1006,9 +1024,15 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
   Map<String, dynamic> _withSocketIdentity(
     Map<String, dynamic> envelope,
-    WebSocket socket,
-  ) {
-    return _withDeviceIdentity(envelope, deviceId: _socketDeviceIds[socket]);
+    WebSocket socket, {
+    bool preserveEnvelopeDeviceId = false,
+  }) {
+    final envelopeDeviceId = envelope['device_id'] as String?;
+    final deviceId =
+        preserveEnvelopeDeviceId && envelopeDeviceId?.isNotEmpty == true
+        ? envelopeDeviceId
+        : _socketDeviceIds[socket];
+    return _withDeviceIdentity(envelope, deviceId: deviceId);
   }
 
   Map<String, dynamic> _withDeviceIdentity(

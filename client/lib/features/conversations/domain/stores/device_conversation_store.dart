@@ -488,9 +488,15 @@ class DeviceConversationStore {
   void applyTurnReplayAccepted({
     required String sessionId,
     required String targetRequestId,
+    String? targetTurnId,
+    String? targetMessageId,
   }) {
     if (_currentSessionId != sessionId) return;
-    if (_conversation.truncateAtUserRequest(targetRequestId)) {
+    final hidden = _conversation.hideSupersededIdentities(
+      turnId: targetTurnId,
+      messageId: targetMessageId,
+    );
+    if (hidden) {
       _emitMessages();
     }
   }

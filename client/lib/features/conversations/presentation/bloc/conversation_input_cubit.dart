@@ -10,6 +10,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 
 import 'conversation_input_state.dart';
 import 'session_messages_cubit.dart';
@@ -105,16 +106,24 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
 
   Future<TurnReplayResult> replayTurn({
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) async {
     try {
       return await messagesCubit.replayTurn(
         targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+        expectedHistoryRevision: expectedHistoryRevision,
         action: action,
         message: message,
         confirmedReplayUnsafe: confirmedReplayUnsafe,
+        confirmedDropSteers: confirmedDropSteers,
       );
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
@@ -132,6 +141,21 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
       return const SessionCompactResult(outcome: 'failed');
+    }
+  }
+
+  Future<SessionForkResult> forkSession({
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async {
+    try {
+      return await messagesCubit.forkSession(
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+      );
+    } catch (e) {
+      emit(state.copyWith(error: e.toString()));
+      return const SessionForkResult(outcome: 'failed');
     }
   }
 

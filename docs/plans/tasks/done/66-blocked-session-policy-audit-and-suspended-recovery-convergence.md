@@ -2,7 +2,7 @@
 title: "Task 66: Blocked Session Policy Audit and Suspended Recovery Convergence"
 description: "تدقيق كل مسارات تحويل الجلسة إلى blocked، اعتماد السياسة مع المستخدم، وإعادة إنتاج وإصلاح تضارب force-stop مع system_ask_user عبر Agent وClient واختبار daemon-backed معزول."
 status: "completed"
-current_gate: "Complete"
+current_gate: "complete"
 priority: "critical"
 depends_on: "Plan 30 durable runtime recovery and Task 31 authoritative execution snapshots"
 file_budget: 36
@@ -221,7 +221,7 @@ question/permission أولًا، ثم blocked/fatal، لكنه يحتفظ بـru
 | `BLK-WAITING-OWNERLESS` | `SessionRecoveryRestorer` يحول waiting بلا timer-owner أو suspended owner مثبت | waiting row + notice/checkpoints غير كافية | callback آمن غير قابل للإثبات | حاليًا blocked generic؛ Stop/Retry/Change Provider | restart ثابت؛ notice generic | interfaces legacy tests جزئية | **Split**: interactive المطابق يصلح waiting؛ timer wait المفقود يعاد بناؤه من durable `resume_at`; الصف التالف فقط blocked |
 | `BLK-TURN-UNEXPECTED` | catch العام في `SessionTurnExecutor.runTurn` | exception + active owner فقط؛ قد يكتب work blocked قبل تصنيف السبب | لا يوجد إثبات دائم بذاته أن تدخل المستخدم مطلوب | حاليًا generic blocked للـresume، وerror event لباقي الحالات | قد يترك notice/work متناقضين؛ client error قد يمسح pending request | coverage موزعة ولا توجد exhaustive catch matrix | **Remove/Split**: مرّر الأخطاء المعروفة إلى classifier؛ checkpoint error إلى صفه؛ invariant/persistence failure إلى fatal diagnostic، ولا blocked catch-all |
 | `BLK-RESTORE-GLOBAL` | `SessionRecoveryRestorer.markRestoreFailureAsBlocked` بعد فشل startup restore العام | أي active nonterminal item + error غير مصنف | حماية من الصمت، لكن الخطأ قد يكون في جلسة أخرى أو parsing جزئي | generic blocked لكل item؛ Stop/Retry/Change Provider | يمنع الضياع لكنه يوسع blast radius؛ notices بلا revision | interfaces fallback tests موجودة | **Split**: عزل الفشل per-session/per-row؛ لا تحجب صفًا صالحًا بسبب صف آخر؛ corruption الحقيقي يبقى قابلًا للتحكم |
-| `BLK-RESTART-TIMEOUT` | `SessionRunOrchestrator.interruptProviderRequestsForRestart` يلغي provider request الحالي فقط بعد timeout مضبوط | exact work/run/generation + in-flight marker + restart flag | outcome عند المزود مجهولة | blocked مع تحذير؛ Stop/Retry/Change Provider | startup لا يعيد الطلب تلقائيًا | restart coordinator/checkpoint tests موجودة | **Keep** |
+| `BLK-RESTART-TIMEOUT` | `SessionRunOrchestrator.interruptProviderRequestsForRestart` بعد انتهاء مهلة drain | exact work/run/generation + in-flight marker + restart flag | outcome عند المزود مجهولة إذا وقعت مقاطعة فعلية | **الـRestart العادي لا يقاطع طلب المزود ولا يخرج؛ يبقى pending حتى ينتهي الطلب ويصل runtime إلى checkpoint آمنة. Force Restart وحده يستطيع إلغاء الطلب، وعندها يبقى blocked مع Stop/Retry/Change Provider. Retry/Change Provider الصريحان يعيدان آخر `checkpoint_before_model_request` المعروف ذريًا ثم يبدآن طلبًا جديدًا** | startup لا يعيد الطلب تلقائيًا؛ manual claim فقط يزيل علامة المقاطعة | restart coordinator/checkpoint tests + live regression | **Split/Fix**: إزالة `providerOnlyTimeout` من صلاحيات restart العادي، وإصلاح manual retry من marker المزود الغامض |
 | `BLK-RECOVERY-COMMAND` | Retry/Change Provider لا يجد saved work، provider بلا default model، أو claim يفشل في `SessionRecoveryCommandHandler` | command request + notice/route؛ أحيانًا لا active work | لا يوجد شيء صالح لـresume أو route ناقص | حاليًا generic blocked قد يصبح orphan notice؛ Settings/Provider/Stop | orphan cleanup يحذف notice عند startup لكن قد تبقى حيًا حتى restart | bridge provider tests جزئية | **Split/Remove**: route ناقص يبقى blocked على work المملوك؛ missing work يصبح idempotent command failure + idle/clear، لا orphan blocked |
 | `BLK-CLIENT-STALE-PROJECTION` | live/hydrated runtime notice قد تصل بعد execution revision أحدث؛ `DeviceConversationStore` لا يرتب notices | request id فقط؛ execution snapshot لها revision منفصل | ليست حالة daemon حقيقية بل projection race | pending question تتقدم حاليًا، لكن notice blocked قد تعود بعد resuming/idle | execution stale payload مرفوض؛ notice stale ليست مرفوضة | registry tests موجودة؛ notice/hydration ordering variants ناقصة | **Remove**: اربط attention/notice بexecution revision أو authority token، وارفض/امسح notice الأقدم |
 
@@ -529,6 +529,36 @@ set -o pipefail; fvm flutter test --concurrency=1 <focused-client-daemon-backed-
 
 ---
 
+## Gate F — Ordinary Restart Provider Drain and Manual Retry Recovery
+
+- [x] جعل restart العادي يستمر في الانتظار بعد كل timeout window عندما يكون
+      المانع طلب مزود قيد التنفيذ، من دون إلغائه أو تحويل الجلسة إلى blocked.
+- [x] إبقاء Force Restart وحده مالك مقاطعة طلب المزود بعد timeout.
+- [x] جعل transport/CLI للـrestart العادي ينتظر رد التحضير النهائي بدل إنهاء
+      الطلب محليًا بعد نافذة timeout الأولى.
+- [x] إغلاق provider admission ذريًا مع drain: لا توجد `await` بين فحص ملكية
+      drain وكتابة marker المزود، والـrun الذي يصل checkpoint آمنة يبقى parked
+      ولا يبدأ provider request أو tool batch جديدة قبل خروج العملية.
+- [x] عند Retry أو Change Provider الصريح بعد مقاطعة Force Restart، استعادة
+      `checkpoint_before_model_request` المعروفة ومسح علامة المقاطعة داخل نفس
+      انتقال `blocked -> resuming` قبل أي provider call.
+- [x] اختبار الانتظار العادي، المقاطعة القسرية، manual retry، والـcheckpoint
+      غير القابلة للإصلاح، ثم إعادة تشغيل runtime الحقيقية واستعادة الجلسة
+      `34a49cf4-eb32-4513-b51a-c526e2671cb8` عبر أمر Retry الرسمي.
+
+### Gate F Acceptance
+
+- [x] لا ينتج restart عادي `Provider request interrupted for restart` مهما
+      تجاوز طلب المزود نافذة timeout، ويخرج فقط بعد checkpoint آمنة.
+- [x] بعد امتلاك drain للـcheckpoint الآمنة يبقى provider call count ثابتًا؛
+      لا يكتب runtime request dump ولا يبدأ استدعاء مزود جديدًا في العملية
+      القديمة، ويبدأ الاستدعاء التالي مرة واحدة فقط بعد التشغيل الجديد.
+- [x] Force Restart يحتفظ بسلوك outcome المجهولة ولا يعيد الطلب تلقائيًا.
+- [x] Retry اليدوي من الحالة المتضررة لا يكرر خطأ `recognized checkpoint kind`
+      ويصل إلى terminal commit طبيعي.
+
+---
+
 ## 6. الملفات المتوقعة
 
 تحدد نهائياً بعد Gate A وB؛ القائمة الحالية نطاق مراجعة لا تفويض لتعديلها كلها:
@@ -596,3 +626,48 @@ set -o pipefail; fvm flutter test --concurrency=1 <focused-client-daemon-backed-
 - **Known limitations:** provider request ذو outcome مجهولة، وأداة unsafe غير shell
   بلا terminal evidence، تبقيان `blocked` عمدًا ولا تعادان تلقائيًا؛ هذه هي
   حدود الأمان المعتمدة وليستا fallback failures.
+
+---
+
+## Gate G — Interactive Ordinary-Restart and Admission Convergence Regression
+
+أعاد البلاغ الحي فتح المهمة لأن الاختبارات السابقة أثبتت startup بعد Force Stop
+لكنها لم تختبر أن الانتظار التفاعلي نفسه checkpoint آمنة للـRestart العادي، ولم
+تثبت تنظيف projection الـorchestrator بعد إجابة مستعادة.
+
+### القرارات المثبتة
+
+- Ask User وطلب permission غير المجابين نقطة restart آمنة إذا كانت كل الأدوات
+  غير المكتملة مغطاة بـ`awaiting_permission` ولا يوجد provider request جارٍ.
+- Restart العادي لا ينتظر الإجابة ولا يحتاج Force ولا يصنع tool result؛ startup
+  يعيد نفس الطلب كـ`waiting` بالهوية نفسها.
+- بعد terminal commit للإجابة المستعادة، تزال ملكية suspension/busy الداخلية
+  ويعود admission إلى durable state؛ الرسالة التالية turn جديدة طبيعية.
+- نتيجة حذف queued message تستخدم `outcome` في command result، ويجب أن تختفي
+  الرسالة من الواجهة عند `deleted` أو `already_removed`.
+
+### التنفيذ والقبول
+
+- [x] إضافة بوابة restart للانتظار التفاعلي الكامل مع fail-closed عند التغطية
+      الجزئية لأدوات batch.
+- [x] ربط terminal commit في `SuspendedResumeService` بتسوية projection لدى
+      `SessionRunOrchestrator` وتصريف FIFO.
+- [x] تصحيح Client لاستهلاك `outcome` من نتيجة حذف queued message.
+- [x] اختبارات مركزة لـAsk User وpermission والتغطية الجزئية وتنظيف ownership
+      وحذف الصف من الواجهة.
+- [x] مرور analyzers والاختبارات المركزة النهائية وتحديث Graphify.
+- [x] لا restart للعميل ولا اختبار تفاعلي قبل طلب المستخدم الصريح.
+
+### Gate G Evidence
+
+- Agent focused: `83 passed` في checkpoint/orchestrator suites؛ والحزمة الكاملة
+  `1472 passed, 13 skipped`.
+- Client focused: `26 passed` في event-handler suite؛ والحزمة الكاملة
+  `1191 passed, 1 skipped`.
+- Daemon-backed E2E: `F.2.9` مرّ عبر مزود HTTP حتمي وprocessين حقيقيين؛ قبل
+  Restart كان `system_ask_user` معلقًا، وقَبِل `/restart` العادي الحالة كـ`safe`،
+  ثم استُخدمت هوية الطلب نفسها بعد الإقلاع بلا tool result مصطنعة. بعد الإجابة
+  اكتملت الجولة وقُبلت رسالة جديدة كـturn طبيعي (`1 passed`).
+- `fvm dart analyze` و`fvm flutter analyze`: بلا issues.
+- `graphify update .`: اكتمل إلى `22124 nodes` و`30117 edges`.
+- لم تُعد تشغيل نسخة Agent أو Client، ولم يُنفذ اختبار UI تفاعلي في هذه الدورة.

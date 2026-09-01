@@ -33,6 +33,7 @@ import 'package:sanad_client/features/conversations/domain/models/message_delive
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -397,6 +398,40 @@ void main() {
     await cubit.close();
   });
 
+  test('adoptForkedSession adds the child and selects it', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    await cubit.selectSession(session);
+
+    final child = Session(
+      id: 'child-1',
+      title: '(1) Test Session',
+      deviceId: agent.id,
+      createdAt: DateTime(2026, 8, 30),
+      updatedAt: DateTime(2026, 8, 30),
+    );
+    await cubit.adoptForkedSession(child);
+
+    expect(cubit.state.selectedSession?.id, 'child-1');
+    expect(
+      cubit.state.agentSessions[agent.id]?.map((item) => item.id),
+      containsAll([session.id, 'child-1']),
+    );
+    expect(
+      cubit.state.agentSessions[agent.id]?.first.id,
+      'child-1',
+      reason: 'the adopted fork must appear at the top of the sidebar',
+    );
+
+    await cubit.close();
+  });
+
   test('authoritative attention stream toggles sidebar pending state', () async {
     socket.setConnected(true);
     agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
@@ -500,6 +535,65 @@ void main() {
     expect(messagesCubit.state.messages, retainedMessages);
     expect(messagesCubit.state.olderHistoryError, isNotNull);
     expect(messagesCubit.state.hasOlderHistory, isTrue);
+
+    await messagesCubit.close();
+    await sessionCubit.close();
+  });
+
+  test('replay result projects the authoritative history revision', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final sessionCubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+    );
+    final messagesCubit = SessionMessagesCubit(
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      conversationRepository: conversationRepository,
+      preferencesRepository: FakeDevicePreferencesRepository(),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await sessionCubit.selectSession(session);
+    await Future<void>.delayed(Duration.zero);
+
+    client.replayResult = const TurnReplayResult(
+      outcome: 'accepted',
+      safety: TurnReplaySafety.safe,
+      requiresConfirmation: false,
+      historyRevision: 5,
+    );
+    final accepted = await messagesCubit.replayTurn(
+      targetRequestId: 'request-1',
+      targetMessageId: 'message-1',
+      targetTurnId: 'turn-1',
+      action: TurnReplayAction.retry,
+    );
+    expect(accepted.isAccepted, isTrue);
+    expect(sessionCubit.state.selectedSession?.historyRevision, 5);
+
+    client.replayResult = const TurnReplayResult(
+      outcome: 'stale_turn_boundary',
+      safety: TurnReplaySafety.safe,
+      requiresConfirmation: false,
+      historyRevision: 9,
+    );
+    final rejected = await messagesCubit.replayTurn(
+      targetRequestId: 'request-2',
+      targetMessageId: 'message-2',
+      targetTurnId: 'turn-2',
+      action: TurnReplayAction.retry,
+    );
+    expect(rejected.isAccepted, isFalse);
+    expect(sessionCubit.state.selectedSession?.historyRevision, 9);
+    expect(
+      sessionCubit.state.agentSessions.values
+          .expand((sessions) => sessions)
+          .firstWhere((candidate) => candidate.id == session.id)
+          .historyRevision,
+      9,
+    );
 
     await messagesCubit.close();
     await sessionCubit.close();
@@ -2004,6 +2098,11 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
   int beginNewSessionCalls = 0;
   DeviceProcessingSnapshot _processingSnapshot = const DeviceProcessingSnapshot();
   DeviceSuspendedRequest? _pendingSuspendedRequest;
+  TurnReplayResult replayResult = const TurnReplayResult(
+    outcome: 'accepted',
+    safety: TurnReplaySafety.safe,
+    requiresConfirmation: false,
+  );
 
   _FakeDeviceClient({
     required this.config,
@@ -2159,17 +2258,24 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
   Future<TurnReplayResult> replayTurn({
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
-  }) async => const TurnReplayResult(
-    outcome: 'accepted',
-    safety: TurnReplaySafety.safe,
-    requiresConfirmation: false,
-  );
+    bool confirmedDropSteers = false,
+  }) async => replayResult;
+
+  @override
+  Future<SessionForkResult> forkSession({
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async => const SessionForkResult(outcome: 'accepted');
 
   @override
   Future<SessionCompactResult> compactSession({

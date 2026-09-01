@@ -340,6 +340,136 @@ String? primaryResourceOwnershipConflict(
   return null;
 }
 
+Future<void> handleBackgroundRun({
+  required List<String> originalArguments,
+  required SanadDevComponentTarget target,
+  required String device,
+  required String? sanadHomePath,
+  Duration timeout = sanadDevComponentControlTimeout,
+  Duration pollInterval = const Duration(milliseconds: 100),
+}) async {
+  final runtime = await discoverSanadDevRuntime(
+    callerDirectory: _callerDirectory,
+    sanadHomeOverride: sanadHomePath,
+  );
+  final workspaceHash = runtime.worktreeId.split('-').last;
+  String? previousAttemptId;
+  try {
+    previousAttemptId = (await readLocatedSanadDevStartupAttempt(
+      runtimeDirectory: runtime.runtimeDirectory,
+      workspaceHash: workspaceHash,
+    ))?.attemptId;
+  } on Object {
+    // A stale diagnostic cannot block a new launch attempt.
+  }
+
+  final childArguments = sanadDevBackgroundChildArguments(
+    Platform.script.toFilePath(),
+    originalArguments,
+  );
+  final process = await Process.start(
+    Platform.resolvedExecutable,
+    childArguments,
+    workingDirectory: Directory.current.path,
+    environment: {
+      ...Platform.environment,
+      'SANAD_DEV_CALLER_DIR': _callerDirectory,
+    },
+    mode: ProcessStartMode.detached,
+  );
+  print(
+    'Starting ${target.name} in the background for ${runtime.worktreeId}...',
+  );
+
+  final deadline = DateTime.now().add(timeout);
+  DateTime? childExitedAt;
+  while (DateTime.now().isBefore(deadline)) {
+    SanadDevStartupAttempt? attempt;
+    try {
+      attempt = await readLocatedSanadDevStartupAttempt(
+        runtimeDirectory: runtime.runtimeDirectory,
+        workspaceHash: workspaceHash,
+      );
+    } on Object {
+      // The child may be atomically replacing the locator.
+    }
+    if (attempt != null && attempt.attemptId != previousAttemptId) {
+      if (attempt.outcome == SanadDevStartupOutcome.managed) {
+        print(
+          '✓ Background runtime is managed. '
+          'Use "sanad-dev status" or bounded "sanad-dev logs" commands.',
+        );
+        return;
+      }
+      if (attempt.outcome == SanadDevStartupOutcome.failed) {
+        stderr.writeln(
+          'Background startup failed at ${attempt.stage.name}: '
+          '${attempt.failureReason ?? 'unknown failure'} '
+          '(exit ${attempt.exitStatus ?? 1}).',
+        );
+        exitCode = attempt.exitStatus ?? 1;
+        return;
+      }
+    }
+
+    if (await _backgroundRequestedComponentsAreManaged(
+      runtime: runtime,
+      target: target,
+      device: device,
+    )) {
+      print(
+        '✓ Requested background components are managed. '
+        'Use "sanad-dev status" or bounded "sanad-dev logs" commands.',
+      );
+      return;
+    }
+    if (!await isProcessRunning(process.pid)) {
+      childExitedAt ??= DateTime.now();
+      if (!isSanadDevBackgroundPublicationGraceActive(childExitedAt)) {
+        stderr.writeln(
+          'Background launcher exited before publishing a managed or failed '
+          'startup result. Run "sanad-dev status" for diagnostics.',
+        );
+        exitCode = 1;
+        return;
+      }
+    } else {
+      childExitedAt = null;
+    }
+    await Future<void>.delayed(pollInterval);
+  }
+  stderr.writeln(
+    'Background startup did not reach a terminal state within '
+    '${timeout.inSeconds} seconds. Run "sanad-dev status" for diagnostics.',
+  );
+  exitCode = 1;
+}
+
+Future<bool> _backgroundRequestedComponentsAreManaged({
+  required SanadDevRuntime runtime,
+  required SanadDevComponentTarget target,
+  required String device,
+}) async {
+  final state = selectRuntimeProcessState(
+    activeAgents: await discoverAgentInstances(),
+    activeClients: await discoverClientInstances(),
+    runtime: runtime,
+  );
+  if (state.agent == null && state.relevantClients.isEmpty) return false;
+  final ownership = await assessRuntimeOwnership(
+    runtime: runtime,
+    state: state,
+    sanadHome: resolveActiveSanadHome(runtime, state),
+  );
+  if (!ownership.isManaged) return false;
+  final agentReady =
+      target == SanadDevComponentTarget.client || ownership.state.agent != null;
+  final clientReady =
+      target == SanadDevComponentTarget.agent ||
+      ownership.state.ownedClients.any((client) => client.deviceId == device);
+  return agentReady && clientReady;
+}
+
 Future<void> handleRun({
   required SanadDevComponentTarget target,
   required bool driverMode,
@@ -348,6 +478,7 @@ Future<void> handleRun({
   required String device,
   required String configPath,
   required String? sanadHomePath,
+  bool backgroundMode = false,
 }) async {
   final runtime = await discoverSanadDevRuntime(
     callerDirectory: _callerDirectory,
@@ -459,17 +590,59 @@ Future<void> handleRun({
   );
   if (dryRun) return;
 
-  final isAbsoluteConfig = configPath.startsWith('/') ||
+  var startupAttempt = SanadDevStartupAttempt(
+    attemptId: _newRuntimeOwnershipToken(),
+    workspaceHash: runtime.worktreeId.split('-').last,
+    agentPort: runtime.agentPort,
+    requestedHome:
+        sanadHomePath ??
+        (runtime.isLinkedWorktree ? 'worktree-default' : 'user'),
+    resolvedHome: runtime.sanadHome,
+    stage: SanadDevStartupStage.preflight,
+    outcome: SanadDevStartupOutcome.starting,
+    updatedAt: DateTime.now().toUtc(),
+  );
+  Future<void> recordStartup({
+    required SanadDevStartupStage stage,
+    SanadDevStartupOutcome outcome = SanadDevStartupOutcome.starting,
+    int? exitStatus,
+    String? failureReason,
+  }) async {
+    startupAttempt = startupAttempt.copyWith(
+      stage: stage,
+      outcome: outcome,
+      updatedAt: DateTime.now().toUtc(),
+      exitStatus: exitStatus,
+      failureReason: failureReason,
+    );
+    await writeSanadDevStartupAttempt(startupAttempt);
+    await writeSanadDevStartupAttemptLocator(
+      runtimeDirectory: runtime.runtimeDirectory,
+      attempt: startupAttempt,
+    );
+  }
+
+  await secureRuntimeDirectory(runtime.sanadHome, runtime.sanadHome);
+  await recordStartup(stage: SanadDevStartupStage.preflight);
+
+  final isAbsoluteConfig =
+      configPath.startsWith('/') ||
       File(configPath).isAbsolute ||
       RegExp(r'^[a-zA-Z]:[/\\]').hasMatch(configPath);
   final candidateFile = File(configPath);
   final configFile = isAbsoluteConfig
       ? candidateFile
       : candidateFile.existsSync()
-          ? candidateFile
-          : File('$clientDirectory${Platform.pathSeparator}$configPath');
+      ? candidateFile
+      : File('$clientDirectory${Platform.pathSeparator}$configPath');
   if (!configFile.existsSync()) {
     stderr.writeln('Client configuration not found: ${configFile.path}');
+    await recordStartup(
+      stage: SanadDevStartupStage.cleanup,
+      outcome: SanadDevStartupOutcome.failed,
+      exitStatus: 1,
+      failureReason: 'client configuration not found',
+    );
     exitCode = 1;
     return;
   }
@@ -480,12 +653,17 @@ Future<void> handleRun({
       cloudEndpoints = readSanadCloudEndpoints(configFile);
     } on FormatException catch (error) {
       stderr.writeln(error.message);
+      await recordStartup(
+        stage: SanadDevStartupStage.cleanup,
+        outcome: SanadDevStartupOutcome.failed,
+        exitStatus: 64,
+        failureReason: 'client cloud configuration is invalid',
+      );
       exitCode = 64;
       return;
     }
   }
 
-  await secureRuntimeDirectory(runtime.sanadHome, runtime.sanadHome);
   await cleanupStaleComponentJournals(runtime.sanadHome);
 
   final preferencesPrefix = resolveSanadDevPreferencesPrefix(
@@ -515,6 +693,7 @@ Future<void> handleRun({
     updatedAt: DateTime.now().toUtc(),
   );
   await writeRuntimeLauncherRecord(launcherRecord);
+  await recordStartup(stage: SanadDevStartupStage.recordCreated);
 
   final agentEnvironment =
       buildUnifiedSanadHomeEnvironment(
@@ -560,6 +739,47 @@ Future<void> handleRun({
   ComponentProcessJournal? agentJournal;
   ComponentProcessJournal? clientJournal;
   final bootLogs = <String>[];
+  final startupSignals = <StreamSubscription<ProcessSignal>>[];
+  var startupAbortInProgress = false;
+  Future<void> cancelStartupSignals() async {
+    for (final subscription in startupSignals) {
+      await subscription.cancel();
+    }
+    startupSignals.clear();
+  }
+
+  Future<void> abortStartup(ProcessSignal signal) async {
+    if (startupAbortInProgress) return;
+    startupAbortInProgress = true;
+    if (agent != null) await terminateSanadDevProcessTree(agent.pid);
+    if (client != null) await terminateSanadDevProcessTree(client.pid);
+    await agentJournal?.cancel();
+    await clientJournal?.cancel();
+    await deleteRuntimeLauncherRecord(runtime.sanadHome, runtime.agentPort);
+    await recordStartup(
+      stage: SanadDevStartupStage.cleanup,
+      outcome: SanadDevStartupOutcome.failed,
+      exitStatus: 1,
+      failureReason: 'startup interrupted by ${signal.toString()}',
+    );
+    await cancelStartupSignals();
+    exit(1);
+  }
+
+  void watchStartupSignal(ProcessSignal signal) {
+    startupSignals.add(
+      signal.watch().listen((value) {
+        unawaited(abortStartup(value));
+      }),
+    );
+  }
+
+  watchStartupSignal(ProcessSignal.sigint);
+  if (!Platform.isWindows) {
+    watchStartupSignal(ProcessSignal.sigterm);
+    watchStartupSignal(ProcessSignal.sighup);
+  }
+
   try {
     final agentStart = startsAgent
         ? Process.start(
@@ -592,85 +812,113 @@ Future<void> handleRun({
     }
     if (startError != null) throw startError;
   } on Object catch (error) {
+    await cancelStartupSignals();
     stderr.writeln('Component failed to start: $error');
     if (agent != null) await terminateSanadDevProcessTree(agent.pid);
     if (client != null) await terminateSanadDevProcessTree(client.pid);
     await deleteRuntimeLauncherRecord(runtime.sanadHome, runtime.agentPort);
+    await recordStartup(
+      stage: SanadDevStartupStage.cleanup,
+      outcome: SanadDevStartupOutcome.failed,
+      exitStatus: 1,
+      failureReason: 'component spawn failed',
+    );
     exitCode = 1;
     return;
   }
-
-  if (agent != null) {
-    agentJournal = await ComponentProcessJournal.attach(
-      process: agent,
-      writer: ComponentJournalWriter(
-        sanadHome: runtime.sanadHome,
-        agentPort: runtime.agentPort,
-        component: 'agent',
-        launcherId: launcherId,
-        runtimeNonce: runtimeNonce,
-      ),
-      mirrorStdout: true,
-      mirrorStderr: true,
-      onBytes: (_, bytes) {
-        bootLogs.addAll(
-          const LineSplitter().convert(
-            utf8.decode(bytes, allowMalformed: true),
-          ),
-        );
-        while (bootLogs.length > 200) {
-          bootLogs.removeAt(0);
-        }
-      },
-    );
-  }
-  if (client != null) {
-    clientJournal = await ComponentProcessJournal.attach(
-      process: client,
-      writer: ComponentJournalWriter(
-        sanadHome: runtime.sanadHome,
-        agentPort: runtime.agentPort,
-        component: 'client',
-        vmServicePort: runtime.vmServicePort,
-        launcherId: launcherId,
-        runtimeNonce: runtimeNonce,
-      ),
-      mirrorStdout: !startsAgent,
-      mirrorStderr: !startsAgent,
-    );
-  }
-
-  if (startsAgent && startsClient) {
-    final opened = await openClientLogTerminal(
-      repositoryRoot: runtime.repositoryRoot,
-      agentPort: runtime.agentPort,
-      vmServicePort: runtime.vmServicePort,
-      sanadHome: runtime.sanadHome,
-    );
-    if (!opened) {
-      print(
-        'Client logs: sanad-dev logs client -n 50 -p ${runtime.vmServicePort}',
-      );
-    }
-  }
+  await recordStartup(stage: SanadDevStartupStage.componentsSpawned);
 
   var agentHealthy = !startsAgent;
   ClientInstance? discoveredClient;
-  await Future.wait<void>([
-    if (startsAgent)
-      () async {
-        agentHealthy = await _waitForAgent(runtime, agentDirectory);
-      }(),
-    if (startsClient)
-      () async {
-        discoveredClient = await _waitForManagedClientIdentity(
+  try {
+    if (agent != null) {
+      agentJournal = await ComponentProcessJournal.attach(
+        process: agent,
+        writer: ComponentJournalWriter(
+          sanadHome: runtime.sanadHome,
+          agentPort: runtime.agentPort,
+          component: 'agent',
+          launcherId: launcherId,
+          runtimeNonce: runtimeNonce,
+        ),
+        mirrorStdout: !backgroundMode,
+        mirrorStderr: !backgroundMode,
+        onBytes: (_, bytes) {
+          bootLogs.addAll(
+            const LineSplitter().convert(
+              utf8.decode(bytes, allowMalformed: true),
+            ),
+          );
+          while (bootLogs.length > 200) {
+            bootLogs.removeAt(0);
+          }
+        },
+      );
+    }
+    if (client != null) {
+      clientJournal = await ComponentProcessJournal.attach(
+        process: client,
+        writer: ComponentJournalWriter(
+          sanadHome: runtime.sanadHome,
+          agentPort: runtime.agentPort,
+          component: 'client',
           vmServicePort: runtime.vmServicePort,
           launcherId: launcherId,
           runtimeNonce: runtimeNonce,
+        ),
+        mirrorStdout: !startsAgent && !backgroundMode,
+        mirrorStderr: !startsAgent && !backgroundMode,
+      );
+    }
+
+    if (startsAgent && startsClient && !backgroundMode) {
+      final opened = await openClientLogTerminal(
+        repositoryRoot: runtime.repositoryRoot,
+        agentPort: runtime.agentPort,
+        vmServicePort: runtime.vmServicePort,
+        sanadHome: runtime.sanadHome,
+      );
+      if (!opened) {
+        print(
+          'Client logs: sanad-dev logs client -n 50 -p ${runtime.vmServicePort}',
         );
-      }(),
-  ]);
+      }
+    }
+
+    await recordStartup(stage: SanadDevStartupStage.readiness);
+    await Future.wait<void>([
+      if (startsAgent)
+        () async {
+          agentHealthy = await _waitForAgent(runtime, agentDirectory);
+        }(),
+      if (startsClient)
+        () async {
+          discoveredClient = await _waitForManagedClientIdentity(
+            vmServicePort: runtime.vmServicePort,
+            launcherId: launcherId,
+            runtimeNonce: runtimeNonce,
+          );
+        }(),
+    ]);
+  } on Object catch (error) {
+    await cancelStartupSignals();
+    stderr.writeln('Startup orchestration failed: $error');
+    if (agent != null) await terminateSanadDevProcessTree(agent.pid);
+    if (client != null) await terminateSanadDevProcessTree(client.pid);
+    await agentJournal?.cancel();
+    await clientJournal?.cancel();
+    await deleteRuntimeLauncherRecord(runtime.sanadHome, runtime.agentPort);
+    await recordStartup(
+      stage: SanadDevStartupStage.cleanup,
+      outcome: SanadDevStartupOutcome.failed,
+      exitStatus: 1,
+      failureReason: 'startup orchestration failed',
+    );
+    exitCode = 1;
+    return;
+  }
   if (!agentHealthy || (startsClient && discoveredClient?.pid == null)) {
+    await cancelStartupSignals();
     if (!agentHealthy) {
       stderr.writeln('Agent failed to become healthy. Boot logs:');
       for (final log in bootLogs) {
@@ -685,6 +933,14 @@ Future<void> handleRun({
     await agentJournal?.cancel();
     await clientJournal?.cancel();
     await deleteRuntimeLauncherRecord(runtime.sanadHome, runtime.agentPort);
+    await recordStartup(
+      stage: SanadDevStartupStage.cleanup,
+      outcome: SanadDevStartupOutcome.failed,
+      exitStatus: 1,
+      failureReason: !agentHealthy
+          ? 'agent readiness failed'
+          : 'client readiness failed',
+    );
     exitCode = 1;
     return;
   }
@@ -701,6 +957,12 @@ Future<void> handleRun({
         : 'client-only',
   );
   await writeRuntimeLauncherRecord(launcherRecord);
+  await recordStartup(
+    stage: SanadDevStartupStage.managed,
+    outcome: SanadDevStartupOutcome.managed,
+    exitStatus: 0,
+  );
+  await cancelStartupSignals();
 
   final staleControl = File(
     runtimeComponentControlPath(runtime.sanadHome, runtime.agentPort),
@@ -823,11 +1085,37 @@ Future<void> handleRuntimeStatus({
     'Agent gateway: ${matchingAgent == null ? '-' : 'http://127.0.0.1:${matchingAgent.port}'}',
   );
   print('Sanad home: $activeSanadHome');
+  SanadDevStartupAttempt? startupAttempt;
+  try {
+    startupAttempt = await readLocatedSanadDevStartupAttempt(
+      runtimeDirectory: runtime.runtimeDirectory,
+      workspaceHash: runtime.worktreeId.split('-').last,
+    );
+    if (startupAttempt != null) {
+      print('Startup requested home: ${startupAttempt.requestedHome}');
+      print('Startup resolved home: ${startupAttempt.resolvedHome}');
+      print(
+        'Startup attempt: ${startupAttempt.outcome.name} '
+        '(stage=${startupAttempt.stage.name}, '
+        'exit=${startupAttempt.exitStatus ?? '-'})',
+      );
+      if (startupAttempt.failureReason != null) {
+        print('Startup failure: ${startupAttempt.failureReason}');
+      }
+    }
+  } on Object catch (error) {
+    print('Startup attempt: invalid ($error)');
+  }
+  final startupInProgress = isSanadDevStartupAttemptInProgress(startupAttempt);
   print(
-    'Status: ${runtimeStatusLabel(ownership.isManaged ? ownership.state : processState)}',
+    startupInProgress
+        ? 'Status: starting (stage=${startupAttempt!.stage.name})'
+        : 'Status: ${runtimeStatusLabel(ownership.isManaged ? ownership.state : processState)}',
   );
-  print('Runtime class: ${ownership.classification.name}');
-  if (ownership.reason != null) {
+  print(
+    'Runtime class: ${startupInProgress ? 'starting' : ownership.classification.name}',
+  );
+  if (!startupInProgress && ownership.reason != null) {
     print('Ownership detail: ${ownership.reason}');
   }
   if (ownership.record != null) {
@@ -879,9 +1167,16 @@ Future<void> handleRuntimeStatus({
   }
 }
 
+bool canRemoveStaleLauncherRecord({
+  required bool launcherLive,
+  required bool endpointLive,
+  required bool clientLive,
+}) => !launcherLive && !endpointLive && !clientLive;
+
 typedef ProcessTerminator = bool Function(int pid, ProcessSignal signal);
-typedef LauncherStopRequester =
-    Future<void> Function(RuntimeLauncherRecord record);
+typedef LauncherStopRequester = Future<void> Function(
+  RuntimeLauncherRecord record,
+);
 
 Future<bool> stopManagedRuntimeLauncher(
   RuntimeOwnershipAssessment ownership, {
@@ -1102,8 +1397,7 @@ Future<void> handleRuntimeDoctor({
             switchPath,
             handoff.copyWith(
               status: 'failed',
-              message:
-                  'Stale runtime handoff discarded because its owning launcher is no longer active.',
+              message: 'Stale runtime handoff discarded because its owning launcher is no longer active.',
             ),
           );
           print(
@@ -1128,22 +1422,20 @@ Future<void> handleRuntimeDoctor({
             client.launchProfile?.define('SANAD_DEV_LAUNCHER_ID') ==
                 record.launcherId,
       );
-      if (!launcherLive && !endpointLive && !clientLive) {
+      if (canRemoveStaleLauncherRecord(
+        launcherLive: launcherLive,
+        endpointLive: endpointLive,
+        clientLive: clientLive,
+      )) {
         await deleteRuntimeLauncherRecord(record.sanadHome, record.agentPort);
         print(
           'Fixed: removed one stale launcher record; no process was signaled.',
         );
         return;
       }
-      if (!launcherLive && !clientLive) {
-        await deleteRuntimeLauncherRecord(record.sanadHome, record.agentPort);
-        print(
-          'Fixed: removed stale launcher record for agent port ${record.agentPort}.',
-        );
-        return;
-      }
       stderr.writeln(
-        'No fix applied: a launcher or runtime endpoint is still live.',
+        'No fix applied: a launcher or runtime endpoint is still live; '
+        'the lease was preserved.',
       );
       exitCode = 1;
       return;
@@ -1170,12 +1462,16 @@ Future<void> handleRuntimeDoctor({
   final nextAction = switch (ownership.classification) {
     RuntimeOwnershipClass.managed => 'Use sanad-dev status/stop/switch.',
     RuntimeOwnershipClass.manual =>
-      'Use sanad-dev takeover after confirming the manual pair.',
+      'Run "sanad-dev takeover" after confirming the listed manual pair.',
     RuntimeOwnershipClass.orphaned =>
-      'Inspect the listed ownership evidence; use target cleanup only for a '
-          'non-source stale target.',
-    RuntimeOwnershipClass.stopped => 'Use sanad-dev run.',
-    _ => 'Resolve the owning IDE/runtime; automatic mutation is refused.',
+      'Run "sanad-dev cleanup-target-orphans"; it will proceed only when '
+          'target-only stale ownership is proven.',
+    RuntimeOwnershipClass.stopped => 'Run "sanad-dev run".',
+    RuntimeOwnershipClass.crossOwned =>
+      'Run "sanad-dev doctor" from the owning worktree shown above.',
+    _ =>
+      'Close the listed IDE/manual Client, then rerun "sanad-dev doctor"; '
+          'automatic mutation is refused.',
   };
   print('Next action: $nextAction');
 }
@@ -1578,9 +1874,8 @@ Future<int> _nextAvailableVmServicePort(int preferred) async {
 
 Future<bool> _vmServiceIsAvailable(int port) async {
   try {
-    final socket = await WebSocket.connect(
-      'ws://127.0.0.1:$port/ws',
-    ).timeout(const Duration(milliseconds: 300));
+    final socket = await WebSocket.connect('ws://127.0.0.1:$port/ws')
+        .timeout(const Duration(milliseconds: 300));
     await socket.close();
     return true;
   } on Object {

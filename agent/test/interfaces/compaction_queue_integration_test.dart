@@ -53,16 +53,20 @@ void main() {
     when(mockAgentRunner.activeProvider).thenReturn('mock');
     when(mockAgentRunner.currentModelStepId).thenReturn('step-1');
     when(mockAgentRunner.getContextTokens()).thenAnswer((_) async => 4000);
-    when(mockAgentRunner.getContextUsageSnapshot()).thenAnswer((_) async => null);
+    when(
+      mockAgentRunner.getContextUsageSnapshot(),
+    ).thenAnswer((_) async => null);
     when(
       mockAgentRunner.attachMetadataToLastAssistantMessage(any),
     ).thenReturn(null);
     when(mockAgentRunner.requestStop()).thenReturn(null);
-    when(mockAgentRunner.beginAuthoritativeRun(
-      any,
-      workItemId: anyNamed('workItemId'),
-      generation: anyNamed('generation'),
-    )).thenReturn(null);
+    when(
+      mockAgentRunner.beginAuthoritativeRun(
+        any,
+        workItemId: anyNamed('workItemId'),
+        generation: anyNamed('generation'),
+      ),
+    ).thenReturn(null);
     when(mockAgentRunner.endAuthoritativeRun(any)).thenReturn(null);
     when(
       mockAgentRunner.attachCancellationScope(
@@ -86,8 +90,10 @@ void main() {
         lastUserMessageAt: DateTime.utc(2026, 8, 29),
       ),
     );
-    when(mockSessionManager.recordCanonicalUserMessageAccepted(any, any))
-        .thenReturn(null);
+    when(mockSessionManager.getMessages(any)).thenReturn(const []);
+    when(
+      mockSessionManager.recordCanonicalUserMessageAccepted(any, any),
+    ).thenReturn(null);
     when(mockSessionManager.saveSessionMetadata(any, any)).thenReturn(null);
     when(mockSessionManager.getSessionMetadata(any)).thenReturn(null);
     when(mockSessionManager.getInFlightSnapshot(any)).thenReturn(null);
@@ -146,7 +152,11 @@ void main() {
     expect(orchestrator.isSessionCompacting('session-compact-queue'), isTrue);
     expect(orchestrator.getQueuedEvents('session-compact-queue').length, 1);
     expect(
-      orchestrator.getQueuedEvents('session-compact-queue').first.message.content,
+      orchestrator
+          .getQueuedEvents('session-compact-queue')
+          .first
+          .message
+          .content,
       'During compact',
     );
     verifyNever(

@@ -642,6 +642,151 @@ void main() {
     );
   });
 
+  test('metadata-only history updates preserve the active boundary', () {
+    final canonical = [
+      Message(role: MessageRole.user, content: 'old-1'),
+      Message(role: MessageRole.user, content: 'old-2'),
+      Message(role: MessageRole.assistant, content: 'tail-1'),
+      Message(role: MessageRole.user, content: 'tail-2'),
+    ];
+    sessions.replaceMessages('session-1', canonical);
+    final originalIds = builder
+        .loadCanonicalTimeline('session-1')
+        .messages
+        .map((entry) => entry.rowId)
+        .toList(growable: false);
+    final startedAt = DateTime.utc(2026, 8, 31);
+    final sourceRange = CompactionMessageRange(
+      start: CompactionMessageIdentity(originalIds[0]),
+      end: CompactionMessageIdentity(originalIds[1]),
+    );
+    final tailRange = CompactionMessageRange(
+      start: CompactionMessageIdentity(originalIds[2]),
+      end: CompactionMessageIdentity(originalIds[3]),
+    );
+    boundaries.tryClaim(
+      compactionId: 'cmp-metadata-stable',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.auto,
+      sourceRange: sourceRange,
+      retainedTailRange: tailRange,
+      routeSignature: _route(),
+      startedAt: startedAt,
+    );
+    const summary = CompactionInternalSummary(
+      currentGoal: 'Keep the active boundary',
+      remainingWork: 'Continue from the retained tail',
+    );
+    boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-metadata-stable',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.auto,
+        sourceRevision: const CompactionHistoryRevision(1),
+        sourceRange: sourceRange,
+        retainedTailRange: tailRange,
+        internalSummary: summary,
+        continuityResult: CompactionContinuityResult.fromSummary(summary),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 400_000,
+          estimatedRequestTokensBefore: 320_000,
+          estimatedRequestTokensAfter: 40_000,
+          retainedTailTokens: 10_000,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: startedAt,
+      completedAt: startedAt.add(const Duration(seconds: 1)),
+    );
+
+    sessions.replaceMessages('session-1', [
+      canonical[0].copyWith(metadata: const {'request_id': 'request-1'}),
+      canonical[1],
+      canonical[2],
+      canonical[3],
+    ]);
+
+    expect(
+      builder
+          .loadCanonicalTimeline('session-1')
+          .messages
+          .map((entry) => entry.rowId),
+      originalIds,
+    );
+    final projection = builder.buildForSession('session-1');
+    expect(projection.activeBoundary?.compactionId, 'cmp-metadata-stable');
+    expect(projection.conversationMessages.first.content, contains('Keep'));
+  });
+
+  test('semantic history updates still invalidate the old boundary', () {
+    final canonical = [
+      Message(role: MessageRole.user, content: 'old-1'),
+      Message(role: MessageRole.user, content: 'old-2'),
+      Message(role: MessageRole.assistant, content: 'tail-1'),
+      Message(role: MessageRole.user, content: 'tail-2'),
+    ];
+    sessions.replaceMessages('session-1', canonical);
+    final ids = builder
+        .loadCanonicalTimeline('session-1')
+        .messages
+        .map((entry) => entry.rowId)
+        .toList(growable: false);
+    final startedAt = DateTime.utc(2026, 8, 31);
+    final sourceRange = CompactionMessageRange(
+      start: CompactionMessageIdentity(ids[0]),
+      end: CompactionMessageIdentity(ids[1]),
+    );
+    final tailRange = CompactionMessageRange(
+      start: CompactionMessageIdentity(ids[2]),
+      end: CompactionMessageIdentity(ids[3]),
+    );
+    boundaries.tryClaim(
+      compactionId: 'cmp-semantic-change',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.auto,
+      sourceRange: sourceRange,
+      retainedTailRange: tailRange,
+      routeSignature: _route(),
+      startedAt: startedAt,
+    );
+    const summary = CompactionInternalSummary(
+      currentGoal: 'Old summarized goal',
+      remainingWork: 'Old remaining work',
+    );
+    boundaries.completeStarted(
+      candidate: CompactionCandidate(
+        compactionId: 'cmp-semantic-change',
+        sessionId: 'session-1',
+        trigger: CompactionTrigger.auto,
+        sourceRevision: const CompactionHistoryRevision(1),
+        sourceRange: sourceRange,
+        retainedTailRange: tailRange,
+        internalSummary: summary,
+        continuityResult: CompactionContinuityResult.fromSummary(summary),
+        metrics: CompactionMetrics(
+          contextWindowTokens: 400_000,
+          estimatedRequestTokensBefore: 320_000,
+          estimatedRequestTokensAfter: 40_000,
+          retainedTailTokens: 10_000,
+        ),
+        routeSignature: _route(),
+      ),
+      startedAt: startedAt,
+      completedAt: startedAt.add(const Duration(seconds: 1)),
+    );
+
+    sessions.replaceMessages('session-1', [
+      Message(role: MessageRole.user, content: 'edited-old-1'),
+      canonical[1],
+      canonical[2],
+      canonical[3],
+    ]);
+
+    final projection = builder.buildForSession('session-1');
+    expect(projection.usesCompactionBoundary, isFalse);
+    expect(projection.conversationMessages.first.content, 'edited-old-1');
+  });
+
   test('canonical timeline query returns full history independently', () {
     sessions.replaceMessages('session-1', [
       Message(role: MessageRole.user, content: 'one'),

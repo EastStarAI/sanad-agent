@@ -21,6 +21,7 @@ import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_instance_form_view.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_picker_view.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_flow.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:toastification/toastification.dart';
 
 class _FakeClient extends ProviderSetupClient {
@@ -1007,7 +1008,8 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Cancel'), findsOneWidget);
-      await tester.pump(const Duration(seconds: 3));
+      await tester.pump(ToastUtils.defaultDuration);
+      await tester.pump(const Duration(milliseconds: 500));
     },
   );
 

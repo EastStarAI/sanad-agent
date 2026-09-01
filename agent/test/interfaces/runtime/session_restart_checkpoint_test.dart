@@ -13,8 +13,10 @@ import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_agent/engine/runtime/tool_execution_coordinator.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
+import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
+import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import 'package:sanad_agent/plugins/plugin_manager.dart';
 import 'package:test/test.dart';
 
@@ -39,6 +41,44 @@ void main() {
     await getIt.reset();
     state.dispose();
   });
+
+  test(
+    'manual retry restores the safe checkpoint before a forced provider interruption',
+    () {
+      final repaired =
+          ContinuationCheckpointCoordinator.metadataForInterruptedProviderRetry(
+            const {
+              'checkpoint_kind': 'model_request_in_flight',
+              'checkpoint_before_model_request': 'after_tool_result',
+              'restart_interrupted_provider_request': true,
+              'currently_executing_tools': <String>[],
+              'resume_history_length': 3,
+            },
+          );
+
+      expect(repaired, isNotNull);
+      expect(repaired?['checkpoint_kind'], 'after_tool_result');
+      expect(repaired, isNot(contains('checkpoint_before_model_request')));
+      expect(repaired, isNot(contains('restart_interrupted_provider_request')));
+      expect(repaired?['resume_history_length'], 3);
+    },
+  );
+
+  test(
+    'manual retry rejects an interrupted provider without a safe predecessor',
+    () {
+      final repaired =
+          ContinuationCheckpointCoordinator.metadataForInterruptedProviderRetry(
+            const {
+              'checkpoint_kind': 'model_request_in_flight',
+              'checkpoint_before_model_request': 'unknown',
+              'restart_interrupted_provider_request': true,
+            },
+          );
+
+      expect(repaired, isNull);
+    },
+  );
 
   test(
     'controlled restart waits for the active tool result checkpoint',
@@ -84,6 +124,97 @@ void main() {
           ),
         ),
       );
+    },
+  );
+
+  for (final scenario in <(String, String, SessionWorkState)>[
+    ('ask-user live', 'system_ask_user', SessionWorkState.running),
+    ('ask-user restored', 'system_ask_user', SessionWorkState.waiting),
+    ('permission live', 'shell_execute', SessionWorkState.running),
+    ('permission restored', 'shell_execute', SessionWorkState.waiting),
+  ]) {
+    final (label, toolName, workState) = scenario;
+    test('controlled restart accepts a durable $label wait as safe', () async {
+      final now = DateTime.now().toUtc();
+      final checkpointStore = SuspendedCheckpointStore(
+        sessionManager: SessionManager(),
+      );
+      getIt.registerSingleton<SuspendedCheckpointStore>(checkpointStore);
+      await checkpointStore.save(
+        SuspendedCheckpoint(
+          checkpointId: '$label-checkpoint',
+          sessionId: 'restart-session',
+          requestId: '$label-request',
+          toolCallId: '$label-tool-call',
+          toolName: toolName,
+          status: 'awaiting_permission',
+          toolArguments: const {},
+          permissionPayload: const {},
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      persisted.executionState.enqueueWorkItem(
+        workItemId: '$label-work',
+        sessionId: 'restart-session',
+        state: workState,
+        continuationMetadata: {
+          'currently_executing_tools': ['$label-tool-call'],
+          'tool_replay_safety': {'$label-tool-call': false},
+        },
+      );
+
+      final result = await SessionRunOrchestrator()
+          .waitForControlledRestartCheckpoint(timeout: Duration.zero);
+
+      expect(result.isSafe, isTrue);
+      expect(persisted.findWorkItem('$label-work')?.state, workState);
+    });
+  }
+
+  test(
+    'interactive checkpoint cannot hide another unresolved tool call',
+    () async {
+      final now = DateTime.now().toUtc();
+      final checkpointStore = SuspendedCheckpointStore(
+        sessionManager: SessionManager(),
+      );
+      getIt.registerSingleton<SuspendedCheckpointStore>(checkpointStore);
+      await checkpointStore.save(
+        SuspendedCheckpoint(
+          checkpointId: 'permission-checkpoint',
+          sessionId: 'restart-session',
+          requestId: 'permission-request',
+          toolCallId: 'permission-tool-call',
+          toolName: 'shell_execute',
+          status: 'awaiting_permission',
+          toolArguments: const {},
+          permissionPayload: const {},
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      persisted.executionState.enqueueWorkItem(
+        workItemId: 'mixed-work',
+        sessionId: 'restart-session',
+        state: SessionWorkState.running,
+        continuationMetadata: const {
+          'checkpoint_kind': AgentRunner.checkpointKindInitialModelRequest,
+          'currently_executing_tools': [
+            'permission-tool-call',
+            'unowned-tool-call',
+          ],
+        },
+      );
+
+      final result = await SessionRunOrchestrator()
+          .waitForControlledRestartCheckpoint(timeout: Duration.zero);
+
+      expect(result.isSafe, isFalse);
+      expect(result.blockers.single.toolCallIds, [
+        'permission-tool-call',
+        'unowned-tool-call',
+      ]);
     },
   );
 

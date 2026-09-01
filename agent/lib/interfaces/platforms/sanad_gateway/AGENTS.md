@@ -14,6 +14,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Use device-first canonical envelopes with explicit device, hardware, session, request, origin, and typed delivery identity.
 - Do not emit legacy agent type fields or legacy thread identity in new payloads.
 - Preserve opaque event id across transport copies and preserve run/model-step/tool-call distinctions.
+- A session-bound Local Gateway response retains the explicit device identity captured for that session. A later unrelated command on the same socket must not replace it with another device or hardware identity; socket identity is fallback-only when no session identity exists.
 - `thinking_mode` is the only session/persistence/protocol field name; do not accept or emit aliases.
 - Every request-correlated response carries the original request id.
 
@@ -33,7 +34,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 ## Session and History
 - `create_session` bootstraps without execution and preserves an explicit supplied title.
 - Workspace-associated session events include workspace identity and recoverable display metadata.
-- Session lists use keyset ordering by last accepted user message then session id; only canonical user acceptance advances ordering.
+- Session lists use keyset ordering by the canonical activity timestamp then session id. Fork creation initializes the child at commit time so it leads the list; afterward only canonical user acceptance advances ordering.
 - Reject incompatible filters, malformed cursors, and non-positive limits explicitly.
 - History omits absent optional runtime, metadata, and request fields rather than emitting null.
 - Hydrate durable pending steer, unacknowledged draft recovery, runtime notice, route transitions, canonical reasoning/tool/final events, and latest context usage.
@@ -46,7 +47,8 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Restart draft recovery is text-free until a first-writer claim succeeds; only the winning direct response carries recovered items.
 - User-stop recovery requires its private owner token for acknowledgment. Restart recovery requires the durable winning claimant id.
 - History and broadcasts never grant recovery ownership or expose claimed text.
-- Turn edit/retry classifies replay safety before cancellation, requires explicit unsafe/unknown confirmation, establishes authoritative idle, then truncates and dispatches replacement.
+- Turn edit/retry classifies replay safety before cancellation, requires explicit unsafe/unknown confirmation, rejects steer targets before Stop, serializes one replay per session, waits for an authoritative `idle` snapshot after scoped stop, then atomically soft-rewinds and accepts the replacement user record before dispatch.
+- `session.fork` materializes an independent child from a durable terminal final-answer identity. The daemon copies the active prefix server-side in one transaction; the child starts idle and does not inherit runtime work. Child history derives one trailing stable `session.forked` UI event from session lineage without persisting it as a model-visible message.
 
 ## Runtime Queries and Provider Commands
 - Shared handlers own workspace list/create/remove/tree, MCP list/save/delete/replace/inspect, skills, slash commands, device settings, provider setup, models, session queries, recovery, replay, and remote update/restart.

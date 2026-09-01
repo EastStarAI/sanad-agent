@@ -132,7 +132,7 @@ void main() {
   );
 
   test(
-    'provider-only timeout cancels the request and permits restart without force',
+    'ordinary restart keeps waiting for an active provider request',
     () async {
       int? exitCode;
       final blocker = const ControlledRestartBlocker(
@@ -141,25 +141,36 @@ void main() {
         checkpointRecognized: true,
         providerRequestInFlight: true,
       );
-      final orchestrator = _BoundaryOrchestrator(
-        result: ControlledRestartCheckpointResult(
+      final safeCheckpoint = Completer<ControlledRestartCheckpointResult>();
+      final orchestrator = _SequencedBoundaryOrchestrator(
+        firstResult: ControlledRestartCheckpointResult(
           isSafe: false,
           blockers: [blocker],
         ),
+        nextResult: safeCheckpoint.future,
       );
       final coordinator = DaemonRestartCoordinator(
         sessionOrchestrator: orchestrator,
         exitDaemon: (code) => exitCode = code,
       );
 
-      final preparation = await coordinator.prepareRestart(
-        timeout: const Duration(seconds: 7),
-      );
+      var preparationCompleted = false;
+      final preparing = coordinator
+          .prepareRestart(timeout: const Duration(seconds: 7))
+          .whenComplete(() => preparationCompleted = true);
+      await Future<void>.delayed(Duration.zero);
 
+      expect(preparationCompleted, isFalse);
+      expect(orchestrator.calls, 2);
+      expect(orchestrator.interruptedBlockers, isEmpty);
+      expect(exitCode, isNull);
+
+      safeCheckpoint.complete(ControlledRestartCheckpointResult.safe);
+      final preparation = await preparing;
       expect(preparation.accepted, isTrue);
       expect(preparation.force, isFalse);
-      expect(preparation.outcome, 'provider_requests_interrupted');
-      expect(orchestrator.interruptedBlockers, [blocker]);
+      expect(preparation.outcome, 'safe');
+      expect(orchestrator.interruptedBlockers, isEmpty);
       expect(orchestrator.drainCancelled, isFalse);
       expect(exitCode, isNull);
 
@@ -376,6 +387,48 @@ class _BoundaryOrchestrator extends SessionRunOrchestrator {
     bool requireRequesterCompletion = false,
   }) async {
     return result;
+  }
+}
+
+class _SequencedBoundaryOrchestrator extends SessionRunOrchestrator {
+  _SequencedBoundaryOrchestrator({
+    required this.firstResult,
+    required this.nextResult,
+  });
+
+  final ControlledRestartCheckpointResult firstResult;
+  final Future<ControlledRestartCheckpointResult> nextResult;
+  final List<ControlledRestartBlocker> interruptedBlockers = [];
+  var calls = 0;
+  bool drainCancelled = false;
+
+  @override
+  void beginControlledRestartDrain() {}
+
+  @override
+  void cancelControlledRestartDrain() {
+    drainCancelled = true;
+  }
+
+  @override
+  Future<void> interruptProviderRequestsForRestart(
+    Iterable<ControlledRestartBlocker> blockers,
+  ) async {
+    interruptedBlockers.addAll(blockers);
+  }
+
+  @override
+  Future<ControlledRestartCheckpointResult> waitForControlledRestartCheckpoint({
+    Duration timeout =
+        SessionRunOrchestrator.controlledRestartCheckpointTimeout,
+    Duration pollInterval =
+        SessionRunOrchestrator.controlledRestartCheckpointPollInterval,
+    String? requesterSessionId,
+    String? requesterToolCallId,
+    bool requireRequesterCompletion = false,
+  }) {
+    calls++;
+    return calls == 1 ? Future.value(firstResult) : nextResult;
   }
 }
 

@@ -46,12 +46,28 @@ erDiagram
         text created_at
         text updated_at
         text last_user_message_at
+        integer history_revision
+        text lineage_id
+        text parent_session_id
+        text forked_from_message_id
+        text forked_from_turn_id
+        integer fork_sequence
+        text lineage_base_title
+        text fork_request_id
     }
     
     messages {
         integer id PK "AUTOINCREMENT"
         text session_id FK
         text data "JSON String"
+        text message_id UK
+        text turn_id
+        text history_status "active | superseded"
+        text superseded_by_turn_id
+        text input_kind "root_turn | steer"
+        text request_id
+        text run_id
+        text origin_message_id
     }
     
     scheduled_tasks {
@@ -96,6 +112,14 @@ Stores active and historical chat threads/sessions configured locally for the de
 | `created_at` | `TEXT` | Non-null | ISO8601 creation date string |
 | `updated_at` | `TEXT` | Non-null | ISO8601 update date string |
 | `last_user_message_at` | `TEXT` | Non-null after migration backfill | Canonical ordering timestamp used by `get_sessions` keyset pagination |
+| `history_revision` | `INTEGER` | Non-null, default `0` | Compare-and-swap token for active-history mutations; independent from execution and route revisions |
+| `lineage_id` | `TEXT` | Non-null after Task 52 backfill | Stable fork-tree identity; independent of any one session row lifetime |
+| `parent_session_id` | `TEXT` | Nullable | Immediate parent session; SET NULL when that parent is deleted |
+| `forked_from_message_id` | `TEXT` | Nullable | Source final-answer `message_id` for a forked session |
+| `forked_from_turn_id` | `TEXT` | Nullable | Source turn that owns that final answer |
+| `fork_sequence` | `INTEGER` | Non-null, default `0` | Unique increasing integer per `lineage_id`; `0` is a root session |
+| `lineage_base_title` | `TEXT` | Nullable | Title snapshot used for daemon-assigned `(n) <base>` names |
+| `fork_request_id` | `TEXT` | Nullable, unique when present | Idempotency key for `session.fork` |
 
 #### Session Title Ownership
 
@@ -106,30 +130,43 @@ Stores active and historical chat threads/sessions configured locally for the de
 #### Session Ordering and Pagination Notes
 
 - `last_user_message_at` is stored in normalized UTC ISO8601 format and is the authoritative primary sort key for session list queries.
-- The daemon updates `last_user_message_at` only when a canonical user message or steer is accepted. Assistant/tool/system persistence must not mutate session ordering.
+- After creation, the daemon updates `last_user_message_at` only when a canonical user message or steer is accepted. A newly created fork initializes this ordering timestamp to its atomic fork commit time so the child leads the session list; copied message timestamps remain historical. Startup idempotently repairs older fork rows whose ordering timestamp predates `created_at`. Assistant/tool/system persistence must not mutate session ordering.
 - Blank `workspace_id` values are normalized to `NULL` so `unscoped_only` queries can use a stable `workspace_id IS NULL` filter.
 - `saveSession` uses `created_at` as the fallback only on the initial INSERT path. Later UPSERTs that omit `last_user_message_at` must preserve the stored ordering value instead of resetting it.
 - Migration/backfill of `last_user_message_at` is idempotent and batched: only dirty rows are rewritten, and large legacy sets must not exceed SQLite variable limits.
 - `AgentStateDatabase` now maintains the indices `idx_sessions_ordering`, `idx_sessions_workspace_ordering`, and `idx_messages_session_id` to support session pagination and migration backfill efficiently.
 
 ### 3.2. `messages` Table
-Maintains message history. Messages are serialized as JSON blobs in the `data` column to support flexible metadata and nested tool parameters.
+Maintains message history. Messages are serialized as JSON blobs in the `data` column to support flexible metadata and nested tool parameters. Task 51 adds first-class identity and activity columns so history queries do not parse JSON to decide visibility. Normal reads use `history_status = 'active'` ordered by `id`. See [section 7](#7-session-history-identity-task-51).
 
 | Column | Type | Constraints | Description |
 |---|---|---|---|
-| `id` | `INTEGER` | Primary Key, Autoincrement | Sequence tracker |
+| `id` | `INTEGER` | Primary Key, Autoincrement | Physical insert-order cursor; not a protocol identity |
 | `session_id` | `TEXT` | Foreign Key (`sessions.session_id`), ON DELETE CASCADE | Associated chat thread |
 | `data` | `TEXT` | Non-null | JSON string mapping to the protocol `Message` |
+| `message_id` | `TEXT` | Unique, Non-null after Task 51 backfill | Stable identity of this history record |
+| `turn_id` | `TEXT` | Non-null after Task 51 backfill | Execution-attempt identity shared by the attempt's records |
+| `history_status` | `TEXT` | Non-null, checked `active \| superseded`, default `active` | Visibility for normal history, timeline, and model context |
+| `superseded_by_turn_id` | `TEXT` | Nullable | Replacement `turn_id` after soft rewind |
+| `input_kind` | `TEXT` | Nullable, checked `root_turn \| steer` | Set for user-originated records; null for assistant/tool/system |
+| `request_id` | `TEXT` | Nullable | Extracted command/steer correlation; never inferred from text |
+| `run_id` | `TEXT` | Nullable | Extracted execution owner when present |
+| `origin_message_id` | `TEXT` | Nullable | Source `message_id` for a copied fork row; the copied row has a new `message_id` |
+
+Normal reads use `history_status = 'active'` ordered by `id`. Audit or recovery paths that need superseded rows must request them explicitly. Pagination and fork copy the same active ordered prefix and must not use hydration indexes as keys.
 
 #### Message identity for compaction (Plan 53)
 
 - `messages.id` is the **only** durable identity used by compaction source/tail ranges. In-memory list indices inside `AgentRunner` are never persisted on boundary rows.
 - Compaction must not delete or rewrite summarized rows. Canonical history remains fully queryable for timeline pagination (Task 47).
 - `SessionDB.replaceMessages` remains the replay/supersession path (Task 51) and bumps `sessions.history_revision` in the same write path (Plan 53b).
+- A top-level `metadata`-only patch updates the existing row in place because compaction summaries and semantic anchors exclude that envelope. Role, content, tool, reasoning, and provider-state changes still rewrite the changed suffix so an unsafe summary cannot remain active.
 
 ### 3.2.1. `session_compaction_operations` Table (Plan 53b — implemented Gate B1)
 
 Durable compaction lifecycle rows. Internal summaries are stored here, never as extra `messages` rows.
+
+A materialized session fork clones every terminal operation ordered inside its selected message prefix. Each clone owns a new `compaction_id`; its source/tail endpoints are remapped to newly inserted child `messages.id` values and its tail anchor is recomputed in the same transaction. `started` operations and operations whose marker follows the selected final answer are not copied. The latest eligible copied completed row drives the child model projection, while all copied terminal rows remain available for timeline hydration.
 
 | Column | Type | Constraints | Description |
 |---|---|---|---|
@@ -598,3 +635,72 @@ Stores durable informational route transitions. `SessionRouteTransitionRepositor
 | `created_at` | `TEXT` | Non-null | UTC ISO8601 transition timestamp |
 
 `PRIMARY KEY (session_id, route_revision)` prevents two logical transitions from sharing a session revision. The unique `event_id` prevents the same logical event from being recorded under another session or revision. No route event is generated by schema migration.
+
+---
+
+## 7. Session History Identity (Task 51)
+
+Task 51 adds a third revision stream. `sessions.history_revision` orders
+active-history mutations and must never be compared with
+`session_execution_snapshots.revision` or `sessions.route_revision`.
+
+`SessionDB` remains the SQL owner of `sessions` and `messages`. Soft rewind and
+replacement-user acceptance commit in one `AgentStateDatabase.transaction`
+together with the `history_revision` compare-and-swap. Replay admission must
+not delete rows or rewrite the session's message list by truncation.
+
+### 7.1. Identity and activity columns
+
+See [§3.2](#32-messages-table). Required indexes after Gate A:
+
+- unique `message_id`
+- `idx_messages_session_active_id` on `(session_id, history_status, id)`
+- `idx_messages_session_turn` on `(session_id, turn_id, id)`
+
+`data` continues to store content, tool calls, reasoning, provider state, and
+metadata. Identity fields are copied into `data` only as a lossless mirror;
+SQL columns are authoritative for query, pagination, and CAS. Updates by
+`message_id` are also constrained by `session_id`; presenting an identity owned
+by another session fails the write instead of mutating that session's row.
+
+### 7.2. Backfill
+
+Task 51 was introduced before a public persisted-data compatibility boundary,
+so daemon startup does not scan or rewrite pre-Task-51 message rows. New writes
+receive `message_id`, `turn_id`, activity, and input-kind identity at their
+normal persistence boundary. A development database retained from before Task
+51 may still display old rows, but those rows remain ineligible for replay or
+fork targeting until the database is recreated or migrated explicitly.
+
+Opening a normalized database must not rewrite any message row. In particular,
+schema initialization must never perform an all-history identity pass; startup
+cost cannot scale with the number or size of stored message payloads.
+
+---
+
+## 8. Session Lineage (Task 52)
+
+Fork is a materialized copy. Child sessions are independent rows with new
+message identities. See [Session Fork Protocol](session_fork_protocol.md).
+
+### 8.1. Columns and indexes
+
+See [§3.1](#31-sessions-table) and [§3.2](#32-messages-table). Required
+indexes after Gate A:
+
+- unique `(lineage_id, fork_sequence)`
+- unique `fork_request_id` where present
+- `idx_sessions_parent` on `parent_session_id`
+- `idx_messages_origin` on `origin_message_id`
+
+`saveSession` upserts live session fields and must not overwrite lineage,
+fork target, sequence, or `fork_request_id` on conflict.
+
+### 8.2. Backfill and delete
+
+Existing sessions become independent roots: `lineage_id = session_id` and
+`fork_sequence = 0`. Deleting a session atomically SET NULLs
+`parent_session_id` on children and cascades only that session's own messages.
+If deletion is rejected, the parent row and every child parent link roll back
+together. On success, child rows, copied history, `lineage_id`, and fork-point
+identities remain.

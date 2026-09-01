@@ -17,14 +17,14 @@ Verification matrix for durable goal-preserving context compaction across agent 
 | Boundary repository (53b B1) | `cd agent && fvm dart test test/evolution/compaction_boundary_repository_test.dart` | Claim, CAS, redaction |
 | Model projection (53b B2) | `cd agent && fvm dart test test/evolution/model_projection_builder_test.dart` | Projection, reload, tail pairing |
 | Activation (53b B3) | `cd agent && fvm dart test test/evolution/compaction_activation_service_test.dart` | Projection revision, stale completion |
-| Engine (53c) | `cd agent && fvm dart test test/engine/context_compaction_engine_test.dart test/engine/context_compaction_fixture_test.dart` | Pressure, tail, repeated anchor, redaction validation |
+| Engine (53c) | `cd agent && fvm dart test test/engine/context_compaction_engine_test.dart test/engine/context_compaction_fixture_test.dart` | Pressure, tail, repeated anchor, redaction validation, and rejection of incidental semantic labels quoted by tool output |
 | Model policy (53g) | `cd agent && fvm dart test test/core/config_test.dart test/engine/adapters_test.dart test/engine/adapters/codex_responses_adapter_test.dart` | YAML defaults/validation, exact model windows, codec-native wire estimate |
 | Overflow recovery (53d D4) | `cd agent && fvm dart test test/engine/runtime/compaction_overflow_recovery_test.dart test/core/provider_runtime/runtime_failure_reason_test.dart` | 400 context-overflow classify, one-shot recovery, stream guard |
 | Preflight/checkpoint (53d D2/D7) | `cd agent && fvm dart test test/engine/runtime/compaction_preflight_integration_test.dart test/engine/runtime/compaction_checkpoint_resume_test.dart` | Provider history rebuild + checkpoint resume after activation |
 | Restart persistence (53f F2) | `cd agent && fvm dart test test/evolution/compaction_restart_persistence_test.dart` | Boundary survives DB reopen |
 | Daemon E2E (53f F5) | `cd agent && fvm dart test --concurrency=1 --timeout=120s e2e_test/context_compaction_daemon_e2e_test.dart` | Manual compact + restart history hydration over real daemon |
 | Slash catalog (53e E0) | `cd agent && fvm dart test test/interfaces/local_workspace_compact_slash_test.dart test/interfaces/sanad_bridge_test.dart` | `/compact` runtime command exposed |
-| Client dispatch (53e E5) | `cd client && fvm flutter test test/widget/compact_command_dispatch_test.dart test/unit/services/skill_composer_utils_test.dart test/unit/bloc/composer_slash_commands_cubit_test.dart` | Partial Enter/click immediate action, exact `/compact`, mid-message exclusion, skill insert-then-submit, duplicate/args/busy feedback |
+| Client dispatch (53e E5) | `cd client && fvm flutter test test/widget/compact_command_dispatch_test.dart test/unit/services/skill_composer_utils_test.dart test/unit/bloc/composer_slash_commands_cubit_test.dart` | Partial Enter/click immediate action, exact `/compact`, command consumption on typed failure, mid-message exclusion, skill insert-then-submit, duplicate/args/busy feedback |
 
 ## Manual scenarios (53f)
 
@@ -44,6 +44,7 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] Goal/pending/decision anchors survive three compactions (53f F1) — `context_compaction_fixture_test.dart` (2026-08-29).
 - [x] Session A compaction does not affect Session B (53f F2/F3) — `compaction_coordinator_test.dart` (2026-08-29).
 - [x] Live/history parity for compaction lifecycle events (53f F4) — `compaction_event_mapper_test.dart` + mapper history fix (2026-08-29).
+- [x] Live compaction lifecycle events remain isolated by explicit `session_id`; a background conversation cannot add or replace a tile in the active timeline — `device_conversation_event_handler_test.dart` (2026-09-01 regression repair).
 - [x] Overflow recovery one retry before visible stream (53d D4) — `compaction_overflow_recovery_test.dart` + 400 classify fix (2026-08-29).
 - [x] Client `/compact` dispatch and validation outcomes (53e E5) — `compact_command_dispatch_test.dart` (2026-08-29).
 - [x] Typed composer selection keeps leading-only `runtime_action` separate from anywhere-insertable `skill`, executes partial Enter/click immediately, coalesces duplicate Enter, and rejects stale slash-search responses after the action closes the surface — focused client suites (2026-08-31 remediation).
@@ -85,6 +86,7 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] Two preflight calls after one synthetic Auto failure emit exactly one started/failed lifecycle because the active-run breaker blocks the repeat — `compaction_preflight_integration_test.dart`; activation diagnostics preserve `sourceRevisionStale`; full agent suite 1373 passed / 12 skipped and isolated daemon E2E 3/3 (2026-08-31 live Auto regression remediation).
 - [x] Same-id completed reconciliation bypasses exact-redelivery suppression once, while an identical enriched replay is still dropped; canonical map ordering cannot change the fingerprint — `event_deduplicator_test.dart` + `cross_transport_dedup_test.dart` (2026-08-31 live card remediation).
 - [x] The compaction card uses the confirmed after-value, effective-input denominators, daemon-owned automatic threshold, grouped token values, and no Type/Trigger/Status rows; only the centered 44px label opens it and divider clicks do nothing — `compaction_event_tile_test.dart` (2026-08-31 live card remediation).
+- [x] Top-level metadata-only history patches preserve every semantic prefix `messages.id` and the newest active compaction boundary, so a small post-compaction suffix stays below threshold; real content changes still rewrite the suffix and invalidate the unsafe summary — `model_projection_builder_test.dart` + `compaction_preflight_integration_test.dart` (2026-08-31 Task 53h).
 
 ## Review notes (2026-08-29 evening)
 

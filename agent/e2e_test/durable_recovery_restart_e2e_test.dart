@@ -717,6 +717,108 @@ void main() {
     testOn: 'linux || mac-os',
     timeout: const Timeout(Duration(minutes: 3)),
   );
+
+  test(
+    'F.2.9 ordinary restart preserves ask-user suspension and resumes once',
+    () async {
+      final h = await _RecoveryHarness.create();
+      try {
+        const toolCallId = 'call-f29-ask-user';
+        h.fakeLlm.enqueueToolCall(
+          toolName: 'system_ask_user',
+          args: const <String, dynamic>{
+            'questions': <Map<String, dynamic>>[
+              <String, dynamic>{
+                'question': 'Continue after the ordinary restart?',
+                'options': <String>['Continue', 'Pause', 'Cancel'],
+              },
+            ],
+          },
+          toolCallId: toolCallId,
+        );
+        h.fakeLlm.enqueueText('ask-user-resumed-after-ordinary-restart');
+        h.fakeLlm.enqueueText('new-turn-admitted-after-suspended-resume');
+
+        final client1 = await h.startFirstDaemon();
+        final sessionId = 'gate-f-f29-${_unique()}';
+        try {
+          await client1.sendThink(
+            sessionId: sessionId,
+            requestId: 'f29-think-${_unique()}',
+            message: 'Ask me before continuing.',
+          );
+
+          final firstRequestId = await client1.waitForPermissionRequest(
+            sessionId: sessionId,
+            toolName: 'system_ask_user',
+            timeout: const Duration(seconds: 30),
+          );
+
+          final restart = await h.requestOrdinaryRestart(
+            timeout: const Duration(seconds: 5),
+          );
+          expect(restart['success'], isTrue);
+          expect(restart['outcome'], equals('safe'));
+
+          final client2 = await h.startSecondDaemon();
+          try {
+            final historyBeforeAnswer = await client2.loadSessionHistory(
+              sessionId: sessionId,
+              requestId: 'f29-history-${_unique()}',
+              timeout: const Duration(seconds: 30),
+            );
+            final messages = (historyBeforeAnswer['messages'] as List)
+                .whereType<Map>()
+                .map(Map<String, dynamic>.from)
+                .toList(growable: false);
+            expect(
+              messages.any(
+                (message) =>
+                    message['type'] == 'tool_result' &&
+                    message['tool_call_id'] == toolCallId,
+              ),
+              isFalse,
+              reason: 'restart must not fabricate a result for Ask User',
+            );
+
+            await client2.sendPermissionResponse(
+              sessionId: sessionId,
+              requestId: firstRequestId,
+              answer: 'Continue',
+            );
+            expect(
+              await client2.waitForFinalAnswer(
+                sessionId: sessionId,
+                timeout: const Duration(seconds: 30),
+              ),
+              contains('ask-user-resumed-after-ordinary-restart'),
+            );
+
+            await client2.sendThink(
+              sessionId: sessionId,
+              requestId: 'f29-second-think-${_unique()}',
+              message: 'Accept this new turn after the resumed answer.',
+            );
+            expect(
+              await client2.waitForFinalAnswer(
+                sessionId: sessionId,
+                timeout: const Duration(seconds: 30),
+              ),
+              contains('new-turn-admitted-after-suspended-resume'),
+              reason: 'the restored suspension projection must become idle',
+            );
+          } finally {
+            await client2.close();
+          }
+        } finally {
+          await client1.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 }
 
 // ─── Test harness ─────────────────────────────────────────────────────────
@@ -987,6 +1089,34 @@ class _RecoveryHarness {
     try {
       await proc.exitCode.timeout(const Duration(seconds: 6));
     } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>> requestOrdinaryRestart({
+    required Duration timeout,
+  }) async {
+    final proc = _firstDaemon;
+    if (proc == null) {
+      throw StateError('The first daemon is not running.');
+    }
+    final client = HttpClient();
+    try {
+      final request = await client.postUrl(
+        Uri.parse(
+          'http://127.0.0.1:$gatewayPort/restart'
+          '?timeout_seconds=${timeout.inSeconds}',
+        ),
+      );
+      authorizeLocalGatewayTestRequest(request, sanadHome.path);
+      final response = await request.close();
+      final body = await utf8.decoder.bind(response).join();
+      final payload = jsonDecode(body) as Map<String, dynamic>;
+      expect(response.statusCode, equals(HttpStatus.ok), reason: body);
+      await proc.exitCode.timeout(const Duration(seconds: 10));
+      _firstDaemon = null;
+      return payload;
+    } finally {
+      client.close(force: true);
+    }
   }
 
   Future<void> dispose() async {
@@ -1596,6 +1726,57 @@ class _TestClient {
         'type': 'session.runtime_stop',
         'session_id': sessionId,
         'payload': {'request_id': requestId},
+      },
+    });
+  }
+
+  Future<String> waitForPermissionRequest({
+    required String sessionId,
+    required String toolName,
+    required Duration timeout,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final remaining = deadline.difference(DateTime.now());
+      final moved = await frames.moveNext().timeout(remaining);
+      if (!moved) break;
+      final frame =
+          jsonDecode(frames.current as String) as Map<String, dynamic>;
+      if (frame['type'] != 'device_event' ||
+          frame['event'] != 'tool_permission_request') {
+        continue;
+      }
+      final payload = frame['payload'] is Map
+          ? Map<String, dynamic>.from(frame['payload'] as Map)
+          : <String, dynamic>{};
+      final eventSessionId =
+          frame['session_id']?.toString() ?? payload['session_id']?.toString();
+      if (eventSessionId != sessionId || payload['tool_name'] != toolName) {
+        continue;
+      }
+      return payload['request_id'].toString();
+    }
+    throw TimeoutException(
+      'Timed out waiting for permission request $toolName on $sessionId',
+      timeout,
+    );
+  }
+
+  Future<void> sendPermissionResponse({
+    required String sessionId,
+    required String requestId,
+    required String answer,
+  }) async {
+    _send(<String, dynamic>{
+      'type': 'execute_command',
+      'command': 'tool_permission_response',
+      'payload': <String, dynamic>{
+        'session_id': sessionId,
+        'request_id': requestId,
+        'allowed': true,
+        'scope': 'once',
+        'decision': 'allow',
+        'answer': answer,
       },
     });
   }

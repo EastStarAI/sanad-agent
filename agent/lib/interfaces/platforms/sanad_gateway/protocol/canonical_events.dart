@@ -267,6 +267,11 @@ class CanonicalEventTypes {
   static const String sessionCompact = 'session.compact';
   static const String sessionCompactResult = 'session.compact_result';
 
+  // ── Task 52: materialized conversation fork ────────────────────────────
+  static const String sessionFork = 'session.fork';
+  static const String sessionForkResult = 'session.fork_result';
+  static const String sessionForked = 'session.forked';
+
   // ── Task 55: Provider account usage limits ─────────────────────────────
   static const String providerUsageGet = 'provider.usage.get';
   static const String providerUsageResult = 'provider.usage.result';

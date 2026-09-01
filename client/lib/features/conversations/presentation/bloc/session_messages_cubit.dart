@@ -15,6 +15,7 @@ import 'package:sanad_client/features/conversations/domain/models/message_delive
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
@@ -960,9 +961,13 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
   Future<TurnReplayResult> replayTurn({
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) async {
     final agent = _currentAgent;
     final sessionId = state.activeSessionId;
@@ -973,17 +978,64 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         requiresConfirmation: false,
       );
     }
-    return conversationRepository.replayTurn(
+    final result = await conversationRepository.replayTurn(
       agent,
       sessionId: sessionId,
       targetRequestId: targetRequestId,
+      targetMessageId: targetMessageId,
+      targetTurnId: targetTurnId,
+      expectedHistoryRevision: expectedHistoryRevision ?? sessionCubit.state.selectedSession?.historyRevision ?? 0,
       action: action,
       message: message,
       providerInstanceId: state.nextMessageProviderId,
       modelId: state.nextMessageModel,
       thinkingMode: state.nextMessageThinkingMode,
       confirmedReplayUnsafe: confirmedReplayUnsafe,
+      confirmedDropSteers: confirmedDropSteers,
     );
+    final nextRevision = result.historyRevision;
+    final selected = sessionCubit.state.selectedSession;
+    if (nextRevision != null && selected != null && selected.id == sessionId) {
+      sessionCubit.applyHistoryRevision(sessionId, nextRevision);
+    }
+    return result;
+  }
+
+  Future<SessionForkResult> forkSession({
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || sessionId.isEmpty) {
+      return const SessionForkResult(outcome: 'missing_session');
+    }
+    final result = await conversationRepository.forkSession(
+      agent,
+      sessionId: sessionId,
+      targetMessageId: targetMessageId,
+      targetTurnId: targetTurnId,
+    );
+    final child = result.child;
+    if (result.isAccepted && child != null) {
+      try {
+        await sessionCubit.adoptForkedSession(
+          child.copyWith(deviceId: child.deviceId ?? agent.id),
+        );
+      } catch (error, stackTrace) {
+        _logger.warning(
+          'Fork committed but child navigation failed.',
+          error,
+          stackTrace,
+        );
+        return SessionForkResult(
+          outcome: result.outcome,
+          child: child,
+          navigationFailed: true,
+        );
+      }
+    }
+    return result;
   }
 
   Future<void> retryRuntimeNotice() async {

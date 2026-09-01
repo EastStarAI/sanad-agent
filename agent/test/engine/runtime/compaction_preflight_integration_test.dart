@@ -251,8 +251,15 @@ void main() {
       isNotNull,
     );
 
+    final persistedAfterCompaction = sessions.getMessages('session-preflight');
     sessions.replaceMessages('session-preflight', [
-      ...sessions.getMessages('session-preflight'),
+      persistedAfterCompaction.first.copyWith(
+        metadata: {
+          ...?persistedAfterCompaction.first.metadata,
+          'delivery_state': 'confirmed',
+        },
+      ),
+      ...persistedAfterCompaction.skip(1),
       Message(
         role: MessageRole.user,
         content: 'small follow-up after compaction',
