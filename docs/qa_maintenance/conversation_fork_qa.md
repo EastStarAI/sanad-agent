@@ -23,6 +23,9 @@ description: "Quality assurance matrix for materialized conversation fork, linea
 - A local navigation failure after daemon acceptance keeps the child in the
   sidebar and reports that creation succeeded rather than inviting a retry.
 - Tool calls are not re-executed during fork.
+- Every completed or failed compaction event ordered inside the copied prefix is materialized with a child-owned compaction id and remapped child message ranges; started and post-target events are absent.
+- Multiple copied compactions remain visible in historical order, while the newest eligible completed boundary supplies the child's first model projection so the full canonical transcript is not resent.
+- Failure while copying any eligible compaction row rolls back the child session, copied messages, and lifecycle rows together.
 
 ## Timeline marker and opening
 

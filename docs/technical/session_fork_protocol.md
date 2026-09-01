@@ -73,6 +73,29 @@ inside the prefix is preserved by rewriting ids consistently. `origin_message_id
 records the source row. Runtime work, notices, and queues are not copied. The
 child starts `idle`.
 
+## Compaction lifecycle materialization
+
+Every terminal compaction operation (`completed` or `failed`) whose timeline
+position falls inside the selected prefix is copied in the same transaction as
+the child and its messages. A compaction marker is ordered immediately after its
+retained-tail end, so only operations whose tail end is strictly before the last
+copied message row belong to the fork. `started` operations and operations at or
+after the selected final answer remain source-only.
+
+Each copied operation receives a new child-owned `compaction_id`. Source and
+tail endpoints are remapped from source SQLite row ids to the independently
+inserted child message rows, and the retained-tail semantic anchor is recomputed
+from the rewritten child message. Terminal status, internal summary, metrics,
+route signature, failure detail, and lifecycle timestamps remain equivalent.
+No compaction row is shared between parent and child.
+
+All copied lifecycle markers therefore hydrate in the same historical order.
+The latest eligible copied `completed` boundary remains the child's active model
+projection, including rolling summaries produced by earlier compactions; older
+completed and failed events remain visible for fidelity. If any eligible
+compaction row cannot be inserted, the session, message rows, and compaction
+rows roll back together.
+
 ## History-only fork event
 
 A forked child history ends with one derived `session.forked` row. Its stable

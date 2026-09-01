@@ -2,7 +2,7 @@
 title: "Task 51: Message Replay Soft Rewind and Idle Hardening"
 description: "إغلاق فجوات Task 49 عبر soft rewind ذري، وهوية turn ثابتة، واشتراط idle authoritative قبل Edit/Retry دون حذف التاريخ الأصلي."
 status: "completed"
-current_gate: "complete"
+current_gate: "Gate F — completed"
 review_remaining: "0%"
 priority: "high"
 scope: "Sanad agent replay persistence/protocol and Flutter conversation replay recovery"
@@ -229,6 +229,19 @@ tool result. معاملتها كحد replay مستقل قد يفشل في الع
 - [x] اختبار replay للـroot يثبت supersede لكل steers التابعة وعدم إعادة حقنها.
 - [x] اختبارات client cache/widget لعدم ظهور superseded وإبقاء الأصل عند الرفض.
 - [x] تحديث وثائق product/technical/database/QA المتأثرة وإزالة وصف `truncate` القديم.
+
+### Gate F — Compaction replay guard
+
+- [x] يعتبر آخر `context_compaction.completed` حدًا بسيطًا: لا تقبل Edit/Retry لأي root user message كانت موجودة قبله، دون تفريع source/tail.
+- [x] يرفض daemon الطلب قبل Stop أو soft rewind بنتيجة typed `target_precedes_compaction`.
+- [x] يخفي client إجراءات Edit/Retry للرسائل السابقة لآخر حدث ضغط مكتمل، مع بقاء daemon مصدر الحماية.
+- [x] لا تمنع عملية ضغط failed/cancelled الرسائل اللاحقة أو السابقة من replay.
+- [x] تغطي الاختبارات hydration والطلب المباشر من client قديم وعدم تغير التاريخ عند الرفض.
+
+#### Gate F Acceptance
+
+- [x] Given رسالة تسبق آخر ضغط مكتمل، when يعرض التاريخ أو يصل replay command مباشر، then لا تظهر الإجراءات ويرفض daemon دون mutation.
+- [x] Given رسالة أُنشئت بعد آخر ضغط مكتمل، then تبقى أهلية Edit/Retry الحالية دون تغيير.
 
 ## 6. Definition of Done
 

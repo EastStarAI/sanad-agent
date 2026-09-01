@@ -184,6 +184,10 @@ class SanadProtocolBridge {
                   getIt.isRegistered<PersistedRuntimeStateRepository>()
                   ? getIt<PersistedRuntimeStateRepository>()
                   : null,
+              compactionBoundaries:
+                  getIt.isRegistered<CompactionBoundaryRepository>()
+                  ? getIt<CompactionBoundaryRepository>()
+                  : null,
               bridge: this,
             )
           : null;

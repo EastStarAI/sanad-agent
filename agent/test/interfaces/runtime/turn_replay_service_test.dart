@@ -2,8 +2,10 @@ import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
+import 'package:sanad_agent/evolution/db/session_history_revision_repository.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/runtime/turn_replay_service.dart';
 import 'package:test/test.dart';
@@ -76,6 +78,61 @@ void main() {
       );
     },
   );
+
+  test('latest root before a completed compaction is not replayable', () {
+    sessions.saveSessionHistory(sessionId, [
+      user('request-compacted', 'compact this turn'),
+      Message(role: MessageRole.assistant, content: 'answer'),
+    ]);
+    final rows = state.db.select(
+      'SELECT id FROM messages WHERE session_id = ? ORDER BY id ASC',
+      [sessionId],
+    );
+    _insertCompletedCompaction(
+      state,
+      sessionId: sessionId,
+      sourceRowId: rows.first['id'] as int,
+      tailRowId: rows.last['id'] as int,
+    );
+    final service = TurnReplayService(
+      sessionManager: sessions,
+      persistedState: runtime,
+      compactionBoundaries: CompactionBoundaryRepository(
+        state,
+        SessionHistoryRevisionRepository(state),
+      ),
+    );
+
+    final inspection = service.inspect(
+      sessionId: sessionId,
+      targetRequestId: 'request-compacted',
+    );
+
+    expect(
+      inspection.failure,
+      TurnReplayInspectionFailure.targetPrecedesCompaction,
+    );
+    expect(
+      service.admitReplacement(
+        inspection: inspection,
+        replacementRequestId: 'request-retry',
+        replacementText: 'must not land',
+        action: 'retry',
+      ),
+      isNull,
+    );
+    expect(sessions.getMessages(sessionId), hasLength(2));
+
+    sessions.saveSessionHistory(sessionId, [
+      ...sessions.getMessages(sessionId),
+      user('request-after-compaction', 'new turn after compaction'),
+    ]);
+    final afterInspection = service.inspect(
+      sessionId: sessionId,
+      targetRequestId: 'request-after-compaction',
+    );
+    expect(afterInspection.canReplay, isTrue);
+  });
 
   test('older user turn is rejected to preserve newer user-owned turns', () {
     sessions.saveSessionHistory(sessionId, [
@@ -541,4 +598,55 @@ void main() {
     expect(inspection.safety, TurnReplaySafety.unsafe);
     expect(inspection.requiresConfirmation, isTrue);
   });
+}
+
+void _insertCompletedCompaction(
+  AgentStateDatabase state, {
+  required String sessionId,
+  required int sourceRowId,
+  required int tailRowId,
+}) {
+  state.db.execute(
+    '''
+    INSERT INTO session_compaction_operations (
+      compaction_id, session_id, trigger, status,
+      source_history_revision,
+      source_start_message_id, source_end_message_id,
+      tail_start_message_id, tail_end_message_id,
+      provider_instance_id, model_id, template_id, protocol,
+      normalized_base_url, config_revision, credential_revision,
+      context_window_tokens, effective_input_budget_tokens,
+      auto_threshold_tokens, estimated_request_tokens_before,
+      estimated_request_tokens_after, retained_tail_tokens,
+      internal_summary_json, started_at, completed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''',
+    [
+      'compaction-replay-guard',
+      sessionId,
+      'manual',
+      'completed',
+      1,
+      sourceRowId,
+      sourceRowId,
+      tailRowId,
+      tailRowId,
+      'provider',
+      'model',
+      'template',
+      'test',
+      'https://example.invalid',
+      1,
+      1,
+      1000,
+      900,
+      800,
+      700,
+      200,
+      100,
+      '{"currentGoal":"guard replay"}',
+      '2026-08-31T00:00:00Z',
+      '2026-08-31T00:00:01Z',
+    ],
+  );
 }

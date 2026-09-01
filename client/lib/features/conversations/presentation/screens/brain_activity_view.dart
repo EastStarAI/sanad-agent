@@ -275,7 +275,10 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   }
 
   int _latestReplayableRootIndex(List<CanonicalEvent> messages) {
-    for (int i = messages.length - 1; i >= 0; i--) {
+    final latestCompletedCompaction = messages.lastIndexWhere(
+      (event) => event.metadata?['compaction_event'] == true && event.metadata?['compaction_status'] == 'completed',
+    );
+    for (int i = messages.length - 1; i > latestCompletedCompaction; i--) {
       if (messages[i].isReplayableRootTurn) return i;
     }
     return -1;
@@ -771,6 +774,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     'already_in_progress' => 'A message edit or retry is already in progress.',
     'target_not_replayable_input' => 'Steering messages cannot be edited or retried.',
     'history_revision_mismatch' => 'This conversation changed before the edit could start.',
+    'target_precedes_compaction' => 'Messages before context compaction cannot be edited or retried.',
     'identity_incomplete' => 'This message does not have a reliable turn boundary.',
     'steer_reinjection_confirmation_required' => 'Retrying this turn will not send its steering messages again.',
     _ => 'Sanad could not edit or retry this message.',

@@ -19,6 +19,12 @@ Steer bubbles are never editable or retryable, including pending steers,
 delivered steers, and steers reconstructed from tool-result metadata. Those
 events keep their existing Cancel/Delete or read-only presentation.
 
+A completed context-compaction event establishes a simple read-only cutoff. Edit
+and Retry are absent from every user message at or before that event; only a new
+root user message after the latest completed compaction may expose them. Failed
+or cancelled compaction does not establish the cutoff. The daemon enforces the
+same rule before Stop or history mutation, so an older client cannot bypass it.
+
 ## Inline edit
 
 - Edit replaces the root user message body with an inline multiline input in
