@@ -21,6 +21,8 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Client/Agent fields agree but no live launcher lease exists | Group remains manual and ordinary mutation is refused. |
 | Healthy launcher lease, available Agent identity, and exact lease-owned Client nonce/PID/VM set agree | Complete, Agent-only, and Client-only runtimes remain managed; repeated component run is idempotent. |
 | Exact managed runtime plus additional manual, IDE-owned, foreign, or incomplete Client processes | Status remains managed; run/stop/reload/restart target only the lease-owned inventory and leave every extra process untouched. |
+| One driver Client and one regular Client are managed in the same worktree | `sanad-dev ui` selects only the exact owned `lib/driver_main.dart` profile; the regular Client does not create ambiguity. |
+| Driver Clients run in two worktrees | Each caller filters through its own validated lease and source/workspace identity; neither latest process nor a global singleton can redirect the other caller. |
 | `run all -d macos` from a stopped runtime | Agent and Client spawns begin without readiness ordering; both identities must verify before the lease reports running. |
 | Client exits while Agent remains active | Launcher removes only that Client from the lease and continues supervising the Agent. |
 | Agent exits or is paused while Clients remain active | Launcher keeps Clients and the lease alive; status reports Client-only and a later `run agent` rejoins the same group. |
@@ -35,6 +37,8 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | `stop client --force` | CLI rejects the misleading combination as a usage error. |
 | `doctor` | Reports class and ownership evidence without mutation. |
 | `doctor --fix` with no launcher, Agent, or client | Removes only the stale/invalid record and signals no process. |
+| `doctor --fix` with a dead launcher but a live Agent endpoint or Client | Preserves the lease, signals nothing, returns nonzero, and does not convert the live group into a manual runtime. |
+| Doctor reports manual, orphaned, cross-owned, or unverifiable | Output gives one concrete takeover/target-cleanup/owning-worktree/IDE-close next action; every mutating command still revalidates ownership. |
 | Complete manual pair | `takeover` uses a safe Agent drain followed by permanent supervisor shutdown, relaunches it as one managed group, and attempts restoration on launch failure. |
 | Incomplete/manual pair or Agent-origin takeover | Takeover refuses before client mutation. |
 | Target orphan attached to requester/source port | Cleanup refuses before signaling any PID. |
@@ -66,6 +70,18 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Existing shim belongs to another checkout | Explicit install/setup fail without replacement unless `--force`; run accepts the functional dispatcher without replacing it, preserving linked-worktree use. |
 | No arguments or help | Static help is displayed, including `sanad-dev run` as the official source command, with no SDK, package, shim, or runtime mutation. |
 | Default or overridden source profile | Default is Production with Cloud enabled; `--no-cloud` disables hosted routing; `--config config/dev.json` remains explicit. Tests use constants/fakes and perform no hosted request. |
+| `run --background` from a temporary non-TTY shell | A detached launcher retains the complete managed process group after the requester shell exits; no external `nohup`, `screen`, or `script` command is required. |
+| Background requester observes a new managed/failed attempt | It returns zero only for a managed requested component set; staged failure or bounded timeout returns nonzero with a status recovery hint. |
+| Detached child publishes failure while exiting | A two-second post-exit publication grace lets the atomic attempt/locator win over PID polling, and the requester prints the exact stage, bounded reason, and exit status. |
+| Background mode starts Agent and Client | No terminal sidecar or stdout mirror is opened; both component streams remain available from launcher-owned journals. |
+| `run --background --dry-run` | CLI rejects the contradictory request with usage exit status 64 and performs no runtime mutation. |
+| Startup with a worktree-default, `user`, or explicit absolute Home | The versioned attempt preserves requested and resolved Home separately and advances through named startup stages without becoming ownership evidence. |
+| Spawn or readiness fails before managed | Owned process trees are cleaned; the attempt records `failed`, `cleanup`, exit status, and a bounded non-secret reason. A later same-worktree status resolves it through the validated locator even when the failed request used an explicit Home. |
+| SIGINT, SIGTERM, or SIGHUP arrives after lease creation but before managed | One idempotent abort path terminates every spawned process tree, closes journals, removes the lease, records the interruption, and exits nonzero; no Agent, VM listener, supervisor, or Client remains. |
+| SIGHUP arrives after managed | The controller performs its normal complete-group cleanup and removes the lease rather than orphaning children. |
+| Startup-attempt locator is stale, malformed, or belongs to another workspace hash | Status reports invalid diagnostics; the record cannot select or mutate a runtime. |
+| Fresh attempt remains `starting` while Agent/Client identity is appearing | Status projects `starting` plus the exact stage for at most six minutes and does not transiently claim manual/orphaned/unverifiable; mutation still requires a complete managed lease. |
+| Starting attempt expires or becomes terminal | Status returns to current process/lease classification and never treats the diagnostic attempt as liveness. |
 | Agent emits logger, print, stderr, or an uncaught stack before health | All bytes remain in bounded history after process exit and are available to follow readers. |
 | Client emits Flutter build output, logger/debug output, print, stderr, or uncaught stack before VM readiness | One Client journal preserves the output in arrival order and its watcher can start before VM discovery. |
 | History transitions to follow while output is written | Snapshot offsets prevent gaps and duplicate replay. |

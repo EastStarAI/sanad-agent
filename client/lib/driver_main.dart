@@ -8,7 +8,7 @@ import 'package:flutter/gestures.dart';
 
 void main() {
   // Enable integration testing with the Flutter Driver extension.
-  enableFlutterDriverExtension();
+  enableFlutterDriverExtension(enableTextEntryEmulation: false);
 
   const Set<String> ignoredNoiseTypes = {
     'SizedBox',
@@ -483,6 +483,90 @@ void main() {
       return developer.ServiceExtensionResponse.error(
         developer.ServiceExtensionResponse.extensionError,
         json.encode({'error': e.toString()}),
+      );
+    }
+  });
+
+  // Register text entry without replacing the operating system text channel.
+  developer.registerExtension('ext.sanad_client.enter_text', (method, parameters) async {
+    try {
+      final targetKey = parameters['key']?.trim();
+      final targetText = parameters['text'];
+      final root = WidgetsBinding.instance.rootElement;
+      if (root == null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': 'Root element not found'}),
+        );
+      }
+      if (targetText == null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': 'Text entry requires a text value'}),
+        );
+      }
+
+      Element? keyedElement;
+      if (targetKey != null && targetKey.isNotEmpty) {
+        void findKeyedElement(Element element) {
+          if (keyedElement != null) return;
+          final key = element.widget.key;
+          final keyValue = key is ValueKey ? key.value.toString() : key?.toString();
+          if (keyValue == targetKey) {
+            keyedElement = element;
+            return;
+          }
+          element.visitChildren(findKeyedElement);
+        }
+
+        findKeyedElement(root);
+        if (keyedElement == null) {
+          return developer.ServiceExtensionResponse.error(
+            developer.ServiceExtensionResponse.extensionError,
+            json.encode({'error': 'Text input key not found: $targetKey'}),
+          );
+        }
+      }
+
+      EditableTextState? editableState;
+      void findEditableState(Element element) {
+        if (editableState != null) return;
+        if (element is StatefulElement && element.state is EditableTextState) {
+          final candidate = element.state as EditableTextState;
+          if (keyedElement != null || candidate.widget.focusNode.hasFocus) {
+            editableState = candidate;
+            return;
+          }
+        }
+        element.visitChildren(findEditableState);
+      }
+
+      findEditableState(keyedElement ?? root);
+      if (editableState == null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({
+            'error': targetKey == null || targetKey.isEmpty
+                ? 'No focused editable text field found'
+                : 'No editable text field found for key: $targetKey',
+          }),
+        );
+      }
+
+      editableState!.updateEditingValue(
+        TextEditingValue(
+          text: targetText,
+          selection: TextSelection.collapsed(offset: targetText.length),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      return developer.ServiceExtensionResponse.result(
+        json.encode({'status': 'ok'}),
+      );
+    } catch (error) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': error.toString()}),
       );
     }
   });

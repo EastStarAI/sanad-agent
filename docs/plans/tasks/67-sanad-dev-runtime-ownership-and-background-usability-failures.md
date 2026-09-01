@@ -1,9 +1,9 @@
 ---
 title: "Task 67: sanad-dev Runtime Ownership and Background Usability Failures"
 description: "سجل مشكلات قابل لإعادة الإنتاج لفشل تشغيل sanad-dev في الخلفية، وتصنيف ownership، والتنظيف، والتحكم في runtime."
-status: "proposed"
-current_gate: "problem inventory"
-review_remaining: "100%"
+status: "completed"
+current_gate: "complete"
+review_remaining: "0%"
 priority: "high"
 scope: "scripts/sanad_dev runtime launch, discovery, ownership, doctor, logs, restart, and stop behavior"
 depends_on: "current sanad-dev launcher lease and worktree runtime contracts"
@@ -222,36 +222,123 @@ sanad-dev run --driver --no-cloud --home <explicit-test-home>
 - عند وجود غموض، يعرض الأمر قائمة runtimes المطابقة وأدلة الملكية ولا يغير
   حالة أي runtime.
 
-## 4. مصفوفة إعادة الإنتاج المطلوبة
+## 4. نتيجة الفرز الحالية
 
-- [ ] تشغيل foreground من Terminal بشرية.
-- [ ] تشغيل background من shell طويلة العمر.
-- [ ] تشغيل background من shell مؤقتة تنتهي فورًا.
-- [ ] startup مع وبدون TTY.
-- [ ] startup مع worktree home الافتراضية.
-- [ ] startup مع `--home` صريحة.
-- [ ] runtime واحدة مقابل runtimes متوازية في worktrees مختلفة.
-- [ ] تشغيل `--driver` في worktree اثنتين بالتزامن وتنفيذ `sanad-dev ui snapshot`
+| المشكلة | التصنيف | الدليل/الإجراء |
+|---|---|---|
+| P1 | عطل حالي قيد الإصلاح | أضيف `run --background` وhandshake؛ بقي اختبار shell مؤقت فعلي. |
+| P2 | عطل حالي قيد الإصلاح | startup attempt مرحلية تمنع الفشل الصامت بعد بدء orchestration. |
+| P3 | مُصلح ومثبت حيًا | SIGINT/SIGTERM/SIGHUP أثناء startup تسجل failure ثم تنظف الشجرة؛ SIGHUP بعد managed يمر عبر cleanup العادي. |
+| P4 | مغطى قائمًا | `terminateSanadDevProcessTree` يتتبع supervisor والأطفال، مع اختبار ترتيب Unix قائم. |
+| P5–P6 | مغطى قائمًا ويحتاج parity fixture | ownership الحالية تربط Home/source/workspace/launcher/nonce والاختبارات تثبت عزل worktree. |
+| P7 | مُصلح آليًا | doctor يحافظ على lease أمام أي endpoint حية ويعرض next action محددة؛ target cleanup يعيد التحقق قبل الإشارة. |
+| P8 | مغطى قائمًا ويحتاج regression صريح | selector يطابق workspace والport مع fail-closed ownership. |
+| P9 | مُصلح آليًا | محاولة `starting` حديثة تعرض مرحلة انتقالية حتى ست دقائق؛ بعدها تعود ownership الحية للتصنيف الطبيعي. |
+| P10 | مُصلح آليًا | locator الخاص بالworktree يستعيد requested/resolved Home بعد فشل Home صريحة. |
+| P11 | مُصلح على مستوى الاختيار | `ui` يختار owned `driver_main.dart` فقط؛ بقي اختبار driverين فعليين بالتوازي. |
+
+## 5. القرارات المقفلة ونطاق التنفيذ
+
+- الأمر الرسمي المقفل للتشغيل الخلفي هو `sanad-dev run --background`؛ ينتظر
+  handshake محدودًا حتى `managed` أو فشل مرحلي، ولا يُطلب من المستخدم تركيب
+  `nohup` أو `screen` أو `script` يدويًا.
+- launcher واحدة durable تبقى مالكة لكل process tree. لا يتحول Agent أو Client
+  إلى manual runtime لمجرد انفصال الطرفية.
+- فشل startup يُحفظ في سجل محاولة غير سري يضم المرحلة والسبب وexit status وHome
+  المطلوبة/المحلولة، بينما تبقى journals للتشخيص وليست دليل ملكية.
+- كل عمليات status/logs/restart/stop/ui تختار runtime أولًا بهوية worktree، ثم
+  تتحقق من launcher id والnonce والHome والمنافذ؛ لا يوجد global latest-client.
+- cleanup لا يقتل process بالمنفذ أو source path وحدهما، ولا يلمس runtime تخص
+  worktree أخرى.
+- لا تشمل المهمة تغيير daemon restart checkpoint أو بروتوكول source handoff إلا
+  إذا أثبت اختبار regression أن العطل يقع في حد الملكية المشترك نفسه.
+
+## 6. بوابات التنفيذ
+
+### G0 — الفرز وإعادة الإنتاج الحتمية
+
+- [x] إنشاء Worktree مستقلة من commit `1190346` دون نقل تغييرات Worktree المصدر غير الملتزم بها.
+- [x] إثبات مرور baseline الحالي لاختبارات runtime context والownership/process selection (34 اختبارًا).
+- [x] إضافة تحقق معزول يغطي shell طويل/قصير العمر، غياب TTY، وفقد terminal عبر SIGHUP أثناء startup دون لمس runtime المستخدم.
+- [x] تصنيف P1–P11 إلى: عطل حالي، مغطى بإصلاح قائم، أو يحتاج regression إضافية.
+
+### G1 — تشغيل خلفي رسمي وتشخيص startup
+
+- [x] إضافة أمر خلفي بسيط مملوك لـ`sanad-dev` مع readiness/failure handshake محدود الزمن.
+- [x] حفظ startup attempt آمن يميز requested Home وresolved Home وfallback التشخيصي.
+- [x] ضمان أن كل خروج قبل managed يسجل المرحلة والسبب وexit status وينظف process tree كاملة.
+- [x] توثيق الأمر وسلوك logs/status عند النجاح والفشل.
+
+### G2 — استقرار الملكية والحالة والتنظيف
+
+- [x] تثبيت state machine الانتقالية ومنع تصنيف `starting` مؤقتًا كـorphaned/manual/unverifiable.
+- [x] مطابقة Home الصريحة وsource/worktree/launcher evidence في status/logs/restart/stop.
+- [x] جعل doctor يعرض إجراء cleanup واحدًا آمنًا وقابلًا للتنفيذ لكل حالة قابلة للإصلاح.
+- [x] إثبات إنهاء supervisor والأطفال كوحدة واحدة وعدم الإضرار بأي runtime أخرى.
+
+### G3 — تعدد UI drivers
+
+- [x] إزالة أي اختيار global/latest-client من مسار `sanad-dev ui`.
+- [x] تغطية driver متزامنة في worktree اثنتين مع snapshot/find/screenshot وإعادة تشغيل إحداهما.
+- [x] إثبات بقاء runtime الأخرى قابلة للتحكم ودون إعادة تصنيف.
+
+### G4 — التحقق والتوثيق
+
+- [x] تمرير analyzer والاختبارات المركزة مع output محدود.
+- [x] تحديث وثائق التصميم وQA ومرجع CLI بما يطابق السلوك المنفذ.
+- [x] تشغيل `graphify update .` ومراجعة diff النهائي.
+- [x] تنفيذ تحقق runtime معزول فقط؛ تم كل stop بعد موافقة المستخدم الصريحة ولم يُستخدم switch.
+
+### G5 — الكتابة البشرية والآلية في driver
+
+- [x] تعطيل Flutter Driver text-entry emulation افتراضيًا حتى تبقى قناة نظام التشغيل فعالة.
+- [x] إضافة Sanad VM extension لإدخال النص عبر `EditableTextState` دون استبدال `SystemChannels.textInput`.
+- [x] جعل `sanad-dev ui enter-text` يفضل الامتداد الجديد مع fallback متوافق للإصدارات السابقة.
+- [x] إثبات آلي وحي أن `enter-text` يغيّر قيمة `chat_input` إلى `Automated driver text works` ثم التحقق منها بـ`find`.
+- [x] تشغيل Client مرئية بـ`--driver`؛ أكد المستخدم أن ضغطات الأحرف البشرية تُكتب طبيعيًا بعد نجاح الإدخال الآلي.
+- [x] تحديث مواصفات Driver وQA ومهارة الاختبار وتشغيل analyzer والاختبارات وGraphify.
+
+## 7. مصفوفة إعادة الإنتاج المطلوبة
+
+- [x] تشغيل foreground من Terminal بشرية مع Agent-only managed ثم stop رسمي.
+- [x] تشغيل background من shell طويلة العمر حتى اكتمال handshake.
+- [x] تشغيل background من shell مؤقتة تنتهي فورًا.
+- [x] startup مع وبدون TTY، مع فقد terminal/SIGHUP أثناء foreground startup.
+- [x] startup مع worktree home الافتراضية.
+- [x] startup مع `--home` صريحة.
+- [x] runtime واحدة مقابل runtimes متوازية في worktrees مختلفة.
+- [x] تشغيل `--driver` في worktree اثنتين بالتزامن وتنفيذ `sanad-dev ui snapshot`
       و`find` و`screenshot` من كل worktree مع إثبات بقاء الأخرى قابلة للتحكم.
-- [ ] إعادة تشغيل driver في worktree مع استمرار UI commands في الأخرى دون انقطاع.
-- [ ] EOF أثناء بدء Agent وقبل Client.
-- [ ] خروج Client أثناء startup وبعد managed.
-- [ ] خروج Agent child مع بقاء supervisor.
-- [ ] stale launcher record مع process حية وبدون process حية.
+- [x] إعادة تشغيل driver في worktree مع استمرار UI commands في الأخرى دون انقطاع.
+- [x] فقد terminal/SIGHUP أثناء بدء Agent وقبل اكتمال Client.
+- [x] خروج Client بعد managed مع بقاء Agent managed، ثم إعادة ضم Client.
+- [x] خروج Agent managed مع بقاء Client managed، واختبارات process-tree تغطي supervisor/child.
+- [x] stale launcher record مع process حية وبدون process حية عبر doctor predicate والاختبارات.
 
-## 5. معايير القبول للإصلاح المستقبلي
+## 8. معايير القبول
 
-- [ ] يوجد أمر رسمي واحد وبسيط لتشغيل runtime في الخلفية، أو خطأ صريح يحدد أن
+- [x] يوجد أمر رسمي واحد وبسيط لتشغيل runtime في الخلفية، أو خطأ صريح يحدد أن
       التشغيل attached فقط ويقدم البديل الرسمي.
-- [ ] لا يفشل startup بصمت؛ كل فشل يحمل المرحلة والسبب وexit status.
-- [ ] status لا يناقض listener/VM/launcher evidence بعد انتهاء مهلة startup.
-- [ ] `--home` الصريحة تبقى جزءًا صحيحًا من runtime identity والتشخيص.
-- [ ] logs/status/restart/stop تختار worktree نفسها بصورة متسقة.
-- [ ] `sanad-dev ui` تدعم drivers متزامنة في worktrees متعددة، وتختار client
+- [x] لا يفشل startup بصمت؛ كل فشل يحمل المرحلة والسبب وexit status.
+- [x] status لا يناقض listener/VM/launcher evidence بعد انتهاء مهلة startup.
+- [x] `--home` الصريحة تبقى جزءًا صحيحًا من runtime identity والتشخيص.
+- [x] logs/status/restart/stop تختار worktree نفسها بصورة متسقة.
+- [x] `sanad-dev ui` تدعم drivers متزامنة في worktrees متعددة، وتختار client
       المطابقة للcaller worktree دون تعطيل أو إيقاف أو إعادة تصنيف الأخريات.
-- [ ] restart أو stop لdriver في worktree لا يقطع UI commands في أي worktree أخرى.
-- [ ] stop ينظف process group المملوكة كاملة، بما فيها supervisors والأطفال.
-- [ ] doctor يقدم إجراء cleanup آمنًا وقابلًا للتنفيذ لكل حالة غير managed.
-- [ ] cleanup لا يوقف Agent أو Client تخص worktree أخرى.
-- [ ] اختبارات آلية تغطي مصفوفة إعادة الإنتاج السابقة دون الاعتماد على PIDs أو
-      منافذ ثابتة.
+- [x] restart أو stop لdriver في worktree لا يقطع UI commands في أي worktree أخرى.
+- [x] stop ينظف process group المملوكة كاملة، بما فيها supervisors والأطفال.
+- [x] doctor يقدم إجراء cleanup آمنًا وقابلًا للتنفيذ لكل حالة غير managed.
+- [x] cleanup لا يوقف Agent أو Client تخص worktree أخرى.
+- [x] اختبارات آلية مع تحقق حي معزول تغطي مصفوفة إعادة الإنتاج دون تثبيت PIDs أو
+      منافذ في التنفيذ؛ أرقام الأدلة الحية مؤقتة فقط.
+
+## 9. تعريف الاكتمال
+
+- [x] كل معيار قبول مرتبط باختبار آلي أو دليل تحقق معزول محدد.
+- [x] `fvm flutter analyze` يمر، وتمُر اختبارات `sanad-dev` المركزة على macOS
+      مع بقاء مصفوفة CI العابرة للمنصات قابلة للتشغيل.
+- [x] وثائق `docs/technical/` و`docs/qa_maintenance/` ومرجع CLI محدثة دون
+      إنشاء عقد منافس في README.
+- [x] لا توجد تغييرات غير لازمة في حدود restart أو source handoff.
+- [x] Graphify محدث، والـdiff النهائي خالٍ من أسرار ومسارات مستخدم ثابتة.
+- [x] لا commit أو push دون موافقة المستخدم.

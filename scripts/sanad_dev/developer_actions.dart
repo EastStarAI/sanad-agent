@@ -1021,6 +1021,21 @@ Future<void> handleClientDevTools(int? portOverride) async {
   exit(exitCode);
 }
 
+List<ClientInstance> selectManagedUiDriverClients(
+  RuntimeOwnershipAssessment ownership,
+) {
+  if (!ownership.isManaged) return const [];
+  return ownership.state.ownedClients
+      .where(
+        (client) =>
+            client.launchProfile?.target
+                ?.replaceAll('\\', '/')
+                ?.endsWith('lib/driver_main.dart') ==
+            true,
+      )
+      .toList(growable: false);
+}
+
 Future<void> handleUiDriverCommand(List<String> args) async {
   final callerDir =
       Platform.environment['SANAD_DEV_CALLER_DIR'] ?? Directory.current.path;
@@ -1054,9 +1069,7 @@ Future<void> handleUiDriverCommand(List<String> args) async {
       state: processState,
       sanadHome: activeHome,
     );
-    final managedClients = ownership.isManaged
-        ? ownership.state.ownedClients
-        : const <ClientInstance>[];
+    final managedClients = selectManagedUiDriverClients(ownership);
     if (managedClients.length != 1) {
       stderr.writeln(
         managedClients.isEmpty

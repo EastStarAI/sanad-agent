@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 
 import '../../../../scripts/flutter_driver_cli/cli_runner.dart';
@@ -38,6 +40,28 @@ void main() {
           'target',
         ]).run(),
         1,
+      );
+    });
+
+    test('driver text entry preserves the operating system input channel', () {
+      final driverSource = File('lib/driver_main.dart').readAsStringSync();
+      final controllerSource = File(
+        '../scripts/flutter_driver_cli/flutter_vm_controller.dart',
+      ).readAsStringSync();
+
+      expect(
+        driverSource,
+        contains(
+          'enableFlutterDriverExtension(enableTextEntryEmulation: false)',
+        ),
+      );
+      expect(
+        driverSource,
+        contains("registerExtension('ext.sanad_client.enter_text'"),
+      );
+      expect(
+        controllerSource,
+        contains("_discoverIsolateId('ext.sanad_client.enter_text')"),
       );
     });
 

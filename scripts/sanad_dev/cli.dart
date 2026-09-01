@@ -44,6 +44,8 @@ void main(List<String> args) async {
   bool driverMode = false;
   final cloudEnabled = resolveSanadDevCloudEnabled(args);
   bool dryRun = false;
+  bool backgroundMode = false;
+  bool internalBackgroundMode = false;
   bool forceRestart = false;
   bool fix = false;
   int restartTimeoutSeconds = 60;
@@ -78,6 +80,10 @@ void main(List<String> args) async {
       driverMode = true;
     } else if (arg == '--dry-run') {
       dryRun = true;
+    } else if (arg == '--background') {
+      backgroundMode = true;
+    } else if (arg == '--internal-background') {
+      internalBackgroundMode = true;
     } else if (arg == '--force') {
       forceRestart = true;
     } else if (arg == '--fix') {
@@ -121,6 +127,25 @@ void main(List<String> args) async {
       exitCode = 64;
       return;
     }
+    if (backgroundMode && dryRun) {
+      stderr.writeln('--background cannot be combined with --dry-run.');
+      exitCode = 64;
+      return;
+    }
+    if (backgroundMode && internalBackgroundMode) {
+      stderr.writeln('Invalid nested background launch request.');
+      exitCode = 64;
+      return;
+    }
+    if (backgroundMode) {
+      await handleBackgroundRun(
+        originalArguments: args,
+        target: componentCommand!.target,
+        device: device,
+        sanadHomePath: sanadHomePath,
+      );
+      return;
+    }
     await handleRun(
       target: componentCommand!.target,
       driverMode: driverMode,
@@ -129,6 +154,7 @@ void main(List<String> args) async {
       device: device,
       configPath: configPath,
       sanadHomePath: sanadHomePath,
+      backgroundMode: internalBackgroundMode,
     );
     return;
   }
@@ -316,6 +342,9 @@ void printUsage() {
     '  --config <path>           Client config file (default: $defaultSanadDevClientConfig).',
   );
   print('  --dry-run                 Resolve and print runtime settings only.');
+  print(
+    '  --background              Launch detached and wait for a managed/failure result.',
+  );
   print('  --fix                     Apply doctor safe stale-record repairs.');
   print(
     '  --timeout <seconds>       Agent restart safety timeout (default: 60).',
@@ -326,6 +355,7 @@ void printUsage() {
   print('');
   print('Examples:');
   print('  sanad-dev run');
+  print('  sanad-dev run --background');
   print('  sanad-dev run agent');
   print('  sanad-dev run client -d macos');
   print('  sanad-dev stop client -d macos');

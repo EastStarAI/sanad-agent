@@ -350,6 +350,31 @@ void main() {
     );
   });
 
+  test('doctor removes stale lease only when every live surface is absent', () {
+    expect(
+      sanad_dev.canRemoveStaleLauncherRecord(
+        launcherLive: false,
+        endpointLive: false,
+        clientLive: false,
+      ),
+      isTrue,
+    );
+    for (final evidence in const [
+      (true, false, false),
+      (false, true, false),
+      (false, false, true),
+    ]) {
+      expect(
+        sanad_dev.canRemoveStaleLauncherRecord(
+          launcherLive: evidence.$1,
+          endpointLive: evidence.$2,
+          clientLive: evidence.$3,
+        ),
+        isFalse,
+      );
+    }
+  });
+
   test('stop refuses before invoking any fake for blocked ownership', () async {
     final blocked = sanad_dev.ClientInstance(
       51084,
@@ -628,6 +653,46 @@ void main() {
       ),
       58085,
     );
+  });
+
+  test('UI driver selection ignores non-driver managed clients', () {
+    final driver = sanad_dev.ClientInstance(
+      51084,
+      'driver-token',
+      clientDirectory,
+      'macos',
+      pid: 101,
+      launchProfile: const launch_profile.ClientLaunchProfile(
+        compileArguments: [],
+        defines: {},
+        target: 'lib/driver_main.dart',
+        deviceId: 'macos',
+      ),
+    );
+    final regular = sanad_dev.ClientInstance(
+      51085,
+      'regular-token',
+      clientDirectory,
+      'macos',
+      pid: 102,
+      launchProfile: const launch_profile.ClientLaunchProfile(
+        compileArguments: [],
+        defines: {},
+        target: 'lib/main.dart',
+        deviceId: 'macos',
+      ),
+    );
+    final assessment = sanad_dev.RuntimeOwnershipAssessment(
+      classification: runtime_ownership.RuntimeOwnershipClass.managed,
+      state: sanad_dev.RuntimeProcessState(
+        agent: null,
+        ownedClients: [regular, driver],
+        crossOwnedClients: const [],
+        ambiguousClients: const [],
+      ),
+    );
+
+    expect(sanad_dev.selectManagedUiDriverClients(assessment), [driver]);
   });
 
   test('source-switch status is explicitly historical', () {

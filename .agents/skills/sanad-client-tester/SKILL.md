@@ -129,6 +129,13 @@ To inspect the application's interface dynamically without rendering heavy exter
     sanad-dev ui batch --file client/test/interactive/sample_recipe.json
     ```
 
+   Driver mode keeps Flutter's real operating-system text channel active so a
+   human can type normally while automation is connected. `enter-text` uses the
+   Sanad text-entry extension rather than globally enabling Flutter Driver's
+   mocked text input. After automated entry, inspect the same keyed field and,
+   when physical-input behavior changed, ask the human tester to type additional
+   characters before closing the live gate.
+
 6. **Visual Layout Verification (Optional):** Capture a screenshot only when layout evidence is needed or explicitly requested:
 
     ```bash
