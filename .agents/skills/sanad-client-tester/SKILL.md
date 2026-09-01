@@ -163,7 +163,7 @@ These general-purpose tools are permanently located in the workspace:
 * **Never Abort mid-Driver Run:** Do not cancel a driver script while a tap or text entry operation is active to prevent the UI thread from hanging in a "Guarded" state.
 * **Guarded Recovery:** If a `Guarded function conflict` occurs, immediately trigger a **Hot Restart** using the developer utility: `sanad-dev restart client` to reset the service.
 * **Target Scaffolds over Slivers:** Tapping items inside `CustomScrollView` (Slivers) may hang on macOS. Target outer Scaffolds or static layouts first.
-* **Unsynchronized Operations under Stream Activities:** Always wrap interactive driver actions (such as `tap` or `enterText`) inside `await driver.runUnsynchronized(() async { ... })` when testing fields or screens containing ongoing animations, thinking indicators, progress bars, or active thought streams. Failing to do so will cause the driver to hang indefinitely waiting for the application to reach an idle state.
+* **Unsynchronized Legacy Flutter Driver Operations:** Wrap Flutter Driver fallback actions such as legacy `tap`, `enterText`, and scroll-until-visible inside `await driver.runUnsynchronized(() async { ... })` when screens contain ongoing animations, thinking indicators, progress bars, or active thought streams. The primary Sanad `enter-text` path is a VM service extension that updates `EditableTextState` while keeping the operating-system text channel active; do not globally enable Flutter Driver text-entry emulation around it.
 * **No Hardcoded Machine Paths:** Do not hardcode absolute, machine-specific paths in driver interaction scripts for dynamic selector keys such as workspaces. Read paths dynamically or inject them through environment variables to preserve cross-platform compatibility.
 
 ---
@@ -178,6 +178,13 @@ Before running any integration or interactive tests, verify that all backend ser
 
 * **Why?** Parallel agent sessions running in different worktrees clash when they bind the same local gateway or Flutter VM service port, and they can corrupt or duplicate runtime work when they share writable session state.
 * **The Solution:** Use `sanad-dev run` from the current checkout/worktree. Do not infer worktrees from directory naming, modify shared `.env`/JSON files, set `SANAD_STATE_HOME`, or hand-assign ports unless diagnosing the launcher itself. Linked worktrees receive one isolated `SANAD_HOME` containing identity, providers, credentials, databases, memories, dumps, and runtime state; the primary checkout retains the normal user home. Client preferences follow the same home-derived isolation boundary.
+
+When a change affects driver discovery or runtime ownership, verify two managed
+`--driver` runtimes concurrently. From each owning worktree, run `snapshot`,
+`find`, `enter-text`, and `screenshot`; restart or stop one Client and prove the
+other worktree's UI commands still succeed. Automatic selection must use the
+caller worktree's validated lease and exact `lib/driver_main.dart` profile,
+never a newest/global Client.
 
 #### A. Standard Interactive Run
 
@@ -194,6 +201,16 @@ For deterministic local-only verification, disable cloud explicitly:
 ```bash
 sanad-dev run --driver --no-cloud
 ```
+
+For an agent-owned disposable run that must survive a temporary/non-TTY shell,
+use the official detached mode and wait for its managed/failure handshake:
+
+```bash
+sanad-dev run --background --driver --no-cloud
+```
+
+Do not compose `nohup`, `screen`, `script`, or shell `&` wrappers around
+`sanad-dev run`.
 
 #### B. Human Review and Connected Verification
 

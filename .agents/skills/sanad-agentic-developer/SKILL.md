@@ -130,12 +130,18 @@ sanad-dev -h
 ```bash
 sanad-dev run
 sanad-dev run --driver
+sanad-dev run --background
+sanad-dev run --background --driver --no-cloud
 sanad-dev status
 ```
 
 Local and cloud gateway connections are enabled by default. Use `--no-cloud` only for explicit local-only verification. `--cloud` is an explicit restatement of the default, not a requirement for normal connected development.
 
 Use `--home user` only when a linked worktree intentionally needs the primary user's Sanad Home. Otherwise allow the launcher to choose the worktree-scoped home; an explicit custom home must be an absolute path.
+
+`run --background` is the sole official detached launch mode. It starts one detached launcher that remains the owner of the Agent, Clients, journals, and complete process trees, then returns success only after a bounded handshake proves the requested components are managed. Never wrap `sanad-dev run` in user-composed `nohup`, `screen`, `script`, or shell-background recipes. A temporary or non-TTY shell must use `--background`; launcher interruption before managed must publish a staged failure and clean every process it spawned.
+
+After any background launch or startup failure, use `sanad-dev status` as the canonical diagnostic. It distinguishes requested Home, resolved Home, startup stage, outcome, exit status, and bounded failure reason from current process/lease ownership. A fresh `starting` attempt is transitional diagnostic state only and never grants mutation authority.
 
 ### Logs and Runtime Actions
 
@@ -155,7 +161,7 @@ Client restart/reload reuses and validates the matched live Flutter process's la
 
 Always keep agent-issued log commands bounded. Do not add `-f` or `--follow`.
 
-The launcher resolves the caller's Git worktree before selecting an instance. Use `-p <port>` only when an explicit diagnostic override is necessary.
+The launcher resolves the caller's Git worktree before selecting an instance. Use `-p <port>` only when an explicit diagnostic override is necessary. With concurrent worktree runtimes, issue `status`, logs, UI, restart, reload, and stop from the owning worktree; never select the newest global process or reuse another worktree's Agent/VM port. Restarting or stopping one proven managed group must leave every sibling worktree runtime unchanged.
 
 ### User-Authorized Runtime Source Handoff
 
