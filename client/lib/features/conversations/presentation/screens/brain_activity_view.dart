@@ -1205,7 +1205,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
 
   Widget _buildEventTile(CanonicalEvent event) {
     final latestRootIndex = _latestReplayableRootIndex(_messages);
-    final canReplay = latestRootIndex >= 0 && _messages[latestRootIndex].id == event.id;
+    final canReplay = !widget.hasNewerHistory && latestRootIndex >= 0 && _messages[latestRootIndex].id == event.id;
     final canFork = event.isForkableFinalAnswer;
     return BlocSelector<ConversationInputCubit, ConversationInputState, String?>(
       selector: (state) => state.pendingSuspendedRequest?.toolName,

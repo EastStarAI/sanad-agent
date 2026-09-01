@@ -964,6 +964,73 @@ void main() {
     expect(find.text('editable prompt'), findsOneWidget);
   });
 
+  testWidgets('live committed root shows replay actions without navigation', (
+    tester,
+  ) async {
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: const [],
+    );
+
+    messagesController.add([
+      CanonicalEvent(
+        id: 'live-root',
+        kind: EventKind.userMessage,
+        text: 'live durable prompt',
+        timestamp: DateTime.utc(2026, 9, 1),
+        metadata: const {
+          'request_id': 'request-live-root',
+          'message_id': 'message-live-root',
+          'turn_id': 'turn-live-root',
+          'input_kind': 'root_turn',
+          'replay_eligible': true,
+        },
+      ),
+    ]);
+    await tester.pump();
+
+    expect(find.byKey(const Key('edit_message_button')), findsOneWidget);
+    expect(find.byKey(const Key('retry_message_button')), findsOneWidget);
+  });
+
+  testWidgets('partial anchored history hides replay actions until tail', (
+    tester,
+  ) async {
+    final root = CanonicalEvent(
+      id: 'anchored-root',
+      kind: EventKind.userMessage,
+      text: 'not globally latest',
+      timestamp: DateTime.utc(2026, 9, 1),
+      metadata: const {
+        'request_id': 'request-anchored-root',
+        'message_id': 'message-anchored-root',
+        'turn_id': 'turn-anchored-root',
+        'input_kind': 'root_turn',
+        'replay_eligible': true,
+      },
+    );
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [root],
+      hasNewerHistory: true,
+      onLoadNewerHistory: () async {},
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('edit_message_button')), findsNothing);
+    expect(find.byKey(const Key('retry_message_button')), findsNothing);
+  });
+
   testWidgets('completed compaction hides replay actions for earlier messages', (
     tester,
   ) async {

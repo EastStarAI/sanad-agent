@@ -214,11 +214,21 @@ class SessionTurnExecutor {
 
       if (!isResume) {
         final receivedAt = turnRequest.metadata['received_at']?.toString();
-        final durableUser = _findDurableMessage(
-          sessionId: event.sessionId,
-          role: MessageRole.user,
-          requestId: turnRequest.requestId,
-        );
+        final requestId = turnRequest.requestId;
+        final durableUser = requestId == null || requestId.isEmpty
+            ? _findDurableMessage(
+                sessionId: event.sessionId,
+                role: MessageRole.user,
+                requestId: requestId,
+              )
+            : await agentRunner.commitUserMessage(
+                content,
+                requestId: requestId,
+                receivedAt: receivedAt == null
+                    ? null
+                    : DateTime.tryParse(receivedAt),
+              );
+        if (!ownsRun(activeRun)) return;
         emitResponse(
           GatewayResponse(
             sessionId: event.sessionId,

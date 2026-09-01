@@ -387,9 +387,12 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     );
     return Directionality(
       textDirection: TextDirection.ltr,
-      child: Row(
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 4,
         children: [
-          if (metaText.isNotEmpty || timestampText.isNotEmpty) ...[
+          if (metaText.isNotEmpty || timestampText.isNotEmpty)
             Text(
               [
                 timestampText,
@@ -400,37 +403,39 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                 fontSize: 11,
               ),
             ),
-            const SizedBox(width: 8),
-          ],
-
-          if (widget.canFork)
-            Semantics(
-              label: 'Fork',
-              child: IconButton(
-                key: const Key('fork_conversation_button'),
-                tooltip: 'Fork',
-                visualDensity: VisualDensity.compact,
-                constraints: ConversationActionStyle.constraints,
-                padding: EdgeInsets.zero,
-                onPressed: widget.isForkPending || widget.onFork == null ? null : () => unawaited(widget.onFork!()),
-                icon: widget.isForkPending
-                    ? const SizedBox(
-                        width: 14,
-                        height: 14,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : Icon(
-                        Icons.account_tree_outlined,
-                        size: ConversationActionStyle.iconSize,
-                        color: ConversationActionStyle.iconColor(context),
-                      ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.canFork) ...[
+                Semantics(
+                  label: 'Fork',
+                  child: IconButton(
+                    key: const Key('fork_conversation_button'),
+                    tooltip: 'Fork',
+                    visualDensity: VisualDensity.compact,
+                    constraints: ConversationActionStyle.constraints,
+                    padding: EdgeInsets.zero,
+                    onPressed: widget.isForkPending || widget.onFork == null ? null : () => unawaited(widget.onFork!()),
+                    icon: widget.isForkPending
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            Icons.account_tree_outlined,
+                            size: ConversationActionStyle.iconSize,
+                            color: ConversationActionStyle.iconColor(context),
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              CopyButton(
+                text: widget.event.text,
+                successMessage: 'Answer copied to clipboard',
               ),
-            ),
-
-          const SizedBox(width: 8),
-          CopyButton(
-            text: widget.event.text,
-            successMessage: 'Answer copied to clipboard',
+            ],
           ),
         ],
       ),

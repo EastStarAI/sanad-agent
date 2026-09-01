@@ -34,8 +34,11 @@ SQLite `messages.id`, hydration sequence indexes, timestamps, and message text
 are not identities. Missing identity yields a typed failure and leaves history
 unchanged. Live user echoes and final answers carry the same committed
 `message_id` and `turn_id` as hydration; root echoes also carry daemon-authored
-`input_kind` and `replay_eligible`. Controls must not require reconnect to gain
-identity.
+`input_kind` and `replay_eligible`. The daemon commits the root history row
+before publishing its live `user_message`; model execution reuses that exact
+committed input rather than appending a second copy. Controls must not require
+reconnect to gain identity. An anchored page with `has_newer=true` is not an
+authoritative replay surface until its newer suffix reaches the tail.
 
 ## Command
 

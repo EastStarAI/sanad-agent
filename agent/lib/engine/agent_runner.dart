@@ -516,15 +516,60 @@ class AgentRunner {
   }
 
   int _appendOrReuseUserMessage(Message userMessage, String? requestId) {
-    if (requestId != null && requestId.isNotEmpty && history.isNotEmpty) {
-      final last = history.last;
-      if (last.role == MessageRole.user &&
-          last.metadata?['request_id']?.toString() == requestId) {
-        return history.length - 1;
-      }
-    }
+    final existingIndex = _persistedUserMessageIndex(requestId);
+    if (existingIndex != -1) return existingIndex;
     history.add(userMessage);
     return history.length - 1;
+  }
+
+  int _persistedUserMessageIndex(String? requestId) {
+    if (requestId == null || requestId.isEmpty || history.isEmpty) return -1;
+    final last = history.last;
+    return last.role == MessageRole.user &&
+            last.metadata?['request_id']?.toString() == requestId
+        ? history.length - 1
+        : -1;
+  }
+
+  /// Commits one root user input before any live event exposes it to clients.
+  /// Re-entry with the same request id reuses the durable row without notifying
+  /// plugins or mutating history a second time.
+  Future<Message> commitUserMessage(
+    String? userContent, {
+    String? requestId,
+    DateTime? receivedAt,
+  }) async {
+    _reloadPersistedHistory();
+    var index = _persistedUserMessageIndex(requestId);
+    if (index == -1) {
+      index = _appendOrReuseUserMessage(
+        Message(
+          role: MessageRole.user,
+          content: userContent ?? '',
+          metadata: {
+            if (requestId != null && requestId.isNotEmpty)
+              'request_id': requestId,
+            'received_at': (receivedAt ?? DateTime.now())
+                .toUtc()
+                .toIso8601String(),
+          },
+        ),
+        requestId,
+      );
+      await pluginManager.notifyMessage(history[index]);
+      _saveHistory();
+      _reloadPersistedHistory();
+      index = requestId == null || requestId.isEmpty
+          ? history.length - 1
+          : _persistedUserMessageIndex(requestId);
+      if (index < 0 || index >= history.length) {
+        throw StateError(
+          'Committed user message is missing from session history.',
+        );
+      }
+    }
+    _currentTurnStartIndex = index;
+    return history[index];
   }
 
   bool _hasPersistableAssistantState(Message message) {
@@ -642,24 +687,11 @@ class AgentRunner {
     );
     try {
       _turnRoute.applyTurnSwitchIfNeeded();
-      _reloadPersistedHistory();
-
-      _currentTurnStartIndex = _appendOrReuseUserMessage(
-        Message(
-          role: MessageRole.user,
-          content: userContent ?? '',
-          metadata: {
-            if (effectiveRequestId != null && effectiveRequestId.isNotEmpty)
-              'request_id': effectiveRequestId,
-            'received_at': (receivedAt ?? DateTime.now())
-                .toUtc()
-                .toIso8601String(),
-          },
-        ),
-        effectiveRequestId,
+      await commitUserMessage(
+        userContent,
+        requestId: effectiveRequestId,
+        receivedAt: receivedAt,
       );
-      await pluginManager.notifyMessage(history[_currentTurnStartIndex]);
-      _saveHistory();
       _beginModelStep();
       _checkpointCoordinator.saveCheckpoint(
         ctx: _checkpointCtx,
@@ -1456,24 +1488,11 @@ class AgentRunner {
       requestId: effectiveRequestId,
     );
     _turnRoute.applyTurnSwitchIfNeeded();
-    _reloadPersistedHistory();
-
-    _currentTurnStartIndex = _appendOrReuseUserMessage(
-      Message(
-        role: MessageRole.user,
-        content: userContent ?? '',
-        metadata: {
-          if (effectiveRequestId != null && effectiveRequestId.isNotEmpty)
-            'request_id': effectiveRequestId,
-          'received_at': (receivedAt ?? DateTime.now())
-              .toUtc()
-              .toIso8601String(),
-        },
-      ),
-      effectiveRequestId,
+    await commitUserMessage(
+      userContent,
+      requestId: effectiveRequestId,
+      receivedAt: receivedAt,
     );
-    await pluginManager.notifyMessage(history[_currentTurnStartIndex]);
-    _saveHistory();
     _beginModelStep();
     _checkpointCoordinator.saveCheckpoint(
       ctx: _checkpointCtx,

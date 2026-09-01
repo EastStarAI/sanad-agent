@@ -10,7 +10,12 @@ description: "Specification for inline edit and retry of the latest root user tu
 Sanad exposes Edit and Retry only for the latest durable **root user turn**
 whose canonical event carries stable `message_id`, `turn_id`, and raw
 `request_id`, plus daemon-authored `input_kind=root_turn` and
-`replay_eligible=true`. Missing or false eligibility fails closed in the UI.
+`replay_eligible=true`. Missing or false eligibility fails closed in the UI. The controls appear and
+are usable as soon as the root message commits durably, including while its run
+is active; the daemon owns the safe Stop, idle boundary, and rewind. Live and
+hydrated projections expose the same identity and eligibility. An anchored
+history slice with a known newer suffix remains read-only until the authoritative
+tail is loaded.
 Older root turns remain read-only because replaying one would
 discard newer user-owned turns and requires the separate conversation-fork
 design.
