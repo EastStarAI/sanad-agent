@@ -12,13 +12,13 @@ evidence_fingerprint: "sha256:649b8758bdef850c34646defccb7fa1e87a55791873bc7337d
 
 ## Goal
 
-إضافة `view_image` إلى workspace catalog وربطها بالـresolver والموافقة والـworker وإرجاع text+image result.
+إضافة `view_image` إلى catalog عند وجود Workspace أو attachment scope معتمدة، وربطها بالـresolver/grant والموافقة والـworker وإرجاع text+image result.
 
 ## Locked scope
 
 - schema: `path` و`detail` فقط؛ local single file.
 - authorize canonical target قبل stat/read؛ scoped approval باسم `view_image`.
-- present with workspace regardless of adapter capability؛ provider projection مسؤولية 77c.
+- present with workspace أو admitted session attachment regardless of adapter capability؛ provider projection مسؤولية 77c.
 
 ## Gates
 
@@ -30,7 +30,7 @@ evidence_fingerprint: "sha256:649b8758bdef850c34646defccb7fa1e87a55791873bc7337d
 - [ ] internal/default/full-access/deny/symlink behaviors مثبتة.
 
 ### B2 — Catalog and result
-- [ ] تسجيل workspace-only مع replay safety صريحة.
+- [ ] تسجيل source-scoped مع replay safety صريحة: workspace أو session attachment grant.
 - [ ] نجاح الأداة ينتج summary آمنة ثم image block؛ الخطأ text-only closed code.
 
 ### B3 — Verification
@@ -40,7 +40,7 @@ evidence_fingerprint: "sha256:649b8758bdef850c34646defccb7fa1e87a55791873bc7337d
 ## Acceptance criteria
 
 - [ ] لا byte read قبل authorization.
-- [ ] no-workspace يخفي الأداة وworkspace يظهر schema الصحيحة.
+- [ ] no-workspace/no-attachment يخفي الأداة؛ workspace أو admitted attachment يظهر schema الصحيحة مع scope المناسبة.
 
 ## Definition of Done
 

@@ -1,6 +1,6 @@
 ---
 title: "View Image Tool QA"
-description: "Locked regression matrix for typed results, secure image loading, provider projection, recovery, and pruning."
+description: "Regression matrix for typed results, user attachments, View Image conversation media, local/remote security, recovery, and pruning."
 ---
 
 # View Image Tool QA
@@ -19,7 +19,8 @@ description: "Locked regression matrix for typed results, secure image loading, 
 
 | Scenario | Required result |
 |---|---|
-| No workspace | `view_image` absent. |
+| No workspace and no admitted attachment | `view_image` absent. |
+| No workspace with admitted image attachment | Tool present and restricted to the session attachment grant. |
 | Valid workspace | Tool present with `path` and the four-value `detail` enum. |
 | Internal relative path | Resolves from workspace without approval. |
 | External path/default mode | Suspends before stat/read and requires canonical `view_image` approval. |
@@ -71,9 +72,48 @@ Both sync and stream paths use the same builder and pass identical assertions.
 | Events/logs/plugins/history query | Bounded text/status only. |
 | Request dump | Deep-copy marker contains safe MIME/size only; live payload still contains the valid image. |
 
+## User attachment admission matrix
+
+| Scenario | Required result |
+|---|---|
+| `+` beside Permission Mode | Opens File Picker once and preserves composer focus/text. |
+| Paste image / drag file / picker file | Enters the same ordered draft attachment pipeline. |
+| File at 5 MiB | Accepted after client and agent validation. |
+| File at 5 MiB + 1 byte | Rejected before user-turn acceptance regardless of type. |
+| Fifth file / aggregate above 20 MiB | Rejected with draft and prior ready attachments preserved. |
+| Clipboard image without path | Materialized in the agent-owned store before turn acceptance. |
+| Remote client-local path | Never enters daemon history or model projection; bytes stage first. |
+| Incompatible hosted capability | Fails closed with draft retained and no command-embedded bytes. |
+| Interrupted/hash-mismatch transfer | Retryable failure; no canonical message or durable partial file. |
+| Folder on remote client only | Not recursively uploaded in v1. |
+
+## Conversation and edit matrix
+
+| Scenario | Required result |
+|---|---|
+| Sent user message | Ordered image thumbnails/file cards appear above text in live and history views. |
+| Image activation | Opens accessible Lightbox without exposing path or reusable credential. |
+| Enter Edit | Existing attachments appear ready immediately and are not uploaded again. |
+| Add/remove then Cancel | Original canonical bubble and attachment ownership remain unchanged. |
+| Save with pending/failed new file | Save disabled or controlled failure; original bubble remains. |
+| Save & Retry success | New attachment set becomes canonical exactly once. |
+| Device/session switch | Transient attachment/edit state cannot bleed into another owner. |
+
+## View Image timeline media matrix
+
+| Scenario | Required result |
+|---|---|
+| Live/history tool result | Title is `View Image`; thumbnail appears directly below it. |
+| Near/far viewport | Hydration starts only near viewport and cancels on disposal/switch. |
+| Local route | Authenticated Local Gateway returns only the bound media. |
+| Remote route | Compatible hosted capability returns media only to the authorized requester. |
+| Wrong user/device/session or expired identity | No bytes returned. |
+| Pruned/expired media | Stable row shows `Image no longer available`. |
+| Event/cache JSON | Contains metadata and opaque `media_id`; no base64, private path, or public URL. |
+
 ## Daemon-backed proof
 
-Use an isolated daemon and deterministic provider fixture that declares `imageToolResults`. The fixture asks for a checkerboard image whose answer is absent from path and prompt, inspects the next request image block, and returns the visual answer. Repeat with restart after tool completion and delete the source file before recovery. Execute this port-binding test with `--concurrency=1`; unit and codec suites remain parallel.
+Use an isolated daemon and deterministic provider fixture that declares `imageToolResults`. First admit an attachment and prove the initial provider request contains user text plus the agent-local path projection but no attachment bytes. The fixture then asks for `view_image`, inspects the next request image block, and returns an answer available only in the pixels. Repeat locally and through the compatible remote contract, including restart after tool completion, Edit without re-upload, interrupted transfer, and source deletion before recovery. Execute port-binding tests with `--concurrency=1`; unit, widget, and codec suites remain parallel.
 
 ## Security checklist
 
@@ -86,3 +126,7 @@ Use an isolated daemon and deterministic provider fixture that declares `imageTo
 - [ ] Worker timeout terminates isolated processing and leaves no artifact.
 - [ ] Stale run cannot append a result to a newer owner.
 - [ ] Text fallback cannot start a provider retry loop.
+- [ ] User attachment bytes never enter the provider request before an explicit tool call.
+- [ ] Client-local remote paths never become agent/model paths.
+- [ ] Attachment and media access is isolated by user, device, and session.
+- [ ] Partial transfers, expired media, and session deletion leave no unauthorized durable artifact.

@@ -1,6 +1,6 @@
 ---
 title: "Message Edit and Retry UX"
-description: "Specification for inline edit and retry of the latest user messages in the timeline."
+description: "Specification for inline edit, attachment restoration, and retry of the latest user messages in the timeline."
 ---
 
 # Message Edit and Retry UX
@@ -17,6 +17,14 @@ Sanad exposes Edit and Retry only for the latest durable user turn whose canonic
 - Cancel restores the original bubble without contacting the daemon.
 - Navigating to another session, device, or New Conversation cancels the transient edit draft.
 - The edit controls are disabled while replay confirmation or dispatch is pending.
+
+## Attachments during edit
+
+- An editable user turn restores its ordered image thumbnails and file cards above the multiline input. Existing attachments are ready references and are not uploaded again.
+- The user may remove an existing attachment or add a new one through paste, drag/drop, or the `+` File Picker beside Permission Mode.
+- Every new file follows the 5 MiB per-file, four-file, and 20 MiB aggregate limits. Save remains disabled while validation or upload is pending.
+- A failed new attachment keeps the inline edit and original canonical bubble intact, with Retry and Remove actions. Cancel discards attachment edits and restores the original message without cleanup of files it still references.
+- Save & Retry changes the turn only after every new attachment is admitted and the daemon accepts replay. A removed attachment is cleaned only when no canonical message owns it.
 
 ## Retry
 

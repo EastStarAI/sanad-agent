@@ -1,6 +1,6 @@
 ---
 title: "Sanad Client Interface"
-description: "Current user experience for devices, workspaces, conversations, providers, permissions, and active agent interactions."
+description: "Current user experience for devices, workspaces, conversations, attachments, View Image media, providers, permissions, and active agent interactions."
 ---
 
 # Sanad Client Interface
@@ -97,7 +97,9 @@ thinking mode. A first-time user with no thinking preference starts at
 runtime has an authoritative provider/model route, the model selector is never
 left empty merely because only the provider half was restored.
 
-Dragging and dropping files of any type onto the composer area captures their full local paths and appends them directly to the message input field. During a drag-over action, the composer card displays a highlighted primary border and a matching subtle background tint for clear visual feedback.
+The composer accepts files through image paste, drag-and-drop, and a File Picker opened by the `+` button on the left beside Permission Mode. All three inputs create the same attachment rail above the text field. Image tiles show a thumbnail, safe name, size, status, and remove action; other files use compact icon cards with the same controls. Drag-over keeps the highlighted primary border and subtle tint.
+
+Each file is limited to 5 MiB regardless of type, with at most four files and 20 MiB total per message. Validation or remote transfer shows progress, and Send remains unavailable until every attachment is ready. A failed item preserves the draft and offers Retry or Remove. On a remote device, the client never sends its local path as runtime input: the file must be admitted on the agent first. Missing hosted attachment capability disables remote attachment admission with a clear error rather than embedding bytes in the conversation command.
 
 A workspace created elsewhere in the client appears on the selector's first
 opening; users never need to close and reopen the menu to refresh it.
@@ -109,7 +111,16 @@ Settings deep links: selecting the avatar or display name opens Profile, while
 the dedicated gear opens General.
 
 The conversation timeline renders Markdown, code, reasoning summaries, tool
-activity, permission requests, recovery notices, and final responses. Multiline
+activity, permission requests, recovery notices, and final responses. User
+messages render ordered image thumbnails and file cards above their text;
+activating an image opens an accessible lightbox, while supported files use a
+safe preview and other files use an authenticated download. Internal agent
+paths and media credentials are never displayed.
+
+A `view_image` tool row is titled `View Image` and places its thumbnail directly
+below the title. It loads only near the viewport and opens the full image on
+activation. Local and remote routes present the same row; expired or pruned
+media leaves the row visible with `Image no longer available`. Multiline
 Markdown code blocks keep programming languages and untyped `Code` content LTR,
 opening long lines from the left even when they contain Arabic strings. Fenced
 `text` blocks detect their own content direction and open from the right for

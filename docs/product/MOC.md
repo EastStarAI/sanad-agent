@@ -18,7 +18,7 @@ This directory owns the functional specifications of "WHAT" we are building and 
 - [Sanad Agent Features](features.md) — User-facing guide to local, remote, provider, workspace, tool, and interaction capabilities.
 - [Sanad Agent Identity and Scope](project_identity_and_scope.md) — Independent public identity, open-source scope, and optional hosted-service boundary.
 - [Provider Account Usage Limits](provider_account_usage_limits.md) — Instance-scoped usage windows, non-blocking freshness behavior, errors, and planned reset-credit controls.
-- [Message Edit and Retry UX](message_edit_retry_ux.md) — Inline latest-turn editing, navigation cancellation, replay warnings, and user-visible failure behavior.
+- [Message Edit and Retry UX](message_edit_retry_ux.md) — Inline latest-turn editing with attachment restoration, navigation cancellation, replay warnings, and user-visible failure behavior.
 - [Conversation Navigation UX Spec](conversation_navigation_ux_spec.md) — Typed conversation destinations, Back/Forward behavior, atomic transitions, deletion fallback, and restart recovery.
 - [Settings Hub](settings_hub.md) — Device-scoped settings, provider management, and runtime configuration experience.
-- [Sanad Client Interface](client_interface.md) — Current devices, workspaces, conversations, providers, permissions, and responsive interaction behavior.
+- [Sanad Client Interface](client_interface.md) — Current devices, workspaces, conversations, user attachments, View Image media, providers, permissions, and responsive interaction behavior.
