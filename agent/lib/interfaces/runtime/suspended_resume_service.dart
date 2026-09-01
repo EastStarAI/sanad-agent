@@ -19,6 +19,7 @@ import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
 typedef SuspendedResponseEmitter =
     Future<void> Function(GatewayResponse response);
 typedef SuspendedDecisionClaimed = Future<void> Function();
+typedef SuspendedTerminalCommitted = void Function(String sessionId);
 
 class SuspendedResumeService {
   SuspendedResumeService({
@@ -30,10 +31,12 @@ class SuspendedResumeService {
     PermissionManager? permissionManager,
     PersistedRuntimeStateRepository? persistedState,
     RuntimeRecoveryService? runtimeRecovery,
+    SuspendedTerminalCommitted? onTerminalCommitted,
   }) : _checkpointStore = checkpointStore ?? SuspendedCheckpointStore(),
        _sessionManagerProvided = sessionManager,
        _persistedStateProvided = persistedState,
        _runtimeRecoveryProvided = runtimeRecovery,
+       _onTerminalCommitted = onTerminalCommitted,
        _runtimeCatalog = runtimeCatalog ?? getIt<LocalRuntimeCatalog>(),
        _runtimeContextBuilder =
            runtimeContextBuilder ?? getIt<RuntimeContextBuilder>(),
@@ -45,6 +48,7 @@ class SuspendedResumeService {
   SessionManager? _sessionManagerProvided;
   final PersistedRuntimeStateRepository? _persistedStateProvided;
   final RuntimeRecoveryService? _runtimeRecoveryProvided;
+  final SuspendedTerminalCommitted? _onTerminalCommitted;
   SessionManager get _sessionManager =>
       _sessionManagerProvided ??= SessionManager();
   PersistedRuntimeStateRepository? get _persistedState =>
@@ -146,6 +150,7 @@ class SuspendedResumeService {
     final forcedIsError = isAskUser ? false : (decision['allowed'] != true);
     final ownerRunId =
         resumeOwner?.runId ?? sessionMetadata['run_id']?.toString();
+    var terminalCommitted = false;
 
     try {
       String fullContent = '';
@@ -249,6 +254,7 @@ class SuspendedResumeService {
             'Persisted suspended resume terminal commit failed: $outcome',
           );
         }
+        terminalCommitted = true;
       }
       await emitResponse(
         GatewayResponse(
@@ -269,6 +275,9 @@ class SuspendedResumeService {
       await _checkpointStore.deleteByRequestId(requestId);
       return true;
     } finally {
+      if (terminalCommitted) {
+        _onTerminalCommitted?.call(checkpoint.sessionId);
+      }
       if (resumeOwner != null) {
         agentRunner.endAuthoritativeRun(resumeOwner.runId);
       }

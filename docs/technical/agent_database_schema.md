@@ -166,6 +166,8 @@ Normal reads use `history_status = 'active'` ordered by `id`. Audit or recovery 
 
 Durable compaction lifecycle rows. Internal summaries are stored here, never as extra `messages` rows.
 
+A materialized session fork clones every terminal operation ordered inside its selected message prefix. Each clone owns a new `compaction_id`; its source/tail endpoints are remapped to newly inserted child `messages.id` values and its tail anchor is recomputed in the same transaction. `started` operations and operations whose marker follows the selected final answer are not copied. The latest eligible copied completed row drives the child model projection, while all copied terminal rows remain available for timeline hydration.
+
 | Column | Type | Constraints | Description |
 |---|---|---|---|
 | `compaction_id` | `TEXT` | Primary Key | Operation UUID |

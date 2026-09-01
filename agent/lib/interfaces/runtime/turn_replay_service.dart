@@ -1,4 +1,5 @@
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
@@ -13,6 +14,7 @@ enum TurnReplayInspectionFailure {
   targetNotReplayableInput,
   identityIncomplete,
   historyRevisionMismatch,
+  targetPrecedesCompaction,
 }
 
 class TurnReplayAdmission {
@@ -64,12 +66,15 @@ class TurnReplayInspection {
 class TurnReplayService {
   final SessionManager _sessionManager;
   final PersistedRuntimeStateRepository? _persistedState;
+  final CompactionBoundaryRepository? _compactionBoundaries;
 
   const TurnReplayService({
     required SessionManager sessionManager,
     PersistedRuntimeStateRepository? persistedState,
+    CompactionBoundaryRepository? compactionBoundaries,
   }) : _sessionManager = sessionManager,
-       _persistedState = persistedState;
+       _persistedState = persistedState,
+       _compactionBoundaries = compactionBoundaries;
 
   TurnReplayInspection inspect({
     required String sessionId,
@@ -174,6 +179,18 @@ class TurnReplayService {
         sessionId,
         targetRequestId,
         TurnReplayInspectionFailure.targetIsNotLatestTurn,
+        historyRevision: session.historyRevision,
+      );
+    }
+    if (_compactionBoundaries?.targetPrecedesCompletedCompaction(
+          sessionId: sessionId,
+          messageId: identity.messageId,
+        ) ==
+        true) {
+      return _failure(
+        sessionId,
+        targetRequestId,
+        TurnReplayInspectionFailure.targetPrecedesCompaction,
         historyRevision: session.historyRevision,
       );
     }

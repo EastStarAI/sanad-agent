@@ -4,7 +4,9 @@ import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
+import 'package:sanad_agent/evolution/db/session_history_revision_repository.dart';
 import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
@@ -18,6 +20,7 @@ void main() {
   late AgentStateDatabase state;
   late SessionManager sessions;
   late PersistedRuntimeStateRepository runtime;
+  late CompactionBoundaryRepository compactionBoundaries;
   late _RecordingOrchestrator orchestrator;
   late SessionTurnReplayCommandHandler handler;
   late String sessionId;
@@ -29,11 +32,16 @@ void main() {
     getIt.registerSingleton<AgentStateDatabase>(state);
     sessions = SessionManager();
     runtime = PersistedRuntimeStateRepository.fromState(state);
+    compactionBoundaries = CompactionBoundaryRepository(
+      state,
+      SessionHistoryRevisionRepository(state),
+    );
     orchestrator = _RecordingOrchestrator();
     handler = SessionTurnReplayCommandHandler(
       orchestrator: orchestrator,
       sessionManager: sessions,
       persistedState: runtime,
+      compactionBoundaries: compactionBoundaries,
       bridge: _EnvelopeBridge(),
       idleWaitTimeout: const Duration(milliseconds: 80),
       idlePollInterval: const Duration(milliseconds: 10),
@@ -99,6 +107,49 @@ void main() {
     expect(envelopes.single['payload']['outcome'], 'invalid_request');
     expect(orchestrator.stopCount, 0);
     expect(sessions.getMessages(sessionId), hasLength(1));
+  });
+
+  test('compacted targets are rejected before Stop or mutation', () async {
+    sessions.saveSessionHistory(sessionId, [
+      Message(
+        role: MessageRole.user,
+        content: 'compact this',
+        metadata: const {'request_id': 'root-compacted'},
+      ),
+      Message(role: MessageRole.assistant, content: 'answer'),
+    ]);
+    final stored = sessions.getMessages(sessionId);
+    final target = stored.first;
+    final rows = state.db.select(
+      'SELECT id FROM messages WHERE session_id = ? ORDER BY id ASC',
+      [sessionId],
+    );
+    _insertCompletedCompaction(
+      state,
+      sessionId: sessionId,
+      sourceRowId: rows.first['id'] as int,
+      tailRowId: rows.last['id'] as int,
+    );
+    final envelopes = <Map<String, dynamic>>[];
+
+    await handler.handle(
+      command(
+        requestId: 'cmd-compacted',
+        targetRequestId: 'root-compacted',
+        targetMessageId: target.metadata?['message_id']?.toString(),
+        targetTurnId: target.metadata?['turn_id']?.toString(),
+      ),
+      (envelope) async => envelopes.add(envelope),
+    );
+
+    expect(
+      envelopes.single['payload']['outcome'],
+      'target_precedes_compaction',
+    );
+    expect(orchestrator.stopCount, 0);
+    expect(orchestrator.events, isEmpty);
+    expect(sessions.getMessages(sessionId), hasLength(2));
+    expect(sessions.getSession(sessionId)!.historyRevision, 1);
   });
 
   test('pending steer targets are rejected before Stop or mutation', () async {
@@ -725,6 +776,57 @@ void main() {
     expect(sessions.getMessages(sessionId).single.content, 'hello');
     expect(sessions.getSession(sessionId)!.historyRevision, 1);
   });
+}
+
+void _insertCompletedCompaction(
+  AgentStateDatabase state, {
+  required String sessionId,
+  required int sourceRowId,
+  required int tailRowId,
+}) {
+  state.db.execute(
+    '''
+    INSERT INTO session_compaction_operations (
+      compaction_id, session_id, trigger, status,
+      source_history_revision,
+      source_start_message_id, source_end_message_id,
+      tail_start_message_id, tail_end_message_id,
+      provider_instance_id, model_id, template_id, protocol,
+      normalized_base_url, config_revision, credential_revision,
+      context_window_tokens, effective_input_budget_tokens,
+      auto_threshold_tokens, estimated_request_tokens_before,
+      estimated_request_tokens_after, retained_tail_tokens,
+      internal_summary_json, started_at, completed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''',
+    [
+      'compaction-handler-guard',
+      sessionId,
+      'manual',
+      'completed',
+      1,
+      sourceRowId,
+      sourceRowId,
+      tailRowId,
+      tailRowId,
+      'provider',
+      'model',
+      'template',
+      'test',
+      'https://example.invalid',
+      1,
+      1,
+      1000,
+      900,
+      800,
+      700,
+      200,
+      100,
+      '{"currentGoal":"guard replay"}',
+      '2026-08-31T00:00:00Z',
+      '2026-08-31T00:00:01Z',
+    ],
+  );
 }
 
 class _EnvelopeBridge extends SanadProtocolBridge {

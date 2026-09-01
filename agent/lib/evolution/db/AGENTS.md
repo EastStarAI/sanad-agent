@@ -30,6 +30,7 @@ This contract applies to `agent/lib/evolution/db/`.
 - Session lineage (`lineage_id`, `parent_session_id`, fork target identities,
   `fork_sequence`) is independent of session lifetime. Deleting a parent
   nulls `parent_session_id` on children and never cascades to child rows.
+- A materialized fork copies every terminal compaction lifecycle event ordered inside its selected active prefix. Each child operation owns a new compaction id and ranges remapped to child message rows in the same transaction; started or post-target operations are never copied.
 - Canonical user acceptance alone advances session-list user-message ordering.
 - Title compare-and-set, deletion, and route transitions remain atomic with their owning session data.
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
@@ -20,6 +21,7 @@ class SessionTurnReplayCommandHandler {
   final SessionRunOrchestrator _orchestrator;
   final SessionManager _sessionManager;
   final PersistedRuntimeStateRepository? _persistedState;
+  final CompactionBoundaryRepository? _compactionBoundaries;
   final SanadProtocolBridge _bridge;
   final Duration _idleWaitTimeout;
   final Duration _idlePollInterval;
@@ -29,12 +31,14 @@ class SessionTurnReplayCommandHandler {
     required SessionRunOrchestrator orchestrator,
     required SessionManager sessionManager,
     PersistedRuntimeStateRepository? persistedState,
+    CompactionBoundaryRepository? compactionBoundaries,
     required SanadProtocolBridge bridge,
     Duration idleWaitTimeout = defaultIdleWaitTimeout,
     Duration idlePollInterval = defaultIdlePollInterval,
   }) : _orchestrator = orchestrator,
        _sessionManager = sessionManager,
        _persistedState = persistedState,
+       _compactionBoundaries = compactionBoundaries,
        _bridge = bridge,
        _idleWaitTimeout = idleWaitTimeout,
        _idlePollInterval = idlePollInterval;
@@ -112,6 +116,7 @@ class SessionTurnReplayCommandHandler {
       final replay = TurnReplayService(
         sessionManager: _sessionManager,
         persistedState: _persistedState,
+        compactionBoundaries: _compactionBoundaries,
       );
       final inspection = replay.inspect(
         sessionId: sessionId,
@@ -411,6 +416,8 @@ class SessionTurnReplayCommandHandler {
         TurnReplayInspectionFailure.identityIncomplete => 'identity_incomplete',
         TurnReplayInspectionFailure.historyRevisionMismatch =>
           'history_revision_mismatch',
+        TurnReplayInspectionFailure.targetPrecedesCompaction =>
+          'target_precedes_compaction',
       };
 
   static String _postIdleFailureName(TurnReplayInspectionFailure failure) =>

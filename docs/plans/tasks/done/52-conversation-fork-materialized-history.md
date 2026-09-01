@@ -2,7 +2,7 @@
 title: "Task 52: Conversation Fork with Materialized History"
 description: "إنشاء fork مستقل من أي final answer دائمة عبر نسخ ذري لتاريخ المحادثة حتى نقطة الاختيار مع lineage وتسمية متسلسلة."
 status: "completed"
-current_gate: "complete"
+current_gate: "Gate F — completed"
 review_remaining: "0%"
 priority: "high"
 scope: "Sanad agent session persistence/protocol and Flutter conversation timeline/navigation"
@@ -167,6 +167,20 @@ coordinates_with: "Task 47 session history pagination, Task 44 background sessio
 - [x] اختبار daemon-backed لجلسة بها عدة turns وfork من إجابة وسطية ثم استمرار
       parent وchild برسالتين مختلفتين.
 - [x] تحديث وثائق product/technical/database/QA وفهارسها ذات الصلة.
+
+### Gate F — Compaction-complete materialized fork
+
+- [x] ينسخ fork كل عمليات ضغط السياق terminal (`completed` و`failed`) الواقعة بالكامل داخل الـprefix المختار، ولا ينسخ عملية `started` أو حدثًا بعد نقطة fork.
+- [x] تملك child هويات compaction جديدة، مع إعادة ربط source/tail row ids بصفوف الرسائل الجديدة ونسخ summary/metrics/route/timestamps دون مشاركة صفوف المصدر.
+- [x] تنفذ جلسة child ورسائلها وعمليات الضغط المنسوخة داخل معاملة واحدة؛ فشل النسخ يعيد rollback كاملًا.
+- [x] تستخدم latest completed boundary المنسوخة في أول model projection للفرع، بينما تبقى كل أحداث الضغط السابقة ظاهرة بترتيبها التاريخي.
+- [x] تغطي الاختبارات ضغطًا متعددًا، fork بعد آخر ضغط، fork بين ضغطين، failed lifecycle، واستمرار child دون إعادة إرسال التاريخ الكامل.
+
+#### Gate F Acceptance
+
+- [x] Given prefix يحتوي عدة أحداث ضغط terminal، when يُنشأ fork بعد آخرها، then تعرض child الأحداث نفسها وتستخدم أحدث summary فعالة.
+- [x] Given fork target تسبق عملية ضغط لاحقة، then لا تنسخ child تلك العملية.
+- [x] Parent وchild لا تشتركان في message rows أو compaction rows وتبقيان مستقلتين بعد الإنشاء.
 
 ## 6. Definition of Done
 

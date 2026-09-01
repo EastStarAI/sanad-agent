@@ -1,14 +1,20 @@
 import 'package:sanad_agent/core/di.dart';
+import 'dart:convert';
+
 import 'package:sanad_agent/core/models/llm_finish_reason.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/engine/compaction/compaction.dart';
+import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/runtime/pending_input_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_execution_snapshot_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_work_item_repository.dart';
 import 'package:sanad_agent/evolution/db/session_db.dart';
+import 'package:sanad_agent/evolution/db/session_history_revision_repository.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/runtime/session_fork_service.dart';
 import 'package:test/test.dart';
@@ -129,6 +135,140 @@ void main() {
     expect(childTool.toolCallId, childAsk.toolCalls!.single.id);
     expect(childTool.toolCallId, isNot('call-1'));
   });
+
+  test(
+    'copies all terminal compaction events through the fork point and projects the latest summary',
+    () {
+      final parentId = seedThreeTurns();
+      final db = SessionDB.fromState(state);
+      final persisted = db.getPersistedMessages(parentId);
+      int rowId(String messageId) => persisted
+          .singleWhere(
+            (entry) =>
+                MessageHistoryIdentity.read(entry.message).messageId ==
+                messageId,
+          )
+          .rowId;
+
+      _insertCompaction(
+        state,
+        id: 'compact-1',
+        sessionId: parentId,
+        status: 'completed',
+        sourceStart: rowId('m-u1'),
+        sourceEnd: rowId('m-u1'),
+        tailStart: rowId('m-a1'),
+        tailEnd: rowId('m-a1'),
+        startedAt: '2026-08-30T00:01:00Z',
+        completedAt: '2026-08-30T00:01:01Z',
+        summaryGoal: 'first compacted goal',
+      );
+      _insertCompaction(
+        state,
+        id: 'compact-failed',
+        sessionId: parentId,
+        status: 'failed',
+        sourceStart: rowId('m-u1'),
+        sourceEnd: rowId('m-a1'),
+        tailStart: rowId('m-u2'),
+        tailEnd: rowId('m-tool-res'),
+        startedAt: '2026-08-30T00:02:00Z',
+        completedAt: '2026-08-30T00:02:01Z',
+      );
+      _insertCompaction(
+        state,
+        id: 'compact-2',
+        sessionId: parentId,
+        status: 'completed',
+        sourceStart: rowId('m-u1'),
+        sourceEnd: rowId('m-a1'),
+        tailStart: rowId('m-u2'),
+        tailEnd: rowId('m-tool-res'),
+        startedAt: '2026-08-30T00:03:00Z',
+        completedAt: '2026-08-30T00:03:01Z',
+        summaryGoal: 'latest compacted goal',
+      );
+      _insertCompaction(
+        state,
+        id: 'compact-started',
+        sessionId: parentId,
+        status: 'started',
+        sourceStart: rowId('m-u1'),
+        sourceEnd: rowId('m-a1'),
+        tailStart: rowId('m-u2'),
+        tailEnd: rowId('m-tool-res'),
+        startedAt: '2026-08-30T00:03:30Z',
+        completedAt: null,
+      );
+      // This event is ordered after the selected final answer and is outside
+      // the materialized fork prefix.
+      _insertCompaction(
+        state,
+        id: 'compact-after-target',
+        sessionId: parentId,
+        status: 'completed',
+        sourceStart: rowId('m-u1'),
+        sourceEnd: rowId('m-a1'),
+        tailStart: rowId('m-u2'),
+        tailEnd: rowId('m-a2'),
+        startedAt: '2026-08-30T00:04:00Z',
+        completedAt: '2026-08-30T00:04:01Z',
+        summaryGoal: 'after target',
+      );
+
+      final result = fork.fork(
+        sourceSessionId: parentId,
+        requestId: 'fork-with-compactions',
+        targetMessageId: 'm-a2',
+        targetTurnId: 'turn-2',
+      );
+
+      expect(result.outcome, SessionForkOutcome.accepted);
+      final child = result.child!;
+      final boundaries = CompactionBoundaryRepository(
+        state,
+        SessionHistoryRevisionRepository(state),
+      );
+      final childLifecycle = boundaries.listLifecycleForSession(
+        child.sessionId,
+      );
+      expect(childLifecycle, hasLength(3));
+      expect(childLifecycle.map((entry) => entry.status), [
+        CompactionStatus.completed,
+        CompactionStatus.failed,
+        CompactionStatus.completed,
+      ]);
+      expect(
+        childLifecycle.map((entry) => entry.compactionId),
+        isNot(contains(anyOf('compact-1', 'compact-failed', 'compact-2'))),
+      );
+
+      final childRowIds = db
+          .getPersistedMessages(child.sessionId)
+          .map((entry) => entry.rowId)
+          .toSet();
+      for (final operation in childLifecycle) {
+        expect(childRowIds, contains(operation.sourceRange.start.rowId));
+        expect(childRowIds, contains(operation.sourceRange.end.rowId));
+        expect(childRowIds, contains(operation.retainedTailRange.start.rowId));
+        expect(childRowIds, contains(operation.retainedTailRange.end.rowId));
+      }
+
+      final projection = ModelProjectionBuilder(
+        sessions: db,
+        boundaries: boundaries,
+      ).buildForSession(child.sessionId);
+      expect(projection.usesCompactionBoundary, isTrue);
+      expect(
+        projection.activeBoundary!.internalSummary!.currentGoal,
+        'latest compacted goal',
+      );
+      expect(
+        projection.conversationMessages.first.content,
+        contains('latest compacted goal'),
+      );
+    },
+  );
 
   test('same request_id returns the existing child', () {
     final parentId = seedThreeTurns();
@@ -453,6 +593,57 @@ void main() {
     );
   });
 
+  test('rolls back the child when copied compaction history cannot commit', () {
+    final parentId = seedThreeTurns();
+    final db = SessionDB.fromState(state);
+    final rows = db.getPersistedMessages(parentId);
+    int rowId(String messageId) => rows
+        .singleWhere(
+          (entry) =>
+              MessageHistoryIdentity.read(entry.message).messageId == messageId,
+        )
+        .rowId;
+    _insertCompaction(
+      state,
+      id: 'compact-parent',
+      sessionId: parentId,
+      status: 'completed',
+      sourceStart: rowId('m-u1'),
+      sourceEnd: rowId('m-u1'),
+      tailStart: rowId('m-a1'),
+      tailEnd: rowId('m-a1'),
+      startedAt: '2026-08-30T00:01:00Z',
+      completedAt: '2026-08-30T00:01:01Z',
+      summaryGoal: 'must copy atomically',
+    );
+    state.db.execute('''
+      CREATE TRIGGER fail_fork_compaction BEFORE INSERT
+      ON session_compaction_operations
+      WHEN NEW.session_id != '$parentId'
+      BEGIN
+        SELECT RAISE(ABORT, 'fork compaction copy failed');
+      END;
+    ''');
+
+    final result = fork.fork(
+      sourceSessionId: parentId,
+      requestId: 'fork-compaction-fail',
+      targetMessageId: 'm-a2',
+      targetTurnId: 'turn-2',
+    );
+
+    expect(result.outcome, SessionForkOutcome.failed);
+    expect(sessions.getAllSessions(), hasLength(1));
+    expect(sessions.getSession(parentId)!.messages, hasLength(8));
+    expect(
+      state.db.select(
+        'SELECT * FROM session_compaction_operations WHERE session_id != ?',
+        [parentId],
+      ),
+      isEmpty,
+    );
+  });
+
   test('rolls back the child when copied history cannot commit', () {
     final parentId = seedThreeTurns();
     state.db.execute('''
@@ -473,6 +664,76 @@ void main() {
     expect(sessions.getAllSessions(), hasLength(1));
     expect(sessions.getSession(parentId)!.messages, hasLength(8));
   });
+}
+
+void _insertCompaction(
+  AgentStateDatabase state, {
+  required String id,
+  required String sessionId,
+  required String status,
+  required int sourceStart,
+  required int sourceEnd,
+  required int tailStart,
+  required int tailEnd,
+  required String startedAt,
+  required String? completedAt,
+  String? summaryGoal,
+}) {
+  final completed = status == 'completed';
+  final failed = status == 'failed';
+  state.db.execute(
+    '''
+    INSERT INTO session_compaction_operations (
+      compaction_id, session_id, trigger, status,
+      source_history_revision,
+      source_start_message_id, source_end_message_id,
+      tail_start_message_id, tail_end_message_id,
+      provider_instance_id, model_id, template_id, protocol,
+      normalized_base_url, config_revision, credential_revision,
+      context_window_tokens, effective_input_budget_tokens,
+      auto_threshold_tokens, estimated_request_tokens_before,
+      estimated_request_tokens_after, before_measurement_kind,
+      retained_tail_tokens, duration_ms, internal_summary_json,
+      failure_reason, started_at, completed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''',
+    [
+      id,
+      sessionId,
+      'manual',
+      status,
+      0,
+      sourceStart,
+      sourceEnd,
+      tailStart,
+      tailEnd,
+      'provider',
+      'model',
+      'template',
+      'test',
+      'https://example.invalid',
+      1,
+      1,
+      if (completed) 1000 else null,
+      if (completed) 900 else null,
+      if (completed) 800 else null,
+      if (completed) 700 else null,
+      if (completed) 200 else null,
+      'estimated',
+      if (completed) 100 else null,
+      if (completed) 10 else null,
+      if (completed)
+        jsonEncode({
+          'currentGoal': summaryGoal,
+          'constraints': 'preserve constraints',
+        })
+      else
+        null,
+      if (failed) 'interrupted' else null,
+      startedAt,
+      completedAt,
+    ],
+  );
 }
 
 Message _user(String id, String turnId, String content) {

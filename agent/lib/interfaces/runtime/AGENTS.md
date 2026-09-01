@@ -66,8 +66,10 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - A crashed foreground shell with owned persisted progress is terminalized once as `interrupted`, including bounded partial output and verified containment cleanup. Resume restores the original assistant tool call and its matching terminal result into canonical history before invoking the model; recovery itself does not replay the command. Missing or conflicting ownership remains blocked.
 - Explicit manual Retry or Change Provider may close ambiguous unsafe tools with a neutral unknown-outcome result and continue, but must never replay their side effects.
 - An unresolved suspended checkpoint covering every executing tool call is an interactive `waiting` owner, not an ambiguous interrupted-tool failure.
+- The same fully covered unresolved interactive checkpoint is a safe ordinary-restart boundary. Restart preserves the unanswered ask/permission and must not require force, synthesize a tool result, or classify the tool as interrupted.
 - Repeated startup while an interactive checkpoint is unanswered preserves the same request in `waiting`; it emits neither an interruption result nor a blocked notice.
 - Restart-restored permission or clarifying input must claim durable `resuming` ownership and commit `completed` before terminal delivery.
+- After that terminal commit, the suspended-resume path must reconcile the orchestrator's in-memory suspension/busy projection and drain queued work; durable `idle` cannot coexist with stale admission ownership.
 - Startup may hydrate a runtime notice only when active non-terminal work owns it; terminal historical sessions cannot receive fallback recovery notices.
 - Restored waiting work recreates a real auto-resume callback and claims suspended ownership before publishing resuming/cleared state.
 - A failed resume preserves controllable ownership and cannot silently strand work.

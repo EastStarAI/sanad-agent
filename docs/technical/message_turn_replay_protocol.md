@@ -81,6 +81,7 @@ identities plus:
 | `history_revision_mismatch` | none | `expected_history_revision` is not the current session revision |
 | `turn_boundary_not_found` | none | Target message/turn/request combination does not exist |
 | `not_latest_turn` | none | Target is not the latest **active** root turn |
+| `target_precedes_compaction` | none | A completed context-compaction event follows the target; messages at or before that cutoff are read-only |
 | `stale_turn_boundary` | none | Target changed after idle wait or is no longer active |
 | `session_not_idle` | none | Authoritative snapshot is not `idle` after scoped stop/wait |
 | `already_in_progress` | none | Another replay command already owns the session |
@@ -101,8 +102,15 @@ in that turn, including tools before and after any steer, has durable
 replay-safety value true. Any explicit false is `unsafe`. Missing work-item or
 per-tool metadata is `unknown` and fails closed to confirmation.
 
-Classification occurs before cancellation. An unconfirmed `unsafe|unknown`
-request returns `confirmation_required` without changing execution or history.
+Classification occurs before cancellation. Before tool-safety handling, the
+daemon rejects a target whose persisted row is at or before the retained-tail
+end of any later completed compaction. This deliberately simple cutoff does not
+distinguish summarized source from retained tail. It returns
+`target_precedes_compaction` before Stop, soft rewind, or history mutation.
+Failed/cancelled compaction does not establish a cutoff.
+
+An unconfirmed `unsafe|unknown` request returns `confirmation_required` without
+changing execution or history.
 
 `contains_steers` is true when the active tail of that root turn includes any
 delivered or embedded steer. Those steers are superseded with the turn and are

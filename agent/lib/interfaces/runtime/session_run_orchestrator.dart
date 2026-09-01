@@ -158,6 +158,20 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     );
   }
 
+  /// Reconciles the in-memory projection after a restart-restored suspended
+  /// decision commits its original durable work item as terminal.
+  ///
+  /// [SuspendedResumeService] owns reconstructing the lost interactive tool
+  /// continuation, but the orchestrator remains the admission and queue-drain
+  /// authority. The durable terminal commit must already have removed active
+  /// work before this method is called.
+  void reconcilePersistedSuspendedTerminal(String sessionId) {
+    if (persistedState?.findActiveWorkItem(sessionId) != null) return;
+    _suspendedEvents.remove(sessionId);
+    _busySessions.remove(sessionId);
+    _drainNextQueuedEvent(sessionId);
+  }
+
   bool acknowledgeStopRecovery(
     String sessionId,
     String stopRequestId, {
@@ -781,6 +795,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     if (store == null) return ControlledRestartCheckpointResult.safe;
     final elapsed = Stopwatch()..start();
     while (true) {
+      final awaitingInteractiveTools = <String, Set<String>>{};
+      for (final checkpoint in await _listAwaitingSuspensions()) {
+        awaitingInteractiveTools
+            .putIfAbsent(checkpoint.sessionId, () => <String>{})
+            .add(checkpoint.toolCallId);
+      }
       final blockers = <ControlledRestartBlocker>[];
       for (final sessionId in store.findAllSessionIdsWithWorkItems()) {
         final item = store.findActiveWorkItem(sessionId);
@@ -829,6 +849,20 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
                       toolCallId == requesterToolCallId);
                 })
                 .toList(growable: false);
+        final awaitingForSession =
+            awaitingInteractiveTools[sessionId] ?? const <String>{};
+        final isDurableInteractiveWait =
+            (item.state == SessionWorkState.running ||
+                item.state == SessionWorkState.waiting) &&
+            !providerRequestInFlight &&
+            executingTools.isNotEmpty &&
+            executingTools.every(awaitingForSession.contains);
+        if (isDurableInteractiveWait) {
+          // The unresolved checkpoint owns every unfinished tool call. The
+          // replacement daemon will restore this exact work as `waiting` and
+          // publish no interruption result until the user answers or denies.
+          continue;
+        }
         final requesterCompletionSafe =
             !requireRequesterCompletion ||
             sessionId != requesterSessionId ||

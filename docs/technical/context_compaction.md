@@ -486,3 +486,8 @@ lifecycle row is inserted after that durable message row and before the first
 later canonical message. `started_at` and `completed_at` remain display and
 audit metadata only; they are not compared against synthetic history message
 timestamps.
+
+Live lifecycle delivery is session-scoped. The client accepts a
+`context_compaction.started|completed|failed` timeline update only when its
+explicit `session_id` matches the active conversation; compaction in a
+background conversation must not mutate the visible timeline.

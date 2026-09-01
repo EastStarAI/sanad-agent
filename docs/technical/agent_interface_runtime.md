@@ -95,6 +95,14 @@ permanent stop, and unrelated WebSocket traffic remain available during the
 wait. Permanent stop cancels the pending restart and owns the only subsequent
 exit.
 
+An unresolved interactive tool is already restart-safe when every unfinished
+tool-call id is covered by a durable `awaiting_permission` checkpoint and no
+provider request is in flight. Ordinary restart exits from that boundary
+without waiting for the user, cancelling the tool, or requiring force. Startup
+then changes the preserved running owner to `waiting` and republishes the same
+Ask User or permission request identity. Partial coverage never hides another
+unresolved tool in the same batch; that batch remains a restart blocker.
+
 A forced timeout deliberately preserves ambiguous durable tool state for
 startup recovery. Automatic startup remains fail-closed. Any later manual
 recovery uses cause-neutral interruption text because the runtime may not be
@@ -177,7 +185,11 @@ permission decision, atomically claims `waiting` or `blocked` work as
 `resuming`, and resumes the assistant stream through normal canonical
 delivery. It restores the original run/generation owner and commits the work
 item as `completed` before publishing the terminal response. Resume never uses
-an ad-hoc transport side channel.
+an ad-hoc transport side channel. Once the terminal commit succeeds, it also
+reconciles the orchestrator projection: the restored suspension and stale busy
+ownership are removed and the durable FIFO is allowed to drain. This prevents
+an `idle` database snapshot from coexisting with admission that still queues
+new messages.
 
 Startup reconciles runtime notices against active non-terminal work before
 hydration. A notice with no active work owner is deleted as orphan state, and a

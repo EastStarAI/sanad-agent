@@ -9,6 +9,7 @@ import '../models/session_state.dart';
 import '../models/suspended_checkpoint.dart';
 import '../../core/models/message.dart';
 import 'agent_state_database.dart';
+import 'compaction_boundary_repository.dart';
 import 'session_history_revision_repository.dart';
 import '../compaction/model_context_projection.dart';
 import 'message_history_identity.dart';
@@ -38,6 +39,7 @@ class SoftRewindAdmissionCommit {
 /// [SessionDB.fromState].
 class SessionDB {
   late Database _db;
+  late CompactionBoundaryRepository _compactionBoundaries;
 
   /// The owner this instance is responsible for disposing. Non-null only for
   /// the default constructor (standalone); `null` when sharing an injected
@@ -45,7 +47,12 @@ class SessionDB {
   final AgentStateDatabase? _disposeOwnedState;
 
   SessionDB() : _disposeOwnedState = AgentStateDatabase() {
-    _db = _disposeOwnedState!.db;
+    final state = _disposeOwnedState!;
+    _db = state.db;
+    _compactionBoundaries = CompactionBoundaryRepository(
+      state,
+      SessionHistoryRevisionRepository(state),
+    );
   }
 
   /// Shares a single [AgentStateDatabase] connection without taking
@@ -54,6 +61,10 @@ class SessionDB {
   /// `ProviderInstanceRepository` share one `state.db` connection.
   SessionDB.fromState(AgentStateDatabase state) : _disposeOwnedState = null {
     _db = state.db;
+    _compactionBoundaries = CompactionBoundaryRepository(
+      state,
+      SessionHistoryRevisionRepository(state),
+    );
   }
 
   void dispose() {
@@ -917,7 +928,10 @@ class SessionDB {
           );
         }
 
-        final active = getMessages(sourceSessionId);
+        final activePersisted = getPersistedMessages(sourceSessionId);
+        final active = activePersisted
+            .map((entry) => entry.message)
+            .toList(growable: false);
         final target = _findActive(
           active,
           messageId: targetMessageId,
@@ -956,6 +970,9 @@ class SessionDB {
             outcome: SessionForkOutcome.targetNotFound,
           );
         }
+        final sourcePrefix = activePersisted
+            .take(prefix.length)
+            .toList(growable: false);
 
         final lineageId = parent.lineageId;
         final sequence = _nextForkSequence(lineageId);
@@ -1001,9 +1018,24 @@ class SessionDB {
             [baseTitle, parent.sessionId],
           );
         }
-        for (final message in SessionForkCopy.rewritePrefix(prefix)) {
-          MessageHistoryIdentity.persist(_db, child.sessionId, message);
+        final rewrittenPrefix = SessionForkCopy.rewritePrefix(prefix);
+        final childRowIdBySourceRowId = <int, int>{};
+        for (var index = 0; index < rewrittenPrefix.length; index++) {
+          MessageHistoryIdentity.persist(
+            _db,
+            child.sessionId,
+            rewrittenPrefix[index],
+          );
+          childRowIdBySourceRowId[sourcePrefix[index].rowId] =
+              _db.lastInsertRowId;
         }
+        _compactionBoundaries.cloneTerminalOperationsForFork(
+          sourceSessionId: sourceSessionId,
+          childSessionId: child.sessionId,
+          childRowIdBySourceRowId: childRowIdBySourceRowId,
+          sourcePrefixEndRowId: sourcePrefix.last.rowId,
+          childHistoryRevision: child.historyRevision,
+        );
         _db.execute('COMMIT');
         return SessionForkCommit(
           outcome: SessionForkOutcome.accepted,
