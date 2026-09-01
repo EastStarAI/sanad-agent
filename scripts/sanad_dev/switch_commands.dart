@@ -174,8 +174,7 @@ Future<void> handleRuntimeSwitch({
         manifestPath,
         existing.copyWith(
           status: 'failed',
-          message:
-              'Stale runtime handoff discarded because its owning launcher is no longer active.',
+          message: 'Stale runtime handoff discarded because its owning launcher is no longer active.',
         ),
       );
       print(
@@ -416,6 +415,7 @@ class _SwitchableRuntimeController {
     final shutdown = Completer<_ShutdownRequested>();
     StreamSubscription<ProcessSignal>? sigint;
     StreamSubscription<ProcessSignal>? sigterm;
+    StreamSubscription<ProcessSignal>? sighup;
     StreamSubscription<List<int>>? stdinKeys;
     if (stdin.hasTerminal) {
       try {
@@ -453,11 +453,14 @@ class _SwitchableRuntimeController {
       }
     });
     if (!Platform.isWindows) {
-      sigterm = ProcessSignal.sigterm.watch().listen((_) {
+      void requestShutdown(ProcessSignal _) {
         if (!shutdown.isCompleted) {
           shutdown.complete(const _ShutdownRequested());
         }
-      });
+      }
+
+      sigterm = ProcessSignal.sigterm.watch().listen(requestShutdown);
+      sighup = ProcessSignal.sighup.watch().listen(requestShutdown);
     }
 
     var clientExitCode = 0;
@@ -523,6 +526,7 @@ class _SwitchableRuntimeController {
       if (await stopRequest.exists()) await stopRequest.delete();
       await sigint.cancel();
       await sigterm?.cancel();
+      await sighup?.cancel();
       await stdinKeys?.cancel();
       if (stdin.hasTerminal) {
         try {

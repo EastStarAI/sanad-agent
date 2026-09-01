@@ -17,7 +17,7 @@ Desktop worktree discovery belongs to `sanad-dev ui`. Standalone, mobile, and we
 
 ## Components
 
-- `client/lib/driver_main.dart` registers development-only VM extensions and starts the normal Client application.
+- `client/lib/driver_main.dart` registers development-only VM extensions and starts the normal Client application. Flutter Driver text-entry emulation is disabled at binding creation so the operating-system text channel and physical keyboard remain active.
 - `scripts/flutter_driver_cli/flutter_vm_controller.dart` owns VM RPC, isolate selection, Flutter Driver actions, and connection cleanup.
 - `scripts/flutter_driver_cli/cli_runner.dart` validates commands and produces human-readable or machine-readable results.
 - `scripts/sanad_dev/developer_actions.dart` resolves the current worktree's live driver client and forwards its VM endpoint to the standalone CLI.
@@ -25,6 +25,14 @@ Desktop worktree discovery belongs to `sanad-dev ui`. Standalone, mobile, and we
 ## Interaction Contract
 
 The public primitives are snapshot, find, tap, enter-text, scroll, wait-for, screenshot, and batch. Selectors use widget keys, exact text, widget types, explicit indexes, coordinates, and optional subtree scope.
+
+`enter-text` first focuses the requested field, then calls the Sanad
+`ext.sanad_client.enter_text` extension. The extension resolves an exact keyed
+`EditableTextState` (or the focused editable when no key is supplied) and sends
+one `TextEditingValue` through `updateEditingValue`, preserving user-change
+semantics without mocking `SystemChannels.textInput`. It never returns the text
+value. The controller falls back to legacy Flutter Driver `enterText` only for
+older instrumented Clients that do not advertise the Sanad extension.
 
 The controller selects the isolate that advertises the required extension rather than assuming the first VM isolate is the Flutter UI isolate. Missing scopes and invalid indexes fail closed. Scoped, indexed, and coordinate taps never fall back to an unscoped selector. Offset scrolling uses the custom extension; scroll-until-visible remains a Flutter Driver operation and succeeds only after the target becomes visible.
 
