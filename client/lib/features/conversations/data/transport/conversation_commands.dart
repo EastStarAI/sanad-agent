@@ -900,16 +900,40 @@ class ConversationCommands {
     List<CanonicalEvent> retained,
     List<CanonicalEvent> hydrated,
   ) {
+    final foldedHydrated = _foldCanonicalEvents(hydrated);
     final hydratedById = {
-      for (final event in hydrated) event.id: event,
+      for (final event in foldedHydrated) event.id: event,
     };
     final merged = <CanonicalEvent>[
-      for (final event in retained) hydratedById.remove(event.id) ?? event,
+      for (final event in retained)
+        switch (hydratedById.remove(event.id)) {
+          final hydratedEvent? => event.merge(hydratedEvent),
+          null => event,
+        },
     ];
     merged.addAll(
-      hydrated.where((event) => hydratedById.remove(event.id) != null),
+      foldedHydrated.where(
+        (event) => hydratedById.remove(event.id) != null,
+      ),
     );
     return merged;
+  }
+
+  List<CanonicalEvent> _foldCanonicalEvents(
+    Iterable<CanonicalEvent> events,
+  ) {
+    final folded = <CanonicalEvent>[];
+    final indexById = <String, int>{};
+    for (final event in events) {
+      final index = indexById[event.id];
+      if (index == null) {
+        indexById[event.id] = folded.length;
+        folded.add(event);
+      } else {
+        folded[index] = folded[index].merge(event);
+      }
+    }
+    return folded;
   }
 
   Future<List<CanonicalEvent>> loadAnchoredSessionHistory(

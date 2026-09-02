@@ -2,13 +2,13 @@
 
 ## الحالة
 
-- **الحالة:** اكتمل pagination وإصلاح تكافؤ أهلية Edit/Retry بين live history والـhydration والتحقق منهما.
+- **الحالة:** اكتمل إصلاح تكرار pending steer بعد hydration والتنقل بين المحادثات والتحقق منه.
 - **الفرع:** `docs/task-84-conversation-history-pagination`.
-- **البوابة الحالية:** G8 — مغلقة.
+- **البوابة الحالية:** G10 — مغلقة.
 - **نسبة العمل المتبقي:** 0%.
 - **التأصيل المرجعي:** Evidence ID `84`، fingerprint
   `sha256:9aa23d0f3a0007890d9ef01643ee633ea618f5ca48704ad54492340d51df9e28`.
-- **حدود التسليم:** مصرح بالـ Commit والـ Push والـ PR والدمج بأمر المالك.
+- **حدود التسليم:** صرّح المالك بالـCommit والـPush وفتح PR ومتابعة CI والدمج إلى `main`.
 
 ## الهدف
 
@@ -313,6 +313,61 @@ Show later نفسها ظهرت قبل الإصلاح ثلاثة `EventTile` من
 - [x] Given رسالة root جديدة، when تُرسل، then يظهر Edit/Retry من live event دون تغيير المحادثة أو طلب history إضافي.
 - [x] Given anchored page لها سجل أحدث، then لا تظهر إجراءات replay لأي root محملة حتى الوصول إلى authoritative tail.
 - [x] Given Retry أثناء تنفيذ الوكيل، then يرسل Client أمر replay واحدًا ويتولى Agent وحده Stop ثم rewind وإعادة التنفيذ.
+
+### G9 — تكافؤ أجزاء الأداة عبر live/history وحدود الصفحات
+
+- [x] تشخيص السجل الحقيقي وإثبات سلامة صفّي `tool_use` و`tool_result` في قاعدة
+  البيانات مع فقدان الدمج في Client.
+- [x] دمج الأحداث المتكررة داخل hydration بالهوية canonical قبل مصالحتها مع
+  retained history، مع الاحتفاظ بـinput وoutput والحالة النهائية.
+- [x] دمج النصف الأقدم من الأداة عند prepend بدل إسقاطه كـID مكرر.
+- [x] توجيه `shell_execute` النهائي إلى عرض Terminal حتى إذا وصل بلا input
+  مؤقتًا، ومنع إظهار غلاف `isError`/`output` الخام.
+- [x] إضافة اختبارات regression للمسارات الثلاثة وتحديث QA، ثم تشغيل analyzer
+  والاختبارات المركزة وGraphify.
+
+#### قبول G9
+
+- [x] Given نتيجة Terminal حية ثم hydration يحوي `tool_use` و`tool_result`،
+  then يبقى command ويظهر stdout الداخلي فقط.
+- [x] Given `tool_result` في الصفحة الحالية و`tool_use` المطابق في الصفحة
+  الأقدم، when تُضم الصفحة، then يندمجان في حدث واحد مكتمل.
+- [x] Given نتيجة `shell_execute` بلا input، then يستخدم العرض المتخصص ولا يظهر
+  JSON envelope العام.
+
+**دليل G9:** قاعدة المستخدم أثبتت سلامة `tool_use` و`tool_result` وربطهما بنفس
+`tool_call_id`. نجح الاختباران المركزان (`58 passed`) وClient analyzer بلا
+مشكلات، ثم نجحت مجموعة Client كاملة (`1224 passed`, `1 skipped`). طُبق hot
+reload على runtime المملوك لـWorktree 84 وتأكدت هوية الـworktree والمحادثة، مع
+ترك عملية Terminal النشطة دون restart أو تدخل. نجح `git diff --check` وتحديث
+Graphify.
+
+### G10 — مصالحة pending steer مع رسالة التاريخ الدائمة
+
+- [x] إثبات أن قاعدة البيانات تحتوي steer واحدة وأن Client يعرض تمثيل التاريخ
+  وتمثيل lifecycle كفقاعتين بسبب اختلاف event ids رغم تطابق `request_id`.
+- [x] مصالحة projection المؤقت مع رسالة التاريخ الدائمة داخل
+  `DeviceConversationStore` مع الحفاظ على موضع ومعرّف رسالة التاريخ.
+- [x] إعادة المصالحة بعد استبدال التاريخ أو ضم صفحة أقدم أو أحدث حتى لا يعود
+  التكرار بعد navigation أو hydration لاحق.
+- [x] إضافة regression يعيد التحميل، ينتقل إلى محادثة أخرى، ثم يعود إلى نفس
+  المحادثة مع lifecycle بالحالة `delivered`.
+
+#### قبول G10
+
+- [x] Given history steer وpending-steer lifecycle لهما نفس `request_id`، when
+  تُحمّل المحادثة، then تظهر فقاعة مستخدم واحدة في موضعها السببي.
+- [x] Given lifecycle وصل إلى `delivered`، when يغادر المستخدم المحادثة ثم
+  يعود، then لا تظهر نسخة مؤقتة في نهاية السجل.
+- [x] Given pending أو delivering بلا رسالة تاريخ دائمة، then يظل projection
+  المؤقت الواحد متاحًا ويتحول بنفس الهوية عبر lifecycle الحي.
+
+**دليل G10:** نجح regression المركز الذي يعيد واقعة hydration والتنقل، ثم نجحت
+مجموعتا أوامر المحادثة وlifecycle (`76 passed`) مع الحفاظ على اختبارات pending
+والإلغاء القائمة. نجح Client analyzer بلا مشكلات ومجموعة Client الكاملة
+(`1225 passed`, `1 skipped`).
+طُبق hot restart بنجاح على Client المملوك لـWorktree 84، وبقي runtime مطابقًا
+لنفس المصدر والفرع، كما نجح `git diff --check` وتحديث Graphify.
 
 ## معايير القبول
 
