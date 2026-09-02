@@ -59,8 +59,10 @@ update all package, lockfile, native Windows, release-contract, artifact-name,
 release-note identity, changelog-slot, and current-release documentation
 surfaces. `check-preparation` must then reject any stale surface or unfinished
 `TODO`. Focused tests copy the current 11-file release surface into an isolated
-temporary fixture and prove successful transformation, no mutation after
-prevalidation failure, and stale native/prose rejection.
+temporary fixture, derive the next patch and build from its current contract,
+and prove successful transformation, no mutation after prevalidation failure,
+and stale native/prose rejection. Tests must not pin the release identity that
+they are designed to advance.
 
 The protected-review exception is valid only for an exact metadata release PR.
 `scripts/release/verify_metadata_release_diff.sh` compares the PR merge range

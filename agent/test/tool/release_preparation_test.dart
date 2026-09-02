@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
@@ -20,6 +21,10 @@ const _releaseFiles = [
 
 void main() {
   late Directory fixture;
+  late String currentVersion;
+  late String nextVersion;
+  late int currentBuildNumber;
+  late int nextBuildNumber;
 
   setUp(() async {
     fixture = await Directory.systemTemp.createTemp(
@@ -32,6 +37,14 @@ void main() {
       await target.parent.create(recursive: true);
       await source.copy(target.path);
     }
+    final contract = jsonDecode(
+      File('${fixture.path}/release/release-contract.json').readAsStringSync(),
+    ) as Map<String, dynamic>;
+    currentVersion = contract['version'] as String;
+    currentBuildNumber = contract['build_number'] as int;
+    final parts = currentVersion.split('.').map(int.parse).toList();
+    nextVersion = '${parts[0]}.${parts[1]}.${parts[2] + 1}';
+    nextBuildNumber = currentBuildNumber + 1;
   });
 
   tearDown(() async {
@@ -48,25 +61,36 @@ void main() {
   test('updates every mechanical release identity surface', () async {
     final preparation = ReleasePreparation(fixture);
 
-    await preparation.prepare(version: '1.0.7', buildNumber: 8);
+    await preparation.prepare(
+      version: nextVersion,
+      buildNumber: nextBuildNumber,
+    );
 
-    expect(readFixture('agent/pubspec.yaml'), contains('version: 1.0.7'));
-    expect(readFixture('client/pubspec.yaml'), contains('version: 1.0.7+8'));
+    expect(
+      readFixture('agent/pubspec.yaml'),
+      contains('version: $nextVersion'),
+    );
+    expect(
+      readFixture('client/pubspec.yaml'),
+      contains('version: $nextVersion+$nextBuildNumber'),
+    );
     expect(
       readFixture('client/release/windows/sanad_client_installer.iss'),
-      contains('AppVersion=1.0.7'),
+      contains('AppVersion=$nextVersion'),
     );
     expect(
       readFixture('client/windows/runner/Runner.rc'),
-      contains('#define VERSION_AS_NUMBER 1,0,7,8'),
+      contains(
+        '#define VERSION_AS_NUMBER ${nextVersion.replaceAll('.', ',')},$nextBuildNumber',
+      ),
     );
     expect(
       readFixture('release/release-contract.json'),
-      contains('sanad-agent-1.0.7'),
+      contains('sanad-agent-$nextVersion'),
     );
     expect(
       readFixture('release/release-notes.md'),
-      startsWith('# Sanad 1.0.7'),
+      startsWith('# Sanad $nextVersion'),
     );
     expect(readFixture('agent/CHANGELOG.md'), contains('TODO'));
     expect(preparation.check, throwsFormatException);
@@ -86,11 +110,17 @@ void main() {
     final preparation = ReleasePreparation(fixture);
 
     expect(
-      () => preparation.prepare(version: '1.0.6', buildNumber: 8),
+      () => preparation.prepare(
+        version: currentVersion,
+        buildNumber: nextBuildNumber,
+      ),
       throwsFormatException,
     );
     expect(
-      () => preparation.prepare(version: '1.0.7', buildNumber: 7),
+      () => preparation.prepare(
+        version: nextVersion,
+        buildNumber: currentBuildNumber,
+      ),
       throwsFormatException,
     );
 
@@ -103,7 +133,7 @@ void main() {
     writeFixture(
       'client/windows/runner/Runner.rc',
       readFixture('client/windows/runner/Runner.rc').replaceFirst(
-        '#define VERSION_AS_STRING "1.0.6"',
+        '#define VERSION_AS_STRING "$currentVersion"',
         '#define VERSION_AS_STRING "stale"',
       ),
     );
@@ -111,7 +141,8 @@ void main() {
 
     expect(
       () =>
-          ReleasePreparation(fixture).prepare(version: '1.0.7', buildNumber: 8),
+          ReleasePreparation(fixture)
+              .prepare(version: nextVersion, buildNumber: nextBuildNumber),
       throwsFormatException,
     );
 
@@ -126,9 +157,8 @@ void main() {
 
     writeFixture(
       'client/release/windows/sanad_client_installer.iss',
-      readFixture(
-        'client/release/windows/sanad_client_installer.iss',
-      ).replaceFirst('AppVersion=1.0.6', 'AppVersion=0.0.0'),
+      readFixture('client/release/windows/sanad_client_installer.iss')
+          .replaceFirst('AppVersion=$currentVersion', 'AppVersion=0.0.0'),
     );
     expect(preparation.check, throwsFormatException);
   });
