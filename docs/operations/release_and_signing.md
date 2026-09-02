@@ -13,6 +13,39 @@ canonical installer sources. The current patch release uses marketing version `1
 
 Pull-request CI is read-only and never receives signing or deployment credentials. A protected validation-only dispatch from `main` can build the complete signed Agent/Client matrix, including a private IPA, as retained private artifacts without a tag, Draft, Release, TestFlight upload, or deployment. Signing jobs use protected GitHub Environments. Assembly remains contents-read; only the separate Draft and publication jobs receive contents-write.
 
+## Automated release preparation
+
+Future releases use the release-delivery reference loaded on demand by the
+repository `Sanad Pull Request Lifecycle` skill and the FVM-managed
+`agent/tool/release_tool.dart prepare-release` command. The command
+accepts one increasing Stable semantic version and build number, validates every
+source surface before writing, and updates Agent/Client package metadata,
+release-contract package lock entries, native Windows version resources, the
+canonical contract/tag/artifact filenames, release-note identity, changelog
+slot, and this current-release statement. `check-preparation` then rejects stale
+or unfinished release identity before a pull request can pass CI. Release prose
+remains derived from merged Git history by the skill rather than invented by the
+mechanical command.
+
+A release-preparation pull request may pass without `release-reviewed` only when
+`scripts/release/verify_metadata_release_diff.sh` proves the diff is exactly the
+11 established metadata/prose files and every changed mechanical line is a
+version, build, tag, or canonical artifact-filename substitution. The normal
+protected review remains fail-closed for any workflow, signing, deployment,
+script, installer-logic, task-plan, unrelated-file, or unexpected-line change.
+This narrow exception permits the explicitly requested release-delivery
+extension to prepare, push, and squash-merge the metadata PR without introducing
+an early publication decision. It grants no Environment, secret, tag rewrite, or publication access.
+
+After merge, the skill creates the immutable tag only on the verified public
+`main` commit, requires PR #129 merge commit
+`872a5b75aec8303bf59ea39e25826d017d0ad714` and every selected merged change to
+be ancestors, and identifies the release workflow by both tag and source SHA.
+It uses bounded polling and stops on any failed or ambiguous prerequisite. The
+one final human decision is requested only when the complete signed candidate,
+metadata, attestations, and private Draft have succeeded and the sole pending
+protected deployment is `release-publication`.
+
 ## Artifact channels
 
 | Component | Target | Public channel | Authenticity boundary |

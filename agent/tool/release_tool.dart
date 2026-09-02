@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:sanad_release_contract/release_contract.dart';
 
+import 'release_preparation.dart';
+
 Future<void> main(List<String> arguments) async {
   if (arguments.isEmpty) _usage();
   final command = arguments.first;
@@ -10,6 +12,21 @@ Future<void> main(List<String> arguments) async {
   final repoRoot = Directory(options['repo-root'] ?? '..').absolute;
   try {
     switch (command) {
+      case 'prepare-release':
+        final version = _required(options, 'version');
+        final buildNumber = int.tryParse(_required(options, 'build-number'));
+        if (buildNumber == null) {
+          throw const FormatException('Build number must be an integer.');
+        }
+        await ReleasePreparation(
+          repoRoot,
+        ).prepare(version: version, buildNumber: buildNumber);
+        stdout.writeln('Prepared release $version+$buildNumber.');
+        return;
+      case 'check-preparation':
+        ReleasePreparation(repoRoot).check();
+        stdout.writeln('Release preparation is complete and consistent.');
+        return;
       case 'validate-contract':
         await _validateContract(
           repoRoot,
@@ -315,7 +332,7 @@ String _required(Map<String, String> values, String key) {
 Never _usage([String? error]) {
   if (error != null) stderr.writeln(error);
   stderr.writeln(
-    'Usage: release_tool.dart <validate-contract|generate-manifest|verify-manifest|generate-appcast> [options]',
+    'Usage: release_tool.dart <prepare-release|check-preparation|validate-contract|generate-manifest|verify-manifest|generate-appcast> [options]',
   );
   exit(64);
 }
