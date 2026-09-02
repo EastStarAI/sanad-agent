@@ -177,16 +177,64 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   }
 
   void _requestMissingSavedAnchor() {
-    if (!mounted || widget.followLatestOnOpen) return;
+    if (!mounted) return;
     final anchorEventId = widget.initialViewportAnchorEventId;
-    if (anchorEventId == null ||
-        anchorEventId == _attemptedAnchorEventId ||
-        widget.onLoadAnchoredHistory == null ||
-        _messages.any((event) => event.id == anchorEventId)) {
+    if (anchorEventId == null || anchorEventId == _attemptedAnchorEventId) {
+      return;
+    }
+    if (!_isRestorableHistoryAnchor(anchorEventId)) {
+      _attemptedAnchorEventId = anchorEventId;
+      final replacement = _nearestRestorableHistoryAnchor();
+      if (replacement != null) {
+        widget.onViewportAnchorChanged?.call(replacement);
+      }
+      return;
+    }
+    if (widget.followLatestOnOpen) return;
+    if (widget.onLoadAnchoredHistory == null ||
+        _messages.any(
+          (event) => event.id == anchorEventId || event.eventId == anchorEventId,
+        )) {
       return;
     }
     _attemptedAnchorEventId = anchorEventId;
     unawaited(widget.onLoadAnchoredHistory!(anchorEventId));
+  }
+
+  bool _isRestorableHistoryAnchor(String eventId) {
+    final sessionId = widget.sessionId;
+    return sessionId != null && eventId.startsWith('history:$sessionId:');
+  }
+
+  String? _restorableHistoryAnchorFor(ConversationTimelineItem item) {
+    for (final event in item.events) {
+      final eventId = event.eventId;
+      if (eventId != null && _isRestorableHistoryAnchor(eventId)) {
+        return eventId;
+      }
+    }
+    return null;
+  }
+
+  int? _nearestRestorableHistoryIndex(int origin) {
+    if (_timelineItems.isEmpty) return null;
+    final boundedOrigin = origin.clamp(0, _timelineItems.length - 1).toInt();
+    for (var distance = 0; distance < _timelineItems.length; distance++) {
+      final before = boundedOrigin - distance;
+      if (before >= 0 && _restorableHistoryAnchorFor(_timelineItems[before]) != null) {
+        return before;
+      }
+      final after = boundedOrigin + distance;
+      if (distance > 0 && after < _timelineItems.length && _restorableHistoryAnchorFor(_timelineItems[after]) != null) {
+        return after;
+      }
+    }
+    return null;
+  }
+
+  String? _nearestRestorableHistoryAnchor() {
+    final index = _nearestRestorableHistoryIndex(_openAnchorIndex);
+    return index == null ? null : _restorableHistoryAnchorFor(_timelineItems[index]);
   }
 
   void _maybeAutoFillHistory() {
@@ -295,8 +343,12 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     final savedAnchor = widget.initialViewportAnchorEventId;
     final anchorBecameAvailable =
         savedAnchor != null &&
-        !oldWidget.initialMessages.any((event) => event.id == savedAnchor) &&
-        widget.initialMessages.any((event) => event.id == savedAnchor);
+        !oldWidget.initialMessages.any(
+          (event) => event.id == savedAnchor || event.eventId == savedAnchor,
+        ) &&
+        widget.initialMessages.any(
+          (event) => event.id == savedAnchor || event.eventId == savedAnchor,
+        );
     if (sessionChanged || messagesChanged || activityChanged) {
       _applyMessages(
         widget.initialMessages,
@@ -470,12 +522,23 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       _openAnchorIndex = _timelineItems.length - 1;
       return;
     }
-    final restoredIndex = widget.initialViewportAnchorEventId == null
+    final savedAnchorEventId = widget.initialViewportAnchorEventId;
+    if (savedAnchorEventId != null && !_isRestorableHistoryAnchor(savedAnchorEventId)) {
+      final transientIndex = _timelineItems.indexWhere(
+        (item) => item.containsEventId(savedAnchorEventId),
+      );
+      final replacementIndex = _nearestRestorableHistoryIndex(
+        transientIndex < 0 ? _timelineItems.length - 1 : transientIndex,
+      );
+      if (replacementIndex != null) {
+        _openAnchorIndex = replacementIndex;
+        return;
+      }
+    }
+    final restoredIndex = savedAnchorEventId == null || !_isRestorableHistoryAnchor(savedAnchorEventId)
         ? -1
         : _timelineItems.indexWhere(
-            (item) => item.containsEventId(
-              widget.initialViewportAnchorEventId!,
-            ),
+            (item) => item.containsEventId(savedAnchorEventId),
           );
     if (restoredIndex >= 0) {
       _openAnchorIndex = restoredIndex;
@@ -633,10 +696,12 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       final eventTop = eventBox.localToGlobal(Offset.zero).dy;
       final eventBottom = eventTop + eventBox.size.height;
       if (eventBottom <= viewportTop || eventTop >= viewportBottom) continue;
+      final anchorEventId = _restorableHistoryAnchorFor(item);
+      if (anchorEventId == null) continue;
       final visibleTop = eventTop < viewportTop ? viewportTop : eventTop;
       if (topEventPosition == null || visibleTop < topEventPosition) {
         topEventPosition = visibleTop;
-        topEventId = item.id;
+        topEventId = anchorEventId;
       }
     }
 

@@ -209,7 +209,12 @@ void main() {
       onLoadAnchoredHistory: (_) async {
         notifier.value = [
           _event('history:session-1:41:final_answer:0', EventKind.finalAnswer, _lines(20)),
-          _event(anchorId, EventKind.userMessage, 'restored prompt'),
+          _event(
+            'restored-user-display-id',
+            EventKind.userMessage,
+            'restored prompt',
+            eventId: anchorId,
+          ),
           _event('history:session-1:43:final_answer:0', EventKind.finalAnswer, _lines(10)),
         ];
       },
@@ -244,6 +249,54 @@ void main() {
     await tester.pump();
 
     expect(requestedAnchors, ['history:session-1:42:user_message:0']);
+  });
+
+  testWidgets('transient steer anchors migrate to nearby durable history', (
+    tester,
+  ) async {
+    final requestedAnchors = <String>[];
+    final recordedAnchors = <String>[];
+    const durableAnchor = 'history:session-1:41:final_answer:0';
+    const transientAnchor = 'user_req_transient-steer';
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [
+        _event(
+          'answer_model_step_before-steer',
+          EventKind.finalAnswer,
+          'durable history before steer',
+          eventId: durableAnchor,
+        ),
+        CanonicalEvent(
+          id: transientAnchor,
+          kind: EventKind.userMessage,
+          text: 'steer sent during active work',
+          timestamp: DateTime(2026, 1, 1),
+          metadata: const {
+            'request_id': 'req_transient-steer',
+            'pending_steer_state': 'delivered',
+          },
+        ),
+      ],
+      initialViewportAnchorEventId: transientAnchor,
+      followLatestOnOpen: true,
+      onViewportAnchorChanged: recordedAnchors.add,
+      onLoadAnchoredHistory: (eventId) async {
+        requestedAnchors.add(eventId);
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(requestedAnchors, isEmpty);
+    expect(recordedAnchors, [durableAnchor]);
+    expect(find.text('durable history before steer'), findsOneWidget);
   });
 
   testWidgets('a short first page auto-fills once without a request loop', (tester) async {
@@ -749,8 +802,18 @@ void main() {
     final recordedAnchors = <String>[];
     final messages = [
       for (var i = 0; i < 30; i += 1)
-        _event('event-$i', EventKind.finalAnswer, 'message ${List.filled(8, i).join(' ')}'),
-      _event('last-user', EventKind.userMessage, 'latest user prompt'),
+        _event(
+          'event-$i',
+          EventKind.finalAnswer,
+          'message ${List.filled(8, i).join(' ')}',
+          eventId: 'history:session-1:${i + 1}:final_answer:0',
+        ),
+      _event(
+        'last-user',
+        EventKind.userMessage,
+        'latest user prompt',
+        eventId: 'history:session-1:31:user_message:0',
+      ),
     ];
 
     await _pumpBrainActivityView(
@@ -774,19 +837,35 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
 
     expect(recordedAnchors, isNotEmpty);
-    expect(messages.map((event) => event.id), contains(recordedAnchors.last));
+    expect(recordedAnchors.last, startsWith('history:session-1:'));
+    expect(
+      messages.map((event) => event.eventId),
+      contains(recordedAnchors.last),
+    );
   });
 
   testWidgets('switching idle sessions restores each saved visible event independently', (tester) async {
     final sessionOne = [
-      for (var i = 0; i < 40; i += 1) _event('session-one-$i', EventKind.finalAnswer, _lines(4)),
+      for (var i = 0; i < 40; i += 1)
+        _event(
+          'session-one-$i',
+          EventKind.finalAnswer,
+          _lines(4),
+          eventId: 'history:session-one:${i + 1}:final_answer:0',
+        ),
     ];
     final sessionTwo = [
-      for (var i = 0; i < 40; i += 1) _event('session-two-$i', EventKind.finalAnswer, _lines(4)),
+      for (var i = 0; i < 40; i += 1)
+        _event(
+          'session-two-$i',
+          EventKind.finalAnswer,
+          _lines(4),
+          eventId: 'history:session-two:${i + 1}:final_answer:0',
+        ),
     ];
     final anchors = <String, String>{
-      'session-one': 'session-one-20',
-      'session-two': 'session-two-10',
+      'session-one': 'history:session-one:21:final_answer:0',
+      'session-two': 'history:session-two:11:final_answer:0',
     };
     final selected = ValueNotifier<(String, List<CanonicalEvent>)>(
       ('session-one', sessionOne),
@@ -830,18 +909,17 @@ void main() {
     await tester.pump();
     await tester.pump();
     await tester.pump();
-    expect(
-      find.byKey(ValueKey(anchors['session-two']!)),
-      findsOneWidget,
-    );
+    final sessionTwoDisplayId = sessionTwo.firstWhere((event) => event.eventId == anchors['session-two']).id;
+    expect(find.byKey(ValueKey(sessionTwoDisplayId)), findsOneWidget);
 
     selected.value = ('session-one', sessionOne);
     await tester.pump();
     await tester.pump();
 
-    expect(find.byKey(ValueKey(savedSessionOne)), findsOneWidget);
+    final sessionOneDisplayId = sessionOne.firstWhere((event) => event.eventId == savedSessionOne).id;
+    expect(find.byKey(ValueKey(sessionOneDisplayId)), findsOneWidget);
     expect(
-      tester.getTopLeft(find.byKey(ValueKey(savedSessionOne))).dy,
+      tester.getTopLeft(find.byKey(ValueKey(sessionOneDisplayId))).dy,
       lessThan(180),
     );
     selected.dispose();
@@ -1337,8 +1415,19 @@ Future<void> _pumpBrainActivityView(
   );
 }
 
-CanonicalEvent _event(String id, EventKind kind, String text) {
-  return CanonicalEvent(id: id, kind: kind, text: text, timestamp: DateTime(2026, 1, 1));
+CanonicalEvent _event(
+  String id,
+  EventKind kind,
+  String text, {
+  String? eventId,
+}) {
+  return CanonicalEvent(
+    id: id,
+    kind: kind,
+    text: text,
+    timestamp: DateTime(2026, 1, 1),
+    eventId: eventId,
+  );
 }
 
 ScrollController _timelineController(WidgetTester tester) {

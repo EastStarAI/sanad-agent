@@ -99,10 +99,11 @@ description: "QA scenarios for persistent conversation snapshots, draft acceptan
 | Network/offline failure | Existing messages and viewport remain with no retry control. Auto-fill stops; fresh edge intent/overscroll permits at most three consecutive retries per direction, then emits no further requests until success or session reset. |
 | Response repeats its cursor or returns no progress | Pagination becomes exhausted and cannot loop. |
 | Switch session/device during request | Late command and Cubit generations are ignored; no foreign timeline mutation appears. |
-| Restore an old saved viewport event | Client sends `anchor_event_id`; the bounded page begins at that row, includes newer context, and aligns the event near the visible top. An oldest-row anchor must not collapse the timeline to one message. |
+| Restore an old saved viewport event | Client sends only an Agent-issued `history:<session>:...` `anchor_event_id`; the bounded page begins at that row, includes newer context, and aligns the event near the visible top. An oldest-row anchor must not collapse the timeline to one message. |
 | Navigate away after exhausting older history, then return | The Client restores the fully loaded in-memory timeline, reconciles the authoritative tail by event id, and permits scrolling from the first message through the newest message without another anchor/tail race. |
 | Restore an anchor with more than one forward page | Short content auto-fills newer pages; otherwise downward intent prefetches one newer cursor at a time before the loaded edge. Tool uses split from terminal rows only transiently and reconcile when the next bounded page arrives. |
-| Missing/deleted/compacted anchor | Agent returns `anchor_not_found`; Client retains the newest tail without repeated requests. |
+| Transient or legacy display anchor | `user_req_*`, model-step, live-event, and group ids are never sent to history lookup; Client replaces a stored legacy value with the nearest loaded `history:<session>:...` event. |
+| Missing/deleted/compacted durable anchor | Agent returns `anchor_not_found`; Client retains the newest tail without repeated requests. |
 | Tool-heavy run crosses a newer-page boundary | Reprojection merges every tool call in the same visible run into one group. Hidden historical reasoning cannot leave singleton tools below the group; visible timeline rows and `system_ask_user` still split groups. |
 | Compact and large window resize | No geometry jump, stale inline edit, overflow, or unintended tail-follow activation. |
 

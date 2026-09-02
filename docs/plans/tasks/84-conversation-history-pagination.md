@@ -2,9 +2,9 @@
 
 ## الحالة
 
-- **الحالة:** اكتمل إصلاح تكرار pending steer بعد hydration والتنقل بين المحادثات والتحقق منه.
+- **الحالة:** مُنع حفظ steer/live/display projections كـviewport anchors، وتكافؤ أهلية Edit/Retry بين live والـhistory؛ اكتمل التحقق الآلي والحي.
 - **الفرع:** `docs/task-84-conversation-history-pagination`.
-- **البوابة الحالية:** G10 — مغلقة.
+- **البوابة الحالية:** G11 — مغلقة.
 - **نسبة العمل المتبقي:** 0%.
 - **التأصيل المرجعي:** Evidence ID `84`، fingerprint
   `sha256:9aa23d0f3a0007890d9ef01643ee633ea618f5ca48704ad54492340d51df9e28`.
@@ -300,21 +300,7 @@ Show later نفسها ظهرت قبل الإصلاح ثلاثة `EventTile` من
 إعادة فتح الميزانية بعد recovery سلطوي. التُقطت لقطتان محليتان غير متتبعتين
 للجلسة الخاملة وtail الجلسة النشطة.
 
-### G8 — تكافؤ أهلية Edit/Retry بين live والـhistory
-
-- [x] يثبت Agent رسالة root user وهويتها durable قبل نشر `user_message` الحي، ثم يبدأ model stream من الرسالة نفسها دون duplicate.
-- [x] يتطابق live event والـhydration لنفس الرسالة في `request_id` و`message_id` و`turn_id` و`input_kind` و`replay_eligible`.
-- [x] يظهر Edit/Retry ويعملان فور durable commit حتى أثناء التنفيذ؛ يظل Agent مالك Stop والـidle boundary والـsoft rewind.
-- [x] لا يعرض Client Edit/Retry من anchored/partial history ما دام `hasNewerHistory=true`.
-- [x] تغطي الاختبارات الإرسال الحي دون navigation، والـhydration parity، والـpartial-tail guard، ومسار daemon-backed الحقيقي.
-
-#### قبول G8
-
-- [x] Given رسالة root جديدة، when تُرسل، then يظهر Edit/Retry من live event دون تغيير المحادثة أو طلب history إضافي.
-- [x] Given anchored page لها سجل أحدث، then لا تظهر إجراءات replay لأي root محملة حتى الوصول إلى authoritative tail.
-- [x] Given Retry أثناء تنفيذ الوكيل، then يرسل Client أمر replay واحدًا ويتولى Agent وحده Stop ثم rewind وإعادة التنفيذ.
-
-### G9 — تكافؤ أجزاء الأداة عبر live/history وحدود الصفحات
+### G8 — تكافؤ أجزاء الأداة عبر live/history وحدود الصفحات
 
 - [x] تشخيص السجل الحقيقي وإثبات سلامة صفّي `tool_use` و`tool_result` في قاعدة
   البيانات مع فقدان الدمج في Client.
@@ -326,7 +312,7 @@ Show later نفسها ظهرت قبل الإصلاح ثلاثة `EventTile` من
 - [x] إضافة اختبارات regression للمسارات الثلاثة وتحديث QA، ثم تشغيل analyzer
   والاختبارات المركزة وGraphify.
 
-#### قبول G9
+#### قبول G8
 
 - [x] Given نتيجة Terminal حية ثم hydration يحوي `tool_use` و`tool_result`،
   then يبقى command ويظهر stdout الداخلي فقط.
@@ -335,14 +321,14 @@ Show later نفسها ظهرت قبل الإصلاح ثلاثة `EventTile` من
 - [x] Given نتيجة `shell_execute` بلا input، then يستخدم العرض المتخصص ولا يظهر
   JSON envelope العام.
 
-**دليل G9:** قاعدة المستخدم أثبتت سلامة `tool_use` و`tool_result` وربطهما بنفس
+**دليل G8:** قاعدة المستخدم أثبتت سلامة `tool_use` و`tool_result` وربطهما بنفس
 `tool_call_id`. نجح الاختباران المركزان (`58 passed`) وClient analyzer بلا
 مشكلات، ثم نجحت مجموعة Client كاملة (`1224 passed`, `1 skipped`). طُبق hot
 reload على runtime المملوك لـWorktree 84 وتأكدت هوية الـworktree والمحادثة، مع
 ترك عملية Terminal النشطة دون restart أو تدخل. نجح `git diff --check` وتحديث
 Graphify.
 
-### G10 — مصالحة pending steer مع رسالة التاريخ الدائمة
+### G9 — مصالحة pending steer مع رسالة التاريخ الدائمة
 
 - [x] إثبات أن قاعدة البيانات تحتوي steer واحدة وأن Client يعرض تمثيل التاريخ
   وتمثيل lifecycle كفقاعتين بسبب اختلاف event ids رغم تطابق `request_id`.
@@ -353,7 +339,7 @@ Graphify.
 - [x] إضافة regression يعيد التحميل، ينتقل إلى محادثة أخرى، ثم يعود إلى نفس
   المحادثة مع lifecycle بالحالة `delivered`.
 
-#### قبول G10
+#### قبول G9
 
 - [x] Given history steer وpending-steer lifecycle لهما نفس `request_id`، when
   تُحمّل المحادثة، then تظهر فقاعة مستخدم واحدة في موضعها السببي.
@@ -362,13 +348,44 @@ Graphify.
 - [x] Given pending أو delivering بلا رسالة تاريخ دائمة، then يظل projection
   المؤقت الواحد متاحًا ويتحول بنفس الهوية عبر lifecycle الحي.
 
-**دليل G10:** نجح regression المركز الذي يعيد واقعة hydration والتنقل، ثم نجحت
+**دليل G9:** نجح regression المركز الذي يعيد واقعة hydration والتنقل، ثم نجحت
 مجموعتا أوامر المحادثة وlifecycle (`76 passed`) مع الحفاظ على اختبارات pending
-والإلغاء القائمة. نجح Client analyzer بلا مشكلات ومجموعة Client الكاملة
-(`1225 passed`, `1 skipped`).
+والإلغاء القائمة. نجح Client analyzer بلا مشكلات ومجموعة Client الكاملة على
+الفرع النهائي المبني من `main` (`1224 passed`, `1 skipped`).
 طُبق hot restart بنجاح على Client المملوك لـWorktree 84، وبقي runtime مطابقًا
 لنفس المصدر والفرع، كما نجح `git diff --check` وتحديث Graphify.
 
+### G10 — هوية viewport anchor قابلة للاسترجاع
+
+- [x] منع حفظ `user_req_*` وlive/model-step/tool-group display ids كـanchor.
+- [x] حفظ `event.eventId` فقط عندما يطابق `history:<session>:...` الصادر عن Agent.
+- [x] ترحيل anchor قديم مؤقت إلى أقرب history event محمّل دون إرسال طلب invalid.
+- [x] مطابقة الاستعادة على canonical display id أو history event id داخل المجموعة.
+- [x] إضافة regression مطابق لرسالة steer أثناء run والتنقل بعيدًا ثم العودة.
+- [x] تشغيل التحقق الكامل وتحديث Graphify وإغلاق البوابة.
+
+**دليل G10 الحالي:** قاعدة المستخدم أثبتت أن `user_req_d857...` رسالة steer
+بالحالة `delivered` وليست replay، وأن history API يقبل فقط صيغة
+`history:<session>:...`. بعد hot reload والتنقل بعيدًا والعودة ظهرت الصفحة
+التاريخية ومجموعة الأدوات والأحداث الحية معًا، ولم يُرسل anchored request
+بالمعرف المؤقت. بعد تحميل النسخة النهائية وتكرار session switch ظهرت سبعة عناصر
+حديثة بين مجموعات وأحداث history/live بدل فقاعة steer منفردة. نجح analyzer و28
+widget tests المركزة ومجموعة Client الكاملة (`1224 passed`, `1 skipped`)، ثم
+نجح `git diff --check` وتحديث Graphify.
+
+### G11 — تكافؤ أهلية Edit/Retry بين live والـhistory
+
+- [x] يثبت Agent رسالة root user وهويتها durable قبل نشر `user_message` الحي، ثم يبدأ model stream من الرسالة نفسها دون duplicate.
+- [x] يتطابق live event والـhydration لنفس الرسالة في `request_id` و`message_id` و`turn_id` و`input_kind` و`replay_eligible`.
+- [x] يظهر Edit/Retry ويعملان فور durable commit حتى أثناء التنفيذ؛ يظل Agent مالك Stop والـidle boundary والـsoft rewind.
+- [x] لا يعرض Client Edit/Retry من anchored/partial history ما دام `hasNewerHistory=true`.
+- [x] تغطي الاختبارات الإرسال الحي دون navigation، والـhydration parity، والـpartial-tail guard، ومسار daemon-backed الحقيقي.
+
+#### قبول G11
+
+- [x] Given رسالة root جديدة، when تُرسل، then يظهر Edit/Retry من live event دون تغيير المحادثة أو طلب history إضافي.
+- [x] Given anchored page لها سجل أحدث، then لا تظهر إجراءات replay لأي root محملة حتى الوصول إلى authoritative tail.
+- [x] Given Retry أثناء تنفيذ الوكيل، then يرسل Client أمر replay واحدًا ويتولى Agent وحده Stop ثم rewind وإعادة التنفيذ.
 ## معايير القبول
 
 - [x] Given جلسة تحتوي 10,000 رسالة persistence، when تُفتح، then لا يقرأ Agent

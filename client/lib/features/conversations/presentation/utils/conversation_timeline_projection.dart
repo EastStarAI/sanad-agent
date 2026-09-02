@@ -61,7 +61,9 @@ class ConversationTimelineItem {
   bool get isToolGroup => toolSummary != null;
   bool get isActivity => activity != null;
   CanonicalEvent get event => events.single;
-  bool containsEventId(String eventId) => events.any((event) => event.id == eventId);
+  bool containsEventId(String eventId) => events.any(
+    (event) => event.id == eventId || event.eventId == eventId,
+  );
 }
 
 List<ConversationTimelineItem> projectConversationTimeline(
