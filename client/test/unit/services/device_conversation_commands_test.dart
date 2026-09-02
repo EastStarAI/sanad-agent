@@ -619,6 +619,106 @@ void main() {
     expect(store.currentMessages.single.text, 'done');
   });
 
+  test('history hydration reconciles a delivered steer by request id', () async {
+    Future<void> hydrateSteerHistory() async {
+      final future = commands.loadSessionHistory('session-1');
+      final payload = socket.capturedCommands.last['payload'] as Map<String, dynamic>;
+      socket.eventRouter.routeEvent({
+        'device_id': 'agent-1',
+        'event': 'session_history',
+        'payload': {
+          'request_id': payload['request_id'],
+          'has_more': false,
+          'messages': [
+            {
+              'event_id': 'history:session-1:10:tool_result:0',
+              'type': 'tool_result',
+              'tool': 'shell_execute',
+              'output': 'done',
+              'status': 'done',
+              'tool_call_id': 'tool-before-steer',
+              'session_id': 'session-1',
+              'created_at': '2026-09-02T13:59:58Z',
+            },
+            {
+              'event_id': 'history:session-1:10:user_message:1',
+              'type': 'user_message',
+              'content': 'show the secret timestamps',
+              'session_id': 'session-1',
+              'request_id': 'steer-request-1',
+              'created_at': '2026-09-02T13:59:59Z',
+              'metadata': {
+                'steer': true,
+                'input_kind': 'steer',
+                'request_id': 'steer-request-1',
+              },
+            },
+            {
+              'event_id': 'history:session-1:11:final_answer:0',
+              'type': 'final_answer',
+              'content': 'final response',
+              'session_id': 'session-1',
+              'created_at': '2026-09-02T14:00:10Z',
+            },
+          ],
+          'pending_steers': [
+            {
+              'session_id': 'session-1',
+              'request_id': 'steer-request-1',
+              'run_id': 'run-1',
+              'generation': 1,
+              'text': 'show the secret timestamps',
+              'received_at': '2026-09-02T13:59:59Z',
+              'updated_at': '2026-09-02T14:00:10Z',
+              'state': 'delivered',
+              'revision': 3,
+            },
+          ],
+        },
+      });
+      await future;
+    }
+
+    await hydrateSteerHistory();
+
+    expect(store.currentMessages, hasLength(3));
+    expect(store.currentMessages[1].id, 'history:session-1:10:user_message:1');
+    expect(store.currentMessages[1].requestId, 'steer-request-1');
+    expect(store.currentMessages[1].metadata?['pending_steer_state'], 'delivered');
+    expect(
+      store.currentMessages.where(
+        (event) => event.kind == EventKind.userMessage && event.requestId == 'steer-request-1',
+      ),
+      hasLength(1),
+    );
+
+    socket.clearCaptured();
+    final other = commands.loadSessionHistory('session-2');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': false,
+        'messages': const [],
+      },
+    });
+    await other;
+
+    socket.clearCaptured();
+    await hydrateSteerHistory();
+
+    expect(store.currentMessages, hasLength(3));
+    expect(store.currentMessages[1].id, 'history:session-1:10:user_message:1');
+    expect(
+      store.currentMessages.where(
+        (event) => event.kind == EventKind.userMessage && event.requestId == 'steer-request-1',
+      ),
+      hasLength(1),
+    );
+  });
+
   test('loadOlderSessionHistory coalesces and prepends stable unique events', () async {
     final initial = commands.loadSessionHistory('session-1');
     final initialPayload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
@@ -680,6 +780,64 @@ void main() {
     expect(store.historyNextCursor, isNull);
   });
 
+  test('older page merges tool-use into an existing terminal result', () async {
+    final initial = commands.loadSessionHistory('session-1');
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': true,
+        'next_cursor': 'tool-older',
+        'messages': [
+          {
+            'type': 'tool_result',
+            'tool': 'shell_execute',
+            'output': '{"isError":false,"output":"done\\n"}',
+            'status': 'done',
+            'tool_call_id': 'call-result-first',
+            'session_id': 'session-1',
+            'created_at': '2026-09-02T00:00:01Z',
+          },
+        ],
+      },
+    });
+    await initial;
+    socket.clearCaptured();
+
+    final older = commands.loadOlderSessionHistory('session-1');
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': false,
+        'messages': [
+          {
+            'type': 'tool_use',
+            'tool': 'shell_execute',
+            'input': {'command': 'echo done'},
+            'status': 'done',
+            'tool_call_id': 'call-result-first',
+            'session_id': 'session-1',
+            'created_at': '2026-09-02T00:00:00Z',
+          },
+        ],
+      },
+    });
+    await older;
+
+    expect(store.currentMessages, hasLength(1));
+    expect(store.currentMessages.single.toolInput, {'command': 'echo done'});
+    expect(
+      store.currentMessages.single.toolOutput,
+      '{"isError":false,"output":"done\\n"}',
+    );
+    expect(store.currentMessages.single.status, EventStatus.done);
+  });
+
   test('complete loaded history survives session navigation and tail refresh', () async {
     store.activateSession('session-1');
     store.setHistory([
@@ -738,6 +896,65 @@ void main() {
     ]);
     expect(store.historyHasMore, isFalse);
     expect(store.historyNextCursor, isNull);
+  });
+
+  test('retained terminal result merges with both hydrated tool fragments', () async {
+    store.activateSession('session-1');
+    store.setHistory([
+      CanonicalEvent(
+        id: 'tool_call-hydration-race',
+        kind: EventKind.toolCall,
+        status: EventStatus.done,
+        tool: const {
+          'name': 'shell_execute',
+          'output': '{"isError":false,"output":"153\\n/path\\n"}',
+        },
+        timestamp: DateTime.utc(2026, 9, 2, 0, 0, 1),
+        toolCallId: 'call-hydration-race',
+      ),
+    ]);
+
+    final history = commands.loadSessionHistory('session-1');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': false,
+        'messages': [
+          {
+            'type': 'tool_use',
+            'tool': 'shell_execute',
+            'input': {'command': 'generate output'},
+            'status': 'done',
+            'tool_call_id': 'call-hydration-race',
+            'session_id': 'session-1',
+            'created_at': '2026-09-02T00:00:00Z',
+          },
+          {
+            'type': 'tool_result',
+            'tool': 'shell_execute',
+            'output': '{"isError":false,"output":"153\\n/path\\n"}',
+            'status': 'done',
+            'tool_call_id': 'call-hydration-race',
+            'session_id': 'session-1',
+            'created_at': '2026-09-02T00:00:01Z',
+          },
+        ],
+      },
+    });
+    await history;
+
+    expect(store.currentMessages, hasLength(1));
+    expect(store.currentMessages.single.toolInput, {
+      'command': 'generate output',
+    });
+    expect(
+      store.currentMessages.single.toolOutput,
+      '{"isError":false,"output":"153\\n/path\\n"}',
+    );
+    expect(store.currentMessages.single.status, EventStatus.done);
   });
 
   test('anchored history sends the stable event id and replaces only on success', () async {

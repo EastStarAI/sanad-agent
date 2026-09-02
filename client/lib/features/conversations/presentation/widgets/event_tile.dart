@@ -633,14 +633,21 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
 
   Widget _buildToolContent() {
     final toolName = widget.event.toolName ?? '';
+    final category = ToolPresentationHelper.cleanToolTitle(toolName);
+
+    // A terminal result can arrive before its matching tool-use input during
+    // live/history reconciliation. The specialized tile still unwraps and
+    // renders that result safely without requiring a command suffix.
+    if (category == 'Ran') {
+      return TerminalToolTile(event: widget.event);
+    }
+
     final details = ToolPresentationHelper.getToolDetailSuffix(widget.event);
 
     // If we could not extract any suffix details, fall back to the old GenericToolTile (input/output JSON)
     if (details.isEmpty) {
       return GenericToolTile(event: widget.event);
     }
-
-    final category = ToolPresentationHelper.cleanToolTitle(toolName);
 
     switch (category) {
       case 'Read':
@@ -652,8 +659,6 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
           event: widget.event,
           isFullyExpanded: _isExpanded && _expansionController.isCompleted,
         );
-      case 'Ran':
-        return TerminalToolTile(event: widget.event);
       case 'Search Web':
       case 'Fetch':
         return WebToolTile(event: widget.event);

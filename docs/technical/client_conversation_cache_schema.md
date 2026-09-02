@@ -137,14 +137,18 @@ independent opaque older/newer cursors and exhaustion state. Widgets receive
 only typed load intents and booleans; they never read or construct cursors.
 
 The initial tail replaces a partial timeline atomically. Older pages prepend by
-canonical identity; newer pages apply in chronological order so a terminal tool
-row can enrich its matching running tool even when the pair crosses a page
-boundary. Presentation reprojects the complete loaded slice after either merge;
-hidden reasoning rows do not split a visible tool run, while visible events and
-`system_ask_user` remain grouping boundaries. Each direction coalesces its matching in-flight cursor and advances
-only when the returned cursor differs from the requested one. Session/device
-switches and newer hydration generations reject late results. Failure leaves the
-visible timeline and runtime projections unchanged.
+canonical identity and merge duplicate identities rather than discarding an
+older event fragment. Hydration folds repeated canonical identities before it
+reconciles retained live state. Newer pages apply in chronological order so a
+terminal tool row can enrich its matching running tool even when the pair
+crosses a page boundary. The same rule preserves a tool-use input when its
+terminal result arrived first. Presentation reprojects the complete loaded slice
+after either merge; hidden reasoning rows do not split a visible tool run, while
+visible events and `system_ask_user` remain grouping boundaries. Each direction
+coalesces its matching in-flight cursor and advances only when the returned
+cursor differs from the requested one. Session/device switches and newer
+hydration generations reject late results. Failure leaves the visible timeline
+and runtime projections unchanged.
 
 At most two recently visited timelines that are exhausted in both directions
 may remain in memory. Reopening one reconciles the authoritative tail by event
@@ -220,8 +224,13 @@ that direction, and session activation resets both.
 messages and pending steers. Pending steers are keyed by the daemon's raw
 `request_id` and accept only increasing lifecycle revisions. The timeline
 renders `pending` as one temporary user bubble, transforms that same identity
-to delivered, and removes it only after authoritative cancellation. History,
-live events, navigation, and reconnect must not create duplicate bubbles.
+to delivered, and removes it only after authoritative cancellation. When
+history contains the durable steer with the same raw `request_id`, the store
+removes the temporary display id and enriches the durable event with lifecycle
+metadata without moving it from its causal position. This reconciliation runs
+after initial history replacement and older/newer page merges as well as live
+lifecycle delivery. History, live events, navigation, and reconnect must not
+create duplicate bubbles.
 
 This projection is deliberately separate from `ConversationCacheStore` draft
 ownership. A pending steer is not editable draft text and cannot be copied into
