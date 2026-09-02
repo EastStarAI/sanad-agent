@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
+import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
@@ -13,21 +15,33 @@ import 'package:sanad_agent/interfaces/runtime/turn_replay_service.dart';
 import '../sanad_protocol_bridge.dart';
 
 class SessionTurnReplayCommandHandler {
+  static const Duration defaultIdleWaitTimeout = Duration(seconds: 15);
+  static const Duration defaultIdlePollInterval = Duration(milliseconds: 25);
+
   final SessionRunOrchestrator _orchestrator;
   final SessionManager _sessionManager;
   final PersistedRuntimeStateRepository? _persistedState;
+  final CompactionBoundaryRepository? _compactionBoundaries;
   final SanadProtocolBridge _bridge;
+  final Duration _idleWaitTimeout;
+  final Duration _idlePollInterval;
   final Set<String> _sessionsInFlight = <String>{};
 
   SessionTurnReplayCommandHandler({
     required SessionRunOrchestrator orchestrator,
     required SessionManager sessionManager,
     PersistedRuntimeStateRepository? persistedState,
+    CompactionBoundaryRepository? compactionBoundaries,
     required SanadProtocolBridge bridge,
+    Duration idleWaitTimeout = defaultIdleWaitTimeout,
+    Duration idlePollInterval = defaultIdlePollInterval,
   }) : _orchestrator = orchestrator,
        _sessionManager = sessionManager,
        _persistedState = persistedState,
-       _bridge = bridge;
+       _compactionBoundaries = compactionBoundaries,
+       _bridge = bridge,
+       _idleWaitTimeout = idleWaitTimeout,
+       _idlePollInterval = idlePollInterval;
 
   Future<void> handle(
     CanonicalEvent event,
@@ -37,19 +51,32 @@ class SessionTurnReplayCommandHandler {
         event.sessionId ?? event.payload['session_id']?.toString() ?? '';
     final targetRequestId =
         event.payload['target_request_id']?.toString().trim() ?? '';
+    final targetMessageId =
+        event.payload['target_message_id']?.toString().trim() ?? '';
+    final targetTurnId =
+        event.payload['target_turn_id']?.toString().trim() ?? '';
     final commandRequestId =
         event.payload['request_id']?.toString().trim() ?? '';
     final action = event.payload['action']?.toString() ?? 'retry';
     final confirmed = event.payload['confirmed_replay_unsafe'] == true;
+    final confirmedDropSteers = event.payload['confirmed_drop_steers'] == true;
+    final expectedHistoryRevision = _parseRevision(
+      event.payload['expected_history_revision'],
+    );
 
     if (sessionId.isEmpty ||
         targetRequestId.isEmpty ||
-        commandRequestId.isEmpty) {
+        targetMessageId.isEmpty ||
+        targetTurnId.isEmpty ||
+        commandRequestId.isEmpty ||
+        expectedHistoryRevision == null) {
       await _emitResult(
         emitEnvelope,
         sessionId: sessionId,
         requestId: commandRequestId,
         targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
         action: action,
         outcome: 'invalid_request',
         safety: TurnReplaySafety.unknown,
@@ -62,6 +89,8 @@ class SessionTurnReplayCommandHandler {
         sessionId: sessionId,
         requestId: commandRequestId,
         targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
         action: action,
         outcome: 'invalid_request',
         safety: TurnReplaySafety.unknown,
@@ -74,6 +103,8 @@ class SessionTurnReplayCommandHandler {
         sessionId: sessionId,
         requestId: commandRequestId,
         targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
         action: action,
         outcome: 'already_in_progress',
         safety: TurnReplaySafety.unknown,
@@ -85,10 +116,14 @@ class SessionTurnReplayCommandHandler {
       final replay = TurnReplayService(
         sessionManager: _sessionManager,
         persistedState: _persistedState,
+        compactionBoundaries: _compactionBoundaries,
       );
       final inspection = replay.inspect(
         sessionId: sessionId,
         targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+        expectedHistoryRevision: expectedHistoryRevision,
       );
       if (!inspection.canReplay) {
         await _emitResult(
@@ -96,9 +131,13 @@ class SessionTurnReplayCommandHandler {
           sessionId: sessionId,
           requestId: commandRequestId,
           targetRequestId: targetRequestId,
+          targetMessageId: targetMessageId,
+          targetTurnId: targetTurnId,
           action: action,
           outcome: _failureName(inspection.failure!),
           safety: inspection.safety,
+          containsSteers: inspection.containsSteers,
+          historyRevision: inspection.historyRevision,
         );
         return;
       }
@@ -108,10 +147,31 @@ class SessionTurnReplayCommandHandler {
           sessionId: sessionId,
           requestId: commandRequestId,
           targetRequestId: targetRequestId,
+          targetMessageId: targetMessageId,
+          targetTurnId: targetTurnId,
           action: action,
           outcome: 'confirmation_required',
           safety: inspection.safety,
           requiresConfirmation: true,
+          containsSteers: inspection.containsSteers,
+          historyRevision: inspection.historyRevision,
+        );
+        return;
+      }
+      if (inspection.containsSteers && !confirmedDropSteers) {
+        await _emitResult(
+          emitEnvelope,
+          sessionId: sessionId,
+          requestId: commandRequestId,
+          targetRequestId: targetRequestId,
+          targetMessageId: targetMessageId,
+          targetTurnId: targetTurnId,
+          action: action,
+          outcome: 'steer_reinjection_confirmation_required',
+          safety: inspection.safety,
+          containsSteers: true,
+          requiresSteerDropConfirmation: true,
+          historyRevision: inspection.historyRevision,
         );
         return;
       }
@@ -126,6 +186,8 @@ class SessionTurnReplayCommandHandler {
           sessionId: sessionId,
           requestId: commandRequestId,
           targetRequestId: targetRequestId,
+          targetMessageId: targetMessageId,
+          targetTurnId: targetTurnId,
           action: action,
           outcome: 'empty_message',
           safety: inspection.safety,
@@ -134,30 +196,76 @@ class SessionTurnReplayCommandHandler {
       }
 
       await _orchestrator.requestStop(sessionId);
-      final execution = _persistedState?.executionSnapshots.getSnapshot(
-        sessionId,
-      );
-      if (execution != null && execution.state != SessionExecutionState.idle) {
+      final reachedIdle = await _waitForAuthoritativeIdle(sessionId);
+      if (!reachedIdle) {
         await _emitResult(
           emitEnvelope,
           sessionId: sessionId,
           requestId: commandRequestId,
           targetRequestId: targetRequestId,
+          targetMessageId: targetMessageId,
+          targetTurnId: targetTurnId,
           action: action,
           outcome: 'session_not_idle',
           safety: inspection.safety,
+          containsSteers: inspection.containsSteers,
+          historyRevision: inspection.historyRevision,
         );
         return;
       }
-      if (!replay.truncateAtTarget(inspection)) {
+      final postIdle = replay.inspect(
+        sessionId: sessionId,
+        targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+        expectedHistoryRevision: expectedHistoryRevision,
+      );
+      if (!postIdle.canReplay) {
         await _emitResult(
           emitEnvelope,
           sessionId: sessionId,
           requestId: commandRequestId,
           targetRequestId: targetRequestId,
+          targetMessageId: targetMessageId,
+          targetTurnId: targetTurnId,
           action: action,
-          outcome: 'stale_turn_boundary',
+          outcome: _postIdleFailureName(postIdle.failure!),
+          safety: postIdle.safety,
+          containsSteers: postIdle.containsSteers,
+          historyRevision: postIdle.historyRevision,
+        );
+        return;
+      }
+      final admission = replay.admitReplacement(
+        inspection: postIdle,
+        replacementRequestId: commandRequestId,
+        replacementText: replayMessage,
+        action: action,
+      );
+      if (admission == null) {
+        final current = replay.inspect(
+          sessionId: sessionId,
+          targetRequestId: targetRequestId,
+          targetMessageId: targetMessageId,
+          targetTurnId: targetTurnId,
+          expectedHistoryRevision: expectedHistoryRevision,
+        );
+        await _emitResult(
+          emitEnvelope,
+          sessionId: sessionId,
+          requestId: commandRequestId,
+          targetRequestId: targetRequestId,
+          targetMessageId: targetMessageId,
+          targetTurnId: targetTurnId,
+          action: action,
+          outcome:
+              current.failure ==
+                  TurnReplayInspectionFailure.historyRevisionMismatch
+              ? 'history_revision_mismatch'
+              : 'stale_turn_boundary',
           safety: inspection.safety,
+          containsSteers: inspection.containsSteers,
+          historyRevision: current.historyRevision,
         );
         return;
       }
@@ -191,7 +299,17 @@ class SessionTurnReplayCommandHandler {
       final gatewayEvent = GatewayEvent(
         sessionId: sessionId,
         platformId: 'sanad_client',
-        message: Message(role: MessageRole.user, content: replayMessage),
+        message: Message(
+          role: MessageRole.user,
+          content: replayMessage,
+          metadata: {
+            'request_id': commandRequestId,
+            'message_id': admission.replacementMessageId,
+            'turn_id': admission.replacementTurnId,
+            'input_kind': MessageHistoryIdentity.rootTurn,
+            'history_status': MessageHistoryIdentity.active,
+          },
+        ),
         metadata: {'command': 'think', 'payload': request.toMetadata()},
         turnRequest: request,
       );
@@ -201,9 +319,13 @@ class SessionTurnReplayCommandHandler {
         sessionId: sessionId,
         requestId: commandRequestId,
         targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
         action: action,
         outcome: 'accepted',
-        safety: inspection.safety,
+        safety: postIdle.safety,
+        containsSteers: postIdle.containsSteers,
+        historyRevision: admission.historyRevision,
       );
       unawaited(_orchestrator.handleEvent(gatewayEvent));
     } catch (_) {
@@ -212,6 +334,8 @@ class SessionTurnReplayCommandHandler {
         sessionId: sessionId,
         requestId: commandRequestId,
         targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
         action: action,
         outcome: 'failed',
         safety: TurnReplaySafety.unknown,
@@ -221,15 +345,36 @@ class SessionTurnReplayCommandHandler {
     }
   }
 
+  /// Stop acknowledgement and terminal work items are not dispatch authority.
+  /// Replay waits until the persisted snapshot is exactly [idle], including
+  /// queued, running, waiting, blocked, and resuming work after scoped stop.
+  Future<bool> _waitForAuthoritativeIdle(String sessionId) async {
+    if (_persistedState == null) return false;
+    final deadline = DateTime.now().add(_idleWaitTimeout);
+    while (true) {
+      final snapshot = _persistedState.executionSnapshots.getSnapshot(
+        sessionId,
+      );
+      if (snapshot.state == SessionExecutionState.idle) return true;
+      if (!DateTime.now().isBefore(deadline)) return false;
+      await Future<void>.delayed(_idlePollInterval);
+    }
+  }
+
   Future<void> _emitResult(
     Future<void> Function(Map<String, dynamic> envelope) emitEnvelope, {
     required String sessionId,
     required String requestId,
     required String targetRequestId,
+    String targetMessageId = '',
+    String targetTurnId = '',
     required String action,
     required String outcome,
     required TurnReplaySafety safety,
     bool requiresConfirmation = false,
+    bool requiresSteerDropConfirmation = false,
+    bool containsSteers = false,
+    int? historyRevision,
   }) {
     return emitEnvelope(
       _bridge.buildAgentEventEnvelope(
@@ -240,14 +385,24 @@ class SessionTurnReplayCommandHandler {
             'session_id': sessionId,
             'request_id': requestId,
             'target_request_id': targetRequestId,
+            'target_message_id': targetMessageId,
+            'target_turn_id': targetTurnId,
             'action': action,
             'outcome': outcome,
             'replay_safety': safety.name,
             'requires_confirmation': requiresConfirmation,
+            'requires_steer_drop_confirmation': requiresSteerDropConfirmation,
+            'contains_steers': containsSteers,
+            'history_revision': ?historyRevision,
           },
         ),
       ),
     );
+  }
+
+  static int? _parseRevision(Object? value) {
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString().trim() ?? '');
   }
 
   static String _failureName(TurnReplayInspectionFailure failure) =>
@@ -256,5 +411,22 @@ class SessionTurnReplayCommandHandler {
         TurnReplayInspectionFailure.targetNotFound => 'turn_boundary_not_found',
         TurnReplayInspectionFailure.targetIsNotLatestTurn => 'not_latest_turn',
         TurnReplayInspectionFailure.emptyMessage => 'empty_message',
+        TurnReplayInspectionFailure.targetNotReplayableInput =>
+          'target_not_replayable_input',
+        TurnReplayInspectionFailure.identityIncomplete => 'identity_incomplete',
+        TurnReplayInspectionFailure.historyRevisionMismatch =>
+          'history_revision_mismatch',
+        TurnReplayInspectionFailure.targetPrecedesCompaction =>
+          'target_precedes_compaction',
+      };
+
+  static String _postIdleFailureName(TurnReplayInspectionFailure failure) =>
+      switch (failure) {
+        TurnReplayInspectionFailure.targetNotFound ||
+        TurnReplayInspectionFailure.targetIsNotLatestTurn ||
+        TurnReplayInspectionFailure.identityIncomplete => 'stale_turn_boundary',
+        TurnReplayInspectionFailure.historyRevisionMismatch =>
+          'stale_turn_boundary',
+        _ => _failureName(failure),
       };
 }

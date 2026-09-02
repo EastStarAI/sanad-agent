@@ -9,7 +9,9 @@ import 'package:sanad_client/features/conversations/domain/models/session_attent
 import 'package:sanad_client/features/conversations/domain/models/session_route_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
@@ -206,6 +208,36 @@ class _TestConversationClient implements ConversationClient {
   }
 
   @override
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(String sessionId) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    String sessionId,
+    String anchorEventId,
+  ) {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) {
+    throw UnimplementedError();
+  }
+
+  @override
+  bool get historyHasMore => false;
+
+  @override
+  String? get historyNextCursor => null;
+
+  @override
+  bool get historyHasNewer => false;
+
+  @override
+  String? get historyNextNewerCursor => null;
+
+  @override
   Future<List<SlashCommandEntry>> searchSlashCommands({String? query, String? workspaceId}) {
     throw UnimplementedError();
   }
@@ -267,17 +299,33 @@ class _TestConversationClient implements ConversationClient {
   Future<TurnReplayResult> replayTurn({
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) async => const TurnReplayResult(
     outcome: 'accepted',
     safety: TurnReplaySafety.safe,
     requiresConfirmation: false,
   );
+
+  @override
+  Future<SessionCompactResult> compactSession({
+    required String sessionId,
+  }) async => const SessionCompactResult(outcome: 'accepted');
+
+  @override
+  Future<SessionForkResult> forkSession({
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async => const SessionForkResult(outcome: 'accepted');
 
   @override
   Future<void> retryRuntimeNotice({
@@ -325,7 +373,11 @@ class _TestConversationClient implements ConversationClient {
   }
 
   @override
-  Future<DeviceWorkspace> createWorkspace({required String path, String? name}) {
+  Future<DeviceWorkspace> createWorkspace({
+    String? path,
+    String? name,
+    String? description,
+  }) {
     throw UnimplementedError();
   }
 
@@ -334,6 +386,11 @@ class _TestConversationClient implements ConversationClient {
     required String workspaceId,
     required String displayName,
   }) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> removeWorkspace({required String workspaceId}) async {
     throw UnimplementedError();
   }
 

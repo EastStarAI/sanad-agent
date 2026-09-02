@@ -64,6 +64,7 @@ class GatewayResponse {
   final bool isToolUse;
   final bool isToolResult;
   final bool isToolError;
+  final bool isToolCancelled;
   final bool isSessionCreated;
   final bool isSessionUpdated;
   final Map<String, dynamic>? sessionPayload;
@@ -99,6 +100,7 @@ class GatewayResponse {
     this.isToolUse = false,
     this.isToolResult = false,
     this.isToolError = false,
+    this.isToolCancelled = false,
     this.isSessionCreated = false,
     this.isSessionUpdated = false,
     this.sessionPayload,
@@ -135,6 +137,7 @@ class GatewayResponse {
     isToolUse: isToolUse,
     isToolResult: isToolResult,
     isToolError: isToolError,
+    isToolCancelled: isToolCancelled,
     isSessionCreated: isSessionCreated,
     isSessionUpdated: isSessionUpdated,
     sessionPayload: sessionPayload,

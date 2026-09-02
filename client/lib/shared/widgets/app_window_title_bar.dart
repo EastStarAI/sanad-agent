@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/infrastructure/platform/window_manager_service.dart';
 import 'package:window_manager/window_manager.dart';
 
 class AppWindowTitleBar extends StatelessWidget {
@@ -43,19 +44,18 @@ class AppWindowTitleBar extends StatelessWidget {
                 brightness: Theme.of(context).brightness,
                 onPressed: () => windowManager.minimize(),
               ),
-              FutureBuilder<bool>(
-                future: windowManager.isMaximized(),
-                builder: (context, snapshot) {
-                  final isMaximized = snapshot.data ?? false;
-                  if (isMaximized) {
+              ValueListenableBuilder<bool>(
+                valueListenable: WindowManagerService.maximizedOrFullScreenListenable,
+                builder: (context, isMaximizedOrFullScreen, _) {
+                  if (isMaximizedOrFullScreen) {
                     return WindowCaptionButton.unmaximize(
                       brightness: Theme.of(context).brightness,
-                      onPressed: () => windowManager.unmaximize(),
+                      onPressed: WindowManagerService.toggleMaximized,
                     );
                   }
                   return WindowCaptionButton.maximize(
                     brightness: Theme.of(context).brightness,
-                    onPressed: () => windowManager.maximize(),
+                    onPressed: WindowManagerService.toggleMaximized,
                   );
                 },
               ),

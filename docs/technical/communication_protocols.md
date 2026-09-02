@@ -100,11 +100,16 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
       }
     }
     ```
-  - **Note:** Supported commands include `think`, `stop`, `clear_history`, `register_tools`, `workspace.get_policy`, `workspace.set_permission_mode`, `session.runtime_retry`, `session.runtime_continue_with_provider`, `tool_permission_response`, `session.pending_steer_cancel`, `session.queued_message_delete`, `session.stop_recovery_claim`, and `session.stop_recovery_ack`. Conversation actions sent by Sanad Client never use a direct `protocol_event`; local and cloud routes use this same explicit-device command envelope.
+  - **Note:** Supported commands include `think`, `stop`, `clear_history`, `register_tools`, `workspace.get_policy`, `workspace.set_permission_mode`, `session.runtime_retry`, `session.runtime_continue_with_provider`, `tool_permission_response`, `session.pending_steer_cancel`, `session.queued_message_delete`, `session.stop_recovery_claim`, `session.stop_recovery_ack`, `device.update.check`, `device.update.apply`, and `device.runtime.restart`. Conversation actions sent by Sanad Client never use a direct `protocol_event`; local and cloud routes use this same explicit-device command envelope.
   - Every routed command has a canonical `request_id`. The gateway records a
     short-lived private route from that identifier to the originating app
     socket before dispatching the command. It does not broadcast a generic
     `device_command_echo` to the user's other interfaces.
+  - The hosted Gateway relays a command only when the authenticated app User
+    matches the live daemon connection for that `device_id`. Relayed payloads
+    are not stored as hosted settings. Task 82 remote update, restart,
+    workspace, and MCP commands follow
+    [Remote Device Control Threat Model](remote_device_control_threat_model.md).
   - Before emitting `execute_command`, the Gateway strips command-origin aliases
     from the envelope and nested payload and writes one `origin_client` v1 object
     from the authenticated connection registry. The object contains only public
@@ -196,6 +201,7 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
 #### C. Event Stream Forwarding
 - **Event: `device_event` (Daemon → Backend → Client)**
   - Streams thought outputs, status updates, or tool execution requests.
+  - On the Local Gateway, a session-bound event keeps the logical `device_id` captured when that session was bound (for example, `local-agent`). Unrelated capability, model, or settings commands sharing the WebSocket may carry another device or hardware identity, but cannot overwrite the session event identity. The last socket identity is used only when an event has no session-bound identity.
   - Payload Schema:
     ```json
     {
@@ -257,27 +263,75 @@ payload is the complete authoritative snapshot:
   "work_item_id": "nullable-work-item-id",
   "request_id": "nullable-request-id",
   "revision": 4,
-  "updated_at": "2026-07-15T12:00:00.000Z"
+  "updated_at": "2026-07-15T12:00:00.000Z",
+  "turn_started_at": "2026-07-15T11:58:35.000Z",
+  "elapsed_ms": 85000
 }
 ```
 
-Actual changes to `(state, work_item_id, request_id)` advance the per-session
-revision once. An idempotent recomputation neither advances the revision nor
-publishes another event. Delivery uses `platform_family=sanad_client`; the
+`turn_started_at` is the stable accepted-work timestamp for the representative
+work item and survives queued, running, waiting, blocked, resuming, and stopping
+transitions. `elapsed_ms` is an observation computed when the payload is
+serialized. It lets a client anchor a local display ticker without comparing
+the client clock to the daemon clock. Reopening or reconnecting receives a fresh
+observation through the existing session query snapshot.
+
+`session.runtime_notice` and `session.runtime_notice_cleared` include
+`execution_revision`, copied from the authoritative snapshot after the owning
+work transition commits. A client rejects a notice older than its accepted
+snapshot and rejects a clear older than the notice it would remove. During
+history hydration, an older daemon notice without this field is bound to the
+`execution_snapshot.revision` returned in the same envelope.
+
+Actual changes to `(state, work_item_id, request_id, turn_started_at)` advance
+the per-session revision once. An idempotent recomputation neither advances the
+revision nor publishes another event. A later query may return a greater
+`elapsed_ms` for the same revision; clients treat that value as a refreshed
+observation, not conflicting execution authority. Delivery uses `platform_family=sanad_client`; the
 runtime mints one `event_id` before GatewayManager fan-out, and local and cloud
 copies retain that same identity and payload.
 
-`session_history` always contains `execution_snapshot`. Every row in a
-paginated `sessions_list` contains its own `execution_snapshot` as well. A
-session with no persisted snapshot row is represented explicitly as
-`idle/revision=0`, with null work/request identities and the Unix epoch as its
-stable virtual timestamp. Missing terminal, in-flight, or runtime-notice
-events must not be interpreted as evidence of idle state.
+A tail or anchored `session_history` contains `execution_snapshot`; an `older`
+page intentionally omits all runtime-only projections. Every row in a paginated
+`sessions_list` contains its own `execution_snapshot`. A session with no
+persisted snapshot row is represented explicitly as `idle/revision=0`, with
+null work/request identities and the Unix epoch as its stable virtual timestamp.
+Missing terminal, in-flight, or runtime-notice events must not be interpreted as
+evidence of idle state.
 
 On daemon restart, execution snapshots are recomputed from restored durable
 work. `running`, `waiting`, `blocked`, and safely normalized `resuming` work
 remain non-idle; a process-local `stopping` projection is discarded and
 derived again from the durable work rows owned by the new process.
+
+### Session history page contract
+
+`get_session_history` accepts `session_id`, optional `limit` (`1..200`, default
+`100`), and exactly one optional mode selector:
+
+- `cursor`: an opaque older-page cursor returned as `next_cursor`;
+- `anchor_event_id`: a stable `history:<session>:<row>:<kind>:<ordinal>` event
+  identity used to restore an idle reading position. An anchor page begins at
+  the owning persistence row and reads newer rows in chronological order, so
+  even the oldest saved anchor restores following context instead of a
+  single-row timeline. `has_more`/`next_cursor` still describe rows older than
+  that anchor.
+
+The `session_history` response contains `page_kind` (`tail | older | anchor | newer`),
+chronological `messages`, older-direction `has_more`/optional `next_cursor`,
+newer-direction `has_newer`/optional `next_newer_cursor`, and
+`history_revision`. An anchor response may expose both directions. Both cursors
+are opaque, session-bound, fingerprinted keyset cursors; a newer cursor carries
+its direction internally and cannot be reinterpreted as an older cursor. The daemon bounds each page to 1 MiB of persisted message
+JSON while retaining at least one oversized record so the cursor always
+advances. One persistence row is projected atomically, so reasoning, thought,
+tool-use, and final-answer fan-out never splits across pages.
+
+Errors are request-correlated under `payload.error`: `invalid_request`,
+`invalid_limit`, `invalid_cursor`, `stale_cursor`, or `anchor_not_found`. Cursors
+bind session id, row boundary, history revision, and a redacted boundary
+fingerprint. A cross-session, deleted, or rewritten boundary fails closed.
+Local and cloud transports dispatch this same handler and envelope.
 
 ### Live context usage projection
 
@@ -304,7 +358,7 @@ projection when one is persisted. The client displays `cached_tokens` as
 - `workspace_id` and `unscoped_only=true` are mutually exclusive; invalid combinations must return a structured query error instead of silently falling back.
 - `limit` is server-owned: missing uses the daemon default, invalid/non-positive values are rejected, and oversized values are capped centrally.
 - Ordering is authoritative: `last_user_message_at DESC`, then `session_id DESC`.
-- Only canonical user acceptance updates `last_user_message_at`. Assistant/tool/system events must not reorder the session list.
+- After session creation, only canonical user acceptance updates `last_user_message_at`. Fork creation initializes the child at its commit time so it appears first; assistant/tool/system events must not reorder the session list.
 - Session/workspace/provider/model updates must preserve the stored `last_user_message_at`; only a newly accepted canonical user message may advance it.
 - The cursor is opaque to clients and encodes the normalized ordering pair (`last_user_message_at`, `session_id`).
 - `sessions_list` responses that carry a `request_id` are request-scoped snapshots. Clients must not treat filtered/paginated responses as the shared default sidebar stream automatically.
@@ -379,6 +433,7 @@ stateDiagram-v2
 - Evaluates the active socket states and matches the user's `hardware_id`.
 - Resolves the active `ConnectionScope` (`cloud` | `local`) for each target device.
 - **Local Reachability Rule:** If the target device's `hardware_id` matches the local machine's fingerprint, the coordinator treats it as a local candidate. It upgrades the connection to the local daemon and bypasses cloud routing when the local socket is active.
+- **Synthetic identity boundary:** `local-agent` is a stable client inventory/cache id only. The coordinator never uses that text to infer transport; a matching `hardware_id` plus live local socket state is required. Once transport is resolved, commands target the hardware identity locally and the durable account device identity in cloud, never the synthetic row id.
 - **Transition continuity:** Swapping connection scopes does not destroy the active conversation session cache. UI-side chat histories persist in-memory to prevent screen blanks during reconnects or local takeovers.
 - **Restart reconciliation:** When a conversation is already bound to the local daemon, a bounded grace period keeps that binding and its cached sessions visible while the daemon restarts. The first session snapshot after reconnect is merged with the retained snapshot, then the client requests history for the active session to recover final answers, queue state, and runtime notices emitted while disconnected. A missing session in this transitional snapshot is not deletion proof; explicit `session_deleted` or an explicit manual refresh owns removal.
 - **History/live deduplication:** Reconnect hydration reconciles persisted history with events retained in memory by canonical `request_id`, then `run_id`/event identity. Legacy user rows without an identity use same-session text plus a bounded timestamp match. Running thinking chunks remain mergeable so newer streaming content is not discarded.
@@ -654,7 +709,7 @@ Every `device_event` carries a canonical delivery contract alongside the existin
 External families (`telegram`/`whatsapp`/`cli`) use `origin` delivery and never enter `sanad_client` synchronization, including for runtime suspension prompts. A `tool_permission_request` fans out only when the captured run origin belongs to `sanad_client`; local, cloud, web, and mobile Sanad Client transports are one logical platform family.
 
 ### 6.4. Event Identity & Deduplication
-- `event_id` is minted once at event creation as a UUID-backed identifier and preserved across all local/cloud copies. It is NOT regenerated per transport, NOT derived from content/timestamp alone, and NOT reused.
+- `event_id` is minted once at event creation as a UUID-backed identifier and preserved across all local/cloud copies. It is NOT regenerated per transport, NOT derived from content/timestamp alone, and NOT reused. Most producers use UUID-backed ids; durable lifecycle producers may use a deterministic opaque transition id when history must reconstruct the exact live identity. Compaction uses `context_compaction:<compaction_id>:<status>` while retaining one logical `compaction_id` for tile folding.
 - The Flutter client applies transition-race deduplication by canonical `event_id` via one shared `EventDeduplicator` injected into both transports by `DeviceConnectionCoordinator`. The first Local or Cloud copy is applied and every later copy of that logical event is dropped regardless of transport.
 - Incoming `device_event` debug logging happens after this check, so a dropped transport copy is not reported as a second applied event.
 - The dedupe cache is bounded (LRU + age), in-memory only, independent of the durable conversation log, and cleared on full logout — NOT on a same-device transport switch.
@@ -691,4 +746,49 @@ A model step begins before each LLM invocation. Deltas merge only within that st
 
 `tool_use` also carries the `model_step_id` that produced the call and closes that thought projection as completed. An active-run `stopped` event carries `run_id + model_step_id`; the client removes only that unfinished projection. Recovery-only Stop may omit `model_step_id` and must preserve every stored thought because it has no active model projection to cancel.
 
+A terminal `tool_result` is published only after its durable owner transaction
+commits. In addition to `completed`, `failed`, and explicit user `cancelled`, a
+shell may end as `timed_out` or `interrupted`. Live delivery and
+`get_session_history` both expose the same
+`tool_call_id`, `run_id`, `model_step_id`, `generation`, `revision`, `status`,
+`reason`, `started_at`, `terminal_at`, and optional `cleanup_outcome`. Repeated
+Stop or a late success/timeout cannot advance the revision or replace that
+terminal. Timeout and interruption retain bounded stdout/stderr in the tool
+output; only an explicit Stop uses `reason=cancelled_by_user`. The event
+envelope keeps the session and opaque event identities; the payload does not
+duplicate tool output in `content`.
+
+The terminal result's error classification is also invariant across surfaces.
+If a structured tool payload declares `isError=true` or `is_error=true`, the
+live `tool_result`, durable checkpoint record, and history message metadata all
+declare the result as an error even when the bounded output begins with partial
+stdout rather than an `Error` prefix. A timeout therefore delivers its captured
+output and timeout reason while remaining machine-classified as failed.
+
+When startup terminalizes a crashed shell, the recovery checkpoint keeps that
+tool call as a pending history-reconciliation member even though process
+execution is already terminal. Before the next provider invocation, canonical
+history restores the original assistant `tool_use` followed by exactly one
+matching `tool_result` with the same `tool_call_id`. A later provider-issued
+call is a separate tool use and must not replace the recovered pair in history
+or presentation. Recovery does not constrain the model's next decision: if the
+model requests the same command again, that request is recorded and presented
+as a new pair with its own `tool_call_id` and terminal result.
+
+For an active tool Stop, delivery order is the durable cancelled `tool_result`,
+then `stopped`, then the final `session.execution_state_changed` snapshot for
+`idle` or preserved newer queued work. Durable work cancellation commits before
+`stopped`; only snapshot publication is deferred to preserve wire order.
+
 `get_session_history` emits these same identities and ordering. Legacy rows without a model-step identity use deterministic message/segment order. Canonical history is consumed directly and is never converted through a legacy model that requires numeric IDs; route-transition UUIDs therefore remain valid.
+
+Compaction history is causally anchored after the durable retained-tail end row
+and before the first later canonical message. Its real lifecycle timestamps are
+display metadata, not the merge key, because ordinary history rows may carry
+synthetic timestamps. A terminal `completed` or `failed` transition is
+immutable for its logical `compaction_id`. A completed transition may be
+republished with the same deterministic `event_id` exactly once when
+`provider_confirmed_request_tokens_after` becomes available; status, causal
+position, ranges, estimate fields, and summary do not change. Payloads expose
+`before_measurement_kind` and keep the confirmed after-value distinct from
+`estimated_request_tokens_after`.

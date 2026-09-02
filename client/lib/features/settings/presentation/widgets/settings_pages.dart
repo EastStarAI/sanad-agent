@@ -13,6 +13,7 @@ import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dar
 import 'package:sanad_client/features/devices/presentation/utils/device_ui_mapper.dart';
 import 'package:sanad_client/features/mcp/presentation/screens/mcp_server_management_screen.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_flow.dart';
+import 'package:sanad_client/features/settings/data/device_control_client.dart';
 import 'package:sanad_client/features/settings/data/device_settings_client.dart';
 import 'package:sanad_client/features/settings/data/device_skills_client.dart';
 import 'package:sanad_client/infrastructure/platform/auto_update_service.dart';
@@ -279,16 +280,30 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
   static const _knownWebSearchProviders = {'ddg', 'serper'};
 
   final _client = getIt<DeviceSettingsClient>();
+  final _runtimeClient = getIt<DeviceControlClient>();
   final _coordinator = getIt<DeviceConnectionCoordinator>();
   final _serperKeyController = TextEditingController();
   DeviceSettingsSnapshot? _settings;
+  DeviceUpdateCheckSnapshot? _updateCheck;
   String? _error;
+  String? _runtimeStatus;
   bool _saving = false;
+  bool _runtimeBusy = false;
 
   @override
   void initState() {
     super.initState();
     unawaited(_load());
+  }
+
+  @override
+  void didUpdateWidget(DeviceOverviewPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.device.id != widget.device.id) {
+      _updateCheck = null;
+      _runtimeStatus = null;
+      unawaited(_load());
+    }
   }
 
   @override
@@ -306,6 +321,144 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     }
+  }
+
+  Future<void> _checkForAgentUpdates() async {
+    if (_runtimeBusy || !widget.device.isOnline) return;
+    setState(() {
+      _runtimeBusy = true;
+      _runtimeStatus = 'Checking for updates…';
+      _error = null;
+    });
+    try {
+      final result = await _runtimeClient.checkForUpdates(widget.device);
+      if (!mounted) return;
+      setState(() {
+        _updateCheck = result;
+        _runtimeStatus = _checkStatusLabel(result);
+      });
+    } catch (error) {
+      if (mounted) {
+        setState(() => _runtimeStatus = null);
+        ToastUtils.showError(context, error.toString());
+      }
+    } finally {
+      if (mounted) setState(() => _runtimeBusy = false);
+    }
+  }
+
+  Future<void> _applyAgentUpdate() async {
+    if (_runtimeBusy || !widget.device.isOnline) return;
+    var check = _updateCheck;
+    if (check == null || !check.updateAvailable) {
+      await _checkForAgentUpdates();
+      check = _updateCheck;
+    }
+    if (!mounted || check == null) return;
+    if (check.sourceManaged) {
+      ToastUtils.showError(
+        context,
+        check.message ?? 'This agent runs from source and stays developer-managed.',
+      );
+      return;
+    }
+    if (!check.updateAvailable) {
+      ToastUtils.showSuccess(
+        context,
+        check.message ?? 'The agent is already up to date.',
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Update agent'),
+        content: Text(
+          'Install version ${check!.availableVersion} on ${widget.device.name}? '
+          'The agent will wait for a safe checkpoint, then the connection will drop until it comes back online.',
+        ),
+        actions: [
+          TextButton(
+            key: const Key('dialog_cancel_update_button'),
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('dialog_confirm_update_button'),
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Update'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    setState(() {
+      _runtimeBusy = true;
+      _runtimeStatus = 'Applying update…';
+    });
+    try {
+      await _runtimeClient.applyUpdate(widget.device, check: check);
+      await _runtimeClient.waitForReconnect(
+        inventory: context.read<DeviceCubit>().agentRepository,
+        deviceId: widget.device.id,
+        expectedVersion: check.availableVersion,
+      );
+      if (!mounted) return;
+      setState(() {
+        _updateCheck = null;
+        _runtimeStatus = 'Updated to ${check!.availableVersion}.';
+      });
+      ToastUtils.showSuccess(context, 'Agent updated to ${check.availableVersion}.');
+    } catch (error) {
+      if (mounted) ToastUtils.showError(context, error.toString());
+    } finally {
+      if (mounted) setState(() => _runtimeBusy = false);
+    }
+  }
+
+  Future<void> _restartRemoteAgent() async {
+    if (_runtimeBusy || !widget.device.isOnline) return;
+    final mode = await showDialog<AgentRestartMode>(
+      context: context,
+      builder: (context) => AgentRestartConfirmationDialog(
+        deviceName: widget.device.name,
+      ),
+    );
+    if (mode == null || !mounted) return;
+    final force = mode == AgentRestartMode.force;
+
+    setState(() {
+      _runtimeBusy = true;
+      _runtimeStatus = force ? 'Force restarting agent…' : 'Restarting agent…';
+    });
+    try {
+      await _runtimeClient.restartAgent(widget.device, force: force);
+      await _runtimeClient.waitForReconnect(
+        inventory: context.read<DeviceCubit>().agentRepository,
+        deviceId: widget.device.id,
+      );
+      if (!mounted) return;
+      setState(() => _runtimeStatus = 'Agent is online again.');
+      ToastUtils.showSuccess(context, 'Agent restarted.');
+    } catch (error) {
+      if (mounted) ToastUtils.showError(context, error.toString());
+    } finally {
+      if (mounted) setState(() => _runtimeBusy = false);
+    }
+  }
+
+  String _checkStatusLabel(DeviceUpdateCheckSnapshot result) {
+    if (result.sourceManaged) {
+      return result.message ?? 'This agent runs from source.';
+    }
+    if (result.updateAvailable) {
+      return 'Update available: ${result.currentVersion} → ${result.availableVersion}.';
+    }
+    if (result.upToDate) {
+      return 'Up to date (${result.currentVersion}).';
+    }
+    return result.message ?? 'Update check finished (${result.status}).';
   }
 
   Future<void> _update(Map<String, dynamic> changes) async {
@@ -395,15 +548,42 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
                   label: 'Current route',
                   value: route == ConnectionScope.local ? 'Local' : 'Cloud',
                 ),
-                if (route == ConnectionScope.local)
+                if (_runtimeStatus != null) ...[
+                  const SizedBox(height: 8),
                   Align(
-                    alignment: Alignment.centerRight,
-                    child: OutlinedButton.icon(
-                      onPressed: _saving ? null : () => _coordinator.serviceManager.restartDaemon(),
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      _runtimeStatus!,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  alignment: WrapAlignment.end,
+                  children: [
+                    OutlinedButton.icon(
+                      key: const Key('device_check_updates_button'),
+                      onPressed: !widget.device.isOnline || _runtimeBusy ? null : _checkForAgentUpdates,
+                      icon: const Icon(Icons.system_update_alt),
+                      label: const Text('Check for updates'),
+                    ),
+                    OutlinedButton.icon(
+                      key: const Key('device_apply_update_button'),
+                      onPressed: !widget.device.isOnline || _runtimeBusy ? null : _applyAgentUpdate,
+                      icon: const Icon(Icons.upgrade),
+                      label: const Text('Update agent'),
+                    ),
+                    OutlinedButton.icon(
+                      key: const Key('device_restart_agent_button'),
+                      onPressed: !widget.device.isOnline || _runtimeBusy ? null : _restartRemoteAgent,
                       icon: const Icon(Icons.restart_alt),
                       label: const Text('Restart agent'),
                     ),
-                  ),
+                  ],
+                ),
               ],
             ),
           ),
@@ -582,6 +762,68 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
     if (confirmed == true && context.mounted) {
       context.read<DeviceCubit>().deleteAgent(widget.device.id);
     }
+  }
+}
+
+enum AgentRestartMode { safe, force }
+
+class AgentRestartConfirmationDialog extends StatelessWidget {
+  const AgentRestartConfirmationDialog({
+    super.key,
+    required this.deviceName,
+  });
+
+  final String deviceName;
+
+  @override
+  Widget build(BuildContext context) {
+    final compact = MediaQuery.sizeOf(context).width < 600;
+    return AlertDialog(
+      constraints: const BoxConstraints(maxWidth: 560),
+      insetPadding: EdgeInsets.symmetric(
+        horizontal: compact ? 16 : 40,
+        vertical: 24,
+      ),
+      title: const Text('Restart agent'),
+      content: Text(
+        'Restart $deviceName? Restart waits for a safe checkpoint. Force restart '
+        'may interrupt active work. The connection will drop until the agent '
+        'comes back online.',
+      ),
+      buttonPadding: EdgeInsets.zero,
+      actionsOverflowDirection: VerticalDirection.down,
+      actions: [
+        TextButton(
+          key: const Key('dialog_cancel_restart_button'),
+          style: TextButton.styleFrom(
+            minimumSize: const Size(0, 48),
+            padding: const EdgeInsets.symmetric(horizontal: 12),
+          ),
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const Key('dialog_force_restart_button'),
+          style: FilledButton.styleFrom(
+            backgroundColor: Theme.of(context).colorScheme.error,
+            foregroundColor: Theme.of(context).colorScheme.onError,
+            minimumSize: const Size(0, 48),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+          ),
+          onPressed: () => Navigator.of(context).pop(AgentRestartMode.force),
+          child: const Text('Force restart'),
+        ),
+        FilledButton(
+          key: const Key('dialog_confirm_restart_button'),
+          style: FilledButton.styleFrom(
+            minimumSize: const Size(0, 48),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+          ),
+          onPressed: () => Navigator.of(context).pop(AgentRestartMode.safe),
+          child: const Text('Restart'),
+        ),
+      ],
+    );
   }
 }
 
@@ -887,11 +1129,13 @@ class WorkspacePage extends StatelessWidget {
     required this.workspace,
     required this.onRename,
     required this.onChangePath,
+    required this.onRemove,
   });
   final DeviceConfig device;
   final DeviceWorkspace workspace;
   final VoidCallback onRename;
-  final VoidCallback onChangePath;
+  final VoidCallback? onChangePath;
+  final Future<void> Function()? onRemove;
 
   @override
   Widget build(BuildContext context) => DefaultTabController(
@@ -937,9 +1181,9 @@ class WorkspacePage extends StatelessWidget {
               ),
               const TabBar(
                 tabs: [
-                  Tab(text: 'Overview'),
-                  Tab(text: 'MCP Servers'),
-                  Tab(text: 'Skills'),
+                  Tab(key: Key('workspace_tab_overview'), text: 'Overview'),
+                  Tab(key: Key('workspace_tab_mcp_servers'), text: 'MCP Servers'),
+                  Tab(key: Key('workspace_tab_skills'), text: 'Skills'),
                 ],
               ),
             ],
@@ -971,13 +1215,15 @@ class WorkspacePage extends StatelessWidget {
                             icon: const Icon(Icons.edit_outlined),
                             label: const Text('Rename Workspace'),
                           ),
-                          FilledButton.icon(
-                            onPressed: onChangePath,
-                            icon: const Icon(
-                              Icons.drive_folder_upload_outlined,
+                          if (onChangePath != null)
+                            FilledButton.icon(
+                              onPressed: onChangePath,
+                              icon: const Icon(
+                                Icons.drive_folder_upload_outlined,
+                              ),
+                              label: const Text('Change Path'),
                             ),
-                            label: const Text('Change Path'),
-                          ),
+                          WorkspaceRemovalButton(onRemove: onRemove),
                         ],
                       ),
                     ],
@@ -996,5 +1242,48 @@ class WorkspacePage extends StatelessWidget {
         ),
       ],
     ),
+  );
+}
+
+class WorkspaceRemovalButton extends StatelessWidget {
+  const WorkspaceRemovalButton({super.key, required this.onRemove});
+
+  final Future<void> Function()? onRemove;
+
+  Future<void> _confirmRemoval(BuildContext context) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove workspace?'),
+        content: const Text(
+          'This removes only the workspace record from Sanad. The folder and '
+          'its files will not be deleted, and existing conversations will '
+          'remain in the database.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm_remove_workspace_button'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Remove workspace'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) await onRemove?.call();
+  }
+
+  @override
+  Widget build(BuildContext context) => OutlinedButton.icon(
+    key: const Key('remove_workspace_button'),
+    onPressed: onRemove == null ? null : () => _confirmRemoval(context),
+    style: OutlinedButton.styleFrom(
+      foregroundColor: Theme.of(context).colorScheme.error,
+    ),
+    icon: const Icon(Icons.delete_outline),
+    label: const Text('Remove workspace'),
   );
 }

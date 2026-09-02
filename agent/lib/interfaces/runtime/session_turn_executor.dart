@@ -16,6 +16,7 @@ import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
+import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/session_payload_builder.dart';
 
@@ -26,7 +27,9 @@ class ActiveRun {
   final String? workItemId;
   final Completer<void> completer;
   final AgentRunner agentRunner;
+  final RunCancellationScope cancellationScope;
   StreamSubscription<String>? _subscription;
+  RunCancellationResourceHandle? _subscriptionHandle;
   bool stopRequested = false;
   bool invalidated = false;
 
@@ -37,17 +40,37 @@ class ActiveRun {
     required this.workItemId,
     required this.completer,
     required this.agentRunner,
-  });
+  }) : cancellationScope = RunCancellationScope(
+         sessionId: sessionId,
+         runId: runId,
+         workItemId: workItemId,
+         generation: generation,
+       );
 
   void attach(StreamSubscription<String> subscription) {
     _subscription = subscription;
+    _subscriptionHandle?.release();
+    _subscriptionHandle = cancellationScope.register(
+      'turn_stream_subscription',
+      () async {
+        await subscription.cancel();
+      },
+    );
   }
 
-  Future<void> requestStop() async {
+  Future<void> requestStop({
+    Duration cleanupDeadline = RunCancellationScope.defaultCleanupDeadline,
+  }) async {
     stopRequested = true;
     invalidated = true;
     agentRunner.requestStop();
-    await cancelSubscription();
+    await cancellationScope.cancel(
+      reason: RunCancellationReason.userStop,
+      cleanupDeadline: cleanupDeadline,
+    );
+    _subscription = null;
+    _subscriptionHandle?.release();
+    _subscriptionHandle = null;
     complete();
   }
 
@@ -57,6 +80,8 @@ class ActiveRun {
       return;
     }
     _subscription = null;
+    _subscriptionHandle?.release();
+    _subscriptionHandle = null;
     await subscription.cancel();
   }
 
@@ -153,6 +178,7 @@ class SessionTurnExecutor {
       );
       final owner = activeRun;
       activeRuns[event.sessionId] = activeRun;
+      agentRunner.attachCancellationScope(owner.cancellationScope);
       agentRunner.beginAuthoritativeRun(
         runId,
         workItemId: workItemId,
@@ -176,23 +202,49 @@ class SessionTurnExecutor {
         if (!bound) {
           return;
         }
+        if (isResume) {
+          final persistedWork = persistedState.findWorkItem(
+            activeRun.workItemId!,
+          );
+          if (persistedWork != null) {
+            agentRunner.runStartTime = persistedWork.createdAt;
+          }
+        }
       }
 
       if (!isResume) {
         final receivedAt = turnRequest.metadata['received_at']?.toString();
+        final requestId = turnRequest.requestId;
+        final durableUser = requestId == null || requestId.isEmpty
+            ? _findDurableMessage(
+                sessionId: event.sessionId,
+                role: MessageRole.user,
+                requestId: requestId,
+              )
+            : await agentRunner.commitUserMessage(
+                content,
+                requestId: requestId,
+                receivedAt: receivedAt == null
+                    ? null
+                    : DateTime.tryParse(receivedAt),
+              );
+        if (!ownsRun(activeRun)) return;
         emitResponse(
           GatewayResponse(
             sessionId: event.sessionId,
             platformId: event.platformId,
-            message: Message(
-              role: MessageRole.user,
-              content: content,
-              metadata: {
-                if (turnRequest.requestId != null)
-                  'request_id': turnRequest.requestId,
-                'received_at': receivedAt,
-              },
-            ),
+            message:
+                durableUser ??
+                Message(
+                  role: MessageRole.user,
+                  content: content,
+                  metadata: {
+                    ...?event.message.metadata,
+                    if (turnRequest.requestId != null)
+                      'request_id': turnRequest.requestId,
+                    'received_at': receivedAt,
+                  },
+                ),
             isComplete: true,
             runId: runId,
           ),
@@ -317,7 +369,7 @@ class SessionTurnExecutor {
 
       runSubscription = stream.listen(
         (chunk) async {
-          if (!ownsRun(owner)) {
+          if (!ownsRun(owner) || !owner.cancellationScope.isPublicationOpen) {
             _logger.info(
               'Stream listener detected stop flag for session: ${event.sessionId}',
             );
@@ -352,6 +404,7 @@ class SessionTurnExecutor {
           );
         },
         onDone: () {
+          owner.cancellationScope.markCompleted();
           owner.complete();
         },
         onError: (e, stack) {
@@ -443,12 +496,18 @@ class SessionTurnExecutor {
         return;
       }
 
+      agentRunner.markProviderResponseTerminalCommitted();
       sessionManager.clearInFlightSnapshot(event.sessionId);
+      final durableTerminal = _findDurableMessage(
+        sessionId: event.sessionId,
+        role: MessageRole.assistant,
+        runId: activeRun.runId,
+      );
       emitResponse(
         GatewayResponse(
           sessionId: event.sessionId,
           platformId: event.platformId,
-          message: terminalMessage,
+          message: durableTerminal ?? terminalMessage,
           isComplete: true,
           runId: activeRun.runId,
           modelStepId: agentRunner.currentModelStepId,
@@ -527,6 +586,10 @@ class SessionTurnExecutor {
       }
       final redactedError = _secretsRedactor.redact(e.toString());
       _logger.severe('Error handling event: $redactedError', e, stack);
+      // The durable recovery notice is the terminal projection for a failed
+      // resume. Emitting an assistant response here is translated into a
+      // misleading `final_answer` even though no continuation succeeded.
+      if (isResume) return;
       final contextUsageOnError = await _captureContextUsage(
         sessionId: event.sessionId,
         agentRunner: agentRunner,
@@ -575,6 +638,7 @@ class SessionTurnExecutor {
         if (identical(activeRuns[event.sessionId], activeRun)) {
           activeRuns.remove(event.sessionId);
         }
+        agentRunner.detachCancellationScope(activeRun.cancellationScope);
         agentRunner.endAuthoritativeRun(activeRun.runId);
         if (getIt.isRegistered<RuntimeRecoveryService>()) {
           getIt<RuntimeRecoveryService>().endRun(
@@ -623,7 +687,7 @@ class SessionTurnExecutor {
     String? toolRunId,
     required void Function() onResetFullContent,
   }) async {
-    if (!ownsRun(owner)) {
+    if (!ownsRun(owner) || !owner.cancellationScope.isPublicationOpen) {
       return;
     }
     final sessionManager = getIt<SessionManager>();
@@ -673,7 +737,9 @@ class SessionTurnExecutor {
     required AgentRunner agentRunner,
     required String thought,
   }) {
-    if (thought.isEmpty || !ownsRun(owner)) {
+    if (thought.isEmpty ||
+        !ownsRun(owner) ||
+        !owner.cancellationScope.isPublicationOpen) {
       return;
     }
     _appendInFlightSnapshot(
@@ -702,7 +768,9 @@ class SessionTurnExecutor {
     required String fallbackRunId,
     required String reasoning,
   }) {
-    if (reasoning.isEmpty || !ownsRun(owner)) {
+    if (reasoning.isEmpty ||
+        !ownsRun(owner) ||
+        !owner.cancellationScope.isPublicationOpen) {
       return;
     }
     _appendInFlightSnapshot(
@@ -758,7 +826,11 @@ class SessionTurnExecutor {
     required GatewayEvent event,
     required String content,
   }) {
-    if (content.isEmpty || !ownsRun(owner)) return;
+    if (content.isEmpty ||
+        !ownsRun(owner) ||
+        !owner.cancellationScope.isPublicationOpen) {
+      return;
+    }
     final modelStepId = owner.agentRunner.currentModelStepId;
     emitResponse(
       GatewayResponse(
@@ -783,6 +855,26 @@ class SessionTurnExecutor {
         modelStepId: modelStepId,
       ),
     );
+  }
+
+  Message? _findDurableMessage({
+    required String sessionId,
+    required MessageRole role,
+    String? requestId,
+    String? runId,
+  }) {
+    final messages = getIt<SessionManager>().getMessages(sessionId);
+    for (final message in messages.reversed) {
+      if (message.role != role) continue;
+      final metadata = message.metadata;
+      if (requestId != null && metadata?['request_id'] == requestId) {
+        return message;
+      }
+      if (runId != null && metadata?['run_id'] == runId) {
+        return message;
+      }
+    }
+    return null;
   }
 
   bool _shouldGenerateIntelligentTitle({

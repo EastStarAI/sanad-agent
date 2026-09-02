@@ -20,6 +20,7 @@ import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
@@ -277,6 +278,9 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         'dev_runtime_nonce': Platform.environment['SANAD_DEV_RUNTIME_NONCE'],
         'state_mode': stateMode,
         'gateway_enabled': _config.enableGateway,
+        'cloud_registered':
+            getIt.isRegistered<ServerSanadGatewayPlatform>() &&
+            getIt<ServerSanadGatewayPlatform>().isCloudRegistered,
       });
       return;
     }
@@ -537,7 +541,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       'url': _config.localGatewayUrl,
     };
     _logger.info('⬆️ [ws] Sending register_success to client');
-    _logger.fine('⬆️ [ws] Welcome payload: $welcomePayload');
+    logFinePayload('⬆️ [ws] Welcome payload:', welcomePayload);
     _sendToSocket(socket, welcomePayload);
 
     socket.listen(
@@ -632,6 +636,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       return;
     }
 
+    logFinePayload('⬇️ [ws] Message payload:', envelope);
     _rememberSocketIdentity(socket, envelope);
 
     if (type == 'get_capabilities') {
@@ -646,7 +651,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
           'request_id': envelope['request_id'],
       };
       _logger.info('⬆️ [ws] Sending capabilities to client');
-      _logger.fine('⬆️ [ws] Capabilities payload: $capabilitiesPayload');
+      logFinePayload('⬆️ [ws] Capabilities payload:', capabilitiesPayload);
       _sendToSocket(socket, capabilitiesPayload);
       return;
     }
@@ -817,6 +822,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     } else {
       _logger.info('⬆️ [ws] Sending device_event: $eventType');
     }
+    logFinePayload('⬆️ [ws] Device event payload:', payload);
     await _sendToSocket(socket, payload);
   }
 
@@ -925,6 +931,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     } else {
       _logger.info('⬆️ [ws] Sending device_event response: $eventType');
     }
+    logFinePayload('⬆️ [ws] Response payload:', envelope);
 
     // Phase 27 — delivery-aware local routing. The runtime sets the scope;
     // the platform resolves it to concrete sockets.
@@ -935,7 +942,11 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         if (targetSocket != null) {
           await _sendToSocket(
             targetSocket,
-            _withSocketIdentity(envelope, targetSocket),
+            _withSocketIdentity(
+              envelope,
+              targetSocket,
+              preserveEnvelopeDeviceId: deviceId?.isNotEmpty == true,
+            ),
           );
         } else {
           _logger.warning(
@@ -946,7 +957,14 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       case DeliveryScope.platformFamily:
         // Fan out to every connected local Sanad Client socket.
         for (final client in _clients.toList()) {
-          await _sendToSocket(client, _withSocketIdentity(envelope, client));
+          await _sendToSocket(
+            client,
+            _withSocketIdentity(
+              envelope,
+              client,
+              preserveEnvelopeDeviceId: deviceId?.isNotEmpty == true,
+            ),
+          );
         }
       case DeliveryScope.hardware:
         final target = delivery.targetHardwareId;
@@ -964,7 +982,14 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
           );
         }
         for (final socket in matched) {
-          await _sendToSocket(socket, _withSocketIdentity(envelope, socket));
+          await _sendToSocket(
+            socket,
+            _withSocketIdentity(
+              envelope,
+              socket,
+              preserveEnvelopeDeviceId: deviceId?.isNotEmpty == true,
+            ),
+          );
         }
       case DeliveryScope.device:
         // App → daemon direction: not applicable on the local server platform
@@ -1041,9 +1066,15 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
   Map<String, dynamic> _withSocketIdentity(
     Map<String, dynamic> envelope,
-    WebSocket socket,
-  ) {
-    return _withDeviceIdentity(envelope, deviceId: _socketDeviceIds[socket]);
+    WebSocket socket, {
+    bool preserveEnvelopeDeviceId = false,
+  }) {
+    final envelopeDeviceId = envelope['device_id'] as String?;
+    final deviceId =
+        preserveEnvelopeDeviceId && envelopeDeviceId?.isNotEmpty == true
+        ? envelopeDeviceId
+        : _socketDeviceIds[socket];
+    return _withDeviceIdentity(envelope, deviceId: deviceId);
   }
 
   Map<String, dynamic> _withDeviceIdentity(

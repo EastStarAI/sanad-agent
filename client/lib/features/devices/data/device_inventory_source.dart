@@ -3,7 +3,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 class DeviceInventoryIds {
-  static const localDevice = 'local-agent';
+  static const localDevice = DeviceConfig.syntheticLocalId;
 
   const DeviceInventoryIds._();
 }

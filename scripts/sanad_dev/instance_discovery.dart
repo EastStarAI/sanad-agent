@@ -354,12 +354,20 @@ class AgentInstance {
   });
 }
 
-Future<List<AgentInstance>> discoverAgentInstances() async {
+Future<List<AgentInstance>> discoverAgentInstances({
+  String? sanadHomeOverride,
+}) async {
   final client = HttpClient();
   client.connectionTimeout = const Duration(milliseconds: 150);
   final instances = <AgentInstance>[];
-  final runtime = await _currentRuntime();
-  final candidateHomes = await discoverLocalGatewayCandidateHomes(runtime);
+  final runtime = await discoverSanadDevRuntime(
+    callerDirectory: _callerDirectory,
+    sanadHomeOverride: sanadHomeOverride,
+  );
+  final candidateHomes = await discoverLocalGatewayCandidateHomes(
+    runtime,
+    sanadHomeOverride: sanadHomeOverride,
+  );
   final credentials = <({String home, String value})>[];
   for (final home in candidateHomes) {
     try {
@@ -430,10 +438,16 @@ Future<List<AgentInstance>> discoverAgentInstances() async {
 }
 
 Future<Set<String>> discoverLocalGatewayCandidateHomes(
-  SanadDevRuntime runtime,
-) async {
+  SanadDevRuntime runtime, {
+  String? sanadHomeOverride,
+}) async {
   final primaryHome = resolveDefaultUserSanadHome(Platform.environment);
-  final homes = <String>{runtime.sanadHome, primaryHome};
+  final homes = <String>{
+    runtime.sanadHome,
+    primaryHome,
+    if (sanadHomeOverride != null && sanadHomeOverride.isNotEmpty)
+      sanadHomeOverride,
+  };
 
   final linkedHomes = Directory(
     '$primaryHome${Platform.pathSeparator}dev${Platform.pathSeparator}homes',
@@ -473,7 +487,10 @@ Future<Set<String>> discoverLocalGatewayCandidateHomes(
   return homes;
 }
 
-Future<ClientInstance?> selectClientInstance(int? portOverride) async {
+Future<ClientInstance?> selectClientInstance(
+  int? portOverride, {
+  String? sanadHomePath,
+}) async {
   final instances = await discoverClientInstances();
   if (instances.isEmpty) {
     print(
@@ -498,9 +515,14 @@ Future<ClientInstance?> selectClientInstance(int? portOverride) async {
     exit(1);
   }
 
-  final runtime = await _currentRuntime();
+  final runtime = await discoverSanadDevRuntime(
+    callerDirectory: _callerDirectory,
+    sanadHomeOverride: sanadHomePath,
+  );
   final state = selectRuntimeProcessState(
-    activeAgents: await discoverAgentInstances(),
+    activeAgents: await discoverAgentInstances(
+      sanadHomeOverride: sanadHomePath,
+    ),
     activeClients: instances,
     runtime: runtime,
   );
@@ -572,13 +594,18 @@ Future<ClientInstance?> _recordedClientInstance(int port) async {
 Future<AgentInstance?> selectAgentInstance(
   int? portOverride, {
   bool allowStartupGrace = false,
+  String? sanadHomePath,
 }) async {
-  var instances = await discoverAgentInstances();
+  var instances = await discoverAgentInstances(
+    sanadHomeOverride: sanadHomePath,
+  );
   if (instances.isEmpty && allowStartupGrace) {
     final deadline = DateTime.now().add(const Duration(seconds: 5));
     while (DateTime.now().isBefore(deadline) && instances.isEmpty) {
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      instances = await discoverAgentInstances();
+      instances = await discoverAgentInstances(
+        sanadHomeOverride: sanadHomePath,
+      );
     }
   }
   if (instances.isEmpty) {
@@ -603,7 +630,10 @@ Future<AgentInstance?> selectAgentInstance(
   }
 
   // Filter instances matching the current worktree's workspace root hash
-  final runtime = await _currentRuntime();
+  final runtime = await discoverSanadDevRuntime(
+    callerDirectory: _callerDirectory,
+    sanadHomeOverride: sanadHomePath,
+  );
   final currentWorkspaceHash = runtime.worktreeId.split('-').last;
   var matchingInstances = instances
       .where((inst) => inst.workspaceHash == currentWorkspaceHash)
@@ -613,7 +643,9 @@ Future<AgentInstance?> selectAgentInstance(
     final deadline = DateTime.now().add(const Duration(seconds: 5));
     while (DateTime.now().isBefore(deadline) && matchingInstances.isEmpty) {
       await Future<void>.delayed(const Duration(milliseconds: 500));
-      instances = await discoverAgentInstances();
+      instances = await discoverAgentInstances(
+        sanadHomeOverride: sanadHomePath,
+      );
       matchingInstances = instances
           .where((inst) => inst.workspaceHash == currentWorkspaceHash)
           .toList();

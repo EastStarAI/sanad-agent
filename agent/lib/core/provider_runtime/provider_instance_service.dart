@@ -2,6 +2,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../engine/adapters/provider_profile.dart';
 import '../../engine/adapters/provider_registry.dart';
+import 'provider_endpoint_resolver.dart';
 import 'provider_instance.dart';
 import 'provider_model_id.dart';
 import 'provider_instance_repository.dart';
@@ -116,7 +117,7 @@ class ProviderInstanceService {
       displayName: trimmed,
       protocol: effProtocol,
       authMethod: authMethod,
-      baseUrl: baseUrl ?? template?.defaultBaseUrl,
+      baseUrl: _normalizeBaseUrl(baseUrl) ?? template?.defaultBaseUrl,
       defaultModel: normalizedDefaultModel,
       status: InstanceStatus.draft,
       isDefault: false,
@@ -179,11 +180,14 @@ class ProviderInstanceService {
     if (existing == null) {
       throw StateError('Provider instance not found: $id');
     }
+    final normalizedBaseUrl = baseUrl == null
+        ? null
+        : _normalizeBaseUrl(baseUrl);
     final changedConfig =
-        (baseUrl != null && baseUrl != existing.baseUrl) ||
+        (normalizedBaseUrl != null && normalizedBaseUrl != existing.baseUrl) ||
         (protocol != null && protocol != existing.protocol);
     final next = existing.copyWith(
-      baseUrl: baseUrl ?? existing.baseUrl,
+      baseUrl: normalizedBaseUrl ?? existing.baseUrl,
       defaultModel: defaultModel == null
           ? existing.defaultModel
           : ProviderModelId.normalize(
@@ -348,5 +352,12 @@ class ProviderInstanceService {
   static bool _isTemplateKnown(String templateId) {
     return templateId == kCustomProviderTemplateId ||
         ProviderRegistry.findByNameOrAlias(templateId) != null;
+  }
+
+  static String? _normalizeBaseUrl(String? baseUrl) {
+    if (baseUrl == null) return null;
+    final trimmed = baseUrl.trim();
+    if (trimmed.isEmpty) return null;
+    return ProviderEndpointResolver.parseHttpBaseUrl(trimmed).toString();
   }
 }

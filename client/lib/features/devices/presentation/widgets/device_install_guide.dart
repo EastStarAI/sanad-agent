@@ -25,9 +25,13 @@ class DeviceInstallGuide extends StatelessWidget {
     required this.token,
   });
 
-  String get _posixCommand =>
-      'curl -fsSL https://sanad.eaststarai.com/install.sh | '
-      'bash -s -- --pairing-token \'$token\'';
+  String get _posixCommand {
+    final quotedToken = _quotePosix(token);
+    return 'curl -fsSL https://sanad.eaststarai.com/install.sh | '
+        'bash -s -- --pairing-token $quotedToken';
+  }
+
+  static String _quotePosix(String value) => "'${value.replaceAll("'", "'\\''")}'";
   String get _windowsCommand =>
       '& ([scriptblock]::Create((irm '
       'https://sanad.eaststarai.com/install.ps1))) '

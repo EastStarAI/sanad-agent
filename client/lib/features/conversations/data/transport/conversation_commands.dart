@@ -12,7 +12,9 @@ import 'package:sanad_client/features/conversations/domain/stores/device_convers
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/pending_steer_record.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/data/transport/conversation_request_id.dart';
 import 'package:uuid/uuid.dart';
 
@@ -23,6 +25,10 @@ class ConversationCommands {
   final DeviceConversationStore _conversationStore;
   final DeviceEventMapper _mapper;
   int _historyHydrationGeneration = 0;
+  Future<List<CanonicalEvent>>? _olderHistoryLoad;
+  String? _olderHistoryCursor;
+  Future<List<CanonicalEvent>>? _newerHistoryLoad;
+  String? _newerHistoryCursor;
 
   ConversationCommands({
     required ConversationCommandGateway gateway,
@@ -80,15 +86,14 @@ class ConversationCommands {
 
     _gateway.sendCommand(
       command: 'steer',
-      payload: {
-        'request_id': requestId,
-        'session_id': sessionId,
-        'message': message,
-      },
+      payload: {'request_id': requestId, 'session_id': sessionId},
     );
   }
 
-  Future<String?> deleteQueuedMessage({required String requestId, required String sessionId}) async {
+  Future<String?> deleteQueuedMessage({
+    required String requestId,
+    required String sessionId,
+  }) async {
     if (!_gateway.isConnected) return null;
     final commandRequestId = generateConversationRequestId();
     _gateway.sendCommand(
@@ -102,7 +107,10 @@ class ConversationCommands {
     return commandRequestId;
   }
 
-  Future<String?> cancelPendingSteer({required String requestId, required String sessionId}) async {
+  Future<String?> cancelPendingSteer({
+    required String requestId,
+    required String sessionId,
+  }) async {
     if (!_gateway.isConnected) return null;
     final commandRequestId = generateConversationRequestId();
     _gateway.sendCommand(
@@ -141,7 +149,9 @@ class ConversationCommands {
     );
 
     if (result != null) {
-      final payload = Map<String, dynamic>.from(result['payload'] as Map? ?? result);
+      final payload = Map<String, dynamic>.from(
+        result['payload'] as Map? ?? result,
+      );
       final deviceId = result['device_id'] as String?;
       if (deviceId != null && payload['device_id'] == null) {
         payload['device_id'] = deviceId;
@@ -222,12 +232,16 @@ class ConversationCommands {
   Future<TurnReplayResult> replayTurn({
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) async {
     if (!_gateway.isConnected) {
       return const TurnReplayResult(
@@ -243,8 +257,12 @@ class ConversationCommands {
         'session_id': sessionId,
         'request_id': requestId,
         'target_request_id': targetRequestId,
+        if (targetMessageId != null && targetMessageId.isNotEmpty) 'target_message_id': targetMessageId,
+        if (targetTurnId != null && targetTurnId.isNotEmpty) 'target_turn_id': targetTurnId,
+        if (expectedHistoryRevision != null) 'expected_history_revision': expectedHistoryRevision,
         'action': action.name,
         'confirmed_replay_unsafe': confirmedReplayUnsafe,
+        'confirmed_drop_steers': confirmedDropSteers,
         if (message != null) 'message': message,
         if (providerInstanceId != null && providerInstanceId.trim().isNotEmpty)
           'provider_instance_id': providerInstanceId.trim(),
@@ -257,6 +275,59 @@ class ConversationCommands {
       result?['payload'] as Map? ?? result ?? const {},
     );
     return TurnReplayResult.fromJson(payload);
+  }
+
+  Future<SessionCompactResult> compactSession({
+    required String sessionId,
+  }) async {
+    if (!_gateway.isConnected) {
+      return const SessionCompactResult(outcome: 'disconnected');
+    }
+    final requestId = generateConversationRequestId();
+    final result = await _gateway.request(
+      command: 'session.compact',
+      payload: {'session_id': sessionId, 'request_id': requestId},
+      requestId: requestId,
+    );
+    final payload = Map<String, dynamic>.from(
+      result?['payload'] as Map? ?? result ?? const {},
+    );
+    return SessionCompactResult.fromJson(payload);
+  }
+
+  Future<SessionForkResult> forkSession({
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async {
+    if (!_gateway.isConnected) {
+      return const SessionForkResult(outcome: 'disconnected');
+    }
+    final requestId = generateConversationRequestId();
+    final result = await _gateway.request(
+      command: 'session.fork',
+      payload: {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'target_message_id': targetMessageId,
+        'target_turn_id': targetTurnId,
+      },
+      requestId: requestId,
+      timeout: const Duration(seconds: 30),
+    );
+    final payload = Map<String, dynamic>.from(
+      result?['payload'] as Map? ?? result ?? const {},
+    );
+    final parsed = SessionForkResult.fromJson(payload);
+    final deviceId = result?['device_id']?.toString();
+    if (parsed.child == null || deviceId == null || deviceId.isEmpty) {
+      return parsed;
+    }
+    return SessionForkResult(
+      outcome: parsed.outcome,
+      child: parsed.child!.copyWith(deviceId: deviceId),
+      navigationFailed: parsed.navigationFailed,
+    );
   }
 
   Future<void> retryRuntimeNotice({
@@ -335,10 +406,7 @@ class ConversationCommands {
     final requestId = generateConversationRequestId();
     final result = await _gateway.request(
       command: 'get_sessions',
-      payload: {
-        'request_id': requestId,
-        ...?query?.toJson(),
-      },
+      payload: {'request_id': requestId, ...?query?.toJson()},
       requestId: requestId,
     );
 
@@ -384,7 +452,11 @@ class ConversationCommands {
       final payload = result['payload'] as Map<String, dynamic>? ?? result;
       final workspaces = payload['workspaces'] as List? ?? [];
       return workspaces
-          .map((workspace) => DeviceWorkspace.fromJson(Map<String, dynamic>.from(workspace as Map)))
+          .map(
+            (workspace) => DeviceWorkspace.fromJson(
+              Map<String, dynamic>.from(workspace as Map),
+            ),
+          )
           .toList();
     }
 
@@ -411,14 +483,22 @@ class ConversationCommands {
       final commands = payload['commands'] as List? ?? [];
       return commands
           .whereType<Map>()
-          .map(
-            (command) => SlashCommandEntry(
+          .map((command) {
+            final type = switch (command['type']?.toString()) {
+              'runtime_action' => SlashCommandType.runtimeAction,
+              'skill' => SlashCommandType.skill,
+              _ => null,
+            };
+            if (type == null) return null;
+            return SlashCommandEntry(
               sourceId: command['source']?.toString() ?? 'runtime',
               command: command['command']?.toString() ?? '',
               insertText: command['command']?.toString() ?? '',
               description: command['description']?.toString(),
-            ),
-          )
+              type: type,
+            );
+          })
+          .whereType<SlashCommandEntry>()
           .where((entry) => entry.command.trim().isNotEmpty)
           .toList(growable: false);
     }
@@ -450,12 +530,15 @@ class ConversationCommands {
   }
 
   Future<DeviceWorkspace> createWorkspace({
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) async {
-    final trimmedPath = path.trim();
-    if (trimmedPath.isEmpty) {
-      throw StateError('Workspace path is required');
+    final trimmedPath = path?.trim() ?? '';
+    final trimmedName = name?.trim() ?? '';
+    final trimmedDescription = description?.trim() ?? '';
+    if (trimmedPath.isEmpty && trimmedName.isEmpty) {
+      throw StateError('Workspace name or path is required');
     }
 
     final requestId = generateConversationRequestId();
@@ -463,8 +546,9 @@ class ConversationCommands {
       command: 'create_workspace',
       payload: {
         'request_id': requestId,
-        'path': trimmedPath,
-        if (name != null && name.trim().isNotEmpty) 'name': name.trim(),
+        if (trimmedPath.isNotEmpty) 'path': trimmedPath,
+        if (trimmedName.isNotEmpty) 'name': trimmedName,
+        if (trimmedDescription.isNotEmpty) 'description': trimmedDescription,
       },
       requestId: requestId,
     );
@@ -493,22 +577,44 @@ class ConversationCommands {
     );
   }
 
+  Future<void> removeWorkspace({required String workspaceId}) async {
+    final normalizedId = workspaceId.trim();
+    if (normalizedId.isEmpty) {
+      throw StateError('Workspace id is required');
+    }
+    final requestId = generateConversationRequestId();
+    final result = await _gateway.request(
+      command: 'workspace.remove',
+      payload: {'request_id': requestId, 'workspace_id': normalizedId},
+      requestId: requestId,
+    );
+    final payload = result?['payload'] as Map<String, dynamic>? ?? result;
+    if (result?['event'] == 'workspace.removed' && payload?['workspace_id']?.toString() == normalizedId) {
+      return;
+    }
+    if (result?['event'] == 'error') {
+      throw StateError(
+        payload?['message']?.toString() ?? 'Failed to remove workspace',
+      );
+    }
+    throw StateError('Failed to remove workspace');
+  }
+
   Future<DeviceWorkspace> relocateWorkspace({
     required String workspaceId,
     required String newPath,
   }) {
     return _mutateWorkspace(
       command: 'workspace.relocate',
-      payload: {
-        'workspace_id': workspaceId.trim(),
-        'new_path': newPath.trim(),
-      },
+      payload: {'workspace_id': workspaceId.trim(), 'new_path': newPath.trim()},
+      previewEvent: 'workspace.relocate.preview',
     );
   }
 
   Future<DeviceWorkspace> _mutateWorkspace({
     required String command,
     required Map<String, dynamic> payload,
+    String? previewEvent,
   }) async {
     final requestId = generateConversationRequestId();
     final result = await _gateway.request(
@@ -516,6 +622,22 @@ class ConversationCommands {
       payload: {'request_id': requestId, ...payload},
       requestId: requestId,
     );
+    if (previewEvent != null && result?['event'] == previewEvent) {
+      final preview = result?['payload'] as Map<String, dynamic>? ?? result;
+      final token = preview?['confirmation_token']?.toString() ?? '';
+      final fingerprint = preview?['confirmation_fingerprint']?.toString() ?? '';
+      if (token.isEmpty || fingerprint.isEmpty) {
+        throw StateError('Failed to update workspace');
+      }
+      return _mutateWorkspace(
+        command: command,
+        payload: {
+          ...payload,
+          'confirmation_token': token,
+          'confirmation_fingerprint': fingerprint,
+        },
+      );
+    }
     final response = result == null ? null : (result['payload'] as Map<String, dynamic>? ?? result);
     if (result?['event'] == 'error') {
       throw StateError(
@@ -556,7 +678,10 @@ class ConversationCommands {
     );
   }
 
-  Future<void> renameFolder({required String path, required String newName}) async {
+  Future<void> renameFolder({
+    required String path,
+    required String newName,
+  }) async {
     final trimmedPath = path.trim();
     final trimmedNewName = newName.trim();
     if (trimmedPath.isEmpty || trimmedNewName.isEmpty) {
@@ -589,12 +714,34 @@ class ConversationCommands {
     final requestId = generateConversationRequestId();
     final result = await _gateway.request(
       command: 'workspace.delete_folder',
-      payload: {
-        'request_id': requestId,
-        'path': trimmedPath,
-      },
+      payload: {'request_id': requestId, 'path': trimmedPath},
       requestId: requestId,
     );
+    if (result?['event']?.toString() == 'workspace.delete_folder.preview') {
+      final payload = result?['payload'] as Map<String, dynamic>? ?? result;
+      final token = payload?['confirmation_token']?.toString() ?? '';
+      final fingerprint = payload?['confirmation_fingerprint']?.toString() ?? '';
+      if (token.isEmpty || fingerprint.isEmpty) {
+        throw StateError('Failed to delete folder');
+      }
+      final confirmId = generateConversationRequestId();
+      final confirmed = await _gateway.request(
+        command: 'workspace.delete_folder',
+        payload: {
+          'request_id': confirmId,
+          'path': trimmedPath,
+          'confirmation_token': token,
+          'confirmation_fingerprint': fingerprint,
+        },
+        requestId: confirmId,
+      );
+      _requireFolderMutationAcknowledgment(
+        confirmed,
+        expectedEvent: 'workspace.folder_deleted',
+        fallbackMessage: 'Failed to delete folder',
+      );
+      return;
+    }
     _requireFolderMutationAcknowledgment(
       result,
       expectedEvent: 'workspace.folder_deleted',
@@ -616,9 +763,23 @@ class ConversationCommands {
     throw StateError(message?.toString() ?? fallbackMessage);
   }
 
-  Future<List<CanonicalEvent>> loadSessionHistory(String sessionId) async {
+  Future<List<CanonicalEvent>> loadSessionHistory(
+    String sessionId, {
+    String? anchorEventId,
+  }) async {
     final generation = ++_historyHydrationGeneration;
-    _conversationStore.activateSession(sessionId);
+    final restoredRetainedHistory = _conversationStore.activateSession(
+      sessionId,
+    );
+    final retainedEvents = List<CanonicalEvent>.from(
+      _conversationStore.currentMessages,
+    );
+    final retainedHistoryIsComplete =
+        restoredRetainedHistory &&
+        retainedEvents.isNotEmpty &&
+        !_conversationStore.historyHasMore &&
+        !_conversationStore.historyHasNewer;
+    final baselineEventIds = retainedEvents.map((event) => event.id).toSet();
 
     final requestId = generateConversationRequestId();
     final result = await _gateway.request(
@@ -626,6 +787,8 @@ class ConversationCommands {
       payload: {
         'request_id': requestId,
         'session_id': sessionId,
+        'limit': 100,
+        if (anchorEventId != null) 'anchor_event_id': anchorEventId,
       },
       requestId: requestId,
     );
@@ -635,7 +798,10 @@ class ConversationCommands {
         return List<CanonicalEvent>.from(_conversationStore.currentMessages);
       }
 
-      final payload = Map<String, dynamic>.from(result['payload'] as Map? ?? {});
+      final payload = Map<String, dynamic>.from(
+        result['payload'] as Map? ?? {},
+      );
+      _throwHistoryError(payload);
       final messagesData = payload['messages'] as List? ?? [];
       final queuedMessagesData = payload['queued_messages'] as List? ?? [];
       final pendingSteersData = payload['pending_steers'] as List? ?? [];
@@ -649,25 +815,26 @@ class ConversationCommands {
         final metadata = Map<String, dynamic>.from(
           row['metadata'] as Map? ?? const {},
         );
-        _conversationStore.applyRoutePayload(
-          {
-            ...metadata,
-            ...row,
-            'session_id': row['session_id'] ?? metadata['session_id'] ?? sessionId,
-          },
-          expectedSessionId: sessionId,
-        );
+        _conversationStore.applyRoutePayload({
+          ...metadata,
+          ...row,
+          'session_id': row['session_id'] ?? metadata['session_id'] ?? sessionId,
+        }, expectedSessionId: sessionId);
       }
       final events = _mapper.mapHistory(messagesData);
       final queuedEvents = _mapper.mapHistory(queuedMessagesData);
       final inFlight = payload['in_flight'];
-      final transientEvents = List<CanonicalEvent>.from(_conversationStore.currentMessages);
+      final transientEvents = _conversationStore.currentMessages
+          .where((event) => !baselineEventIds.contains(event.id))
+          .toList(growable: false);
 
       if (inFlight is Map) {
         final snapshotEvent = _mapper.mapLiveEvent({
           'device_id': '',
           'event': inFlight['type'] ?? 'thought_stream',
-          'payload': Map<String, dynamic>.from(inFlight.cast<String, dynamic>()),
+          'payload': Map<String, dynamic>.from(
+            inFlight.cast<String, dynamic>(),
+          ),
         });
         if (snapshotEvent != null) {
           events.add(snapshotEvent);
@@ -678,10 +845,21 @@ class ConversationCommands {
         return events;
       }
 
-      _conversationStore.setHistory(events);
+      final hydratedEvents = retainedHistoryIsComplete
+          ? _mergeRetainedHistoryWithHydration(retainedEvents, events)
+          : events;
+      _conversationStore.setHistory(
+        hydratedEvents,
+        hasMore: retainedHistoryIsComplete ? false : payload['has_more'] == true,
+        nextCursor: retainedHistoryIsComplete ? null : payload['next_cursor']?.toString(),
+        hasNewer: retainedHistoryIsComplete ? false : payload['has_newer'] == true,
+        nextNewerCursor: retainedHistoryIsComplete ? null : payload['next_newer_cursor']?.toString(),
+      );
       _conversationStore.setQueuedMessages(queuedEvents);
       _conversationStore.hydratePendingSteers(
-        pendingSteersData.whereType<Map>().map((row) => PendingSteerRecord.fromJson(Map<String, dynamic>.from(row))),
+        pendingSteersData.whereType<Map>().map(
+          (row) => PendingSteerRecord.fromJson(Map<String, dynamic>.from(row)),
+        ),
         sessionId: sessionId,
       );
       final rawStopRecovery = payload['stop_draft_recovery'];
@@ -697,7 +875,7 @@ class ConversationCommands {
           // The durable payload remains available for a later hydration retry.
         }
       }
-      final historyIdentityKeys = events.expand(_reconciliationIdentityKeys).toSet();
+      final historyIdentityKeys = hydratedEvents.expand(_reconciliationIdentityKeys).toSet();
       for (final event in transientEvents) {
         if (_isAlreadyRepresentedInHistory(
           event,
@@ -718,8 +896,190 @@ class ConversationCommands {
     throw StateError('Session history request failed');
   }
 
+  List<CanonicalEvent> _mergeRetainedHistoryWithHydration(
+    List<CanonicalEvent> retained,
+    List<CanonicalEvent> hydrated,
+  ) {
+    final foldedHydrated = _foldCanonicalEvents(hydrated);
+    final hydratedById = {
+      for (final event in foldedHydrated) event.id: event,
+    };
+    final merged = <CanonicalEvent>[
+      for (final event in retained)
+        switch (hydratedById.remove(event.id)) {
+          final hydratedEvent? => event.merge(hydratedEvent),
+          null => event,
+        },
+    ];
+    merged.addAll(
+      foldedHydrated.where(
+        (event) => hydratedById.remove(event.id) != null,
+      ),
+    );
+    return merged;
+  }
+
+  List<CanonicalEvent> _foldCanonicalEvents(
+    Iterable<CanonicalEvent> events,
+  ) {
+    final folded = <CanonicalEvent>[];
+    final indexById = <String, int>{};
+    for (final event in events) {
+      final index = indexById[event.id];
+      if (index == null) {
+        indexById[event.id] = folded.length;
+        folded.add(event);
+      } else {
+        folded[index] = folded[index].merge(event);
+      }
+    }
+    return folded;
+  }
+
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    String sessionId,
+    String anchorEventId,
+  ) {
+    return loadSessionHistory(sessionId, anchorEventId: anchorEventId);
+  }
+
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(String sessionId) {
+    final cursor = _conversationStore.historyNextCursor;
+    if (_conversationStore.currentSessionId != sessionId || !_conversationStore.historyHasMore || cursor == null) {
+      return Future.value(
+        List<CanonicalEvent>.from(_conversationStore.currentMessages),
+      );
+    }
+    final existing = _olderHistoryLoad;
+    if (existing != null && _olderHistoryCursor == cursor) return existing;
+
+    final generation = _historyHydrationGeneration;
+    final load = _loadOlderSessionHistory(
+      sessionId: sessionId,
+      cursor: cursor,
+      generation: generation,
+    );
+    _olderHistoryCursor = cursor;
+    _olderHistoryLoad = load;
+    return load.whenComplete(() {
+      if (identical(_olderHistoryLoad, load)) {
+        _olderHistoryLoad = null;
+        _olderHistoryCursor = null;
+      }
+    });
+  }
+
+  Future<List<CanonicalEvent>> _loadOlderSessionHistory({
+    required String sessionId,
+    required String cursor,
+    required int generation,
+  }) async {
+    final requestId = generateConversationRequestId();
+    final result = await _gateway.request(
+      command: 'get_session_history',
+      payload: {
+        'request_id': requestId,
+        'session_id': sessionId,
+        'limit': 100,
+        'cursor': cursor,
+      },
+      requestId: requestId,
+    );
+    if (result == null) {
+      throw StateError('Older session history request failed');
+    }
+    if (generation != _historyHydrationGeneration || _conversationStore.currentSessionId != sessionId) {
+      return List<CanonicalEvent>.from(_conversationStore.currentMessages);
+    }
+    final payload = Map<String, dynamic>.from(result['payload'] as Map? ?? {});
+    _throwHistoryError(payload);
+    final events = _mapper.mapHistory(payload['messages'] as List? ?? const []);
+    _conversationStore.prependHistory(
+      events,
+      hasMore: payload['has_more'] == true,
+      nextCursor: payload['next_cursor']?.toString(),
+      requestedCursor: cursor,
+    );
+    return List<CanonicalEvent>.from(_conversationStore.currentMessages);
+  }
+
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) {
+    final cursor = _conversationStore.historyNextNewerCursor;
+    if (_conversationStore.currentSessionId != sessionId || !_conversationStore.historyHasNewer || cursor == null) {
+      return Future.value(
+        List<CanonicalEvent>.from(_conversationStore.currentMessages),
+      );
+    }
+    final existing = _newerHistoryLoad;
+    if (existing != null && _newerHistoryCursor == cursor) return existing;
+
+    final generation = _historyHydrationGeneration;
+    final load = _loadNewerSessionHistory(
+      sessionId: sessionId,
+      cursor: cursor,
+      generation: generation,
+    );
+    _newerHistoryCursor = cursor;
+    _newerHistoryLoad = load;
+    return load.whenComplete(() {
+      if (identical(_newerHistoryLoad, load)) {
+        _newerHistoryLoad = null;
+        _newerHistoryCursor = null;
+      }
+    });
+  }
+
+  Future<List<CanonicalEvent>> _loadNewerSessionHistory({
+    required String sessionId,
+    required String cursor,
+    required int generation,
+  }) async {
+    final requestId = generateConversationRequestId();
+    final result = await _gateway.request(
+      command: 'get_session_history',
+      payload: {
+        'request_id': requestId,
+        'session_id': sessionId,
+        'limit': 100,
+        'cursor': cursor,
+      },
+      requestId: requestId,
+    );
+    if (result == null) {
+      throw StateError('Newer session history request failed');
+    }
+    if (generation != _historyHydrationGeneration || _conversationStore.currentSessionId != sessionId) {
+      return List<CanonicalEvent>.from(_conversationStore.currentMessages);
+    }
+    final payload = Map<String, dynamic>.from(result['payload'] as Map? ?? {});
+    _throwHistoryError(payload);
+    final events = _mapper.mapHistory(
+      payload['messages'] as List? ?? const [],
+    );
+    _conversationStore.appendHistory(
+      events,
+      hasNewer: payload['has_newer'] == true,
+      nextNewerCursor: payload['next_newer_cursor']?.toString(),
+      requestedCursor: cursor,
+    );
+    return List<CanonicalEvent>.from(_conversationStore.currentMessages);
+  }
+
+  void _throwHistoryError(Map<String, dynamic> payload) {
+    final rawError = payload['error'];
+    if (rawError is! Map) return;
+    final error = Map<String, dynamic>.from(rawError);
+    final code = error['code']?.toString() ?? 'history_failed';
+    final message = error['message']?.toString() ?? 'Session history request failed';
+    throw StateError('$code: $message');
+  }
+
   Iterable<String> _reconciliationIdentityKeys(CanonicalEvent event) sync* {
     if (event.id.isNotEmpty) yield 'id:${event.id}';
+    final messageId = event.messageId;
+    if (messageId != null && messageId.isNotEmpty) {
+      yield 'message:$messageId';
+    }
     if (event.modelStepId != null && event.modelStepId!.isNotEmpty) {
       yield 'model_step:${event.kind.name}:${event.modelStepId}';
     }
@@ -741,13 +1101,30 @@ class ConversationCommands {
     List<CanonicalEvent> history,
     Set<String> historyIdentityKeys,
   ) {
+    final transientIdentityKeys = _reconciliationIdentityKeys(transient).toSet();
+    final isRepresented = transientIdentityKeys.any(
+      historyIdentityKeys.contains,
+    );
+
+    // A live tool result can arrive while the history request is in flight.
+    // The returned snapshot may still contain the matching tool as running, so
+    // identity alone is not enough: reapply the terminal live event to merge
+    // its output and advance the stale history row.
+    if (transient.kind == EventKind.toolCall && transient.status != EventStatus.running && isRepresented) {
+      final matchingHistory = history.where((persisted) {
+        if (persisted.kind != EventKind.toolCall) return false;
+        return _reconciliationIdentityKeys(persisted).any(transientIdentityKeys.contains);
+      });
+      if (matchingHistory.any(
+        (persisted) => persisted.status == EventStatus.running || isNewerToolTerminalEvent(persisted, transient),
+      )) {
+        return false;
+      }
+    }
+
     // Running thinking chunks may be newer than the persisted in-flight
     // snapshot and must still merge into it.
-    if (transient.kind != EventKind.thinking &&
-        transient.kind != EventKind.reasoning &&
-        _reconciliationIdentityKeys(
-          transient,
-        ).any(historyIdentityKeys.contains)) {
+    if (transient.kind != EventKind.thinking && transient.kind != EventKind.reasoning && isRepresented) {
       return true;
     }
     if (transient.kind != EventKind.userMessage) return false;
@@ -776,7 +1153,9 @@ class ConversationCommands {
     );
 
     if (result != null) {
-      _logger.info('✅ [ConversationCommands] Session title updated: $sessionId');
+      _logger.info(
+        '✅ [ConversationCommands] Session title updated: $sessionId',
+      );
     } else {
       _logger.severe('❌ [ConversationCommands] Failed to update session title');
     }
@@ -786,10 +1165,7 @@ class ConversationCommands {
     final requestId = generateConversationRequestId();
     final result = await _gateway.request(
       command: 'delete_session',
-      payload: {
-        'request_id': requestId,
-        'session_id': sessionId,
-      },
+      payload: {'request_id': requestId, 'session_id': sessionId},
       requestId: requestId,
     );
 
@@ -797,7 +1173,9 @@ class ConversationCommands {
       _logger.info('✅ [ConversationCommands] Session deleted: $sessionId');
     } else {
       _logger.severe('❌ [ConversationCommands] Failed to delete session');
-      throw StateError('The daemon did not confirm deletion of session $sessionId');
+      throw StateError(
+        'The daemon did not confirm deletion of session $sessionId',
+      );
     }
   }
 

@@ -111,6 +111,38 @@ void main() {
       expect(response.message.content, 'Hello from OpenAI');
     });
 
+    test(
+      'returns fallback models instead of throwing on malformed base URL',
+      () async {
+        final adapter = BaseOpenAIAdapter(
+          config,
+          profile,
+          baseUrlOverride: 'not a url',
+        );
+
+        final models = await adapter.getAvailableModels();
+
+        expect(models, isNotEmpty);
+        expect(adapter.availableModelsSource, equals('fallback'));
+        expect(adapter.lastModelsException, isNotNull);
+      },
+    );
+
+    test('strips copied config prefixes before model discovery', () async {
+      final mockClient = MockClient((request) async {
+        expect(request.url.toString(), 'https://api.cursor.com/v1/models');
+        return http.Response(jsonEncode({'data': []}), 200);
+      });
+      final adapter = BaseOpenAIAdapter(
+        config,
+        profile,
+        client: mockClient,
+        baseUrlOverride: 'url https://api.cursor.com/v1',
+      );
+
+      await adapter.getAvailableModels();
+    });
+
     test('should filter models using ModelsDevService', () async {
       final tempCachePath = getTempCachePath();
       addTearDown(() => _cleanupTempCache(tempCachePath));

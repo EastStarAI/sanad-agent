@@ -113,7 +113,15 @@ listener, and exits within a bounded handoff so the already-launched NSIS
 installer can replace the application. NSIS waits for that graceful exit and
 uses an exact-installed-path fallback only for clients released before the
 listener existed; it never terminates source runs or another installation by
-process name alone.
+process name alone. The installer also fails closed until the installed EXE and
+DLL handles can be opened exclusively. It extracts the complete replacement
+under the installation root before touching the active payload, then moves the
+old EXE, top-level DLLs, and `data/` into a backup and moves the staged payload
+into place on the same volume. Every staged file is SHA-256 checked after the
+move. A failed move or verification restores the backup; successful
+verification removes both temporary directories. This is transactional
+multi-file replacement with rollback, not a claim that the whole payload swaps
+atomically in one filesystem operation.
 
 Linux has no background poll, download, package replacement, privilege request,
 or rollback claim. **Settings → General → Check for Updates** performs a
@@ -128,8 +136,12 @@ Windows real-machine gates may compile private candidates with
 `SANAD_APPCAST_URL`, `SANAD_RELEASE_MANIFEST_URL`,
 `SANAD_RELEASE_ARTIFACT_MIRROR_URL`, `SANAD_HOME`, and
 `SANAD_SERVICE_INSTANCE`. These are build-time overrides only and isolate the
-candidate's feed, Home, and Scheduled Task without requiring a launch shell. The
-manifest must still carry canonical GitHub artifact identity and pass the normal
+candidate's feed, Home, and Scheduled Task without requiring a launch shell.
+NSIS lifecycle tests additionally compile with a dedicated user-level install
+directory, display name, HKCU application/uninstall keys, and no shortcuts;
+production packages retain the default Program Files location, Sanad keys, and
+shortcuts when those test-only defines are absent. The manifest must still carry
+canonical GitHub artifact identity and pass the normal
 version, size, SHA-256, and trust policy; the mirror changes only where the test
 candidate bytes are fetched. The Windows DSA private key remains outside the
 checkout and its path is passed directly to the signing tool; release tooling

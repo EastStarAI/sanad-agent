@@ -17,6 +17,8 @@ class ConversationState {
 
   final List<CanonicalEvent> _events = [];
   ThinkingStreamMode _thinkingStreamMode;
+  final Set<String> _supersededTurnIds = <String>{};
+  final Set<String> _supersededMessageIds = <String>{};
 
   List<CanonicalEvent> get events => List.unmodifiable(_events);
 
@@ -24,6 +26,8 @@ class ConversationState {
 
   void clear() {
     _events.clear();
+    _supersededTurnIds.clear();
+    _supersededMessageIds.clear();
   }
 
   void updateThinkingStreamMode(ThinkingStreamMode value) {
@@ -40,12 +44,14 @@ class ConversationState {
     _events.clear();
     for (final event in history) {
       if (event.kind == EventKind.reasoning) continue;
+      if (_isSuperseded(event)) continue;
       _applyInternal(event);
     }
   }
 
   /// Apply a new event to the state.
   void apply(CanonicalEvent event) {
+    if (_isSuperseded(event)) return;
     _applyInternal(event);
   }
 
@@ -85,13 +91,57 @@ class ConversationState {
     _events.removeWhere((event) => event.id == id);
   }
 
-  bool truncateAtUserRequest(String requestId) {
-    final index = _events.indexWhere(
-      (event) => event.kind == EventKind.userMessage && event.requestId == requestId,
-    );
-    if (index < 0) return false;
-    _events.removeRange(index, _events.length);
-    return true;
+  /// Defensive fallback when `stopped` arrives before a terminal tool_result.
+  void cancelRunningToolsForRun({
+    required String runId,
+    String? sessionId,
+    String message = 'Command cancelled by user.',
+  }) {
+    for (var index = 0; index < _events.length; index++) {
+      final event = _events[index];
+      if (event.kind != EventKind.toolCall || event.status != EventStatus.running) {
+        continue;
+      }
+      if (event.runId != runId) continue;
+      if (sessionId != null && event.sessionId != sessionId) continue;
+      _events[index] = event.copyWith(
+        status: EventStatus.cancelled,
+        tool: {
+          ...?event.tool,
+          'output': message,
+        },
+      );
+    }
+  }
+
+  /// Hide the superseded root turn by stable identity. Late live events with
+  /// the same `turn_id` or `message_id` are dropped instead of resurrecting it.
+  bool hideSupersededIdentities({
+    String? turnId,
+    String? messageId,
+  }) {
+    if (turnId != null && turnId.isNotEmpty) {
+      _supersededTurnIds.add(turnId);
+    }
+    if (messageId != null && messageId.isNotEmpty) {
+      _supersededMessageIds.add(messageId);
+    }
+    final before = _events.length;
+    _events.removeWhere(_isSuperseded);
+    return _events.length != before;
+  }
+
+  bool _isSuperseded(CanonicalEvent event) {
+    if (event.metadata?['history_status']?.toString() == 'superseded') {
+      return true;
+    }
+    final turnId = event.turnId;
+    final messageId = event.messageId;
+    if (turnId != null && _supersededTurnIds.contains(turnId)) return true;
+    if (messageId != null && _supersededMessageIds.contains(messageId)) {
+      return true;
+    }
+    return false;
   }
 
   void _applyInternal(CanonicalEvent event) {
@@ -141,6 +191,9 @@ class ConversationState {
     }
 
     final existing = _events[index];
+    if (event.metadata?['compaction_event'] == true && !_shouldApplyCompactionLifecycle(existing, event)) {
+      return;
+    }
     _events[index] = _merge(existing, event);
   }
 
@@ -223,6 +276,7 @@ class ConversationState {
         );
 
       case EventKind.toolCall:
+        if (!_shouldApplyToolEvent(existing, incoming)) return existing;
         // tool_use seeds `name`/`input`, tool_result adds `output` and flips status.
         final merged = <String, dynamic>{...?existing.tool};
         incoming.tool?.forEach((k, v) {
@@ -230,11 +284,14 @@ class ConversationState {
         });
         return existing.copyWith(
           tool: merged,
-          // Advance toward done/error; don't regress a finalized row back to running.
-          status: _advanceStatus(existing.status, incoming.status),
+          status: _mergedToolStatus(existing, incoming),
           timestamp: incoming.timestamp,
+          sessionId: incoming.sessionId ?? existing.sessionId,
           runId: incoming.runId ?? existing.runId,
+          modelStepId: incoming.modelStepId ?? existing.modelStepId,
           toolCallId: incoming.toolCallId ?? existing.toolCallId,
+          eventId: incoming.eventId ?? existing.eventId,
+          metadata: incoming.metadata != null ? {...?existing.metadata, ...incoming.metadata!} : existing.metadata,
         );
 
       case EventKind.finalAnswer:
@@ -273,8 +330,35 @@ class ConversationState {
         );
 
       default:
+        if (existing.metadata?['compaction_event'] == true) {
+          return incoming.copyWith(
+            metadata: {...?existing.metadata, ...?incoming.metadata},
+          );
+        }
         return incoming;
     }
+  }
+
+  bool _shouldApplyCompactionLifecycle(
+    CanonicalEvent existing,
+    CanonicalEvent incoming,
+  ) {
+    final existingStatus = existing.metadata?['compaction_status']?.toString();
+    final incomingStatus = incoming.metadata?['compaction_status']?.toString();
+    final existingRank = _compactionLifecycleRank(existingStatus);
+    final incomingRank = _compactionLifecycleRank(incomingStatus);
+    if (existingRank == 2 && incomingRank == 2) {
+      return existingStatus == incomingStatus;
+    }
+    return incomingRank >= existingRank;
+  }
+
+  int _compactionLifecycleRank(String? status) {
+    return switch (status) {
+      'completed' || 'failed' => 2,
+      'started' => 1,
+      _ => 0,
+    };
   }
 
   int _findMatchingOptimisticUserMessage(CanonicalEvent incoming) {
@@ -331,13 +415,38 @@ class ConversationState {
   }
 
   EventStatus _advanceStatus(EventStatus current, EventStatus incoming) {
-    // error wins, then done, then running.
-    const rank = {
-      EventStatus.running: 0,
-      EventStatus.done: 1,
-      EventStatus.error: 2,
-    };
-    return rank[incoming]! >= rank[current]! ? incoming : current;
+    return terminalStatusRank(incoming) >= terminalStatusRank(current) ? incoming : current;
+  }
+
+  EventStatus _mergedToolStatus(
+    CanonicalEvent existing,
+    CanonicalEvent incoming,
+  ) {
+    final hasVersionMetadata =
+        existing.generation != null ||
+        incoming.generation != null ||
+        existing.revision != null ||
+        incoming.revision != null;
+    if (hasVersionMetadata && isNewerToolTerminalEvent(existing, incoming)) {
+      return incoming.status;
+    }
+    return _advanceStatus(existing.status, incoming.status);
+  }
+
+  bool _shouldApplyToolEvent(
+    CanonicalEvent existing,
+    CanonicalEvent incoming,
+  ) {
+    if (incoming.status == EventStatus.running) {
+      return existing.status == EventStatus.running;
+    }
+    if (existing.status == EventStatus.running) return true;
+
+    final sameVersion = existing.generation == incoming.generation && existing.revision == incoming.revision;
+    if (sameVersion && existing.revision != null) {
+      return existing.status == incoming.status;
+    }
+    return isNewerToolTerminalEvent(existing, incoming);
   }
 
   void dispose() {}

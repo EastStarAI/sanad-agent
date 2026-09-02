@@ -345,6 +345,70 @@ void main() {
       expect(callCount, equals(2));
     });
 
+    test('refresh survives malformed base URL without prior cache', () async {
+      repo.createInstance(
+        ProviderInstance(
+          id: 'inst-1',
+          templateId: 'custom',
+          displayName: 'Broken Provider',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          baseUrl: 'not a url',
+          configRevision: 1,
+          credentialRevision: 1,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+
+      final refreshed = await cacheService.refresh('inst-1', manual: true);
+
+      expect(refreshed, isNotEmpty);
+      final cachedRow = repo.readModelCache('inst-1', 'models')!;
+      expect(cachedRow['source'], equals('fallback'));
+      expect(cachedRow['last_error'], isNotNull);
+    });
+
+    test(
+      'refresh persists failed state when live fetch throws without cache',
+      () async {
+        repo.createInstance(
+          ProviderInstance(
+            id: 'inst-1',
+            templateId: 'openai',
+            displayName: 'OpenAI',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            configRevision: 1,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        var callCount = 0;
+        runtime.adapterOverride = MockLLMAdapter(() async {
+          callCount++;
+          throw const FormatException('boom');
+        });
+
+        await expectLater(
+          cacheService.refresh('inst-1', manual: true),
+          throwsA(isA<FormatException>()),
+        );
+
+        final cachedRow = repo.readModelCache('inst-1', 'models')!;
+        expect(cachedRow['source'], equals('failed'));
+        expect(cachedRow['last_error'], contains('boom'));
+
+        await expectLater(
+          cacheService.refresh('inst-1', manual: true),
+          throwsA(isA<FormatException>()),
+        );
+        expect(callCount, equals(2));
+      },
+    );
+
     test(
       'refresh failure falls back to last successful entry in DB and logs error',
       () async {

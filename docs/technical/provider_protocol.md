@@ -73,7 +73,9 @@ Replacing or adding an API key on an existing instance increments `credential_re
 | `EnvFileService` | Reads/writes `.env` preserving comments. |
 
 Model fetch contract details:
-- OpenAI-compatible discovery must prefer the configured base URL as-is and fetch `.../models`, but custom/local gateways may expose the catalog under `.../v1/models`; the runtime must retry that path before falling back to presets.
+- Provider Base URLs are trimmed, trailing slashes are removed, and copied field labels (`url `, `base_url `, `base-url `, or `endpoint `) are stripped case-insensitively before persistence or use. Only absolute `http` and `https` URLs are accepted for new metadata. This read-time normalization also repairs legacy rows such as `url https://api.cursor.com/v1` without requiring a database rewrite.
+- OpenAI-compatible discovery must prefer the configured base URL as-is and fetch `.../models`, but custom/local gateways may expose the catalog under `.../v1/models`; the runtime must retry that path before falling back to presets. A base URL already ending in `/v1` or `/models` produces one canonical candidate and must never become `/v1/v1/models` or `/models/models`.
+- Model-cache refresh coalescing owns cleanup inside the same awaited Future; it must not create a detached error-propagating `whenComplete` Future. A failed refresh keeps a non-empty prior successful list as `cache_stale`. Without usable prior models it persists `source=failed` plus `last_error` and rethrows so `model.refresh` emits terminal `failed`, never `updated` with an empty failed row. The detached gateway workflow contains both refresh and terminal-event delivery failures so neither can terminate the daemon event loop.
 - Anthropic-compatible discovery must resolve `.../v1/models` from a root base URL (or `.../models` when the configured base already ends with `/v1`). Native Anthropic Messages requests authenticate with `x-api-key` plus the required `anthropic-version` header. Some Anthropic-compatible local/proxy gateways expose the same catalog only through `Authorization: Bearer ...`; in that case model discovery must retry with bearer auth before falling back. The main Sanad Anthropic adapter should keep native request execution on `x-api-key` by default and use bearer auth only as a compatibility fallback unless the runtime later adds an explicit auth-mode contract.
 - When live discovery fails, the fallback list must preserve the instance's selected/default model and merge it with the template's curated fallback models so the picker never collapses to an unrelated single model.
 - `provider.instance.create` must never crash the daemon on validation failures such as duplicate display names. The response must come back on `provider.instance.created` with an `error` payload so the client can render an inline validation message.
@@ -221,9 +223,8 @@ current default instance. Provider mutations clear that runtime-owned cache
 through the explicitly injected service; protocol handlers do not inspect or
 reset the dependency container.
 
-The shared `ContextEngine` is provider-neutral. `AgentRunner._streamNextResponse`
-and `_generateResponse` resolve the current turn route and pass its adapter to
-`contextEngine.compressIfNeeded(history, adapter: …)` before every model call.
+Shared context services remain provider-neutral. `AgentRunner._streamNextResponse`
+and `_generateResponse` resolve the current turn route for each model call.
 Title generation likewise resolves its fallback route from `AgentRuntimeService`
 at call time. Together these boundaries allow the first post-onboarding turn and
 background title work to use the newly configured provider without a daemon
@@ -355,6 +356,32 @@ limits, network errors, billing, provider overload) to every open client on a
 session instead of failing silently or scattering raw error text into the
 conversation. The agent is the single source of truth: the UI sends commands
 and waits for a fresh event before changing its visual state.
+
+### Provider request interruption (Plan 50b)
+
+Each provider turn receives the active `RunCancellationScope` through
+`LLMRequestOptions`. Production adapters (`BaseOpenAIAdapter`,
+`BaseAnthropicAdapter`, `CodexResponsesAdapter`, `OllamaAdapter`) issue HTTP
+through `ProviderRequestTransport`:
+
+- When a cancellation scope is attached, the transport owns a request-scoped
+  HTTP client and registers cleanup on that scope. Closing the client aborts
+  connect/send and ends SSE reads without closing an adapter-shared client used
+  by another run.
+- `ProviderRequestCancelledException` is typed separately from network/HTTP
+  failures. `AgentRunner` maps it to `RuntimeRecoveryCancelled` and must not
+  start retry/failover.
+- Watchdog defaults live in `ProviderWatchdogConfig` (connect, first-byte, and
+  stream-idle bounds, plus an optional total bound). First-byte and idle
+  expiry fail the stream with `TimeoutException` and cancel its upstream
+  subscription; they never masquerade as a successful end-of-stream. The
+  optional total deadline spans connect and streaming rather than restarting
+  for each phase. A timeout is not treated as proof of cleanup by itself.
+- Rate-limit waits observe `RunCancellationScope.whenCancelled` in addition to
+  the recovery cancel token, so Stop aborts a wait without inventing a network
+  notice.
+
+See also `docs/technical/run_cancellation_and_process_ownership.md`.
 
 ### Per-instance rate limit
 

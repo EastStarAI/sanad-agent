@@ -6,6 +6,17 @@ import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_authentication_exchange_notifier.dart';
 
 Future<void> main(List<String> args) async {
+  if (args.length == 1 &&
+      const {'help', '-h', '--help'}.contains(args.single)) {
+    _printUsage();
+    return;
+  }
+  if (!_validArguments(args)) {
+    stderr.writeln('Unknown or incomplete login arguments.');
+    _printUsage();
+    exitCode = 64;
+    return;
+  }
   try {
     getIt<Config>();
   } catch (_) {
@@ -16,14 +27,33 @@ Future<void> main(List<String> args) async {
   final authManager = getIt<AuthManager>();
   await authManager.initialize();
 
+  if (args.contains('--cancel-pairing')) {
+    final cancelled = await authManager.cancelPreparedDevicePairing();
+    print(
+      cancelled
+          ? 'Pending device pairing was cancelled and prior authorization restored.'
+          : 'No pending device pairing exists.',
+    );
+    return;
+  }
+
   // Check for --status argument
   if (args.contains('--status')) {
     await runStatus();
     return;
   }
 
-  // Check for --token / -t argument
+  // Pairing authority may be supplied through stdin so installers never place
+  // it in the Agent process argument list.
   String? tokenArg;
+  if (args.length == 1 && args.single == '--token-stdin') {
+    tokenArg = stdin.readLineSync()?.trim();
+    if (tokenArg == null || tokenArg.isEmpty) {
+      stderr.writeln('Pairing token stdin was empty.');
+      exitCode = 64;
+      return;
+    }
+  }
   for (var i = 0; i < args.length; i++) {
     if ((args[i] == '--token' || args[i] == '-t') && i + 1 < args.length) {
       tokenArg = args[i + 1];
@@ -132,6 +162,27 @@ Future<void> _notifyRunningDaemon(Config config) async {
       'reload it. Run: sanad service restart',
     );
   }
+}
+
+bool _validArguments(List<String> args) {
+  if (args.isEmpty) return true;
+  if (args.length == 1) {
+    return const {
+      '--portal',
+      '--status',
+      '--cancel-pairing',
+      '--token-stdin',
+    }.contains(args.single);
+  }
+  return args.length == 2 &&
+      const {'--token', '-t'}.contains(args.first) &&
+      args[1].isNotEmpty;
+}
+
+void _printUsage() {
+  print(
+    'Usage: sanad login [--portal | --status | --token TOKEN | --token-stdin | --cancel-pairing]',
+  );
 }
 
 Future<void> runStatus() async {

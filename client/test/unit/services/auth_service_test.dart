@@ -255,7 +255,10 @@ void main() {
         await authService.synchronizeDesktopAuthFile();
         expect(authService.accessToken, 'external-access');
 
-        mockStore.authDocument = {'hardware_id': 'device-1'};
+        mockStore.authDocument = {
+          'hardware_id': 'device-1',
+          'agent_logout_pending': true,
+        };
         await authService.synchronizeDesktopAuthFile();
         expect(authService.accessToken, isNull);
         expect(exchangeCount, 0);
@@ -277,8 +280,8 @@ void main() {
         await authService.init(fallbackDeviceId: 'device-1');
 
         expect(authService.accessToken, 'atomic-access');
-        expect(mockStore.authDocument['access_token'], 'atomic-access');
-        expect(mockStore.authDocument['refresh_token'], 'atomic-refresh');
+        expect(mockStore.authDocument['access_token'], isNull);
+        expect(mockStore.authDocument['refresh_token'], isNull);
       },
     );
 
@@ -294,7 +297,7 @@ void main() {
         expect(authService.accessToken, equals('prefs_token'));
         expect(authService.hardwareId, equals('canonical_device'));
 
-        expect(mockStore.authDocument['access_token'], equals('prefs_token'));
+        expect(mockStore.authDocument['access_token'], isNull);
         expect(
           mockStore.authDocument['hardware_id'],
           equals('canonical_device'),
@@ -464,9 +467,8 @@ void main() {
         expect(result.outcome, AuthRefreshOutcome.success);
         expect(result.accessToken, 'rotated-access');
         expect(prefs.getString('backend_access_token'), 'rotated-access');
-        expect(prefs.getString('backend_refresh_token'), 'rotated-refresh');
-        expect(mockStore.authDocument['access_token'], 'rotated-access');
-        expect(mockStore.authDocument['refresh_token'], 'rotated-refresh');
+        expect(mockStore.authDocument['access_token'], isNull);
+        expect(mockStore.authDocument['refresh_token'], isNull);
       },
     );
 
@@ -524,7 +526,7 @@ void main() {
 
         expect(result.outcome, AuthRefreshOutcome.transientUnavailable);
         expect(authService.accessToken, 'old-access');
-        expect(mockStore.authDocument['refresh_token'], 'old-refresh');
+        expect(prefs.getString('backend_refresh_token'), 'old-refresh');
       },
     );
 

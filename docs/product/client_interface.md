@@ -60,8 +60,28 @@ of its section without losing the current selection or scroll position.
 On wide desktop and tablet layouts, navigation appears as a persistent,
 resizable sidebar. The resize target follows the sidebar's visible edge,
 including the macOS shell margin, and the selected desktop width is restored
-from local client preferences on the next launch. On mobile and narrow layouts,
-it becomes a drawer that closes after a destination is selected.
+from local client preferences on the next launch. The native-desktop header also
+provides a phone-size toggle beside the sidebar pin control. A fresh normal
+window prefers `1400 × 900`; the toggle changes it to a `450 × 900` logical
+viewport. Compact and expanded modes persist independent screen positions, so
+each mode returns to the last place where the user moved it; the first toggle
+without a compact position inherits the expanded window's current origin. The
+minimum supported macOS, Windows, and Linux window size
+is `450 × 600`, allowing users on short desktop displays to reduce the height
+without narrowing below the responsive design floor. Manually enlarging the window exits compact mode and updates
+the toggle. In narrow native-desktop layout, the same restore action remains
+beside navigation in both active-session and New Conversation headers; true
+mobile and web builds never expose desktop window controls. On macOS these
+application actions begin after the native traffic-light controls rather than
+overlapping their title-bar region. Narrow native-desktop actions retain the
+same neutral gray treatment as the wide sidebar controls. In the native desktop
+compact-window mode, hovering the navigation menu button opens the navigation
+drawer; it remains open while the pointer is over either the button or drawer
+and closes shortly after the pointer leaves both. Click/touch drawer behavior
+outside that mode is unchanged. On Windows and Linux,
+the custom maximize caption observes native maximize and full-screen changes,
+switches to the restore glyph while either state is active, and restores rather
+than requesting maximize again.
 
 Opening a conversation with active work shows its latest event so current
 progress is immediately visible. An idle conversation resumes from the event
@@ -79,10 +99,13 @@ Long active conversations may open at their latest event. New agent events enter
 with a short visual fade-and-slide transition. If the user is already actively
 following the tail, the page follows that new event with a brief smooth scroll;
 otherwise the event animation does not move the reading position. Opening active
-work at the tail or manually returning to the bottom grants follow eligibility. While following, a growing thinking, reasoning, or
-final-answer bubble moves the page only by the amount needed to keep its bottom
-above the composer. Scrolling away revokes eligibility immediately, after which
-streaming growth and later activity preserve the reading position.
+work at the tail, sending a new user message, or manually returning to the bottom
+grants follow eligibility. Sending still performs only the existing minimum,
+animation-free reveal; it does not jump the page to the tail immediately. While
+following, a growing thinking, reasoning, final-answer, or grouped-tool row moves
+the page only by the amount needed to keep its bottom above the composer.
+Scrolling away revokes eligibility immediately, after which streaming growth and
+later activity preserve the reading position.
 
 ## New conversations
 
@@ -97,7 +120,14 @@ thinking mode. A first-time user with no thinking preference starts at
 runtime has an authoritative provider/model route, the model selector is never
 left empty merely because only the provider half was restored.
 
-Dragging and dropping files of any type onto the composer area captures their full local paths and appends them directly to the message input field. During a drag-over action, the composer card displays a highlighted primary border and a matching subtle background tint for clear visual feedback.
+Composer suggestions have distinct interaction types. A no-argument runtime
+action is available only from a leading slash and executes as soon as the user
+chooses it with Enter or the pointer. A skill can be inserted at any slash
+position and remains in the draft until the next submit. These behaviors come
+from the suggestion type rather than a hard-coded command name; inline `@`
+file references can therefore be added later as a separate insertion type.
+
+Dragging and dropping files of any type onto the composer area captures their full local paths and inserts them at the current caret, replacing an active text selection and leaving the caret after the inserted paths. During a drag-over action, the composer card displays a highlighted primary border and a matching subtle background tint for clear visual feedback. A newly presented New Conversation focuses the message field automatically, and clicking any blank non-control area of the composer transfers focus to that field so typing can begin without targeting the text line precisely.
 
 A workspace created elsewhere in the client appears on the selector's first
 opening; users never need to close and reopen the menu to refresh it.
@@ -132,6 +162,36 @@ Arabic ask-user headers mirror
 the complete header row while English headers remain left-to-right. Event
 runtime metadata uses milliseconds below one second, seconds below one minute,
 minutes plus seconds below one hour, and hours plus minutes thereafter.
+
+Tool activity is compacted as soon as at least two tool calls are contiguous.
+Every call, including the latest running call in a parallel batch, enters the
+group; one tool remains standalone. The icon-free collapsed title lists
+skill loads first, then other non-file operations and file searches/reads, then the deduplicated
+modified-file count, with green added-line and red removed-line totals last. It
+uses no `Tool uses:` prefix and repeats the same transparent operation summary
+inside the expanded body. The title reuses the existing tool typography,
+spacing, border, and adjacent chevron without introducing new visual language.
+Expanding the group does not expand its child tools: every child starts
+collapsed and preserves its own expansion state, as does the group and
+standalone tools when virtualized by scrolling. The collapsed body is not
+built, and cached totals do not replay their animation when a row re-enters the
+viewport. Every changed number animates over 750ms; added/removed values retain
+the compact file-edit-title spacing, and the chevron matches the gray title.
+Expanded content remains capped at 500 logical pixels with independent follow
+behavior. One non-expandable conversation-activity row may appear only at the
+current tail while authoritative attention is running/resuming. Its real
+reasoning/tool candidate must remain latest for one full second before replacing
+the text directly, without an Activity entrance or text-transition animation;
+burst intermediates never render, while the last confirmed
+text remains visible during same-round debounce until the stable replacement is
+ready. The generic provider/tool gap reads `Working…`, while an explicit reasoning preview retains `Thinking:`. A standalone tool gets no duplicate. The row's trailing edge shows the authoritative elapsed wall time as `Working for 25s`, `Working for 1m, 25s`, or `Working for 1h, 35m`; seconds update below one hour and minutes update thereafter. The elapsed baseline belongs to session execution state, so leaving and reopening an active conversation resumes at the current value rather than restarting from zero.
+Ask-user and non-tool events are hard placement boundaries, so later activity
+never reappears under an old group. User attention, waiting, blocked/fatal,
+stopping, interruption/idle, errors, ordinary answer text, and terminal state
+remove the activity immediately, and no blank placeholder is reserved. When debounced Activity content becomes visible, the outer conversation follow reveals it only if follow remains active or eligible; manual conversation scrolling is the opt-out, and nested tool/group scrolling remains independent.
+Clarifying questions divide groups: the running ask-user call remains hidden
+while the composer presents the question, and completed question/answer content
+appears without a redundant generic tool header.
 
 While the agent is working:
 
@@ -181,6 +241,10 @@ Settings distinguish:
 
 Workspace configuration can override a user-level capability with the same
 name. Inherited entries remain identifiable so the user can see their origin.
+Workspace Overview offers record-only removal behind a confirmation that
+explicitly preserves the host folder, its files, and existing conversations.
+Remote folder browsing is not exposed there; its constrained runtime remains
+reserved for a future conversation-side file tree.
 
 ## Connection states
 
@@ -194,16 +258,47 @@ Mobile and web act as remote controllers for paired agents.
 After a remote device record is created, the installation view keeps both
 platform paths visible at once: macOS/Linux first and Windows PowerShell below
 it. Each compact editor card has a platform label, one generated command,
-horizontal overflow for long tokens, and an independent copy action. Running
-that command installs the agent, prepares the creation-only pairing token, and
-starts the service. The view continues automatically when the authoritative
-inventory reports the new device Online.
+horizontal overflow for long tokens, and an independent copy action. The POSIX
+card follows the conventional `curl -fsSL ... | bash -s -- --pairing-token`
+shape; the Windows card invokes the downloaded PowerShell script block with
+`-PairingToken`. Running either command installs the agent, prepares the
+creation-only pairing token, and starts the service. The view continues
+automatically when the authoritative
+inventory reports the new device Online. If Online status arrives before the
+new row is present in the current inventory snapshot, the Client immediately
+reconciles authoritative inventory; the resulting device row then triggers
+capability loading so model and thinking controls do not require an Agent
+restart. A correlated null capability response received before the device is
+Online is not cached as a valid capability set; the Online transition retries
+the request.
 
 ## Accessibility and responsive behavior
+
+Context compaction appears as one centered timeline separator per logical
+operation. Manual and automatic/overflow labels remain distinct, running state
+uses progress, and terminal success or failure replaces that same tile. The
+centered label alone owns a localized interaction target of at least 44 logical
+pixels and opens the same redacted multiline metrics through desktop hover,
+touch/click, or keyboard focus. Hovering or clicking the divider space does
+nothing; narrow layouts may wrap the label but must not overflow.
+The flat detail card omits lifecycle `Type`, `Trigger`, and `Status` rows. It
+shows before, after, reclaimed context, retained tail, automatic threshold,
+usable input, and full window. Before/after percentages use the daemon-owned
+usable input budget; reclaimed percentage uses the before value. Once provider
+reconciliation arrives, after uses the confirmed value, marks it `Confirmed`,
+suppresses the superseded estimate, and recomputes reclaimed context from it.
+Persistence may retain the provisional estimate for bounded diagnostics.
+The separator dividers consume the full conversation width around the intrinsic
+centered label in both LTR and RTL layouts.
 
 Primary actions provide semantic labels and tooltips. Narrow layouts retain
 touch-friendly targets, and the composer grows for multiline input without
 hiding send, stop, permission, provider, model, or thinking controls.
+
+On desktop, double-clicking a conversation title in the sidebar opens the same
+capability-gated `Rename Session` dialog as choosing `Rename` from its options
+menu. The gesture belongs to the title only; the options control and relative
+timestamp keep their existing interactions.
 
 Realtime voice exists as a separate experimental path and is not part of the
 stable interface described here. See

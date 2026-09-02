@@ -22,6 +22,7 @@ import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_servi
 import 'package:sanad_client/features/mcp/data/mcp_runtime_client.dart';
 import 'package:sanad_client/features/settings/data/device_settings_client.dart';
 import 'package:sanad_client/features/settings/data/account_lifecycle_repository.dart';
+import 'package:sanad_client/features/settings/data/device_control_client.dart';
 import 'package:sanad_client/features/settings/data/device_skills_client.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client_impl.dart';
@@ -332,6 +333,9 @@ Future<void> configureDependencies({
   if (!getIt.isRegistered<DeviceSettingsClient>()) {
     getIt.registerLazySingleton<DeviceSettingsClient>(
       () => DeviceSettingsClient(getIt<DeviceCommandClient>()),
+    );
+    getIt.registerLazySingleton<DeviceControlClient>(
+      () => DeviceControlClient(getIt<DeviceCommandClient>()),
     );
     getIt.registerLazySingleton<DeviceSkillsClient>(
       () => DeviceSkillsClient(getIt<DeviceCommandClient>()),

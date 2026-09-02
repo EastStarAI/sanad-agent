@@ -6,6 +6,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 ## Active Run Ownership
 - Every turn is owned by immutable session id, work-item id, stable run id, and monotonically increasing generation.
 - Only the current non-invalidated owner may broadcast callbacks, clear busy state, drain queues, persist execution state, or deliver a terminal result.
+- Each `ActiveRun` owns one `RunCancellationScope`; Stop invalidates that scope synchronously before awaiting bounded cleanup.
 - Stop invalidates ownership synchronously before awaiting cancellation; input received during that wait belongs to the next generation.
 - Visible recovery is session-addressable, but cancellation, retry, stopped reason, and late-notice authority remain run-scoped.
 
@@ -21,6 +22,14 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - `SessionTurnExecutor` owns active stream subscriptions, turn callbacks, tool event emission, exception routing, and post-terminal title scheduling.
 - `SessionRecoveryRestorer` owns startup reconstruction and classification of queued, waiting, blocked, running, and resuming durable work.
 - Shared request-id and route helpers remain stateless and must not import the orchestrator.
+- `DeviceCommandAdmission` owns device-control admission: correlation against
+  the daemon's registered cloud id or local hardware id, cross-transport
+  duplicate `request_id`, confirmation tickets, explicit boolean force
+  selection, and unbounded-timeout rejection. It also exposes `admitCorrelation` and
+  `consumeConfirmation` for managed-remote workspace mutations and cloud-admitted
+  MCP save/delete/inspect/complete. It does not inspect capability flags.
+  `DeviceControlCommandHandler` executes update check/apply and supervised
+  restart after admission.
 - Runtime collaborators do not open database connections or duplicate table ownership.
 
 ## Terminal Commit
@@ -28,6 +37,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Stale, recovery-owned, or persistence-failed terminal outcomes do not deliver content.
 - Rejected generated finals produce correlation-safe diagnostics without logging content.
 - Terminal commit persists assistant state before transport publication.
+- Live user echoes and final-answer publications use the committed history row's message/turn identity and eligibility fields; transport must not publish a pre-persistence copy that requires reconnect before Edit, Retry, or Fork becomes available.
 
 ## Stop, Retry, and Route Recovery
 - Atomic stop clears notice, cancel token, suspended state, durable work, and queue ownership, then emits one authoritative clear/stop transition.
@@ -42,7 +52,8 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 
 ## Restart Recovery
 - Persist continuation checkpoint kind, completed tool results, executing tools, replay-safety metadata, and owner identity.
-- Controlled restart drains every active session for a bounded caller-selected timeout; ordinary timeout never exits, and force exit requires an explicit flag.
+- Controlled restart drains every active session in caller-selected observation windows. An ordinary restart keeps waiting across provider-only timeout windows until the in-flight provider request completes and persists a safe checkpoint; it never cancels that request. Only explicit force restart may interrupt the exact still-current work-item/run/generation owner and proceed with an unknown provider outcome. Other ordinary unsafe timeouts never exit.
+- Once an active run reaches its first safe checkpoint under restart drain, it is parked there. The safety scan may accept restart only while every next provider admission is closed; an active run must not consume another provider request or invalidate the accepted checkpoint before exit.
 - While restart drain owns admission, queue new work durably and do not promote queued, restored, retry, or auto-resume work until cancellation or the next process restores it.
 - A tool-origin restart may exempt only its exact requester identity before the single response and must await that tool's durable post-response checkpoint before normal exit.
 - A requester-bound deferred result is a valid post-response checkpoint only
@@ -52,9 +63,13 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - A safe preparation may complete as a permanent supervised stop when an external launcher is taking ownership; this must preserve the checkpoint boundary while preventing the old supervisor from respawning.
 - Resume interrupted tools automatically only when every executing operation explicitly declares restart replay safety and ownership metadata is complete.
 - Unsafe, ownerless, or ambiguous interrupted work becomes blocked rather than guessed complete.
+- A crashed foreground shell with owned persisted progress is terminalized once as `interrupted`, including bounded partial output and verified containment cleanup. Resume restores the original assistant tool call and its matching terminal result into canonical history before invoking the model; recovery itself does not replay the command. Missing or conflicting ownership remains blocked.
 - Explicit manual Retry or Change Provider may close ambiguous unsafe tools with a neutral unknown-outcome result and continue, but must never replay their side effects.
 - An unresolved suspended checkpoint covering every executing tool call is an interactive `waiting` owner, not an ambiguous interrupted-tool failure.
+- The same fully covered unresolved interactive checkpoint is a safe ordinary-restart boundary. Restart preserves the unanswered ask/permission and must not require force, synthesize a tool result, or classify the tool as interrupted.
+- Repeated startup while an interactive checkpoint is unanswered preserves the same request in `waiting`; it emits neither an interruption result nor a blocked notice.
 - Restart-restored permission or clarifying input must claim durable `resuming` ownership and commit `completed` before terminal delivery.
+- After that terminal commit, the suspended-resume path must reconcile the orchestrator's in-memory suspension/busy projection and drain queued work; durable `idle` cannot coexist with stale admission ownership.
 - Startup may hydrate a runtime notice only when active non-terminal work owns it; terminal historical sessions cannot receive fallback recovery notices.
 - Restored waiting work recreates a real auto-resume callback and claims suspended ownership before publishing resuming/cleared state.
 - A failed resume preserves controllable ownership and cannot silently strand work.
@@ -68,6 +83,20 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Restart never injects a pending steer into a new generation; unresolved pending/delivering rows become durable draft-recovery outcomes unless history proves delivery.
 - Recovered text and owner tokens never enter logs or broadcast payloads.
 
+## Latest-Root-Turn Replay
+- Replay targets the latest active `root_turn` by `message_id`, `turn_id`, `request_id`, and `expected_history_revision`.
+- Soft rewind and replacement-user acceptance commit atomically; the CAS
+  transaction revalidates the target as the latest active root. History is
+  never truncated, and rewind without a durable replacement is not admitted.
+- Steer is not a replay boundary, including pending, delivered, and
+  embedded steers. Dispatch waits for an authoritative `idle` snapshot
+  after scoped stop. Missing snapshot state is not dispatch authority.
+
+## Materialized Session Fork
+- `session.fork` copies the active prefix through a durable terminal final answer in one transaction.
+- Steer-superseded thoughts, incomplete/failed/cancelled rows, and tool-call asks are not forkable targets.
+- The client sends source session and target identities only. The child starts idle with new message/turn identities.
+
 ## Workspace Filesystem Mutation
 - Resolve stable workspace UUIDs to their current daemon-owned path before filesystem, MCP, skill, or permission access; a missing path remains visible but fails execution until repaired.
 - Display-name rename never mutates the filesystem, and Change Path never rewrites session/work-item workspace ids.
@@ -75,6 +104,8 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Create accepts an existing parent plus one validated child name; never accept a client-assembled create target path.
 - Rename and delete reject filesystem roots, symbolic links, non-directories, missing paths, traversal names, and occupied rename destinations.
 - Recursive delete requires an explicit client confirmation, but daemon validation remains authoritative regardless of client behavior.
+- Workspace-record removal is metadata-only: it deletes the registered
+  workspace row and never deletes the directory, files, sessions, or messages.
 
 ## Verification Boundary
 - Runtime changes require focused tests for FIFO, stale ownership, stop, retry, route rewrite, terminal commit, and restart reconstruction.

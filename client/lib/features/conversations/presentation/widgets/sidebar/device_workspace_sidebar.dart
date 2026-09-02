@@ -73,7 +73,7 @@ class DeviceWorkspaceSidebar extends StatelessWidget {
               SidebarBreakpoints.minWidth,
               isDrawerMode ? mediaQuery.size.width : SidebarBreakpoints.maxWidth,
             );
-    final isMacOS = AppPlatform.isMacOS && !isDrawerMode;
+    final isMacOS = AppPlatform.isMacOS;
     final theme = Theme.of(context);
 
     Widget buildDeviceHeader() {
@@ -117,7 +117,11 @@ class DeviceWorkspaceSidebar extends StatelessWidget {
                 if (!isDrawerMode)
                   SizedBox(height: isMacOS ? SidebarBreakpoints.macOSTrafficLightsHeight : 32)
                 else if (isMacOS)
-                  const SizedBox(height: SidebarBreakpoints.macOSTrafficLightsHeight),
+                  const SizedBox(
+                    key: Key('macos_drawer_traffic_lights_spacer'),
+                    height: SidebarBreakpoints.macOSTrafficLightsHeight + SidebarBreakpoints.macOSDrawerTopGap,
+                  ),
+
                 buildDeviceHeader(),
                 Expanded(
                   child: BlocSelector<DeviceCubit, DeviceState, ({DeviceConfig? active, List<DeviceConfig> devices})>(
@@ -234,13 +238,18 @@ class _SidebarBody extends StatelessWidget {
     }
 
     Future<void> createWorkspace() async {
-      final path = await WorkspacePickerHelper.pickWorkspacePath(
+      final selected = await WorkspacePickerHelper.promptCreateWorkspace(
         context: context,
         device: device,
-        debugOverride: DeviceWorkspaceSidebar.debugPickDirectoryPath,
+        debugLocalPath: DeviceWorkspaceSidebar.debugPickDirectoryPath,
       );
-      if (path == null || path.trim().isEmpty) return;
-      final workspace = await cacheRepository.createWorkspace(device, path: path);
+      if (selected == null) return;
+      final workspace = await cacheRepository.createWorkspace(
+        device,
+        path: selected.path,
+        name: selected.name,
+        description: selected.description,
+      );
       if (workspace != null && context.mounted) {
         unawaited(sidebarCubit.loadWorkspaceConversationsIfNeeded(device, workspace.id));
       } else if (context.mounted) {

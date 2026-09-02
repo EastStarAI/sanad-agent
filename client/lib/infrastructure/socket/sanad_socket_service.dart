@@ -504,7 +504,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     final dedup = eventDeduplicator;
     if (dedup == null) return true;
     final eventId = event['event_id'] as String?;
-    if (!dedup.shouldProcess(eventId, transport: transport)) {
+    if (!dedup.shouldProcess(eventId, transport: transport, payload: event)) {
       _logger.fine(
         'Dropping duplicate device_event on $transport transport.',
       );
@@ -964,6 +964,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         normalized == 'credential' ||
         normalized == 'credentials' ||
         normalized == 'secret' ||
+        normalized == 'secrets' ||
         normalized == 'api_key' ||
         normalized == 'client_instance_id' ||
         normalized == 'event_id' ||

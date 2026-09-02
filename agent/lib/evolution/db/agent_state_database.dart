@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -10,6 +11,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/constants.dart';
 import '../../core/sanad_home/sanad_home_bootstrap.dart';
+import 'session_lineage.dart';
 
 /// Single owner of the agent's local SQLite connection (`state.db`).
 ///
@@ -51,7 +53,26 @@ class AgentStateDatabase {
   /// Opens (or creates) `state.db` under [getSanadStateHome] and initializes the
   /// full schema. This is the single production connection.
   AgentStateDatabase() {
+    _rejectUnisolatedTestOpen();
     _openAtPath(getSanadStateHome());
+  }
+
+  static void _rejectUnisolatedTestOpen() {
+    if (!_isDartTestRuntime() || hasExplicitSanadStateIsolation()) return;
+    throw StateError(
+      'Refusing to open the inherited Sanad state database from a Dart test. '
+      'Inject AgentStateDatabase.inMemory(), use AgentStateDatabase.atPath(), '
+      'or select a temporary state root with setSanadHomeOverride(), '
+      'setSanadStateHomeOverride(), or SANAD_STATE_HOME.',
+    );
+  }
+
+  static bool _isDartTestRuntime() {
+    if (Zone.current[#test.invoker] != null) return true;
+    // Suite-level initializers run before the test invoker Zone exists. The VM
+    // runner executes those initializers from its generated dart_test kernel.
+    final script = Platform.script.toString();
+    return script.contains('dart_test.kernel.') && script.endsWith('.dill');
   }
 
   /// Opens (or creates) `state.db` under an explicit runtime-state directory.
@@ -181,6 +202,33 @@ class AgentStateDatabase {
       'ALTER TABLE sessions ADD COLUMN route_revision INTEGER NOT NULL DEFAULT 1 CHECK (route_revision > 0)',
     );
     _safeAddColumn(db, 'ALTER TABLE sessions ADD COLUMN route_updated_at TEXT');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN history_revision INTEGER NOT NULL DEFAULT 0',
+    );
+    _safeAddColumn(db, 'ALTER TABLE sessions ADD COLUMN lineage_id TEXT');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN parent_session_id TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN forked_from_message_id TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN forked_from_turn_id TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN fork_sequence INTEGER NOT NULL DEFAULT 0',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN lineage_base_title TEXT',
+    );
+    _safeAddColumn(db, 'ALTER TABLE sessions ADD COLUMN fork_request_id TEXT');
+    SessionLineage.backfill(db);
     db.execute('''
       UPDATE sessions
       SET route_updated_at = updated_at
@@ -193,8 +241,64 @@ class AgentStateDatabase {
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         session_id TEXT NOT NULL,
         data TEXT NOT NULL,
+        message_id TEXT,
+        turn_id TEXT,
+        history_status TEXT NOT NULL DEFAULT 'active'
+          CHECK (history_status IN ('active', 'superseded')),
+        superseded_by_turn_id TEXT,
+        input_kind TEXT
+          CHECK (input_kind IS NULL OR input_kind IN ('root_turn', 'steer')),
+        request_id TEXT,
+        run_id TEXT,
         FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE
       );
+    ''');
+    _safeAddColumn(db, 'ALTER TABLE messages ADD COLUMN message_id TEXT');
+    _safeAddColumn(db, 'ALTER TABLE messages ADD COLUMN turn_id TEXT');
+    _safeAddColumn(
+      db,
+      "ALTER TABLE messages ADD COLUMN history_status TEXT NOT NULL DEFAULT 'active'",
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE messages ADD COLUMN superseded_by_turn_id TEXT',
+    );
+    _safeAddColumn(db, 'ALTER TABLE messages ADD COLUMN input_kind TEXT');
+    _safeAddColumn(db, 'ALTER TABLE messages ADD COLUMN request_id TEXT');
+    _safeAddColumn(db, 'ALTER TABLE messages ADD COLUMN run_id TEXT');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE messages ADD COLUMN origin_message_id TEXT',
+    );
+    _migrateLastUserMessageAt(db);
+    db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_message_id
+      ON messages(message_id);
+    ''');
+    db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_lineage_sequence
+      ON sessions(lineage_id, fork_sequence);
+    ''');
+    db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_fork_request_id
+      ON sessions(fork_request_id)
+      WHERE fork_request_id IS NOT NULL;
+    ''');
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_sessions_parent
+      ON sessions(parent_session_id);
+    ''');
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_messages_origin
+      ON messages(origin_message_id);
+    ''');
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_messages_session_active_id
+      ON messages(session_id, history_status, id);
+    ''');
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_messages_session_turn
+      ON messages(session_id, turn_id, id);
     ''');
     db.execute('''
       CREATE INDEX IF NOT EXISTS idx_messages_session_id
@@ -483,8 +587,21 @@ class AgentStateDatabase {
         request_id TEXT,
         revision INTEGER NOT NULL CHECK (revision > 0),
         updated_at TEXT NOT NULL,
+        turn_started_at TEXT,
         FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE
       );
+    ''');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_execution_snapshots ADD COLUMN turn_started_at TEXT',
+    );
+    db.execute('''
+      UPDATE session_execution_snapshots
+      SET turn_started_at = (
+        SELECT created_at FROM session_work_items
+        WHERE session_work_items.work_item_id = session_execution_snapshots.work_item_id
+      )
+      WHERE turn_started_at IS NULL AND work_item_id IS NOT NULL;
     ''');
 
     // ── Task 31: durable route transition audit ─────────────────────────
@@ -522,6 +639,96 @@ class AgentStateDatabase {
     ''');
     _migrateWorkspaceIdentity(db);
     _migrateLastUserMessageAt(db);
+    _migratePlan53Compaction(db);
+  }
+
+  static void _migratePlan53Compaction(Database db) {
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN history_revision INTEGER NOT NULL DEFAULT 0 CHECK (history_revision >= 0)',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE sessions ADD COLUMN projection_revision INTEGER NOT NULL DEFAULT 0 CHECK (projection_revision >= 0)',
+    );
+
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS session_compaction_operations (
+        compaction_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        trigger TEXT NOT NULL CHECK (trigger IN ('manual', 'auto', 'overflow')),
+        status TEXT NOT NULL CHECK (status IN ('started', 'completed', 'failed')),
+        source_history_revision INTEGER NOT NULL CHECK (source_history_revision >= 0),
+        source_start_message_id INTEGER NOT NULL,
+        source_end_message_id INTEGER NOT NULL,
+        tail_start_message_id INTEGER NOT NULL,
+        tail_end_message_id INTEGER NOT NULL,
+        tail_end_anchor_fingerprint TEXT,
+        tail_end_anchor_ordinal INTEGER CHECK (tail_end_anchor_ordinal > 0),
+        provider_instance_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        template_id TEXT NOT NULL,
+        protocol TEXT NOT NULL,
+        normalized_base_url TEXT NOT NULL,
+        config_revision INTEGER NOT NULL,
+        credential_revision INTEGER NOT NULL,
+        context_window_tokens INTEGER,
+        effective_input_budget_tokens INTEGER,
+        auto_threshold_tokens INTEGER,
+        estimated_request_tokens_before INTEGER,
+        estimated_request_tokens_after INTEGER,
+        before_measurement_kind TEXT NOT NULL DEFAULT 'estimated'
+          CHECK (before_measurement_kind IN ('estimated', 'confirmed', 'mixed')),
+        provider_confirmed_request_tokens_after INTEGER
+          CHECK (provider_confirmed_request_tokens_after >= 0),
+        retained_tail_tokens INTEGER,
+        duration_ms INTEGER,
+        internal_summary_json TEXT,
+        failure_reason TEXT,
+        failure_detail_json TEXT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT,
+        FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE,
+        CHECK (source_end_message_id < tail_start_message_id)
+      );
+    ''');
+
+    _safeAddColumn(
+      db,
+      "ALTER TABLE session_compaction_operations ADD COLUMN before_measurement_kind TEXT NOT NULL DEFAULT 'estimated' CHECK (before_measurement_kind IN ('estimated', 'confirmed', 'mixed'))",
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN effective_input_budget_tokens INTEGER CHECK (effective_input_budget_tokens > 0)',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN auto_threshold_tokens INTEGER CHECK (auto_threshold_tokens > 0)',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN provider_confirmed_request_tokens_after INTEGER CHECK (provider_confirmed_request_tokens_after >= 0)',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN tail_end_anchor_fingerprint TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN tail_end_anchor_ordinal INTEGER CHECK (tail_end_anchor_ordinal > 0)',
+    );
+
+    db.execute('''
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_session_compaction_one_started
+      ON session_compaction_operations(session_id)
+      WHERE status = 'started';
+    ''');
+
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_session_compaction_completed
+      ON session_compaction_operations(session_id, completed_at DESC)
+      WHERE status = 'completed';
+    ''');
   }
 
   static void _migrateWorkspaceIdentity(Database db) {

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Intended v1.0.1 or v1.0.1-rc.N identity
+        description: Intended vX.Y.Z or vX.Y.Z-rc.N identity
         type: string
         required: true
       validation_only:
@@ -109,7 +109,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
+          - runner: macos-26
             platform: macos
             architecture: arm64
             extension: ''
@@ -400,7 +400,7 @@ jobs:
 
   client-macos:
     needs: validate
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     environment: apple-signing
     steps:
@@ -522,7 +522,7 @@ jobs:
 
   client-ios:
     needs: validate
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     environment: apple-testflight
     steps:

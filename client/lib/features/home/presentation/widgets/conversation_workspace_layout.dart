@@ -9,6 +9,7 @@ import 'package:sanad_client/core/navigation/navigation_history_controller.dart'
 import 'package:sanad_client/features/conversations/presentation/widgets/session_sidebar.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_composition.dart';
 import 'package:sanad_client/features/home/data/sidebar_preferences.dart';
+import 'package:sanad_client/infrastructure/platform/window_manager_service.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -188,6 +189,29 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
                   constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
                   padding: EdgeInsets.zero,
                 ),
+                if (AppPlatform.isDesktop) ...[
+                  const SizedBox(width: 4),
+                  ValueListenableBuilder<bool>(
+                    valueListenable: WindowManagerService.compactModeListenable,
+                    builder: (context, isCompact, _) => IconButton(
+                      key: const Key('desktop_compact_window_btn'),
+                      tooltip: isCompact ? 'Restore window size' : 'Use phone-size window',
+                      onPressed: WindowManagerService.toggleCompactMode,
+                      icon: Icon(
+                        isCompact ? Symbols.open_in_full : Symbols.phone_iphone,
+                        size: 16,
+                        color: isCompact
+                            ? theme.colorScheme.primary
+                            : theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                      ),
+                      constraints: const BoxConstraints(
+                        minWidth: 24,
+                        minHeight: 24,
+                      ),
+                      padding: EdgeInsets.zero,
+                    ),
+                  ),
+                ],
                 const SizedBox(width: 4),
                 IconButton(
                   key: const Key('sidebar_back_btn'),
@@ -276,7 +300,7 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
         Positioned(
           left: 0,
           top: 0,
-          width: isMacOS ? 240 : 160,
+          width: isMacOS ? 300 : 240,
           child: MouseRegion(
             onEnter: (_) => setHovered(true),
             child: buildButtonRow(),

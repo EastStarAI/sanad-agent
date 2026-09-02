@@ -13,6 +13,7 @@ import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
 import 'llm_http_exception.dart';
 import 'llm_request_options.dart';
+import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 import '../llm_request_dumper.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
@@ -42,14 +43,18 @@ class BaseAnthropicAdapter implements LLMAdapter {
   }
 
   String get _baseUrl {
-    if (baseUrlOverride != null) return baseUrlOverride!;
-    final resolved = config.baseUrlFor(profile);
-    if (resolved.isNotEmpty &&
-        resolved != 'https://api.openai.com/v1' &&
-        resolved != 'https://api.anthropic.com/v1') {
-      return resolved;
-    }
-    return profile.defaultBaseUrl ?? 'https://api.anthropic.com';
+    final resolved = baseUrlOverride != null
+        ? baseUrlOverride!
+        : () {
+            final configured = config.baseUrlFor(profile);
+            if (configured.isNotEmpty &&
+                configured != 'https://api.openai.com/v1' &&
+                configured != 'https://api.anthropic.com/v1') {
+              return configured;
+            }
+            return profile.defaultBaseUrl ?? 'https://api.anthropic.com';
+          }();
+    return ProviderEndpointResolver.normalizeBaseUrl(resolved);
   }
 
   String get _apiKey => apiKeyOverride ?? config.apiKeyFor(profile);
@@ -88,10 +93,16 @@ class BaseAnthropicAdapter implements LLMAdapter {
 
   Future<List<ModelOption>> _fetchLiveModels() async {
     _lastModelsException = null;
-    final modelsEndpoint = ProviderEndpointResolver.resolveModelsEndpoint(
-      _baseUrl,
-      profile.effectiveProtocol,
-    );
+    final Uri modelsEndpoint;
+    try {
+      modelsEndpoint = ProviderEndpointResolver.resolveModelsEndpoint(
+        _baseUrl,
+        profile.effectiveProtocol,
+      );
+    } catch (error) {
+      _lastModelsException = error;
+      return const [];
+    }
     for (final headers in _modelFetchHeaderCandidates()) {
       try {
         final response = await (client ?? http.Client()).get(
@@ -191,8 +202,9 @@ class BaseAnthropicAdapter implements LLMAdapter {
 
   @override
   Future<int> getContextLimit([String? modelOverride]) async {
-    if (config.contextLimit != 4000) return config.contextLimit;
     final resolvedModel = _resolveModel(modelOverride);
+    final configuredLimit = config.contextModelLimit(resolvedModel);
+    if (configuredLimit != null) return configuredLimit;
     return ModelMetadata.getLimitForModel(resolvedModel) ?? 200000;
   }
 
@@ -241,20 +253,20 @@ class BaseAnthropicAdapter implements LLMAdapter {
       );
     }
 
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     late http.Response response;
     try {
-      response = await _withTimeout(
-        httpClient.post(
-          url,
-          headers: _anthropicHeaders(),
-          body: jsonEncode(body),
-        ),
-        options.timeout,
+      response = await transport.post(
+        url,
+        headers: _anthropicHeaders(),
+        body: jsonEncode(body),
+        operation: 'generateResponse',
       );
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
 
     _logger.info('LLM Response status: ${response.statusCode}');
@@ -354,17 +366,19 @@ class BaseAnthropicAdapter implements LLMAdapter {
       );
     }
 
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     final request = http.Request('POST', url);
     request.headers.addAll(_anthropicHeaders());
     request.body = jsonEncode(body);
 
     late http.StreamedResponse response;
     try {
-      response = await _withTimeout(httpClient.send(request), options.timeout);
+      response = await transport.send(request, operation: 'generateStream');
     } catch (_) {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
       rethrow;
     }
 
@@ -395,10 +409,11 @@ class BaseAnthropicAdapter implements LLMAdapter {
       LLMFinishReason? streamFinishReason;
 
       try {
-        await for (final line
-            in response.stream
-                .transform(utf8.decoder)
-                .transform(const LineSplitter())) {
+        await for (final line in transport.decodeSseLines(
+          response.stream,
+          operation: 'generateStream',
+        )) {
+          transport.throwIfCancelled(operation: 'generateStream');
           accumulatedStreamLines.add(line);
           final trimmed = line.trim();
           if (trimmed.isEmpty) continue;
@@ -609,7 +624,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
         );
       }
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
   }
 
@@ -824,9 +839,6 @@ class BaseAnthropicAdapter implements LLMAdapter {
             : LLMFinishReason.unknown;
     }
   }
-
-  Future<T> _withTimeout<T>(Future<T> future, Duration? timeout) =>
-      timeout == null ? future : future.timeout(timeout);
 }
 
 Map<String, dynamic> _normalizeAnthropicUsage(Map<String, dynamic> usage) => {

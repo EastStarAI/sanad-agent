@@ -329,7 +329,12 @@ class _UnifiedComposerContainer extends StatelessWidget {
       ),
     );
 
-    return composerCard;
+    return GestureDetector(
+      key: const Key('composer_focus_surface'),
+      behavior: HitTestBehavior.opaque,
+      onTap: chatFocusNode.requestFocus,
+      child: composerCard,
+    );
   }
 
   Widget _buildBottomRow(BuildContext context) {
@@ -631,6 +636,7 @@ class _ModelChipState extends State<_ModelChip> {
 
     Widget buildChip(BuildContext context, double? progress, Color? progressColor) {
       return InkWell(
+        key: const Key('model_selector_btn'),
         onTap: () => _openModelPicker(context),
         borderRadius: BorderRadius.circular(8),
         child: _buildModelChip(context, currentModel, contextUsage, progress, progressColor),

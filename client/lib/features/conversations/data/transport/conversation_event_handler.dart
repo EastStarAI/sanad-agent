@@ -25,6 +25,11 @@ class ConversationEventHandler {
     'thinking',
     'tool_call',
   };
+  static const Set<String> _sessionTimelineEvents = {
+    'context_compaction.started',
+    'context_compaction.completed',
+    'context_compaction.failed',
+  };
 
   final String _deviceId;
   final ConversationCommandGateway _gateway;
@@ -98,19 +103,33 @@ class ConversationEventHandler {
       final targetRequestId = payload['target_request_id']?.toString();
       final outcome = payload['outcome']?.toString() ?? '';
       if (targetRequestId != null) {
-        _conversationStore.applyPendingSteerCancelOutcome(targetRequestId, outcome);
+        _conversationStore.applyPendingSteerCancelOutcome(
+          targetRequestId,
+          outcome,
+        );
       }
       return;
     }
 
     if (eventType == 'session.queued_message_changed' || eventType == 'session.queued_message_delete_result') {
       final targetRequestId = payload['target_request_id']?.toString();
-      final outcome = payload['state']?.toString();
+      final outcome = eventType == 'session.queued_message_delete_result'
+          ? payload['outcome']?.toString()
+          : payload['state']?.toString();
       if (targetRequestId != null &&
-          {'deleted', 'cancelled', 'already_removed', 'already_processed', 'promoted'}.contains(outcome)) {
+          {
+            'deleted',
+            'cancelled',
+            'already_removed',
+            'already_processed',
+            'promoted',
+          }.contains(outcome)) {
         _conversationStore.removeQueuedMessage(targetRequestId);
       } else if (targetRequestId != null) {
-        _conversationStore.applyQueueMutationOutcome(targetRequestId, outcome ?? 'unknown');
+        _conversationStore.applyQueueMutationOutcome(
+          targetRequestId,
+          outcome ?? 'unknown',
+        );
       }
       return;
     }
@@ -124,8 +143,16 @@ class ConversationEventHandler {
         _conversationStore.applyTurnReplayAccepted(
           sessionId: eventSessionId,
           targetRequestId: targetRequestId,
+          targetTurnId: payload['target_turn_id']?.toString(),
+          targetMessageId: payload['target_message_id']?.toString(),
         );
       }
+      return;
+    }
+
+    if (eventType == 'session.compact_result') {
+      // Command acknowledgement only; lifecycle tiles come from
+      // context_compaction.started/completed/failed events.
       return;
     }
 
@@ -193,12 +220,15 @@ class ConversationEventHandler {
 
     final createdSessionId = payload['session_id'] as String? ?? payload['id'] as String?;
     if (eventType == 'session_created' && createdSessionId != null) {
-      if (!_conversationStore.adoptCreatedSession(createdSessionId: createdSessionId, requestId: requestId)) {
+      if (!_conversationStore.adoptCreatedSession(
+        createdSessionId: createdSessionId,
+        requestId: requestId,
+      )) {
         return;
       }
     }
 
-    if (_streamingEvents.contains(eventType)) {
+    if (_streamingEvents.contains(eventType) || _sessionTimelineEvents.contains(eventType)) {
       if (!_conversationStore.shouldAcceptStreamingEvent(eventSessionId)) {
         return;
       }
@@ -215,6 +245,12 @@ class ConversationEventHandler {
         runId: runId,
         sessionId: eventSessionId,
       );
+      if (runId != null && runId.isNotEmpty) {
+        _conversationStore.cancelRunningToolsForRun(
+          runId: runId,
+          sessionId: eventSessionId,
+        );
+      }
       if (eventSessionId != null) {
         _conversationStore.clearPendingSuspendedRequestForSession(
           eventSessionId,
@@ -224,6 +260,7 @@ class ConversationEventHandler {
       _conversationStore.clearRuntimeNotice(
         sessionId: eventSessionId,
         requestId: requestId,
+        executionRevision: (payload['execution_revision'] as num?)?.toInt(),
       );
       return;
     }
@@ -241,6 +278,7 @@ class ConversationEventHandler {
         _conversationStore.clearRuntimeNotice(
           sessionId: eventSessionId,
           requestId: requestId,
+          executionRevision: (payload['execution_revision'] as num?)?.toInt(),
         );
       }
       return;
@@ -251,6 +289,7 @@ class ConversationEventHandler {
       _conversationStore.clearRuntimeNotice(
         sessionId: eventSessionId,
         requestId: requestId,
+        executionRevision: (payload['execution_revision'] as num?)?.toInt(),
       );
       return;
     }

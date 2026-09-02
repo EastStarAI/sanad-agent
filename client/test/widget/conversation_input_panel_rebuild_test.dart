@@ -28,6 +28,7 @@ import 'package:sanad_client/features/provider_setup/data/models/provider_instan
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:sanad_client/utils/workspace_picker_helper.dart';
 import 'package:desktop_drop/desktop_drop.dart';
 import 'package:flutter/material.dart';
@@ -57,6 +58,7 @@ void main() {
     await getIt.reset();
     ConversationInputPanel.debugPickDirectoryPath = null;
     WorkspacePickerHelper.debugOnRemoteDisabled = null;
+    WorkspacePickerHelper.debugRemoteWorkspaceName = null;
     socket = FakeSanadSocketService();
     socket.autoCapabilitiesPayload = const {
       'supports_workspaces': true,
@@ -99,6 +101,7 @@ void main() {
     ConversationInputPanel.debugPickDirectoryPath = null;
     ConversationInputPanel.debugOnValidationError = null;
     WorkspacePickerHelper.debugOnRemoteDisabled = null;
+    WorkspacePickerHelper.debugRemoteWorkspaceName = null;
     await sessionMessagesCubit.close();
     await sessionCubit.close();
     await agentCubit.close();
@@ -108,6 +111,25 @@ void main() {
     cacheStore.dispose();
     socket.dispose();
     await getIt.reset();
+  });
+
+  testWidgets('new conversation composer requests focus on first presentation', (
+    tester,
+  ) async {
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: ConversationInputPanel(
+        onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+      ),
+    );
+    await tester.pump();
+
+    final editable = tester.widget<EditableText>(find.byType(EditableText));
+    expect(editable.focusNode.hasFocus, isTrue);
   });
 
   testWidgets('typing in the draft does not rebuild bottom actions', (tester) async {
@@ -345,7 +367,8 @@ void main() {
       validationError,
       ConversationInputCubit.missingProviderModelError,
     );
-    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(ToastUtils.defaultDuration);
+    await tester.pump(const Duration(milliseconds: 500));
   });
 
   testWidgets('switching devices loads the target device draft', (tester) async {
@@ -836,19 +859,18 @@ void main() {
 
     expect(conversationRepository.browseWorkspaceTreeRequests, isEmpty);
     expect(conversationRepository.createdWorkspaces.single, containsPair('path', '/picked/local-workspace'));
+    await tester.pump(ToastUtils.defaultDuration);
+    await tester.pump(const Duration(milliseconds: 500));
   });
 
-  testWidgets('blocks remote workspace creation with a security notice', (tester) async {
+  testWidgets('creates a remote workspace by name without a host path', (tester) async {
     socket.setConnected(true);
     var pickerCalled = false;
-    String? disabledMessage;
     ConversationInputPanel.debugPickDirectoryPath = () async {
       pickerCalled = true;
       return '/remote/workspace';
     };
-    WorkspacePickerHelper.debugOnRemoteDisabled = (message) {
-      disabledMessage = message;
-    };
+    WorkspacePickerHelper.debugRemoteWorkspaceName = () async => 'remote-notes';
 
     await pumpTestApp(
       tester,
@@ -866,10 +888,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Choose Workspace'), findsNothing);
-    expect(disabledMessage, WorkspacePickerHelper.remoteDisabledMessage);
     expect(pickerCalled, isFalse);
     expect(conversationRepository.browseWorkspaceTreeRequests, isEmpty);
-    expect(conversationRepository.createdWorkspaces, isEmpty);
+    expect(conversationRepository.createdWorkspaces.single, containsPair('name', 'remote-notes'));
+    expect(conversationRepository.createdWorkspaces.single['path'], isNull);
   });
 
   testWidgets('appends dropped file paths to input field when files are dragged and dropped', (tester) async {

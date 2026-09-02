@@ -12,15 +12,24 @@
 !ifndef OUTPUT_FILE
   !define OUTPUT_FILE "..\..\build\sanad-client-setup.exe"
 !endif
+!ifndef APP_DISPLAY_NAME
+  !define APP_DISPLAY_NAME "Sanad"
+!endif
+!ifndef APP_REGISTRY_KEY
+  !define APP_REGISTRY_KEY "Software\Sanad"
+!endif
+!ifndef APP_UNINSTALL_REGISTRY_KEY
+  !define APP_UNINSTALL_REGISTRY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Sanad"
+!endif
 
-Name "Sanad"
+Name "${APP_DISPLAY_NAME}"
 OutFile "${OUTPUT_FILE}"
 !ifdef GATE_E_INSTALL_DIR
   InstallDir "${GATE_E_INSTALL_DIR}"
 !else
   InstallDir "$PROGRAMFILES64\Sanad"
 !endif
-InstallDirRegKey HKCU "Software\Sanad" "Install_Dir"
+InstallDirRegKey HKCU "${APP_REGISTRY_KEY}" "Install_Dir"
 
 !ifdef GATE_E_USER_INSTALL
   RequestExecutionLevel user
@@ -40,42 +49,55 @@ InstallDirRegKey HKCU "Software\Sanad" "Install_Dir"
 ; Installer sections
 Section "Install"
   SetShellVarContext current
-  SetOutPath "$INSTDIR"
+  InitPluginsDir
+
+  ; Extract and validate a complete payload before touching the installed
+  ; executable. The staging directory lives under $INSTDIR so the replacement
+  ; helper can use same-volume moves instead of partial in-place writes.
+  RMDir /r "$INSTDIR\.sanad-install-staging"
+  IfFileExists "$INSTDIR\.sanad-install-staging" 0 staging_ready
+    DetailPrint "A previous Sanad Client staging directory could not be removed."
+    Abort
+  staging_ready:
+  ClearErrors
+  SetOutPath "$INSTDIR\.sanad-install-staging"
+  File "..\..\build\windows\x64\runner\Release\sanad-client.exe"
+  File "..\..\build\windows\x64\runner\Release\*.dll"
+  SetOutPath "$INSTDIR\.sanad-install-staging\data"
+  File /r "..\..\build\windows\x64\runner\Release\data\*"
+  ${If} ${Errors}
+    RMDir /r "$INSTDIR\.sanad-install-staging"
+    DetailPrint "The Sanad Client payload could not be staged completely."
+    Abort
+  ${EndIf}
 
   ; WinSparkle launches the installer before requesting graceful shutdown.
   ; New clients flush and exit through before-quit-for-update. The helper waits
   ; for that handoff and only force-stops the exact installed path as a bounded
   ; compatibility fallback for clients released before the listener existed.
-  InitPluginsDir
-  File /oname=$PLUGINSDIR\stop_installed_client.ps1 "stop_installed_client.ps1"
-  nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\stop_installed_client.ps1" -TargetPath "$INSTDIR\sanad-client.exe"'
+  SetOutPath "$PLUGINSDIR"
+  File /oname=stop_installed_client.ps1 "stop_installed_client.ps1"
+  File /oname=install_staged_client.ps1 "install_staged_client.ps1"
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\stop_installed_client.ps1" -TargetPath "$INSTDIR\sanad-client.exe"'
   Pop $0
   Pop $1
   ${If} $0 != 0
+    RMDir /r "$INSTDIR\.sanad-install-staging"
     DetailPrint "The installed Sanad Client did not close safely: $1"
     Abort
   ${EndIf}
 
-  ; Remove the previous application payload so upgrades cannot retain stale
-  ; DLLs or data.
-  Delete "$INSTDIR\sanad-client.exe"
-  Delete "$INSTDIR\*.dll"
-  RMDir /r "$INSTDIR\data"
-  
-  ; Copy main executable
-  ClearErrors
-  File "..\..\build\windows\x64\runner\Release\sanad-client.exe"
-  IfFileExists "$INSTDIR\sanad-client.exe" +3 0
-    DetailPrint "The Sanad Client executable could not be installed."
+  ; Swap the staged executable, DLLs, and data into place using same-volume
+  ; moves. The helper verifies hashes and restores the previous payload if any
+  ; replacement step fails.
+  nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\install_staged_client.ps1" -TargetDirectory "$INSTDIR" -StagedDirectory "$INSTDIR\.sanad-install-staging"'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    DetailPrint "The Sanad Client payload could not be replaced safely: $1"
     Abort
-  
-  ; Copy DLL files
-  File "..\..\build\windows\x64\runner\Release\*.dll"
-  
-  ; Copy data folder
-  SetOutPath "$INSTDIR\data"
-  File /r "..\..\build\windows\x64\runner\Release\data\*"
-  
+  ${EndIf}
+
   ; Install Visual C++ Redistributable
   SetOutPath "$TEMP"
   File "..\..\build\windows\x64\runner\Release\vc_redist.x64.exe"
@@ -84,41 +106,43 @@ Section "Install"
   Delete "$TEMP\vc_redist.x64.exe"
   SetOutPath "$INSTDIR"
   
-  ; Create start menu shortcuts
-  SetOutPath "$INSTDIR"
-  CreateDirectory "$SMPROGRAMS\Sanad"
-  CreateShortcut "$SMPROGRAMS\Sanad\Sanad.lnk" "$INSTDIR\sanad-client.exe"
-  CreateShortcut "$SMPROGRAMS\Sanad\Uninstall.lnk" "$INSTDIR\uninstall.exe"
-  
-  ; Create desktop shortcut
-  CreateShortcut "$DESKTOP\Sanad.lnk" "$INSTDIR\sanad-client.exe"
-  
+  !ifndef GATE_E_NO_SHORTCUTS
+    ; Create start menu and desktop shortcuts for production packages.
+    SetOutPath "$INSTDIR"
+    CreateDirectory "$SMPROGRAMS\Sanad"
+    CreateShortcut "$SMPROGRAMS\Sanad\Sanad.lnk" "$INSTDIR\sanad-client.exe"
+    CreateShortcut "$SMPROGRAMS\Sanad\Uninstall.lnk" "$INSTDIR\uninstall.exe"
+    CreateShortcut "$DESKTOP\Sanad.lnk" "$INSTDIR\sanad-client.exe"
+  !endif
+
   ; Create uninstaller
   WriteUninstaller "$INSTDIR\uninstall.exe"
   
   ; Store installation folder and Windows Installed Apps metadata.
-  WriteRegStr HKCU "Software\Sanad" "Install_Dir" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Sanad" "DisplayName" "Sanad"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Sanad" "DisplayVersion" "${APP_VERSION}"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Sanad" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Sanad" "UninstallString" '"$INSTDIR\uninstall.exe"'
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Sanad" "NoModify" 1
-  WriteRegDWORD HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Sanad" "NoRepair" 1
+  WriteRegStr HKCU "${APP_REGISTRY_KEY}" "Install_Dir" "$INSTDIR"
+  WriteRegStr HKCU "${APP_UNINSTALL_REGISTRY_KEY}" "DisplayName" "${APP_DISPLAY_NAME}"
+  WriteRegStr HKCU "${APP_UNINSTALL_REGISTRY_KEY}" "DisplayVersion" "${APP_VERSION}"
+  WriteRegStr HKCU "${APP_UNINSTALL_REGISTRY_KEY}" "InstallLocation" "$INSTDIR"
+  WriteRegStr HKCU "${APP_UNINSTALL_REGISTRY_KEY}" "UninstallString" '"$INSTDIR\uninstall.exe"'
+  WriteRegDWORD HKCU "${APP_UNINSTALL_REGISTRY_KEY}" "NoModify" 1
+  WriteRegDWORD HKCU "${APP_UNINSTALL_REGISTRY_KEY}" "NoRepair" 1
 SectionEnd
 
 ; Uninstaller section
 Section "Uninstall"
   SetShellVarContext current
-  ; Remove shortcuts
-  RMDir /r "$SMPROGRAMS\Sanad"
-  Delete "$DESKTOP\Sanad.lnk"
+  !ifndef GATE_E_NO_SHORTCUTS
+    ; Remove production shortcuts.
+    RMDir /r "$SMPROGRAMS\Sanad"
+    Delete "$DESKTOP\Sanad.lnk"
+  !endif
   
   ; Remove application files
   RMDir /r "$INSTDIR"
   
   ; Remove registry entries
-  DeleteRegKey HKCU "Software\Sanad"
-  DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Sanad"
+  DeleteRegKey HKCU "${APP_REGISTRY_KEY}"
+  DeleteRegKey HKCU "${APP_UNINSTALL_REGISTRY_KEY}"
 SectionEnd
 
 ; Function to ensure admin rights

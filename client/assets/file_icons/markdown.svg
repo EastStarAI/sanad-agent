@@ -1,12 +1,2 @@
-<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
-
-<!-- Uploaded to: SVG Repo, www.svgrepo.com, Transformed by: SVG Repo Mixer Tools -->
-<svg width="128px" height="128px" viewBox="0 0 24.00 24.00" xmlns="http://www.w3.org/2000/svg" fill="#60a5fa" stroke="#60a5fa" stroke-width="0.00024000000000000003" transform="matrix(1, 0, 0, 1, 0, 0)">
-
-<g id="SVGRepo_bgCarrier" stroke-width="0"/>
-
-<g id="SVGRepo_tracerCarrier" stroke-linecap="round" stroke-linejoin="round"/>
-
-<g id="SVGRepo_iconCarrier"> <title>markdown</title> <rect width="24" height="24" fill="none"/> <path d="M2,16V8H4l3,3,3-3h2v8H10V10.83l-3,3-3-3V16H2M16,8h3v4h2.5l-4,4.5-4-4.5H16Z"/> </g>
-
-</svg>
+<?xml version="1.0" encoding="utf-8"?><!-- Uploaded to: SVG Repo, www.svgrepo.com, Generator: SVG Repo Mixer Tools -->
+<svg viewBox="0 0 15 15" xmlns="http://www.w3.org/2000/svg"><g transform="translate(-0.5, -0.75)"><path fill="#60a5fa" d="M6.345 5h2.1v6.533H6.993l.055-5.31-1.774 5.31H4.072l-1.805-5.31c.04.644.06 5.31.06 5.31H1V5h2.156s1.528 4.493 1.577 4.807L6.345 5zm6.71 3.617v-3.5H11.11v3.5H9.166l2.917 2.916L15 8.617h-1.945z"/></g></svg>

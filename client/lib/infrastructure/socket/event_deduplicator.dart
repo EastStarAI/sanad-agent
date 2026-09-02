@@ -1,4 +1,7 @@
 import 'dart:collection';
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 
 /// Bounded LRU deduplication of canonical events by `event_id`.
 ///
@@ -23,7 +26,7 @@ class EventDeduplicator {
   final int maxEntries;
   final Duration maxAge;
 
-  // "<event_id>" → epoch microseconds when inserted.
+  // "<event_id>::<payload fingerprint>" → insertion time.
   // LinkedHashMap preserves insertion order, so `keys.first` is the
   // least-recently-used entry after re-insertion-on-access.
   final LinkedHashMap<String, int> _seen = LinkedHashMap();
@@ -34,9 +37,14 @@ class EventDeduplicator {
   /// that must be dropped. Events without an `event_id` are always processed
   /// to preserve backward compatibility with producers that have not yet
   /// adopted the canonical envelope.
-  bool shouldProcess(String? eventId, {required String transport}) {
+  bool shouldProcess(
+    String? eventId, {
+    required String transport,
+    Object? payload,
+  }) {
     if (eventId == null || eventId.isEmpty) return true;
-    final dedupeKey = eventId;
+    final fingerprint = payload == null ? '' : _payloadFingerprint(payload);
+    final dedupeKey = '$eventId::$fingerprint';
     _sweepIfNeeded();
     if (_seen.containsKey(dedupeKey)) {
       // LRU bump: move to most-recent.
@@ -68,4 +76,22 @@ class EventDeduplicator {
   }
 
   int get size => _seen.length;
+
+  String _payloadFingerprint(Object? value) {
+    final canonical = _canonicalize(value);
+    return sha256.convert(utf8.encode(jsonEncode(canonical))).toString();
+  }
+
+  Object? _canonicalize(Object? value) {
+    if (value is Map) {
+      final keys = value.keys.map((key) => key.toString()).toList()..sort();
+      return <String, Object?>{
+        for (final key in keys) key: _canonicalize(value[key]),
+      };
+    }
+    if (value is Iterable) {
+      return value.map(_canonicalize).toList(growable: false);
+    }
+    return value;
+  }
 }

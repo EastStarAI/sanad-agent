@@ -133,6 +133,41 @@ void main() {
     );
   });
 
+  test('newer execution revision rejects a stale blocked notice', () {
+    store.activateSession('session-a');
+    store.applyExecutionPayload(_executionPayload('session-a', 'blocked', 4));
+    store.setRuntimeNotice(
+      const RuntimeNotice(
+        sessionId: 'session-a',
+        requestId: 'request-session-a',
+        status: 'blocked',
+        reason: 'unknown',
+        title: 'Old block',
+        executionRevision: 4,
+      ),
+    );
+    expect(store.currentRuntimeNotice, isNotNull);
+
+    store.applyExecutionPayload(_executionPayload('session-a', 'idle', 5));
+    expect(store.currentRuntimeNotice, isNull);
+
+    store.setRuntimeNotice(
+      const RuntimeNotice(
+        sessionId: 'session-a',
+        requestId: 'request-session-a',
+        status: 'blocked',
+        reason: 'unknown',
+        title: 'Delayed stale block',
+        executionRevision: 4,
+      ),
+    );
+    expect(store.currentRuntimeNotice, isNull);
+    expect(
+      store.attentionStateFor('session-a').visualState,
+      SessionAttentionVisualState.normal,
+    );
+  });
+
   test('hydrates list/history shapes through the same execution reducer', () {
     store.hydrateSessionState({
       'session_id': 'session-a',

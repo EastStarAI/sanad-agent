@@ -121,7 +121,7 @@ curl -fsSL https://sanad.eaststarai.com/install.sh | bash
 على Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://sanad.eaststarai.com/install.ps1)))
+irm https://sanad.eaststarai.com/install.ps1 | iex
 ```
 
 اختر تسجيل الدخول لربط الجهاز من خلال Portal، أو تخطَّه لتشغيل الوكيل محليًا

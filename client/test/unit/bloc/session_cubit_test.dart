@@ -31,7 +31,9 @@ import 'package:sanad_client/features/conversations/domain/models/session_execut
 import 'package:sanad_client/features/conversations/domain/models/session_route_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -396,6 +398,40 @@ void main() {
     await cubit.close();
   });
 
+  test('adoptForkedSession adds the child and selects it', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    await cubit.selectSession(session);
+
+    final child = Session(
+      id: 'child-1',
+      title: '(1) Test Session',
+      deviceId: agent.id,
+      createdAt: DateTime(2026, 8, 30),
+      updatedAt: DateTime(2026, 8, 30),
+    );
+    await cubit.adoptForkedSession(child);
+
+    expect(cubit.state.selectedSession?.id, 'child-1');
+    expect(
+      cubit.state.agentSessions[agent.id]?.map((item) => item.id),
+      containsAll([session.id, 'child-1']),
+    );
+    expect(
+      cubit.state.agentSessions[agent.id]?.first.id,
+      'child-1',
+      reason: 'the adopted fork must appear at the top of the sidebar',
+    );
+
+    await cubit.close();
+  });
+
   test('authoritative attention stream toggles sidebar pending state', () async {
     socket.setConnected(true);
     agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
@@ -458,6 +494,106 @@ void main() {
 
     expect(messagesCubit.state.activeSessionId, session.id);
     expect(client.loadedHistorySessionIds, [session.id]);
+
+    await messagesCubit.close();
+    await sessionCubit.close();
+  });
+
+  test('SessionMessagesCubit coalesces older loads and preserves history on failure', () async {
+    socket.setConnected(true);
+    client.historyHasMoreValue = true;
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final sessionCubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+    );
+    final messagesCubit = SessionMessagesCubit(
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      conversationRepository: conversationRepository,
+      preferencesRepository: FakeDevicePreferencesRepository(),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await sessionCubit.selectSession(session);
+    await Future<void>.delayed(Duration.zero);
+    expect(messagesCubit.state.hasOlderHistory, isTrue);
+
+    final completer = Completer<List<CanonicalEvent>>();
+    client.olderHistoryCompleter = completer;
+    final first = messagesCubit.loadOlderHistory();
+    final second = messagesCubit.loadOlderHistory();
+    expect(client.loadedOlderHistorySessionIds, [session.id]);
+    completer.complete(const []);
+    await Future.wait([first, second]);
+
+    final retainedMessages = messagesCubit.state.messages;
+    client.olderHistoryCompleter = null;
+    client.olderHistoryError = StateError('network');
+    await messagesCubit.loadOlderHistory();
+
+    expect(messagesCubit.state.messages, retainedMessages);
+    expect(messagesCubit.state.olderHistoryError, isNotNull);
+    expect(messagesCubit.state.hasOlderHistory, isTrue);
+
+    await messagesCubit.close();
+    await sessionCubit.close();
+  });
+
+  test('replay result projects the authoritative history revision', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final sessionCubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+    );
+    final messagesCubit = SessionMessagesCubit(
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      conversationRepository: conversationRepository,
+      preferencesRepository: FakeDevicePreferencesRepository(),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await sessionCubit.selectSession(session);
+    await Future<void>.delayed(Duration.zero);
+
+    client.replayResult = const TurnReplayResult(
+      outcome: 'accepted',
+      safety: TurnReplaySafety.safe,
+      requiresConfirmation: false,
+      historyRevision: 5,
+    );
+    final accepted = await messagesCubit.replayTurn(
+      targetRequestId: 'request-1',
+      targetMessageId: 'message-1',
+      targetTurnId: 'turn-1',
+      action: TurnReplayAction.retry,
+    );
+    expect(accepted.isAccepted, isTrue);
+    expect(sessionCubit.state.selectedSession?.historyRevision, 5);
+
+    client.replayResult = const TurnReplayResult(
+      outcome: 'stale_turn_boundary',
+      safety: TurnReplaySafety.safe,
+      requiresConfirmation: false,
+      historyRevision: 9,
+    );
+    final rejected = await messagesCubit.replayTurn(
+      targetRequestId: 'request-2',
+      targetMessageId: 'message-2',
+      targetTurnId: 'turn-2',
+      action: TurnReplayAction.retry,
+    );
+    expect(rejected.isAccepted, isFalse);
+    expect(sessionCubit.state.selectedSession?.historyRevision, 9);
+    expect(
+      sessionCubit.state.agentSessions.values
+          .expand((sessions) => sessions)
+          .firstWhere((candidate) => candidate.id == session.id)
+          .historyRevision,
+      9,
+    );
 
     await messagesCubit.close();
     await sessionCubit.close();
@@ -1953,10 +2089,20 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
   int getSessionsCalls = 0;
   String? activatedSessionId;
   final List<String> loadedHistorySessionIds = [];
+  final List<String> loadedOlderHistorySessionIds = [];
+  bool historyHasMoreValue = false;
+  String? historyNextCursorValue;
+  Completer<List<CanonicalEvent>>? olderHistoryCompleter;
+  Object? olderHistoryError;
   final List<String> deletedSessionIds = [];
   int beginNewSessionCalls = 0;
   DeviceProcessingSnapshot _processingSnapshot = const DeviceProcessingSnapshot();
   DeviceSuspendedRequest? _pendingSuspendedRequest;
+  TurnReplayResult replayResult = const TurnReplayResult(
+    outcome: 'accepted',
+    safety: TurnReplaySafety.safe,
+    requiresConfirmation: false,
+  );
 
   _FakeDeviceClient({
     required this.config,
@@ -2112,17 +2258,29 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
   Future<TurnReplayResult> replayTurn({
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
-  }) async => const TurnReplayResult(
-    outcome: 'accepted',
-    safety: TurnReplaySafety.safe,
-    requiresConfirmation: false,
-  );
+    bool confirmedDropSteers = false,
+  }) async => replayResult;
+
+  @override
+  Future<SessionForkResult> forkSession({
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async => const SessionForkResult(outcome: 'accepted');
+
+  @override
+  Future<SessionCompactResult> compactSession({
+    required String sessionId,
+  }) async => const SessionCompactResult(outcome: 'accepted');
 
   @override
   Future<void> retryRuntimeNotice({
@@ -2170,6 +2328,39 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
   }
 
   @override
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(String sessionId) async {
+    loadedOlderHistorySessionIds.add(sessionId);
+    final error = olderHistoryError;
+    if (error != null) throw error;
+    final completer = olderHistoryCompleter;
+    if (completer != null) return completer.future;
+    return _currentMessages;
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    String sessionId,
+    String anchorEventId,
+  ) => loadSessionHistory(sessionId);
+
+  @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) async {
+    return _currentMessages;
+  }
+
+  @override
+  bool get historyHasMore => historyHasMoreValue;
+
+  @override
+  String? get historyNextCursor => historyNextCursorValue;
+
+  @override
+  bool get historyHasNewer => false;
+
+  @override
+  String? get historyNextNewerCursor => null;
+
+  @override
   Future<Session> createSession({
     String? title,
     bool isTitlePlaceholder = false,
@@ -2211,8 +2402,9 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
 
   @override
   Future<DeviceWorkspace> createWorkspace({
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) async {
     throw UnimplementedError();
   }
@@ -2222,6 +2414,11 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
     required String workspaceId,
     required String displayName,
   }) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<void> removeWorkspace({required String workspaceId}) async {
     throw UnimplementedError();
   }
 

@@ -67,6 +67,42 @@ void main() {
     expect(store.isSessionProcessing('session-2'), isTrue);
   });
 
+  test('compaction lifecycle updates only its active session timeline', () async {
+    for (final status in ['started', 'completed', 'failed']) {
+      socket.eventRouter.routeEvent(
+        _envelope('context_compaction.$status', {
+          'session_id': 'session-2',
+          'compaction_id': 'background-compaction-$status',
+          'trigger': 'manual',
+          'status': status,
+          'started_at': '2026-09-01T05:00:00.000Z',
+          if (status != 'started') 'completed_at': '2026-09-01T05:00:01.000Z',
+        }),
+      );
+    }
+    await Future<void>.delayed(Duration.zero);
+
+    expect(store.currentMessages, isEmpty);
+
+    socket.eventRouter.routeEvent(
+      _envelope('context_compaction.completed', {
+        'session_id': 'session-1',
+        'compaction_id': 'active-compaction',
+        'trigger': 'manual',
+        'status': 'completed',
+        'started_at': '2026-09-01T05:00:01.000Z',
+        'completed_at': '2026-09-01T05:00:02.000Z',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(store.currentMessages, hasLength(1));
+    expect(
+      store.currentMessages.single.metadata,
+      containsPair('compaction_id', 'active-compaction'),
+    );
+  });
+
   test('stopped removes only the active model step and preserves completed thoughts', () async {
     socket.eventRouter.routeEvent(
       _envelope('thought_stream', {
@@ -560,6 +596,33 @@ void main() {
     }
   });
 
+  test('queued delete result consumes daemon outcome and removes the row', () async {
+    store.setQueuedMessages([
+      CanonicalEvent(
+        id: 'user-queued-delete',
+        kind: EventKind.userMessage,
+        text: 'remove me',
+        timestamp: DateTime.utc(2026, 9, 1),
+        sessionId: 'session-1',
+        metadata: const {
+          'request_id': 'queued-delete-request',
+          'queued': true,
+        },
+      ),
+    ]);
+
+    socket.eventRouter.routeEvent(
+      _envelope('session.queued_message_delete_result', {
+        'session_id': 'session-1',
+        'target_request_id': 'queued-delete-request',
+        'outcome': 'deleted',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(store.currentQueuedMessages, isEmpty);
+  });
+
   test('background pending steer lifecycle never leaks into the active conversation', () async {
     socket.eventRouter.routeEvent(
       _envelope('session.pending_steer_changed', {
@@ -603,6 +666,151 @@ void main() {
       store.snapshot.pendingSteers['session-1']?['background-steer']?.state,
       PendingSteerState.delivered,
     );
+  });
+
+  test('tool_result cancelled closes running tool without spinner state', () async {
+    socket.eventRouter.routeEvent(
+      _envelope('tool_use', {
+        'tool': 'shell_execute',
+        'input': '{"command":"sleep 30"}',
+        'session_id': 'session-1',
+        'run_id': 'run-cancel',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-cancel-1',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('tool_result', {
+        'tool': 'shell_execute',
+        'output': 'Command cancelled by user.',
+        'status': 'cancelled',
+        'isError': true,
+        'session_id': 'session-1',
+        'run_id': 'run-cancel',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-cancel-1',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final tool = store.currentMessages.singleWhere(
+      (event) => event.kind == EventKind.toolCall,
+    );
+    expect(tool.status, EventStatus.cancelled);
+    expect(tool.toolOutput, 'Command cancelled by user.');
+  });
+
+  test('stopped cancels running tools for the same run as defensive fallback', () async {
+    socket.eventRouter.routeEvent(
+      _envelope('tool_use', {
+        'tool': 'shell_execute',
+        'input': '{"command":"sleep 30"}',
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-stop-1',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('stopped', {
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final tool = store.currentMessages.singleWhere(
+      (event) => event.kind == EventKind.toolCall,
+    );
+    expect(tool.status, EventStatus.cancelled);
+    expect(tool.toolOutput, 'Command cancelled by user.');
+  });
+
+  test('stopped fallback leaves running tools from another run untouched', () async {
+    for (final entry in [('run-stop', 'tool-stop'), ('run-other', 'tool-other')]) {
+      socket.eventRouter.routeEvent(
+        _envelope('tool_use', {
+          'tool': 'shell_execute',
+          'input': '{"command":"sleep 30"}',
+          'session_id': 'session-1',
+          'run_id': entry.$1,
+          'model_step_id': 'step-${entry.$2}',
+          'tool_call_id': entry.$2,
+        }),
+      );
+    }
+    socket.eventRouter.routeEvent(
+      _envelope('stopped', {
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-tool-stop',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      store.currentMessages.singleWhere((event) => event.toolCallId == 'tool-stop').status,
+      EventStatus.cancelled,
+    );
+    expect(
+      store.currentMessages.singleWhere((event) => event.toolCallId == 'tool-other').status,
+      EventStatus.running,
+    );
+  });
+
+  test('authoritative cancellation enriches fallback and blocks late timeout', () async {
+    socket.eventRouter.routeEvent(
+      _envelope('tool_use', {
+        'tool': 'shell_execute',
+        'input': '{"command":"sleep 30"}',
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-stop',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('stopped', {
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('tool_result', {
+        'tool': 'shell_execute',
+        'output': 'Command cancelled by user.',
+        'status': 'cancelled',
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-stop',
+        'generation': 5,
+        'revision': 50,
+        'reason': 'user_stop',
+        'terminal_at': '2026-08-29T00:00:01Z',
+      }),
+    );
+    socket.eventRouter.routeEvent(
+      _envelope('tool_result', {
+        'tool': 'shell_execute',
+        'output': 'Command timed out.',
+        'status': 'error',
+        'session_id': 'session-1',
+        'run_id': 'run-stop',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-stop',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final tool = store.currentMessages.single;
+    expect(tool.status, EventStatus.cancelled);
+    expect(tool.toolOutput, 'Command cancelled by user.');
+    expect(tool.generation, 5);
+    expect(tool.revision, 50);
+    expect(tool.metadata, containsPair('reason', 'user_stop'));
   });
 }
 

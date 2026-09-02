@@ -455,6 +455,24 @@ void main() {
       expect(json['capabilities']['supports_stop'], isTrue);
       expect(json['capabilities']['supports_workspaces'], isTrue);
       expect(json['capabilities']['supports_local_tool_runtime'], isTrue);
+      expect(
+        json['capabilities'].containsKey('supports_remote_update'),
+        isFalse,
+      );
+      expect(
+        json['capabilities'].containsKey('supports_remote_restart'),
+        isFalse,
+      );
+      expect(
+        json['capabilities'].containsKey(
+          'supports_remote_workspace_management',
+        ),
+        isFalse,
+      );
+      expect(
+        json['capabilities'].containsKey('supports_remote_mcp_management'),
+        isFalse,
+      );
     });
     // ...
 
@@ -693,6 +711,32 @@ void main() {
     );
 
     test(
+      'handleCommand removes a workspace record without deleting its folder',
+      () async {
+        final service = getIt<LocalWorkspaceRuntimeService>();
+        final directory = Directory('${tempDir.path}/remove-workspace')
+          ..createSync();
+        final workspace = await service.createWorkspace(path: directory.path);
+        Map<String, dynamic>? emitted;
+
+        final handled = await SanadProtocolBridge().handleCommand({
+          'command': CanonicalEventTypes.removeWorkspace,
+          'payload': {
+            'request_id': 'workspace-remove-1',
+            'workspace_id': workspace['id'],
+          },
+        }, (envelope) async => emitted = envelope);
+
+        expect(handled, isTrue);
+        expect(emitted?['event'], CanonicalEventTypes.workspaceRemoved);
+        expect(emitted?['request_id'], 'workspace-remove-1');
+        expect(emitted?['payload']['workspace_id'], workspace['id']);
+        expect(directory.existsSync(), isTrue);
+        expect(await service.listWorkspaces(), isEmpty);
+      },
+    );
+
+    test(
       'handleCommand mutates folders with correlated acknowledgments',
       () async {
         final bridge = SanadProtocolBridge();
@@ -800,7 +844,7 @@ void main() {
       await bridge.handleCommand(
         {
           'command': 'search_slash_commands',
-          'payload': {'request_id': 'req-5', 'query': 'mcp'},
+          'payload': {'request_id': 'req-5', 'query': 'compact'},
         },
         (envelope) async {
           slashEnvelope = envelope;
@@ -812,7 +856,7 @@ void main() {
         equals(CanonicalEventTypes.slashCommandsList),
       );
       final commands = slashEnvelope?['payload']['commands'] as List<dynamic>;
-      expect(commands.any((entry) => entry['command'] == 'mcp'), isTrue);
+      expect(commands.any((entry) => entry['command'] == 'compact'), isTrue);
     });
 
     test(
@@ -1068,6 +1112,9 @@ void main() {
         expect(messages[1]['content'], '**Planning**\n\n**Refining**');
         expect(messages[2]['content'], 'I will update the implementation.');
         expect(messages[3]['content'], 'The fix is complete.');
+        expect(messages[3]['status'], 'done');
+        expect(messages[3]['message_id'], isNotEmpty);
+        expect(messages[3]['turn_id'], isNotEmpty);
       },
     );
 
@@ -1245,6 +1292,95 @@ void main() {
     );
 
     test(
+      'history pages preserve fan-out identity and tail-only runtime state',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-paged-history';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'gpt-5.5',
+            createdAt: DateTime.parse('2026-07-14T01:00:00Z'),
+            updatedAt: DateTime.parse('2026-07-14T01:01:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Inspect'),
+          Message(
+            role: MessageRole.assistant,
+            reasoning: 'Planning',
+            content: 'Reading',
+            toolCalls: [
+              ToolCall(
+                id: 'tool-page-1',
+                name: 'file_read',
+                arguments: const {'path': 'lib/main.dart'},
+              ),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'tool-page-1',
+            content: 'contents',
+          ),
+          Message(role: MessageRole.assistant, content: 'Done'),
+        ]);
+
+        Future<Map<String, dynamic>> page({
+          String? cursor,
+          String? anchor,
+        }) async {
+          Map<String, dynamic>? emitted;
+          await bridge.handleCommand({
+            'command': 'get_session_history',
+            'payload': {
+              'request_id': 'req-${cursor ?? anchor ?? 'tail'}',
+              'session_id': sessionId,
+              'limit': 1,
+              'cursor': ?cursor,
+              'anchor_event_id': ?anchor,
+            },
+          }, (envelope) async => emitted = envelope);
+          return Map<String, dynamic>.from(emitted!['payload'] as Map);
+        }
+
+        final tail = await page();
+        final page3 = await page(cursor: tail['next_cursor'] as String);
+        final page2 = await page(cursor: page3['next_cursor'] as String);
+        final page1 = await page(cursor: page2['next_cursor'] as String);
+        final allRows = [
+          page1,
+          page2,
+          page3,
+          tail,
+        ].expand((payload) => payload['messages'] as List).cast<Map>().toList();
+        final eventIds = allRows.map((row) => row['event_id']).toList();
+
+        expect(eventIds.toSet(), hasLength(eventIds.length));
+        expect(page2['messages'].map((row) => row['type']), [
+          'reasoning',
+          'thought',
+          'tool_use',
+        ]);
+        expect(tail, contains('execution_snapshot'));
+        expect(page3, isNot(contains('execution_snapshot')));
+        expect(page1['has_more'], isFalse);
+
+        final anchorId = page2['messages'][1]['event_id'] as String;
+        final anchored = await page(anchor: anchorId);
+        expect(anchored['page_kind'], 'anchor');
+        expect(
+          (anchored['messages'] as List).any(
+            (row) => row['event_id'] == anchorId,
+          ),
+          isTrue,
+        );
+        expect(anchored, contains('execution_snapshot'));
+      },
+    );
+
+    test(
       'get_session_history restores typed tool errors without relying on text prefixes',
       () async {
         final bridge = SanadProtocolBridge();
@@ -1294,6 +1430,81 @@ void main() {
         );
         expect(toolResult['output'], 'Validation failed for two files');
         expect(toolResult['isError'], isTrue);
+      },
+    );
+
+    test(
+      'get_session_history restores the complete cancelled tool terminal',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-cancelled-tool-history';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'sanad-agent',
+            createdAt: DateTime.parse('2026-08-29T00:00:00Z'),
+            updatedAt: DateTime.parse('2026-08-29T00:01:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Run a command'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'tool-cancelled-1',
+                name: 'shell_execute',
+                arguments: const {'command': 'sleep 10'},
+              ),
+            ],
+            metadata: const {
+              'run_id': 'run-cancelled-1',
+              'model_step_id': 'step-cancelled-1',
+            },
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'tool-cancelled-1',
+            content: 'Command cancelled by user.',
+            metadata: const {
+              'run_id': 'run-cancelled-1',
+              'model_step_id': 'step-cancelled-1',
+              'generation': 5,
+              'revision': 23,
+              'status': 'cancelled',
+              'reason': 'user_stop',
+              'is_error': true,
+              'started_at': '2026-08-29T00:00:10.000Z',
+              'terminal_at': '2026-08-29T00:00:11.000Z',
+              'cleanup_outcome': 'cancelled',
+            },
+          ),
+        ]);
+
+        Map<String, dynamic>? emitted;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-cancelled-tool-history',
+            'session_id': sessionId,
+          },
+        }, (envelope) async => emitted = envelope);
+
+        final messages = emitted?['payload']['messages'] as List;
+        final toolResult = messages.singleWhere(
+          (message) => message['type'] == 'tool_result',
+        );
+        expect(toolResult['status'], 'cancelled');
+        expect(toolResult['run_id'], 'run-cancelled-1');
+        expect(toolResult['model_step_id'], 'step-cancelled-1');
+        expect(toolResult['tool_call_id'], 'tool-cancelled-1');
+        expect(toolResult['generation'], 5);
+        expect(toolResult['revision'], 23);
+        expect(toolResult['reason'], 'user_stop');
+        expect(toolResult['started_at'], '2026-08-29T00:00:10.000Z');
+        expect(toolResult['terminal_at'], '2026-08-29T00:00:11.000Z');
+        expect(toolResult['cleanup_outcome'], 'cancelled');
       },
     );
 

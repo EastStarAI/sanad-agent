@@ -188,6 +188,26 @@ void main() {
     expect(manager.agents.map((device) => device.id), ['oldest', 'middle', 'newest']);
   });
 
+  test('unknown online status triggers authoritative inventory reconciliation', () async {
+    AppPlatform.overrideIsDesktop = false;
+    cloudSocket.setConnected(true);
+    cloudSocket.clearCaptured();
+
+    manager.handleStatusChangeForTesting({
+      'device_id': 'newly-paired-device',
+      'is_online': true,
+    });
+
+    expect(cloudSocket.capturedCommands.single['event'], 'get_devices');
+    await manager.handleDevicesResponseForTesting({
+      'status': 'ok',
+      'devices': [
+        _deviceJson('newly-paired-device', '2026-08-29T22:00:00Z'),
+      ],
+    });
+    expect(manager.agents.single.id, 'newly-paired-device');
+  });
+
   test('device_status_changed preserves oldest-to-newest ordering', () async {
     AppPlatform.overrideIsDesktop = false;
     await manager.handleDevicesResponseForTesting({

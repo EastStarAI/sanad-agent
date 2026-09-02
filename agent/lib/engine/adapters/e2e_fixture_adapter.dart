@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import '../../capabilities/models/tool_schema.dart';
 import '../../core/models/agent_response.dart';
 import '../../core/models/message.dart';
@@ -17,6 +19,10 @@ class E2eFixtureAdapter implements LLMAdapter {
   static const permissionToolName = 'system_screenshot';
   static const permissionToolCallId = 'e2e-permission-tool-call';
   static const permissionResponseText = 'SCREEN_OK';
+  static const parallelExternalReadPromptPrefix =
+      '__SANAD_E2E_PARALLEL_EXTERNAL_READS__';
+  static const parallelExternalReadResponseText = 'EXTERNAL_READS_OK';
+  static const parallelExternalReadToolName = 'file_read';
   static const memoryToolName = 'memory';
   static const memoryAddPrompt = '__SANAD_E2E_MEMORY_ADD__';
   static const memoryReadPrompt = '__SANAD_E2E_MEMORY_READ__';
@@ -27,6 +33,14 @@ class E2eFixtureAdapter implements LLMAdapter {
   static const memoryAddToolCallId = 'e2e-memory-add-tool-call';
   static const memoryReadToolCallId = 'e2e-memory-read-tool-call';
   static const memoryEntry = 'User name is Ahmed Memory E2E';
+  static const askUserPrompt = '__SANAD_E2E_ASK_USER_RESTART__';
+  static const askUserToolName = 'system_ask_user';
+  static const askUserToolCallId = 'e2e-ask-user-tool-call';
+  static const askUserResponseText = 'ASK_USER_RESUMED';
+  static const shellCrashPromptPrefix = '__SANAD_E2E_SHELL_CRASH__';
+  static const shellToolName = 'shell_execute';
+  static const shellToolCallId = 'e2e-shell-crash-tool-call';
+  static const shellCrashResponseText = 'SHELL_INTERRUPTED_RESUMED';
 
   const E2eFixtureAdapter();
 
@@ -55,6 +69,108 @@ class E2eFixtureAdapter implements LLMAdapter {
         message: Message(
           role: MessageRole.assistant,
           content: marker ?? 'MISSING_RUNTIME_MARKER',
+        ),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
+    final hasAskUserTool =
+        tools?.any((tool) => tool.name == askUserToolName) ?? false;
+    if (latestUserContent == askUserPrompt && hasAskUserTool) {
+      final hasResult = history.any(
+        (message) =>
+            message.role == MessageRole.tool &&
+            message.toolCallId == askUserToolCallId,
+      );
+      if (!hasResult) {
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: askUserToolCallId,
+                name: askUserToolName,
+                arguments: const {
+                  'question': 'Should this task continue after restart?',
+                },
+              ),
+            ],
+          ),
+          isToolCall: true,
+          model: modelId,
+          provider: providerId,
+          finishReason: LLMFinishReason.toolCalls,
+        );
+      }
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: askUserResponseText,
+        ),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
+    final isShellCrashScenario =
+        latestUserContent?.startsWith(shellCrashPromptPrefix) ?? false;
+    final hasShellTool =
+        tools?.any((tool) => tool.name == shellToolName) ?? false;
+    if (isShellCrashScenario && hasShellTool) {
+      Message? toolResult;
+      for (final message in history) {
+        if (message.role == MessageRole.tool &&
+            message.toolCallId == shellToolCallId) {
+          toolResult = message;
+        }
+      }
+      if (toolResult == null) {
+        final encodedCommand = latestUserContent!.substring(
+          shellCrashPromptPrefix.length,
+        );
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: shellToolCallId,
+                name: shellToolName,
+                arguments: {
+                  'command': jsonDecode(encodedCommand).toString(),
+                  'timeout_ms': 60000,
+                },
+              ),
+            ],
+          ),
+          isToolCall: true,
+          model: modelId,
+          provider: providerId,
+          finishReason: LLMFinishReason.toolCalls,
+        );
+      }
+      final truthfulInterruption =
+          (toolResult.content?.contains('CRASH_OUTPUT') ?? false) &&
+          (toolResult.content?.contains('interrupted') ?? false) &&
+          !(toolResult.content?.contains('cancelled by user') ?? false);
+      final hasOriginalToolUse = history.any(
+        (message) =>
+            message.role == MessageRole.assistant &&
+            (message.toolCalls ?? const []).any(
+              (toolCall) =>
+                  toolCall.id == shellToolCallId &&
+                  toolCall.name == shellToolName &&
+                  toolCall.arguments['command'] != null,
+            ),
+      );
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: truthfulInterruption && hasOriginalToolUse
+              ? shellCrashResponseText
+              : 'INVALID_SHELL_INTERRUPTION_RESULT',
         ),
         model: modelId,
         provider: providerId,
@@ -140,6 +256,55 @@ class E2eFixtureAdapter implements LLMAdapter {
           content: memoryToolCallId == memoryAddToolCallId
               ? 'MEMORY_STORED'
               : 'MEMORY_READ',
+        ),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
+    final isParallelExternalReadScenario =
+        latestUserContent?.startsWith(parallelExternalReadPromptPrefix) ??
+        false;
+    final hasParallelExternalReadTool =
+        tools?.any((tool) => tool.name == parallelExternalReadToolName) ??
+        false;
+    if (isParallelExternalReadScenario && hasParallelExternalReadTool) {
+      final encodedPaths = latestUserContent!.substring(
+        parallelExternalReadPromptPrefix.length,
+      );
+      final paths = (jsonDecode(encodedPaths) as List<dynamic>)
+          .map((path) => path.toString())
+          .toList(growable: false);
+      final toolCalls = [
+        for (var index = 0; index < paths.length; index++)
+          ToolCall(
+            id: 'e2e-external-file-read-$index',
+            name: parallelExternalReadToolName,
+            arguments: {'path': paths[index]},
+          ),
+      ];
+      final completedToolCallIds = history
+          .where((message) => message.role == MessageRole.tool)
+          .map((message) => message.toolCallId)
+          .whereType<String>()
+          .toSet();
+      final hasAllResults = toolCalls.every(
+        (toolCall) => completedToolCallIds.contains(toolCall.id),
+      );
+      if (!hasAllResults) {
+        return AgentResponse(
+          message: Message(role: MessageRole.assistant, toolCalls: toolCalls),
+          isToolCall: true,
+          model: modelId,
+          provider: providerId,
+          finishReason: LLMFinishReason.toolCalls,
+        );
+      }
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: parallelExternalReadResponseText,
         ),
         model: modelId,
         provider: providerId,

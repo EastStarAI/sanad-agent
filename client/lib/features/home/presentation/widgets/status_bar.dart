@@ -89,19 +89,19 @@ class StatusBar extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(horizontal: 8),
                 child: Row(
                   children: [
-                    if (status.isDesktop) ...[
-                      Icon(Icons.computer, size: 12, color: foregroundColor),
-                      const SizedBox(width: 4),
-                      Text(
-                        'Desktop Mode',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: foregroundColor,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                    ],
+                    // if (status.isDesktop) ...[
+                    //   Icon(Icons.computer, size: 12, color: foregroundColor),
+                    //   const SizedBox(width: 4),
+                    //   Text(
+                    //     'Desktop Mode',
+                    //     style: TextStyle(
+                    //       fontSize: 11,
+                    //       color: foregroundColor,
+                    //       fontWeight: FontWeight.w500,
+                    //     ),
+                    //   ),
+                    //   const SizedBox(width: 12),
+                    // ],
                     Icon(Icons.bolt, size: 12, color: foregroundColor),
                     const SizedBox(width: 4),
                     Text(

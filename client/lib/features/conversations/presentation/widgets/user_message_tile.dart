@@ -221,10 +221,14 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                       key: const Key('edit_message_button'),
                       tooltip: 'Edit message',
                       visualDensity: VisualDensity.compact,
-                      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+                      constraints: ConversationActionStyle.constraints,
                       padding: EdgeInsets.zero,
                       onPressed: widget.isReplayPending ? null : widget.onBeginEdit,
-                      icon: const Icon(Icons.edit_outlined, size: 15),
+                      icon: Icon(
+                        Icons.edit_outlined,
+                        size: ConversationActionStyle.iconSize,
+                        color: ConversationActionStyle.iconColor(context),
+                      ),
                     ),
                   ),
                   Semantics(
@@ -233,7 +237,7 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                       key: const Key('retry_message_button'),
                       tooltip: 'Retry message',
                       visualDensity: VisualDensity.compact,
-                      constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+                      constraints: ConversationActionStyle.constraints,
                       padding: EdgeInsets.zero,
                       onPressed: widget.isReplayPending || widget.onRetry == null
                           ? null
@@ -244,7 +248,11 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                               height: 14,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
-                          : const Icon(Icons.refresh, size: 16),
+                          : Icon(
+                              Icons.refresh,
+                              size: ConversationActionStyle.iconSize,
+                              color: ConversationActionStyle.iconColor(context),
+                            ),
                     ),
                   ),
                 ],

@@ -53,7 +53,10 @@ environments, `site-packages`, `.next`, `dist`, and `target`. A candidate that p
 decoded as UTF-8 is skipped without failing the whole search. Shell execution
 follows host-native command semantics, enforces workspace/path and permission
 policy, applies a bounded timeout, bounds stdout and stderr while streaming, and
-terminates the command process tree where supported.
+terminates the command process tree where supported. Child processes are not
+trusted to emit valid UTF-8: malformed byte sequences are replaced during
+bounded decoding rather than escaping the tool future and terminating the
+Agent daemon.
 
 ## Tool Output Budgets
 
@@ -82,7 +85,14 @@ Permission policy combines workspace rules with once, session, and workspace
 user decisions. Before a sensitive call waits for approval, the manager writes a
 durable suspended checkpoint containing enough identity and tool context for
 restart. A resumed decision is reapplied before execution; a once decision uses
-a one-shot bypass to avoid immediately prompting again.
+a one-shot bypass to avoid immediately prompting again. Concurrent authorization
+checks are serialized FIFO per session so the client and durable session state
+never have more than one unresolved interactive permission request for that
+session. Each queued check re-evaluates current policy when it reaches the front,
+while checks from different sessions remain independent. Daemon-backed E2E
+verification drives a parallel external-file-read batch through the authenticated
+local socket and requires each permission response before the next request is
+emitted.
 
 ## MCP and Skills
 

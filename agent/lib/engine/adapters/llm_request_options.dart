@@ -1,3 +1,6 @@
+import '../runtime/run_cancellation_scope.dart';
+import 'provider_watchdog_config.dart';
+
 /// Per-call runtime context shared by every LLM adapter.
 ///
 /// Options are immutable and must never be retained by an adapter between
@@ -10,6 +13,8 @@ class LLMRequestOptions {
   final String? thinkingMode;
   final Duration? timeout;
   final int? maxOutputTokens;
+  final RunCancellationScope? cancellationScope;
+  final ProviderWatchdogConfig watchdogs;
 
   const LLMRequestOptions({
     this.sessionId,
@@ -18,5 +23,7 @@ class LLMRequestOptions {
     this.thinkingMode,
     this.timeout,
     this.maxOutputTokens,
+    this.cancellationScope,
+    this.watchdogs = ProviderWatchdogConfig.defaults,
   });
 }

@@ -230,8 +230,7 @@ Future<void> handleClientLogs(
       tailCount: tailCount,
       allowStartupGrace: waitForJournal,
       startupGrace: sanadDevComponentControlTimeout,
-      interactiveHint:
-          '--- Client logs (r: reload, R: restart, h: help, d: detach, c: clear, q: quit, Ctrl+C: close logs) ---',
+      interactiveHint: '--- Client logs (r: reload, R: restart, h: help, d: detach, c: clear, q: quit, Ctrl+C: close logs) ---',
       interactiveKeys: const {'r', 'R', 'h', 'd', 'c', 'q'},
       onInteractiveKey: (key) => _sendManagedClientDeveloperKey(
         sanadHome: journalHome,
@@ -383,14 +382,24 @@ Future<void> handleClientLogs(
   exit(0);
 }
 
-Future<void> handleClientAttachAction(String action, int? portOverride) async {
-  final instance = await selectClientInstance(portOverride);
+Future<void> handleClientAttachAction(
+  String action,
+  int? portOverride, {
+  String? sanadHomePath,
+}) async {
+  final instance = await selectClientInstance(
+    portOverride,
+    sanadHomePath: sanadHomePath,
+  );
   if (instance == null) exit(1);
 
   final vmUrl = instance.token.isEmpty
       ? 'http://127.0.0.1:${instance.port}/'
       : 'http://127.0.0.1:${instance.port}/${instance.token}/';
-  final runtime = await _currentRuntime();
+  final runtime = await discoverSanadDevRuntime(
+    callerDirectory: _callerDirectory,
+    sanadHomeOverride: sanadHomePath,
+  );
   final expectedClientDirectory =
       '${runtime.repositoryRoot}${Platform.pathSeparator}client';
   if (!_samePath(instance.path, expectedClientDirectory)) {
@@ -411,7 +420,9 @@ Future<void> handleClientAttachAction(String action, int? portOverride) async {
     exitCode = 1;
     return;
   }
-  final activeAgents = await discoverAgentInstances();
+  final activeAgents = await discoverAgentInstances(
+    sanadHomeOverride: sanadHomePath,
+  );
   final workspaceHash = runtime.worktreeId.split('-').last;
   final matchingAgents = activeAgents
       .where((agent) => agent.workspaceHash == workspaceHash)
@@ -651,8 +662,7 @@ Future<void> handleAgentLogs(
       tailCount: tailCount,
       allowStartupGrace: waitForInstance,
       startupGrace: sanadDevAgentStartupTimeout,
-      interactiveHint:
-          '--- Agent logs (r/R: restart, s/q: safe stop, Ctrl+C: close logs) ---',
+      interactiveHint: '--- Agent logs (r/R: restart, s/q: safe stop, Ctrl+C: close logs) ---',
       interactiveKeys: const {'r', 'R', 's', 'q'},
       onInteractiveKey: (key) => _sendManagedAgentInteractiveKey(
         sanadHome: activeHome,
@@ -852,13 +862,18 @@ Future<void> handleAgentRestart(
   int? portOverride, {
   bool force = false,
   int timeoutSeconds = 60,
+  String? sanadHomePath,
 }) async {
   final instance = await selectAgentInstance(
     portOverride,
     allowStartupGrace: true,
+    sanadHomePath: sanadHomePath,
   );
   if (instance == null) exit(1);
-  final runtime = await _currentRuntime();
+  final runtime = await discoverSanadDevRuntime(
+    callerDirectory: _callerDirectory,
+    sanadHomeOverride: sanadHomePath,
+  );
   final workspaceHash = runtime.worktreeId.split('-').last;
   if (instance.workspaceHash != workspaceHash) {
     stderr.writeln(
@@ -945,9 +960,7 @@ Future<void> handleAgentRestart(
         timeout: Duration(seconds: timeoutSeconds),
       );
       if (healthy) {
-        print(
-          '✓ Agent daemon restarted and healthy on port ${instance.port}.',
-        );
+        print('✓ Agent daemon restarted and healthy on port ${instance.port}.');
       } else {
         stderr.writeln(
           'Restart failed: daemon accepted the request, but the health probe '
@@ -1006,4 +1019,93 @@ Future<void> handleClientDevTools(int? portOverride) async {
 
   final exitCode = await process.exitCode;
   exit(exitCode);
+}
+
+List<ClientInstance> selectManagedUiDriverClients(
+  RuntimeOwnershipAssessment ownership,
+) {
+  if (!ownership.isManaged) return const [];
+  return ownership.state.ownedClients
+      .where(
+        (client) =>
+            client.launchProfile?.target
+                ?.replaceAll('\\', '/')
+                ?.endsWith('lib/driver_main.dart') ==
+            true,
+      )
+      .toList(growable: false);
+}
+
+Future<void> handleUiDriverCommand(List<String> args) async {
+  final callerDir =
+      Platform.environment['SANAD_DEV_CALLER_DIR'] ?? Directory.current.path;
+  final runtime = await discoverSanadDevRuntime(callerDirectory: callerDir);
+  final repoRoot = runtime.repositoryRoot;
+  final clientDir = Directory('$repoRoot/client');
+  final toolScript = '$repoRoot/scripts/flutter_driver_cli.dart';
+
+  final hasExplicitVmUrl = args.any(
+    (arg) =>
+        arg == '--vm-url' ||
+        arg == '-u' ||
+        arg.startsWith('--vm-url=') ||
+        arg.startsWith('-u='),
+  );
+  final isHelpRequest =
+      args.isEmpty ||
+      args.first == 'help' ||
+      args.any((arg) => arg == '-h' || arg == '--help');
+  final extraArgs = <String>[];
+  if (!hasExplicitVmUrl && !isHelpRequest) {
+    final activeClients = await discoverClientInstances();
+    final processState = selectRuntimeProcessState(
+      activeAgents: await discoverAgentInstances(),
+      activeClients: activeClients,
+      runtime: runtime,
+    );
+    final activeHome = resolveActiveSanadHome(runtime, processState);
+    final ownership = await assessRuntimeOwnership(
+      runtime: runtime,
+      state: processState,
+      sanadHome: activeHome,
+    );
+    final managedClients = selectManagedUiDriverClients(ownership);
+    if (managedClients.length != 1) {
+      stderr.writeln(
+        managedClients.isEmpty
+            ? 'No active driver-enabled client is managed for this worktree. '
+                  'Run `sanad-dev run --driver` first or pass --vm-url explicitly.'
+            : 'Multiple managed clients are active for this worktree. '
+                  'Pass --vm-url explicitly to select one.',
+      );
+      exitCode = 1;
+      return;
+    }
+    final selectedClient = managedClients.single;
+    final tokenPath = selectedClient.token.isEmpty
+        ? ''
+        : '${selectedClient.token}/';
+    extraArgs.addAll([
+      '--vm-url',
+      'http://127.0.0.1:${selectedClient.port}/$tokenPath',
+    ]);
+  }
+
+  final process = await Process.start(
+    'fvm',
+    [
+      'dart',
+      '--packages=${clientDir.path}/.dart_tool/package_config.json',
+      toolScript,
+      ...args,
+      ...extraArgs,
+    ],
+    workingDirectory: clientDir.path,
+    mode: ProcessStartMode.inheritStdio,
+    runInShell: Platform.isWindows,
+    environment: {...Platform.environment, 'SANAD_DEV_CALLER_DIR': callerDir},
+  );
+
+  final code = await process.exitCode;
+  exit(code);
 }

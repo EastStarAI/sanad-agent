@@ -128,12 +128,53 @@ Sidebar refreshes intentionally request the unscoped section and eligible worksp
 - Editing after dispatch clears the pending request marker before writing newer text, so acceptance of the older request cannot clear a newer draft.
 - Snapshot consumers detect canonical cleanup from the immutable snapshot event itself; an unrelated cache emission while a debounce is pending never clears the editor.
 
-## 6. Persistence
+## 6. Timeline History Pagination
+
+Sidebar pagination remains owned by `ConversationCacheStore`; transcript pages
+are a separate transient resource owned by the per-device
+`DeviceConversationStore` behind `ConversationClient`. An anchored slice owns
+independent opaque older/newer cursors and exhaustion state. Widgets receive
+only typed load intents and booleans; they never read or construct cursors.
+
+The initial tail replaces a partial timeline atomically. Older pages prepend by
+canonical identity and merge duplicate identities rather than discarding an
+older event fragment. Hydration folds repeated canonical identities before it
+reconciles retained live state. Newer pages apply in chronological order so a
+terminal tool row can enrich its matching running tool even when the pair
+crosses a page boundary. The same rule preserves a tool-use input when its
+terminal result arrived first. Presentation reprojects the complete loaded slice
+after either merge; hidden reasoning rows do not split a visible tool run, while
+visible events and `system_ask_user` remain grouping boundaries. Each direction
+coalesces its matching in-flight cursor and advances only when the returned
+cursor differs from the requested one. Session/device switches and newer
+hydration generations reject late results. Failure leaves the visible timeline
+and runtime projections unchanged.
+
+At most two recently visited timelines that are exhausted in both directions
+may remain in memory. Reopening one reconciles the authoritative tail by event
+identity instead of discarding pages the user explicitly loaded. Partial slices
+remain replaceable and do not become cache authority. Cursor and loaded
+transcript pages are never persisted; only an Agent-issued
+`history:<session>:...` event id may survive restart and trigger an anchored
+request. Live, steer-lifecycle, model-step, and tool-group display identities are
+not queryable history anchors and are never persisted; legacy values migrate to
+the nearest loaded history event. Flutter page-storage offsets are not
+authoritative, so conversation scrolling disables the framework offset cache and
+restores through the saved event id.
+
+Presentation renders no pagination/retry controls. Short slices alternate older
+and newer auto-fill with a three-page budget per direction; longer slices
+prefetch before a physical scroll reaches either loaded edge. Errors stop
+automatic fill. Fresh edge intent or overscroll can retry at most three
+consecutive failures per direction; successful or authoritative recovery resets
+that direction, and session activation resets both.
+
+## 7. Persistence
 
 - Backend: `SharedPreferencesConversationCachePersistence` (cross-platform, no secrets).
 - Codec: `ConversationCacheCodec` — single namespaced JSON blob under the stable key `sanad_conversation_cache`. Schema compatibility and safe invalidation are owned by the payload codec.
 - Schema version: `4`. `lastDestination` is encoded as a typed object containing `kind` plus the valid identity field (`sessionId` or nullable `workspaceId`). Unknown or malformed destination objects decode as absent and therefore default to New Conversation at routing time; `lastSelectedSessionId` is never promoted into a destination.
-- `sessionViewportAnchors` stores stable event ids rather than pixel offsets. It is written only after manual scrolling settles, ignored while a session has authoritative active work, cleared by a newly accepted user message, and removed with session/device cleanup.
+- `sessionViewportAnchors` stores only Agent-issued `history:<session>:...` event ids rather than display ids or pixel offsets. It is written only after manual scrolling settles, ignored while a session has authoritative active work, migrated away from legacy transient ids on read, cleared by a newly accepted user message, and removed with session/device cleanup.
 - Unknown future versions and corrupt payloads invalidate safely.
 - Debounced writes via `ConversationCachePersistor` (default 500ms); `flush()` on lifecycle pause/close.
 - Bootstrap awaits hydration before `runApp`, and serialized persistence writes prevent an older delayed save from overwriting a newer snapshot.
@@ -155,12 +196,12 @@ Sidebar refreshes intentionally request the unscoped section and eligible worksp
   recovered user text, and are removed after successful apply/acknowledgement.
 - No tokens, credentials, or raw transport payloads are stored.
 
-## 7. Logout / Cleanup Boundary
+## 8. Logout / Cleanup Boundary
 
 - `clearCloudUserScope(Set<String> cloudDeviceIds)` removes cloud-device cache and drafts while preserving local desktop inventory.
 - `clearDevice(deviceId)` removes all keys for one device.
 
-## 8. Consumer API
+## 9. Consumer API
 
 `ConversationCacheRepository` (`lib/features/conversations/data/repositories/conversation_cache_repository.dart`) is the intent-based facade. Widgets/cubits call:
 
@@ -180,14 +221,19 @@ Sidebar refreshes intentionally request the unscoped section and eligible worksp
 - `prependRecoveredSessionDraft` and Stop-recovery acknowledgement correlation
   keyed by `deviceId + sessionId + stopRequestId`
 
-## 9. Pending input projection boundary (Task 36)
+## 10. Pending input projection boundary (Task 36)
 
 `DeviceConversationStore` owns the live per-session projections for queued
 messages and pending steers. Pending steers are keyed by the daemon's raw
 `request_id` and accept only increasing lifecycle revisions. The timeline
 renders `pending` as one temporary user bubble, transforms that same identity
-to delivered, and removes it only after authoritative cancellation. History,
-live events, navigation, and reconnect must not create duplicate bubbles.
+to delivered, and removes it only after authoritative cancellation. When
+history contains the durable steer with the same raw `request_id`, the store
+removes the temporary display id and enriches the durable event with lifecycle
+metadata without moving it from its causal position. This reconciliation runs
+after initial history replacement and older/newer page merges as well as live
+lifecycle delivery. History, live events, navigation, and reconnect must not
+create duplicate bubbles.
 
 This projection is deliberately separate from `ConversationCacheStore` draft
 ownership. A pending steer is not editable draft text and cannot be copied into
@@ -212,7 +258,16 @@ matches either its live claim map or the draft's persisted
 The winning client clears its claim metadata only after draft persistence and
 recovery acknowledgement succeed.
 
-## 11. DI Composition
+## 11. Compaction lifecycle projection (Plan 53)
+
+Compaction lifecycle is a typed per-session timeline projection rather than a
+user or assistant message. Live and history transitions fold under the logical
+`compaction_id`; started may advance once to completed or failed, but one
+terminal status cannot replace the other. History ordering follows the
+daemon-provided retained-tail causal position, so cache hydration must preserve
+list order instead of sorting these events by timestamps.
+
+## 12. DI Composition
 
 Registered in `lib/core/di/injection.dart`:
 

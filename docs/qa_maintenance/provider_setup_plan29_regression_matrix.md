@@ -15,6 +15,8 @@ provider instances evolve across the daemon, CLI, and Flutter client.
 | Area | What must hold |
 |---|---|
 | `model.refresh` acking | Client requests must ignore the non-terminal `started` event and complete only on `updated` or `failed`. |
+| Model refresh crash containment | A malformed legacy Base URL, refresh exception, or terminal-event delivery failure cannot escape a detached Future and terminate the daemon. A no-cache failure persists diagnostics and emits `failed`; it never emits `updated` with an empty failed cache row. A subsequent manual retry performs a fresh request rather than coalescing onto completed ownership. |
+| Provider Base URL normalization | New metadata accepts only absolute HTTP(S) URLs, strips copied labels such as `url `, and stores one canonical value without trailing slashes. Legacy labeled rows normalize at adapter read time. OpenAI model discovery never constructs `/v1/v1/models` or `/models/models`. |
 | First onboarding instance | The first created instance becomes the default automatically unless another default was chosen explicitly. |
 | Runtime readiness | `ready` requires credential + selected model + successful endpoint/model discovery for the current revisions. |
 | Model picker readiness | Client UI reads readiness from `model.snapshot.instances[].status`, not from cache presence. |
@@ -43,7 +45,7 @@ provider instances evolve across the daemon, CLI, and Flutter client.
 
 | Layer | Coverage added/updated in this change |
 |---|---|
-| Agent unit tests | Readiness promotion waits for verified cache state; OAuth identity extraction covers claim priority, invalid values, lazy stored-record enrichment, summary mapping, and instance-keyed approval persistence. |
-| Agent interface tests | Templates/instance commands and `model.snapshot` status are exercised through `SanadProtocolBridge`. |
+| Agent unit tests | Readiness promotion waits for verified cache state; Base URL normalization covers legacy copied labels, malformed/unsupported schemes, and canonical `/v1/models`; model-cache coverage proves fallback diagnostics, truthful no-cache failure, coalesced-owner cleanup, and a fresh retry after failure. OAuth identity extraction covers claim priority, invalid values, lazy stored-record enrichment, summary mapping, and instance-keyed approval persistence. |
+| Agent interface tests | Templates/instance commands, `model.snapshot` status, and the `model.refresh` `started` → `failed` terminal sequence are exercised through `SanadProtocolBridge`. |
 | Client bloc/widget tests | Template loading no longer relies on legacy fallback, snapshot DTOs carry instance `status`, credential DTOs preserve `account_label`/`account_name`, OAuth cards and Edit render both distinct identity values, and the shared flow is covered in bounded-overlay and unbounded-Settings layouts. |
 | CLI tests | `sanad setup list` / `remove` assert the instance repository is the source of truth. |

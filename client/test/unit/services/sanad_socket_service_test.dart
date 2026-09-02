@@ -218,6 +218,7 @@ void main() {
           'items': [
             {'client-secret': 'raw-client-secret', 'status': 'ready'},
           ],
+          'secrets': {'bearer_token': 'g6-canary-bearer-9f3a7c2e1b88'},
         },
       });
 
@@ -227,6 +228,7 @@ void main() {
         'raw-camel-case-token',
         'raw-bearer-token',
         'raw-client-secret',
+        'g6-canary-bearer-9f3a7c2e1b88',
         'instance-private',
         'event-private',
         'person@example.test',

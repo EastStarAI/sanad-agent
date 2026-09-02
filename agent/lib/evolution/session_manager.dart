@@ -1,11 +1,14 @@
 import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
+import 'package:uuid/uuid.dart';
 import 'db/agent_state_database.dart';
 import 'db/session_db.dart';
 import 'models/session_query.dart';
+import 'models/session_history_page.dart';
 import 'models/session_state.dart';
 import 'models/suspended_checkpoint.dart';
+import 'compaction/model_context_projection.dart';
 import '../core/models/message.dart';
 
 class SessionManager {
@@ -54,7 +57,7 @@ class SessionManager {
     String? providerId,
     String? thinkingMode,
   }) {
-    final sessionId = DateTime.now().millisecondsSinceEpoch.toString();
+    final sessionId = const Uuid().v4();
 
     var resolvedProviderId = providerId;
     if (resolvedProviderId == null || resolvedProviderId.isEmpty) {
@@ -146,6 +149,7 @@ class SessionManager {
         lastUserMessageAt: session.lastUserMessageAt,
         routeRevision: session.routeRevision,
         routeUpdatedAt: session.routeUpdatedAt,
+        historyRevision: session.historyRevision,
         messages: session.messages,
       );
       _db.saveSession(updatedSession);
@@ -168,11 +172,44 @@ class SessionManager {
         lastUserMessageAt: session.lastUserMessageAt,
         routeRevision: session.routeRevision,
         routeUpdatedAt: session.routeUpdatedAt,
+        historyRevision: session.historyRevision,
         messages: messages,
       );
       _db.saveSession(updatedSession);
       _db.replaceMessages(sessionId, messages);
     }
+  }
+
+  SoftRewindAdmissionCommit? commitSoftRewindAdmission({
+    required String sessionId,
+    required int expectedHistoryRevision,
+    required String targetMessageId,
+    required String targetTurnId,
+    required String targetRequestId,
+    required Message replacement,
+  }) {
+    return _db.commitSoftRewindAdmission(
+      sessionId: sessionId,
+      expectedHistoryRevision: expectedHistoryRevision,
+      targetMessageId: targetMessageId,
+      targetTurnId: targetTurnId,
+      targetRequestId: targetRequestId,
+      replacement: replacement,
+    );
+  }
+
+  SessionForkCommit commitFork({
+    required String sourceSessionId,
+    required String requestId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) {
+    return _db.commitFork(
+      sourceSessionId: sourceSessionId,
+      requestId: requestId,
+      targetMessageId: targetMessageId,
+      targetTurnId: targetTurnId,
+    );
   }
 
   void recordCanonicalUserMessageAccepted(
@@ -182,8 +219,29 @@ class SessionManager {
     _db.updateSessionLastUserMessageAt(sessionId, receivedAt);
   }
 
-  List<Message> getMessages(String sessionId) {
-    return _db.getMessages(sessionId);
+  List<Message> getMessages(
+    String sessionId, {
+    bool includeSuperseded = false,
+  }) {
+    return _db.getMessages(sessionId, includeSuperseded: includeSuperseded);
+  }
+
+  List<PersistedMessage> getPersistedMessages(String sessionId) {
+    return _db.getPersistedMessages(sessionId);
+  }
+
+  SessionHistoryPage getPersistedMessagePage(
+    String sessionId, {
+    int limit = defaultSessionHistoryPageSize,
+    String? cursor,
+    int? anchorRowId,
+  }) {
+    return _db.getPersistedMessagePage(
+      sessionId,
+      limit: limit,
+      cursor: cursor,
+      anchorRowId: anchorRowId,
+    );
   }
 
   /// Persists last-turn metrics (usage, model, context_tokens, etc.) alongside

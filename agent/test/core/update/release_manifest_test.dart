@@ -168,6 +168,56 @@ void main() {
     });
   });
 
+  group('macOS platform trust', () {
+    test(
+      'uses the exact Apple-anchored NanoSoft publisher requirement',
+      () async {
+        String? executable;
+        List<String>? arguments;
+
+        final trusted = await verifyPlatformCodeSignature(
+          File('/tmp/sanad-agent-candidate'),
+          'macos',
+          processRunner: (command, commandArguments) async {
+            executable = command;
+            arguments = commandArguments;
+            return ProcessResult(1, 0, '', '');
+          },
+        );
+
+        expect(trusted, isTrue);
+        expect(executable, '/usr/bin/codesign');
+        expect(arguments, [
+          '--verify',
+          '--strict',
+          '--verbose=2',
+          '--test-requirement',
+          macosAgentPublisherRequirement,
+          '/tmp/sanad-agent-candidate',
+        ]);
+        expect(
+          macosAgentPublisherRequirement,
+          allOf(
+            contains('anchor apple generic'),
+            contains('certificate leaf[subject.OU] = "UC2824B99G"'),
+            contains('Developer ID Application: NanoSoft LY LLC (UC2824B99G)'),
+            isNot(contains('notarized')),
+          ),
+        );
+      },
+    );
+
+    test('fails closed when the publisher requirement is rejected', () async {
+      final trusted = await verifyPlatformCodeSignature(
+        File('/tmp/untrusted-agent-candidate'),
+        'macos',
+        processRunner: (_, _) async => ProcessResult(1, 3, '', 'rejected'),
+      );
+
+      expect(trusted, isFalse);
+    });
+  });
+
   group('AgentUpdateService', () {
     late Directory temporaryDirectory;
 
@@ -242,6 +292,39 @@ void main() {
         requestedArtifact?.toString(),
         'http://127.0.0.1/artifacts/sanad-agent-1.1.0-linux-x64',
       );
+    });
+
+    test('rejects a manifest revision changed after confirmation', () async {
+      final executable = File('${temporaryDirectory.path}/sanad')
+        ..writeAsStringSync('old');
+      var artifactRequested = false;
+      final service = AgentUpdateService(
+        currentVersion: '1.0.0',
+        executablePath: executable.path,
+        isSourceManaged: false,
+        operatingSystem: 'linux',
+        architecture: 'x64',
+        client: MockClient((request) async {
+          if (!request.url.path.endsWith('release-manifest.json')) {
+            artifactRequested = true;
+          }
+          return http.Response(
+            jsonEncode(_manifestJson(bytes: [1, 2, 3])),
+            200,
+          );
+        }),
+      );
+
+      final result = await service.update(
+        targetVersion: '1.1.0',
+        expectedManifestTag: 'v1.1.0',
+        expectedManifestCommit: 'superseded-commit',
+      );
+
+      expect(result.status, AgentUpdateStatus.targetMismatch);
+      expect(result.message, contains('changed after confirmation'));
+      expect(artifactRequested, isFalse);
+      expect(executable.readAsStringSync(), 'old');
     });
 
     test('rejects latest when it differs from the exact target', () async {
