@@ -9,9 +9,6 @@ import 'package:sanad_client/features/conversations/presentation/widgets/markdow
 class AppMarkdownRenderer extends StatelessWidget {
   final String data;
   final bool isFinal;
-  final bool isStreaming;
-  final String? contentId;
-  final Key? markdownKey;
   final void Function(String text, String? href, String title)? onTapLink;
   final Map<String, MarkdownElementBuilder>? builders;
 
@@ -19,28 +16,9 @@ class AppMarkdownRenderer extends StatelessWidget {
     super.key,
     required this.data,
     required this.isFinal,
-    this.isStreaming = false,
-    this.contentId,
-    this.markdownKey,
     this.onTapLink,
     this.builders,
   });
-
-  /// Computes a balanced milestone key for progressive streaming markdown
-  /// to ensure clean AST rendering on structural boundaries (lines, blocks, chunks)
-  /// while avoiding per-character element rebuild thrashing.
-  Key _resolveMarkdownBodyKey() {
-    if (markdownKey != null) {
-      return markdownKey!;
-    }
-    final prefix = contentId != null ? contentId! : 'markdown_body';
-    if (!isStreaming) {
-      return ValueKey('${prefix}_final');
-    }
-    final lineCount = data.split('\n').length;
-    final bucket = data.length ~/ 80;
-    return ValueKey('${prefix}_stream_${lineCount}_$bucket');
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -49,7 +27,6 @@ class AppMarkdownRenderer extends StatelessWidget {
       isFinal: isFinal,
     );
     return MarkdownBody(
-      key: _resolveMarkdownBodyKey(),
       data: data,
       styleSheet: markdownStyle,
       onTapLink: onTapLink,
@@ -57,4 +34,3 @@ class AppMarkdownRenderer extends StatelessWidget {
     );
   }
 }
-

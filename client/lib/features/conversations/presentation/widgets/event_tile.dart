@@ -367,10 +367,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
           key: Key('primary_markdown_${widget.event.kind.name}'),
           width: double.infinity,
           child: AppMarkdownRenderer(
-            contentId: widget.event.id,
             data: widget.event.text,
             isFinal: true,
-            isStreaming: widget.event.status == EventStatus.running,
             onTapLink: _onTapLink,
           ),
         ),
@@ -621,10 +619,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         return Directionality(
           textDirection: TextUtils.getTextDirection(widget.event.text),
           child: AppMarkdownRenderer(
-            contentId: widget.event.id,
             data: widget.event.text,
             isFinal: false,
-            isStreaming: widget.event.status == EventStatus.running,
             onTapLink: _onTapLink,
           ),
         );
