@@ -157,6 +157,27 @@ Use the review skill.''',
       mockAgentRunner.attachMetadataToLastAssistantMessage(any),
     ).thenReturn(null);
     when(mockAgentRunner.registry).thenReturn(ToolsRegistry());
+    when(
+      mockAgentRunner.commitUserMessage(
+        any,
+        requestId: anyNamed('requestId'),
+        receivedAt: anyNamed('receivedAt'),
+      ),
+    ).thenAnswer((invocation) async {
+      final requestId = invocation.namedArguments[#requestId]?.toString();
+      return Message(
+        role: MessageRole.user,
+        content: invocation.positionalArguments.first?.toString(),
+        metadata: {
+          'request_id': ?requestId,
+          'message_id': 'message-${requestId ?? 'legacy'}',
+          'turn_id': 'turn-${requestId ?? 'legacy'}',
+          'input_kind': 'root_turn',
+          'history_status': 'active',
+          'replay_eligible': requestId != null,
+        },
+      );
+    });
 
     // updateTurnRoute is called by resumeSuspended when a route override is
     // supplied. Default to a no-op so individual tests don't need to stub it.

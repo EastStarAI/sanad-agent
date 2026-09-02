@@ -2,9 +2,9 @@
 
 ## الحالة
 
-- **الحالة:** مُنع حفظ steer/live/display projections كـviewport anchors، وتُرحّل القيم القديمة إلى أقرب history event دائم؛ اكتمل التحقق الآلي والحي.
-- **الفرع:** `revert/streaming-markdown-milestone-keys`.
-- **البوابة الحالية:** G10 — مغلقة.
+- **الحالة:** مُنع حفظ steer/live/display projections كـviewport anchors، وتكافؤ أهلية Edit/Retry بين live والـhistory؛ اكتمل التحقق الآلي والحي.
+- **الفرع:** `docs/task-84-conversation-history-pagination`.
+- **البوابة الحالية:** G11 — مغلقة.
 - **نسبة العمل المتبقي:** 0%.
 - **التأصيل المرجعي:** Evidence ID `84`، fingerprint
   `sha256:9aa23d0f3a0007890d9ef01643ee633ea618f5ca48704ad54492340d51df9e28`.
@@ -373,6 +373,19 @@ Graphify.
 widget tests المركزة ومجموعة Client الكاملة (`1224 passed`, `1 skipped`)، ثم
 نجح `git diff --check` وتحديث Graphify.
 
+### G11 — تكافؤ أهلية Edit/Retry بين live والـhistory
+
+- [x] يثبت Agent رسالة root user وهويتها durable قبل نشر `user_message` الحي، ثم يبدأ model stream من الرسالة نفسها دون duplicate.
+- [x] يتطابق live event والـhydration لنفس الرسالة في `request_id` و`message_id` و`turn_id` و`input_kind` و`replay_eligible`.
+- [x] يظهر Edit/Retry ويعملان فور durable commit حتى أثناء التنفيذ؛ يظل Agent مالك Stop والـidle boundary والـsoft rewind.
+- [x] لا يعرض Client Edit/Retry من anchored/partial history ما دام `hasNewerHistory=true`.
+- [x] تغطي الاختبارات الإرسال الحي دون navigation، والـhydration parity، والـpartial-tail guard، ومسار daemon-backed الحقيقي.
+
+#### قبول G11
+
+- [x] Given رسالة root جديدة، when تُرسل، then يظهر Edit/Retry من live event دون تغيير المحادثة أو طلب history إضافي.
+- [x] Given anchored page لها سجل أحدث، then لا تظهر إجراءات replay لأي root محملة حتى الوصول إلى authoritative tail.
+- [x] Given Retry أثناء تنفيذ الوكيل، then يرسل Client أمر replay واحدًا ويتولى Agent وحده Stop ثم rewind وإعادة التنفيذ.
 ## معايير القبول
 
 - [x] Given جلسة تحتوي 10,000 رسالة persistence، when تُفتح، then لا يقرأ Agent
