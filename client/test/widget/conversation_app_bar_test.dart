@@ -18,7 +18,22 @@ void main() {
       const SessionMessagesState().visualState,
       ConversationVisualState.newConversation,
     );
+    expect(
+      const SessionMessagesState(requestedSessionId: 'session-1', isHistoryLoading: true).visualState,
+      ConversationVisualState.loadingTransition,
+    );
+    expect(
+      const SessionMessagesState(historyLoadError: 'Could not load').visualState,
+      ConversationVisualState.loadingTransition,
+    );
   });
+
+  test('showAppBar is true for active and loading transition, false only for new conversation', () {
+    expect(ConversationVisualState.newConversation.showAppBar, isFalse);
+    expect(ConversationVisualState.loadingTransition.showAppBar, isTrue);
+    expect(ConversationVisualState.activeSession.showAppBar, isTrue);
+  });
+
 
   testWidgets('desktop app bar constrains long workspace and session titles', (
     tester,
@@ -201,4 +216,30 @@ void main() {
     final column = tester.widget<Column>(find.byType(Column));
     expect(column.crossAxisAlignment, CrossAxisAlignment.end);
   });
+
+  testWidgets('mobile app bar renders default Conversation title and menu button when sessionTitle is null', (
+    tester,
+  ) async {
+    bool menuPressed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ConversationAppBar(
+            sessionTitle: null,
+            isMobile: true,
+            onMenuPressed: () {
+              menuPressed = true;
+            },
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Conversation'), findsOneWidget);
+    expect(find.byTooltip('Open navigation menu'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Open navigation menu'));
+    expect(menuPressed, isTrue);
+  });
 }
+

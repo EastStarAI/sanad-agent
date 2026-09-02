@@ -154,10 +154,13 @@ At most two recently visited timelines that are exhausted in both directions
 may remain in memory. Reopening one reconciles the authoritative tail by event
 identity instead of discarding pages the user explicitly loaded. Partial slices
 remain replaceable and do not become cache authority. Cursor and loaded
-transcript pages are never persisted; only the per-device/session stable
-viewport event id survives restart and may trigger an anchored request. Flutter
-page-storage offsets are not authoritative, so conversation scrolling disables
-the framework offset cache and restores through the saved event id.
+transcript pages are never persisted; only an Agent-issued
+`history:<session>:...` event id may survive restart and trigger an anchored
+request. Live, steer-lifecycle, model-step, and tool-group display identities are
+not queryable history anchors and are never persisted; legacy values migrate to
+the nearest loaded history event. Flutter page-storage offsets are not
+authoritative, so conversation scrolling disables the framework offset cache and
+restores through the saved event id.
 
 Presentation renders no pagination/retry controls. Short slices alternate older
 and newer auto-fill with a three-page budget per direction; longer slices
@@ -171,7 +174,7 @@ that direction, and session activation resets both.
 - Backend: `SharedPreferencesConversationCachePersistence` (cross-platform, no secrets).
 - Codec: `ConversationCacheCodec` — single namespaced JSON blob under the stable key `sanad_conversation_cache`. Schema compatibility and safe invalidation are owned by the payload codec.
 - Schema version: `4`. `lastDestination` is encoded as a typed object containing `kind` plus the valid identity field (`sessionId` or nullable `workspaceId`). Unknown or malformed destination objects decode as absent and therefore default to New Conversation at routing time; `lastSelectedSessionId` is never promoted into a destination.
-- `sessionViewportAnchors` stores stable event ids rather than pixel offsets. It is written only after manual scrolling settles, ignored while a session has authoritative active work, cleared by a newly accepted user message, and removed with session/device cleanup.
+- `sessionViewportAnchors` stores only Agent-issued `history:<session>:...` event ids rather than display ids or pixel offsets. It is written only after manual scrolling settles, ignored while a session has authoritative active work, migrated away from legacy transient ids on read, cleared by a newly accepted user message, and removed with session/device cleanup.
 - Unknown future versions and corrupt payloads invalidate safely.
 - Debounced writes via `ConversationCachePersistor` (default 500ms); `flush()` on lifecycle pause/close.
 - Bootstrap awaits hydration before `runApp`, and serialized persistence writes prevent an older delayed save from overwriting a newer snapshot.
