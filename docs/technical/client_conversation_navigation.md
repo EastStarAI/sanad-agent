@@ -91,7 +91,10 @@ arrives.
 The conversation timeline uses a centered sliver layout so a long history can
 open at a selected event without building every older row. An idle session opens
 at its saved manual viewport event when valid, then falls back to its latest user
-message; that event begins near the visible top. A session with authoritative
+message; that event begins near the visible top. Saved viewport identity is
+always the Agent-issued history event id, not the Client's live, steer, model-step,
+or grouped display identity; legacy display ids migrate to the nearest loaded
+history event before another navigation. A session with authoritative
 active work ignores the saved reading position and opens at the live tail: the
 latest event ends at the visible bottom boundary immediately above the composer.
 The active-tail layout keeps old history in the upward-growing sliver without

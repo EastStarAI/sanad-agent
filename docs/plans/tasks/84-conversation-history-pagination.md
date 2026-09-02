@@ -2,9 +2,9 @@
 
 ## الحالة
 
-- **الحالة:** اكتمل إصلاح تكرار pending steer بعد hydration والتنقل بين المحادثات والتحقق منه.
-- **الفرع:** `fix/conversation-history-projections`.
-- **البوابة الحالية:** G9 — مغلقة.
+- **الحالة:** مُنع حفظ steer/live/display projections كـviewport anchors، وتُرحّل القيم القديمة إلى أقرب history event دائم؛ اكتمل التحقق الآلي والحي.
+- **الفرع:** `revert/streaming-markdown-milestone-keys`.
+- **البوابة الحالية:** G10 — مغلقة.
 - **نسبة العمل المتبقي:** 0%.
 - **التأصيل المرجعي:** Evidence ID `84`، fingerprint
   `sha256:9aa23d0f3a0007890d9ef01643ee633ea618f5ca48704ad54492340d51df9e28`.
@@ -354,6 +354,24 @@ Graphify.
 الفرع النهائي المبني من `main` (`1224 passed`, `1 skipped`).
 طُبق hot restart بنجاح على Client المملوك لـWorktree 84، وبقي runtime مطابقًا
 لنفس المصدر والفرع، كما نجح `git diff --check` وتحديث Graphify.
+
+### G10 — هوية viewport anchor قابلة للاسترجاع
+
+- [x] منع حفظ `user_req_*` وlive/model-step/tool-group display ids كـanchor.
+- [x] حفظ `event.eventId` فقط عندما يطابق `history:<session>:...` الصادر عن Agent.
+- [x] ترحيل anchor قديم مؤقت إلى أقرب history event محمّل دون إرسال طلب invalid.
+- [x] مطابقة الاستعادة على canonical display id أو history event id داخل المجموعة.
+- [x] إضافة regression مطابق لرسالة steer أثناء run والتنقل بعيدًا ثم العودة.
+- [x] تشغيل التحقق الكامل وتحديث Graphify وإغلاق البوابة.
+
+**دليل G10 الحالي:** قاعدة المستخدم أثبتت أن `user_req_d857...` رسالة steer
+بالحالة `delivered` وليست replay، وأن history API يقبل فقط صيغة
+`history:<session>:...`. بعد hot reload والتنقل بعيدًا والعودة ظهرت الصفحة
+التاريخية ومجموعة الأدوات والأحداث الحية معًا، ولم يُرسل anchored request
+بالمعرف المؤقت. بعد تحميل النسخة النهائية وتكرار session switch ظهرت سبعة عناصر
+حديثة بين مجموعات وأحداث history/live بدل فقاعة steer منفردة. نجح analyzer و28
+widget tests المركزة ومجموعة Client الكاملة (`1224 passed`, `1 skipped`)، ثم
+نجح `git diff --check` وتحديث Graphify.
 
 ## معايير القبول
 

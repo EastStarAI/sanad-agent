@@ -120,9 +120,12 @@ The `NavigationHistoryController` maintains three stacks:
 - New Conversation restores its nullable workspace preselection; `null` means no workspace is selected. A workspace known to be removed is dropped.
 - `lastSelectedSessionId` is used only to inherit previous session context and never determines the restart route.
 - A missing saved destination defaults to New Conversation. If a saved session was deleted while offline, recovery also falls back to New Conversation.
-- An idle session with a saved viewport event requests the bounded page containing
-  that event and reopens it near the visible top. Active work always opens at the
-  live tail. A missing, compacted, or stale event safely retains the newest tail.
+- An idle session persists only a durable history event as its viewport anchor,
+  requests the bounded page containing that event, and reopens it near the visible
+  top. Temporary steer/live/tool-group identities are skipped; a legacy temporary
+  anchor migrates to the nearest loaded durable event. Active work always opens at
+  the live tail. A missing, compacted, or stale durable event safely retains the
+  newest tail.
 
 ## Test Scenarios
 
