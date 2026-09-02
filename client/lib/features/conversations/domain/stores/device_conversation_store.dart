@@ -410,29 +410,62 @@ class DeviceConversationStore {
     byRequest[record.requestId] = record;
     if (record.sessionId != _currentSessionId) return;
 
-    final eventId = 'user_${record.requestId}';
+    _reconcilePendingSteerProjection(record);
+    _emitMessages();
+  }
+
+  void _reconcilePendingSteerProjection(
+    PendingSteerRecord record, {
+    Map<String, dynamic> metadataOverrides = const {},
+  }) {
+    final transientEventId = 'user_${record.requestId}';
     if (record.state == PendingSteerState.cancelled || record.state == PendingSteerState.recovered) {
-      _conversation.removeById(eventId);
-      _emitMessages();
+      _conversation.removeById(transientEventId);
       return;
     }
+
+    final durableEvent = _conversation.events
+        .where(
+          (event) =>
+              event.id != transientEventId &&
+              event.kind == EventKind.userMessage &&
+              event.sessionId == record.sessionId &&
+              event.requestId == record.requestId,
+        )
+        .firstOrNull;
+    if (durableEvent != null) {
+      _conversation.removeById(transientEventId);
+    }
+    final base = durableEvent;
     _conversation.apply(
       CanonicalEvent(
-        id: eventId,
+        id: base?.id ?? transientEventId,
         kind: EventKind.userMessage,
-        text: record.text,
-        timestamp: record.receivedAt,
-        sessionId: record.sessionId,
-        runId: record.runId,
+        text: base?.text ?? record.text,
+        timestamp: base?.timestamp ?? record.receivedAt,
+        sessionId: base?.sessionId ?? record.sessionId,
+        runId: base?.runId ?? record.runId,
+        eventId: base?.eventId,
         metadata: {
+          ...?base?.metadata,
           'request_id': record.requestId,
           'pending_steer_state': record.state.name,
           'pending_steer_revision': record.revision,
           'generation': record.generation,
+          ...metadataOverrides,
         },
       ),
     );
-    _emitMessages();
+  }
+
+  void _reconcileCurrentPendingSteerProjections() {
+    final sessionId = _currentSessionId;
+    if (sessionId == null) return;
+    final records = _pendingSteersBySessionId[sessionId];
+    if (records == null) return;
+    for (final record in records.values) {
+      _reconcilePendingSteerProjection(record);
+    }
   }
 
   void hydratePendingSteers(
@@ -492,21 +525,9 @@ class DeviceConversationStore {
         .whereType<PendingSteerRecord>()
         .firstOrNull;
     if (record == null || record.sessionId != _currentSessionId) return;
-    _conversation.apply(
-      CanonicalEvent(
-        id: 'user_$requestId',
-        kind: EventKind.userMessage,
-        text: record.text,
-        timestamp: record.receivedAt,
-        sessionId: record.sessionId,
-        runId: record.runId,
-        metadata: {
-          'request_id': requestId,
-          'pending_steer_state': record.state.name,
-          'pending_steer_revision': record.revision,
-          'pending_cancel_outcome': outcome,
-        },
-      ),
+    _reconcilePendingSteerProjection(
+      record,
+      metadataOverrides: {'pending_cancel_outcome': outcome},
     );
     _emitMessages();
   }
@@ -533,6 +554,7 @@ class DeviceConversationStore {
     String? nextNewerCursor,
   }) {
     _conversation.setHistory(events);
+    _reconcileCurrentPendingSteerProjections();
     _historyHasMore = hasMore && nextCursor != null;
     _historyNextCursor = _historyHasMore ? nextCursor : null;
     _historyHasNewer = hasNewer && nextNewerCursor != null;
@@ -547,14 +569,13 @@ class DeviceConversationStore {
     required String requestedCursor,
   }) {
     if (_historyNextCursor != requestedCursor) return false;
-    final existingIds = _conversation.events.map((event) => event.id).toSet();
-    final older = events.where((event) => existingIds.add(event.id)).toList(growable: false);
-    _conversation.setHistory([...older, ..._conversation.events]);
+    _conversation.setHistory([...events, ..._conversation.events]);
+    _reconcileCurrentPendingSteerProjections();
     final advanced = nextCursor != null && nextCursor != requestedCursor;
     _historyHasMore = hasMore && advanced;
     _historyNextCursor = _historyHasMore ? nextCursor : null;
     _emitMessages();
-    return older.isNotEmpty || !_historyHasMore;
+    return events.isNotEmpty || !_historyHasMore;
   }
 
   bool appendHistory(
@@ -568,6 +589,7 @@ class DeviceConversationStore {
     for (final event in newer) {
       _conversation.apply(event);
     }
+    _reconcileCurrentPendingSteerProjections();
     final advanced = nextNewerCursor != null && nextNewerCursor != requestedCursor;
     _historyHasNewer = hasNewer && advanced;
     _historyNextNewerCursor = _historyHasNewer ? nextNewerCursor : null;
