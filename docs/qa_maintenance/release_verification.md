@@ -51,6 +51,40 @@ then installs, launches, and purges it on the clean runner. The Stable Linux
 convenience link selects this `.deb`; the `tar.gz` remains a public portable
 alternative.
 
+## Automated preparation gate
+
+`prepare-release` must reject malformed, equal, or decreasing Stable versions
+and non-increasing build numbers before writing any file. A successful run must
+update all package, lockfile, native Windows, release-contract, artifact-name,
+release-note identity, changelog-slot, and current-release documentation
+surfaces. `check-preparation` must then reject any stale surface or unfinished
+`TODO`. Focused tests copy the current 11-file release surface into an isolated
+temporary fixture, derive the next patch and build from its current contract,
+and prove successful transformation, no mutation after prevalidation failure,
+and stale native/prose rejection. Tests must not pin the release identity that
+they are designed to advance.
+
+The protected-review exception is valid only for an exact metadata release PR.
+`scripts/release/verify_metadata_release_diff.sh` compares the PR merge range
+against the fixed 11-file set and inspects every changed line outside release
+notes and changelog. Only semantic version/build declarations, the Stable tag,
+canonical `sanad-agent`/`sanad-client` filenames, and the single current-release
+documentation sentence are accepted. Tests must prove the expected diff passes
+while an unrelated path or installer metadata line fails. CI must also run the
+normal release contract, Agent/Client analyzer, tests, secret scan, and release
+security lanes; the exception replaces only the early `release-reviewed` label,
+not technical validation or final publication approval.
+
+Before creating the immutable tag, automation must prove that the squash-merged
+release commit is current public `main`, that every selected included change is
+an ancestor, and specifically that PR #129 merge commit
+`872a5b75aec8303bf59ea39e25826d017d0ad714` is present in the next and later
+release lines. The candidate monitor is bounded and identifies its run by tag
+plus source SHA. It may request the final decision only after every prerequisite
+job and private Draft succeeds and the sole pending deployment is
+`release-publication`; any failed, cancelled, missing, stale, duplicate, timed
+out, or ambiguous state blocks approval.
+
 ## Platform matrix
 
 Until `flutter/flutter#185394` is fixed in a stable Flutter engine and passes a

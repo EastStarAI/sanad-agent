@@ -1,3 +1,12 @@
+## 1.0.7
+
+- Added durable conversation replay, materialized forks, paginated history, and synchronized live-history recovery (#125, #127, #128, #131).
+- Added run-scoped cancellation, safe forced-shutdown recovery, and protection against replaying active provider requests after controlled restart (#112, #117, #124).
+- Added durable model-aware context compaction and contained provider model-refresh failures (#118, #123).
+- Added secure device-scoped workspace and MCP control plus durable Linux headless Agent installation (#120, #121).
+- Hardened `sanad-dev` runtime ownership, background startup, and multi-driver control (#126).
+- Added deterministic release identity preparation and fail-closed metadata verification (#132).
+
 ## 1.0.6
 
 - Hardened macOS Agent runtime trust verification to enforce Developer ID publisher requirements (#105).
