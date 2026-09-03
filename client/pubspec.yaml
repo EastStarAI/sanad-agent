@@ -70,7 +70,7 @@ dependencies:
 
   flutter_highlight: ^0.7.0
   highlight: ^0.7.0
-  flutter_markdown: ^0.7.7+1
+  flutter_markdown_plus: ^1.0.12
   flutter_svg: ^2.0.17
   code_forge: ^5.1.0
   re_highlight: ^0.0.3
