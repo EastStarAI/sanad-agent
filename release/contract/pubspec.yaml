@@ -1,6 +1,6 @@
 name: sanad_release_contract
 description: Shared machine-readable Sanad release manifest contract.
-version: 1.0.7
+version: 1.0.8
 publish_to: none
 
 environment:
