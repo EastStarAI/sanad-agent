@@ -26,6 +26,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
   final ProviderProfile profile;
   final http.Client? client;
   final ModelsDevService? modelsDevService;
+  final ModelContextLimitLookup? modelContextLimitLookup;
   final String? baseUrlOverride;
   final String? apiKeyOverride;
   final String? defaultModelOverride;
@@ -37,6 +38,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     this.profile, {
     this.client,
     this.modelsDevService,
+    this.modelContextLimitLookup,
     this.baseUrlOverride,
     this.apiKeyOverride,
     this.defaultModelOverride,
@@ -330,6 +332,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final resolvedModel = _resolveModel(modelOverride);
     final configuredLimit = config.contextModelLimit(resolvedModel);
     if (configuredLimit != null) return configuredLimit;
+
+    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
+    if (catalogLimit != null) return catalogLimit;
 
     // 1. LM Studio local probe (reference-style)
     if (profile.name == 'lm-studio') {

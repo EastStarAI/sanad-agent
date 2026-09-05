@@ -35,6 +35,14 @@ class CompactionTailSelector {
 
   const CompactionTailSelector({this.minimumRecentMessages = 1});
 
+  bool hasCompressibleHead({
+    required List<IndexedConversationMessage> timeline,
+    CompactionMessageRange? previousSourceEnd,
+  }) {
+    if (timeline.isEmpty) return false;
+    return _sourceStartIndex(timeline, previousSourceEnd) < timeline.length - 1;
+  }
+
   CompactionRangeSelection select({
     required List<IndexedConversationMessage> timeline,
     required int tailTokenBudget,

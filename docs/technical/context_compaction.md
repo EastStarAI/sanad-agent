@@ -89,10 +89,17 @@ Removing `ContextEngine` does **not** alter these independent paths:
 
 - `LLMAdapter.getContextLimit(model)` and `AgentRunner.getContextTokens()` stay on the turn route.
 - Prototype used the same adapter hook but will be replaced by `RequestPressureSnapshot` (53c) without removing adapter APIs.
-- Task 53g makes `SANAD_HOME/config.yaml` the only user-owned non-secret override:
-  exact normalized `context.modelLimits` first, then live provider metadata,
-  current model metadata, and the provider fallback. Legacy `CONTEXT_LIMIT`
-  cannot impose one window on every model.
+- Task 53g makes `SANAD_HOME/config.yaml` the only user-owned non-secret override.
+  Runtime resolution uses the exact normalized override first, then the selected
+  model's `context_window` from the revision-matched catalog cache of the same
+  provider instance, then adapter/provider metadata and its bounded fallback.
+  Catalog metadata never crosses instance, config-revision, or
+  credential-revision boundaries. Legacy `CONTEXT_LIMIT` cannot impose one
+  window on every model.
+- Pressure above threshold is not itself proof that compaction can make
+  progress. If the active canonical projection has no source head before its
+  retained tail, automatic or forced preparation returns no candidate and the
+  model request continues without throwing a range-selection argument error.
 
 ## 3. Ownership Boundaries (Gate A0)
 

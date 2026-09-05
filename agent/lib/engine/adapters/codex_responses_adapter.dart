@@ -33,6 +33,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     super.config,
     super.profile, {
     super.client,
+    super.modelContextLimitLookup,
     super.baseUrlOverride,
     super.apiKeyOverride,
     super.defaultModelOverride,

@@ -97,6 +97,12 @@ class ContextCompactionEngine {
     if (!force && !pressure.exceedsThreshold) {
       return null;
     }
+    if (!_tailSelector.hasCompressibleHead(
+      timeline: request.timeline,
+      previousSourceEnd: request.previousSourceRange,
+    )) {
+      return null;
+    }
     final progressCap = (pressure.components.historyTokens * 0.50).floor();
     final tailBudget =
         progressCap > 0 && progressCap < request.targetRequestTokens
