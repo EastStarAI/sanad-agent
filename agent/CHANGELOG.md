@@ -1,3 +1,7 @@
+## 1.0.8
+
+- Added revision-matched provider catalog context-window resolution for newly discovered models and prevented compaction failure when no source head is available (#136).
+
 ## 1.0.7
 
 - Added durable conversation replay, materialized forks, paginated history, and synchronized live-history recovery (#125, #127, #128, #131).
