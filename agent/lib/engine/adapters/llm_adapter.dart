@@ -4,6 +4,8 @@ import '../../capabilities/models/tool_schema.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'llm_request_options.dart';
 
+typedef ModelContextLimitLookup = int? Function(String modelId);
+
 /// Adapter-owned measurement of the material that contributes input tokens on
 /// the provider wire.
 ///

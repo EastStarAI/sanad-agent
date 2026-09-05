@@ -23,6 +23,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
   final Config config;
   final ProviderProfile profile;
   final http.Client? client;
+  final ModelContextLimitLookup? modelContextLimitLookup;
   final String? baseUrlOverride;
   final String? apiKeyOverride;
   final String? defaultModelOverride;
@@ -33,6 +34,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
     this.config,
     this.profile, {
     this.client,
+    this.modelContextLimitLookup,
     this.baseUrlOverride,
     this.apiKeyOverride,
     this.defaultModelOverride,
@@ -205,6 +207,8 @@ class BaseAnthropicAdapter implements LLMAdapter {
     final resolvedModel = _resolveModel(modelOverride);
     final configuredLimit = config.contextModelLimit(resolvedModel);
     if (configuredLimit != null) return configuredLimit;
+    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
+    if (catalogLimit != null) return catalogLimit;
     return ModelMetadata.getLimitForModel(resolvedModel) ?? 200000;
   }
 

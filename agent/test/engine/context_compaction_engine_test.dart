@@ -820,6 +820,39 @@ Remaining Work and Safest Next Action: Run verification
         expect(candidate, isNull);
       });
 
+      test(
+        'returns null when forced pressure has no compressible head',
+        () async {
+          final engine = ContextCompactionEngine();
+          final candidate = await engine.buildCandidate(
+            CompactionEngineRequest(
+              compactionId: 'cmp-no-head',
+              sessionId: 'session-1',
+              trigger: CompactionTrigger.auto,
+              sourceRevision: const CompactionHistoryRevision(1),
+              routeSignature: _route(),
+              contextWindowTokens: 4_000,
+              timeline: [
+                IndexedConversationMessage(
+                  rowId: 1,
+                  message: Message(
+                    role: MessageRole.user,
+                    content: 'new conversation ${'x' * 20_000}',
+                  ),
+                ),
+              ],
+              systemPrompt: 'system prompt',
+              runtimeContext: 'runtime',
+              toolSchemas: const [],
+              targetRequestTokens: 300,
+            ),
+            force: true,
+          );
+
+          expect(candidate, isNull);
+        },
+      );
+
       test('builds validated candidate under target budget', () async {
         final engine = ContextCompactionEngine();
         final candidate = await engine.buildCandidate(

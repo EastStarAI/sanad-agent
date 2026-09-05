@@ -20,6 +20,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     super.config,
     super.profile, {
     super.client,
+    super.modelContextLimitLookup,
     super.baseUrlOverride,
     super.apiKeyOverride,
   });
@@ -134,6 +135,9 @@ class OllamaAdapter extends BaseOpenAIAdapter {
 
     final configuredLimit = config.contextModelLimit(resolvedModel);
     if (configuredLimit != null) return configuredLimit;
+
+    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
+    if (catalogLimit != null) return catalogLimit;
 
     try {
       final url = Uri.parse('${super.baseUrl}/api/show');
