@@ -55,6 +55,8 @@ description: "Focused QA coverage for the Plan 32c device-scoped sidebar, includ
 2. Restart the app or switch away then back.
 3. **Expected:** Cached workspaces/conversations render before the remote refresh completes.
 4. **Expected:** Refresh status is visible but non-blocking; the list does not blank.
+5. Start another workspace refresh, remove a workspace from Settings before that refresh completes, then allow its older response to arrive.
+6. **Expected:** The removed workspace stays absent; the stale response cannot restore it.
 
 ### 4. Offline and stale-error behavior
 1. Load sidebar data successfully.
@@ -126,3 +128,4 @@ description: "Focused QA coverage for the Plan 32c device-scoped sidebar, includ
 | Rebuild-scope verification | `client/test/widget/session_sidebar_rebuild_test.dart` |
 | Cubit projection and device snapshot clearing | `client/test/unit/bloc/session_sidebar_cubit_test.dart` |
 | Lazy collapsed refresh, pagination, canonical-event/create-workspace races | `client/test/unit/bloc/session_sidebar_cubit_pagination_ordering_test.dart` |
+| Workspace removal versus an older in-flight workspace-list refresh | `client/test/unit/repositories/conversation_cache_repository_test.dart` |
