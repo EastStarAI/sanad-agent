@@ -1,3 +1,10 @@
+## 1.0.9
+
+- Added provider-backed multilingual context compaction with typed JSON validation and bounded recovery (#139).
+- Propagated causal turn, run, and step IDs across live execution events and anchored steering messages to durable tool-call references (#142).
+- Added session affinity headers for OpenCode requests (#140).
+- Added canonical application attribution headers for OpenRouter requests (#141).
+
 ## 1.0.8
 
 - Added revision-matched provider catalog context-window resolution for newly discovered models and prevented compaction failure when no source head is available (#136).
