@@ -7,9 +7,9 @@ status: "in progress"
 
 ## الحالة
 
-- **الحالة:** اكتمل التنفيذ والتحقق الآلي للنطاق الموسّع. بدأ التحقق المرئي الحي بإذن المالك، لكن أول رسالة idle واجهت خطأ مزود أصلحه `main` الأحدث؛ أوقف المالك الجولة وطلب حفظ التغييرات ثم تحديث الفرع من `main` قبل استئنافها.
+- **الحالة:** اكتمل التنفيذ والتحقق الآلي للنطاق الموسّع. دُمج `main` الأحدث بعد تعذر أول جولة مرئية بخطأ المزود، ونجحت analyzers والحزمتان الكاملتان بعد حل التعارضات. الخطوة التالية إعادة تشغيل runtime الاختباري ثم استئناف التحقق المرئي.
 - **الفرع الحالي:** `feature/87-live-turn-identity-and-steer-ordering` داخل `.agent/worktrees/87-live-turn-identity-and-steer-ordering`.
-- **البوابة الحالية:** G4 — مزامنة `main` ثم إعادة التحقق المرئي الحي؛ لا يعد فشل المزود دليلًا على سلوك الهوية أو الترتيب.
+- **البوابة الحالية:** G4 — إعادة تشغيل الوكيل والعميل من المصدر المدمج ثم إعادة التحقق المرئي الحي.
 - **نسبة العمل المتبقي:** نحو **4%**، محصورة في التحقق المرئي الحي المصرّح به ومراجعة المالك؛ التنفيذ واختبارات الوحدة والتكامل وdaemon-backed E2E مكتملة.
 - **حدود التسليم الحالية:** تنفيذ وتحقق داخل Worktree المهمة؛ لا Commit أو Push أو PR أو Merge، ولا `sanad-dev switch` أو `sanad-dev stop` أو تشغيل runtime حي دون إذن منفصل.
 
@@ -349,7 +349,9 @@ E2E `three clients reconcile normal, steer, and replay history identically`
 - Agent analyzer: `No issues found!`.
 - Agent full fast suite: `+1487 ~13: All tests passed!`.
 - Client analyzer: `No issues found!`.
-- Client full fast suite: `+1236 ~1: All tests passed!`.
+- Client full fast suite قبل مزامنة `main`: `+1236 ~1: All tests passed!`.
+- بعد دمج `main`: Agent analyzer وClient analyzer بلا مشاكل، Agent full fast suite
+  `+1521 ~13`، وClient full fast suite `+1242 ~1`؛ كلها ناجحة.
 - اختبارات Client المركزة بعد آخر تعديل للمصالحة: `+94: All tests passed!`.
 - daemon-backed Local Gateway E2E لثلاثة عملاء: `+1: All tests passed!`
   باستخدام `--concurrency=1` و`SANAD_HOME=$HOME/.sanad-test`؛ أنشأ

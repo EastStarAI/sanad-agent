@@ -9,6 +9,7 @@ import '../core/models/agent_response.dart';
 import '../core/models/llm_provider_state.dart';
 import '../core/models/llm_usage_snapshot.dart';
 import '../capabilities/registry/tools_registry.dart';
+import '../capabilities/models/tool_schema.dart';
 import '../capabilities/tools/memory_tool.dart';
 import 'adapters/llm_adapter.dart';
 import 'adapters/llm_request_options.dart';
@@ -47,6 +48,7 @@ import 'runtime/run_cancellation_scope.dart';
 import '../evolution/compaction/model_projection_builder.dart';
 import '../core/agent_runtime_service.dart';
 import '../evolution/db/session_history_revision_repository.dart';
+import '../evolution/db/session_projection_revision_repository.dart';
 import '../engine/compaction/compaction.dart';
 import 'context/context.dart';
 import 'runtime/compaction_coordinator.dart';
@@ -65,6 +67,19 @@ class PendingSteerDeliveryCommit {
     required this.history,
     required this.records,
   });
+}
+
+class CompactionProviderSeed {
+  final List<Message> projection;
+  final List<ToolSchema> tools;
+  final LLMRequestOptions options;
+
+  CompactionProviderSeed({
+    required List<Message> projection,
+    required List<ToolSchema> tools,
+    required this.options,
+  }) : projection = List.unmodifiable(projection),
+       tools = List.unmodifiable(tools);
 }
 
 class AgentRunner {
@@ -547,15 +562,60 @@ class AgentRunner {
   }
 
   int _appendOrReuseUserMessage(Message userMessage, String? requestId) {
-    if (requestId != null && requestId.isNotEmpty && history.isNotEmpty) {
-      final last = history.last;
-      if (last.role == MessageRole.user &&
-          last.metadata?['request_id']?.toString() == requestId) {
-        return history.length - 1;
-      }
-    }
+    final existingIndex = _persistedUserMessageIndex(requestId);
+    if (existingIndex != -1) return existingIndex;
     history.add(userMessage);
     return history.length - 1;
+  }
+
+  int _persistedUserMessageIndex(String? requestId) {
+    if (requestId == null || requestId.isEmpty || history.isEmpty) return -1;
+    final last = history.last;
+    return last.role == MessageRole.user &&
+            last.metadata?['request_id']?.toString() == requestId
+        ? history.length - 1
+        : -1;
+  }
+
+  /// Commits one root user input before any live event exposes it to clients.
+  /// Re-entry with the same request id reuses the durable row without notifying
+  /// plugins or mutating history a second time.
+  Future<Message> commitUserMessage(
+    String? userContent, {
+    String? requestId,
+    DateTime? receivedAt,
+  }) async {
+    _reloadPersistedHistory();
+    var index = _persistedUserMessageIndex(requestId);
+    if (index == -1) {
+      index = _appendOrReuseUserMessage(
+        Message(
+          role: MessageRole.user,
+          content: userContent ?? '',
+          metadata: {
+            if (requestId != null && requestId.isNotEmpty)
+              'request_id': requestId,
+            'received_at': (receivedAt ?? DateTime.now())
+                .toUtc()
+                .toIso8601String(),
+          },
+        ),
+        requestId,
+      );
+      await pluginManager.notifyMessage(history[index]);
+      _saveHistory();
+      _reloadPersistedHistory();
+      index = requestId == null || requestId.isEmpty
+          ? history.length - 1
+          : _persistedUserMessageIndex(requestId);
+      if (index < 0 || index >= history.length) {
+        throw StateError(
+          'Committed user message is missing from session history.',
+        );
+      }
+    }
+    _currentTurnStartIndex = index;
+    return history[index];
   }
 
   bool _hasPersistableAssistantState(Message message) {
@@ -673,24 +733,11 @@ class AgentRunner {
     );
     try {
       _turnRoute.applyTurnSwitchIfNeeded();
-      _reloadPersistedHistory();
-
-      _currentTurnStartIndex = _appendOrReuseUserMessage(
-        Message(
-          role: MessageRole.user,
-          content: userContent ?? '',
-          metadata: {
-            if (effectiveRequestId != null && effectiveRequestId.isNotEmpty)
-              'request_id': effectiveRequestId,
-            'received_at': (receivedAt ?? DateTime.now())
-                .toUtc()
-                .toIso8601String(),
-          },
-        ),
-        effectiveRequestId,
+      await commitUserMessage(
+        userContent,
+        requestId: effectiveRequestId,
+        receivedAt: receivedAt,
       );
-      await pluginManager.notifyMessage(history[_currentTurnStartIndex]);
-      _saveHistory();
       _beginModelStep();
       _checkpointCoordinator.saveCheckpoint(
         ctx: _checkpointCtx,
@@ -1052,6 +1099,8 @@ class AgentRunner {
     required int attempt,
     required bool streamStarted,
     required Set<String> failedProviderInstanceIds,
+    List<Message>? failedProviderProjection,
+    List<ToolSchema>? failedProviderTools,
   }) async {
     if (error is RateLimitCancelled ||
         error is ProviderRequestCancelledException) {
@@ -1084,6 +1133,7 @@ class AgentRunner {
       final coordinator = getIt<CompactionCoordinator>();
       final revisionRepo = getIt<SessionHistoryRevisionRepository>();
       final revision = revisionRepo.read(sessionId);
+      final projectionRevision = _currentProjectionRevision();
       if (revision != null) {
         final timeline = _compactionTimelineForSession();
         if (timeline.isEmpty) {
@@ -1114,6 +1164,13 @@ class AgentRunner {
             systemPrompt: contextAssembler.assemble() ?? '',
             runtimeContext: '',
             toolSchemas: const [],
+            providerProjection: failedProviderProjection,
+            providerTools: failedProviderTools ?? const [],
+            providerRequestOptions: _compactionRequestOptions(
+              providerInstanceId,
+              compactionId: 'overflow',
+            ),
+            projectionRevision: projectionRevision,
             previousSummary: activeBoundary?.internalSummary,
             previousSourceRange: activeBoundary?.sourceRange,
             targetRequestTokens: targetRequestTokens,
@@ -1393,6 +1450,8 @@ class AgentRunner {
           attempt: providerAttempt,
           streamStarted: false,
           failedProviderInstanceIds: failedProviderInstanceIds,
+          failedProviderProjection: effectiveHistory,
+          failedProviderTools: tools,
         );
         if (!handled) {
           rethrow;
@@ -1505,32 +1564,13 @@ class AgentRunner {
       requestId: effectiveRequestId,
     );
     _turnRoute.applyTurnSwitchIfNeeded();
-    _reloadPersistedHistory();
-
-    _currentTurnStartIndex = _appendOrReuseUserMessage(
-      Message(
-        role: MessageRole.user,
-        content: userContent ?? '',
-        metadata: {
-          if (effectiveRequestId != null && effectiveRequestId.isNotEmpty)
-            'request_id': effectiveRequestId,
-          'received_at': (receivedAt ?? DateTime.now())
-              .toUtc()
-              .toIso8601String(),
-        },
-      ),
-      effectiveRequestId,
+    final durableRoot = await commitUserMessage(
+      userContent,
+      requestId: effectiveRequestId,
+      receivedAt: receivedAt,
     );
-    await pluginManager.notifyMessage(history[_currentTurnStartIndex]);
-    _saveHistory();
     final onRootMessageCommitted = _onRootMessageCommitted;
     if (onRootMessageCommitted != null) {
-      final persisted = sessionManager.getMessages(sessionId);
-      if (_currentTurnStartIndex >= persisted.length) {
-        throw StateError('Persisted root message is missing after commit.');
-      }
-      final durableRoot = persisted[_currentTurnStartIndex];
-      history[_currentTurnStartIndex] = durableRoot;
       await onRootMessageCommitted(durableRoot);
     }
     _beginModelStep();
@@ -1799,6 +1839,8 @@ class AgentRunner {
           attempt: providerAttempt,
           streamStarted: streamStarted,
           failedProviderInstanceIds: failedProviderInstanceIds,
+          failedProviderProjection: effectiveHistory,
+          failedProviderTools: tools,
         );
         if (!handled) {
           rethrow;
@@ -2346,6 +2388,13 @@ class AgentRunner {
       systemPrompt: contextAssembler.assemble() ?? '',
       runtimeContext: runtimeSystemPrompt ?? '',
       toolSchemas: toolSchemas,
+      providerProjection: prospectiveHistory,
+      providerTools: registry.allTools.map((tool) => tool.schema).toList(),
+      providerRequestOptions: _compactionRequestOptions(
+        routing.providerId,
+        compactionId: 'auto',
+      ),
+      projectionRevision: _currentProjectionRevision(),
       previousSummary: projection.activeBoundary?.internalSummary,
       previousSourceRange: projection.activeBoundary?.sourceRange,
       targetRequestTokens:
@@ -2366,6 +2415,27 @@ class AgentRunner {
       _autoCompactionBlockedForRun = true;
     }
     return false;
+  }
+
+  LLMRequestOptions _compactionRequestOptions(
+    String? providerInstanceId, {
+    required String compactionId,
+  }) {
+    return LLMRequestOptions(
+      sessionId: sessionId,
+      requestId: 'compaction:$compactionId:${const Uuid().v4()}',
+      providerInstanceId: providerInstanceId,
+      thinkingMode: _turnRoute.effectiveThinkingMode,
+      cancellationScope: _cancellationScope,
+    );
+  }
+
+  int _currentProjectionRevision() {
+    if (!getIt.isRegistered<SessionProjectionRevisionRepository>()) return 0;
+    return getIt<SessionProjectionRevisionRepository>()
+            .read(sessionId)
+            ?.value ??
+        0;
   }
 
   static int _effectiveInputWindow(int contextWindow) =>
@@ -2389,6 +2459,23 @@ class AgentRunner {
     String? runtimeSystemPrompt,
   }) {
     return _prepareProviderHistory(runtimeSystemPrompt: runtimeSystemPrompt);
+  }
+
+  /// Builds the same idle provider payload used by an ordinary next request,
+  /// without running preflight compaction or inventing a user turn.
+  Future<CompactionProviderSeed> prepareCompactionProviderSeed({
+    String? runtimeSystemPrompt,
+  }) async {
+    var projection = _buildEffectiveHistory(
+      runtimeSystemPrompt: runtimeSystemPrompt,
+    );
+    projection = await pluginManager.runPreExecution(projection);
+    final routing = _turnRoute.resolveTurnRouting();
+    return CompactionProviderSeed(
+      projection: projection,
+      tools: registry.allTools.map((tool) => tool.schema).toList(),
+      options: _requestOptionsForTurn(routing.providerId),
+    );
   }
 
   @visibleForTesting
@@ -2460,6 +2547,8 @@ class AgentRunner {
     required String? modelId,
     bool streamStarted = false,
     int attempt = 0,
+    List<Message>? failedProviderProjection,
+    List<ToolSchema>? failedProviderTools,
   }) async {
     try {
       return await _handleRuntimeFailure(
@@ -2469,6 +2558,8 @@ class AgentRunner {
         attempt: attempt,
         streamStarted: streamStarted,
         failedProviderInstanceIds: {},
+        failedProviderProjection: failedProviderProjection,
+        failedProviderTools: failedProviderTools,
       );
     } on RuntimeRecoveryRequired {
       return false;

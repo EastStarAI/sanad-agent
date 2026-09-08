@@ -214,6 +214,7 @@ class ConversationCacheStore {
   }
 
   void applyWorkspaceUpdated(String deviceId, DeviceWorkspace workspace) {
+    advanceWorkspacesGeneration(deviceId);
     ensureDeviceContext(deviceId);
     final ctx = _contextFor(deviceId);
     final current = List<DeviceWorkspace>.from(ctx.workspaces.workspaces);
@@ -250,6 +251,7 @@ class ConversationCacheStore {
   }
 
   void applyWorkspaceRemoved(String deviceId, String workspaceId) {
+    advanceWorkspacesGeneration(deviceId);
     ensureDeviceContext(deviceId);
     final ctx = _contextFor(deviceId);
     final workspaces = List<DeviceWorkspace>.from(ctx.workspaces.workspaces)

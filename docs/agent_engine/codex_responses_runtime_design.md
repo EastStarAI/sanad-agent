@@ -33,6 +33,10 @@ description: "تصميم codec وحالة الاستمرارية والبث وا
 الخدمة نفسها حتى تتطابق نتيجة `model.options` مع نتيجة `model.refresh`. تطبق
 الخدمة aliases الخاصة بالتوافق الأمامي وفق مرجع Hermes بعد نجاح catalog الحي،
 بينما يبقى fallback الثابت مسؤولية provider profile عند فشل الطلب أو التحليل.
+يحتفظ model cache كذلك بـ`context_window` التي يعيدها catalog لنفس instance.
+عند التنفيذ يمرر `AgentRuntimeService` lookup مرتبطًا بهوية instance ومراجعات
+الإعداد والاعتماد إلى المحول؛ لذلك تتقدم نافذة catalog الحية على metadata العامة
+دون أي شرط باسم النموذج، مع بقاء override الصريح في `config.yaml` أعلى أولوية.
 لا يؤثر هذا العقد في اكتشاف نماذج بقية OpenAI-compatible providers.
 
 ## Request codec

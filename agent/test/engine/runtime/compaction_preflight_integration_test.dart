@@ -118,6 +118,28 @@ class _FailingSummarizer implements CompactionSummarizer {
   }
 }
 
+class _CapturingProviderSummarizer
+    implements CompactionSummarizer, ProviderProjectionCompactionSummarizer {
+  CompactionProviderRequest? request;
+
+  @override
+  Future<String> summarize({required String prompt}) =>
+      throw UnsupportedError('provider projection expected');
+
+  @override
+  Future<CompactionProviderResult> summarizeProvider(
+    CompactionProviderRequest request,
+  ) async {
+    this.request = request;
+    return const CompactionProviderResult(
+      content:
+          '{"schemaVersion":1,"currentGoal":"تشغيل الضغط","latestUserRequest":"الطلب الجاري الواجب تنفيذه","successCriteria":"success","constraints":"none","completedWork":"none","activeState":"working","criticalContext":"الطلب الجاري الواجب تنفيذه","decisions":"none","blockers":"none","filesAndPaths":"none","pendingAsks":"الطلب الجاري الواجب تنفيذه","remainingWork":"continue"}',
+      usage: {'prompt_tokens': 1000, 'completion_tokens': 100},
+      duration: Duration(milliseconds: 1),
+    );
+  }
+}
+
 void main() {
   late AgentStateDatabase state;
   late SessionManager sessionManager;
@@ -162,6 +184,9 @@ void main() {
     );
     getIt.registerSingleton<SessionHistoryRevisionRepository>(
       SessionHistoryRevisionRepository(state),
+    );
+    getIt.registerSingleton<SessionProjectionRevisionRepository>(
+      SessionProjectionRevisionRepository(state),
     );
     getIt.registerSingleton<ContextCompactionEngine>(
       ContextCompactionEngine(summarizer: StructuredCompactionSummarizer()),
@@ -285,6 +310,62 @@ void main() {
     );
     expect(runner.history.length, canonicalLength);
   });
+
+  test(
+    'auto compaction seed includes the currently admitted user request',
+    () async {
+      sessions.replaceMessages('session-preflight', [
+        Message(role: MessageRole.user, content: 'طلب سابق'),
+        for (var index = 0; index < 500; index++) ...[
+          Message(role: MessageRole.user, content: 'تفصيل $index'),
+          Message(
+            role: MessageRole.assistant,
+            content: 'سياق كبير $index ${'x' * 1_000}',
+          ),
+        ],
+        Message(role: MessageRole.user, content: 'الطلب الجاري الواجب تنفيذه'),
+      ]);
+      runner = AgentRunner(
+        _PreflightAdapter(contextLimit: 3_000),
+        ToolsRegistry(),
+        sessionManager,
+        existingSessionId: 'session-preflight',
+      );
+      final summarizer = _CapturingProviderSummarizer();
+      getIt.registerSingleton<CompactionCoordinator>(
+        CompactionCoordinator(
+          engine: ContextCompactionEngine(summarizer: summarizer),
+          boundaries: boundaries,
+          activation: CompactionActivationService(
+            boundaries: boundaries,
+            projectionRevisions: getIt<SessionProjectionRevisionRepository>(),
+          ),
+          projectionBuilder: getIt<ModelProjectionBuilder>(),
+        ),
+      );
+
+      await runner.debugPrepareProviderHistory();
+
+      expect(
+        summarizer.request,
+        isNotNull,
+        reason: boundaries
+            .listLifecycleForSession('session-preflight')
+            .map(
+              (operation) => '${operation.status}:${operation.failureReason}',
+            )
+            .join(', '),
+      );
+      expect(
+        summarizer.request!.baseProjection.last.content,
+        'الطلب الجاري الواجب تنفيذه',
+      );
+      expect(
+        summarizer.request!.appendedProjection.last.content,
+        endsWith('return only the final JSON object.'),
+      );
+    },
+  );
 
   test('one failed auto compaction opens the per-run breaker', () async {
     sessions.replaceMessages('session-preflight', [

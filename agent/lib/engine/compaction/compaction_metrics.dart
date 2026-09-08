@@ -15,6 +15,12 @@ class CompactionMetrics {
   final int reclaimedTokens;
   final int retainedTailTokens;
   final Duration? duration;
+  final int? summarizationInputTokens;
+  final int? summarizationCachedInputTokens;
+  final int? summarizationCacheWriteTokens;
+  final int? summarizationOutputTokens;
+  final int? summarizationReasoningTokens;
+  final int summarizationAttempts;
 
   CompactionMetrics({
     required this.contextWindowTokens,
@@ -26,6 +32,12 @@ class CompactionMetrics {
     this.providerConfirmedRequestTokensAfter,
     required this.retainedTailTokens,
     this.duration,
+    this.summarizationInputTokens,
+    this.summarizationCachedInputTokens,
+    this.summarizationCacheWriteTokens,
+    this.summarizationOutputTokens,
+    this.summarizationReasoningTokens,
+    this.summarizationAttempts = 0,
   }) : reclaimedTokens =
            estimatedRequestTokensBefore - estimatedRequestTokensAfter,
        assert(contextWindowTokens > 0, 'contextWindowTokens must be positive'),
@@ -40,6 +52,7 @@ class CompactionMetrics {
              retainedTailTokens >= 0,
          'token counts must be non-negative',
        ),
+       assert(summarizationAttempts >= 0),
        assert(
          estimatedRequestTokensAfter <= estimatedRequestTokensBefore,
          'after tokens must not exceed before tokens',
@@ -60,10 +73,18 @@ class CompactionMetrics {
               other.providerConfirmedRequestTokensAfter &&
           reclaimedTokens == other.reclaimedTokens &&
           retainedTailTokens == other.retainedTailTokens &&
-          duration == other.duration;
+          duration == other.duration &&
+          summarizationInputTokens == other.summarizationInputTokens &&
+          summarizationCachedInputTokens ==
+              other.summarizationCachedInputTokens &&
+          summarizationCacheWriteTokens ==
+              other.summarizationCacheWriteTokens &&
+          summarizationOutputTokens == other.summarizationOutputTokens &&
+          summarizationReasoningTokens == other.summarizationReasoningTokens &&
+          summarizationAttempts == other.summarizationAttempts;
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     contextWindowTokens,
     effectiveInputBudgetTokens,
     autoThresholdTokens,
@@ -74,5 +95,11 @@ class CompactionMetrics {
     reclaimedTokens,
     retainedTailTokens,
     duration,
-  );
+    summarizationInputTokens,
+    summarizationCachedInputTokens,
+    summarizationCacheWriteTokens,
+    summarizationOutputTokens,
+    summarizationReasoningTokens,
+    summarizationAttempts,
+  ]);
 }

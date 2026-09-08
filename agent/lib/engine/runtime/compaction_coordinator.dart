@@ -4,6 +4,7 @@ import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/context/context.dart';
 import 'package:sanad_agent/evolution/compaction/compaction_activation_service.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
+import 'package:sanad_agent/evolution/db/session_projection_revision_repository.dart';
 import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
 import 'package:uuid/uuid.dart';
 
@@ -46,6 +47,8 @@ class CompactionCoordinator {
   final CompactionBoundaryRepository _boundaries;
   final CompactionActivationService _activation;
   final ModelProjectionBuilder _projectionBuilder;
+  final SessionProjectionRevisionRepository? _projectionRevisions;
+  final AgentRuntimeService? _runtime;
   final void Function(CompactionLifecycleEvent event)? onLifecycleEvent;
 
   CompactionCoordinator({
@@ -53,11 +56,15 @@ class CompactionCoordinator {
     required CompactionBoundaryRepository boundaries,
     required CompactionActivationService activation,
     required ModelProjectionBuilder projectionBuilder,
+    SessionProjectionRevisionRepository? projectionRevisions,
+    AgentRuntimeService? runtime,
     this.onLifecycleEvent,
   }) : _engine = engine,
        _boundaries = boundaries,
        _activation = activation,
-       _projectionBuilder = projectionBuilder;
+       _projectionBuilder = projectionBuilder,
+       _projectionRevisions = projectionRevisions,
+       _runtime = runtime;
 
   ModelProjectionBuilder get projectionBuilder => _projectionBuilder;
 
@@ -133,6 +140,10 @@ class CompactionCoordinator {
       systemPrompt: request.systemPrompt,
       runtimeContext: request.runtimeContext,
       toolSchemas: request.toolSchemas,
+      providerProjection: request.providerProjection,
+      providerTools: request.providerTools,
+      providerRequestOptions: request.providerRequestOptions,
+      projectionRevision: request.projectionRevision,
       previousSummary: request.previousSummary,
       previousSourceRange: request.previousSourceRange,
       targetRequestTokens: request.targetRequestTokens,
@@ -207,6 +218,14 @@ class CompactionCoordinator {
       );
     }
 
+    if (!_activationFenceMatches(request)) {
+      return _failClaimed(
+        request: request,
+        compactionId: compactionId,
+        startedAt: startedAt,
+        failureReason: CompactionFailureReason.sourceRevisionStale,
+      );
+    }
     final activation = _activation.activateCandidate(
       candidate: candidate.copyWithCompactionId(compactionId),
       startedAt: startedAt,
@@ -253,6 +272,29 @@ class CompactionCoordinator {
       ),
     );
     return CompactionOutcome.completed(candidate: candidate);
+  }
+
+  bool _activationFenceMatches(CompactionEngineRequest request) {
+    final projections = _projectionRevisions;
+    if (projections != null) {
+      final current = projections.read(request.sessionId);
+      if (current == null || current.value != request.projectionRevision) {
+        return false;
+      }
+    }
+    final runtime = _runtime;
+    if (runtime != null) {
+      try {
+        final current = runtime.resolveSignature(
+          providerId: request.routeSignature.providerInstanceId,
+          modelId: request.routeSignature.modelId,
+        );
+        if (current != request.routeSignature) return false;
+      } catch (_) {
+        return false;
+      }
+    }
+    return true;
   }
 
   void _emit(CompactionLifecycleEvent event) {

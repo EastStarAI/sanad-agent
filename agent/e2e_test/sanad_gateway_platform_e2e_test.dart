@@ -1127,6 +1127,80 @@ void main() {
   );
 
   test(
+    'live root message matches durable history before model completion',
+    () async {
+      final port = await _reserveFreePort();
+      final workspaceDir = Directory(
+        '${tempSanadHome.path}/live-user-workspace',
+      )..createSync(recursive: true);
+      final sessionId = 'session-live-user-parity';
+      final runtime = await _startResumeRuntime(
+        port: port,
+        workspacePath: workspaceDir.path,
+        adapter: ResumeScenarioLlmAdapter(),
+      );
+      final socket = await connectAuthenticatedLocalGateway(
+        port: port,
+        sanadHomePath: tempSanadHome.path,
+      );
+      final frames = StreamIterator<dynamic>(socket);
+      await _nextFrame(frames);
+
+      socket.add(
+        jsonEncode({
+          'type': 'execute_command',
+          'command': 'think',
+          'device_id': 'local-device-1',
+          'payload': {
+            'session_id': sessionId,
+            'request_id': 'request-live-user-parity',
+            'message': 'Verify live identity.',
+            'workspace_id': workspaceDir.path,
+            'model': 'ollama/gemma:2b',
+          },
+        }),
+      );
+      final liveUser = await _waitForEvent(frames, 'user_message');
+      final livePayload = Map<String, dynamic>.from(liveUser['payload'] as Map);
+      expect(livePayload['request_id'], 'request-live-user-parity');
+      expect(livePayload['message_id'], isNotEmpty);
+      expect(livePayload['turn_id'], isNotEmpty);
+      expect(livePayload['input_kind'], 'root_turn');
+      expect(livePayload['replay_eligible'], isTrue);
+
+      socket.add(
+        jsonEncode({
+          'type': 'execute_command',
+          'command': 'get_session_history',
+          'device_id': 'local-device-1',
+          'payload': {
+            'session_id': sessionId,
+            'request_id': 'request-live-user-history',
+          },
+        }),
+      );
+      final history = await _waitForEvent(
+        frames,
+        CanonicalEventTypes.sessionHistory,
+      );
+      final hydratedUser = (history['payload']['messages'] as List)
+          .whereType<Map>()
+          .map(Map<String, dynamic>.from)
+          .singleWhere(
+            (row) => row['request_id'] == 'request-live-user-parity',
+          );
+      expect(hydratedUser['message_id'], livePayload['message_id']);
+      expect(hydratedUser['turn_id'], livePayload['turn_id']);
+      expect(hydratedUser['input_kind'], livePayload['input_kind']);
+      expect(hydratedUser['replay_eligible'], livePayload['replay_eligible']);
+
+      await frames.cancel();
+      await socket.close();
+      await runtime.platform.dispose();
+    },
+  );
+
+  test(
     'Local daemon resumes pending permission-gated tool call after runtime restart',
     () async {
       final port = await _reserveFreePort();
@@ -1239,7 +1313,6 @@ void main() {
         historyFrame['payload']['context_usage'],
         containsPair('cached_tokens', 8),
       );
-
       secondSocket.add(
         jsonEncode({
           'type': 'protocol_event',

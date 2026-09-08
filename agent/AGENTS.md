@@ -52,6 +52,7 @@ This contract applies to `agent/`.
 - Admission, terminal commit, failover, stop cleanup, and cross-table execution transitions remain transactional through their aggregate owner.
 - `hardware_id` is persistent local machine identity and is distinct from backend-assigned device ids.
 - `run_id` owns execution, `model_step_id` owns one model invocation, `tool_call_id` pairs tool use/result, raw `request_id` owns command correlation, and opaque `event_id` owns one canonical semantic event. `message_id` owns one persisted history record, `turn_id` owns one execution attempt's history records, and `history_revision` owns compare-and-swap for active-history mutations. Never substitute these identities for one another, for SQLite row ids, or for hydration indexes.
+- A live root `user_message` is published only after its durable history row commits, and it carries the same message/turn/request identity and replay eligibility that subsequent history hydration exposes.
 - Sanad auth, provider OAuth, provider secrets, durable state, and mutable worktree state remain separate storage concerns.
 
 ### Provider and Capability Authority

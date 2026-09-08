@@ -12,7 +12,7 @@ import 'llm_request_options.dart';
 ///
 /// Unlike transport-level fixtures, this adapter runs through AgentRunner and
 /// the normal persistence/event pipeline without contacting an external model.
-class E2eFixtureAdapter implements LLMAdapter {
+class E2eFixtureAdapter implements LLMAdapter, WireInputUsageMeasurer {
   static const providerId = 'e2e-provider';
   static const modelId = 'e2e-model';
   static const responseText = 'e2e-success';
@@ -50,6 +50,49 @@ class E2eFixtureAdapter implements LLMAdapter {
       if (message.role == MessageRole.user) {
         latestUserContent = message.content ?? '';
       }
+    }
+    if (latestUserContent?.contains('The JSON schema version is 1') ?? false) {
+      var latestRequest = 'Continue the current task';
+      String? explicitGoal;
+      for (final message in history.take(history.length - 1)) {
+        if (message.role == MessageRole.user &&
+            (message.content ?? '').trim().isNotEmpty) {
+          latestRequest = message.content!;
+          final goalMatch = RegExp(
+            r'goal:\s*(.+)',
+            caseSensitive: false,
+          ).firstMatch(message.content!);
+          explicitGoal ??= goalMatch?.group(1)?.trim();
+        }
+      }
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: jsonEncode({
+            'schemaVersion': 1,
+            'currentGoal': explicitGoal ?? latestRequest,
+            'latestUserRequest': latestRequest,
+            'successCriteria': 'Complete the requested work safely',
+            'constraints': 'Preserve the active runtime contracts',
+            'completedWork': 'Earlier conversation work is preserved',
+            'activeState': 'Continue from the current checkpoint',
+            'criticalContext': latestRequest,
+            'decisions': 'Use the validated current plan',
+            'blockers': 'None recorded',
+            'filesAndPaths': 'None recorded',
+            'pendingAsks': latestRequest,
+            'remainingWork': 'Complete and verify the latest user request',
+          }),
+        ),
+        usage: const {
+          'prompt_tokens': 1200,
+          'cached_input_tokens': 900,
+          'completion_tokens': 180,
+        },
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
     }
     if (latestUserContent == runtimeContextPrompt) {
       final markerPattern = RegExp(
@@ -376,6 +419,30 @@ class E2eFixtureAdapter implements LLMAdapter {
   }) async => _response(history, tools);
 
   @override
+  Future<WireInputMeasurement?> measureInput(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async => WireInputMeasurement(
+    estimatedTokens:
+        (jsonEncode({
+                  'history': history
+                      .map((message) => message.toJson())
+                      .toList(),
+                  'tools': tools?.map((tool) => tool.toJson()).toList(),
+                }).length /
+                4)
+            .ceil(),
+    stableMaterialFingerprint: jsonEncode(
+      tools?.map((tool) => tool.toJson()).toList() ?? const [],
+    ),
+    inputItemFingerprints: [
+      for (final message in history) jsonEncode(message.toJson()),
+    ],
+  );
+
+  @override
   Stream<AgentResponse> generateStream(
     List<Message> history, {
     List<ToolSchema>? tools,
@@ -396,5 +463,5 @@ class E2eFixtureAdapter implements LLMAdapter {
   ];
 
   @override
-  Future<int> getContextLimit([String? modelOverride]) async => 8192;
+  Future<int> getContextLimit([String? modelOverride]) async => 32_768;
 }

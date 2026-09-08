@@ -953,6 +953,36 @@ void main() {
       expect(runner.history.length, 2); // user + assistant
     });
 
+    test('commits one replay-eligible root input idempotently', () async {
+      final runner = AgentRunner(
+        MockAdapter(const []),
+        registry,
+        sessionManager,
+      );
+
+      final committed = await runner.commitUserMessage(
+        'durable prompt',
+        requestId: 'request-durable-prompt',
+        receivedAt: DateTime.utc(2026, 9, 1),
+      );
+      final replayedCommit = await runner.commitUserMessage(
+        'durable prompt',
+        requestId: 'request-durable-prompt',
+        receivedAt: DateTime.utc(2026, 9, 1),
+      );
+
+      expect(committed.metadata?['request_id'], 'request-durable-prompt');
+      expect(committed.metadata?['message_id'], isNotEmpty);
+      expect(committed.metadata?['turn_id'], isNotEmpty);
+      expect(committed.metadata?['input_kind'], 'root_turn');
+      expect(committed.metadata?['replay_eligible'], isTrue);
+      expect(
+        replayedCommit.metadata?['message_id'],
+        committed.metadata?['message_id'],
+      );
+      expect(sessionManager.getMessages(runner.sessionId), hasLength(1));
+    });
+
     test(
       'controlled restart parks an active tool loop before its next provider request',
       () async {

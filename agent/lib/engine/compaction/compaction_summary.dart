@@ -6,14 +6,18 @@ import 'package:meta/meta.dart';
 /// or any user-visible transcript row.
 @immutable
 class CompactionInternalSummary {
+  static const int schemaVersion = 1;
+
   /// Anchor from the previous successful boundary, not a conversation message.
   final String? previousSummaryAnchor;
 
   final String currentGoal;
+  final String latestUserRequest;
   final String? successCriteria;
   final String? constraints;
   final String? completedWork;
   final String? activeState;
+  final String criticalContext;
   final String? decisions;
   final String? blockers;
   final String? filesAndPaths;
@@ -23,10 +27,12 @@ class CompactionInternalSummary {
   const CompactionInternalSummary({
     this.previousSummaryAnchor,
     required this.currentGoal,
+    this.latestUserRequest = 'Not recorded.',
     this.successCriteria,
     this.constraints,
     this.completedWork,
-    this.activeState,
+    this.activeState = 'Not recorded.',
+    this.criticalContext = 'Not recorded.',
     this.decisions,
     this.blockers,
     this.filesAndPaths,
@@ -35,13 +41,28 @@ class CompactionInternalSummary {
   });
 
   /// Required sections validated before a boundary may activate.
-  static const requiredSectionKeys = <String>['currentGoal', 'remainingWork'];
+  static const requiredSectionKeys = <String>[
+    'currentGoal',
+    'latestUserRequest',
+    'activeState',
+    'criticalContext',
+    'remainingWork',
+  ];
 
   /// Returns missing required section keys for [continuity validation].
   List<String> missingRequiredSections() {
     final missing = <String>[];
     if (currentGoal.trim().isEmpty) {
       missing.add('currentGoal');
+    }
+    if (latestUserRequest.trim().isEmpty) {
+      missing.add('latestUserRequest');
+    }
+    if ((activeState ?? '').trim().isEmpty) {
+      missing.add('activeState');
+    }
+    if (criticalContext.trim().isEmpty) {
+      missing.add('criticalContext');
     }
     if ((remainingWork ?? '').trim().isEmpty) {
       missing.add('remainingWork');
@@ -56,10 +77,12 @@ class CompactionInternalSummary {
           runtimeType == other.runtimeType &&
           previousSummaryAnchor == other.previousSummaryAnchor &&
           currentGoal == other.currentGoal &&
+          latestUserRequest == other.latestUserRequest &&
           successCriteria == other.successCriteria &&
           constraints == other.constraints &&
           completedWork == other.completedWork &&
           activeState == other.activeState &&
+          criticalContext == other.criticalContext &&
           decisions == other.decisions &&
           blockers == other.blockers &&
           filesAndPaths == other.filesAndPaths &&
@@ -70,10 +93,12 @@ class CompactionInternalSummary {
   int get hashCode => Object.hash(
     previousSummaryAnchor,
     currentGoal,
+    latestUserRequest,
     successCriteria,
     constraints,
     completedWork,
     activeState,
+    criticalContext,
     decisions,
     blockers,
     filesAndPaths,

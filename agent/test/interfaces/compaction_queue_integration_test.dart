@@ -80,6 +80,27 @@ void main() {
     ).thenReturn(null);
     when(mockAgentRunner.canPublishRunEvents).thenReturn(true);
     when(mockAgentRunner.setTurnRequestId(any)).thenReturn(null);
+    when(
+      mockAgentRunner.commitUserMessage(
+        any,
+        requestId: anyNamed('requestId'),
+        receivedAt: anyNamed('receivedAt'),
+      ),
+    ).thenAnswer((invocation) async {
+      final requestId = invocation.namedArguments[#requestId]?.toString();
+      return Message(
+        role: MessageRole.user,
+        content: invocation.positionalArguments.first?.toString(),
+        metadata: {
+          'request_id': ?requestId,
+          'message_id': 'message-${requestId ?? 'legacy'}',
+          'turn_id': 'turn-${requestId ?? 'legacy'}',
+          'input_kind': 'root_turn',
+          'history_status': 'active',
+          'replay_eligible': requestId != null,
+        },
+      );
+    });
 
     when(mockSessionManager.getSession(any)).thenReturn(
       SessionState(

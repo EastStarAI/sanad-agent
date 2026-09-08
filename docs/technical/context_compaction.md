@@ -64,6 +64,9 @@ Removing `ContextEngine` does **not** alter these independent paths:
 ### 2.2 Context-usage metrics
 
 - `MetricsTracker` accumulates turn usage; `AgentRunner._buildContextUsageSnapshot()` projects latest provider-reported input against the active route's context window.
+- Compaction-summary usage reuses the same canonical provider normalization as
+  ordinary turns, including nested `input_tokens_details.cached_tokens` and
+  nested cache-write/reasoning details; absent provider values remain absent.
 - Prototype compression did not feed usage metrics; it only replaced message lists before the provider call.
 - Latest provider-reported input usage for the same route and measured request
   material is the authoritative pressure baseline. Adapter-owned wire
@@ -89,10 +92,17 @@ Removing `ContextEngine` does **not** alter these independent paths:
 
 - `LLMAdapter.getContextLimit(model)` and `AgentRunner.getContextTokens()` stay on the turn route.
 - Prototype used the same adapter hook but will be replaced by `RequestPressureSnapshot` (53c) without removing adapter APIs.
-- Task 53g makes `SANAD_HOME/config.yaml` the only user-owned non-secret override:
-  exact normalized `context.modelLimits` first, then live provider metadata,
-  current model metadata, and the provider fallback. Legacy `CONTEXT_LIMIT`
-  cannot impose one window on every model.
+- Task 53g makes `SANAD_HOME/config.yaml` the only user-owned non-secret override.
+  Runtime resolution uses the exact normalized override first, then the selected
+  model's `context_window` from the revision-matched catalog cache of the same
+  provider instance, then adapter/provider metadata and its bounded fallback.
+  Catalog metadata never crosses instance, config-revision, or
+  credential-revision boundaries. Legacy `CONTEXT_LIMIT` cannot impose one
+  window on every model.
+- Pressure above threshold is not itself proof that compaction can make
+  progress. If the active canonical projection has no source head before its
+  retained tail, automatic or forced preparation returns no candidate and the
+  model request continues without throwing a range-selection argument error.
 
 ## 3. Ownership Boundaries (Gate A0)
 
@@ -330,7 +340,7 @@ Partial unique index (B1): at most one `started` row per `session_id`.
 | Lifecycle | `trigger`, `status`, `started_at`, `completed_at` |
 | Snapshot | `source_history_revision`, `source_start_message_id`, `source_end_message_id`, `tail_start_message_id`, `tail_end_message_id`, semantic `tail_end_anchor_fingerprint`, `tail_end_anchor_ordinal` |
 | Route | `provider_instance_id`, `model_id`, `template_id`, `protocol`, `normalized_base_url`, `config_revision`, `credential_revision` |
-| Metrics | `context_window_tokens`, daemon-owned `effective_input_budget_tokens`, daemon-owned `auto_threshold_tokens`, `estimated_request_tokens_before`, `before_measurement_kind`, `estimated_request_tokens_after`, write-once `provider_confirmed_request_tokens_after`, `retained_tail_tokens`, `duration_ms` |
+| Metrics | `context_window_tokens`, daemon-owned `effective_input_budget_tokens`, daemon-owned `auto_threshold_tokens`, `estimated_request_tokens_before`, `before_measurement_kind`, `estimated_request_tokens_after`, write-once `provider_confirmed_request_tokens_after`, `retained_tail_tokens`, `duration_ms`, separate summarization input/cached/cache-write/output/reasoning tokens, and attempt count |
 | Completed only | `internal_summary_json` (redacted structured summary — **not** a `Message` JSON blob) |
 | Failed only | `failure_reason` (enum wire name), optional `failure_detail_json` (redacted diagnostics, never provider wire) |
 
@@ -428,6 +438,50 @@ Projection rules:
 DI: `ModelProjectionBuilder` registered after `SessionManager` in `agent/lib/core/di.dart`.
 
 Verification: `fvm dart test test/evolution/model_projection_builder_test.dart` — 7 passed.
+
+### 8.11 Provider-backed summary request (Task 53i)
+
+Production compaction resolves the exact session route and appends one ephemeral
+user instruction to the trigger-owned provider projection. Auto includes the
+currently admitted user request; Overflow reuses the exact request projection
+that the provider rejected before output; Manual uses the current idle
+projection without adding a synthetic conversation turn. The message and the
+provider response are never persisted as canonical messages.
+
+The request keeps the ordinary tool schemas, thinking mode, output setting,
+cancellation scope, and other request options. The prompt asks for approximately
+two pages but creates no compaction-only token, byte, or field-length limit. Its
+last line forbids tool calls and requires only the final JSON object. A tool-call
+response is never dispatched and receives one corrective attempt from the same
+immutable base; a second invalid response closes the operation as failed.
+
+The 16 registered provider templates resolve to four production wire families:
+Codex Responses, OpenAI-compatible Chat Completions, Anthropic-compatible
+Messages, and Ollama. One adapter-contract suite drives the production
+summarizer through all four real request builders with mocked transports and
+proves that the final semantic input is the compaction user instruction while
+the ordinary tools and routed model remain present. Anthropic may merge that
+instruction with an adjacent user message as a final text block, as required by
+its alternating-role wire contract. Ollama retains its ordinary compatibility
+fallback: only when the endpoint explicitly rejects tool support does the
+adapter retry without tools.
+
+Non-terminal provider results cannot activate a summary. Anthropic
+`pause_turn` normalizes to `incomplete`, and Ollama `done_reason=length`
+normalizes to `length`; both enter the same single corrective attempt and then
+fail safely if repeated.
+
+The JSON summary schema is versioned and requires fixed string fields, including
+`currentGoal`, `latestUserRequest`, `activeState`, `criticalContext`, and
+`remainingWork`. Duplicate/unknown keys and wrong types fail validation. Parsed
+content is redacted before persistence. Activation also fences the history
+revision, projection revision, and complete route signature.
+
+Compaction performs no cache-specific measurement or prefix enforcement. Cache
+behavior is incidental to the ordinary codec/provider request and is neither a
+correctness condition nor an efficiency claim. If the full request overflows,
+bounded contiguous chunk/reduce recovery preserves tool groups and never
+activates partial summaries.
 
 ## 9. Orchestration and Protocol Contract (Task 53d)
 

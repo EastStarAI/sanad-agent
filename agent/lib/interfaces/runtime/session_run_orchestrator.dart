@@ -1034,10 +1034,15 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     }
 
     final compactionId = const Uuid().v4();
+    final compactionRunner = getIt<AgentRunner>(param1: sessionId);
+    final providerSeed = await compactionRunner.prepareCompactionProviderSeed();
     final engineRequest = await CompactionRequestFactory.forSession(
       sessionId: sessionId,
       trigger: CompactionTrigger.manual,
       compactionId: compactionId,
+      providerProjection: providerSeed.projection,
+      providerTools: providerSeed.tools,
+      providerRequestOptions: providerSeed.options,
     );
     if (engineRequest == null) {
       return {

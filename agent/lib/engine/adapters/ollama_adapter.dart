@@ -20,6 +20,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     super.config,
     super.profile, {
     super.client,
+    super.modelContextLimitLookup,
     super.baseUrlOverride,
     super.apiKeyOverride,
   });
@@ -134,6 +135,9 @@ class OllamaAdapter extends BaseOpenAIAdapter {
 
     final configuredLimit = config.contextModelLimit(resolvedModel);
     if (configuredLimit != null) return configuredLimit;
+
+    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
+    if (catalogLimit != null) return catalogLimit;
 
     try {
       final url = Uri.parse('${super.baseUrl}/api/show');
@@ -295,6 +299,11 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       usage: usage,
       model: resolvedModel,
       provider: profile.name,
+      finishReason: _normalizeOllamaFinishReason(
+        data['done_reason'],
+        isDone: data['done'] == true,
+        hasToolCalls: toolCalls?.isNotEmpty ?? false,
+      ),
     );
   }
 
@@ -470,4 +479,19 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       await transport.dispose();
     }
   }
+}
+
+LLMFinishReason _normalizeOllamaFinishReason(
+  dynamic rawDoneReason, {
+  required bool isDone,
+  required bool hasToolCalls,
+}) {
+  if (hasToolCalls) return LLMFinishReason.toolCalls;
+  switch (rawDoneReason?.toString()) {
+    case 'stop':
+      return LLMFinishReason.stop;
+    case 'length':
+      return LLMFinishReason.length;
+  }
+  return isDone ? LLMFinishReason.stop : LLMFinishReason.incomplete;
 }
