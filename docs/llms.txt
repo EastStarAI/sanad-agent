@@ -70,6 +70,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Task 85 — Workspace Removal Stale Refresh Race](docs/plans/tasks/85-workspace-removal-stale-refresh-race.md): إصلاح يمنع استجابة قديمة لقائمة Workspaces من إعادة Workspace بعد نجاح الحذف أو الكتابة الأحدث.
 - [المهمة 53i — ضغط سياق متعدد اللغات عبر المزود](docs/plans/tasks/53i-cache-preserving-provider-backed-context-compaction.md): خطة استبدال الملخص المحلي القالبي بطلب user عادي إلى مزود المحادثة، مع الأدوات والإعدادات المعتادة ودعم العربية والضغط المتكرر والتحقق الآمن.
 - [Task 90 — OpenCode Conversation Session Affinity](docs/plans/tasks/90-opencode-conversation-session-affinity.md): Ensure every OpenCode model request carries one stable conversation-scoped affinity header.
+- [Task 91 — OpenRouter App Attribution](docs/plans/tasks/91-openrouter-app-attribution.md): Attribute Sanad Agent requests to the canonical project identity in OpenRouter.
 - [Automated Release Preparation and Single Final Publication Approval](docs/plans/tasks/release-single-final-approval.md): خطة أمر تحضير الإصدار الحتمي، وPR البيانات المقيد، ومهارة إدارة الإصدار حتى موافقة النشر النهائية الواحدة.
 - [خارطة متطلبات المنتج والأعمال](docs/product/MOC.md): فهرس وخارطة وثائق متطلبات المنتج، تجربة المستخدم، والأعمال الاستراتيجية للمشروع.
 - [Sanad Client Interface](docs/product/client_interface.md): Current user experience for devices, workspaces, conversations, providers, permissions, and active agent interactions.
@@ -107,6 +108,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [New Conversation, Composer, and App Bar QA](docs/qa_maintenance/new_conversation_composer_app_bar_qa.md): Focused Plan 32d scenarios for unified composition, device-scoped drafts, responsive actions, and atomic session presentation.
 - [Plan 30 Runtime Recovery Matrix](docs/qa_maintenance/plan30_runtime_recovery_matrix.md): Focused QA ownership for runtime recovery, route confirmation, reconnect hydration, and never-trapped-session behavior.
 - [Plan 50 Cancellation Regression Matrix](docs/qa_maintenance/plan50_cancellation_regression_matrix.md): Verified cancellation, cleanup, delivery-order, and restart-hydration regression coverage for Plan 50.
+- [OpenRouter App Attribution QA](docs/qa_maintenance/openrouter_app_attribution_qa.md): Regression matrix for exact attribution headers, sync/stream forwarding, authentication preservation, and provider isolation.
 - [Provider Account Usage Limits QA Matrix](docs/qa_maintenance/provider_account_usage_limits_qa.md): Regression coverage for provider-instance usage parsing, protocol isolation, freshness, stale responses, and card presentation.
 - [Plan 29 Provider Setup Regression Matrix](docs/qa_maintenance/provider_setup_plan29_regression_matrix.md): Regression coverage targets for the instance-first provider setup runtime.
 - [Release Verification Matrix](docs/qa_maintenance/release_verification.md): Required local and hosted evidence for Sanad release, signing, installation, update, and rollback.
