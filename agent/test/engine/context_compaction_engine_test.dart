@@ -612,8 +612,7 @@ void main() {
     test('strips provider reasoning markup before parsing', () {
       final summary = CompactionSummaryParser.parse('''
 <reasoning>private provider reasoning</reasoning>
-Current Goal and Success Criteria: Ship safely
-Remaining Work and Safest Next Action: Run verification
+{"schemaVersion":1,"currentGoal":"Ship safely","latestUserRequest":"Finish the task","successCriteria":"Tests pass","constraints":"none","completedWork":"Implementation","activeState":"Verification","criticalContext":"Preserve route","decisions":"none","blockers":"none","filesAndPaths":"none","pendingAsks":"Finish","remainingWork":"Run verification"}
 ''');
 
       expect(summary.currentGoal, 'Ship safely');

@@ -683,6 +683,12 @@ class AgentStateDatabase {
           CHECK (provider_confirmed_request_tokens_after >= 0),
         retained_tail_tokens INTEGER,
         duration_ms INTEGER,
+        summarization_input_tokens INTEGER,
+        summarization_cached_input_tokens INTEGER,
+        summarization_cache_write_tokens INTEGER,
+        summarization_output_tokens INTEGER,
+        summarization_reasoning_tokens INTEGER,
+        summarization_attempts INTEGER NOT NULL DEFAULT 0,
         internal_summary_json TEXT,
         failure_reason TEXT,
         failure_detail_json TEXT,
@@ -717,7 +723,22 @@ class AgentStateDatabase {
       db,
       'ALTER TABLE session_compaction_operations ADD COLUMN tail_end_anchor_ordinal INTEGER CHECK (tail_end_anchor_ordinal > 0)',
     );
-
+    for (final column in const [
+      'summarization_input_tokens',
+      'summarization_cached_input_tokens',
+      'summarization_cache_write_tokens',
+      'summarization_output_tokens',
+      'summarization_reasoning_tokens',
+    ]) {
+      _safeAddColumn(
+        db,
+        'ALTER TABLE session_compaction_operations ADD COLUMN $column INTEGER CHECK ($column >= 0)',
+      );
+    }
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_compaction_operations ADD COLUMN summarization_attempts INTEGER NOT NULL DEFAULT 0 CHECK (summarization_attempts >= 0)',
+    );
     db.execute('''
       CREATE UNIQUE INDEX IF NOT EXISTS idx_session_compaction_one_started
       ON session_compaction_operations(session_id)

@@ -1,10 +1,14 @@
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/capabilities/models/tool_schema.dart';
+import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/context/context.dart';
 import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
 import 'package:sanad_agent/evolution/db/session_history_revision_repository.dart';
+import 'package:sanad_agent/evolution/db/session_projection_revision_repository.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 
 /// Builds engine requests from persisted session state (Plan 53d).
@@ -18,12 +22,16 @@ abstract final class CompactionRequestFactory {
     String systemPrompt = '',
     String runtimeContext = '',
     List<Map<String, dynamic>> toolSchemas = const [],
+    List<Message>? providerProjection,
+    List<ToolSchema>? providerTools,
+    LLMRequestOptions? providerRequestOptions,
     int? contextWindowTokens,
     ConfirmedInputUsageBaseline? confirmedInputUsage,
     double? targetRatio,
   }) async {
     if (!getIt.isRegistered<ModelProjectionBuilder>() ||
         !getIt.isRegistered<SessionHistoryRevisionRepository>() ||
+        !getIt.isRegistered<SessionProjectionRevisionRepository>() ||
         !getIt.isRegistered<AgentRuntimeService>()) {
       return null;
     }
@@ -39,6 +47,10 @@ abstract final class CompactionRequestFactory {
     final activeBoundary = projectionBuilder
         .buildForSession(sessionId)
         .activeBoundary;
+    final activeProjection = projectionBuilder.buildForSession(sessionId);
+    final projectionRevision = getIt<SessionProjectionRevisionRepository>()
+        .read(sessionId);
+    if (projectionRevision == null) return null;
 
     final session = getIt<SessionManager>().getSession(sessionId);
     final runtime = getIt<AgentRuntimeService>();
@@ -91,6 +103,30 @@ abstract final class CompactionRequestFactory {
       systemPrompt: systemPrompt,
       runtimeContext: runtimeContext,
       toolSchemas: toolSchemas,
+      providerProjection:
+          providerProjection ??
+          [
+            if (systemPrompt.isNotEmpty)
+              Message(role: MessageRole.system, content: systemPrompt),
+            ...activeProjection.conversationMessages,
+          ],
+      providerTools:
+          providerTools ??
+          toolSchemas.map(ToolSchema.fromJson).toList(growable: false),
+      providerRequestOptions: LLMRequestOptions(
+        sessionId: sessionId,
+        requestId: 'compaction:$compactionId',
+        providerInstanceId: route.providerInstanceId,
+        thinkingMode:
+            providerRequestOptions?.thinkingMode ?? session?.thinkingMode,
+        timeout: providerRequestOptions?.timeout,
+        maxOutputTokens: providerRequestOptions?.maxOutputTokens,
+        cancellationScope: providerRequestOptions?.cancellationScope,
+        watchdogs:
+            providerRequestOptions?.watchdogs ??
+            const LLMRequestOptions().watchdogs,
+      ),
+      projectionRevision: projectionRevision.value,
       previousSummary: activeBoundary?.internalSummary,
       previousSourceRange: activeBoundary?.sourceRange,
       targetRequestTokens:

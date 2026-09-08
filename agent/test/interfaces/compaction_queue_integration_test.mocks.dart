@@ -7,6 +7,7 @@ import 'dart:async' as _i19;
 
 import 'package:mockito/mockito.dart' as _i1;
 import 'package:mockito/src/dummies.dart' as _i15;
+import 'package:sanad_agent/capabilities/models/tool_schema.dart' as _i21;
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart' as _i3;
 import 'package:sanad_agent/core/models/message.dart' as _i8;
 import 'package:sanad_agent/core/models/tool_call.dart' as _i20;
@@ -16,19 +17,19 @@ import 'package:sanad_agent/engine/agent_runner.dart' as _i14;
 import 'package:sanad_agent/engine/context/context.dart' as _i17;
 import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart'
     as _i9;
-import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart' as _i24;
+import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart' as _i25;
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart' as _i16;
 import 'package:sanad_agent/evolution/compaction/model_context_projection.dart'
-    as _i21;
+    as _i22;
 import 'package:sanad_agent/evolution/db/session_db.dart' as _i10;
 import 'package:sanad_agent/evolution/memory/file_memory_store.dart' as _i6;
 import 'package:sanad_agent/evolution/models/pending_steer_record.dart' as _i18;
 import 'package:sanad_agent/evolution/models/session_history_page.dart' as _i13;
 import 'package:sanad_agent/evolution/models/session_query.dart' as _i12;
 import 'package:sanad_agent/evolution/models/session_state.dart' as _i11;
-import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart' as _i22;
+import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart' as _i23;
 import 'package:sanad_agent/evolution/session_manager.dart' as _i4;
-import 'package:sanad_agent/evolution/title_service.dart' as _i23;
+import 'package:sanad_agent/evolution/title_service.dart' as _i24;
 import 'package:sanad_agent/plugins/plugin_manager.dart' as _i5;
 
 // ignore_for_file: type=lint
@@ -719,6 +720,8 @@ class MockAgentRunner extends _i1.Mock implements _i14.AgentRunner {
     required String? modelId,
     bool? streamStarted = false,
     int? attempt = 0,
+    List<_i8.Message>? failedProviderProjection,
+    List<_i21.ToolSchema>? failedProviderTools,
   }) =>
       (super.noSuchMethod(
             Invocation.method(#debugTryOverflowCompactionRecovery, [], {
@@ -727,6 +730,8 @@ class MockAgentRunner extends _i1.Mock implements _i14.AgentRunner {
               #modelId: modelId,
               #streamStarted: streamStarted,
               #attempt: attempt,
+              #failedProviderProjection: failedProviderProjection,
+              #failedProviderTools: failedProviderTools,
             }),
             returnValue: _i19.Future<bool>.value(false),
           )
@@ -967,12 +972,12 @@ class MockSessionManager extends _i1.Mock implements _i4.SessionManager {
           as List<_i8.Message>);
 
   @override
-  List<_i21.PersistedMessage> getPersistedMessages(String? sessionId) =>
+  List<_i22.PersistedMessage> getPersistedMessages(String? sessionId) =>
       (super.noSuchMethod(
             Invocation.method(#getPersistedMessages, [sessionId]),
-            returnValue: <_i21.PersistedMessage>[],
+            returnValue: <_i22.PersistedMessage>[],
           )
-          as List<_i21.PersistedMessage>);
+          as List<_i22.PersistedMessage>);
 
   @override
   _i13.SessionHistoryPage getPersistedMessagePage(
@@ -1011,28 +1016,28 @@ class MockSessionManager extends _i1.Mock implements _i4.SessionManager {
           as Map<String, dynamic>?);
 
   @override
-  void saveSuspendedCheckpoint(_i22.SuspendedCheckpoint? checkpoint) =>
+  void saveSuspendedCheckpoint(_i23.SuspendedCheckpoint? checkpoint) =>
       super.noSuchMethod(
         Invocation.method(#saveSuspendedCheckpoint, [checkpoint]),
         returnValueForMissingStub: null,
       );
 
   @override
-  _i22.SuspendedCheckpoint? getSuspendedCheckpointByRequestId(
+  _i23.SuspendedCheckpoint? getSuspendedCheckpointByRequestId(
     String? requestId,
   ) =>
       (super.noSuchMethod(
             Invocation.method(#getSuspendedCheckpointByRequestId, [requestId]),
           )
-          as _i22.SuspendedCheckpoint?);
+          as _i23.SuspendedCheckpoint?);
 
   @override
-  List<_i22.SuspendedCheckpoint> listSuspendedCheckpoints({String? status}) =>
+  List<_i23.SuspendedCheckpoint> listSuspendedCheckpoints({String? status}) =>
       (super.noSuchMethod(
             Invocation.method(#listSuspendedCheckpoints, [], {#status: status}),
-            returnValue: <_i22.SuspendedCheckpoint>[],
+            returnValue: <_i23.SuspendedCheckpoint>[],
           )
-          as List<_i22.SuspendedCheckpoint>);
+          as List<_i23.SuspendedCheckpoint>);
 
   @override
   void updateSuspendedCheckpointStatus({
@@ -1078,7 +1083,7 @@ class MockSessionManager extends _i1.Mock implements _i4.SessionManager {
 /// A class which mocks [TitleService].
 ///
 /// See the documentation for Mockito's code generation for more information.
-class MockTitleService extends _i1.Mock implements _i23.TitleService {
+class MockTitleService extends _i1.Mock implements _i24.TitleService {
   MockTitleService() {
     _i1.throwOnMissingStub(this);
   }
@@ -1089,7 +1094,7 @@ class MockTitleService extends _i1.Mock implements _i23.TitleService {
     required String? userMessage,
     required String? assistantResponse,
     String? modelOverride,
-    _i24.LLMRouteSnapshot? route,
+    _i25.LLMRouteSnapshot? route,
   }) =>
       (super.noSuchMethod(
             Invocation.method(#generateTitle, [], {
