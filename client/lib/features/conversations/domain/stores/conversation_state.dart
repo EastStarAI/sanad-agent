@@ -183,15 +183,39 @@ class ConversationState {
   }) {
     final sourceIndex = _events.indexWhere((event) => event.id == id);
     if (sourceIndex < 0) return;
+    final hasAnchor = _events.any(
+      (candidate) =>
+          (anchorToolCallId != null && candidate.toolCallId == anchorToolCallId) ||
+          (anchorMessageId != null && candidate.messageId == anchorMessageId),
+    );
+    if (!hasAnchor) return;
+    final event = _events[sourceIndex];
+    final anchoredSteers = <CanonicalEvent>[event];
+    _events.removeAt(sourceIndex);
+    _events.removeWhere((candidate) {
+      final metadata = candidate.metadata;
+      final sharesAnchor =
+          (anchorToolCallId != null && metadata?['anchor_tool_call_id']?.toString() == anchorToolCallId) ||
+          (anchorMessageId != null && metadata?['anchor_message_id']?.toString() == anchorMessageId);
+      if (!sharesAnchor || !candidate.isSteerInput) return false;
+      anchoredSteers.add(candidate);
+      return true;
+    });
     final anchorIndex = _events.lastIndexWhere(
       (candidate) =>
           (anchorToolCallId != null && candidate.toolCallId == anchorToolCallId) ||
           (anchorMessageId != null && candidate.messageId == anchorMessageId),
     );
-    if (anchorIndex < 0) return;
-    final event = _events.removeAt(sourceIndex);
-    final adjustedAnchorIndex = sourceIndex < anchorIndex ? anchorIndex - 1 : anchorIndex;
-    _events.insert(adjustedAnchorIndex + 1, event);
+    if (anchorIndex < 0) {
+      _events.addAll(anchoredSteers);
+      return;
+    }
+    anchoredSteers.sort((left, right) {
+      final byReceivedAt = left.timestamp.compareTo(right.timestamp);
+      if (byReceivedAt != 0) return byReceivedAt;
+      return (left.requestId ?? left.id).compareTo(right.requestId ?? right.id);
+    });
+    _events.insertAll(anchorIndex + 1, anchoredSteers);
   }
 
   bool _isSuperseded(CanonicalEvent event) {

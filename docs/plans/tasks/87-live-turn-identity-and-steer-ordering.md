@@ -1,17 +1,17 @@
 ---
 title: "Task 87: Authoritative Conversation Identity and Ordering Across Live, History, and Clients"
-status: "in progress"
+status: "completed"
 ---
 
 # المهمة 87 — تكافؤ هوية وترتيب المحادثة بين البث والتاريخ والعملاء
 
 ## الحالة
 
-- **الحالة:** اكتمل التنفيذ والتحقق الآلي للنطاق الموسّع. دُمج `main` الأحدث بعد تعذر أول جولة مرئية بخطأ المزود، ونجحت analyzers والحزمتان الكاملتان بعد حل التعارضات. الخطوة التالية إعادة تشغيل runtime الاختباري ثم استئناف التحقق المرئي.
+- **الحالة:** اكتمل التنفيذ والتحقق الآلي والحي بعد دمج `main`: أُصلح ترتيب delivered steers المشتركة في anchor، ثبتت pending steers عبر التنقل، نجح سيناريو الأدوات الثلاث، ونجح Edit الحي بعد توحيد تحذيري replay في نافذة تأكيد واحدة.
 - **الفرع الحالي:** `feature/87-live-turn-identity-and-steer-ordering` داخل `.agent/worktrees/87-live-turn-identity-and-steer-ordering`.
-- **البوابة الحالية:** G4 — إعادة تشغيل الوكيل والعميل من المصدر المدمج ثم إعادة التحقق المرئي الحي.
-- **نسبة العمل المتبقي:** نحو **4%**، محصورة في التحقق المرئي الحي المصرّح به ومراجعة المالك؛ التنفيذ واختبارات الوحدة والتكامل وdaemon-backed E2E مكتملة.
-- **حدود التسليم الحالية:** تنفيذ وتحقق داخل Worktree المهمة؛ لا Commit أو Push أو PR أو Merge، ولا `sanad-dev switch` أو `sanad-dev stop` أو تشغيل runtime حي دون إذن منفصل.
+- **البوابة الحالية:** التسليم — منح المالك الإذن بالـ Commit والـ PR والتحقق والدمج.
+- **نسبة العمل المتبقي:** **0%** من التنفيذ والتحقق؛ إجراء التسليم الوحيد المتبقي هو Commit مصرح به.
+- **حدود التسليم الحالية:** تنفيذ وتحقق داخل Worktree المهمة؛ Commit التنفيذ الأصلي وMerge `main` مصرح بهما وتمّا، ولا Push أو PR أو Merge إضافي، ولا `sanad-dev switch` أو `sanad-dev stop` دون إذن منفصل.
 
 ## الهدف
 
@@ -292,7 +292,7 @@ E2E `three clients reconcile normal, steer, and replay history identically`
 - [x] تشغيل Agent وClient analyzers والاختبارات المركزة ثم full fast suites
   بحسب blast radius مع bounded output.
 - [x] تشغيل daemon-backed E2E بـ`--concurrency=1` لإثبات Local Gateway الحقيقي.
-- [ ] بعد إذن runtime صريح: التحقق داخل Runtime Worktree 87 من سيناريوهات
+- [x] بعد إذن runtime صريح: التحقق داخل Runtime Worktree 87 من سيناريوهات
   الرسالة العادية من idle وpending/delivered steer وRetry/Edit، ثم مغادرة
   المحادثة والعودة أثناء العمل وبعده، ومقارنة الترتيب بصريًا ومع عميل مستقل.
   تستخدم كل بيئة تحقق حي Sanad Home الاختبارية المعتمدة، لا بيانات المستخدم
@@ -326,7 +326,8 @@ E2E `three clients reconcile normal, steer, and replay history identically`
 - [x] عند Retry/Edit مقبول تختفي الرسالة المستهدفة وكل الأدوات والرسائل التابعة
   لذيلها فورًا، وتظهر replacement في الموضع الصحيح.
 - [x] نتيجة أداة أو stream متأخرة من الدور المستبدل لا تعيد أي صف محذوف.
-- [x] فشل/رفض/طلب تأكيد replay لا يغير الـtimeline الحالي.
+- [x] فشل/رفض/طلب تأكيد replay لا يغير الـtimeline الحالي؛ وإذا اجتمع تحذير
+  آثار الأدوات مع إسقاط steers تعرض الواجهة نافذة واحدة وترسل العلمين بتأكيد واحد.
 - [x] pagination وanchor restore وcache hydration لا تفقد صفحات أقدم ولا تغير
   viewport بسبب المصالحة؛ تثبت اختبارات older/newer/anchored والـretained tail
   بقاء الصفحات، ولا تنفذ المصالحة أي كتابة إلى viewport.
@@ -336,13 +337,13 @@ E2E `three clients reconcile normal, steer, and replay history identically`
 
 ## تعريف الاكتمال
 
-- [ ] جميع بوابات التنفيذ مغلقة بأدلة اختبار قابلة لإعادة التشغيل.
+- [x] جميع بوابات التنفيذ مغلقة بأدلة اختبار قابلة لإعادة التشغيل.
 - [x] Agent وClient analyzers والاختبارات المركزة وfull fast suites ناجحة.
-- [x] daemon-backed E2E ناجح؛ يبقى التحقق المرئي الحي المصرّح به لإثبات التكافؤ أمام المالك.
+- [x] daemon-backed E2E والتحقق المرئي الحي لترتيب pending/delivered steers والتنقل وRetry/Edit ناجحة، بما فيها تأكيد replay موحد قابل للاكتشاف عبر driver.
 - [x] وثائق protocol/product/QA محدثة بلا تكرار لعقود AGENTS أو SOPs.
 - [x] Graphify محدث و`git diff --check` ناجح.
 - [x] لا توجد تعديلات خارج النطاق أو أسرار أو migrations غير مطلوبة.
-- [ ] يراجع المالك النتيجة ويمنح إذنًا منفصلًا لأي Commit/Push/PR/Merge.
+- [x] يراجع المالك النتيجة ويمنح إذنًا منفصلًا لأي Commit/Push/PR/Merge.
 
 ## دليل التحقق الحالي للنطاق الموسّع — 2026-09-08
 
@@ -352,16 +353,36 @@ E2E `three clients reconcile normal, steer, and replay history identically`
 - Client full fast suite قبل مزامنة `main`: `+1236 ~1: All tests passed!`.
 - بعد دمج `main`: Agent analyzer وClient analyzer بلا مشاكل، Agent full fast suite
   `+1521 ~13`، وClient full fast suite `+1242 ~1`؛ كلها ناجحة.
-- اختبارات Client المركزة بعد آخر تعديل للمصالحة: `+94: All tests passed!`.
+- اختبارات Client المركزة بعد إصلاح shared-anchor: `+88: All tests passed!`،
+  وClient analyzer: `No issues found!`.
+- Client full fast suite بعد إصلاح shared-anchor: `+1243 ~1`، ثم بعد توحيد
+  تأكيد replay: `+1244 ~1: All tests passed!`. الاختبارات المركزة النهائية:
+  `+89: All tests passed!`.
 - daemon-backed Local Gateway E2E لثلاثة عملاء: `+1: All tests passed!`
   باستخدام `--concurrency=1` و`SANAD_HOME=$HOME/.sanad-test`؛ أنشأ
   harness أيضًا Home/State مؤقتين للـdaemon ولم يستخدم Sanad Home الرئيسي.
 - يشمل E2E فتح B أثناء العمل والتنقل، فتح C بعد الاكتمال، Queue→Steer، ثم
   Edit/Replay، ومقارنة الترتيب والهويات الدائمة بعد hydration مع منع resurrection.
-- شُغّل runtime مرئي من Worktree 87 باستخدام Home الاختبار؛ أثبتت واجهة driver
-  الـworktree badge واتصال Local Gateway، لكن أول رسالة idle انتهت بخطأ مزود
-  معروف ومحلول على `main`. أوقف المالك الجولة قبل فحص Steer/Edit وطلب المزامنة.
-- لم تُنفذ أوامر `sanad-dev switch` أو `sanad-dev stop`، ولم يحدث Push أو PR أو Merge.
+- بعد مزامنة `main` وإعادة التشغيل نجحت رسالة idle، ثم أثبتت جلسة طويلة بقاء
+  pending steers ظاهرة فور العودة من محادثة أخرى قبل idle؛ لم تنتظر الواجهة
+  انتقالها إلى `delivered` كي تعيد عرضها.
+- كشف الفحص المرئي أن lifecycle delivery قد يعكس عدة steers مشتركة في anchor
+  واحد. أصبح النقل يجمع هذه المجموعة ويرتبها بوقت الاستلام السلطوي مع
+  request/id tie-breaker؛ أثبت regression وإعادة فتح الجلسة ترتيب
+  `STEER_FIRST` ثم `STEER_SECOND`.
+- أثبتت الجلسة `5dd25a85-295b-4015-8d15-909b09cedaec` ثلاث استدعاءات
+  `shell_execute` متتابعة، مع Steer أثناء الأولى وأخرى أثناء الثانية. قبل
+  الانتقال وبعد العودة أثناء استمرار الدور ظهر الترتيب
+  `tool1 → steer1 → tool2 → steer2 → tool3`، ثم بقي نفسه قبل الرد النهائي.
+  حفظ daemon الـsteers كـ`delivered` revision 3 مع tool-call anchors المناظرة،
+  ولم تسجل جولة Client أي `Unhandled Exception` أو `EXCEPTION CAUGHT`.
+- بعد ملاحظة المالك وجود تأكيدين متتاليين، جُمّع تحذير آثار الأدوات وتحذير
+  إسقاط الـsteers في نافذة واحدة ذات مفاتيح driver ثابتة. أثبت Edit الحي أن
+  ضغطة Continue واحدة أزالت النافذة ولم تعرض ثانية، وأرسلت العلمين، واستبدلت
+  الذيل برسالة `EDIT_TASK87` ثم رد `TASK87_EDIT_OK`؛ أصبحت الصفوف السابقة
+  `superseded` ولم تسجل الواجهة استثناءات.
+- لم تُنفذ أوامر `sanad-dev switch` أو `sanad-dev stop`، ولم يحدث Push أو PR؛
+  اقتصر الدمج على Merge `main` المحلي المصرح به.
 
 ## دليل التحقق السابق للنطاق الأصلي — 2026-09-06
 

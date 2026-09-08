@@ -235,8 +235,10 @@ renders `pending` as one temporary user bubble and keeps it after the latest
 live activity while delivery is unresolved. A delivered lifecycle replaces the
 same projection by raw request id, applies its durable message/turn identity and
 history revision, and moves it immediately after the daemon-provided message or
-tool-call anchor. Missing legacy anchors preserve the current order until
-history hydration. When history contains the durable steer, the temporary
+tool-call anchor. Multiple delivered steers sharing one anchor remain ordered by
+the daemon-owned receive time, so processing their lifecycle events cannot
+reverse them. Missing legacy anchors preserve the current order until history
+hydration. When history contains the durable steer, the temporary
 display id is removed and lifecycle metadata enriches that one durable event.
 This reconciliation runs after initial history replacement, cache restoration,
 older/newer page merges, navigation, and live delivery without duplicates or

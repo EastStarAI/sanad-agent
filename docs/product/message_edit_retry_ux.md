@@ -62,9 +62,11 @@ from durable tool-call and replay-safety metadata across the whole turn.
 - Continuing submits an explicit confirmation and then enters the authoritative
   idle boundary.
 
-If the original turn contains one or more steers, Sanad also asks the user to
-confirm that those steering messages will not be sent again. Canceling that
-prompt likewise performs no Stop and no history mutation.
+If the original turn contains one or more steers, the confirmation also warns
+that those steering messages will not be sent again. When tool safety and steer
+dropping both require approval, Sanad combines both warnings in one dialog and
+one Continue action submits both explicit confirmation flags. Canceling that
+single prompt performs no Stop and no history mutation.
 
 ## Original history
 

@@ -71,6 +71,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [المهمة 53i — ضغط سياق متعدد اللغات عبر المزود](docs/plans/tasks/53i-cache-preserving-provider-backed-context-compaction.md): خطة استبدال الملخص المحلي القالبي بطلب user عادي إلى مزود المحادثة، مع الأدوات والإعدادات المعتادة ودعم العربية والضغط المتكرر والتحقق الآمن.
 - [Task 90 — OpenCode Conversation Session Affinity](docs/plans/tasks/90-opencode-conversation-session-affinity.md): Ensure every OpenCode model request carries one stable conversation-scoped affinity header.
 - [Task 91 — OpenRouter App Attribution](docs/plans/tasks/91-openrouter-app-attribution.md): Attribute Sanad Agent requests to the canonical project identity in OpenRouter.
+- [المهمة 87 — تكافؤ هوية وترتيب المحادثة بين البث والتاريخ والعملاء](docs/plans/tasks/87-live-turn-identity-and-steer-ordering.md): خطة مصالحة هوية الدور الحية، وترتيب الـsteer، واستجابة Edit/Retry، والتحقق الآلي والحي الشامل عبر العملاء.
 - [Automated Release Preparation and Single Final Publication Approval](docs/plans/tasks/release-single-final-approval.md): خطة أمر تحضير الإصدار الحتمي، وPR البيانات المقيد، ومهارة إدارة الإصدار حتى موافقة النشر النهائية الواحدة.
 - [خارطة متطلبات المنتج والأعمال](docs/product/MOC.md): فهرس وخارطة وثائق متطلبات المنتج، تجربة المستخدم، والأعمال الاستراتيجية للمشروع.
 - [Sanad Client Interface](docs/product/client_interface.md): Current user experience for devices, workspaces, conversations, providers, permissions, and active agent interactions.

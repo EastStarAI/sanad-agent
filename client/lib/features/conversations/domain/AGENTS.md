@@ -39,7 +39,7 @@ This contract applies to `client/lib/features/conversations/domain/`.
 - `tool_use` closes only its matching model-step thought.
 - `final_answer` and `stopped` remove only the matching running model-step projection and preserve completed prior thoughts.
 - A stop without active model-step identity clears runtime controls only.
-- Unresolved pending steers follow the latest live activity. Once delivered, preserve steer ordering after its daemon-provided tool/message anchor and before the post-steer final answer; canonical reconciliation must fold lifecycle and durable steer copies by domain identity even when their event ids differ, and later tool-result merges must not move the steer.
+- Unresolved pending steers follow the latest live activity and remain visible across session navigation. Once delivered, preserve steer ordering after its daemon-provided tool/message anchor and before the post-steer final answer; multiple delivered steers sharing one anchor retain daemon receive order, canonical reconciliation folds lifecycle and durable copies by domain identity even when event ids differ, and later tool-result merges must not move them.
 - Accepted replay removes only the matched visible tail and retains turn/run/message tombstones against late events; identity-incomplete legacy events remain blocked until authoritative reconciliation.
 - Fold compaction transitions by logical `compaction_id`; terminal status is immutable, so hydration or retry may enrich the same terminal status but cannot switch `completed` and `failed`.
 

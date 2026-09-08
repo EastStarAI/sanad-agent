@@ -728,6 +728,72 @@ void main() {
     );
   });
 
+  test('delivered steers sharing one anchor preserve receive order', () async {
+    socket.eventRouter.routeEvent(
+      _envelope('tool_use', {
+        'tool': 'shell_execute',
+        'session_id': 'session-1',
+        'run_id': 'run-1',
+        'turn_id': 'turn-1',
+        'model_step_id': 'step-1',
+        'tool_call_id': 'tool-shared',
+      }),
+    );
+    for (final entry in [
+      ('steer-first', 'first', '2026-07-15T10:00:00Z'),
+      ('steer-second', 'second', '2026-07-15T10:00:01Z'),
+    ]) {
+      socket.eventRouter.routeEvent(
+        _envelope('session.pending_steer_changed', {
+          'session_id': 'session-1',
+          'request_id': entry.$1,
+          'run_id': 'run-1',
+          'generation': 1,
+          'text': entry.$2,
+          'received_at': entry.$3,
+          'state': 'pending',
+          'revision': 1,
+        }),
+      );
+    }
+    for (final entry in [
+      ('steer-first', 'first', '2026-07-15T10:00:00Z', 'message-first'),
+      ('steer-second', 'second', '2026-07-15T10:00:01Z', 'message-second'),
+    ]) {
+      socket.eventRouter.routeEvent(
+        _envelope('session.pending_steer_changed', {
+          'session_id': 'session-1',
+          'request_id': entry.$1,
+          'run_id': 'run-1',
+          'generation': 1,
+          'text': entry.$2,
+          'received_at': entry.$3,
+          'state': 'delivered',
+          'revision': 2,
+          'message_id': entry.$4,
+          'turn_id': 'turn-1',
+          'anchor_tool_call_id': 'tool-shared',
+          'history_revision': 10,
+        }),
+      );
+    }
+    socket.eventRouter.routeEvent(
+      _envelope('final_answer', {
+        'session_id': 'session-1',
+        'run_id': 'run-1',
+        'turn_id': 'turn-1',
+        'model_step_id': 'step-2',
+        'content': 'done',
+      }),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(
+      store.currentMessages.map((event) => event.requestId ?? event.id),
+      ['tool_tool-shared', 'steer-first', 'steer-second', 'answer_step-2'],
+    );
+  });
+
   test('delivered steer preserves order when a newer anchor is not loaded', () async {
     Map<String, dynamic> steerPayload({
       required int revision,
