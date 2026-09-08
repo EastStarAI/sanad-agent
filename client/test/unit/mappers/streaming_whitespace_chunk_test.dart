@@ -50,20 +50,18 @@ void main() {
       expect(emptyEvent, isNull);
     });
 
-    test('preserves whitespace-only chunks in reasoning_stream', () {
+    test('ignores whitespace-only chunks in reasoning_stream to prevent phantom reasoning bubbles', () {
       final reasoningEvent = mapper.mapLiveEvent({
         'event': 'reasoning_stream',
         'payload': {
           'session_id': 'session-1',
           'run_id': 'run-1',
           'model_step_id': 'step-1',
-          'content': '\n',
+          'content': '   \n\t  ',
         },
       });
 
-      expect(reasoningEvent, isNotNull);
-      expect(reasoningEvent!.kind, EventKind.reasoning);
-      expect(reasoningEvent.text, '\n');
+      expect(reasoningEvent, isNull);
     });
   });
 }

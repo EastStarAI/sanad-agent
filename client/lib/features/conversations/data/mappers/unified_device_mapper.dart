@@ -215,7 +215,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         );
 
       case 'reasoning_stream':
-        if (text.isEmpty) return null;
+        if (text.trim().isEmpty) return null;
         return CanonicalEvent(
           id: _reasoningId(modelStepId, runId, eventId, timestamp),
           kind: EventKind.reasoning,
@@ -262,7 +262,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         );
 
       case 'reasoning':
-        if (text.isEmpty) return null;
+        if (text.trim().isEmpty) return null;
         return CanonicalEvent(
           id: _reasoningId(modelStepId, runId, eventId, timestamp),
           kind: EventKind.reasoning,
