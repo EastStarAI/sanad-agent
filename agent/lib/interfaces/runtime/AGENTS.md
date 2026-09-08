@@ -77,7 +77,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - A crashed running checkpoint with explicit resume intent remains resume work through FIFO; ordinary queued messages remain new turns.
 
 ## Pending Steer and Draft Recovery
-- Reserve pending steer durably before it enters history.
+- Reserve pending steer durably before it enters history; delivery publishes only after history, durable steer identity, causal placement anchor, lifecycle state, and history revision commit atomically.
 - Resolve delivery/cancellation exactly once by raw request id and owner run/generation.
 - Failed history persistence rolls back in-memory mutation without losing text.
 - A late steer that follows a completed assistant model step publishes that pre-steer segment as a completed thought before resetting terminal accumulation; live and history projections must not discard it.

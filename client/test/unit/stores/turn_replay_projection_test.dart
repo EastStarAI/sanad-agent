@@ -12,12 +12,16 @@ void main() {
     String? inputKind,
     bool? replayEligible,
     bool steer = false,
+    String? sessionId,
+    String? runId,
   }) {
     return CanonicalEvent(
       id: id,
       kind: EventKind.userMessage,
       text: id,
       timestamp: DateTime.utc(2026, 7, 18),
+      sessionId: sessionId,
+      runId: runId,
       metadata: {
         'request_id': requestId,
         if (messageId != null) 'message_id': messageId,
@@ -147,6 +151,62 @@ void main() {
     ]);
 
     expect(state.events.map((event) => event.id), ['replacement-root']);
+  });
+
+  test('accepted replay removes the visible tail and tombstones late run and legacy events', () {
+    final state = ConversationState();
+    state.setHistory([
+      user(
+        id: 'prior-root',
+        requestId: 'prior-request',
+        messageId: 'prior-message',
+        turnId: 'prior-turn',
+        sessionId: 'session-1',
+      ),
+      user(
+        id: 'old-root',
+        requestId: 'old-request',
+        messageId: 'old-message',
+        turnId: 'old-turn',
+        sessionId: 'session-1',
+        runId: 'old-run',
+      ),
+      CanonicalEvent(
+        id: 'legacy-tool',
+        kind: EventKind.toolCall,
+        timestamp: DateTime.utc(2026, 7, 18),
+        sessionId: 'session-1',
+        tool: const {'name': 'legacy'},
+      ),
+    ]);
+
+    state.hideSupersededTail(
+      sessionId: 'session-1',
+      targetRequestId: 'old-request',
+      turnId: 'old-turn',
+      runId: 'old-run',
+      messageId: 'old-message',
+    );
+    state.apply(
+      CanonicalEvent(
+        id: 'late-by-run',
+        kind: EventKind.finalAnswer,
+        timestamp: DateTime.utc(2026, 7, 18),
+        sessionId: 'session-1',
+        runId: 'old-run',
+      ),
+    );
+    state.apply(
+      CanonicalEvent(
+        id: 'late-legacy-tool',
+        kind: EventKind.toolCall,
+        timestamp: DateTime.utc(2026, 7, 18),
+        sessionId: 'session-1',
+        tool: const {'name': 'legacy'},
+      ),
+    );
+
+    expect(state.events.map((event) => event.id), ['prior-root']);
   });
 
   test('only daemon-eligible roots are replayable across steer projections', () {

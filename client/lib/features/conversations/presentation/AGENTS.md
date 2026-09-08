@@ -35,7 +35,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 - Keep Stop available for runtime notices advertising stop even when processing is false.
 - Recovery Stop must not clear banners optimistically.
 - Recovery Retry and Change Provider send provider instance plus model atomically whenever both are known.
-- Latest-turn inline edit state is transient and session-bound, cancels on session/device navigation, and must not stop work before confirmation of unsafe or unknown replay.
+- Latest-turn inline edit state is transient and session-bound, cancels on session/device navigation, and must not stop work before confirmation of unsafe or unknown replay. If replay also drops prior steering messages, combine the side-effect and steer-drop warnings into one confirmation and submit both authoritative confirmation flags from that single approval.
 
 ## Suspension Presentation
 - Render permissions, clarifying questions, and runtime notices inline in the active conversation; do not use app-global approval dialogs.

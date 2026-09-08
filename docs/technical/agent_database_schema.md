@@ -511,6 +511,11 @@ does not weaken the one-active-work-item invariant.
 | `state` | `TEXT` | Non-null, CHECK constraint | `pending`, `delivering`, `delivered`, `cancelled`, or `recovered` |
 | `revision` | `INTEGER` | Non-null, greater than zero | Per-record monotonic lifecycle revision |
 | `updated_at` | `TEXT` | Non-null | UTC ISO8601 last transition time |
+| `message_id` | `TEXT` | Nullable | Durable delivered-steer identity; null before delivery and on legacy rows |
+| `turn_id` | `TEXT` | Nullable | Owning execution-attempt identity captured from persisted history |
+| `anchor_message_id` | `TEXT` | Nullable | Durable message after which the steer is projected |
+| `anchor_tool_call_id` | `TEXT` | Nullable | Tool-call anchor used by live projection when applicable |
+| `history_revision` | `INTEGER` | Nullable | Session history revision committed with delivery |
 
 The composite primary key `(session_id, request_id)` makes repeated admission
 idempotent. State transitions use compare-and-set semantics:
@@ -522,9 +527,12 @@ idempotent. State transitions use compare-and-set semantics:
 Only a matching `run_id + generation` may reserve or cancel a record. Revision
 increments once for each successful transition and does not change for a
 duplicate command. Cancellation and delivery reservation execute inside the
-same database transaction boundary, so exactly one wins. User text is never
-written to logs, though it remains in `state.db` because restart and Stop draft
-recovery must not lose it.
+same database transaction boundary, so exactly one wins. Delivery updates the
+history rows, steer identity/anchor columns, lifecycle state, and
+`sessions.history_revision` in one aggregate transaction. Existing databases
+receive the nullable placement columns through additive migration; no history
+rewrite is required. User text is never written to logs, though it remains in
+`state.db` because restart and Stop draft recovery must not lose it.
 
 ### 5.7. `session_stop_recovery_outcomes` (Task 36)
 

@@ -35,6 +35,7 @@ class ConversationEventHandler {
   final ConversationCommandGateway _gateway;
   final DeviceConversationStore _conversationStore;
   final DeviceEventMapper _mapper;
+  final Future<void> Function(String sessionId)? _onReplayTailHydrationRequired;
   late final StreamSubscription<Map<String, dynamic>> _eventSubscription;
 
   ConversationEventHandler({
@@ -42,10 +43,12 @@ class ConversationEventHandler {
     required ConversationCommandGateway gateway,
     required DeviceConversationStore conversationStore,
     required DeviceEventMapper mapper,
+    Future<void> Function(String sessionId)? onReplayTailHydrationRequired,
   }) : _deviceId = deviceId,
        _gateway = gateway,
        _conversationStore = conversationStore,
-       _mapper = mapper {
+       _mapper = mapper,
+       _onReplayTailHydrationRequired = onReplayTailHydrationRequired {
     _eventSubscription = _gateway.events.listen(handleIncomingEvent);
   }
 
@@ -111,11 +114,13 @@ class ConversationEventHandler {
       return;
     }
 
-    if (eventType == 'session.queued_message_changed' || eventType == 'session.queued_message_delete_result') {
+    if (eventType == 'session.queued_message_changed' ||
+        eventType == 'session.queued_message_delete_result' ||
+        eventType == 'session.queued_message_steer_result') {
       final targetRequestId = payload['target_request_id']?.toString();
-      final outcome = eventType == 'session.queued_message_delete_result'
-          ? payload['outcome']?.toString()
-          : payload['state']?.toString();
+      final outcome = eventType == 'session.queued_message_changed'
+          ? payload['state']?.toString()
+          : payload['outcome']?.toString();
       if (targetRequestId != null &&
           {
             'deleted',
@@ -140,12 +145,25 @@ class ConversationEventHandler {
           eventSessionId != null &&
           targetRequestId != null &&
           targetRequestId.isNotEmpty) {
+        final targetTurnId = payload['target_turn_id']?.toString();
+        final targetMessageId = payload['target_message_id']?.toString();
+        final hadLocalBoundary = _conversationStore.hasReplayBoundary(
+          sessionId: eventSessionId,
+          targetRequestId: targetRequestId,
+          targetTurnId: targetTurnId,
+          targetMessageId: targetMessageId,
+        );
         _conversationStore.applyTurnReplayAccepted(
           sessionId: eventSessionId,
           targetRequestId: targetRequestId,
-          targetTurnId: payload['target_turn_id']?.toString(),
-          targetMessageId: payload['target_message_id']?.toString(),
+          targetTurnId: targetTurnId,
+          targetRunId: payload['target_run_id']?.toString(),
+          targetMessageId: targetMessageId,
         );
+        final reconcileTail = _onReplayTailHydrationRequired;
+        if (!hadLocalBoundary && reconcileTail != null) {
+          unawaited(reconcileTail(eventSessionId));
+        }
       }
       return;
     }

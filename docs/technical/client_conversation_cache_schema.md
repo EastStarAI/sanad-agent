@@ -136,19 +136,24 @@ are a separate transient resource owned by the per-device
 independent opaque older/newer cursors and exhaustion state. Widgets receive
 only typed load intents and booleans; they never read or construct cursors.
 
-The initial tail replaces a partial timeline atomically. Older pages prepend by
-canonical identity and merge duplicate identities rather than discarding an
-older event fragment. Hydration folds repeated canonical identities before it
-reconciles retained live state. Newer pages apply in chronological order so a
-terminal tool row can enrich its matching running tool even when the pair
-crosses a page boundary. The same rule preserves a tool-use input when its
-terminal result arrived first. Presentation reprojects the complete loaded slice
-after either merge; hidden reasoning rows do not split a visible tool run, while
-visible events and `system_ask_user` remain grouping boundaries. Each direction
-coalesces its matching in-flight cursor and advances only when the returned
-cursor differs from the requested one. Session/device switches and newer
-hydration generations reject late results. Failure leaves the visible timeline
-and runtime projections unchanged.
+The initial tail replaces the returned range atomically while retaining live
+rows that are provably outside that range. Older and newer pages use the same
+kind-aware canonical reducer rather than a separate event-id deduplicator. User
+and steer rows prefer `message_id`, then `request_id`, then `turn_id`; assistant
+rows prefer `message_id`, then `run_id`, then `turn_id`; tools prefer
+`tool_call_id` with compatible phase folding; lifecycle rows use their request,
+turn, and run identity. `event_id` is only a same-kind fallback. Hydration folds
+repeated history identities first, then merges complementary persisted and live
+fields so one logical row survives without losing richer streaming content.
+Newer pages apply in chronological order so a terminal tool row can enrich its
+matching running tool even when the pair crosses a page boundary. The same rule
+preserves a tool-use input when its terminal result arrived first. Presentation
+reprojects the complete loaded slice after every reconcile; hidden reasoning
+rows do not split a visible tool run, while visible events and `system_ask_user`
+remain grouping boundaries. Each direction coalesces its matching in-flight
+cursor and advances only when the returned cursor differs from the requested
+one. Session/device switches and newer hydration generations reject late
+results. Failure leaves the visible timeline and runtime projections unchanged.
 
 At most two recently visited timelines that are exhausted in both directions
 may remain in memory. Reopening one reconciles the authoritative tail by event
@@ -226,14 +231,18 @@ that direction, and session activation resets both.
 `DeviceConversationStore` owns the live per-session projections for queued
 messages and pending steers. Pending steers are keyed by the daemon's raw
 `request_id` and accept only increasing lifecycle revisions. The timeline
-renders `pending` as one temporary user bubble, transforms that same identity
-to delivered, and removes it only after authoritative cancellation. When
-history contains the durable steer with the same raw `request_id`, the store
-removes the temporary display id and enriches the durable event with lifecycle
-metadata without moving it from its causal position. This reconciliation runs
-after initial history replacement and older/newer page merges as well as live
-lifecycle delivery. History, live events, navigation, and reconnect must not
-create duplicate bubbles.
+renders `pending` as one temporary user bubble and keeps it after the latest
+live activity while delivery is unresolved. A delivered lifecycle replaces the
+same projection by raw request id, applies its durable message/turn identity and
+history revision, and moves it immediately after the daemon-provided message or
+tool-call anchor. Multiple delivered steers sharing one anchor remain ordered by
+the daemon-owned receive time, so processing their lifecycle events cannot
+reverse them. Missing legacy anchors preserve the current order until history
+hydration. When history contains the durable steer, the temporary
+display id is removed and lifecycle metadata enriches that one durable event.
+This reconciliation runs after initial history replacement, cache restoration,
+older/newer page merges, navigation, and live delivery without duplicates or
+cross-session movement.
 
 This projection is deliberately separate from `ConversationCacheStore` draft
 ownership. A pending steer is not editable draft text and cannot be copied into

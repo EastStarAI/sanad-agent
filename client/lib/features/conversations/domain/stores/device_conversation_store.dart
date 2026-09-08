@@ -16,6 +16,7 @@ import 'package:sanad_client/features/conversations/domain/stores/session_route_
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/stores/conversation_state.dart';
+import 'package:sanad_client/features/conversations/domain/stores/canonical_timeline_reconciler.dart';
 
 class _RetainedSessionHistory {
   final List<CanonicalEvent> messages;
@@ -391,6 +392,7 @@ class DeviceConversationStore {
         _emitQueuedMessages();
       }
       _conversation.apply(event);
+      _moveCurrentPendingSteersToTail();
       _emitMessages();
     }
   }
@@ -433,8 +435,15 @@ class DeviceConversationStore {
               event.requestId == record.requestId,
         )
         .firstOrNull;
+    final hasTransientProjection = _conversation.events.any(
+      (event) => event.id == transientEventId,
+    );
     if (durableEvent != null) {
       _conversation.removeById(transientEventId);
+    } else if (record.state == PendingSteerState.delivered && !hasTransientProjection) {
+      // A delivered lifecycle row is metadata for a durable history message,
+      // not authority to synthesize that message outside the loaded slice.
+      return;
     }
     final base = durableEvent;
     _conversation.apply(
@@ -452,10 +461,47 @@ class DeviceConversationStore {
           'pending_steer_state': record.state.name,
           'pending_steer_revision': record.revision,
           'generation': record.generation,
+          if (record.messageId != null) 'message_id': record.messageId,
+          if (record.turnId != null) 'turn_id': record.turnId,
+          if (record.anchorMessageId != null) 'anchor_message_id': record.anchorMessageId,
+          if (record.anchorToolCallId != null) 'anchor_tool_call_id': record.anchorToolCallId,
+          if (record.historyRevision != null) 'history_revision': record.historyRevision,
+          'input_kind': 'steer',
+          'replay_eligible': false,
           ...metadataOverrides,
         },
       ),
     );
+    if (record.state == PendingSteerState.delivered &&
+        (record.anchorMessageId != null || record.anchorToolCallId != null)) {
+      _conversation.moveAfterAnchor(
+        base?.id ?? transientEventId,
+        anchorMessageId: record.anchorMessageId,
+        anchorToolCallId: record.anchorToolCallId,
+      );
+    } else if (record.state != PendingSteerState.delivered) {
+      _conversation.moveToEnd(base?.id ?? transientEventId);
+    }
+  }
+
+  void _moveCurrentPendingSteersToTail() {
+    final sessionId = _currentSessionId;
+    if (sessionId == null) return;
+    final records = _pendingSteersBySessionId[sessionId];
+    if (records == null) return;
+    for (final record in records.values) {
+      if (record.state == PendingSteerState.pending || record.state == PendingSteerState.delivering) {
+        final projection = _conversation.events
+            .where(
+              (event) =>
+                  event.kind == EventKind.userMessage &&
+                  event.sessionId == sessionId &&
+                  event.requestId == record.requestId,
+            )
+            .firstOrNull;
+        _conversation.moveToEnd(projection?.id ?? 'user_${record.requestId}');
+      }
+    }
   }
 
   void _reconcileCurrentPendingSteerProjections() {
@@ -569,7 +615,12 @@ class DeviceConversationStore {
     required String requestedCursor,
   }) {
     if (_historyNextCursor != requestedCursor) return false;
-    _conversation.setHistory([...events, ..._conversation.events]);
+    _conversation.setHistory(
+      CanonicalTimelineReconciler.fold([
+        ...events,
+        ..._conversation.events,
+      ], allowLegacyUserFallback: true),
+    );
     _reconcileCurrentPendingSteerProjections();
     final advanced = nextCursor != null && nextCursor != requestedCursor;
     _historyHasMore = hasMore && advanced;
@@ -586,9 +637,12 @@ class DeviceConversationStore {
   }) {
     if (_historyNextNewerCursor != requestedCursor) return false;
     final newer = List<CanonicalEvent>.from(events);
-    for (final event in newer) {
-      _conversation.apply(event);
-    }
+    _conversation.setHistory(
+      CanonicalTimelineReconciler.fold([
+        ..._conversation.events,
+        ...newer,
+      ], allowLegacyUserFallback: true),
+    );
     _reconcileCurrentPendingSteerProjections();
     final advanced = nextNewerCursor != null && nextNewerCursor != requestedCursor;
     _historyHasNewer = hasNewer && advanced;
@@ -597,15 +651,34 @@ class DeviceConversationStore {
     return newer.isNotEmpty || !_historyHasNewer;
   }
 
-  void applyTurnReplayAccepted({
+  bool hasReplayBoundary({
     required String sessionId,
     required String targetRequestId,
     String? targetTurnId,
     String? targetMessageId,
   }) {
+    if (_currentSessionId != sessionId) return false;
+    return _conversation.events.any(
+      (event) =>
+          event.requestId == targetRequestId ||
+          (targetTurnId != null && event.turnId == targetTurnId) ||
+          (targetMessageId != null && event.messageId == targetMessageId),
+    );
+  }
+
+  void applyTurnReplayAccepted({
+    required String sessionId,
+    required String targetRequestId,
+    String? targetTurnId,
+    String? targetRunId,
+    String? targetMessageId,
+  }) {
     if (_currentSessionId != sessionId) return;
-    final hidden = _conversation.hideSupersededIdentities(
+    final hidden = _conversation.hideSupersededTail(
+      sessionId: sessionId,
+      targetRequestId: targetRequestId,
       turnId: targetTurnId,
+      runId: targetRunId,
       messageId: targetMessageId,
     );
     if (hidden) {

@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_exception.dart';
@@ -9,14 +10,19 @@ import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
+import 'package:sanad_agent/evolution/models/pending_steer_record.dart';
 import 'package:sanad_agent/evolution/models/session_state.dart';
+import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/db/message_history_identity.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
+import 'package:sanad_agent/evolution/db/session_history_revision_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_execution_state_coordinator.dart';
 import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
+import 'package:sanad_agent/engine/runtime/steer_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/session_payload_builder.dart';
 
@@ -26,6 +32,7 @@ class ActiveRun {
   final String runId;
   final String? workItemId;
   final Completer<void> completer;
+  String? _turnId;
   final AgentRunner agentRunner;
   final RunCancellationScope cancellationScope;
   StreamSubscription<String>? _subscription;
@@ -40,12 +47,27 @@ class ActiveRun {
     required this.workItemId,
     required this.completer,
     required this.agentRunner,
-  }) : cancellationScope = RunCancellationScope(
+    String? turnId,
+  }) : _turnId = turnId,
+       cancellationScope = RunCancellationScope(
          sessionId: sessionId,
          runId: runId,
          workItemId: workItemId,
          generation: generation,
        );
+
+  String? get turnId => _turnId;
+
+  void bindTurnId(String turnId) {
+    if (turnId.isEmpty) {
+      throw ArgumentError.value(turnId, 'turnId', 'must not be empty');
+    }
+    final current = _turnId;
+    if (current != null && current != turnId) {
+      throw StateError('Active run turn identity cannot change.');
+    }
+    _turnId = turnId;
+  }
 
   void attach(StreamSubscription<String> subscription) {
     _subscription = subscription;
@@ -165,6 +187,14 @@ class SessionTurnExecutor {
     final runId =
         event.runId ??
         'run_${DateTime.now().microsecondsSinceEpoch}_$generation';
+    final existingRoot = _findDurableMessage(
+      sessionId: event.sessionId,
+      role: MessageRole.user,
+      requestId: turnRequest.requestId,
+    );
+    final existingTurnId = existingRoot == null
+        ? (isResume ? _findLatestDurableTurnId(event.sessionId) : null)
+        : MessageHistoryIdentity.read(existingRoot).turnId;
     ActiveRun? activeRun;
 
     try {
@@ -175,6 +205,7 @@ class SessionTurnExecutor {
         workItemId: workItemId,
         completer: Completer<void>(),
         agentRunner: agentRunner,
+        turnId: existingTurnId?.isEmpty == true ? null : existingTurnId,
       );
       final owner = activeRun;
       activeRuns[event.sessionId] = activeRun;
@@ -184,6 +215,22 @@ class SessionTurnExecutor {
         workItemId: workItemId,
         generation: generation,
       );
+      if (!isResume) {
+        agentRunner.configureRootMessageCommitted((message) {
+          final identity = MessageHistoryIdentity.read(message);
+          owner.bindTurnId(identity.turnId);
+          emitResponse(
+            GatewayResponse(
+              sessionId: event.sessionId,
+              platformId: event.platformId,
+              message: message,
+              isComplete: true,
+              runId: owner.runId,
+              turnId: owner.turnId,
+            ),
+          );
+        });
+      }
       if (getIt.isRegistered<RuntimeRecoveryService>()) {
         getIt<RuntimeRecoveryService>().beginRun(
           event.sessionId,
@@ -210,45 +257,6 @@ class SessionTurnExecutor {
             agentRunner.runStartTime = persistedWork.createdAt;
           }
         }
-      }
-
-      if (!isResume) {
-        final receivedAt = turnRequest.metadata['received_at']?.toString();
-        final requestId = turnRequest.requestId;
-        final durableUser = requestId == null || requestId.isEmpty
-            ? _findDurableMessage(
-                sessionId: event.sessionId,
-                role: MessageRole.user,
-                requestId: requestId,
-              )
-            : await agentRunner.commitUserMessage(
-                content,
-                requestId: requestId,
-                receivedAt: receivedAt == null
-                    ? null
-                    : DateTime.tryParse(receivedAt),
-              );
-        if (!ownsRun(activeRun)) return;
-        emitResponse(
-          GatewayResponse(
-            sessionId: event.sessionId,
-            platformId: event.platformId,
-            message:
-                durableUser ??
-                Message(
-                  role: MessageRole.user,
-                  content: content,
-                  metadata: {
-                    ...?event.message.metadata,
-                    if (turnRequest.requestId != null)
-                      'request_id': turnRequest.requestId,
-                    'received_at': receivedAt,
-                  },
-                ),
-            isComplete: true,
-            runId: runId,
-          ),
-        );
       }
 
       String fullContent = '';
@@ -382,6 +390,7 @@ class SessionTurnExecutor {
           _appendInFlightSnapshot(
             sessionId: event.sessionId,
             runId: owner.runId,
+            turnId: owner.turnId,
             modelStepId: agentRunner.currentModelStepId,
             type: CanonicalEventTypes.thoughtStream,
             delta: chunk,
@@ -399,6 +408,7 @@ class SessionTurnExecutor {
               message: Message(role: MessageRole.assistant, content: chunk),
               isComplete: false,
               runId: owner.runId,
+              turnId: owner.turnId,
               modelStepId: agentRunner.currentModelStepId,
             ),
           );
@@ -457,6 +467,7 @@ class SessionTurnExecutor {
         metadata: {
           ...turnMetadata,
           'run_id': activeRun.runId,
+          if (activeRun.turnId != null) 'turn_id': activeRun.turnId,
           if (agentRunner.currentModelStepId != null)
             'model_step_id': agentRunner.currentModelStepId,
         },
@@ -483,6 +494,7 @@ class SessionTurnExecutor {
             ),
             isComplete: true,
             runId: activeRun.runId,
+            turnId: activeRun.turnId,
           ),
         );
         return;
@@ -510,6 +522,7 @@ class SessionTurnExecutor {
           message: durableTerminal ?? terminalMessage,
           isComplete: true,
           runId: activeRun.runId,
+          turnId: activeRun.turnId,
           modelStepId: agentRunner.currentModelStepId,
           usage: agentRunner.lastUsage,
           contextUsage: contextUsage,
@@ -619,6 +632,7 @@ class SessionTurnExecutor {
           ),
           isComplete: true,
           runId: activeRun.runId,
+          turnId: activeRun.turnId,
           modelStepId: agentRunner.currentModelStepId,
           usage: agentRunner.lastUsage,
           contextUsage: contextUsageOnError,
@@ -705,6 +719,7 @@ class SessionTurnExecutor {
           message: Message(role: MessageRole.tool, content: input),
           isComplete: false,
           runId: owner.runId,
+          turnId: owner.turnId,
           modelStepId: owner.agentRunner.currentModelStepId,
           toolCallId: toolRunId,
           usage: owner.agentRunner.lastUsage,
@@ -722,6 +737,7 @@ class SessionTurnExecutor {
         message: Message(role: MessageRole.tool, content: output),
         isComplete: false,
         runId: owner.runId,
+        turnId: owner.turnId,
         modelStepId: owner.agentRunner.currentModelStepId,
         toolCallId: toolRunId,
         toolName: toolName,
@@ -745,6 +761,7 @@ class SessionTurnExecutor {
     _appendInFlightSnapshot(
       sessionId: event.sessionId,
       runId: owner.runId,
+      turnId: owner.turnId,
       modelStepId: agentRunner.currentModelStepId,
       type: CanonicalEventTypes.thoughtStream,
       delta: thought,
@@ -756,6 +773,7 @@ class SessionTurnExecutor {
         message: Message(role: MessageRole.assistant, thought: thought),
         isComplete: false,
         runId: owner.runId,
+        turnId: owner.turnId,
         modelStepId: agentRunner.currentModelStepId,
       ),
     );
@@ -776,6 +794,7 @@ class SessionTurnExecutor {
     _appendInFlightSnapshot(
       sessionId: event.sessionId,
       runId: owner.runId,
+      turnId: owner.turnId,
       modelStepId: agentRunner.currentModelStepId,
       type: CanonicalEventTypes.reasoningStream,
       delta: reasoning,
@@ -787,6 +806,7 @@ class SessionTurnExecutor {
         message: Message(role: MessageRole.assistant, reasoning: reasoning),
         isComplete: false,
         runId: owner.runId,
+        turnId: owner.turnId,
         modelStepId: agentRunner.currentModelStepId,
       ),
     );
@@ -795,6 +815,7 @@ class SessionTurnExecutor {
   void _appendInFlightSnapshot({
     required String sessionId,
     required String runId,
+    required String? turnId,
     required String? modelStepId,
     required String type,
     required String delta,
@@ -806,6 +827,7 @@ class SessionTurnExecutor {
         existing != null &&
         existing['type'] == type &&
         existing['run_id'] == runId &&
+        existing['turn_id'] == turnId &&
         existing['model_step_id'] == modelStepId &&
         existing['content'] is String;
     final timestamp = DateTime.now().millisecondsSinceEpoch;
@@ -814,6 +836,7 @@ class SessionTurnExecutor {
       'status': 'running',
       'session_id': sessionId,
       'run_id': runId,
+      'turn_id': ?turnId,
       'model_step_id': modelStepId,
       'content': sameStream ? '${existing['content']}$delta' : delta,
       'timestamp': timestamp,
@@ -846,15 +869,114 @@ class SessionTurnExecutor {
               'status': 'done',
               'session_id': event.sessionId,
               'run_id': owner.runId,
+              if (owner.turnId != null) 'turn_id': owner.turnId,
               'model_step_id': ?modelStepId,
             },
           },
         ),
         isComplete: false,
         runId: owner.runId,
+        turnId: owner.turnId,
         modelStepId: modelStepId,
       ),
     );
+  }
+
+  PendingSteerDeliveryCommit commitPendingSteerDelivery({
+    required ActiveRun owner,
+    required List<Message> history,
+    required List<PendingSteerPlacement> placements,
+  }) {
+    final state = getIt<AgentStateDatabase>();
+    final persistedState = getIt<PersistedRuntimeStateRepository>();
+    final sessionManager = getIt<SessionManager>();
+    return state.transaction((transaction) {
+      final persisted = sessionManager.saveSessionHistoryInTransaction(
+        owner.sessionId,
+        history,
+        transaction,
+      );
+      final historyRevision = SessionHistoryRevisionRepository(
+        state,
+      ).readInTransaction(transaction, owner.sessionId)?.value;
+      if (historyRevision == null) {
+        throw StateError(
+          'Session history revision is missing after steer commit.',
+        );
+      }
+      final records = <PendingSteerRecord>[];
+      for (final placement in placements) {
+        final requestId = placement.steer.requestId;
+        if (requestId == null ||
+            placement.anchorIndex < 0 ||
+            placement.anchorIndex >= persisted.length) {
+          continue;
+        }
+        final deliveredAt = persisted[placement.anchorIndex];
+        final deliveredIdentity = MessageHistoryIdentity.isSteer(deliveredAt)
+            ? MessageHistoryIdentity.read(deliveredAt)
+            : _embeddedSteerIdentity(deliveredAt, requestId);
+        if (deliveredIdentity == null || deliveredIdentity.messageId.isEmpty) {
+          throw StateError('Persisted steer identity is missing after commit.');
+        }
+        final anchorIndex = MessageHistoryIdentity.isSteer(deliveredAt)
+            ? placement.anchorIndex - 1
+            : placement.anchorIndex;
+        final anchor = anchorIndex >= 0 ? persisted[anchorIndex] : null;
+        final anchorIdentity = anchor == null
+            ? null
+            : MessageHistoryIdentity.read(anchor);
+        final record = persistedState.pendingInputs.markDelivered(
+          sessionId: owner.sessionId,
+          requestId: requestId,
+          runId: owner.runId,
+          generation: owner.generation,
+          messageId: deliveredIdentity.messageId,
+          turnId: deliveredIdentity.turnId,
+          anchorMessageId: anchorIdentity?.messageId,
+          anchorToolCallId:
+              anchor?.toolCallId ??
+              anchor?.metadata?['tool_call_id']?.toString(),
+          historyRevision: historyRevision,
+          transaction: transaction,
+        );
+        if (record == null) {
+          throw StateError(
+            'Pending steer owner changed during delivery commit.',
+          );
+        }
+        records.add(record);
+      }
+      return PendingSteerDeliveryCommit(history: persisted, records: records);
+    });
+  }
+
+  MessageHistoryIdentity? _embeddedSteerIdentity(
+    Message anchor,
+    String requestId,
+  ) {
+    final raw = anchor.metadata?['steer_messages'];
+    if (raw is! List) return null;
+    for (final item in raw) {
+      if (item is! Map || item['request_id']?.toString() != requestId) continue;
+      return MessageHistoryIdentity.read(
+        Message(
+          role: MessageRole.user,
+          content: item['text']?.toString(),
+          metadata: Map<String, dynamic>.from(item),
+        ),
+      );
+    }
+    return null;
+  }
+
+  String? _findLatestDurableTurnId(String sessionId) {
+    final messages = getIt<SessionManager>().getMessages(sessionId);
+    for (final message in messages.reversed) {
+      final turnId = MessageHistoryIdentity.read(message).turnId;
+      if (turnId.isNotEmpty) return turnId;
+    }
+    return null;
   }
 
   Message? _findDurableMessage({

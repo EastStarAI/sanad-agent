@@ -11,6 +11,9 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
 import 'package:sanad_client/features/conversations/data/conversation_client_registry_impl.dart';
 import 'package:sanad_client/features/conversations/domain/conversation_client.dart';
+import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
+import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client_impl.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/infrastructure/local_gateway/local_gateway_credential_provider.dart';
@@ -772,6 +775,290 @@ void main() {
         'ASK_USER_RESUMED',
       );
       expect(connection.client.currentPendingSuspendedRequest, isNull);
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'promotes Queue to Steer and preserves delivered causal identity',
+    () async {
+      final agentDir = Directory(
+        '${Directory.current.parent.path}${Platform.pathSeparator}agent',
+      );
+      final port = _pickPort();
+      final daemon = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: port,
+      );
+      final connection = await _connectConversation(
+        daemon,
+        port: port,
+        hardwareId: 'queue-steer-identity-e2e',
+      );
+      addTearDown(() async {
+        await connection.dispose();
+        await daemon.stop();
+      });
+
+      final session = await connection.client.createSession(
+        title: 'Queue Steer Identity E2E',
+      );
+      connection.client.activateSession(session.id);
+      final pendingRequest = connection.client.pendingSuspendedRequest
+          .firstWhere((request) => request != null)
+          .then((request) => request!);
+      await connection.client.sendMessage(
+        '__SANAD_E2E_ASK_USER_RESTART__',
+        sessionId: session.id,
+      );
+      final suspended = await pendingRequest.timeout(
+        const Duration(seconds: 30),
+      );
+
+      const steerText = 'Use the promoted queue guidance.';
+      final queuedRequestId = await connection.client.sendMessage(
+        steerText,
+        sessionId: session.id,
+        intent: MessageDeliveryIntent.queue,
+      );
+      expect(queuedRequestId, isNotNull);
+      await _waitForCondition(
+        () => connection.client.currentQueuedMessages.any(
+          (event) => event.requestId == queuedRequestId,
+        ),
+        description: 'queued message projection',
+      );
+
+      await connection.client.steerMessage(
+        steerText,
+        requestId: queuedRequestId!,
+        sessionId: session.id,
+      );
+      await _waitForCondition(
+        () =>
+            connection.client.currentQueuedMessages.every(
+              (event) => event.requestId != queuedRequestId,
+            ) &&
+            connection.client.currentMessages.any(
+              (event) => event.requestId == queuedRequestId && event.isSteerInput,
+            ),
+        description: 'typed Queue-to-Steer promotion outcome',
+      );
+
+      final finalAnswer = _waitForFinalAnswer(
+        connection.socket,
+        sessionId: session.id,
+      );
+      await connection.client.respondToSuspendedRequest(
+        suspended,
+        allow: true,
+        answer: 'Continue',
+      );
+      expect(
+        await finalAnswer.timeout(const Duration(seconds: 30)),
+        'ASK_USER_RESUMED',
+      );
+      await _waitForCondition(
+        () => connection.client.currentMessages.any(
+          (event) => event.requestId == queuedRequestId && event.metadata?['pending_steer_state'] == 'delivered',
+        ),
+        description: 'delivered steer lifecycle',
+      );
+
+      await connection.client.loadSessionHistory(session.id);
+      final events = connection.client.currentMessages;
+      final steerIndex = events.indexWhere(
+        (event) => event.requestId == queuedRequestId,
+      );
+      final toolIndex = events.indexWhere(
+        (event) => event.toolCallId == 'e2e-ask-user-tool-call',
+      );
+      final finalIndex = events.indexWhere(
+        (event) => event.text == 'ASK_USER_RESUMED',
+      );
+      expect(toolIndex, greaterThanOrEqualTo(0));
+      expect(steerIndex, greaterThan(toolIndex));
+      expect(finalIndex, greaterThan(steerIndex));
+
+      final deliveredSteer = events[steerIndex];
+      expect(deliveredSteer.text, steerText);
+      expect(deliveredSteer.messageId, isNotEmpty);
+      expect(deliveredSteer.turnId, isNotEmpty);
+      expect(
+        deliveredSteer.metadata?['anchor_tool_call_id'],
+        'e2e-ask-user-tool-call',
+      );
+      expect(deliveredSteer.metadata?['history_revision'], isA<int>());
+      expect(
+        events.where((event) => event.requestId == queuedRequestId),
+        hasLength(1),
+      );
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'three clients reconcile normal, steer, and replay history identically',
+    () async {
+      final agentDir = Directory(
+        '${Directory.current.parent.path}${Platform.pathSeparator}agent',
+      );
+      final port = _pickPort();
+      final daemon = await _startDaemon(
+        sanadagentLocalDir: agentDir,
+        port: port,
+      );
+      final clients = <_E2eConversationConnection>[];
+      addTearDown(() async {
+        for (final connection in clients.reversed) {
+          await connection.dispose();
+        }
+        await daemon.stop();
+      });
+
+      Future<_E2eConversationConnection> connect() async {
+        final connection = await _connectConversation(
+          daemon,
+          port: port,
+          hardwareId: 'three-client-history-e2e',
+        );
+        clients.add(connection);
+        return connection;
+      }
+
+      final clientA = await connect();
+      final clientB = await connect();
+      final session = await clientA.client.createSession(
+        title: 'Three Client History E2E',
+      );
+      clientA.client.activateSession(session.id);
+      clientB.client.activateSession(session.id);
+
+      final pendingRequest = clientA.client.pendingSuspendedRequest
+          .firstWhere((request) => request != null)
+          .then((request) => request!);
+      await clientA.client.sendMessage(
+        '__SANAD_E2E_ASK_USER_RESTART__',
+        sessionId: session.id,
+      );
+      final suspended = await pendingRequest.timeout(
+        const Duration(seconds: 30),
+      );
+      await clientB.client.loadSessionHistory(session.id);
+      final otherSession = await clientB.client.createSession(
+        title: 'Three Client Navigation E2E',
+      );
+      clientB.client.activateSession(otherSession.id);
+      await clientB.client.loadSessionHistory(otherSession.id);
+      clientB.client.activateSession(session.id);
+      await clientB.client.loadSessionHistory(session.id);
+
+      const steerText = 'Promoted steer shared by every client.';
+      final queuedRequestId = await clientA.client.sendMessage(
+        steerText,
+        sessionId: session.id,
+        intent: MessageDeliveryIntent.queue,
+      );
+      expect(queuedRequestId, isNotNull);
+      await _waitForCondition(
+        () => clientA.client.currentQueuedMessages.any(
+          (event) => event.requestId == queuedRequestId,
+        ),
+        description: 'three-client queued projection',
+      );
+      await clientA.client.steerMessage(
+        steerText,
+        requestId: queuedRequestId!,
+        sessionId: session.id,
+      );
+      await _waitForCondition(
+        () => clientA.client.currentMessages.any(
+          (event) => event.requestId == queuedRequestId && event.isSteerInput,
+        ),
+        description: 'three-client pending steer',
+      );
+
+      final firstFinal = _waitForFinalAnswer(
+        clientA.socket,
+        sessionId: session.id,
+      );
+      await clientA.client.respondToSuspendedRequest(
+        suspended,
+        allow: true,
+        answer: 'Continue',
+      );
+      expect(
+        await firstFinal.timeout(const Duration(seconds: 30)),
+        'ASK_USER_RESUMED',
+      );
+
+      final clientC = await connect();
+      clientC.client.activateSession(session.id);
+      for (final connection in [clientA, clientB, clientC]) {
+        await connection.client.loadSessionHistory(session.id);
+      }
+      final completedSignatures = [
+        for (final connection in [clientA, clientB, clientC]) _durableTimelineSignature(connection.client),
+      ];
+      expect(completedSignatures[1], completedSignatures[0]);
+      expect(completedSignatures[2], completedSignatures[0]);
+      expect(
+        clientC.client.currentMessages.where(
+          (event) => event.requestId == queuedRequestId,
+        ),
+        hasLength(1),
+      );
+
+      final replayRoot = clientA.client.currentMessages.firstWhere(
+        (event) => event.isReplayableRootTurn,
+      );
+      final currentSession = (await clientA.client.getSessions()).sessions.firstWhere(
+        (candidate) => candidate.id == session.id,
+      );
+      final replayFinal = _waitForFinalAnswer(
+        clientA.socket,
+        sessionId: session.id,
+      );
+      final replay = await clientA.client.replayTurn(
+        sessionId: session.id,
+        targetRequestId: replayRoot.requestId!,
+        targetMessageId: replayRoot.messageId,
+        targetTurnId: replayRoot.turnId,
+        expectedHistoryRevision: currentSession.historyRevision,
+        action: TurnReplayAction.edit,
+        message: 'Replacement after multi-client reconciliation.',
+        confirmedReplayUnsafe: true,
+        confirmedDropSteers: true,
+      );
+      expect(replay.isAccepted, isTrue);
+      expect(
+        await replayFinal.timeout(const Duration(seconds: 30)),
+        'e2e-success',
+      );
+
+      for (final connection in [clientA, clientB, clientC]) {
+        await connection.client.loadSessionHistory(session.id);
+      }
+      final replaySignatures = [
+        for (final connection in [clientA, clientB, clientC]) _durableTimelineSignature(connection.client),
+      ];
+      expect(replaySignatures[1], replaySignatures[0]);
+      expect(replaySignatures[2], replaySignatures[0]);
+      for (final connection in [clientA, clientB, clientC]) {
+        expect(
+          connection.client.currentMessages.any(
+            (event) => event.text == steerText,
+          ),
+          isFalse,
+        );
+        expect(
+          connection.client.currentMessages.where(
+            (event) =>
+                event.kind == EventKind.userMessage && event.text == 'Replacement after multi-client reconciliation.',
+          ),
+          hasLength(1),
+        );
+      }
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
@@ -1620,6 +1907,30 @@ Future<Map<String, dynamic>> _requestLocalRuntime({
   } finally {
     await subscription.cancel();
   }
+}
+
+List<String> _durableTimelineSignature(ConversationClient client) => [
+  for (final event in client.currentMessages)
+    if (event.messageId != null || event.toolCallId != null)
+      [
+        event.kind.name,
+        event.messageId ?? '',
+        event.turnId ?? '',
+        event.toolCallId ?? '',
+        event.text,
+      ].join('|'),
+];
+
+Future<void> _waitForCondition(
+  bool Function() condition, {
+  required String description,
+}) async {
+  final deadline = DateTime.now().add(const Duration(seconds: 20));
+  while (DateTime.now().isBefore(deadline)) {
+    if (condition()) return;
+    await Future<void>.delayed(const Duration(milliseconds: 100));
+  }
+  throw StateError('Timed out waiting for $description.');
 }
 
 extension<T> on Iterable<T> {

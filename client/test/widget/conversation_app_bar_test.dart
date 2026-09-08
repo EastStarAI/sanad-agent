@@ -242,4 +242,3 @@ void main() {
     expect(menuPressed, isTrue);
   });
 }
-

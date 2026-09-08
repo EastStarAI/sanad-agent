@@ -59,6 +59,16 @@ import 'runtime/turn_route_state.dart';
 export 'runtime/steer_coordinator.dart'
     show steerMarkerOpen, steerMarkerClose, steerChannelNote;
 
+class PendingSteerDeliveryCommit {
+  final List<Message> history;
+  final List<PendingSteerRecord> records;
+
+  const PendingSteerDeliveryCommit({
+    required this.history,
+    required this.records,
+  });
+}
+
 class CompactionProviderSeed {
   final List<Message> projection;
   final List<ToolSchema> tools;
@@ -203,6 +213,12 @@ class AgentRunner {
   RunCancellationScope? _cancellationScope;
   LLMRouteSnapshot? _lastSuccessfulLlmRoute;
   void Function(PendingSteerRecord record)? _onPendingSteerChanged;
+  PendingSteerDeliveryCommit Function(
+    List<Message> history,
+    List<steer_lib.PendingSteerPlacement> placements,
+  )?
+  _onCommitPendingSteerDelivery;
+  FutureOr<void> Function(Message message)? _onRootMessageCommitted;
 
   /// Exact adapter/provider/model route that completed the latest LLM request
   /// in the current authoritative turn.
@@ -237,14 +253,26 @@ class AgentRunner {
     _turnRoute.setTurnRunId(runId);
   }
 
+  void configureRootMessageCommitted(
+    FutureOr<void> Function(Message message)? onCommitted,
+  ) {
+    _onRootMessageCommitted = onCommitted;
+  }
+
   void configurePendingSteerLifecycle({
     required String runId,
     required int generation,
     void Function(PendingSteerRecord record)? onChanged,
+    PendingSteerDeliveryCommit Function(
+      List<Message> history,
+      List<steer_lib.PendingSteerPlacement> placements,
+    )?
+    onCommitDelivery,
   }) {
     _authoritativeRunId = runId;
     _authoritativeGeneration = generation;
     _onPendingSteerChanged = onChanged;
+    _onCommitPendingSteerDelivery = onCommitDelivery;
   }
 
   void endAuthoritativeRun(String? runId) {
@@ -255,6 +283,8 @@ class AgentRunner {
     _authoritativeGeneration = null;
     _cancellationScope = null;
     _onPendingSteerChanged = null;
+    _onCommitPendingSteerDelivery = null;
+    _onRootMessageCommitted = null;
     _turnRoute.setTurnRunId(null);
   }
 
@@ -801,7 +831,25 @@ class AgentRunner {
     return mutation.outcome == PendingSteerReserveOutcome.reserved;
   }
 
-  void _markPendingSteerDelivered(steer_lib.PendingSteer steer) {
+  void _commitPendingSteerDelivery(
+    List<steer_lib.PendingSteerPlacement> placements,
+  ) {
+    final commit = _onCommitPendingSteerDelivery;
+    if (commit == null) {
+      _saveHistory();
+      for (final placement in placements) {
+        _markPendingSteerDeliveredFallback(placement.steer);
+      }
+      return;
+    }
+    final result = commit(List<Message>.unmodifiable(history), placements);
+    history = List<Message>.from(result.history);
+    for (final record in result.records) {
+      _onPendingSteerChanged?.call(record);
+    }
+  }
+
+  void _markPendingSteerDeliveredFallback(steer_lib.PendingSteer steer) {
     final requestId = steer.requestId;
     final runId = _authoritativeRunId;
     final generation = _authoritativeGeneration;
@@ -1516,11 +1564,15 @@ class AgentRunner {
       requestId: effectiveRequestId,
     );
     _turnRoute.applyTurnSwitchIfNeeded();
-    await commitUserMessage(
+    final durableRoot = await commitUserMessage(
       userContent,
       requestId: effectiveRequestId,
       receivedAt: receivedAt,
     );
+    final onRootMessageCommitted = _onRootMessageCommitted;
+    if (onRootMessageCommitted != null) {
+      await onRootMessageCommitted(durableRoot);
+    }
     _beginModelStep();
     _checkpointCoordinator.saveCheckpoint(
       ctx: _checkpointCtx,
@@ -2627,15 +2679,13 @@ class _RunnerSteerCallbacks implements steer_lib.SteerCallbacks {
   }
 
   @override
-  void saveHistory() => _runner._saveHistory();
+  void commitPendingSteerDelivery(
+    List<steer_lib.PendingSteerPlacement> placements,
+  ) => _runner._commitPendingSteerDelivery(placements);
 
   @override
   bool reservePendingSteer(steer_lib.PendingSteer steer) =>
       _runner._reservePendingSteer(steer);
-
-  @override
-  void markPendingSteerDelivered(steer_lib.PendingSteer steer) =>
-      _runner._markPendingSteerDelivered(steer);
 
   @override
   void releasePendingSteerAfterDeliveryFailure(steer_lib.PendingSteer steer) =>

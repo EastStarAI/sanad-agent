@@ -672,6 +672,9 @@ class SocketConversationClient implements ConversationClient {
       gateway: gateway,
       conversationStore: _store,
       mapper: _mapper,
+      onReplayTailHydrationRequired: (sessionId) async {
+        await _commands?.loadSessionHistory(sessionId);
+      },
     );
     _sessionEventsSubscription = gateway.events.listen(_forwardSessionEvent);
     _socketLifecycleSubscription = socketService.lifecycleStateStream.listen((
