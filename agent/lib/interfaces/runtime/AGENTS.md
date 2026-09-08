@@ -16,6 +16,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Preserve strict FIFO for queued input and immediately drain queue-only sessions restored without a recovery notice.
 - Queue promotion, deletion, route rewrite, and execution-snapshot recomputation commit through the execution aggregate owner.
 - Steering targets the active run's runner and bypasses ordinary admission only through the dedicated steer lifecycle.
+- Idle manual compaction obtains its provider projection, ordinary tool list, and request settings from a session-scoped `AgentRunner` seed without admitting or inventing a user turn.
 
 ## Runtime Collaborators
 - `SessionQueueCoordinator` owns queue projection, FIFO drain, and non-terminal route rewrites.

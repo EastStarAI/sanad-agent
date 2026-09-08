@@ -65,6 +65,15 @@ abstract final class CompactionOperationCodec {
             row['provider_confirmed_request_tokens_after'] as int?,
         retainedTailTokens: row['retained_tail_tokens'] as int,
         duration: _durationFromMs(row['duration_ms'] as int?),
+        summarizationInputTokens: row['summarization_input_tokens'] as int?,
+        summarizationCachedInputTokens:
+            row['summarization_cached_input_tokens'] as int?,
+        summarizationCacheWriteTokens:
+            row['summarization_cache_write_tokens'] as int?,
+        summarizationOutputTokens: row['summarization_output_tokens'] as int?,
+        summarizationReasoningTokens:
+            row['summarization_reasoning_tokens'] as int?,
+        summarizationAttempts: row['summarization_attempts'] as int? ?? 0,
       );
     }
     CompactionFailureReason? failureReason;
@@ -129,10 +138,12 @@ abstract final class CompactionOperationCodec {
     final encoded = jsonEncode({
       'previousSummaryAnchor': summary.previousSummaryAnchor,
       'currentGoal': summary.currentGoal,
+      'latestUserRequest': summary.latestUserRequest,
       'successCriteria': summary.successCriteria,
       'constraints': summary.constraints,
       'completedWork': summary.completedWork,
       'activeState': summary.activeState,
+      'criticalContext': summary.criticalContext,
       'decisions': summary.decisions,
       'blockers': summary.blockers,
       'filesAndPaths': summary.filesAndPaths,
@@ -147,10 +158,12 @@ abstract final class CompactionOperationCodec {
     return CompactionInternalSummary(
       previousSummaryAnchor: map['previousSummaryAnchor'] as String?,
       currentGoal: map['currentGoal'] as String? ?? '',
+      latestUserRequest: map['latestUserRequest'] as String? ?? 'Not recorded.',
       successCriteria: map['successCriteria'] as String?,
       constraints: map['constraints'] as String?,
       completedWork: map['completedWork'] as String?,
       activeState: map['activeState'] as String?,
+      criticalContext: map['criticalContext'] as String? ?? 'Not recorded.',
       decisions: map['decisions'] as String?,
       blockers: map['blockers'] as String?,
       filesAndPaths: map['filesAndPaths'] as String?,

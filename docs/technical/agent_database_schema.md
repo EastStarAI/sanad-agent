@@ -195,6 +195,12 @@ A materialized session fork clones every terminal operation ordered inside its s
 | `provider_confirmed_request_tokens_after` | `INTEGER` | Nullable, `>= 0` | First provider-reported input usage after the completed boundary became active; write-once reconciliation |
 | `retained_tail_tokens` | `INTEGER` | Nullable | Tail budget metric |
 | `duration_ms` | `INTEGER` | Nullable | Wall duration when terminal |
+| `summarization_input_tokens` | `INTEGER` | Nullable, `>= 0` | Provider-reported input tokens consumed by summarization attempts |
+| `summarization_cached_input_tokens` | `INTEGER` | Nullable, `>= 0` | Provider-reported cached input tokens for summarization |
+| `summarization_cache_write_tokens` | `INTEGER` | Nullable, `>= 0` | Provider-reported cache-write/creation tokens |
+| `summarization_output_tokens` | `INTEGER` | Nullable, `>= 0` | Provider-reported summary output tokens |
+| `summarization_reasoning_tokens` | `INTEGER` | Nullable, `>= 0` | Provider-reported reasoning tokens |
+| `summarization_attempts` | `INTEGER` | NOT NULL DEFAULT `0`, `>= 0` | Provider attempts across primary/corrective or bounded recovery passes |
 | `internal_summary_json` | `TEXT` | Nullable | Redacted structured summary; **completed only** |
 | `failure_reason` | `TEXT` | Nullable | Enum wire name; **failed only** |
 | `failure_detail_json` | `TEXT` | Nullable | Redacted diagnostics; optional |

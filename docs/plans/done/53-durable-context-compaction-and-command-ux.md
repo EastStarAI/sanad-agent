@@ -372,6 +372,13 @@ Session execution
 ## 12. سجل التقدم والتسليم
 
 ```text
+Date: 2026-09-06 (Task 53i provider-backed compaction)
+Task/Gate: 53i / local G1–G6 complete; in_review
+Status: production compaction now uses the session provider/model projection as an ordinary user request, retains ordinary tools and request settings, retries one invalid response from an immutable base, and fails safely without activating a weak boundary. It adds no cache-specific measurement, enforcement, persistence, or performance claim; cache behavior is incidental to the codec/provider.
+Verification: agent analyzer clean; focused provider/persistence/runtime suites passed; daemon E2E 4/4; full agent 1511 passed / 13 skipped; docs lint and diff check clean; Graphify 22643 nodes / 30744 edges. Arabic live Codex compaction passed after the user's explicit runtime handoff; all four registered adapter families additionally pass mocked-transport wire contracts, while non-Codex live calls remain optional.
+```
+
+```text
 Date: 2026-08-31 (delivery follow-up)
 Task/Gate: 53g / G5 complete; in_review unchanged
 Status: desktop session-title double-click now invokes the existing capability-gated rename dialog; sidebar tests and live driver verification pass. The three previously reported wiki-lint errors are fixed and docs lint succeeds.

@@ -835,6 +835,8 @@ class BaseAnthropicAdapter implements LLMAdapter {
         return LLMFinishReason.toolCalls;
       case 'max_tokens':
         return LLMFinishReason.length;
+      case 'pause_turn':
+        return LLMFinishReason.incomplete;
       case 'stop_sequence':
         return LLMFinishReason.stop;
       default:

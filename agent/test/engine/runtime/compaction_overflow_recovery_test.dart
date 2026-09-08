@@ -76,6 +76,28 @@ class _FakeRuntimeService extends AgentRuntimeService {
   }
 }
 
+class _CapturingProviderSummarizer
+    implements CompactionSummarizer, ProviderProjectionCompactionSummarizer {
+  CompactionProviderRequest? request;
+
+  @override
+  Future<String> summarize({required String prompt}) =>
+      throw UnsupportedError('provider projection expected');
+
+  @override
+  Future<CompactionProviderResult> summarizeProvider(
+    CompactionProviderRequest request,
+  ) async {
+    this.request = request;
+    return const CompactionProviderResult(
+      content:
+          '{"schemaVersion":1,"currentGoal":"recover from overflow","latestUserRequest":"الطلب الفاشل","successCriteria":"success","constraints":"none","completedWork":"none","activeState":"recovering","criticalContext":"الطلب الفاشل","decisions":"none","blockers":"overflow","filesAndPaths":"none","pendingAsks":"الطلب الفاشل","remainingWork":"retry once"}',
+      usage: {'prompt_tokens': 1000, 'completion_tokens': 100},
+      duration: Duration(milliseconds: 1),
+    );
+  }
+}
+
 void main() {
   late AgentStateDatabase state;
   late SessionDB sessions;
@@ -123,6 +145,9 @@ void main() {
     );
     getIt.registerSingleton<SessionHistoryRevisionRepository>(
       SessionHistoryRevisionRepository(state),
+    );
+    getIt.registerSingleton<SessionProjectionRevisionRepository>(
+      SessionProjectionRevisionRepository(state),
     );
     final repo = ProviderInstanceRepository.fromDatabase(state.db);
     getIt.registerSingleton<ProviderInstanceRepository>(repo);
@@ -190,6 +215,50 @@ void main() {
     );
     expect(triggers, contains(CompactionTrigger.overflow));
   });
+
+  test(
+    'overflow compaction reuses the exact failed provider projection',
+    () async {
+      final summarizer = _CapturingProviderSummarizer();
+      getIt.registerSingleton<CompactionCoordinator>(
+        CompactionCoordinator(
+          engine: ContextCompactionEngine(summarizer: summarizer),
+          boundaries: boundaries,
+          activation: CompactionActivationService(
+            boundaries: boundaries,
+            projectionRevisions: getIt<SessionProjectionRevisionRepository>(),
+          ),
+          projectionBuilder: getIt<ModelProjectionBuilder>(),
+        ),
+      );
+      final failedProjection = [
+        Message(role: MessageRole.system, content: 'نفس النظام'),
+        Message(role: MessageRole.user, content: 'الطلب الفاشل'),
+      ];
+      final recovered = await runner.debugTryOverflowCompactionRecovery(
+        error: const LlmHttpException(
+          statusCode: 400,
+          body: 'maximum context length exceeded',
+          headers: {},
+          operation: 'chat.completions',
+        ),
+        providerInstanceId: 'provider-1',
+        modelId: 'gpt-4o',
+        failedProviderProjection: failedProjection,
+      );
+
+      expect(recovered, isTrue);
+      expect(summarizer.request, isNotNull);
+      expect(summarizer.request!.baseProjection, hasLength(2));
+      expect(
+        identical(
+          summarizer.request!.baseProjection.last,
+          failedProjection.last,
+        ),
+        isTrue,
+      );
+    },
+  );
 
   test('does not retry overflow compaction twice', () async {
     await runner.debugTryOverflowCompactionRecovery(

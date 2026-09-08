@@ -245,7 +245,7 @@ void main() {
           expect(execution.compactionIds, hasLength(1));
           expect(execution.lifecycle, ['started', 'completed']);
           expect(execution.finalAnswers, 2);
-          // The deterministic summarizer can complete before the follow-up
+          // Provider-backed compaction can complete before the follow-up
           // frame is admitted; either way the follow-up executes exactly once.
           expect(execution.queuedClassifications, lessThanOrEqualTo(1));
 
@@ -416,7 +416,7 @@ LOG_LEVEL=INFO
           role: MessageRole.user,
           content: 'goal: daemon compaction e2e validation',
         ),
-        for (var i = 0; i < 80; i++)
+        for (var i = 0; i < 500; i++)
           Message(role: MessageRole.user, content: 'filler $i ${'x' * 300}'),
       ]);
     } finally {
