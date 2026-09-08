@@ -10,6 +10,11 @@ class PendingSteerRecord {
   final PendingSteerState state;
   final int revision;
   final DateTime updatedAt;
+  final String? messageId;
+  final String? turnId;
+  final String? anchorMessageId;
+  final String? anchorToolCallId;
+  final int? historyRevision;
 
   const PendingSteerRecord({
     required this.sessionId,
@@ -21,6 +26,11 @@ class PendingSteerRecord {
     required this.state,
     required this.revision,
     required this.updatedAt,
+    this.messageId,
+    this.turnId,
+    this.anchorMessageId,
+    this.anchorToolCallId,
+    this.historyRevision,
   });
 
   factory PendingSteerRecord.fromRow(Map<String, Object?> row) {
@@ -34,6 +44,11 @@ class PendingSteerRecord {
       state: PendingSteerState.values.byName(row['state'] as String),
       revision: row['revision'] as int,
       updatedAt: DateTime.parse(row['updated_at'] as String).toUtc(),
+      messageId: row['message_id'] as String?,
+      turnId: row['turn_id'] as String?,
+      anchorMessageId: row['anchor_message_id'] as String?,
+      anchorToolCallId: row['anchor_tool_call_id'] as String?,
+      historyRevision: row['history_revision'] as int?,
     );
   }
 
@@ -47,6 +62,11 @@ class PendingSteerRecord {
     'state': state.name,
     'revision': revision,
     'updated_at': updatedAt.toIso8601String(),
+    if (messageId != null) 'message_id': messageId,
+    if (turnId != null) 'turn_id': turnId,
+    if (anchorMessageId != null) 'anchor_message_id': anchorMessageId,
+    if (anchorToolCallId != null) 'anchor_tool_call_id': anchorToolCallId,
+    if (historyRevision != null) 'history_revision': historyRevision,
   };
 }
 

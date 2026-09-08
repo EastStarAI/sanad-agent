@@ -25,7 +25,7 @@ This contract applies to `client/lib/features/conversations/domain/`.
 ## Queue, Steer, and Recovery
 - Project queue and pending-steer state only from daemon lifecycle/mutation outcomes.
 - Scope pending steers by session, raw request id, and monotonic revision.
-- Pending renders one projection; delivered reuses it; cancelled or recovered removes it.
+- Pending renders one projection at the live activity tail; delivered reuses it and moves it to the daemon-provided causal anchor; cancelled or recovered removes it.
 - Background-session outcomes must not mutate the active timeline.
 - Stop-draft recovery removes matching pending-steer projections before offering recovered text to the draft owner.
 - Stop-draft recovery also clears the session queued-messages projection atomically, mirroring the daemon's queue cleanup during stop.
@@ -39,7 +39,8 @@ This contract applies to `client/lib/features/conversations/domain/`.
 - `tool_use` closes only its matching model-step thought.
 - `final_answer` and `stopped` remove only the matching running model-step projection and preserve completed prior thoughts.
 - A stop without active model-step identity clears runtime controls only.
-- Preserve steer ordering after its associated tool and before the post-steer final answer; later tool results merge without moving the steer event.
+- Unresolved pending steers follow the latest live activity. Once delivered, preserve steer ordering after its daemon-provided tool/message anchor and before the post-steer final answer; canonical reconciliation must fold lifecycle and durable steer copies by domain identity even when their event ids differ, and later tool-result merges must not move the steer.
+- Accepted replay removes only the matched visible tail and retains turn/run/message tombstones against late events; identity-incomplete legacy events remain blocked until authoritative reconciliation.
 - Fold compaction transitions by logical `compaction_id`; terminal status is immutable, so hydration or retry may enrich the same terminal status but cannot switch `completed` and `failed`.
 
 ## Snapshot and Attention Safety

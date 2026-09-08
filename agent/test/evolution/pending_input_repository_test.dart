@@ -60,9 +60,66 @@ void main() {
         requestId: 'request-1',
         runId: 'run-1',
         generation: 3,
+        messageId: 'steer-message-1',
+        turnId: 'turn-1',
+        anchorMessageId: 'tool-message-1',
+        anchorToolCallId: 'tool-call-1',
+        historyRevision: 8,
       );
       expect(delivered!.state, PendingSteerState.delivered);
       expect(delivered.revision, 3);
+      expect(delivered.messageId, 'steer-message-1');
+      expect(delivered.turnId, 'turn-1');
+      expect(delivered.anchorMessageId, 'tool-message-1');
+      expect(delivered.anchorToolCallId, 'tool-call-1');
+      expect(delivered.historyRevision, 8);
+    },
+  );
+
+  test(
+    'delivery placement rolls back with its owning aggregate transaction',
+    () {
+      seedSession('session-atomic');
+      runtime.pendingInputs.insertPending(
+        sessionId: 'session-atomic',
+        requestId: 'request-atomic',
+        runId: 'run-atomic',
+        generation: 1,
+        text: 'atomic steer',
+        receivedAt: DateTime.utc(2026, 7, 15, 10),
+      );
+      runtime.pendingInputs.reserve(
+        sessionId: 'session-atomic',
+        requestId: 'request-atomic',
+        runId: 'run-atomic',
+        generation: 1,
+      );
+
+      expect(
+        () => state.transaction((transaction) {
+          runtime.pendingInputs.markDelivered(
+            sessionId: 'session-atomic',
+            requestId: 'request-atomic',
+            runId: 'run-atomic',
+            generation: 1,
+            messageId: 'message-atomic',
+            turnId: 'turn-atomic',
+            anchorToolCallId: 'tool-atomic',
+            historyRevision: 2,
+            transaction: transaction,
+          );
+          throw StateError('rollback aggregate');
+        }),
+        throwsStateError,
+      );
+
+      final record = runtime.pendingInputs.find(
+        'session-atomic',
+        'request-atomic',
+      )!;
+      expect(record.state, PendingSteerState.delivering);
+      expect(record.messageId, isNull);
+      expect(record.historyRevision, isNull);
     },
   );
 

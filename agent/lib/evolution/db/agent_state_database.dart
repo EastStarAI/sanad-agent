@@ -540,6 +540,26 @@ class AgentStateDatabase {
         FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE
       );
     ''');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_pending_steers ADD COLUMN message_id TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_pending_steers ADD COLUMN turn_id TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_pending_steers ADD COLUMN anchor_message_id TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_pending_steers ADD COLUMN anchor_tool_call_id TEXT',
+    );
+    _safeAddColumn(
+      db,
+      'ALTER TABLE session_pending_steers ADD COLUMN history_revision INTEGER',
+    );
     db.execute('''
       CREATE INDEX IF NOT EXISTS idx_session_pending_steers_active
       ON session_pending_steers(session_id, state, received_at);

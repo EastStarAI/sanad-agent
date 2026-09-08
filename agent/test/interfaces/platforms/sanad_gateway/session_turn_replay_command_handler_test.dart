@@ -555,7 +555,11 @@ void main() {
           content: 'hello',
           metadata: const {'request_id': 'root-1'},
         ),
-        Message(role: MessageRole.assistant, content: 'answer'),
+        Message(
+          role: MessageRole.assistant,
+          content: 'answer',
+          metadata: const {'run_id': 'run-original'},
+        ),
       ]);
       final target = sessions.getMessages(sessionId).first;
       final envelopes = <Map<String, dynamic>>[];
@@ -570,6 +574,9 @@ void main() {
       );
       expect(envelopes.single['payload']['outcome'], 'accepted');
       expect(envelopes.single['payload']['history_revision'], 2);
+      expect(envelopes.single['payload']['target_run_id'], 'run-original');
+      expect(envelopes.single['payload']['replacement_message_id'], isNotEmpty);
+      expect(envelopes.single['payload']['replacement_turn_id'], isNotEmpty);
       expect(orchestrator.events, hasLength(1));
       expect(
         orchestrator.events.single.turnRequest?.requestId,

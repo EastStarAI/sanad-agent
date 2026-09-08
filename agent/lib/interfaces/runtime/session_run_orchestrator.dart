@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:logging/logging.dart';
 import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/di.dart';
@@ -31,6 +32,7 @@ import 'session_turn_executor.dart';
 import 'session_recovery_restorer.dart';
 import 'session_turn_request_helpers.dart';
 import 'suspended_checkpoint_store.dart';
+
 import 'package:sanad_agent/engine/compaction/compaction.dart';
 import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/compaction_request_factory.dart';
@@ -458,6 +460,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   }) async {
     final activeRun = _turnExecutor.getActiveRun(sessionId);
     final stoppedRunId = activeRun?.runId;
+    final stoppedTurnId = activeRun?.turnId;
     final stoppedModelStepId = activeRun?.agentRunner.currentModelStepId;
     final hadWork =
         forceEmitStopped ||
@@ -583,6 +586,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
             ),
             isComplete: true,
             runId: record.runId,
+            turnId: stoppedTurnId,
             modelStepId: stoppedModelStepId,
             toolCallId: record.toolCallId,
             toolName: record.toolName,
@@ -625,12 +629,14 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               'canonical_payload': {
                 'session_id': sessionId,
                 'run_id': ?stoppedRunId,
+                'turn_id': ?stoppedTurnId,
                 'model_step_id': ?stoppedModelStepId,
               },
             },
           ),
           isComplete: true,
           runId: stoppedRunId,
+          turnId: stoppedTurnId,
           modelStepId: stoppedModelStepId,
         ),
       );
@@ -1108,6 +1114,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         event,
         requestedWorkspaceId: requestedWorkspaceId,
       );
+      final rawCommandRequestId =
+          (event.metadata['payload'] as Map?)?['command_request_id']
+              ?.toString()
+              .trim();
+      final isQueuePromotionCommand =
+          rawCommandRequestId != null && rawCommandRequestId.isNotEmpty;
       final activeRun = _turnExecutor.getActiveRun(event.sessionId);
       final durableActiveWork = persistedState?.findActiveWorkItem(
         event.sessionId,
@@ -1126,6 +1138,23 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               durableActiveWork.state == SessionWorkState.resuming) &&
           (activeRecoveryNotice == null ||
               activeRecoveryNotice.status == RuntimeNoticeStatus.resuming);
+      if (!canSteer && isQueuePromotionCommand) {
+        final targetRequestId =
+            turnRequest.requestId ?? requestIdForEvent(event) ?? '';
+        _emitCommandOutcome(
+          sessionId: event.sessionId,
+          type: 'session.queued_message_steer_result',
+          targetRequestId: targetRequestId,
+          commandRequestId: rawCommandRequestId,
+          outcome: 'stale_owner',
+        );
+        _emitMessageClassification(
+          event,
+          requestId: targetRequestId,
+          classification: 'queue',
+        );
+        return;
+      }
       if (canSteer) {
         final requestId = turnRequest.requestId ?? requestIdForEvent(event);
         final text = event.message.content?.trim() ?? '';
@@ -1137,7 +1166,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
             event.sessionId,
             requestId,
           );
-          if (existingWork?.state == SessionWorkState.queued) {
+          final commandRequestId = rawCommandRequestId ?? requestId;
+          final isQueuePromotion = isQueuePromotionCommand;
+          if (isQueuePromotion) {
             final promoted = store!.executionState.promoteQueuedToPendingSteer(
               sessionId: event.sessionId,
               requestId: requestId,
@@ -1147,6 +1178,13 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               receivedAt: receivedAt,
             );
             if (promoted.outcome != QueueMutationOutcome.promoted) {
+              _emitCommandOutcome(
+                sessionId: event.sessionId,
+                type: 'session.queued_message_steer_result',
+                targetRequestId: requestId,
+                commandRequestId: commandRequestId,
+                outcome: _wireName(promoted.outcome.name),
+              );
               _emitMessageClassification(
                 event,
                 requestId: requestId,
@@ -1203,6 +1241,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               runId: activeRun.runId,
               generation: activeRun.generation,
               onChanged: (record) => _emitPendingSteerChanged(null, record),
+              onCommitDelivery: (history, placements) =>
+                  _turnExecutor.commitPendingSteerDelivery(
+                    owner: activeRun,
+                    history: history,
+                    placements: placements,
+                  ),
             );
           }
           activeRun.agentRunner.steerEvent(
@@ -1215,6 +1259,15 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
             receivedAt,
           );
           _emitPendingSteerChanged(event.platformId, pending);
+          if (isQueuePromotion) {
+            _emitCommandOutcome(
+              sessionId: event.sessionId,
+              type: 'session.queued_message_steer_result',
+              targetRequestId: requestId,
+              commandRequestId: commandRequestId,
+              outcome: 'promoted',
+            );
+          }
           _emitMessageClassification(
             event,
             requestId: requestId,

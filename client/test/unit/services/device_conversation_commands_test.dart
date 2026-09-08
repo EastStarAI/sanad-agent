@@ -47,6 +47,23 @@ void main() {
     expect((socket.capturedCommands.single['payload'] as Map)['message'], 'hello');
   });
 
+  test('steerMessage preserves queued text and stable request identity', () async {
+    await commands.steerMessage(
+      'use the safer migration',
+      requestId: 'queued-request-1',
+      sessionId: 'session-1',
+    );
+
+    final command = socket.capturedCommands.single;
+    expect(command['command'], 'steer');
+    final payload = command['payload'] as Map<String, dynamic>;
+    expect(payload['request_id'], 'queued-request-1');
+    expect(payload['target_request_id'], 'queued-request-1');
+    expect(payload['command_request_id'], startsWith('req_'));
+    expect(payload['session_id'], 'session-1');
+    expect(payload['message'], 'use the safer migration');
+  });
+
   test('deleteSession fails when the daemon does not confirm deletion', () async {
     socket.setConnected(false);
 
@@ -1339,19 +1356,23 @@ void main() {
     expect(history.single.revision, 30);
   });
 
-  test('loadSessionHistory does not duplicate a live user message already persisted', () async {
+  test('A to B to A reconciles a live user message with durable history identity', () async {
     final sentAt = DateTime.parse('2026-07-12T04:48:20Z');
     store.activateSession('session-1');
-    store.apply(
+    store.setHistory([
       CanonicalEvent(
         id: 'user_request-2',
         kind: EventKind.userMessage,
         text: 'Restart the agent',
         timestamp: sentAt,
         sessionId: 'session-1',
-        metadata: const {'request_id': 'request-2'},
+        metadata: const {
+          'message_id': 'message-2',
+          'request_id': 'request-2',
+        },
       ),
-    );
+    ]);
+    store.activateSession('session-2');
 
     final future = commands.loadSessionHistory('session-1');
     final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
@@ -1363,9 +1384,13 @@ void main() {
         'messages': [
           {
             'id': 2,
+            'event_id': 'history-event-2',
             'sender': 'user',
             'type': 'user_message',
             'content': 'Restart the agent',
+            'message_id': 'message-2',
+            'request_id': 'request-2',
+            'session_id': 'session-1',
             'created_at': sentAt.toIso8601String(),
           },
         ],
@@ -1374,10 +1399,39 @@ void main() {
 
     await future;
 
+    final matching = store.currentMessages.where(
+      (event) => event.messageId == 'message-2',
+    );
+    expect(matching, hasLength(1));
+    expect(matching.single.eventId, 'history-event-2');
+
+    store.activateSession('session-2');
+    final secondReload = commands.loadSessionHistory('session-1');
+    final secondPayload = socket.capturedCommands.last['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': secondPayload['request_id'],
+        'messages': [
+          {
+            'id': 2,
+            'event_id': 'history-event-2',
+            'sender': 'user',
+            'type': 'user_message',
+            'content': 'Restart the agent',
+            'message_id': 'message-2',
+            'request_id': 'request-2',
+            'session_id': 'session-1',
+            'created_at': sentAt.toIso8601String(),
+          },
+        ],
+      },
+    });
+    await secondReload;
+
     expect(
-      store.currentMessages.where(
-        (event) => event.kind == EventKind.userMessage,
-      ),
+      store.currentMessages.where((event) => event.messageId == 'message-2'),
       hasLength(1),
     );
   });

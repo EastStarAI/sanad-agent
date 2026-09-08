@@ -475,58 +475,78 @@ class SessionDB {
   void replaceMessages(String sessionId, List<Message> messages) {
     _db.execute('BEGIN TRANSACTION');
     try {
-      final existing = getPersistedMessages(sessionId);
-      final assigned = MessageHistoryIdentity.assignIdentities(
-        messages,
-        existingActive: existing
-            .map((entry) => MessageHistoryIdentity.read(entry.message))
-            .toList(growable: false),
-      );
-      var unchangedPrefixLength = 0;
-      final comparableLength = existing.length < assigned.length
-          ? existing.length
-          : assigned.length;
-      final metadataUpdates = <({int rowId, Message message})>[];
-      while (unchangedPrefixLength < comparableLength) {
-        final existingMessage = existing[unchangedPrefixLength].message;
-        final replacementMessage = assigned[unchangedPrefixLength];
-        if (jsonEncode(existingMessage.toJson()) ==
-            jsonEncode(replacementMessage.toJson())) {
-          unchangedPrefixLength++;
-          continue;
-        }
-        if (!_sameSemanticMessage(existingMessage, replacementMessage)) {
-          break;
-        }
-        metadataUpdates.add((
-          rowId: existing[unchangedPrefixLength].rowId,
-          message: replacementMessage,
-        ));
-        unchangedPrefixLength++;
-      }
-      for (final entry in metadataUpdates) {
-        MessageHistoryIdentity.persist(
-          _db,
-          sessionId,
-          entry.message,
-          sqliteId: entry.rowId,
-        );
-      }
-      if (unchangedPrefixLength < existing.length) {
-        _db.execute('DELETE FROM messages WHERE session_id = ? AND id >= ?', [
-          sessionId,
-          existing[unchangedPrefixLength].rowId,
-        ]);
-      }
-      for (final message in assigned.skip(unchangedPrefixLength)) {
-        MessageHistoryIdentity.persist(_db, sessionId, message);
-      }
-      SessionHistoryRevisionRepository.bumpDatabase(_db, sessionId);
+      _replaceMessagesInDatabase(_db, sessionId, messages);
       _db.execute('COMMIT');
     } catch (e) {
       _db.execute('ROLLBACK');
       rethrow;
     }
+  }
+
+  /// Persists history inside an aggregate transaction owned by the caller.
+  /// This is used when history and another session-owned lifecycle row must
+  /// become authoritative at the same commit boundary.
+  List<Message> replaceMessagesInTransaction(
+    String sessionId,
+    List<Message> messages,
+    AgentStateTransaction transaction,
+  ) => _replaceMessagesInDatabase(transaction.db, sessionId, messages);
+
+  List<Message> _replaceMessagesInDatabase(
+    Database db,
+    String sessionId,
+    List<Message> messages,
+  ) {
+    final existing = getPersistedMessages(sessionId);
+    final assigned = MessageHistoryIdentity.assignIdentities(
+      messages,
+      existingActive: existing
+          .map((entry) => MessageHistoryIdentity.read(entry.message))
+          .toList(growable: false),
+    );
+    var unchangedPrefixLength = 0;
+    final comparableLength = existing.length < assigned.length
+        ? existing.length
+        : assigned.length;
+    final metadataUpdates = <({int rowId, Message message})>[];
+    while (unchangedPrefixLength < comparableLength) {
+      final existingMessage = existing[unchangedPrefixLength].message;
+      final replacementMessage = assigned[unchangedPrefixLength];
+      if (jsonEncode(existingMessage.toJson()) ==
+          jsonEncode(replacementMessage.toJson())) {
+        unchangedPrefixLength++;
+        continue;
+      }
+      if (!_sameSemanticMessage(existingMessage, replacementMessage)) {
+        break;
+      }
+      metadataUpdates.add((
+        rowId: existing[unchangedPrefixLength].rowId,
+        message: replacementMessage,
+      ));
+      unchangedPrefixLength++;
+    }
+    for (final entry in metadataUpdates) {
+      MessageHistoryIdentity.persist(
+        db,
+        sessionId,
+        entry.message,
+        sqliteId: entry.rowId,
+      );
+    }
+    if (unchangedPrefixLength < existing.length) {
+      db.execute('DELETE FROM messages WHERE session_id = ? AND id >= ?', [
+        sessionId,
+        existing[unchangedPrefixLength].rowId,
+      ]);
+    }
+    for (final message in assigned.skip(unchangedPrefixLength)) {
+      MessageHistoryIdentity.persist(db, sessionId, message);
+    }
+    SessionHistoryRevisionRepository.bumpDatabase(db, sessionId);
+    return getPersistedMessages(
+      sessionId,
+    ).map((entry) => entry.message).toList(growable: false);
   }
 
   static bool _sameSemanticMessage(Message left, Message right) {

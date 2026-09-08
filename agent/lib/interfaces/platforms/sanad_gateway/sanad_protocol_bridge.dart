@@ -226,7 +226,12 @@ class SanadProtocolBridge {
         type: canonicalEventType,
         sessionId: response.sessionId,
         runId: response.runId,
-        payload: canonicalPayload,
+        payload: {
+          ...canonicalPayload,
+          if (response.turnId != null &&
+              !canonicalPayload.containsKey('turn_id'))
+            'turn_id': response.turnId,
+        },
         eventId: response.eventId,
         delivery: response.delivery,
       );

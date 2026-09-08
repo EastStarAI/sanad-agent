@@ -91,6 +91,17 @@ To inspect the application's interface dynamically without rendering heavy exter
     sanad-dev status
     ```
 
+   **Custom Home continuity:** If launch used `--home <absolute>`, pass that exact
+   `--home` value to every later `sanad-dev` command (`status`, bounded `logs`,
+   `ui`, reload/restart, and any authorized stop). Omitting it makes discovery
+   inspect the worktree-default Home and can falsely report a stopped runtime or
+   cross-worktree ownership conflict even while the requested runtime is healthy.
+   Treat `sanad-dev status --home <absolute>` as the authoritative selection
+   check. If a client-specific `logs` or `ui` command still rejects a client that
+   this status reports as managed, use the status-reported VM endpoint with the
+   standalone driver CLI as a diagnostic fallback; do not infer that the Client
+   is stopped and do not repair or stop it automatically.
+
 4. **Inspect UI Structure:** From the repository root, prefer the worktree-scoped `sanad-dev` entry point. It resolves only the active driver-enabled client recorded for the current worktree:
 
     ```bash

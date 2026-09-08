@@ -219,8 +219,15 @@ protocol with no cursor, so the daemon never hydrates an unbounded transcript.
 ## History Projection
 
 Live and reconstructed history use the same canonical identities and payload
-shape. Reasoning remains distinct from final answer content. Tool use and result
-pair by tool-call identity, model output segments by model-step identity, and
-run id remains execution ownership rather than display identity. The latest
+shape. The root user message is persisted before its authoritative live echo;
+its durable `turn_id` binds the active run once and is then copied to every
+live thought, reasoning, tool-use, tool-result, final, and stopped projection
+owned by that execution attempt. Resume recovers the same durable turn identity
+rather than minting a replacement. Both Local and Cloud transports consume the
+shared canonical translation, so the field is identical across delivery paths.
+
+Reasoning remains distinct from final answer content. Tool use and result pair
+by tool-call identity, model output segments by model-step identity, and run id
+remains execution ownership rather than display identity. The latest
 context-usage projection is restored without accumulating historical model
 steps.

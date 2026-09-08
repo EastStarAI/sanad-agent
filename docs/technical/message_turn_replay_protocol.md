@@ -68,6 +68,8 @@ identities plus:
 - `requires_confirmation`
 - `requires_steer_drop_confirmation`
 - `history_revision` after a successful commit
+- on `accepted`, `target_run_id` when known plus
+  `replacement_message_id` and `replacement_turn_id`
 
 ### Outcomes
 
@@ -152,10 +154,15 @@ Normal history, timeline, and model context return `history_status = active`
 only. Superseded rows remain in SQLite for audit and recovery and are not
 resurrected by reconnect, cache hydration, or late live events.
 
-Clients reconcile by `message_id` and `history_revision`. They must not
-optimistically delete the original turn from local cache before `accepted`.
-After `accepted`, they hide superseded identities and wait for the replacement
-user echo rather than truncating by list index.
+Clients reconcile by `message_id`, `turn_id`, `run_id`, and
+`history_revision`. They must not optimistically delete the original turn from
+local cache before `accepted`. After `accepted`, they remove the visible tail
+from the matched root boundary, retain turn/run/message tombstones against late
+stream and tool events, and wait for the durable replacement user echo. Legacy
+late events lacking both turn and run identity are blocked for that session.
+If the local boundary is absent (for example because pagination excluded it),
+the transport requests authoritative tail hydration instead of guessing from
+text, timestamps, or a local list index.
 
 ## Input classification
 

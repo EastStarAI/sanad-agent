@@ -31,8 +31,8 @@ This contract applies to `client/lib/features/conversations/data/`.
 - Preserve opaque string event ids and log only redacted correlation when hydration fails.
 - Reconnect loads the active session history after session-list hydration so events emitted while disconnected become visible. A transport transition to `ready` is sufficient to trigger this reconciliation; never gate it on the stale `DeviceConfig.isOnline` value captured while the daemon was absent.
 - Ignore a history response when navigation has moved to another requested session.
-- Reapply live events after history hydration with request-id deduplication; legacy rows may use bounded same-session text/timestamp matching.
-- When navigation restores a fully exhausted retained timeline, reconcile the authoritative tail into it by canonical event id instead of replacing its explicitly loaded older pages. Partial timelines remain replaceable by the authoritative first page.
+- Reconcile live and hydrated rows with one kind-aware canonical reducer that prefers durable message/request/turn, run/model-step, or tool-call identity as appropriate; use event id only as a same-kind fallback, while legacy user rows may use bounded same-session text/timestamp matching.
+- When navigation restores a retained timeline, treat only the returned history range as authoritative: merge canonical matches, remove stale duplicates in that range, and preserve live rows provably outside it. Initial load, pagination, cache restore, and replay fallback must not implement separate deduplication policies.
 - Anchored hydration owns independent older and newer opaque cursors. Coalesce each direction separately, prepend older pages, append newer pages, and reject stale generation/cursor results in either direction.
 - Do not terminal-deduplicate running thinking events needed by later stream chunks.
 - Hydrate runtime notice and queued messages together for the selected session, and retain lightweight recovery markers in session-list metadata.

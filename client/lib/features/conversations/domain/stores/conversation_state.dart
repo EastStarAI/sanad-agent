@@ -1,6 +1,8 @@
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 
+import 'canonical_timeline_reconciler.dart';
+
 /// Manages the state of a single conversation session.
 ///
 /// Single source of truth for the UI — accepts `CanonicalEvent`s produced by any
@@ -18,7 +20,9 @@ class ConversationState {
   final List<CanonicalEvent> _events = [];
   ThinkingStreamMode _thinkingStreamMode;
   final Set<String> _supersededTurnIds = <String>{};
+  final Set<String> _supersededRunIds = <String>{};
   final Set<String> _supersededMessageIds = <String>{};
+  final Set<String> _legacyReplayBarrierSessionIds = <String>{};
 
   List<CanonicalEvent> get events => List.unmodifiable(_events);
 
@@ -27,7 +31,9 @@ class ConversationState {
   void clear() {
     _events.clear();
     _supersededTurnIds.clear();
+    _supersededRunIds.clear();
     _supersededMessageIds.clear();
+    _legacyReplayBarrierSessionIds.clear();
   }
 
   void updateThinkingStreamMode(ThinkingStreamMode value) {
@@ -51,7 +57,7 @@ class ConversationState {
 
   /// Apply a new event to the state.
   void apply(CanonicalEvent event) {
-    if (_isSuperseded(event)) return;
+    if (_isSuperseded(event) || _isBlockedLegacyLiveEvent(event)) return;
     _applyInternal(event);
   }
 
@@ -131,18 +137,83 @@ class ConversationState {
     return _events.length != before;
   }
 
+  bool hideSupersededTail({
+    required String sessionId,
+    required String targetRequestId,
+    String? turnId,
+    String? runId,
+    String? messageId,
+  }) {
+    if (turnId != null && turnId.isNotEmpty) {
+      _supersededTurnIds.add(turnId);
+    }
+    if (runId != null && runId.isNotEmpty) {
+      _supersededRunIds.add(runId);
+    }
+    if (messageId != null && messageId.isNotEmpty) {
+      _supersededMessageIds.add(messageId);
+    }
+    _legacyReplayBarrierSessionIds.add(sessionId);
+    final boundary = _events.indexWhere(
+      (event) =>
+          event.sessionId == sessionId &&
+          (event.requestId == targetRequestId ||
+              (turnId != null && event.turnId == turnId) ||
+              (messageId != null && event.messageId == messageId)),
+    );
+    final before = _events.length;
+    if (boundary >= 0) {
+      _events.removeRange(boundary, _events.length);
+    } else {
+      _events.removeWhere(_isSuperseded);
+    }
+    return _events.length != before;
+  }
+
+  void moveToEnd(String id) {
+    final index = _events.indexWhere((event) => event.id == id);
+    if (index < 0 || index == _events.length - 1) return;
+    _events.add(_events.removeAt(index));
+  }
+
+  void moveAfterAnchor(
+    String id, {
+    String? anchorMessageId,
+    String? anchorToolCallId,
+  }) {
+    final sourceIndex = _events.indexWhere((event) => event.id == id);
+    if (sourceIndex < 0) return;
+    final anchorIndex = _events.lastIndexWhere(
+      (candidate) =>
+          (anchorToolCallId != null && candidate.toolCallId == anchorToolCallId) ||
+          (anchorMessageId != null && candidate.messageId == anchorMessageId),
+    );
+    if (anchorIndex < 0) return;
+    final event = _events.removeAt(sourceIndex);
+    final adjustedAnchorIndex = sourceIndex < anchorIndex ? anchorIndex - 1 : anchorIndex;
+    _events.insert(adjustedAnchorIndex + 1, event);
+  }
+
   bool _isSuperseded(CanonicalEvent event) {
     if (event.metadata?['history_status']?.toString() == 'superseded') {
       return true;
     }
     final turnId = event.turnId;
     final messageId = event.messageId;
+    final runId = event.runId;
     if (turnId != null && _supersededTurnIds.contains(turnId)) return true;
+    if (runId != null && _supersededRunIds.contains(runId)) return true;
     if (messageId != null && _supersededMessageIds.contains(messageId)) {
       return true;
     }
     return false;
   }
+
+  bool _isBlockedLegacyLiveEvent(CanonicalEvent event) =>
+      event.sessionId != null &&
+      _legacyReplayBarrierSessionIds.contains(event.sessionId) &&
+      event.turnId == null &&
+      event.runId == null;
 
   void _applyInternal(CanonicalEvent event) {
     if (_isRunningAssistantStream(event)) {
@@ -175,7 +246,9 @@ class ConversationState {
       );
     }
 
-    final index = _events.indexWhere((e) => e.id == event.id);
+    final index = _events.indexWhere(
+      (existing) => CanonicalTimelineReconciler.matches(existing, event),
+    );
 
     if (index == -1) {
       if (event.kind == EventKind.userMessage) {
