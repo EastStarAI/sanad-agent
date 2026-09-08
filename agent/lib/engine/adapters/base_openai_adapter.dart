@@ -1,6 +1,8 @@
 import 'dart:convert';
+
 import 'package:logging/logging.dart';
 import 'package:http/http.dart' as http;
+
 import '../../core/config.dart';
 import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
@@ -15,6 +17,7 @@ import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
 import 'models_dev_service.dart';
 import 'llm_http_exception.dart';
+import 'opencode_session_affinity.dart';
 import 'llm_request_options.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
@@ -435,7 +438,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
       resolvedModel: resolvedModel,
       options: options,
     );
-    final headers = _requestHeaders();
+    final headers = _requestHeaders(options);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
         url: url,
@@ -528,7 +531,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
       adapterSharedClient: client,
     );
     final request = http.Request('POST', url);
-    request.headers.addAll(_requestHeaders());
+    request.headers.addAll(_requestHeaders(options));
     final body = await _buildRequestBody(
       history,
       tools: tools,
@@ -868,11 +871,17 @@ class BaseOpenAIAdapter implements LLMAdapter {
     return data;
   }
 
-  Map<String, String> _requestHeaders() => {
-    'Content-Type': 'application/json',
-    if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
-    ...profile.defaultHeaders,
-  };
+  Map<String, String> _requestHeaders(LLMRequestOptions options) =>
+      withOpenCodeSessionAffinity(
+        headers: {
+          'Content-Type': 'application/json',
+          if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
+          ...profile.defaultHeaders,
+        },
+        providerName: profile.name,
+        baseUrl: _baseUrl,
+        sessionId: options.sessionId,
+      );
 
   String _stateIssuer(LLMRequestOptions options) {
     final instance = options.providerInstanceId ?? profile.name;
