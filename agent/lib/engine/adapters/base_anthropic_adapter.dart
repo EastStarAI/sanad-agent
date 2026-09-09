@@ -1,6 +1,8 @@
 import 'dart:convert';
+
 import 'package:logging/logging.dart';
 import 'package:http/http.dart' as http;
+
 import '../../core/config.dart';
 import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
@@ -13,6 +15,7 @@ import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
 import 'llm_http_exception.dart';
 import 'llm_request_options.dart';
+import 'opencode_session_affinity.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 import '../llm_request_dumper.dart';
@@ -23,6 +26,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
   final Config config;
   final ProviderProfile profile;
   final http.Client? client;
+  final ModelContextLimitLookup? modelContextLimitLookup;
   final String? baseUrlOverride;
   final String? apiKeyOverride;
   final String? defaultModelOverride;
@@ -33,6 +37,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
     this.config,
     this.profile, {
     this.client,
+    this.modelContextLimitLookup,
     this.baseUrlOverride,
     this.apiKeyOverride,
     this.defaultModelOverride,
@@ -160,16 +165,24 @@ class BaseAnthropicAdapter implements LLMAdapter {
     return [_anthropicHeaders(), _anthropicHeaders(useBearerAuth: true)];
   }
 
-  Map<String, String> _anthropicHeaders({bool useBearerAuth = false}) {
-    return {
-      'Content-Type': 'application/json',
-      if (useBearerAuth)
-        'Authorization': 'Bearer $_apiKey'
-      else
-        'x-api-key': _apiKey,
-      'anthropic-version': _anthropicVersion,
-      ...profile.defaultHeaders,
-    };
+  Map<String, String> _anthropicHeaders({
+    bool useBearerAuth = false,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) {
+    return withOpenCodeSessionAffinity(
+      headers: {
+        'Content-Type': 'application/json',
+        if (useBearerAuth)
+          'Authorization': 'Bearer $_apiKey'
+        else
+          'x-api-key': _apiKey,
+        'anthropic-version': _anthropicVersion,
+        ...profile.defaultHeaders,
+      },
+      providerName: profile.name,
+      baseUrl: _baseUrl,
+      sessionId: options.sessionId,
+    );
   }
 
   List<String> _fallbackModelIds() {
@@ -205,6 +218,8 @@ class BaseAnthropicAdapter implements LLMAdapter {
     final resolvedModel = _resolveModel(modelOverride);
     final configuredLimit = config.contextModelLimit(resolvedModel);
     if (configuredLimit != null) return configuredLimit;
+    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
+    if (catalogLimit != null) return catalogLimit;
     return ModelMetadata.getLimitForModel(resolvedModel) ?? 200000;
   }
 
@@ -248,7 +263,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
         url: url,
-        headers: _anthropicHeaders(),
+        headers: _anthropicHeaders(options: options),
         body: body,
       );
     }
@@ -261,7 +276,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
     try {
       response = await transport.post(
         url,
-        headers: _anthropicHeaders(),
+        headers: _anthropicHeaders(options: options),
         body: jsonEncode(body),
         operation: 'generateResponse',
       );
@@ -361,7 +376,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
         url: url,
-        headers: _anthropicHeaders(),
+        headers: _anthropicHeaders(options: options),
         body: body,
       );
     }
@@ -371,7 +386,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
       adapterSharedClient: client,
     );
     final request = http.Request('POST', url);
-    request.headers.addAll(_anthropicHeaders());
+    request.headers.addAll(_anthropicHeaders(options: options));
     request.body = jsonEncode(body);
 
     late http.StreamedResponse response;
@@ -831,6 +846,8 @@ class BaseAnthropicAdapter implements LLMAdapter {
         return LLMFinishReason.toolCalls;
       case 'max_tokens':
         return LLMFinishReason.length;
+      case 'pause_turn':
+        return LLMFinishReason.incomplete;
       case 'stop_sequence':
         return LLMFinishReason.stop;
       default:

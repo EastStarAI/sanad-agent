@@ -59,6 +59,12 @@ CompactionCandidate _candidate({
       estimatedRequestTokensAfter: 20_000,
       retainedTailTokens: 5_000,
       duration: const Duration(seconds: 2),
+      summarizationInputTokens: 1_200,
+      summarizationCachedInputTokens: 900,
+      summarizationCacheWriteTokens: 25,
+      summarizationOutputTokens: 180,
+      summarizationReasoningTokens: 40,
+      summarizationAttempts: 2,
     ),
     routeSignature: _route(),
   );
@@ -116,6 +122,9 @@ void main() {
         'provider_confirmed_request_tokens_after',
         'effective_input_budget_tokens',
         'auto_threshold_tokens',
+        'summarization_input_tokens',
+        'summarization_cached_input_tokens',
+        'summarization_attempts',
       ]),
     );
   });
@@ -173,6 +182,12 @@ void main() {
       final latest = boundaries.findLatestCompletedForSession('session-1');
       expect(latest?.compactionId, 'cmp-complete');
       expect(latest?.internalSummary?.currentGoal, 'Goal');
+      expect(latest?.metrics?.summarizationInputTokens, 1_200);
+      expect(latest?.metrics?.summarizationCachedInputTokens, 900);
+      expect(latest?.metrics?.summarizationCacheWriteTokens, 25);
+      expect(latest?.metrics?.summarizationOutputTokens, 180);
+      expect(latest?.metrics?.summarizationReasoningTokens, 40);
+      expect(latest?.metrics?.summarizationAttempts, 2);
 
       final rowIds = boundaries.messageRowIdsForSession('session-1');
       expect(

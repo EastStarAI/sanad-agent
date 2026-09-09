@@ -9,6 +9,7 @@ import 'package:sanad_client/features/conversations/domain/models/workspace_tree
 import 'package:sanad_client/features/conversations/data/mappers/device_event_mapper.dart';
 import 'package:sanad_client/features/conversations/data/transport/conversation_command_gateway.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
+import 'package:sanad_client/features/conversations/domain/stores/canonical_timeline_reconciler.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/pending_steer_record.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
@@ -82,11 +83,19 @@ class ConversationCommands {
     required String requestId,
     required String sessionId,
   }) async {
-    if (!_gateway.isConnected) return;
-
+    if (!_gateway.isConnected) {
+      throw StateError('Cannot promote a queued message while disconnected.');
+    }
+    final commandRequestId = generateConversationRequestId();
     _gateway.sendCommand(
       command: 'steer',
-      payload: {'request_id': requestId, 'session_id': sessionId},
+      payload: {
+        'request_id': requestId,
+        'target_request_id': requestId,
+        'command_request_id': commandRequestId,
+        'session_id': sessionId,
+        'message': message,
+      },
     );
   }
 
@@ -856,12 +865,6 @@ class ConversationCommands {
         nextNewerCursor: retainedHistoryIsComplete ? null : payload['next_newer_cursor']?.toString(),
       );
       _conversationStore.setQueuedMessages(queuedEvents);
-      _conversationStore.hydratePendingSteers(
-        pendingSteersData.whereType<Map>().map(
-          (row) => PendingSteerRecord.fromJson(Map<String, dynamic>.from(row)),
-        ),
-        sessionId: sessionId,
-      );
       final rawStopRecovery = payload['stop_draft_recovery'];
       if (rawStopRecovery is Map) {
         try {
@@ -875,17 +878,18 @@ class ConversationCommands {
           // The durable payload remains available for a later hydration retry.
         }
       }
-      final historyIdentityKeys = hydratedEvents.expand(_reconciliationIdentityKeys).toSet();
       for (final event in transientEvents) {
-        if (_isAlreadyRepresentedInHistory(
-          event,
-          events,
-          historyIdentityKeys,
-        )) {
+        if (_isAlreadyRepresentedInHistory(event, events)) {
           continue;
         }
         _conversationStore.apply(event);
       }
+      _conversationStore.hydratePendingSteers(
+        pendingSteersData.whereType<Map>().map(
+          (row) => PendingSteerRecord.fromJson(Map<String, dynamic>.from(row)),
+        ),
+        sessionId: sessionId,
+      );
 
       return List<CanonicalEvent>.from(_conversationStore.currentMessages);
     }
@@ -899,42 +903,10 @@ class ConversationCommands {
   List<CanonicalEvent> _mergeRetainedHistoryWithHydration(
     List<CanonicalEvent> retained,
     List<CanonicalEvent> hydrated,
-  ) {
-    final foldedHydrated = _foldCanonicalEvents(hydrated);
-    final hydratedById = {
-      for (final event in foldedHydrated) event.id: event,
-    };
-    final merged = <CanonicalEvent>[
-      for (final event in retained)
-        switch (hydratedById.remove(event.id)) {
-          final hydratedEvent? => event.merge(hydratedEvent),
-          null => event,
-        },
-    ];
-    merged.addAll(
-      foldedHydrated.where(
-        (event) => hydratedById.remove(event.id) != null,
-      ),
-    );
-    return merged;
-  }
-
-  List<CanonicalEvent> _foldCanonicalEvents(
-    Iterable<CanonicalEvent> events,
-  ) {
-    final folded = <CanonicalEvent>[];
-    final indexById = <String, int>{};
-    for (final event in events) {
-      final index = indexById[event.id];
-      if (index == null) {
-        indexById[event.id] = folded.length;
-        folded.add(event);
-      } else {
-        folded[index] = folded[index].merge(event);
-      }
-    }
-    return folded;
-  }
+  ) => CanonicalTimelineReconciler.mergeAuthoritativeSlice(
+    retained,
+    hydrated,
+  );
 
   Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
     String sessionId,
@@ -1074,70 +1046,37 @@ class ConversationCommands {
     throw StateError('$code: $message');
   }
 
-  Iterable<String> _reconciliationIdentityKeys(CanonicalEvent event) sync* {
-    if (event.id.isNotEmpty) yield 'id:${event.id}';
-    final messageId = event.messageId;
-    if (messageId != null && messageId.isNotEmpty) {
-      yield 'message:$messageId';
-    }
-    if (event.modelStepId != null && event.modelStepId!.isNotEmpty) {
-      yield 'model_step:${event.kind.name}:${event.modelStepId}';
-    }
-    if (event.toolCallId != null && event.toolCallId!.isNotEmpty) {
-      yield 'tool_call:${event.toolCallId}';
-    }
-    final requestId = event.metadata?['request_id']?.toString();
-    if (requestId != null && requestId.isNotEmpty) {
-      yield 'request:${event.kind.name}:$requestId';
-    }
-    final runId = event.runId;
-    if (event.modelStepId == null && event.toolCallId == null && runId != null && runId.isNotEmpty) {
-      yield 'run:${event.kind.name}:$runId';
-    }
-  }
-
   bool _isAlreadyRepresentedInHistory(
     CanonicalEvent transient,
     List<CanonicalEvent> history,
-    Set<String> historyIdentityKeys,
   ) {
-    final transientIdentityKeys = _reconciliationIdentityKeys(transient).toSet();
-    final isRepresented = transientIdentityKeys.any(
-      historyIdentityKeys.contains,
+    final matchingHistory = history.where(
+      (persisted) => CanonicalTimelineReconciler.matches(
+        persisted,
+        transient,
+        allowLegacyUserFallback: true,
+      ),
     );
+    final isRepresented = matchingHistory.isNotEmpty;
 
     // A live tool result can arrive while the history request is in flight.
     // The returned snapshot may still contain the matching tool as running, so
     // identity alone is not enough: reapply the terminal live event to merge
     // its output and advance the stale history row.
-    if (transient.kind == EventKind.toolCall && transient.status != EventStatus.running && isRepresented) {
-      final matchingHistory = history.where((persisted) {
-        if (persisted.kind != EventKind.toolCall) return false;
-        return _reconciliationIdentityKeys(persisted).any(transientIdentityKeys.contains);
-      });
-      if (matchingHistory.any(
-        (persisted) => persisted.status == EventStatus.running || isNewerToolTerminalEvent(persisted, transient),
-      )) {
-        return false;
-      }
+    if (transient.kind == EventKind.toolCall &&
+        transient.status != EventStatus.running &&
+        matchingHistory.any(
+          (persisted) => persisted.status == EventStatus.running || isNewerToolTerminalEvent(persisted, transient),
+        )) {
+      return false;
     }
 
     // Running thinking chunks may be newer than the persisted in-flight
     // snapshot and must still merge into it.
-    if (transient.kind != EventKind.thinking && transient.kind != EventKind.reasoning && isRepresented) {
-      return true;
+    if (transient.kind == EventKind.thinking || transient.kind == EventKind.reasoning) {
+      return false;
     }
-    if (transient.kind != EventKind.userMessage) return false;
-
-    return history.any((persisted) {
-      if (persisted.kind != EventKind.userMessage || persisted.text != transient.text) {
-        return false;
-      }
-      if (persisted.sessionId != null && transient.sessionId != null && persisted.sessionId != transient.sessionId) {
-        return false;
-      }
-      return persisted.timestamp.difference(transient.timestamp).abs() <= const Duration(minutes: 2);
-    });
+    return isRepresented;
   }
 
   Future<void> updateSessionTitle(String sessionId, String title) async {

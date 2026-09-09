@@ -2,6 +2,7 @@ import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:uuid/uuid.dart';
+
 import 'db/agent_state_database.dart';
 import 'db/session_db.dart';
 import 'models/session_query.dart';
@@ -178,6 +179,14 @@ class SessionManager {
       _db.saveSession(updatedSession);
       _db.replaceMessages(sessionId, messages);
     }
+  }
+
+  List<Message> saveSessionHistoryInTransaction(
+    String sessionId,
+    List<Message> messages,
+    AgentStateTransaction transaction,
+  ) {
+    return _db.replaceMessagesInTransaction(sessionId, messages, transaction);
   }
 
   SoftRewindAdmissionCommit? commitSoftRewindAdmission({

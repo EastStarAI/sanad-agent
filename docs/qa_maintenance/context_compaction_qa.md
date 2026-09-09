@@ -18,6 +18,7 @@ Verification matrix for durable goal-preserving context compaction across agent 
 | Model projection (53b B2) | `cd agent && fvm dart test test/evolution/model_projection_builder_test.dart` | Projection, reload, tail pairing |
 | Activation (53b B3) | `cd agent && fvm dart test test/evolution/compaction_activation_service_test.dart` | Projection revision, stale completion |
 | Engine (53c) | `cd agent && fvm dart test test/engine/context_compaction_engine_test.dart test/engine/context_compaction_fixture_test.dart` | Pressure, tail, repeated anchor, redaction validation, and rejection of incidental semantic labels quoted by tool output |
+| Provider-backed summary (53i) | `cd agent && fvm dart test test/engine/provider_backed_compaction_test.dart test/engine/adapters_test.dart test/engine/adapters/codex_responses_adapter_test.dart test/engine/runtime/compaction_preflight_integration_test.dart test/engine/runtime/compaction_overflow_recovery_test.dart` | Immutable retry base, current Auto/failed Overflow projections, strict multilingual JSON, real wire-contract coverage for Codex/OpenAI-compatible/Anthropic-compatible/Ollama, ordinary settings/tools inheritance, terminal-state normalization, no special output or cache policy, and tool-call rejection/retry |
 | Model policy (53g) | `cd agent && fvm dart test test/core/config_test.dart test/engine/adapters_test.dart test/engine/adapters/codex_responses_adapter_test.dart` | YAML defaults/validation, exact model windows, codec-native wire estimate |
 | Overflow recovery (53d D4) | `cd agent && fvm dart test test/engine/runtime/compaction_overflow_recovery_test.dart test/core/provider_runtime/runtime_failure_reason_test.dart` | 400 context-overflow classify, one-shot recovery, stream guard |
 | Preflight/checkpoint (53d D2/D7) | `cd agent && fvm dart test test/engine/runtime/compaction_preflight_integration_test.dart test/engine/runtime/compaction_checkpoint_resume_test.dart` | Provider history rebuild + checkpoint resume after activation |
@@ -72,6 +73,9 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] A logical compaction cannot regress or switch between terminal `completed` and `failed` states during retry/reload reconciliation — `conversation_state_compaction_test.dart` (2026-08-31 independent remediation).
 - [x] Compaction tiles keep a 44px interaction target, render all six manual/auto lifecycle labels at 280px/2x text scale without overflow, and expose identical redacted metrics by tap, hover, and keyboard focus; unconfirmed token metrics are labeled Estimated — `compaction_event_tile_test.dart` (2026-08-31 independent remediation).
 - [x] A completed compaction immediately replaces the composer context-usage snapshot with provider-confirmed-after when available, otherwise estimated-after; stale cached-input usage is discarded, while started/failed events do not replace the last valid usage — `compaction_event_mapper_test.dart` (2026-08-31 remediation).
+- [x] Provider-backed compaction-summary metrics normalize nested provider usage,
+  including `input_tokens_details.cached_tokens`, through the ordinary-turn
+  usage contract — `provider_backed_compaction_test.dart` (2026-09-06).
 - [x] Manual compaction resolves the active adapter/model context limit before its bounded estimate fallback, carries model/route identity through live and hydrated lifecycle events, and preserves the latest same-model provider window in the composer — `compaction_request_factory_test.dart`, `compaction_lifecycle_broadcaster_test.dart`, and client mapper/usage tests (2026-08-31 remediation).
 - [x] The first provider response after activation writes one confirmed after-value, republishes the same completed event id, survives hydration, and cannot be replaced by later tool-loop responses — `compaction_boundary_repository_test.dart` + `compaction_coordinator_test.dart` + live provider verification (2026-08-31 Task 53g).
 - [x] Compaction separators fill the conversation width symmetrically while retaining narrow/large-text safety; reconciled details show `Provider confirmed after` and suppress the superseded pre-confirmation estimate — `compaction_event_tile_test.dart` + live UI verification (2026-08-31 Task 53g).
@@ -87,6 +91,13 @@ Verification matrix for durable goal-preserving context compaction across agent 
 - [x] Same-id completed reconciliation bypasses exact-redelivery suppression once, while an identical enriched replay is still dropped; canonical map ordering cannot change the fingerprint — `event_deduplicator_test.dart` + `cross_transport_dedup_test.dart` (2026-08-31 live card remediation).
 - [x] The compaction card uses the confirmed after-value, effective-input denominators, daemon-owned automatic threshold, grouped token values, and no Type/Trigger/Status rows; only the centered 44px label opens it and divider clicks do nothing — `compaction_event_tile_test.dart` (2026-08-31 live card remediation).
 - [x] Top-level metadata-only history patches preserve every semantic prefix `messages.id` and the newest active compaction boundary, so a small post-compaction suffix stays below threshold; real content changes still rewrite the suffix and invalidate the unsafe summary — `model_projection_builder_test.dart` + `compaction_preflight_integration_test.dart` (2026-08-31 Task 53h).
+- [x] Provider-backed compaction appends one ephemeral user instruction to the immutable provider projection, includes the current admitted Auto turn, reuses the exact failed Overflow projection, retains ordinary tools/settings, accepts valid JSON without a compaction-only size cap, and never executes tool calls; one invalid attempt is corrected from the same base and a second fails safely — focused 53i suites (2026-09-06).
+- [x] All 16 registered provider templates collapse into four production adapter
+  families whose real request builders preserve the final compaction instruction,
+  tools, and routed model under mocked transport. Anthropic `pause_turn` and
+  Ollama `done_reason=length` normalize as non-terminal/length outcomes and
+  therefore cannot activate a truncated summary — `provider_backed_compaction_test.dart`,
+  `adapters_test.dart`, and `codex_responses_adapter_test.dart` (2026-09-06).
 
 ## Review notes (2026-08-29 evening)
 

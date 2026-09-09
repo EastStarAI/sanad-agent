@@ -236,6 +236,7 @@ class SessionTurnReplayCommandHandler {
         );
         return;
       }
+      final targetRunId = _targetRunId(postIdle);
       final admission = replay.admitReplacement(
         inspection: postIdle,
         replacementRequestId: commandRequestId,
@@ -321,6 +322,9 @@ class SessionTurnReplayCommandHandler {
         targetRequestId: targetRequestId,
         targetMessageId: targetMessageId,
         targetTurnId: targetTurnId,
+        targetRunId: targetRunId,
+        replacementMessageId: admission.replacementMessageId,
+        replacementTurnId: admission.replacementTurnId,
         action: action,
         outcome: 'accepted',
         safety: postIdle.safety,
@@ -368,6 +372,9 @@ class SessionTurnReplayCommandHandler {
     required String targetRequestId,
     String targetMessageId = '',
     String targetTurnId = '',
+    String? targetRunId,
+    String? replacementMessageId,
+    String? replacementTurnId,
     required String action,
     required String outcome,
     required TurnReplaySafety safety,
@@ -387,6 +394,9 @@ class SessionTurnReplayCommandHandler {
             'target_request_id': targetRequestId,
             'target_message_id': targetMessageId,
             'target_turn_id': targetTurnId,
+            'target_run_id': ?targetRunId,
+            'replacement_message_id': ?replacementMessageId,
+            'replacement_turn_id': ?replacementTurnId,
             'action': action,
             'outcome': outcome,
             'replay_safety': safety.name,
@@ -398,6 +408,18 @@ class SessionTurnReplayCommandHandler {
         ),
       ),
     );
+  }
+
+  String? _targetRunId(TurnReplayInspection inspection) {
+    final messages = _sessionManager.getMessages(inspection.sessionId);
+    for (final message in messages.skip(inspection.targetMessageIndex)) {
+      final identity = MessageHistoryIdentity.read(message);
+      if (identity.turnId != inspection.targetTurnId) break;
+      if (identity.runId != null && identity.runId!.isNotEmpty) {
+        return identity.runId;
+      }
+    }
+    return null;
   }
 
   static int? _parseRevision(Object? value) {

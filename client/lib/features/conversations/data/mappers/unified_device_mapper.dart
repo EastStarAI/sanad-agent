@@ -191,7 +191,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
 
       case 'thinking':
       case 'thought_stream':
-        if (text.trim().isEmpty) return null;
+        if (text.isEmpty) return null;
         return CanonicalEvent(
           id: _thinkingId(modelStepId, runId, eventId, timestamp),
           kind: EventKind.thinking,

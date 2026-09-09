@@ -18,6 +18,7 @@ import 'codex_responses_sse_accumulator.dart';
 import 'llm_http_exception.dart';
 import 'llm_adapter.dart';
 import 'llm_request_options.dart';
+import 'opencode_session_affinity.dart';
 import 'provider_request_transport.dart';
 import 'provider_state_rejected_exception.dart';
 
@@ -33,6 +34,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     super.config,
     super.profile, {
     super.client,
+    super.modelContextLimitLookup,
     super.baseUrlOverride,
     super.apiKeyOverride,
     super.defaultModelOverride,
@@ -138,7 +140,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     );
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
-      ..headers.addAll(_headers())
+      ..headers.addAll(_headers(options))
       ..body = jsonEncode(body);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
@@ -230,7 +232,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     );
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
-      ..headers.addAll(_headers())
+      ..headers.addAll(_headers(options))
       ..body = jsonEncode(body);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
@@ -400,11 +402,17 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
 
   String _normalizedBaseUrl() => baseUrl.replaceFirst(RegExp(r'/+$'), '');
 
-  Map<String, String> _headers() => {
-    'Content-Type': 'application/json',
-    if (apiKey.isNotEmpty) 'Authorization': 'Bearer $apiKey',
-    ...profile.defaultHeaders,
-  };
+  Map<String, String> _headers(LLMRequestOptions options) =>
+      withOpenCodeSessionAffinity(
+        headers: {
+          'Content-Type': 'application/json',
+          if (apiKey.isNotEmpty) 'Authorization': 'Bearer $apiKey',
+          ...profile.defaultHeaders,
+        },
+        providerName: profile.name,
+        baseUrl: baseUrl,
+        sessionId: options.sessionId,
+      );
 
   static String? _remaining(String? complete, String emitted) {
     if (complete == null || complete.isEmpty) return null;

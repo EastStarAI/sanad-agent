@@ -228,7 +228,11 @@ void setupDI() {
     ),
   );
   getIt.registerLazySingleton<ContextCompactionEngine>(
-    () => ContextCompactionEngine(),
+    () => ContextCompactionEngine(
+      summarizer: ProviderBackedCompactionSummarizer(
+        getIt<AgentRuntimeService>(),
+      ),
+    ),
   );
   getIt.registerLazySingleton<CompactionCoordinator>(
     () => CompactionCoordinator(
@@ -236,6 +240,8 @@ void setupDI() {
       boundaries: getIt<CompactionBoundaryRepository>(),
       activation: getIt<CompactionActivationService>(),
       projectionBuilder: getIt<ModelProjectionBuilder>(),
+      projectionRevisions: getIt<SessionProjectionRevisionRepository>(),
+      runtime: getIt<AgentRuntimeService>(),
       onLifecycleEvent: CompactionLifecycleRelay.publish,
     ),
   );

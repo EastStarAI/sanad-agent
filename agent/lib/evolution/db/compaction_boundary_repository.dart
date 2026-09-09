@@ -181,7 +181,13 @@ class CompactionBoundaryRepository {
             context_window_tokens = ?, effective_input_budget_tokens = ?,
             auto_threshold_tokens = ?, estimated_request_tokens_before = ?,
             estimated_request_tokens_after = ?, before_measurement_kind = ?,
-            retained_tail_tokens = ?, duration_ms = ?
+            retained_tail_tokens = ?, duration_ms = ?,
+            summarization_input_tokens = ?,
+            summarization_cached_input_tokens = ?,
+            summarization_cache_write_tokens = ?,
+            summarization_output_tokens = ?,
+            summarization_reasoning_tokens = ?,
+            summarization_attempts = ?
         WHERE compaction_id = ? AND status = ?
         ''',
         [
@@ -196,6 +202,12 @@ class CompactionBoundaryRepository {
           metrics.beforeMeasurementKind.wireValue,
           metrics.retainedTailTokens,
           metrics.duration?.inMilliseconds,
+          metrics.summarizationInputTokens,
+          metrics.summarizationCachedInputTokens,
+          metrics.summarizationCacheWriteTokens,
+          metrics.summarizationOutputTokens,
+          metrics.summarizationReasoningTokens,
+          metrics.summarizationAttempts,
           candidate.compactionId,
           CompactionStatus.started.wireValue,
         ],
@@ -464,9 +476,13 @@ class CompactionBoundaryRepository {
           auto_threshold_tokens, estimated_request_tokens_before,
           estimated_request_tokens_after, before_measurement_kind,
           provider_confirmed_request_tokens_after, retained_tail_tokens,
-          duration_ms, internal_summary_json, failure_reason,
+          duration_ms, summarization_input_tokens,
+          summarization_cached_input_tokens, summarization_cache_write_tokens,
+          summarization_output_tokens, summarization_reasoning_tokens,
+          summarization_attempts,
+          internal_summary_json, failure_reason,
           failure_detail_json, started_at, completed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''',
         [
           const Uuid().v4(),
@@ -496,6 +512,12 @@ class CompactionBoundaryRepository {
           row['provider_confirmed_request_tokens_after'],
           row['retained_tail_tokens'],
           row['duration_ms'],
+          row['summarization_input_tokens'],
+          row['summarization_cached_input_tokens'],
+          row['summarization_cache_write_tokens'],
+          row['summarization_output_tokens'],
+          row['summarization_reasoning_tokens'],
+          row['summarization_attempts'],
           row['internal_summary_json'],
           row['failure_reason'],
           row['failure_detail_json'],

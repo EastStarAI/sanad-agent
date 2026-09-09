@@ -436,7 +436,7 @@ stateDiagram-v2
 - **Synthetic identity boundary:** `local-agent` is a stable client inventory/cache id only. The coordinator never uses that text to infer transport; a matching `hardware_id` plus live local socket state is required. Once transport is resolved, commands target the hardware identity locally and the durable account device identity in cloud, never the synthetic row id.
 - **Transition continuity:** Swapping connection scopes does not destroy the active conversation session cache. UI-side chat histories persist in-memory to prevent screen blanks during reconnects or local takeovers.
 - **Restart reconciliation:** When a conversation is already bound to the local daemon, a bounded grace period keeps that binding and its cached sessions visible while the daemon restarts. The first session snapshot after reconnect is merged with the retained snapshot, then the client requests history for the active session to recover final answers, queue state, and runtime notices emitted while disconnected. A missing session in this transitional snapshot is not deletion proof; explicit `session_deleted` or an explicit manual refresh owns removal.
-- **History/live deduplication:** Reconnect hydration reconciles persisted history with events retained in memory by canonical `request_id`, then `run_id`/event identity. Legacy user rows without an identity use same-session text plus a bounded timestamp match. Running thinking chunks remain mergeable so newer streaming content is not discarded.
+- **History/live reconciliation:** Reconnect and post-replay hydration treat the returned history range as authoritative without discarding retained events that are provably outside that range. Matching is kind-aware and prefers durable domain identity: user/steer rows use `message_id`, then `request_id`, then `turn_id`; assistant rows use `message_id`, then `run_id`, then `turn_id`; tools use `tool_call_id` plus phase-compatible folding; lifecycle notices use request/turn/run identity. `event_id` remains transport identity and is only a fallback for same-kind rows. Legacy user rows with no canonical identity may use same-session text plus a bounded timestamp match. Hydration merges complementary live/history fields into one canonical event, preserves richer live streaming state until terminal history arrives, and runs through one shared reducer for initial load, pagination, cache restore, and replay fallback.
 - **Provider readiness during reconnect:** transport failure or timeout is an indeterminate readiness result and cannot open provider onboarding. Only a successful readiness response from the selected connected device may assert that provider setup is required.
 
 ### 3.3. Client Device Inventory Modes
@@ -510,14 +510,19 @@ actual classification from the live execution owner at admission time.
   outcome and is never deleted optimistically.
 - Queue changes and the authoritative execution snapshot are committed
   together. Repeated promote/delete commands for one request cannot execute or
-  inject the text twice.
+  inject the text twice. Queue-to-steer sends the original `message`, stable
+  `target_request_id`, and a distinct `command_request_id`; the terminal
+  `session.queued_message_steer_result` reports `promoted` or a typed rejection
+  so the client always ends action-local progress.
 
 ### 4.3. Pending-steer lifecycle
 
 The daemon persists a pending steer before confirmation and publishes
 `session.pending_steer_changed` with `session_id`, raw `request_id`, `run_id`,
-`generation`, `state`, `revision`, `text`, and `received_at`. Revisions increase
-only for real transitions and clients ignore older or duplicate revisions.
+`generation`, `state`, `revision`, `text`, and `received_at`. A delivered event
+also carries durable `message_id`, `turn_id`, `history_revision`, and the causal
+`anchor_message_id` and/or `anchor_tool_call_id`. Revisions increase only for
+real transitions and clients ignore older or duplicate revisions.
 
 The lifecycle is monotonic:
 
@@ -530,11 +535,14 @@ pending -> recovered
 - `pending` appears as one user bubble in the timeline with the English label
   `Pending` and a `Delete pending message` action. It is not yet model history.
 - Delivery first reserves `pending -> delivering` against the owning run and
-  generation. Only after the steer is incorporated into the correct model
-  history and that history is saved may the daemon publish `delivered`.
-- `delivered` removes the badge and delete action from the same bubble; it does
-  not create a second user event. Reconstructed history and the pending
-  snapshot merge by raw request id.
+  generation. History persistence, durable steer identity and anchor capture,
+  history-revision bump, and `delivering -> delivered` commit in one database
+  transaction before publication.
+- While pending or delivering, the temporary bubble follows the latest live
+  activity. `delivered` removes the badge and delete action, deduplicates by raw
+  request id, and repositions the same bubble immediately after its causal
+  anchor. A legacy delivered event without an anchor preserves existing order
+  until authoritative history hydration.
 - `session.pending_steer_cancel` carries the session and steer request ids plus
   its own command request id. The bubble remains visible with disabled progress
   until one authoritative result arrives: `cancelled`,

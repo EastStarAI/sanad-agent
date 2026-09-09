@@ -62,17 +62,22 @@ from durable tool-call and replay-safety metadata across the whole turn.
 - Continuing submits an explicit confirmation and then enters the authoritative
   idle boundary.
 
-If the original turn contains one or more steers, Sanad also asks the user to
-confirm that those steering messages will not be sent again. Canceling that
-prompt likewise performs no Stop and no history mutation.
+If the original turn contains one or more steers, the confirmation also warns
+that those steering messages will not be sent again. When tool safety and steer
+dropping both require approval, Sanad combines both warnings in one dialog and
+one Continue action submits both explicit confirmation flags. Canceling that
+single prompt performs no Stop and no history mutation.
 
 ## Original history
 
 Successful Edit or Retry does not delete the original turn. The previous root
 message, reasoning, tool calls, and dependent steers remain stored and become
-inactive. The timeline shows only the active replacement turn. Reopening the
-session after success shows the same active history; the original attempt does
-not reappear.
+inactive. The timeline remains unchanged until the daemon accepts replay; it
+then removes the old visible tail immediately and shows the durable replacement
+without allowing delayed tool or stream events to restore the old attempt. If
+the visible page does not contain the target boundary, Sanad refreshes the
+authoritative tail instead of guessing. Reopening the session after success
+shows the same active history; the original attempt does not reappear.
 
 ## User-visible failure behavior
 

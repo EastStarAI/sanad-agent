@@ -10,6 +10,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_activity_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/tool_group_tile.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/turn_replay_confirmation_dialog.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
@@ -933,24 +934,23 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         retriedAfterRevisionMismatch = true;
         continue;
       }
-      if (result.requiresConfirmation && !confirmedUnsafe) {
-        final confirmed = await _confirmUnsafeReplay(result.safety);
+      final needsUnsafeConfirmation = result.requiresConfirmation && !confirmedUnsafe;
+      final needsSteerDropConfirmation =
+          (result.requiresSteerDropConfirmation || result.containsSteers) && !confirmedDropSteers;
+      if (needsUnsafeConfirmation || needsSteerDropConfirmation) {
+        final confirmed = await _confirmReplay(
+          action: action,
+          safety: result.safety,
+          confirmsUnsafe: needsUnsafeConfirmation,
+          confirmsSteerDrop: needsSteerDropConfirmation,
+        );
         if (!mounted) return;
         if (!confirmed) {
           setState(() => _replayPendingEventId = null);
           return;
         }
-        confirmedUnsafe = true;
-        continue;
-      }
-      if (result.requiresSteerDropConfirmation && !confirmedDropSteers) {
-        final confirmed = await _confirmDropSteers();
-        if (!mounted) return;
-        if (!confirmed) {
-          setState(() => _replayPendingEventId = null);
-          return;
-        }
-        confirmedDropSteers = true;
+        confirmedUnsafe = confirmedUnsafe || needsUnsafeConfirmation;
+        confirmedDropSteers = confirmedDropSteers || needsSteerDropConfirmation;
         continue;
       }
       break;
@@ -988,50 +988,19 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     }
   }
 
-  Future<bool> _confirmUnsafeReplay(TurnReplaySafety safety) async {
-    final isUnknown = safety == TurnReplaySafety.unknown;
+  Future<bool> _confirmReplay({
+    required TurnReplayAction action,
+    required TurnReplaySafety safety,
+    required bool confirmsUnsafe,
+    required bool confirmsSteerDrop,
+  }) async {
     return await showDialog<bool>(
           context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('Retry tool actions?'),
-            content: Text(
-              isUnknown
-                  ? 'Sanad cannot verify whether this turn’s tools are safe to repeat. Retrying may repeat changes to files or external systems.'
-                  : 'This turn used tools that may change files or external systems. Retrying can repeat those side effects.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('Continue'),
-              ),
-            ],
-          ),
-        ) ??
-        false;
-  }
-
-  Future<bool> _confirmDropSteers() async {
-    return await showDialog<bool>(
-          context: context,
-          builder: (dialogContext) => AlertDialog(
-            title: const Text('Drop follow-up directions?'),
-            content: const Text(
-              'This turn includes steering messages. Retrying the original request will not send those follow-ups again.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.of(dialogContext).pop(false),
-                child: const Text('Cancel'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.of(dialogContext).pop(true),
-                child: const Text('Continue'),
-              ),
-            ],
+          builder: (_) => TurnReplayConfirmationDialog(
+            action: action,
+            safety: safety,
+            confirmsUnsafe: confirmsUnsafe,
+            confirmsSteerDrop: confirmsSteerDrop,
           ),
         ) ??
         false;

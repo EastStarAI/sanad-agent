@@ -108,16 +108,36 @@ One failed Auto attempt also opens a per-run breaker so later tool-loop model
 steps cannot repeat compaction work; manual compaction and a new run remain
 eligible.
 
-## Summarizer contract (C3)
+## Provider-backed summarizer contract (53i)
 
-- Prompts are redacted before send; responses are stripped of reasoning tags and
-  re-redacted via continuity validation.
-- Over-budget source material is split into at most four contiguous passes.
-- Deterministic and live summarizers must not execute tools.
+- Production uses the exact active provider/model/endpoint and the exact
+  provider-visible projection for the trigger. Auto includes the admitted user
+  turn; overflow reuses the failed projection; manual uses the current idle
+  projection without inventing a turn.
+- One ordinary ephemeral user message is appended. The normal tool list and
+  request settings remain unchanged, but the final instruction line forbids
+  tool calls and requires the final JSON object only. A returned tool call is
+  never executed: one corrective attempt starts again from the same immutable
+  base, then compaction fails safely.
+- Output length is a soft request for about two pages. Compaction adds no token,
+  byte, or field-length cap and does not reject an otherwise valid JSON result;
+  the ordinary provider/request limits remain authoritative.
+- The response is strict versioned JSON with fixed keys, no Markdown fallback,
+  duplicate keys, unknown keys, or wrong types. Required non-empty fields are
+  current goal, latest user request, active state, critical context, and
+  remaining work. Provider-only reasoning wrappers are removed and the parsed
+  structure is redacted before persistence.
+- If the append-only request overflows before output, recovery uses at most four
+  contiguous chunks that keep assistant tool calls with their results, followed
+  by one typed reduce pass. Partial summaries never activate a boundary.
+- Compaction adds no cache-specific measurement, enforcement, or metric. Cache
+  behavior is incidental to the ordinary codec/provider request and is not a
+  correctness condition or performance claim.
 
 ## Repeated compaction
 
-- Previous internal summary is passed as a separate anchor, not as an extra system/history message.
+- The active projection already contains the previous internal summary once;
+  provider-backed compaction does not pass it again in a side channel.
 - The next source range begins after the previous source-range end; already
   summarized canonical rows are not summarized again.
 - Latest successful boundary alone truncates the active model projection.
@@ -126,7 +146,9 @@ eligible.
 ## Engine boundaries
 
 - No database imports inside `agent/lib/engine/context/`.
-- Summarizer runs without tools and redacts secrets before persistence.
+- The summarization request retains the ordinary tool list because it is an
+  ordinary provider request, but compaction never dispatches a tool returned
+  by the provider.
 - Overflow/manual/auto differ only by `CompactionTrigger`; engine policy is shared.
 - Pre-compaction metrics retain their `estimated`, `confirmed`, or `mixed`
   provenance. The projection estimate remains available after activation, then

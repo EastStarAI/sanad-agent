@@ -78,6 +78,25 @@ void main() {
   late LLMAdapter titleRouteAdapter;
   late LLMRouteSnapshot completedTurnRoute;
   late Directory tempDir;
+  FutureOr<void> Function(Message message)? rootMessageCommitted;
+
+  Future<void> commitMockRoot(String content, {String? requestId}) async {
+    final turnId = 'turn-${requestId ?? content}';
+    await rootMessageCommitted?.call(
+      Message(
+        role: MessageRole.user,
+        content: content,
+        metadata: {
+          'request_id': ?requestId,
+          'message_id': 'message-${requestId ?? content}',
+          'turn_id': turnId,
+          'input_kind': 'root_turn',
+          'history_status': 'active',
+          'replay_eligible': requestId != null,
+        },
+      ),
+    );
+  }
 
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('interfaces-runtime-test');
@@ -193,6 +212,14 @@ Use the review skill.''',
       mockAgentRunner.markProviderResponseTerminalCommitted(),
     ).thenReturn(null);
     when(mockAgentRunner.beginAuthoritativeRun(any)).thenReturn(null);
+    rootMessageCommitted = null;
+    when(mockAgentRunner.configureRootMessageCommitted(any)).thenAnswer((
+      invocation,
+    ) {
+      rootMessageCommitted =
+          invocation.positionalArguments.single
+              as FutureOr<void> Function(Message message)?;
+    });
     when(mockAgentRunner.endAuthoritativeRun(any)).thenReturn(null);
     when(
       mockAgentRunner.attachCancellationScope(
@@ -690,10 +717,22 @@ Use the review skill.''',
     'GatewayManager returns authoritative user echoes to opted-in platforms',
     () async {
       final eventController = StreamController<GatewayEvent>();
+      final responses = <GatewayResponse>[];
+      FutureOr<void> Function(Message message)? rootCommitted;
       when(mockPlatform.initialize()).thenAnswer((_) async => {});
       when(mockPlatform.eventStream).thenAnswer((_) => eventController.stream);
       when(mockPlatform.shouldReceiveUserEcho).thenReturn(true);
-      when(mockPlatform.sendResponse(any)).thenAnswer((_) async => {});
+      when(mockPlatform.sendResponse(any)).thenAnswer((invocation) async {
+        responses.add(invocation.positionalArguments.single as GatewayResponse);
+      });
+      when(mockAgentRunner.configureRootMessageCommitted(any)).thenAnswer((
+        invocation,
+      ) {
+        rootCommitted =
+            invocation.positionalArguments.single
+                as FutureOr<void> Function(Message message)?;
+      });
+      when(mockAgentRunner.currentModelStepId).thenReturn('model-step-live');
       when(
         mockAgentRunner.streamMessage(
           any,
@@ -707,7 +746,43 @@ Use the review skill.''',
           onThoughtDelta: anyNamed('onThoughtDelta'),
           onReasoningDelta: anyNamed('onReasoningDelta'),
         ),
-      ).thenAnswer((_) => Stream.fromIterable(['Done']));
+      ).thenAnswer((invocation) async* {
+        await rootCommitted!(
+          Message(
+            role: MessageRole.user,
+            content: 'Hello',
+            metadata: const {
+              'request_id': 'request-echo-1',
+              'message_id': 'message-live',
+              'turn_id': 'turn-live',
+              'input_kind': 'root_turn',
+              'history_status': 'active',
+              'replay_eligible': true,
+            },
+          ),
+        );
+        final thought = invocation.namedArguments[#onThoughtDelta] as dynamic;
+        final reasoning =
+            invocation.namedArguments[#onReasoningDelta] as dynamic;
+        final tool = invocation.namedArguments[#onToolEvent] as dynamic;
+        thought('Inspecting');
+        reasoning('Reasoning');
+        await tool(
+          toolName: 'shell_execute',
+          input: '{}',
+          isError: false,
+          isStart: true,
+          toolRunId: 'tool-live',
+        );
+        await tool(
+          toolName: 'shell_execute',
+          output: 'ok',
+          isError: false,
+          isStart: false,
+          toolRunId: 'tool-live',
+        );
+        yield 'Done';
+      });
 
       gatewayManager.registerPlatform(mockPlatform);
       await gatewayManager.start();
@@ -738,6 +813,27 @@ Use the review skill.''',
           ),
         ),
       ).called(1);
+
+      final liveTurnEvents = responses.where(
+        (response) =>
+            response.message.role == MessageRole.user ||
+            response.message.thought != null ||
+            response.message.reasoning != null ||
+            response.isToolUse ||
+            response.isToolResult ||
+            (response.message.role == MessageRole.assistant &&
+                response.message.content == 'Done'),
+      );
+      expect(liveTurnEvents, isNotEmpty);
+      expect(
+        liveTurnEvents.every((response) => response.turnId == 'turn-live'),
+        isTrue,
+      );
+      final userEcho = responses.singleWhere(
+        (response) => response.message.role == MessageRole.user,
+      );
+      expect(userEcho.message.metadata?['message_id'], 'message-live');
+      expect(userEcho.message.metadata?['turn_id'], 'turn-live');
 
       await eventController.close();
     },
@@ -1043,7 +1139,10 @@ Use the review skill.''',
           onThoughtDelta: anyNamed('onThoughtDelta'),
           onReasoningDelta: anyNamed('onReasoningDelta'),
         ),
-      ).thenAnswer((_) => Stream.fromIterable(['Hello']));
+      ).thenAnswer((_) async* {
+        await commitMockRoot('Hi');
+        yield 'Hello';
+      });
 
       gatewayManager.registerPlatform(mockPlatform);
       gatewayManager.registerPlatform(mirrorPlatform);
@@ -1068,7 +1167,8 @@ Use the review skill.''',
             predicate<GatewayResponse>(
               (r) =>
                   r.message.role == MessageRole.user &&
-                  r.message.content == 'Hi',
+                  r.message.content == 'Hi' &&
+                  r.turnId == 'turn-Hi',
             ),
           ),
         ),
@@ -1076,7 +1176,9 @@ Use the review skill.''',
       verify(
         mirrorPlatform.sendResponse(
           argThat(
-            predicate<GatewayResponse>((r) => r.message.content == 'Hello'),
+            predicate<GatewayResponse>(
+              (r) => r.message.content == 'Hello' && r.turnId == 'turn-Hi',
+            ),
           ),
         ),
       ).called(2);
@@ -1896,6 +1998,59 @@ Use the review skill.''',
   );
 
   test(
+    'SessionRunOrchestrator terminates stale Queue-to-Steer promotion',
+    () async {
+      final orchestrator = getIt<SessionRunOrchestrator>();
+      final responses = <GatewayResponse>[];
+      final responseSubscription = orchestrator.responses.listen(responses.add);
+
+      await orchestrator.handleEvent(
+        GatewayEvent(
+          sessionId: 'session-stale-queue-steer',
+          platformId: 'test-platform',
+          type: 'steer',
+          message: Message(role: MessageRole.user, content: 'Promote me'),
+          metadata: const {
+            'payload': {'command_request_id': 'command-promote-stale'},
+          },
+          turnRequest: AgentTurnRequest(
+            sessionId: 'session-stale-queue-steer',
+            message: 'Promote me',
+            requestId: 'queued-stale-1',
+          ),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final result = responses.firstWhere(
+        (response) =>
+            response.message.metadata?['canonical_event_type'] ==
+            'session.queued_message_steer_result',
+      );
+      expect(
+        result.message.metadata?['canonical_payload'],
+        containsPair('target_request_id', 'queued-stale-1'),
+      );
+      expect(
+        result.message.metadata?['canonical_payload'],
+        containsPair('command_request_id', 'command-promote-stale'),
+      );
+      expect(
+        result.message.metadata?['canonical_payload'],
+        containsPair('outcome', 'stale_owner'),
+      );
+      verifyNever(
+        mockAgentRunner.steerEvent(
+          any,
+          requestId: anyNamed('requestId'),
+          receivedAt: anyNamed('receivedAt'),
+        ),
+      );
+      await responseSubscription.cancel();
+    },
+  );
+
+  test(
     'SessionRunOrchestrator should queue events when busy and process FIFO',
     () async {
       final orchestrator = getIt<SessionRunOrchestrator>();
@@ -1917,7 +2072,14 @@ Use the review skill.''',
           onThoughtDelta: anyNamed('onThoughtDelta'),
           onReasoningDelta: anyNamed('onReasoningDelta'),
         ),
-      ).thenAnswer((_) => Stream.fromFuture(completer.future));
+      ).thenAnswer((invocation) async* {
+        final content = invocation.positionalArguments.first?.toString() ?? '';
+        await commitMockRoot(
+          content,
+          requestId: content == 'Hi 2' ? 'queued-request-2' : null,
+        );
+        yield await completer.future;
+      });
 
       // Send first event
       final event1 = GatewayEvent(
@@ -2003,17 +2165,22 @@ Use the review skill.''',
           onThoughtDelta: anyNamed('onThoughtDelta'),
           onReasoningDelta: anyNamed('onReasoningDelta'),
         ),
-      ).thenAnswer((_) {
+      ).thenAnswer((invocation) async* {
+        final content = invocation.positionalArguments.first?.toString() ?? '';
+        await commitMockRoot(
+          content,
+          requestId: content == 'Hi suspended'
+              ? 'req-suspended-1'
+              : 'req-suspended-2',
+        );
         if (firstAttempt) {
           firstAttempt = false;
-          return Stream<String>.error(
-            const RuntimeRecoveryRequired(
-              'session-suspended-test',
-              RuntimeFailureReason.rateLimit,
-            ),
+          throw const RuntimeRecoveryRequired(
+            'session-suspended-test',
+            RuntimeFailureReason.rateLimit,
           );
         }
-        return Stream.value('Queued response');
+        yield 'Queued response';
       });
       when(
         mockAgentRunner.resumeStream(
@@ -2082,6 +2249,22 @@ Use the review skill.''',
         ),
       );
 
+      when(mockSessionManager.getMessages('session-suspended-test')).thenReturn(
+        [
+          Message(
+            role: MessageRole.user,
+            content: 'Hi suspended',
+            metadata: const {
+              'request_id': 'req-suspended-1',
+              'message_id': 'message-req-suspended-1',
+              'turn_id': 'turn-req-suspended-1',
+              'input_kind': 'root_turn',
+              'history_status': 'active',
+              'replay_eligible': true,
+            },
+          ),
+        ],
+      );
       await orchestrator.resumeSuspended('session-suspended-test');
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
@@ -2090,6 +2273,16 @@ Use the review skill.''',
           (response) => response.message.content == 'Hi suspended',
         ),
         hasLength(1),
+      );
+      final recoveredResponses = responses
+          .where((response) => response.message.content == 'Recovered response')
+          .toList();
+      expect(recoveredResponses, hasLength(2));
+      expect(
+        recoveredResponses.every(
+          (response) => response.turnId == 'turn-req-suspended-1',
+        ),
+        isTrue,
       );
       await responseSubscription.cancel();
     },
@@ -2526,13 +2719,16 @@ Use the review skill.''',
           onThoughtDelta: anyNamed('onThoughtDelta'),
           onReasoningDelta: anyNamed('onReasoningDelta'),
         ),
-      ).thenAnswer((invocation) {
+      ).thenAnswer((invocation) async* {
+        final content = invocation.positionalArguments.first?.toString() ?? '';
+        await commitMockRoot(content);
         if (callCount++ == 0) {
           lateReasoningFromA = invocation.namedArguments[#onReasoningDelta];
           lateToolFromA = invocation.namedArguments[#onToolEvent];
-          return firstController.stream;
+          yield* firstController.stream;
+          return;
         }
-        return Stream.value('Response B');
+        yield 'Response B';
       });
 
       final responses = <GatewayResponse>[];

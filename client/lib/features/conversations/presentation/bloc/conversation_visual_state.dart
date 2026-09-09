@@ -10,4 +10,3 @@ extension ConversationVisualStateX on ConversationVisualState {
   bool get isActiveSession => this == ConversationVisualState.activeSession;
   bool get showAppBar => !isNewConversation;
 }
-

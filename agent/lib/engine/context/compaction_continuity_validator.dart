@@ -90,7 +90,7 @@ class CompactionContinuityValidator {
     required List<CompactionContinuityAnchor> anchors,
     int repairAttempts = 0,
   }) {
-    final redacted = _redactSummary(summary);
+    final redacted = redactSummary(summary);
     final missing = <String>[
       ...redacted.missingRequiredSections(),
       for (final anchor in anchors.where((a) => a.critical))
@@ -103,16 +103,18 @@ class CompactionContinuityValidator {
     );
   }
 
-  CompactionInternalSummary _redactSummary(CompactionInternalSummary summary) {
+  CompactionInternalSummary redactSummary(CompactionInternalSummary summary) {
     String redact(String? value) =>
         value == null ? '' : _redactor.redact(value);
     return CompactionInternalSummary(
       previousSummaryAnchor: summary.previousSummaryAnchor,
       currentGoal: redact(summary.currentGoal),
+      latestUserRequest: redact(summary.latestUserRequest),
       successCriteria: redact(summary.successCriteria),
       constraints: redact(summary.constraints),
       completedWork: redact(summary.completedWork),
       activeState: redact(summary.activeState),
+      criticalContext: redact(summary.criticalContext),
       decisions: redact(summary.decisions),
       blockers: redact(summary.blockers),
       filesAndPaths: redact(summary.filesAndPaths),
@@ -127,6 +129,9 @@ class CompactionContinuityValidator {
   ) {
     final haystack = [
       summary.currentGoal,
+      summary.latestUserRequest,
+      summary.activeState,
+      summary.criticalContext,
       summary.remainingWork,
       summary.filesAndPaths,
       summary.pendingAsks,

@@ -19,6 +19,7 @@ class AgentToCanonical {
         'updated_at': DateTime.now().toIso8601String(),
         ...?response.sessionPayload,
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.runId != null) 'request_id': response.runId,
       };
     } else if (response.isSessionUpdated) {
@@ -30,6 +31,7 @@ class AgentToCanonical {
         'updated_at': DateTime.now().toIso8601String(),
         ...?response.sessionPayload,
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
       };
     } else if (response.message.role == MessageRole.user) {
       type = 'user_message';
@@ -41,6 +43,7 @@ class AgentToCanonical {
             response.message.metadata?['received_at'] ??
             DateTime.now().toIso8601String(),
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.message.metadata != null)
           'metadata': response.message.metadata,
         if (response.message.metadata?['request_id'] != null)
@@ -54,6 +57,7 @@ class AgentToCanonical {
         'input': response.message.content,
         'status': 'running',
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,
         if (response.toolCallId != null) 'tool_call_id': response.toolCallId,
         if (response.contextUsage != null)
@@ -70,6 +74,7 @@ class AgentToCanonical {
             ? 'cancelled'
             : (response.isToolError ? 'error' : 'done'),
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,
         if (response.toolCallId != null) 'tool_call_id': response.toolCallId,
         if (terminalMetadata?['generation'] != null)
@@ -93,6 +98,7 @@ class AgentToCanonical {
         'status': 'done',
         'timestamp': DateTime.now().toIso8601String(),
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,
         if (response.model != null) 'model': response.model,
         if (response.modelDisplay != null)
@@ -122,6 +128,7 @@ class AgentToCanonical {
             : response.message.thought ?? response.message.content,
         'status': 'running',
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,
       };
     }
