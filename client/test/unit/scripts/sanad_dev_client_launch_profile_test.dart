@@ -189,6 +189,40 @@ void main() {
     expect(unknownExternalPrimary, isEmpty);
   });
 
+  test('filters out clients with targets outside repository root', () {
+    final externalTargetProfile = extractClientLaunchProfile([
+      'flutter',
+      'run',
+      '-d',
+      'macos',
+      '--target=/Volumes/Storage/StudioProjects/other-app/lib/main.dart',
+    ]);
+    final resolvedExternal = resolveClientDirectoryForLaunchProfile(
+      profile: externalTargetProfile,
+      runtimeRepositoryRoot: '/Volumes/Storage/projects/sanad-agent',
+      runtimeIsLinkedWorktree: false,
+      runtimeWorktreeName: '',
+      separator: '/',
+    );
+    expect(resolvedExternal, isEmpty);
+
+    final internalTargetProfile = extractClientLaunchProfile([
+      'flutter',
+      'run',
+      '-d',
+      'macos',
+      '--target=/Volumes/Storage/projects/sanad-agent/client/lib/main.dart',
+    ]);
+    final resolvedInternal = resolveClientDirectoryForLaunchProfile(
+      profile: internalTargetProfile,
+      runtimeRepositoryRoot: '/Volumes/Storage/projects/sanad-agent',
+      runtimeIsLinkedWorktree: false,
+      runtimeWorktreeName: '',
+      separator: '/',
+    );
+    expect(resolvedInternal, '/Volumes/Storage/projects/sanad-agent/client');
+  });
+
   test('attach arguments preserve launch profile and never inject local config', () {
     final profile = extractClientLaunchProfile(worktreeArguments);
     final arguments = buildClientAttachArguments(

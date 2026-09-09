@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:test/test.dart';
@@ -36,6 +37,7 @@ import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_state_rejected_exception.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
+import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 
 class MockAdapter implements LLMAdapter {
   final List<AgentResponse> responses;
@@ -170,6 +172,27 @@ class MockTool extends BaseTool {
     Map<String, dynamic> args, {
     ToolContext? context,
   }) async => 'tool result';
+}
+
+class StructuredErrorTool extends BaseTool {
+  @override
+  ToolSchema get schema => ToolSchema(
+    name: 'structured_error_tool',
+    description: 'Returns a structured timeout result with partial output.',
+    parameters: {},
+  );
+
+  @override
+  Future<String> execute(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => jsonEncode({
+    'isError': true,
+    'output':
+        'TIMEOUT_PARTIAL_1\nTIMEOUT_PARTIAL_2\n'
+        'Command timed out after 2000 ms.',
+    'terminal_reason': 'timed_out',
+  });
 }
 
 class DelayedTool extends BaseTool {
@@ -929,6 +952,128 @@ void main() {
       expect(response.content, 'Hello!');
       expect(runner.history.length, 2); // user + assistant
     });
+
+    test('commits one replay-eligible root input idempotently', () async {
+      final runner = AgentRunner(
+        MockAdapter(const []),
+        registry,
+        sessionManager,
+      );
+
+      final committed = await runner.commitUserMessage(
+        'durable prompt',
+        requestId: 'request-durable-prompt',
+        receivedAt: DateTime.utc(2026, 9, 1),
+      );
+      final replayedCommit = await runner.commitUserMessage(
+        'durable prompt',
+        requestId: 'request-durable-prompt',
+        receivedAt: DateTime.utc(2026, 9, 1),
+      );
+
+      expect(committed.metadata?['request_id'], 'request-durable-prompt');
+      expect(committed.metadata?['message_id'], isNotEmpty);
+      expect(committed.metadata?['turn_id'], isNotEmpty);
+      expect(committed.metadata?['input_kind'], 'root_turn');
+      expect(committed.metadata?['replay_eligible'], isTrue);
+      expect(
+        replayedCommit.metadata?['message_id'],
+        committed.metadata?['message_id'],
+      );
+      expect(sessionManager.getMessages(runner.sessionId), hasLength(1));
+    });
+
+    test(
+      'controlled restart parks an active tool loop before its next provider request',
+      () async {
+        final adapter = MockAdapter([
+          AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              toolCalls: [
+                ToolCall(
+                  id: 'restart-boundary-tool',
+                  name: 'test_tool',
+                  arguments: const {},
+                ),
+              ],
+            ),
+            isToolCall: true,
+          ),
+          AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: 'continued once',
+            ),
+          ),
+        ]);
+        late final AgentRunner runner;
+        final drainStarted = Completer<void>();
+        runner = AgentRunner(adapter, registry, sessionManager);
+
+        var completed = false;
+        final streaming = runner
+            .streamMessage(
+              'start',
+              onToolEvent:
+                  ({
+                    required toolName,
+                    input,
+                    output,
+                    required isError,
+                    required isStart,
+                    toolRunId,
+                  }) async {
+                    if (!isStart && !drainStarted.isCompleted) {
+                      runner.beginControlledRestartDrain();
+                      drainStarted.complete();
+                    }
+                  },
+            )
+            .toList()
+            .whenComplete(() => completed = true);
+
+        await drainStarted.future;
+        await Future<void>.delayed(Duration.zero);
+
+        expect(adapter._callCount, 1);
+        expect(runner.providerRequestInFlight, isFalse);
+        expect(completed, isFalse);
+
+        runner.cancelControlledRestartDrain();
+        await streaming;
+
+        expect(adapter._callCount, 2);
+        expect(completed, isTrue);
+      },
+    );
+
+    test(
+      'controlled restart started before a turn consumes no provider request',
+      () async {
+        final adapter = MockAdapter([
+          AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: 'started after release',
+            ),
+          ),
+        ]);
+        final runner = AgentRunner(adapter, registry, sessionManager)
+          ..beginControlledRestartDrain();
+
+        final streaming = runner.streamMessage('start').toList();
+        await Future<void>.delayed(Duration.zero);
+
+        expect(adapter._callCount, 0);
+        expect(runner.providerRequestInFlight, isFalse);
+
+        runner.cancelControlledRestartDrain();
+        await streaming;
+
+        expect(adapter._callCount, 1);
+      },
+    );
 
     test('passes per-turn request options to synchronous adapters', () async {
       final adapter = MockAdapter([
@@ -1769,6 +1914,87 @@ void main() {
     });
 
     test(
+      'propagates structured tool errors to events and message metadata',
+      () async {
+        registry.registerTool(StructuredErrorTool());
+        for (final parallel in [false, true]) {
+          final toolCallId = parallel
+              ? 'timeout-call-parallel'
+              : 'timeout-call-sequential';
+          final runner = AgentRunner(
+            MockAdapter(const []),
+            registry,
+            sessionManager,
+          );
+          final events = <Map<String, dynamic>>[];
+
+          await runner.executeToolCalls(
+            [
+              ToolCall(
+                id: toolCallId,
+                name: 'structured_error_tool',
+                arguments: const {},
+              ),
+            ],
+            parallel: parallel,
+            onToolEvent:
+                ({
+                  required toolName,
+                  input,
+                  output,
+                  required isError,
+                  required isStart,
+                  toolRunId,
+                }) async {
+                  events.add({
+                    'tool_name': toolName,
+                    'output': output,
+                    'is_error': isError,
+                    'is_start': isStart,
+                    'tool_run_id': toolRunId,
+                  });
+                },
+          );
+
+          final completedEvent = events.singleWhere(
+            (event) => event['is_start'] == false,
+          );
+          expect(completedEvent['tool_run_id'], toolCallId);
+          expect(completedEvent['is_error'], isTrue);
+          expect(completedEvent['output'], contains('TIMEOUT_PARTIAL_1'));
+          expect(completedEvent['output'], contains('timed_out'));
+
+          final toolMessage = runner.history.single;
+          expect(toolMessage.role, MessageRole.tool);
+          expect(toolMessage.toolCallId, toolCallId);
+          expect(toolMessage.metadata?['is_error'], isTrue);
+          expect(toolMessage.content, contains('TIMEOUT_PARTIAL_2'));
+          expect(
+            toolMessage.content,
+            contains('Command timed out after 2000 ms.'),
+          );
+        }
+      },
+    );
+
+    test('runtime starts from the authoritative received time', () async {
+      final adapter = MockAdapter([
+        AgentResponse(
+          message: Message(role: MessageRole.assistant, content: 'Done'),
+        ),
+      ]);
+      final runner = AgentRunner(adapter, registry, sessionManager);
+      final receivedAt = DateTime.now().subtract(const Duration(minutes: 35));
+
+      await runner.streamMessage('Work', receivedAt: receivedAt).toList();
+
+      expect(
+        runner.runtimeMs,
+        greaterThanOrEqualTo(const Duration(minutes: 35).inMilliseconds),
+      );
+    });
+
+    test(
       'delivers steer after the active tool batch and before the next model call',
       () async {
         final delayedTool = DelayedTool();
@@ -1875,6 +2101,7 @@ void main() {
 
         final chunksFuture = runner.streamMessage('Start then stop').toList();
         await adapter.started.future;
+        expect(runner.providerRequestInFlight, isTrue);
         runner.requestStop();
         adapter.release.complete();
 
@@ -1882,6 +2109,7 @@ void main() {
         expect(toolExecutions, 0);
         expect(adapter.callCount, 1);
         expect(runner.stopRequested, isTrue);
+        expect(runner.providerRequestInFlight, isFalse);
       },
     );
 
@@ -2093,7 +2321,8 @@ void main() {
 
         expect(runner.history[2].role, MessageRole.tool);
         expect(runner.history[2].toolCallId, 'call_healing_1');
-        expect(runner.history[2].content, contains('cancelled'));
+        expect(runner.history[2].content, contains('interrupted'));
+        expect(runner.history[2].content, isNot(contains('cancelled by user')));
 
         // Verify the healed history was saved to database
         final savedHistory = sessionManager
@@ -3673,6 +3902,76 @@ void main() {
         );
       });
 
+      test('resume repairs a missing pre-provider checkpoint once', () async {
+        final session = sessionManager.createSession('gpt-4o');
+        sessionManager.saveSessionHistory(session.sessionId, [
+          Message(
+            role: MessageRole.user,
+            content: 'recover me',
+            metadata: const {'request_id': 'req-missing-checkpoint'},
+          ),
+        ]);
+
+        final stateDb = AgentStateDatabase.inMemory();
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        GetIt.I.registerSingleton<PersistedRuntimeStateRepository>(repo);
+        addTearDown(() {
+          GetIt.I.unregister<PersistedRuntimeStateRepository>();
+          stateDb.dispose();
+        });
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('${session.sessionId}', 'gpt-4o', '2026-08-31', '2026-08-31')",
+        );
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'w-missing-checkpoint',
+            sessionId: session.sessionId,
+            requestId: 'req-missing-checkpoint',
+            sequence: 1,
+            state: SessionWorkState.resuming,
+            attempt: 0,
+            payload: const {'message': 'recover me'},
+            continuationMetadata: const {},
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+        final adapter = MockAdapter([
+          AgentResponse(
+            message: Message(role: MessageRole.assistant, content: 'recovered'),
+          ),
+        ]);
+        final runner = AgentRunner(
+          adapter,
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+
+        expect(
+          await runner.resumeStream(requestId: 'req-missing-checkpoint').join(),
+          'recovered',
+        );
+        expect(
+          repo
+              .findWorkItem('w-missing-checkpoint')!
+              .continuationMetadata['checkpoint_kind'],
+          ContinuationCheckpointCoordinator.checkpointKindInitialModelRequest,
+        );
+        expect(
+          repo
+              .findWorkItem('w-missing-checkpoint')!
+              .continuationMetadata['checkpoint_repaired_after_restart'],
+          isTrue,
+        );
+        expect(
+          adapter.lastHistory!.where(
+            (message) => message.role == MessageRole.user,
+          ),
+          hasLength(1),
+        );
+      });
+
       test(
         'resume rejects non-idempotent tool still executing without completed result',
         () async {
@@ -4096,6 +4395,7 @@ void main() {
               .continuationMetadata;
           expect(metadata['currently_executing_tools'], isNull);
           expect(metadata['checkpoint_kind'], 'after_tool_result');
+          expect(metadata['checkpoint_before_model_request'], isNull);
           expect(metadata['resume_history_length'], 5);
           final completedResults =
               metadata['completed_tool_results'] as Map<String, dynamic>;
@@ -4276,6 +4576,134 @@ void main() {
           expect(chunks.join(), equals('acknowledged'));
           expect(toolCalls, equals(0));
           expect(runner.history.length, equals(4));
+        },
+      );
+
+      test(
+        'restart-terminalized shell restores original tool pair before model continuation',
+        () async {
+          final session = sessionManager.createSession('gpt-4o');
+          sessionManager.saveSessionHistory(session.sessionId, [
+            Message(role: MessageRole.user, content: 'run once'),
+            Message(
+              role: MessageRole.assistant,
+              toolCalls: [
+                ToolCall(
+                  id: 'call-crashed-shell',
+                  name: 'shell_execute',
+                  arguments: const {
+                    'command': 'printf partial; sleep 120',
+                    'timeout_ms': 60000,
+                  },
+                ),
+              ],
+            ),
+            Message(
+              role: MessageRole.tool,
+              content: 'partial\nThe execution was interrupted unexpectedly.',
+              toolCallId: 'call-crashed-shell',
+              metadata: const {
+                'status': 'interrupted',
+                'reason': 'daemon_interrupted',
+                'is_error': true,
+              },
+            ),
+          ]);
+
+          final stateDb = AgentStateDatabase.inMemory();
+          final repo = PersistedRuntimeStateRepository(stateDb.db);
+          GetIt.I.registerSingleton<PersistedRuntimeStateRepository>(repo);
+          addTearDown(() {
+            GetIt.I.unregister<PersistedRuntimeStateRepository>();
+            stateDb.dispose();
+          });
+          stateDb.db.execute(
+            "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('${session.sessionId}', 'gpt-4o', '2026-08-31', '2026-08-31')",
+          );
+          repo.insertWorkItem(
+            SessionWorkItem(
+              workItemId: 'w-restart-terminalized-shell',
+              sessionId: session.sessionId,
+              requestId: 'req-restart-terminalized-shell',
+              sequence: 1,
+              state: SessionWorkState.resuming,
+              attempt: 0,
+              continuationMetadata: const {
+                'checkpoint_kind': 'after_tool_result',
+                'resume_history_length': 1,
+                'currentTurnStartIndex': 0,
+                'restart_terminalized_tool_ids': ['call-crashed-shell'],
+                'completed_tool_results': {
+                  'call-crashed-shell':
+                      'partial\nThe execution was interrupted unexpectedly.',
+                },
+                'completed_tool_outputs': {
+                  'call-crashed-shell': {
+                    'tool_call_id': 'call-crashed-shell',
+                    'tool_name': 'shell_execute',
+                    'arguments': {
+                      'command': 'printf partial; sleep 120',
+                      'timeout_ms': 60000,
+                    },
+                    'result':
+                        'partial\nThe execution was interrupted unexpectedly.',
+                    'is_error': true,
+                    'sent_to_provider': false,
+                    'status': 'interrupted',
+                    'reason': 'daemon_interrupted',
+                  },
+                },
+              },
+              createdAt: DateTime.now(),
+              updatedAt: DateTime.now(),
+            ),
+          );
+
+          var shellExecutions = 0;
+          registry.registerTool(
+            GateDTestTool('shell_execute', (args, context) async {
+              shellExecutions++;
+              return 'must not execute during restoration';
+            }),
+          );
+          final adapter = MockAdapter([
+            AgentResponse(
+              message: Message(
+                role: MessageRole.assistant,
+                content: 'reviewed interruption',
+              ),
+            ),
+          ]);
+          final runner = AgentRunner(
+            adapter,
+            registry,
+            sessionManager,
+            existingSessionId: session.sessionId,
+          );
+
+          expect(await runner.resumeStream().join(), 'reviewed interruption');
+          expect(shellExecutions, 0);
+          final providerHistory = adapter.lastHistory!
+              .where((message) => message.role != MessageRole.system)
+              .toList();
+          expect(providerHistory.map((message) => message.role), [
+            MessageRole.user,
+            MessageRole.assistant,
+            MessageRole.tool,
+          ]);
+          expect(providerHistory[1].toolCalls!.single.id, 'call-crashed-shell');
+          expect(providerHistory[2].toolCallId, 'call-crashed-shell');
+          expect(providerHistory[2].content, contains('partial'));
+          expect(
+            providerHistory[2].content,
+            contains('interrupted unexpectedly'),
+          );
+          expect(
+            repo
+                .findWorkItem('w-restart-terminalized-shell')!
+                .continuationMetadata['restart_terminalized_tool_ids'],
+            isNull,
+          );
         },
       );
 

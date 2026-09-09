@@ -76,8 +76,18 @@ class DeviceCapabilitiesStore {
       }
 
       final rawCaps = event['capabilities'] ?? event['payload'];
-      final capsJson = rawCaps is Map ? Map<String, dynamic>.from(rawCaps) : <String, dynamic>{};
-      final capability = Capability.fromJson(capsJson);
+      if (rawCaps is! Map) {
+        // Cloud routing can answer a pre-online request with a correlated null
+        // payload. Return the current projection without making that absence a
+        // fresh cache entry, so the Online inventory update retries normally.
+        if (!completer.isCompleted) {
+          completer.complete(getForAgent(agent.id));
+        }
+        return;
+      }
+      final capability = Capability.fromJson(
+        Map<String, dynamic>.from(rawCaps),
+      );
       _storeCapabilities(agent.id, capability);
       if (!completer.isCompleted) {
         completer.complete(capability);

@@ -8,6 +8,7 @@ import 'package:sanad_client/features/conversations/domain/models/device_sidebar
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/features/conversations/domain/stores/conversation_cache_store.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -197,11 +198,17 @@ class ConversationCacheRepository {
   /// trigger workspace creation without going through the input cubit.
   Future<DeviceWorkspace?> createWorkspace(
     DeviceConfig device, {
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) async {
     try {
-      final workspace = await _transport.createWorkspace(device, path: path, name: name);
+      final workspace = await _transport.createWorkspace(
+        device,
+        path: path,
+        name: name,
+        description: description,
+      );
       _cache.applyWorkspaceCreated(device.id, workspace);
       return workspace;
     } catch (_) {
@@ -223,6 +230,14 @@ class ConversationCacheRepository {
     return workspace;
   }
 
+  Future<void> removeWorkspace(
+    DeviceConfig device, {
+    required String workspaceId,
+  }) async {
+    await _transport.removeWorkspace(device, workspaceId: workspaceId);
+    _cache.applyWorkspaceRemoved(device.id, workspaceId);
+  }
+
   Future<DeviceWorkspace> relocateWorkspace(
     DeviceConfig device, {
     required String workspaceId,
@@ -235,6 +250,49 @@ class ConversationCacheRepository {
     );
     _cache.applyWorkspaceUpdated(device.id, workspace);
     return workspace;
+  }
+
+  Future<WorkspaceTreeSnapshot> browseWorkspaceTree(
+    DeviceConfig device, {
+    String? workspaceId,
+    String? path,
+  }) {
+    return _transport.browseWorkspaceTree(
+      device,
+      workspaceId: workspaceId,
+      path: path,
+    );
+  }
+
+  Future<void> createFolder(
+    DeviceConfig device, {
+    required String parentPath,
+    required String name,
+  }) {
+    return _transport.createFolder(
+      device,
+      parentPath: parentPath,
+      name: name,
+    );
+  }
+
+  Future<void> renameFolder(
+    DeviceConfig device, {
+    required String path,
+    required String newName,
+  }) {
+    return _transport.renameFolder(
+      device,
+      path: path,
+      newName: newName,
+    );
+  }
+
+  Future<void> deleteFolder(
+    DeviceConfig device, {
+    required String path,
+  }) {
+    return _transport.deleteFolder(device, path: path);
   }
 
   void setWorkspaceExpansion(String deviceId, String workspaceId, bool expanded) {

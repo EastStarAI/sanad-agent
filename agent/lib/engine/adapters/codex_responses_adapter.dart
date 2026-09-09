@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'package:crypto/crypto.dart';
+
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 
@@ -14,13 +16,17 @@ import 'codex_responses_codec.dart';
 import 'codex_responses_policy.dart';
 import 'codex_responses_sse_accumulator.dart';
 import 'llm_http_exception.dart';
+import 'llm_adapter.dart';
 import 'llm_request_options.dart';
+import 'opencode_session_affinity.dart';
+import 'provider_request_transport.dart';
 import 'provider_state_rejected_exception.dart';
 
 /// Stateless adapter for Responses-compatible Codex endpoints.
 ///
 /// Sync and stream share one request codec and one final response normalizer.
-class CodexResponsesAdapter extends BaseOpenAIAdapter {
+class CodexResponsesAdapter extends BaseOpenAIAdapter
+    implements WireInputTokenEstimator, WireInputUsageMeasurer {
   final _modelsLogger = Logger('CodexResponsesAdapter');
   final CodexModelsService _modelsService;
 
@@ -28,6 +34,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
     super.config,
     super.profile, {
     super.client,
+    super.modelContextLimitLookup,
     super.baseUrlOverride,
     super.apiKeyOverride,
     super.defaultModelOverride,
@@ -66,6 +73,52 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
   }
 
   @override
+  Future<int?> estimateInputTokens(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    return (await measureInput(
+      history,
+      tools: tools,
+      modelOverride: modelOverride,
+      options: options,
+    ))?.estimatedTokens;
+  }
+
+  @override
+  Future<WireInputMeasurement?> measureInput(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async {
+    final body = _codec(options).buildRequest(
+      history: history,
+      model: resolveModel(modelOverride),
+      options: options,
+      tools: _policy.normalizeTools(tools),
+    );
+    final measured = <String, dynamic>{
+      'instructions': body['instructions'],
+      'input': body['input'],
+      if (body['tools'] != null) 'tools': body['tools'],
+    };
+    String fingerprint(Object? value) =>
+        sha256.convert(utf8.encode(jsonEncode(value))).toString();
+    final input = (body['input'] as List?) ?? const [];
+    return WireInputMeasurement(
+      estimatedTokens: (jsonEncode(measured).length / 4).ceil(),
+      stableMaterialFingerprint: fingerprint({
+        'instructions': body['instructions'],
+        'tools': body['tools'],
+      }),
+      inputItemFingerprints: input.map(fingerprint).toList(growable: false),
+    );
+  }
+
+  @override
   Future<AgentResponse> generateResponse(
     List<Message> history, {
     List<ToolSchema>? tools,
@@ -87,7 +140,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
     );
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
-      ..headers.addAll(_headers())
+      ..headers.addAll(_headers(options))
       ..body = jsonEncode(body);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
@@ -97,16 +150,15 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
       );
     }
 
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     late http.StreamedResponse response;
     try {
-      final send = httpClient.send(request);
-      response = options.timeout == null
-          ? await send
-          : await send.timeout(options.timeout!);
+      response = await transport.send(request, operation: 'generateResponse');
     } catch (_) {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
       rethrow;
     }
 
@@ -123,14 +175,11 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
         throw _providerStateFailureOrHttp(failure, body, codec);
       }
 
-      Stream<List<int>> byteStream = response.stream;
-      if (options.timeout != null) {
-        byteStream = byteStream.timeout(options.timeout!);
-      }
-      await for (final line
-          in byteStream
-              .transform(utf8.decoder)
-              .transform(const LineSplitter())) {
+      await for (final line in transport.decodeSseLines(
+        response.stream,
+        operation: 'generateResponse',
+      )) {
+        transport.throwIfCancelled(operation: 'generateResponse');
         capturedLines.add(line);
         if (line.trim().isEmpty || line.startsWith('event:')) continue;
         if (!line.startsWith('data:')) continue;
@@ -160,7 +209,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
       }
       rethrow;
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
   }
 
@@ -183,7 +232,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
     );
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
-      ..headers.addAll(_headers())
+      ..headers.addAll(_headers(options))
       ..body = jsonEncode(body);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
@@ -193,16 +242,15 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
       );
     }
 
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     late http.StreamedResponse response;
     try {
-      final send = httpClient.send(request);
-      response = options.timeout == null
-          ? await send
-          : await send.timeout(options.timeout!);
+      response = await transport.send(request, operation: 'generateStream');
     } catch (_) {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
       rethrow;
     }
 
@@ -222,14 +270,11 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
         throw _providerStateFailureOrHttp(failure, body, codec);
       }
 
-      Stream<List<int>> byteStream = response.stream;
-      if (options.timeout != null) {
-        byteStream = byteStream.timeout(options.timeout!);
-      }
-      await for (final line
-          in byteStream
-              .transform(utf8.decoder)
-              .transform(const LineSplitter())) {
+      await for (final line in transport.decodeSseLines(
+        response.stream,
+        operation: 'generateStream',
+      )) {
+        transport.throwIfCancelled(operation: 'generateStream');
         capturedLines.add(line);
         if (line.trim().isEmpty || line.startsWith('event:')) continue;
         if (!line.startsWith('data:')) continue;
@@ -311,7 +356,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
       }
       rethrow;
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
   }
 
@@ -357,11 +402,17 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter {
 
   String _normalizedBaseUrl() => baseUrl.replaceFirst(RegExp(r'/+$'), '');
 
-  Map<String, String> _headers() => {
-    'Content-Type': 'application/json',
-    if (apiKey.isNotEmpty) 'Authorization': 'Bearer $apiKey',
-    ...profile.defaultHeaders,
-  };
+  Map<String, String> _headers(LLMRequestOptions options) =>
+      withOpenCodeSessionAffinity(
+        headers: {
+          'Content-Type': 'application/json',
+          if (apiKey.isNotEmpty) 'Authorization': 'Bearer $apiKey',
+          ...profile.defaultHeaders,
+        },
+        providerName: profile.name,
+        baseUrl: baseUrl,
+        sessionId: options.sessionId,
+      );
 
   static String? _remaining(String? complete, String emitted) {
     if (complete == null || complete.isEmpty) return null;

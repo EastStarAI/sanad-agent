@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:logging/logging.dart';
+import 'package:sanad_agent/core/secrets_redactor.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'sanad_protocol_bridge.dart';
 import 'protocol/canonical_events.dart';
@@ -23,7 +24,10 @@ mixin SanadGatewayBehavior {
   }) async {
     logger.info('⬇️ [$transportName] Received protocol_event: ${event.type}');
     if (envelope != null) {
-      logger.fine('⬇️ [$transportName] Protocol event payload: $envelope');
+      logFinePayload(
+        '⬇️ [$transportName] Protocol event payload:',
+        envelope,
+      );
     }
     if (runtimeBridge.handleProtocolEvent(event)) {
       return;
@@ -41,7 +45,7 @@ mixin SanadGatewayBehavior {
   }) async {
     final commandName = envelope['command']?.toString() ?? 'unknown';
     logger.info('⬇️ [$transportName] Received execute_command: $commandName');
-    logger.fine('⬇️ [$transportName] Command payload: $envelope');
+    logFinePayload('⬇️ [$transportName] Command payload:', envelope);
 
     final rawPayload = envelope['payload'];
     final payload = rawPayload is Map
@@ -58,6 +62,11 @@ mixin SanadGatewayBehavior {
       );
     }
     return protocolBridge.handleCommand(envelope, onResponse);
+  }
+
+  /// Logs a payload at FINE after secret-field redaction.
+  void logFinePayload(String label, Object? payload) {
+    logger.fine('$label ${const SecretsRedactor().redactForLog(payload)}');
   }
 
   /// Safely converts dynamic map-like data into a structured `Map<String, dynamic>`.

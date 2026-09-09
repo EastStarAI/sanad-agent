@@ -1,4 +1,5 @@
 import 'package:logging/logging.dart';
+
 import 'dart:async';
 
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -23,7 +24,9 @@ import 'package:sanad_client/features/conversations/domain/models/slash_command_
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
@@ -208,12 +211,19 @@ class SocketConversationClient implements ConversationClient {
   }
 
   @override
-  Future<String?> deleteQueuedMessage({required String requestId, required String sessionId}) =>
-      _commands!.deleteQueuedMessage(requestId: requestId, sessionId: sessionId);
+  Future<String?> deleteQueuedMessage({
+    required String requestId,
+    required String sessionId,
+  }) => _commands!.deleteQueuedMessage(
+    requestId: requestId,
+    sessionId: sessionId,
+  );
 
   @override
-  Future<String?> cancelPendingSteer({required String requestId, required String sessionId}) =>
-      _commands!.cancelPendingSteer(requestId: requestId, sessionId: sessionId);
+  Future<String?> cancelPendingSteer({
+    required String requestId,
+    required String sessionId,
+  }) => _commands!.cancelPendingSteer(requestId: requestId, sessionId: sessionId);
 
   @override
   Future<String?> stop({
@@ -256,22 +266,45 @@ class SocketConversationClient implements ConversationClient {
   Future<TurnReplayResult> replayTurn({
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) => _commands!.replayTurn(
     sessionId: sessionId,
     targetRequestId: targetRequestId,
+    targetMessageId: targetMessageId,
+    targetTurnId: targetTurnId,
+    expectedHistoryRevision: expectedHistoryRevision,
     action: action,
     message: message,
     providerInstanceId: providerInstanceId,
     modelId: modelId,
     thinkingMode: thinkingMode,
     confirmedReplayUnsafe: confirmedReplayUnsafe,
+    confirmedDropSteers: confirmedDropSteers,
   );
+
+  @override
+  Future<SessionForkResult> forkSession({
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) => _commands!.forkSession(
+    sessionId: sessionId,
+    targetMessageId: targetMessageId,
+    targetTurnId: targetTurnId,
+  );
+
+  @override
+  Future<SessionCompactResult> compactSession({required String sessionId}) =>
+      _commands!.compactSession(sessionId: sessionId);
 
   @override
   Future<void> retryRuntimeNotice({
@@ -348,17 +381,19 @@ class SocketConversationClient implements ConversationClient {
       if (isLegacyDefault) {
         return await _fetchLegacyDefaultSessions();
       }
-      return await _fetchSessionQuery(
-        resolvedQuery,
-        queryKey: queryKey,
-      );
+      return await _fetchSessionQuery(resolvedQuery, queryKey: queryKey);
     } catch (error) {
-      _logger.severe('[SocketConversationClient] Failed to fetch sessions: $error');
+      _logger.severe(
+        '[SocketConversationClient] Failed to fetch sessions: $error',
+      );
       if (exactCached != null) {
         return exactCached;
       }
       if (isLegacyDefault && _lastSessionsSnapshot != null) {
-        return SessionQueryResult(sessions: _lastSessionsSnapshot!, hasMore: false);
+        return SessionQueryResult(
+          sessions: _lastSessionsSnapshot!,
+          hasMore: false,
+        );
       }
       rethrow;
     }
@@ -466,18 +501,20 @@ class SocketConversationClient implements ConversationClient {
     String? workspaceId,
     String? path,
   }) {
-    return _commands!.browseWorkspaceTree(
-      workspaceId: workspaceId,
-      path: path,
-    );
+    return _commands!.browseWorkspaceTree(workspaceId: workspaceId, path: path);
   }
 
   @override
   Future<DeviceWorkspace> createWorkspace({
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) {
-    return _commands!.createWorkspace(path: path, name: name);
+    return _commands!.createWorkspace(
+      path: path,
+      name: name,
+      description: description,
+    );
   }
 
   @override
@@ -489,6 +526,11 @@ class SocketConversationClient implements ConversationClient {
       workspaceId: workspaceId,
       displayName: displayName,
     );
+  }
+
+  @override
+  Future<void> removeWorkspace({required String workspaceId}) {
+    return _commands!.removeWorkspace(workspaceId: workspaceId);
   }
 
   @override
@@ -524,6 +566,36 @@ class SocketConversationClient implements ConversationClient {
   Future<List<CanonicalEvent>> loadSessionHistory(String sessionId) {
     return _commands!.loadSessionHistory(sessionId);
   }
+
+  @override
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(String sessionId) {
+    return _commands!.loadOlderSessionHistory(sessionId);
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    String sessionId,
+    String anchorEventId,
+  ) {
+    return _commands!.loadAnchoredSessionHistory(sessionId, anchorEventId);
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) {
+    return _commands!.loadNewerSessionHistory(sessionId);
+  }
+
+  @override
+  bool get historyHasMore => _store.historyHasMore;
+
+  @override
+  String? get historyNextCursor => _store.historyNextCursor;
+
+  @override
+  bool get historyHasNewer => _store.historyHasNewer;
+
+  @override
+  String? get historyNextNewerCursor => _store.historyNextNewerCursor;
 
   Future<void> synchronizeAfterReconnect() async {
     await getSessions();
@@ -600,9 +672,14 @@ class SocketConversationClient implements ConversationClient {
       gateway: gateway,
       conversationStore: _store,
       mapper: _mapper,
+      onReplayTailHydrationRequired: (sessionId) async {
+        await _commands?.loadSessionHistory(sessionId);
+      },
     );
     _sessionEventsSubscription = gateway.events.listen(_forwardSessionEvent);
-    _socketLifecycleSubscription = socketService.lifecycleStateStream.listen((state) {
+    _socketLifecycleSubscription = socketService.lifecycleStateStream.listen((
+      state,
+    ) {
       if (state != SocketLifecycleState.ready) {
         _sessionsHydrationPending = true;
       }
@@ -708,10 +785,7 @@ class SocketConversationClient implements ConversationClient {
     final requestId = generateConversationRequestId();
     final result = await gateway.request(
       command: 'workspace.get_policy',
-      payload: {
-        'request_id': requestId,
-        'workspace_path': workspacePath,
-      },
+      payload: {'request_id': requestId, 'workspace_path': workspacePath},
       requestId: requestId,
     );
     if (result != null) {

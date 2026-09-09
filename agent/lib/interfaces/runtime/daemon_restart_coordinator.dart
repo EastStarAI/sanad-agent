@@ -36,6 +36,8 @@ class DaemonRestartPreparation {
     'message': switch (outcome) {
       'safe' => 'Daemon reached a safe restart checkpoint.',
       'forced' => 'Restart timeout expired. Forced daemon restart accepted.',
+      'provider_requests_interrupted' =>
+        'Provider requests exceeded the restart timeout and were cancelled without automatic replay.',
       'already_in_progress' => 'Another daemon restart is already in progress.',
       'cancelled' =>
         'Daemon restart was cancelled by a higher-priority action.',
@@ -89,28 +91,41 @@ class DaemonRestartCoordinator {
     final restartEpoch = ++_restartEpoch;
     final orchestrator = _sessionOrchestrator;
     orchestrator?.beginControlledRestartDrain();
-    late final ControlledRestartCheckpointResult checkpoint;
-    try {
-      checkpoint =
-          await orchestrator?.waitForControlledRestartCheckpoint(
-            timeout: timeout,
-            requesterSessionId: requesterSessionId,
-            requesterToolCallId: requesterToolCallId,
-          ) ??
-          ControlledRestartCheckpointResult.safe;
-    } on Object catch (error, stackTrace) {
-      _logger.severe('Restart safety evaluation failed.', error, stackTrace);
-      if (restartEpoch == _restartEpoch) {
-        orchestrator?.cancelControlledRestartDrain();
-        _restartInProgress = false;
+    late ControlledRestartCheckpointResult checkpoint;
+    while (true) {
+      try {
+        checkpoint =
+            await orchestrator?.waitForControlledRestartCheckpoint(
+              timeout: timeout,
+              requesterSessionId: requesterSessionId,
+              requesterToolCallId: requesterToolCallId,
+            ) ??
+            ControlledRestartCheckpointResult.safe;
+      } on Object catch (error, stackTrace) {
+        _logger.severe('Restart safety evaluation failed.', error, stackTrace);
+        if (restartEpoch == _restartEpoch) {
+          orchestrator?.cancelControlledRestartDrain();
+          _restartInProgress = false;
+        }
+        return DaemonRestartPreparation(
+          accepted: false,
+          force: force,
+          timeout: timeout,
+          requesterSessionId: requesterSessionId,
+          requesterToolCallId: requesterToolCallId,
+          outcome: restartEpoch == _restartEpoch
+              ? 'internal_error'
+              : 'cancelled',
+        );
       }
-      return DaemonRestartPreparation(
-        accepted: false,
-        force: force,
-        timeout: timeout,
-        requesterSessionId: requesterSessionId,
-        requesterToolCallId: requesterToolCallId,
-        outcome: restartEpoch == _restartEpoch ? 'internal_error' : 'cancelled',
+
+      if (restartEpoch != _restartEpoch) break;
+      final providerOnlyTimeout = _isProviderOnlyTimeout(checkpoint);
+      if (checkpoint.isSafe || force || !providerOnlyTimeout) break;
+
+      _logger.info(
+        'Ordinary restart is still waiting for ${checkpoint.blockers.length} '
+        'provider request(s) to reach a safe checkpoint.',
       );
     }
 
@@ -125,7 +140,13 @@ class DaemonRestartCoordinator {
       );
     }
 
-    if (!checkpoint.isSafe && !force) {
+    final providerOnlyTimeout = _isProviderOnlyTimeout(checkpoint);
+    if (!checkpoint.isSafe && force) {
+      await orchestrator?.interruptProviderRequestsForRestart(
+        checkpoint.blockers,
+      );
+    }
+    if (!checkpoint.isSafe && !providerOnlyTimeout && !force) {
       orchestrator?.cancelControlledRestartDrain();
       _restartInProgress = false;
       return DaemonRestartPreparation(
@@ -146,11 +167,25 @@ class DaemonRestartCoordinator {
       requesterSessionId: requesterSessionId,
       requesterToolCallId: requesterToolCallId,
       blockers: checkpoint.blockers,
-      outcome: checkpoint.isSafe ? 'safe' : 'forced',
+      outcome: checkpoint.isSafe
+          ? 'safe'
+          : providerOnlyTimeout
+          ? 'provider_requests_interrupted'
+          : 'forced',
     );
     _activePreparation = preparation;
     return preparation;
   }
+
+  bool _isProviderOnlyTimeout(ControlledRestartCheckpointResult checkpoint) =>
+      !checkpoint.isSafe &&
+      checkpoint.blockers.isNotEmpty &&
+      checkpoint.blockers.every(
+        (blocker) =>
+            blocker.providerRequestInFlight &&
+            blocker.toolCallIds.isEmpty &&
+            blocker.checkpointRecognized,
+      );
 
   /// Cancels the active preparation when its transport response could not be
   /// flushed. The daemon remains running and queued work is released.

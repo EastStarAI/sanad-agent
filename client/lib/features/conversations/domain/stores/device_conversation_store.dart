@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'dart:collection';
+
 import 'package:sanad_client/features/conversations/domain/models/device_processing_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
@@ -14,6 +16,23 @@ import 'package:sanad_client/features/conversations/domain/stores/session_route_
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/stores/conversation_state.dart';
+import 'package:sanad_client/features/conversations/domain/stores/canonical_timeline_reconciler.dart';
+
+class _RetainedSessionHistory {
+  final List<CanonicalEvent> messages;
+  final bool hasMore;
+  final String? nextCursor;
+  final bool hasNewer;
+  final String? nextNewerCursor;
+
+  const _RetainedSessionHistory({
+    required this.messages,
+    required this.hasMore,
+    required this.nextCursor,
+    required this.hasNewer,
+    required this.nextNewerCursor,
+  });
+}
 
 class DeviceConversationStoreSnapshot {
   final List<CanonicalEvent> messages;
@@ -29,6 +48,10 @@ class DeviceConversationStoreSnapshot {
   final Map<String, RuntimeNotice> runtimeNotices;
   final Map<String, SessionRouteSnapshot> routeSnapshots;
   final Map<String, Map<String, PendingSteerRecord>> pendingSteers;
+  final bool historyHasMore;
+  final String? historyNextCursor;
+  final bool historyHasNewer;
+  final String? historyNextNewerCursor;
 
   const DeviceConversationStoreSnapshot({
     required this.messages,
@@ -44,10 +67,16 @@ class DeviceConversationStoreSnapshot {
     this.runtimeNotices = const {},
     this.routeSnapshots = const {},
     this.pendingSteers = const {},
+    this.historyHasMore = false,
+    this.historyNextCursor,
+    this.historyHasNewer = false,
+    this.historyNextNewerCursor,
   });
 }
 
 class DeviceConversationStore {
+  static const int _maxRetainedSessionHistories = 2;
+
   final ConversationState _conversation;
   final StreamController<List<CanonicalEvent>> _messagesController = StreamController<List<CanonicalEvent>>.broadcast();
   final StreamController<List<CanonicalEvent>> _queuedMessagesController =
@@ -75,11 +104,19 @@ class DeviceConversationStore {
   final List<CanonicalEvent> _queuedMessages = [];
   final Map<String, Map<String, PendingSteerRecord>> _pendingSteersBySessionId = {};
   final Set<(String, String)> _stopRecoveredPendingSteerKeys = {};
+  bool _historyHasMore = false;
+  String? _historyNextCursor;
+  bool _historyHasNewer = false;
+  String? _historyNextNewerCursor;
+  final LinkedHashMap<String, _RetainedSessionHistory> _retainedSessionHistories =
+      LinkedHashMap<String, _RetainedSessionHistory>();
 
   DeviceConversationStore({
     ThinkingStreamMode thinkingStreamMode = ThinkingStreamMode.auto,
     DeviceConversationStoreSnapshot? initialSnapshot,
-  }) : _conversation = ConversationState(thinkingStreamMode: thinkingStreamMode) {
+  }) : _conversation = ConversationState(
+         thinkingStreamMode: thinkingStreamMode,
+       ) {
     if (initialSnapshot != null) {
       _conversation.setHistory(initialSnapshot.messages);
       _currentSessionId = initialSnapshot.currentSessionId;
@@ -92,11 +129,17 @@ class DeviceConversationStore {
       for (final snapshot in initialSnapshot.routeSnapshots.values) {
         _routeRegistry.apply(snapshot);
       }
-      _pendingSuspendedRequestBySessionId.addAll(initialSnapshot.pendingSuspendedRequests);
+      _pendingSuspendedRequestBySessionId.addAll(
+        initialSnapshot.pendingSuspendedRequests,
+      );
       _runtimeNoticeBySessionId.addAll(initialSnapshot.runtimeNotices);
       for (final entry in initialSnapshot.pendingSteers.entries) {
         _pendingSteersBySessionId[entry.key] = Map<String, PendingSteerRecord>.from(entry.value);
       }
+      _historyHasMore = initialSnapshot.historyHasMore;
+      _historyNextCursor = initialSnapshot.historyNextCursor;
+      _historyHasNewer = initialSnapshot.historyHasNewer;
+      _historyNextNewerCursor = initialSnapshot.historyNextNewerCursor;
       final pending = initialSnapshot.pendingSuspendedRequest;
       if (pending != null && pending.sessionId.isNotEmpty) {
         _pendingSuspendedRequestBySessionId[pending.sessionId] = pending;
@@ -126,6 +169,10 @@ class DeviceConversationStore {
   List<CanonicalEvent> get currentMessages => _conversation.events;
   List<CanonicalEvent> get currentQueuedMessages => List.unmodifiable(_queuedMessages);
   String? get currentSessionId => _currentSessionId;
+  bool get historyHasMore => _historyHasMore;
+  String? get historyNextCursor => _historyNextCursor;
+  bool get historyHasNewer => _historyHasNewer;
+  String? get historyNextNewerCursor => _historyNextNewerCursor;
   bool get isDraftSession => _isDraftSession;
   String? get pendingSessionRequestId => _pendingSessionRequestId;
   DeviceSuspendedRequest? get currentPendingSuspendedRequest =>
@@ -156,13 +203,21 @@ class DeviceConversationStore {
     pendingSuspendedRequest: currentPendingSuspendedRequest,
     runtimeNotice: currentRuntimeNotice,
     executionSnapshots: _executionRegistry.snapshotsBySessionId,
-    pendingSuspendedRequests: Map.unmodifiable(_pendingSuspendedRequestBySessionId),
+    pendingSuspendedRequests: Map.unmodifiable(
+      _pendingSuspendedRequestBySessionId,
+    ),
     runtimeNotices: Map.unmodifiable(_runtimeNoticeBySessionId),
     routeSnapshots: _routeRegistry.routesBySessionId,
     pendingSteers: Map<String, Map<String, PendingSteerRecord>>.unmodifiable({
       for (final entry in _pendingSteersBySessionId.entries)
-        entry.key: Map<String, PendingSteerRecord>.unmodifiable(entry.value),
+        entry.key: Map<String, PendingSteerRecord>.unmodifiable(
+          entry.value,
+        ),
     }),
+    historyHasMore: _historyHasMore,
+    historyNextCursor: _historyNextCursor,
+    historyHasNewer: _historyHasNewer,
+    historyNextNewerCursor: _historyNextNewerCursor,
   );
 
   Map<String, SessionRouteSnapshot> get currentRouteSnapshots => _routeRegistry.routesBySessionId;
@@ -191,25 +246,63 @@ class DeviceConversationStore {
   bool isSessionProcessing(String? sessionId) => processingSnapshot.isSessionProcessing(sessionId);
   bool canStopSession(String? sessionId) => sessionId != null && attentionStateFor(sessionId).executionSnapshot.canStop;
 
-  void activateSession(String sessionId) {
-    if (_currentSessionId == sessionId) return;
+  bool activateSession(String sessionId) {
+    if (_currentSessionId == sessionId) return false;
+    _retainCurrentSessionHistory();
     _currentSessionId = sessionId;
     _isDraftSession = false;
     _pendingSessionRequestId = null;
-    _conversation.clear();
+    final retained = _retainedSessionHistories.remove(sessionId);
+    if (retained == null) {
+      _conversation.clear();
+      _historyHasMore = false;
+      _historyNextCursor = null;
+      _historyHasNewer = false;
+      _historyNextNewerCursor = null;
+    } else {
+      _conversation.setHistory(retained.messages);
+      _historyHasMore = retained.hasMore;
+      _historyNextCursor = retained.nextCursor;
+      _historyHasNewer = retained.hasNewer;
+      _historyNextNewerCursor = retained.nextNewerCursor;
+    }
     _queuedMessages.clear();
     _emitMessages();
     _emitQueuedMessages();
     _emitPendingSuspended();
     _emitRuntimeNotice();
+    return retained != null;
+  }
+
+  void _retainCurrentSessionHistory() {
+    final sessionId = _currentSessionId;
+    if (sessionId == null || _isDraftSession || _conversation.events.isEmpty) {
+      return;
+    }
+    _retainedSessionHistories.remove(sessionId);
+    _retainedSessionHistories[sessionId] = _RetainedSessionHistory(
+      messages: List<CanonicalEvent>.from(_conversation.events),
+      hasMore: _historyHasMore,
+      nextCursor: _historyNextCursor,
+      hasNewer: _historyHasNewer,
+      nextNewerCursor: _historyNextNewerCursor,
+    );
+    while (_retainedSessionHistories.length > _maxRetainedSessionHistories) {
+      _retainedSessionHistories.remove(_retainedSessionHistories.keys.first);
+    }
   }
 
   void beginNewSession() {
+    _retainCurrentSessionHistory();
     _currentSessionId = null;
     _isDraftSession = true;
     _pendingSessionRequestId = null;
     _conversation.clear();
     _queuedMessages.clear();
+    _historyHasMore = false;
+    _historyNextCursor = null;
+    _historyHasNewer = false;
+    _historyNextNewerCursor = null;
     _emitMessages();
     _emitQueuedMessages();
     _emitPendingSuspended();
@@ -299,6 +392,7 @@ class DeviceConversationStore {
         _emitQueuedMessages();
       }
       _conversation.apply(event);
+      _moveCurrentPendingSteersToTail();
       _emitMessages();
     }
   }
@@ -309,38 +403,121 @@ class DeviceConversationStore {
         (record.state == PendingSteerState.pending || record.state == PendingSteerState.delivering)) {
       return;
     }
-    final byRequest = _pendingSteersBySessionId.putIfAbsent(record.sessionId, () => {});
+    final byRequest = _pendingSteersBySessionId.putIfAbsent(
+      record.sessionId,
+      () => {},
+    );
     final current = byRequest[record.requestId];
     if (current != null && record.revision <= current.revision) return;
     byRequest[record.requestId] = record;
     if (record.sessionId != _currentSessionId) return;
 
-    final eventId = 'user_${record.requestId}';
+    _reconcilePendingSteerProjection(record);
+    _emitMessages();
+  }
+
+  void _reconcilePendingSteerProjection(
+    PendingSteerRecord record, {
+    Map<String, dynamic> metadataOverrides = const {},
+  }) {
+    final transientEventId = 'user_${record.requestId}';
     if (record.state == PendingSteerState.cancelled || record.state == PendingSteerState.recovered) {
-      _conversation.removeById(eventId);
-      _emitMessages();
+      _conversation.removeById(transientEventId);
       return;
     }
+
+    final durableEvent = _conversation.events
+        .where(
+          (event) =>
+              event.id != transientEventId &&
+              event.kind == EventKind.userMessage &&
+              event.sessionId == record.sessionId &&
+              event.requestId == record.requestId,
+        )
+        .firstOrNull;
+    final hasTransientProjection = _conversation.events.any(
+      (event) => event.id == transientEventId,
+    );
+    if (durableEvent != null) {
+      _conversation.removeById(transientEventId);
+    } else if (record.state == PendingSteerState.delivered && !hasTransientProjection) {
+      // A delivered lifecycle row is metadata for a durable history message,
+      // not authority to synthesize that message outside the loaded slice.
+      return;
+    }
+    final base = durableEvent;
     _conversation.apply(
       CanonicalEvent(
-        id: eventId,
+        id: base?.id ?? transientEventId,
         kind: EventKind.userMessage,
-        text: record.text,
-        timestamp: record.receivedAt,
-        sessionId: record.sessionId,
-        runId: record.runId,
+        text: base?.text ?? record.text,
+        timestamp: base?.timestamp ?? record.receivedAt,
+        sessionId: base?.sessionId ?? record.sessionId,
+        runId: base?.runId ?? record.runId,
+        eventId: base?.eventId,
         metadata: {
+          ...?base?.metadata,
           'request_id': record.requestId,
           'pending_steer_state': record.state.name,
           'pending_steer_revision': record.revision,
           'generation': record.generation,
+          if (record.messageId != null) 'message_id': record.messageId,
+          if (record.turnId != null) 'turn_id': record.turnId,
+          if (record.anchorMessageId != null) 'anchor_message_id': record.anchorMessageId,
+          if (record.anchorToolCallId != null) 'anchor_tool_call_id': record.anchorToolCallId,
+          if (record.historyRevision != null) 'history_revision': record.historyRevision,
+          'input_kind': 'steer',
+          'replay_eligible': false,
+          ...metadataOverrides,
         },
       ),
     );
-    _emitMessages();
+    if (record.state == PendingSteerState.delivered &&
+        (record.anchorMessageId != null || record.anchorToolCallId != null)) {
+      _conversation.moveAfterAnchor(
+        base?.id ?? transientEventId,
+        anchorMessageId: record.anchorMessageId,
+        anchorToolCallId: record.anchorToolCallId,
+      );
+    } else if (record.state != PendingSteerState.delivered) {
+      _conversation.moveToEnd(base?.id ?? transientEventId);
+    }
   }
 
-  void hydratePendingSteers(Iterable<PendingSteerRecord> records, {required String sessionId}) {
+  void _moveCurrentPendingSteersToTail() {
+    final sessionId = _currentSessionId;
+    if (sessionId == null) return;
+    final records = _pendingSteersBySessionId[sessionId];
+    if (records == null) return;
+    for (final record in records.values) {
+      if (record.state == PendingSteerState.pending || record.state == PendingSteerState.delivering) {
+        final projection = _conversation.events
+            .where(
+              (event) =>
+                  event.kind == EventKind.userMessage &&
+                  event.sessionId == sessionId &&
+                  event.requestId == record.requestId,
+            )
+            .firstOrNull;
+        _conversation.moveToEnd(projection?.id ?? 'user_${record.requestId}');
+      }
+    }
+  }
+
+  void _reconcileCurrentPendingSteerProjections() {
+    final sessionId = _currentSessionId;
+    if (sessionId == null) return;
+    final records = _pendingSteersBySessionId[sessionId];
+    if (records == null) return;
+    for (final record in records.values) {
+      _reconcilePendingSteerProjection(record);
+    }
+  }
+
+  void hydratePendingSteers(
+    Iterable<PendingSteerRecord> records, {
+    required String sessionId,
+  }) {
     final incomingIds = records
         .where((record) => record.sessionId == sessionId)
         .map((record) => record.requestId)
@@ -359,7 +536,9 @@ class DeviceConversationStore {
 
   void applyStopRecovery(StopDraftRecovery recovery) {
     final recoveredPendingSteerIds = recovery.inputs
-        .where((input) => input.source == 'pending_steer' && input.requestId.isNotEmpty)
+        .where(
+          (input) => input.source == 'pending_steer' && input.requestId.isNotEmpty,
+        )
         .map((input) => input.requestId)
         .toSet();
     if (recoveredPendingSteerIds.isNotEmpty) {
@@ -381,7 +560,9 @@ class DeviceConversationStore {
     // The daemon clears the queue atomically during stop; mirror that in the
     // client projection so queued messages disappear with the recovery event.
     removeQueuedMessagesForSession(recovery.sessionId);
-    if (!_stopRecoveryController.isClosed) _stopRecoveryController.add(recovery);
+    if (!_stopRecoveryController.isClosed) {
+      _stopRecoveryController.add(recovery);
+    }
   }
 
   void applyPendingSteerCancelOutcome(String requestId, String outcome) {
@@ -390,45 +571,117 @@ class DeviceConversationStore {
         .whereType<PendingSteerRecord>()
         .firstOrNull;
     if (record == null || record.sessionId != _currentSessionId) return;
-    _conversation.apply(
-      CanonicalEvent(
-        id: 'user_$requestId',
-        kind: EventKind.userMessage,
-        text: record.text,
-        timestamp: record.receivedAt,
-        sessionId: record.sessionId,
-        runId: record.runId,
-        metadata: {
-          'request_id': requestId,
-          'pending_steer_state': record.state.name,
-          'pending_steer_revision': record.revision,
-          'pending_cancel_outcome': outcome,
-        },
-      ),
+    _reconcilePendingSteerProjection(
+      record,
+      metadataOverrides: {'pending_cancel_outcome': outcome},
     );
     _emitMessages();
   }
 
   void applyQueueMutationOutcome(String requestId, String outcome) {
-    final index = _queuedMessages.indexWhere((event) => event.requestId == requestId);
+    final index = _queuedMessages.indexWhere(
+      (event) => event.requestId == requestId,
+    );
     if (index == -1) return;
     _queuedMessages[index] = _queuedMessages[index].copyWith(
-      metadata: {...?_queuedMessages[index].metadata, 'queue_mutation_outcome': outcome},
+      metadata: {
+        ...?_queuedMessages[index].metadata,
+        'queue_mutation_outcome': outcome,
+      },
     );
     _emitQueuedMessages();
   }
 
-  void setHistory(List<CanonicalEvent> events) {
+  void setHistory(
+    List<CanonicalEvent> events, {
+    bool hasMore = false,
+    String? nextCursor,
+    bool hasNewer = false,
+    String? nextNewerCursor,
+  }) {
     _conversation.setHistory(events);
+    _reconcileCurrentPendingSteerProjections();
+    _historyHasMore = hasMore && nextCursor != null;
+    _historyNextCursor = _historyHasMore ? nextCursor : null;
+    _historyHasNewer = hasNewer && nextNewerCursor != null;
+    _historyNextNewerCursor = _historyHasNewer ? nextNewerCursor : null;
     _emitMessages();
+  }
+
+  bool prependHistory(
+    List<CanonicalEvent> events, {
+    required bool hasMore,
+    required String? nextCursor,
+    required String requestedCursor,
+  }) {
+    if (_historyNextCursor != requestedCursor) return false;
+    _conversation.setHistory(
+      CanonicalTimelineReconciler.fold([
+        ...events,
+        ..._conversation.events,
+      ], allowLegacyUserFallback: true),
+    );
+    _reconcileCurrentPendingSteerProjections();
+    final advanced = nextCursor != null && nextCursor != requestedCursor;
+    _historyHasMore = hasMore && advanced;
+    _historyNextCursor = _historyHasMore ? nextCursor : null;
+    _emitMessages();
+    return events.isNotEmpty || !_historyHasMore;
+  }
+
+  bool appendHistory(
+    List<CanonicalEvent> events, {
+    required bool hasNewer,
+    required String? nextNewerCursor,
+    required String requestedCursor,
+  }) {
+    if (_historyNextNewerCursor != requestedCursor) return false;
+    final newer = List<CanonicalEvent>.from(events);
+    _conversation.setHistory(
+      CanonicalTimelineReconciler.fold([
+        ..._conversation.events,
+        ...newer,
+      ], allowLegacyUserFallback: true),
+    );
+    _reconcileCurrentPendingSteerProjections();
+    final advanced = nextNewerCursor != null && nextNewerCursor != requestedCursor;
+    _historyHasNewer = hasNewer && advanced;
+    _historyNextNewerCursor = _historyHasNewer ? nextNewerCursor : null;
+    _emitMessages();
+    return newer.isNotEmpty || !_historyHasNewer;
+  }
+
+  bool hasReplayBoundary({
+    required String sessionId,
+    required String targetRequestId,
+    String? targetTurnId,
+    String? targetMessageId,
+  }) {
+    if (_currentSessionId != sessionId) return false;
+    return _conversation.events.any(
+      (event) =>
+          event.requestId == targetRequestId ||
+          (targetTurnId != null && event.turnId == targetTurnId) ||
+          (targetMessageId != null && event.messageId == targetMessageId),
+    );
   }
 
   void applyTurnReplayAccepted({
     required String sessionId,
     required String targetRequestId,
+    String? targetTurnId,
+    String? targetRunId,
+    String? targetMessageId,
   }) {
     if (_currentSessionId != sessionId) return;
-    if (_conversation.truncateAtUserRequest(targetRequestId)) {
+    final hidden = _conversation.hideSupersededTail(
+      sessionId: sessionId,
+      targetRequestId: targetRequestId,
+      turnId: targetTurnId,
+      runId: targetRunId,
+      messageId: targetMessageId,
+    );
+    if (hidden) {
       _emitMessages();
     }
   }
@@ -456,7 +709,9 @@ class DeviceConversationStore {
   void setPendingSuspendedRequest(DeviceSuspendedRequest? request) {
     if (request == null) {
       final sessionId = _currentSessionId;
-      if (sessionId != null) _pendingSuspendedRequestBySessionId.remove(sessionId);
+      if (sessionId != null) {
+        _pendingSuspendedRequestBySessionId.remove(sessionId);
+      }
     } else if (request.sessionId.isNotEmpty) {
       _pendingSuspendedRequestBySessionId[request.sessionId] = request;
     }
@@ -468,18 +723,31 @@ class DeviceConversationStore {
     if (notice == null || notice.sessionId.isEmpty) {
       return;
     }
+    final executionRevision = notice.executionRevision;
+    if (executionRevision != null && executionRevision < _executionRegistry.snapshotFor(notice.sessionId).revision) {
+      return;
+    }
     _runtimeNoticeBySessionId[notice.sessionId] = notice;
     _emitRuntimeNotice();
     _emitAttention();
   }
 
-  void clearRuntimeNotice({String? sessionId, String? requestId}) {
+  void clearRuntimeNotice({
+    String? sessionId,
+    String? requestId,
+    int? executionRevision,
+  }) {
     final targetSessionId = sessionId ?? _currentSessionId;
     if (targetSessionId == null || targetSessionId.isEmpty) {
       return;
     }
     final current = _runtimeNoticeBySessionId[targetSessionId];
     if (current == null || (requestId != null && current.requestId != requestId)) {
+      return;
+    }
+    if (executionRevision != null &&
+        current.executionRevision != null &&
+        executionRevision < current.executionRevision!) {
       return;
     }
     if (_runtimeNoticeBySessionId.remove(targetSessionId) != null) {
@@ -508,7 +776,9 @@ class DeviceConversationStore {
     String? requestId,
   }) {
     final current = _pendingSuspendedRequestBySessionId[sessionId];
-    if (current == null || (requestId != null && current.requestId != requestId)) return;
+    if (current == null || (requestId != null && current.requestId != requestId)) {
+      return;
+    }
     _pendingSuspendedRequestBySessionId.remove(sessionId);
     _emitPendingSuspended();
     _emitAttention();
@@ -519,6 +789,11 @@ class DeviceConversationStore {
   ) {
     final result = _executionRegistry.apply(snapshot);
     if (result.changed) {
+      final notice = _runtimeNoticeBySessionId[snapshot.sessionId];
+      if (notice?.executionRevision != null && notice!.executionRevision! < result.current.revision) {
+        _runtimeNoticeBySessionId.remove(snapshot.sessionId);
+        _emitRuntimeNotice();
+      }
       final before = processingSnapshot;
       _syncProcessingProjection();
       _emitProcessingIfChanged(before);
@@ -531,7 +806,10 @@ class DeviceConversationStore {
     Map<String, dynamic> payload, {
     String? expectedSessionId,
   }) => applyExecutionSnapshot(
-    SessionExecutionSnapshot.fromJson(payload, expectedSessionId: expectedSessionId),
+    SessionExecutionSnapshot.fromJson(
+      payload,
+      expectedSessionId: expectedSessionId,
+    ),
   );
 
   SessionExecutionApplyResult hydrateExecutionSnapshot(
@@ -581,11 +859,10 @@ class DeviceConversationStore {
     if (payload.containsKey('runtime_notice') || attention.containsKey('runtime_notice')) {
       final rawNotice = payload['runtime_notice'] ?? attention['runtime_notice'];
       if (rawNotice is Map) {
+        final noticePayload = Map<String, dynamic>.from(rawNotice);
+        noticePayload['execution_revision'] ??= _executionRegistry.snapshotFor(sessionId).revision;
         setRuntimeNotice(
-          RuntimeNotice.fromJson({
-            ...Map<String, dynamic>.from(rawNotice),
-            'session_id': sessionId,
-          }),
+          RuntimeNotice.fromJson({...noticePayload, 'session_id': sessionId}),
         );
       } else {
         clearRuntimeNotice(sessionId: sessionId);
@@ -629,6 +906,27 @@ class DeviceConversationStore {
       sessionId: sessionId,
     );
     if (changed) _emitMessages();
+  }
+
+  void cancelRunningToolsForRun({
+    required String runId,
+    String? sessionId,
+    String message = 'Command cancelled by user.',
+  }) {
+    final hadRunningTools = _conversation.events.any(
+      (event) =>
+          event.kind == EventKind.toolCall &&
+          event.status == EventStatus.running &&
+          event.runId == runId &&
+          (sessionId == null || event.sessionId == sessionId),
+    );
+    if (!hadRunningTools) return;
+    _conversation.cancelRunningToolsForRun(
+      runId: runId,
+      sessionId: sessionId,
+      message: message,
+    );
+    _emitMessages();
   }
 
   void updateProcessingState(String? type, String? sessionId) {

@@ -57,6 +57,8 @@ draft without loss or duplication.
 | Delete a still-queued row | The work item is cancelled and the execution snapshot is recomputed in the same transaction; the UI removes the row after confirmation. |
 | Delete a row that became running or processed | The daemon returns the explicit current outcome; the client does not claim deletion of running work. |
 | Promote/delete commands are duplicated | Text is never injected or executed twice, and each row maintains action-local progress. |
+| Queue-to-steer succeeds | The command carries the original text, stable target request id, and distinct command id; `session.queued_message_steer_result=promoted` removes Queue once and the pending projection appears once. |
+| Queue-to-steer is rejected or stale | A typed terminal result ends loading and leaves the authoritative Queue row retryable; navigation is not required to clear progress. |
 
 ## Stop barrier and draft recovery
 
@@ -84,7 +86,8 @@ draft without loss or duplication.
 |---|---|
 | Press Enter or click Send during running/resuming | Both send `auto`; the tooltip reads `Press Enter to steer`. After the matching pending-steer lifecycle accepts the request, the sent text is cleared from the composer while any newer edit remains intact. |
 | Press Control+Enter or Command+Enter | The composer sends `queue`; no newline is inserted. |
-| Render pending steer | `Pending` and `Delete pending message` are exposed in English semantics, and cancellation progress disables only that action. |
+| Render pending steer | `Pending` and `Delete pending message` are exposed in English semantics, and cancellation progress disables only that action. New tool activity stays above the unresolved projection. |
+| Deliver a steer after later live activity | The delivered identity/revision replaces the temporary row once and moves it directly after its causal tool/message anchor; duplicate lifecycle and reconnect history preserve that order. |
 | A pending steer changes state after the user opens another session | Its session-scoped lifecycle is retained, but neither the lifecycle nor its cancellation outcome inserts a bubble into the currently visible session. |
 | Render a queued row | Steer and Delete are independently focusable and keep the row visible while awaiting daemon confirmation. |
 

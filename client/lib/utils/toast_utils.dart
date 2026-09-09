@@ -1,14 +1,21 @@
 import 'package:flutter/material.dart';
+import 'package:logging/logging.dart';
 import 'package:toastification/toastification.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 class ToastUtils {
+  static final _logger = Logger('ToastUtils');
+
+  /// Minimum time user-visible feedback remains readable before auto-close.
+  static const defaultDuration = Duration(seconds: 5);
+
   static void showError(BuildContext context, String message) {
+    _logger.warning('User-visible error toast: $message');
     toastification.show(
       context: context,
       type: ToastificationType.error,
       style: ToastificationStyle.flat,
-      autoCloseDuration: const Duration(seconds: 2),
+      autoCloseDuration: defaultDuration,
       title: Text(message),
       alignment: AppPlatform.isMobile ? Alignment.topCenter : Alignment.topRight,
       direction: TextDirection.ltr,
@@ -42,7 +49,7 @@ class ToastUtils {
       context: context,
       type: ToastificationType.success,
       style: ToastificationStyle.flat,
-      autoCloseDuration: const Duration(seconds: 2),
+      autoCloseDuration: defaultDuration,
       title: Text(message),
       alignment: AppPlatform.isMobile ? Alignment.topCenter : Alignment.topRight,
       direction: TextDirection.ltr,

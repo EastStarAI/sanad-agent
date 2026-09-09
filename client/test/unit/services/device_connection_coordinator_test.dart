@@ -87,6 +87,30 @@ void main() {
     localSocket.dispose();
   });
 
+  test('synthetic inventory id alone never selects the local transport', () {
+    final cloudSocket = FakeSanadSocketService()..setConnected(true);
+    final localSocket = FakeSanadSocketService()..setConnected(true);
+    final coordinator = DeviceConnectionCoordinator(
+      cloudSocketService: cloudSocket,
+      localSocketService: localSocket,
+      currentDeviceId: 'device-1',
+    );
+    final device = DeviceConfig(
+      id: DeviceConfig.syntheticLocalId,
+      name: 'Incomplete inventory row',
+      isOnline: true,
+    );
+
+    final endpoint = coordinator.resolve(device);
+
+    expect(endpoint.scope, ConnectionScope.cloud);
+    expect(identical(endpoint.socketService, cloudSocket), isTrue);
+
+    coordinator.dispose();
+    cloudSocket.dispose();
+    localSocket.dispose();
+  });
+
   test('does not invent a new agent type while decorating local metadata', () {
     final socket = FakeSanadSocketService(hardwareId: 'device-1')..setConnected(true);
     final coordinator = DeviceConnectionCoordinator(

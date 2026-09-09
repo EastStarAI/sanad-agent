@@ -6,13 +6,16 @@ void main(List<String> args) async {
     exit(1);
   }
 
-  if (args.length == 1 && (args.first == '-h' || args.first == '--help' || args.first == 'help')) {
+  if (args.length == 1 &&
+      (args.first == '-h' || args.first == '--help' || args.first == 'help')) {
     printUsage();
     exit(0);
   }
 
   final command = args[0].toLowerCase();
-  if (args.skip(1).any((arg) => arg == '-h' || arg == '--help')) {
+  if (command != 'driver' &&
+      command != 'ui' &&
+      args.skip(1).any((arg) => arg == '-h' || arg == '--help')) {
     printUsage();
     return;
   }
@@ -41,6 +44,8 @@ void main(List<String> args) async {
   bool driverMode = false;
   final cloudEnabled = resolveSanadDevCloudEnabled(args);
   bool dryRun = false;
+  bool backgroundMode = false;
+  bool internalBackgroundMode = false;
   bool forceRestart = false;
   bool fix = false;
   int restartTimeoutSeconds = 60;
@@ -75,6 +80,10 @@ void main(List<String> args) async {
       driverMode = true;
     } else if (arg == '--dry-run') {
       dryRun = true;
+    } else if (arg == '--background') {
+      backgroundMode = true;
+    } else if (arg == '--internal-background') {
+      internalBackgroundMode = true;
     } else if (arg == '--force') {
       forceRestart = true;
     } else if (arg == '--fix') {
@@ -104,7 +113,9 @@ void main(List<String> args) async {
 
   if (command == 'run') {
     final homeOptionIndex = args.indexOf('--home');
-    if (homeOptionIndex >= 0 && (homeOptionIndex + 1 >= args.length || args[homeOptionIndex + 1].startsWith('-'))) {
+    if (homeOptionIndex >= 0 &&
+        (homeOptionIndex + 1 >= args.length ||
+            args[homeOptionIndex + 1].startsWith('-'))) {
       stderr.writeln('--home requires "user" or an absolute path.');
       exitCode = 64;
       return;
@@ -116,6 +127,25 @@ void main(List<String> args) async {
       exitCode = 64;
       return;
     }
+    if (backgroundMode && dryRun) {
+      stderr.writeln('--background cannot be combined with --dry-run.');
+      exitCode = 64;
+      return;
+    }
+    if (backgroundMode && internalBackgroundMode) {
+      stderr.writeln('Invalid nested background launch request.');
+      exitCode = 64;
+      return;
+    }
+    if (backgroundMode) {
+      await handleBackgroundRun(
+        originalArguments: args,
+        target: componentCommand!.target,
+        device: device,
+        sanadHomePath: sanadHomePath,
+      );
+      return;
+    }
     await handleRun(
       target: componentCommand!.target,
       driverMode: driverMode,
@@ -124,12 +154,16 @@ void main(List<String> args) async {
       device: device,
       configPath: configPath,
       sanadHomePath: sanadHomePath,
+      backgroundMode: internalBackgroundMode,
     );
     return;
   }
 
   if (command == 'status') {
-    await handleRuntimeStatus(portOverride: portOverride);
+    await handleRuntimeStatus(
+      portOverride: portOverride,
+      sanadHomePath: sanadHomePath,
+    );
     return;
   }
 
@@ -192,7 +226,11 @@ void main(List<String> args) async {
     }
   } else if (command == 'restart') {
     if (target == 'client') {
-      await handleClientAttachAction('R', portOverride); // R = Hot Restart
+      await handleClientAttachAction(
+        'R',
+        portOverride,
+        sanadHomePath: sanadHomePath,
+      ); // R = Hot Restart
     } else if (target == 'agent') {
       if (restartTimeoutSeconds < 1 || restartTimeoutSeconds > 3600) {
         stderr.writeln('--timeout must be between 1 and 3600 seconds.');
@@ -203,6 +241,7 @@ void main(List<String> args) async {
         portOverride,
         force: forceRestart,
         timeoutSeconds: restartTimeoutSeconds,
+        sanadHomePath: sanadHomePath,
       );
     } else {
       print('Unknown target: $target. Supported targets: client, agent');
@@ -210,7 +249,11 @@ void main(List<String> args) async {
     }
   } else if (command == 'reload') {
     if (target == 'client') {
-      await handleClientAttachAction('r', portOverride); // r = Hot Reload
+      await handleClientAttachAction(
+        'r',
+        portOverride,
+        sanadHomePath: sanadHomePath,
+      ); // r = Hot Reload
     } else {
       print('Unknown target: $target. Supported targets: client');
       exit(1);
@@ -222,6 +265,8 @@ void main(List<String> args) async {
       print('Unknown target: $target. Supported targets: client');
       exit(1);
     }
+  } else if (command == 'driver' || command == 'ui') {
+    await handleUiDriverCommand(args.sublist(1));
   } else {
     print('Unknown command: $command');
     printUsage();
@@ -265,11 +310,16 @@ void printUsage() {
   print(
     '  inspect [client]          Open Flutter DevTools / Inspector for the client.',
   );
+  print(
+    '  ui / driver <command>     Interact with client (snapshot, find, tap, enter-text, scroll, wait-for, screenshot, batch).',
+  );
   print('');
   print('Options:');
   print('  -f, --follow              Stream logs live in real-time.');
   print('  --wait                    Wait for a managed component journal.');
-  print('  --agent-port <port>       Select the journal group for a Client watcher.');
+  print(
+    '  --agent-port <port>       Select the journal group for a Client watcher.',
+  );
   print(
     '  -n, --tail <lines>        Output only the last <lines> log entries.',
   );
@@ -292,6 +342,9 @@ void printUsage() {
     '  --config <path>           Client config file (default: $defaultSanadDevClientConfig).',
   );
   print('  --dry-run                 Resolve and print runtime settings only.');
+  print(
+    '  --background              Launch detached and wait for a managed/failure result.',
+  );
   print('  --fix                     Apply doctor safe stale-record repairs.');
   print(
     '  --timeout <seconds>       Agent restart safety timeout (default: 60).',
@@ -302,6 +355,7 @@ void printUsage() {
   print('');
   print('Examples:');
   print('  sanad-dev run');
+  print('  sanad-dev run --background');
   print('  sanad-dev run agent');
   print('  sanad-dev run client -d macos');
   print('  sanad-dev stop client -d macos');
@@ -319,9 +373,11 @@ String _defaultDesktopDevice() {
   return 'macos';
 }
 
-String get _callerDirectory => Platform.environment['SANAD_DEV_CALLER_DIR'] ?? Directory.current.path;
+String get _callerDirectory =>
+    Platform.environment['SANAD_DEV_CALLER_DIR'] ?? Directory.current.path;
 
-Future<SanadDevRuntime> _currentRuntime() => discoverSanadDevRuntime(callerDirectory: _callerDirectory);
+Future<SanadDevRuntime> _currentRuntime() =>
+    discoverSanadDevRuntime(callerDirectory: _callerDirectory);
 
 Future<int?> _recordedPortForTarget(String target) async {
   try {

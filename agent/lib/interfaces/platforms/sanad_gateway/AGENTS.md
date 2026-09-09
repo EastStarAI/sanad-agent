@@ -14,6 +14,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Use device-first canonical envelopes with explicit device, hardware, session, request, origin, and typed delivery identity.
 - Do not emit legacy agent type fields or legacy thread identity in new payloads.
 - Preserve opaque event id across transport copies and preserve run/model-step/tool-call distinctions.
+- A session-bound Local Gateway response retains the explicit device identity captured for that session. A later unrelated command on the same socket must not replace it with another device or hardware identity; socket identity is fallback-only when no session identity exists.
 - `thinking_mode` is the only session/persistence/protocol field name; do not accept or emit aliases.
 - Every request-correlated response carries the original request id.
 
@@ -33,7 +34,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 ## Session and History
 - `create_session` bootstraps without execution and preserves an explicit supplied title.
 - Workspace-associated session events include workspace identity and recoverable display metadata.
-- Session lists use keyset ordering by last accepted user message then session id; only canonical user acceptance advances ordering.
+- Session lists use keyset ordering by the canonical activity timestamp then session id. Fork creation initializes the child at commit time so it leads the list; afterward only canonical user acceptance advances ordering.
 - Reject incompatible filters, malformed cursors, and non-positive limits explicitly.
 - History omits absent optional runtime, metadata, and request fields rather than emitting null.
 - Hydrate durable pending steer, unacknowledged draft recovery, runtime notice, route transitions, canonical reasoning/tool/final events, and latest context usage.
@@ -46,25 +47,32 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Restart draft recovery is text-free until a first-writer claim succeeds; only the winning direct response carries recovered items.
 - User-stop recovery requires its private owner token for acknowledgment. Restart recovery requires the durable winning claimant id.
 - History and broadcasts never grant recovery ownership or expose claimed text.
-- Turn edit/retry classifies replay safety before cancellation, requires explicit unsafe/unknown confirmation, establishes authoritative idle, then truncates and dispatches replacement.
+- Turn edit/retry classifies replay safety before cancellation, requires explicit unsafe/unknown confirmation, rejects steer targets before Stop, serializes one replay per session, waits for an authoritative `idle` snapshot after scoped stop, then atomically soft-rewinds and accepts the replacement user record before dispatch.
+- `session.fork` materializes an independent child from a durable terminal final-answer identity. The daemon copies the active prefix server-side in one transaction; the child starts idle and does not inherit runtime work. Child history derives one trailing stable `session.forked` UI event from session lineage without persisting it as a model-visible message.
 
 ## Runtime Queries and Provider Commands
-- Shared handlers own workspace list/create/tree, MCP list/save/delete/replace/inspect, skills, slash commands, device settings, provider setup, models, session queries, recovery, and replay.
+- Shared handlers own workspace list/create/remove/tree, MCP list/save/delete/replace/inspect, skills, slash commands, device settings, provider setup, models, session queries, recovery, replay, and remote update/restart.
 - Provider account usage limits (Task 55) are read-only and instance-first: `provider.usage.get` fetches a `ProviderUsageResult` typed `available | unsupported | unavailable | auth_required | failed`; `provider.usage.support` returns per-instance capability flags so clients never hardcode a catalog. Result snapshots never carry credentials or raw provider payloads. Usage failure is fully contained — it must not change instance status, readiness, or the ability to execute model requests.
 - Keep workspace and MCP commands in the single workspace command owner unless architecture documentation explicitly replaces that ownership; do not fragment it by convenience.
-- Workspace browsing starts from real host roots and returns parent metadata; path-only workspace creation derives display name from the folder basename.
-- Workspace filesystem handlers remain transport-neutral for local runtime use,
-  but the cloud adapter rejects remote create, relocate, browse, folder-create,
-  folder-rename, and folder-delete admission before session registration or
-  bridge dispatch. Every rejection preserves request correlation and returns
-  `remote_workspace_management_disabled`.
-- MCP handlers remain transport-neutral for local configuration, but the cloud
-  adapter rejects remote list, inspect, save, delete, and replace-config
-  admission before session registration or bridge dispatch. Every rejection
-  preserves request correlation and returns `remote_mcp_management_disabled`.
-  This boundary does not filter MCP tools from cloud-origin turns or prevent
-  execution of servers already configured by the local user.
+- Workspace browsing starts from real host roots locally and returns parent metadata; path-only workspace creation derives display name from the folder basename. Cloud-admitted calls inject `managed_remote` and use name-based create under `SANAD_HOME/workspaces`, allowed-root browse, and preview tokens for recursive delete and relocate.
+- Workspace filesystem handlers remain transport-neutral. The cloud adapter
+  dispatches remote create, relocate, browse, and folder mutations without
+  session registration. Wrong-device still fails closed. Cloud MCP commands
+  dispatch the same way with `cloud_admitted`, except `replace_mcp_config`
+  which stays rejected as `remote_mcp_management_disabled`. Read-only list,
+  inspect of non-STDIO drafts, import/export preview, Advanced read/preview,
+  and OAuth status/start/cancel admit by correlation. Save, delete, Advanced
+  save, STDIO inspect, and OAuth complete require a revision fingerprint and
+  one-time confirmation ticket. Snapshots and logs never carry secret values.
+  Cloud-origin turns still execute locally or remotely configured MCP tools
+  through `PermissionManager`.
 - Device settings expose a whitelist only, never secrets, validate the complete mutation before write, report process-environment overrides as externally managed, and acknowledge restart-requiring mutation before scheduling controlled restart.
+- Remote update, restart, workspace, and MCP management do not add capability
+  flags. Every Online device may send those commands. `DeviceControlCommandHandler`
+  executes update check/apply and supervised restart after
+  `DeviceCommandAdmission`. Cloud workspace commands use managed-remote
+  admission. Cloud MCP commands use `cloud_admitted` admission; root-document
+  `replace_mcp_config` remains rejected.
 - Capabilities remain safe with zero configured providers and do not instantiate adapters or perform provider model discovery.
 - Provider templates hide unimplemented auth flows.
 - Provider auth start requires instance identity; default selection requires ready status.
@@ -99,6 +107,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Automatic co-located coupling uses the authenticated loopback HTTP surface only. It may return bounded status, expiry, and non-secret enrollment request identity; it must never return or accept User tokens, Device Credentials, private device codes, proofs, or account identity. Authenticated body-free `DELETE` cancels the current pending enrollment through the Agent-owned private device code and proof, invalidates stale redemption completion, and returns only bounded status so the next start owns a fresh request. Query-bearing and unsupported-method requests fail closed.
 - Explicit Agent logout is admitted only as an authenticated local Desktop `POST /auth/logout` with no query or body. It delegates to `AuthManager.logout()`, returns bounded credential-free status, disconnects cloud authorization through the normal auth change signal, and never stops the Local Gateway.
 - Keep streaming events at fine/debug log level and lifecycle, command, and terminal events concise at info level.
+- Fine payload dumps use `SecretsRedactor.redactForLog`. Nested `secrets` maps and secret-shaped values must never appear in command, protocol, or device-event logs.
 - Daemon restart and permanent stop use the shared restart coordinator so local HTTP and protocol callers preserve acknowledgment delay and supervisor exit semantics.
 - Long-running restart safety evaluation must not serialize local HTTP acceptance; health, stop, and unrelated WebSocket upgrades remain responsive while a restart waits.
 - Never log secrets, raw recovery text, pending steer text, or full sensitive tool payloads.

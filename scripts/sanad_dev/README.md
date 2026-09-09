@@ -81,9 +81,10 @@ sanad-dev run [options]
 * `--config <path>`: Specifies client config JSON file (defaults to `config/prod.json`; `config/dev.json` is explicit internal integration only).
 * `--home <user|absolute>`: Selects the primary user Home or an isolated absolute Home.
 * `--dry-run`: Resolves and prints all candidate ports and paths without launching.
+* `--background`: Starts a detached launcher and waits through a bounded handshake until the requested components are managed or startup publishes a staged failure. The user does not need `nohup`, `screen`, or another shell wrapper. `--background` and `--dry-run` are mutually exclusive.
 
 ### 2. `status`
-Displays runtime status and metadata for the current Git worktree in real-time. Reports whether the agent and client are running, their PIDs, VM service ports, and active configuration modes.
+Displays runtime status and metadata for the current Git worktree in real-time. Reports whether the agent and client are running, their PIDs, VM service ports, and active configuration modes. It also reports the latest validated startup attempt, including requested versus resolved Home, startup stage, outcome, and bounded failure reason; this diagnostic record never grants runtime ownership.
 ```bash
 sanad-dev status
 ```

@@ -177,6 +177,7 @@ class SidebarWorkspaceGroupTile extends StatelessWidget {
     if (group.hasMore) {
       widgets.add(
         _LoadMoreTile(
+          key: ValueKey('workspace-load-more:${group.workspaceId}'),
           isLoading: group.isLoadingMore,
           onPressed: onLoadMore,
           isDrawerMode: isDrawerMode,
@@ -240,6 +241,7 @@ class _LoadMoreTile extends StatelessWidget {
   final bool isDrawerMode;
 
   const _LoadMoreTile({
+    super.key,
     required this.isLoading,
     required this.onPressed,
     required this.isDrawerMode,

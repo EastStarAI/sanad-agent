@@ -4,6 +4,8 @@ import 'package:meta/meta.dart';
 import 'package:sqlite3/sqlite3.dart';
 
 import '../../core/models/message.dart';
+import 'message_history_identity.dart';
+import '../models/session_execution_snapshot.dart';
 import 'agent_state_database.dart';
 import 'runtime/legacy_runtime_state_migrator.dart';
 import 'runtime/pending_input_repository.dart';
@@ -268,8 +270,13 @@ class PersistedRuntimeStateRepository {
   /// cleanup path stays free of internal `@Deprecated` calls. In production
   /// those tables are empty because `session_work_items` is the single
   /// source of truth (Gate C.1).
-  void clearAllForSession(String sessionId) =>
-      _cleanup.clearAllForSession(sessionId);
+  SessionExecutionSnapshotChange clearAllForSession(
+    String sessionId, {
+    bool publishExecutionChange = true,
+  }) => _cleanup.clearAllForSession(
+    sessionId,
+    publishExecutionChange: publishExecutionChange,
+  );
 
   // ── Work Items (Gate C.1) — facade delegation ───────────────────────────
 
@@ -403,8 +410,15 @@ class PersistedRuntimeStateRepository {
         expectedWorkItemId: expectedWorkItemId,
       );
 
-  void cancelWorkItems(String sessionId, Iterable<String> workItemIds) =>
-      _executionState.cancelWorkItems(sessionId, workItemIds);
+  SessionExecutionSnapshotChange cancelWorkItems(
+    String sessionId,
+    Iterable<String> workItemIds, {
+    bool publishExecutionChange = true,
+  }) => _executionState.cancelWorkItems(
+    sessionId,
+    workItemIds,
+    publish: publishExecutionChange,
+  );
 
   bool transitionOwnedWorkItem({
     required String sessionId,
@@ -445,6 +459,31 @@ class PersistedRuntimeStateRepository {
         requestId: requestId,
       )
       .applied;
+
+  /// Returns the authoritative active conversation rows, including identity
+  /// columns that may not yet be mirrored by an in-memory session snapshot.
+  List<Message> findActiveMessages(String sessionId) {
+    final rows = _db.select(
+      '''
+      SELECT data, message_id, turn_id, history_status, input_kind,
+             request_id, run_id, superseded_by_turn_id, origin_message_id
+      FROM messages
+      WHERE session_id = ?
+        AND (history_status = 'active' OR history_status IS NULL)
+      ORDER BY id ASC
+      ''',
+      [sessionId],
+    );
+    return [
+      for (final row in rows)
+        MessageHistoryIdentity.overlayFromRow(
+          Message.fromJson(
+            Map<String, dynamic>.from(jsonDecode(row['data'] as String) as Map),
+          ),
+          row,
+        ),
+    ];
+  }
 
   TerminalCommitOutcome commitTerminal({
     required String sessionId,

@@ -43,6 +43,31 @@ void main() {
     expect(retryPressed, isTrue);
   });
 
+  testWidgets('steer bubbles do not expose edit or retry', (tester) async {
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: EventTile(
+            event: CanonicalEvent(
+              id: 'steer-1',
+              kind: EventKind.userMessage,
+              text: 'nudge',
+              timestamp: DateTime.utc(2026, 7, 18),
+              metadata: const {
+                'request_id': 'steer-1',
+                'input_kind': 'steer',
+                'steer': true,
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byTooltip('Edit message'), findsNothing);
+    expect(find.byTooltip('Retry message'), findsNothing);
+  });
+
   testWidgets('inline editor renders Send and Cancel below the input', (
     tester,
   ) async {

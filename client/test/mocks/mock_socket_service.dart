@@ -30,7 +30,7 @@ class FakeSanadSocketService extends SanadSocketService {
 
   bool _fakeReady = false;
   SocketLifecycleState _fakeLifecycleState = SocketLifecycleState.disconnected;
-  Map<String, dynamic> autoCapabilitiesPayload = const <String, dynamic>{};
+  Map<String, dynamic>? autoCapabilitiesPayload = const <String, dynamic>{};
 
   FakeSanadSocketService({String hardwareId = 'test-device-id'})
     : super(url: 'http://localhost:8000', hardwareId: hardwareId);

@@ -5,7 +5,7 @@ This contract applies to `client/lib/features/conversations/domain/`.
 
 ## Store Ownership
 - `ConversationCacheStore` is the sole in-memory owner of conversation cache, drafts, workspace expansion, pagination state, and per-device destinations.
-- `DeviceConversationStore` owns canonical timeline state; `ProcessingStore` and attention/execution registries own their respective authoritative projections.
+- `DeviceConversationStore` owns canonical timeline state; `ProcessingStore` and attention/execution registries own their respective authoritative projections. It owns independent older/newer history cursors for an anchored slice and may retain at most two recently visited timelines exhausted in both directions so same-runtime navigation does not discard pages the user explicitly loaded; this retention is not persisted cache authority.
 - Cubits and widgets must not create parallel cache maps, cursors, drafts, processing sets, or recovery stores.
 - `SessionCubit.agentSessions` is a compatibility projection from the cache store, not a second owner.
 
@@ -25,7 +25,7 @@ This contract applies to `client/lib/features/conversations/domain/`.
 ## Queue, Steer, and Recovery
 - Project queue and pending-steer state only from daemon lifecycle/mutation outcomes.
 - Scope pending steers by session, raw request id, and monotonic revision.
-- Pending renders one projection; delivered reuses it; cancelled or recovered removes it.
+- Pending renders one projection at the live activity tail; delivered reuses it and moves it to the daemon-provided causal anchor; cancelled or recovered removes it.
 - Background-session outcomes must not mutate the active timeline.
 - Stop-draft recovery removes matching pending-steer projections before offering recovered text to the draft owner.
 - Stop-draft recovery also clears the session queued-messages projection atomically, mirroring the daemon's queue cleanup during stop.
@@ -35,13 +35,17 @@ This contract applies to `client/lib/features/conversations/domain/`.
 
 ## Canonical Identity
 - Use `model_step_id` for thinking/final segments and `tool_call_id` for tool pairs; use `run_id` only for execution correlation.
+- Never infer tool-call identity from the tool name. Merge a tool terminal only through its canonical call identity, preserve terminal generation/revision metadata, and reject stale or conflicting terminal observations.
 - `tool_use` closes only its matching model-step thought.
 - `final_answer` and `stopped` remove only the matching running model-step projection and preserve completed prior thoughts.
 - A stop without active model-step identity clears runtime controls only.
-- Preserve steer ordering after its associated tool and before the post-steer final answer; later tool results merge without moving the steer event.
+- Unresolved pending steers follow the latest live activity and remain visible across session navigation. Once delivered, preserve steer ordering after its daemon-provided tool/message anchor and before the post-steer final answer; multiple delivered steers sharing one anchor retain daemon receive order, canonical reconciliation folds lifecycle and durable copies by domain identity even when event ids differ, and later tool-result merges must not move them.
+- Accepted replay removes only the matched visible tail and retains turn/run/message tombstones against late events; identity-incomplete legacy events remain blocked until authoritative reconciliation.
+- Fold compaction transitions by logical `compaction_id`; terminal status is immutable, so hydration or retry may enrich the same terminal status but cannot switch `completed` and `failed`.
 
 ## Snapshot and Attention Safety
 - Apply execution, attention, suspension, route, queue, and runtime-notice updates only to their matching session.
-- Equal revisions are idempotent only when payloads agree; reject stale or conflicting snapshots.
+- Equal revisions are idempotent only when authoritative payloads agree; a newer elapsed-time observation may refresh the same execution revision without becoming competing execution state. Reject stale or otherwise conflicting snapshots.
+- Runtime notices carry the authoritative execution revision. Reject a notice older than the accepted execution snapshot, remove an older notice when a newer snapshot arrives, and reject a stale clear that targets a newer notice.
 - Provider/model route confirmation changes only from the daemon-rebroadcast authoritative session preference.
 - Context usage is a latest typed snapshot, not an accumulated total; preserve cached-input reporting and never synthesize cache-write usage.

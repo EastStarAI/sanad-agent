@@ -1,6 +1,8 @@
 import 'dart:convert';
+
 import 'package:logging/logging.dart';
 import 'package:http/http.dart' as http;
+
 import '../../core/config.dart';
 import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
@@ -9,12 +11,15 @@ import '../../core/models/tool_call.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
 import '../../core/models/model_metadata.dart';
+import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 import '../../core/provider_runtime/provider_model_id.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
 import 'models_dev_service.dart';
 import 'llm_http_exception.dart';
+import 'opencode_session_affinity.dart';
 import 'llm_request_options.dart';
+import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 import '../llm_request_dumper.dart';
 
@@ -24,6 +29,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
   final ProviderProfile profile;
   final http.Client? client;
   final ModelsDevService? modelsDevService;
+  final ModelContextLimitLookup? modelContextLimitLookup;
   final String? baseUrlOverride;
   final String? apiKeyOverride;
   final String? defaultModelOverride;
@@ -35,12 +41,15 @@ class BaseOpenAIAdapter implements LLMAdapter {
     this.profile, {
     this.client,
     this.modelsDevService,
+    this.modelContextLimitLookup,
     this.baseUrlOverride,
     this.apiKeyOverride,
     this.defaultModelOverride,
   });
 
-  String get _baseUrl => baseUrlOverride ?? config.baseUrlFor(profile);
+  String get _baseUrl => ProviderEndpointResolver.normalizeBaseUrl(
+    baseUrlOverride ?? config.baseUrlFor(profile),
+  );
   String get _apiKey => apiKeyOverride ?? config.apiKeyFor(profile);
 
   // Public accessors for subclasses (Strategy Pattern)
@@ -62,7 +71,15 @@ class BaseOpenAIAdapter implements LLMAdapter {
   @override
   Future<List<ModelOption>> getAvailableModels() async {
     _lastModelsException = null;
-    for (final url in _modelsEndpointCandidates()) {
+    final List<Uri> candidates;
+    try {
+      candidates = _modelsEndpointCandidates();
+    } catch (error) {
+      _lastModelsException = error;
+      _availableModelsSource = 'fallback';
+      return _fallbackModelOptions();
+    }
+    for (final url in candidates) {
       try {
         final response = await _get(
           url,
@@ -224,15 +241,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
   }
 
   List<Uri> _modelsEndpointCandidates() {
-    final normalized = _baseUrl.endsWith('/')
-        ? _baseUrl.substring(0, _baseUrl.length - 1)
-        : _baseUrl;
-    final primary = Uri.parse('$normalized/models');
-    final fallback = Uri.parse('$normalized/v1/models');
-    if (primary.toString() == fallback.toString()) {
-      return [primary];
-    }
-    return [primary, fallback];
+    return ProviderEndpointResolver.resolveOpenAiModelsEndpointCandidates(
+      _baseUrl,
+    );
   }
 
   String _formatModelLabel(String name) {
@@ -322,8 +333,11 @@ class BaseOpenAIAdapter implements LLMAdapter {
   @override
   Future<int> getContextLimit([String? modelOverride]) async {
     final resolvedModel = _resolveModel(modelOverride);
+    final configuredLimit = config.contextModelLimit(resolvedModel);
+    if (configuredLimit != null) return configuredLimit;
 
-    if (config.contextLimit != 4000) return config.contextLimit;
+    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
+    if (catalogLimit != null) return catalogLimit;
 
     // 1. LM Studio local probe (reference-style)
     if (profile.name == 'lm-studio') {
@@ -399,7 +413,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
     if (metadataLimit != null) return metadataLimit;
 
-    return config.contextLimit;
+    return 4000;
   }
 
   String _resolveModel(String? override) {
@@ -424,7 +438,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
       resolvedModel: resolvedModel,
       options: options,
     );
-    final headers = _requestHeaders();
+    final headers = _requestHeaders(options);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
         url: url,
@@ -433,16 +447,20 @@ class BaseOpenAIAdapter implements LLMAdapter {
       );
     }
 
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     late http.Response response;
     try {
-      response = await _withTimeout(
-        httpClient.post(url, headers: headers, body: jsonEncode(body)),
-        options.timeout,
+      response = await transport.post(
+        url,
+        headers: headers,
+        body: jsonEncode(body),
+        operation: 'generateResponse',
       );
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
 
     _logger.info('LLM Response status: ${response.statusCode}');
@@ -508,10 +526,12 @@ class BaseOpenAIAdapter implements LLMAdapter {
   }) async* {
     final url = Uri.parse('$_baseUrl/chat/completions');
     final resolvedModel = _resolveModel(modelOverride);
-    final httpClient = client ?? http.Client();
-    final ownsClient = client == null;
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     final request = http.Request('POST', url);
-    request.headers.addAll(_requestHeaders());
+    request.headers.addAll(_requestHeaders(options));
     final body = await _buildRequestBody(
       history,
       tools: tools,
@@ -531,9 +551,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
     request.body = jsonEncode(body);
     late http.StreamedResponse response;
     try {
-      response = await _withTimeout(httpClient.send(request), options.timeout);
+      response = await transport.send(request, operation: 'generateStream');
     } catch (_) {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
       rethrow;
     }
 
@@ -564,10 +584,11 @@ class BaseOpenAIAdapter implements LLMAdapter {
       var emittedProviderState = false;
 
       try {
-        await for (final line
-            in response.stream
-                .transform(utf8.decoder)
-                .transform(const LineSplitter())) {
+        await for (final line in transport.decodeSseLines(
+          response.stream,
+          operation: 'generateStream',
+        )) {
+          transport.throwIfCancelled(operation: 'generateStream');
           accumulatedStreamLines.add(line);
           if (line.trim().isEmpty) continue;
 
@@ -769,7 +790,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
         );
       }
     } finally {
-      if (ownsClient) httpClient.close();
+      await transport.dispose();
     }
   }
 
@@ -850,11 +871,17 @@ class BaseOpenAIAdapter implements LLMAdapter {
     return data;
   }
 
-  Map<String, String> _requestHeaders() => {
-    'Content-Type': 'application/json',
-    if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
-    ...profile.defaultHeaders,
-  };
+  Map<String, String> _requestHeaders(LLMRequestOptions options) =>
+      withOpenCodeSessionAffinity(
+        headers: {
+          'Content-Type': 'application/json',
+          if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
+          ...profile.defaultHeaders,
+        },
+        providerName: profile.name,
+        baseUrl: _baseUrl,
+        sessionId: options.sessionId,
+      );
 
   String _stateIssuer(LLMRequestOptions options) {
     final instance = options.providerInstanceId ?? profile.name;

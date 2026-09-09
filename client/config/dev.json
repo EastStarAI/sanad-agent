@@ -1,3 +1,4 @@
 {
-  "ENVIRONMENT": "dev"
+  "ENVIRONMENT": "dev",
+  "SANAD_IOS_DEVELOPMENT_AUTH_REDIRECT_URI": "sanad://oauth/ios-development"
 }

@@ -142,15 +142,19 @@ class ProviderModelCacheService {
       return active;
     }
 
-    active = _limiter.run(() => _doLiveRefresh(instance));
+    active = _runTrackedRefresh(instance);
     _activeRefreshes[instanceId] = active;
-
-    // Clean up active refreshes when completed
-    active.whenComplete(() {
-      _activeRefreshes.remove(instanceId);
-    });
-
     return active;
+  }
+
+  Future<List<ModelOption>> _runTrackedRefresh(
+    ProviderInstance instance,
+  ) async {
+    try {
+      return await _limiter.run(() => _doLiveRefresh(instance));
+    } finally {
+      _activeRefreshes.remove(instance.id);
+    }
   }
 
   Future<List<ModelOption>> _doLiveRefresh(ProviderInstance instance) async {
@@ -211,11 +215,12 @@ class ProviderModelCacheService {
 
       // Keep previous success in DB but update last_error metadata
       final cached = _repo.readModelCache(instanceId, 'models');
-      if (cached != null) {
+      final cachedModels = cached?['models'] as List<dynamic>?;
+      if (cached != null && cachedModels != null && cachedModels.isNotEmpty) {
         _repo.upsertModelCache(
           instanceId: instanceId,
           cacheKey: 'models',
-          models: cached['models'] as List<dynamic>,
+          models: cachedModels,
           fetchedAt: cached['fetched_at'] != null
               ? DateTime.parse(cached['fetched_at'] as String)
               : DateTime.now(),
@@ -225,8 +230,7 @@ class ProviderModelCacheService {
           lastError: e.toString(),
         );
 
-        final modelsList = cached['models'] as List<dynamic>;
-        return modelsList
+        return cachedModels
             .map(
               (m) => ModelOption(
                 value: m['value'] as String,
@@ -239,6 +243,16 @@ class ProviderModelCacheService {
             .toList();
       }
 
+      _repo.upsertModelCache(
+        instanceId: instanceId,
+        cacheKey: 'models',
+        models: const [],
+        fetchedAt: DateTime.now(),
+        source: 'failed',
+        configRevision: configRev,
+        credentialRevision: credRev,
+        lastError: e.toString(),
+      );
       rethrow;
     }
   }

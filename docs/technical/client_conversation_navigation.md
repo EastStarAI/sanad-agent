@@ -66,12 +66,35 @@ fields; it cannot overwrite non-empty local intent awaiting confirmation. This
 keeps the composer sendable across runtime-source handoff while preserving
 daemon route authority once hydration completes.
 
+## Incremental History Loading
+
+The initial atomic session swap requests only the newest history page. The
+conversation client keeps the daemon's opaque cursor per device and exposes
+whether another page exists. `SessionMessagesCubit` serializes older-page
+requests, ignores stale completions after session or device changes, prepends
+only newly discovered canonical event ids, and retains the current page when an
+older-page request fails.
+
+The timeline prefetches automatically when manual motion approaches either
+loaded boundary. Short anchored slices alternate bounded older/newer auto-fill
+until content fills the viewport, a direction exhausts, or the three-page
+per-direction budget is reached. No pagination or retry control is rendered in
+the transcript. After an error, automatic fill stops; fresh edge intent or
+over-scroll may retry up to three consecutive failures per direction. Success
+resets that direction's failure budget, while session navigation resets both.
+Because older rows are inserted before the centered anchor sliver, the currently
+visible event retains its viewport position rather than jumping when a page
+arrives.
+
 ## Timeline Opening Position
 
 The conversation timeline uses a centered sliver layout so a long history can
 open at a selected event without building every older row. An idle session opens
 at its saved manual viewport event when valid, then falls back to its latest user
-message; that event begins near the visible top. A session with authoritative
+message; that event begins near the visible top. Saved viewport identity is
+always the Agent-issued history event id, not the Client's live, steer, model-step,
+or grouped display identity; legacy display ids migrate to the nearest loaded
+history event before another navigation. A session with authoritative
 active work ignores the saved reading position and opens at the live tail: the
 latest event ends at the visible bottom boundary immediately above the composer.
 The active-tail layout keeps old history in the upward-growing sliver without

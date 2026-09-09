@@ -1,0 +1,235 @@
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/engine/compaction/compaction.dart';
+
+/// Durable compaction operation row shape (Plan 53b).
+///
+/// Maps to `session_compaction_operations` rows.
+/// [CompactionBoundaryRepository] owns SQL persistence.
+class CompactionOperationRecord {
+  final String compactionId;
+  final String sessionId;
+  final CompactionTrigger trigger;
+  final CompactionStatus status;
+  final CompactionHistoryRevision sourceHistoryRevision;
+  final CompactionMessageRange sourceRange;
+  final CompactionMessageRange retainedTailRange;
+  final String? retainedTailEndFingerprint;
+  final int? retainedTailEndOccurrence;
+  final RouteSignature routeSignature;
+  final CompactionMetrics? metrics;
+  final CompactionInternalSummary? internalSummary;
+  final CompactionFailureReason? failureReason;
+  final String? failureDetailJson;
+  final DateTime startedAt;
+  final DateTime? completedAt;
+
+  CompactionOperationRecord({
+    required this.compactionId,
+    required this.sessionId,
+    required this.trigger,
+    required this.status,
+    required this.sourceHistoryRevision,
+    required this.sourceRange,
+    required this.retainedTailRange,
+    this.retainedTailEndFingerprint,
+    this.retainedTailEndOccurrence,
+    required this.routeSignature,
+    this.metrics,
+    this.internalSummary,
+    this.failureReason,
+    this.failureDetailJson,
+    required this.startedAt,
+    this.completedAt,
+  }) : assert(compactionId.isNotEmpty),
+       assert(sessionId.isNotEmpty),
+       assert(
+         status == CompactionStatus.started
+             ? completedAt == null &&
+                   internalSummary == null &&
+                   metrics == null &&
+                   failureReason == null
+             : completedAt != null,
+       ),
+       assert(
+         status == CompactionStatus.completed
+             ? internalSummary != null &&
+                   metrics != null &&
+                   failureReason == null
+             : true,
+       ),
+       assert(
+         status == CompactionStatus.failed
+             ? failureReason != null && internalSummary == null
+             : true,
+       ),
+       assert(sourceRange.end.rowId < retainedTailRange.start.rowId);
+
+  bool get isTerminal => status.isTerminal;
+
+  bool get isAuthoritativeProjection =>
+      status == CompactionStatus.completed && internalSummary != null;
+
+  /// Converts a validated engine candidate into a completed durable row.
+  factory CompactionOperationRecord.fromCandidate({
+    required CompactionCandidate candidate,
+    required DateTime startedAt,
+    required DateTime completedAt,
+  }) {
+    return CompactionOperationRecord(
+      compactionId: candidate.compactionId,
+      sessionId: candidate.sessionId,
+      trigger: candidate.trigger,
+      status: CompactionStatus.completed,
+      sourceHistoryRevision: candidate.sourceRevision,
+      sourceRange: candidate.sourceRange,
+      retainedTailRange: candidate.retainedTailRange,
+      routeSignature: candidate.routeSignature,
+      metrics: candidate.metrics,
+      internalSummary: candidate.internalSummary,
+      startedAt: startedAt,
+      completedAt: completedAt,
+    );
+  }
+
+  CompactionOperationRecord copyWithTerminalFailure({
+    required CompactionFailureReason failureReason,
+    required DateTime completedAt,
+    String? failureDetailJson,
+  }) {
+    assert(status == CompactionStatus.started);
+    return CompactionOperationRecord(
+      compactionId: compactionId,
+      sessionId: sessionId,
+      trigger: trigger,
+      status: CompactionStatus.failed,
+      sourceHistoryRevision: sourceHistoryRevision,
+      sourceRange: sourceRange,
+      retainedTailRange: retainedTailRange,
+      retainedTailEndFingerprint: retainedTailEndFingerprint,
+      retainedTailEndOccurrence: retainedTailEndOccurrence,
+      routeSignature: routeSignature,
+      failureReason: failureReason,
+      failureDetailJson: failureDetailJson,
+      startedAt: startedAt,
+      completedAt: completedAt,
+    );
+  }
+}
+
+/// Stable, non-secret identity for relocating a retained-tail endpoint after
+/// suffix rewrite assigns the same logical message a new database row id.
+abstract final class CompactionMessageAnchor {
+  CompactionMessageAnchor._();
+
+  static String fingerprint(Message message) {
+    final semantic = Map<String, dynamic>.from(message.toJson())
+      ..remove('metadata');
+    return sha256.convert(utf8.encode(jsonEncode(semantic))).toString();
+  }
+}
+
+/// Monotonic session history revision used for compaction CAS (B1).
+///
+/// Bumped atomically whenever canonical message rows are inserted, deleted, or
+/// replaced through evolution-owned writers (`session_execution_state_coordinator`,
+/// `SessionDB.replaceMessages`). Compaction snapshots store the revision at claim
+/// time; activation succeeds only when the live revision still matches.
+class SessionHistoryRevision {
+  final int value;
+
+  const SessionHistoryRevision(this.value)
+    : assert(value >= 0, 'history revision must be non-negative');
+
+  SessionHistoryRevision next() => SessionHistoryRevision(value + 1);
+
+  CompactionHistoryRevision toCompactionRevision() =>
+      CompactionHistoryRevision(value);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SessionHistoryRevision &&
+          runtimeType == other.runtimeType &&
+          value == other.value;
+
+  @override
+  int get hashCode => value.hashCode;
+}
+
+/// Rules for whether a completed boundary may still drive model projection.
+abstract final class CompactionBoundaryValidity {
+  CompactionBoundaryValidity._();
+
+  /// Returns false when canonical history no longer contains the referenced rows
+  /// or when [currentRevision] proves the snapshot head was superseded.
+  static bool isProjectionEligible({
+    required CompactionOperationRecord boundary,
+    required Set<int> existingMessageRowIds,
+    required SessionHistoryRevision currentRevision,
+  }) {
+    if (!boundary.isAuthoritativeProjection) {
+      return false;
+    }
+    if (hasConflictingMessageRowIds(
+      boundary: boundary,
+      existingMessageRowIds: existingMessageRowIds,
+    )) {
+      return false;
+    }
+    if (_hasMissingRows(
+      boundary: boundary,
+      existingMessageRowIds: existingMessageRowIds,
+    )) {
+      return false;
+    }
+    return boundary.sourceHistoryRevision.value <= currentRevision.value;
+  }
+
+  /// True when durable boundary anchors prove an unsafe partial rewrite.
+  ///
+  /// `messages.id` is globally AUTOINCREMENT and edit/retry may leave numeric
+  /// gaps, so integers between the endpoints are not expected identities.
+  /// Both source endpoints missing is treated as superseded history. A retained
+  /// tail may legitimately have its old end replaced by recovery/edit suffix
+  /// rows; its start is the durable split anchor and must remain present.
+  static bool hasConflictingMessageRowIds({
+    required CompactionOperationRecord boundary,
+    required Set<int> existingMessageRowIds,
+  }) {
+    final sourceStartPresent = existingMessageRowIds.contains(
+      boundary.sourceRange.start.rowId,
+    );
+    final sourceEndPresent = existingMessageRowIds.contains(
+      boundary.sourceRange.end.rowId,
+    );
+    if (sourceStartPresent != sourceEndPresent) return true;
+
+    final tailStartPresent = existingMessageRowIds.contains(
+      boundary.retainedTailRange.start.rowId,
+    );
+    final tailEndPresent = existingMessageRowIds.contains(
+      boundary.retainedTailRange.end.rowId,
+    );
+    return !tailStartPresent && tailEndPresent;
+  }
+
+  static bool _rangeRowsMissing(
+    CompactionMessageRange range,
+    Set<int> existingMessageRowIds,
+  ) {
+    return !existingMessageRowIds.contains(range.start.rowId) ||
+        !existingMessageRowIds.contains(range.end.rowId);
+  }
+
+  static bool _hasMissingRows({
+    required CompactionOperationRecord boundary,
+    required Set<int> existingMessageRowIds,
+  }) {
+    return _rangeRowsMissing(boundary.sourceRange, existingMessageRowIds) ||
+        !existingMessageRowIds.contains(boundary.retainedTailRange.start.rowId);
+  }
+}

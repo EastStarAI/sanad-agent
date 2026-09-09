@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
@@ -26,6 +27,7 @@ class PermissionManager {
   final Map<String, Set<String>> _sessionAllow = {};
   final Map<String, Set<String>> _sessionDeny = {};
   final Map<String, Set<String>> _oneShotAllow = {};
+  final Map<String, Future<void>> _sessionPermissionTails = {};
 
   Future<void> syncWorkspacePermissionMode({
     required String workspacePath,
@@ -46,11 +48,30 @@ class PermissionManager {
     required ToolContext context,
     String? approvalKeyOverride,
     Map<String, dynamic>? permissionDisplayArguments,
-  }) async {
+  }) {
     if (!_requiresApproval(tool)) {
-      return;
+      return Future<void>.value();
     }
 
+    return _serializeForSession(
+      context.sessionId,
+      () => _ensureAuthorized(
+        tool: tool,
+        arguments: arguments,
+        context: context,
+        approvalKeyOverride: approvalKeyOverride,
+        permissionDisplayArguments: permissionDisplayArguments,
+      ),
+    );
+  }
+
+  Future<void> _ensureAuthorized({
+    required LocalToolSpec tool,
+    required Map<String, dynamic> arguments,
+    required ToolContext context,
+    String? approvalKeyOverride,
+    Map<String, dynamic>? permissionDisplayArguments,
+  }) async {
     final sessionMetadata = context.metadata;
     final workspace = sessionMetadata['workspace'] is Map<String, dynamic>
         ? sessionMetadata['workspace'] as Map<String, dynamic>
@@ -161,6 +182,27 @@ class PermissionManager {
       workspacePath: workspacePath,
       currentPolicy: workspacePolicy,
     );
+  }
+
+  Future<void> _serializeForSession(
+    String sessionId,
+    Future<void> Function() action,
+  ) async {
+    final predecessor =
+        _sessionPermissionTails[sessionId] ?? Future<void>.value();
+    final completion = Completer<void>();
+    final currentTail = completion.future;
+    _sessionPermissionTails[sessionId] = currentTail;
+
+    await predecessor;
+    try {
+      await action();
+    } finally {
+      completion.complete();
+      if (identical(_sessionPermissionTails[sessionId], currentTail)) {
+        _sessionPermissionTails.remove(sessionId);
+      }
+    }
   }
 
   Future<void> applyResolvedDecision({

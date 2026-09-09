@@ -212,6 +212,7 @@ void main() {
           'items': [
             {'client-secret': 'raw-client-secret', 'status': 'ready'},
           ],
+          'secrets': {'bearer_token': 'g6-canary-bearer-9f3a7c2e1b88'},
         },
       });
 
@@ -220,6 +221,7 @@ void main() {
       expect(formatted, isNot(contains('raw-camel-case-token')));
       expect(formatted, isNot(contains('raw-bearer-token')));
       expect(formatted, isNot(contains('raw-client-secret')));
+      expect(formatted, isNot(contains('g6-canary-bearer-9f3a7c2e1b88')));
       expect(formatted, contains('[REDACTED]'));
       expect(formatted, contains('hardware-1'));
       expect(formatted, contains('ready'));

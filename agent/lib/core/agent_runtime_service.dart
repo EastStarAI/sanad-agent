@@ -279,6 +279,8 @@ class AgentRuntimeService {
     }
 
     final profile = _profileForSignature(signature);
+    int? modelContextLimitLookup(String modelId) =>
+        _catalogContextLimit(signature, modelId);
 
     if (_credentialResolver != null) {
       _credentialResolver.resolve(profile.name);
@@ -288,6 +290,7 @@ class AgentRuntimeService {
       return BaseAnthropicAdapter(
         _config,
         profile,
+        modelContextLimitLookup: modelContextLimitLookup,
         baseUrlOverride: signature.normalizedBaseUrl,
         apiKeyOverride: resolvedApiKey,
         defaultModelOverride: signature.modelId,
@@ -297,6 +300,7 @@ class AgentRuntimeService {
         return CodexResponsesAdapter(
           _config,
           profile,
+          modelContextLimitLookup: modelContextLimitLookup,
           baseUrlOverride: signature.normalizedBaseUrl,
           apiKeyOverride: resolvedApiKey,
           defaultModelOverride: signature.modelId,
@@ -305,6 +309,7 @@ class AgentRuntimeService {
         return OllamaAdapter(
           _config,
           profile,
+          modelContextLimitLookup: modelContextLimitLookup,
           baseUrlOverride: signature.normalizedBaseUrl,
         );
       } else {
@@ -312,12 +317,50 @@ class AgentRuntimeService {
           _config,
           profile,
           modelsDevService: _modelsDevService,
+          modelContextLimitLookup: modelContextLimitLookup,
           baseUrlOverride: signature.normalizedBaseUrl,
           apiKeyOverride: resolvedApiKey,
           defaultModelOverride: signature.modelId,
         );
       }
     }
+  }
+
+  int? _catalogContextLimit(RouteSignature signature, String rawModelId) {
+    final cached = _instanceRepo.readModelCache(
+      signature.providerInstanceId,
+      'models',
+    );
+    if (cached == null ||
+        cached['config_revision'] != signature.configRevision ||
+        cached['credential_revision'] != signature.credentialRevision) {
+      return null;
+    }
+
+    final requestedModel = ProviderModelId.normalize(
+      templateId: signature.templateId,
+      protocol: signature.protocol,
+      rawModelId: rawModelId,
+    ).toLowerCase();
+    final models = cached['models'];
+    if (requestedModel.isEmpty || models is! List) return null;
+
+    for (final entry in models) {
+      if (entry is! Map) continue;
+      final cachedModel = ProviderModelId.normalize(
+        templateId: signature.templateId,
+        protocol: signature.protocol,
+        rawModelId: entry['value']?.toString() ?? '',
+      ).toLowerCase();
+      if (cachedModel != requestedModel) continue;
+
+      final contextWindow = entry['context_window'];
+      if (contextWindow is num && contextWindow > 0) {
+        return contextWindow.toInt();
+      }
+      return null;
+    }
+    return null;
   }
 
   ProviderProfile _profileForSignature(RouteSignature signature) {

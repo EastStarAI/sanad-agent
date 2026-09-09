@@ -280,6 +280,17 @@ class SessionCubit extends Cubit<SessionState> {
     }
   }
 
+  Future<void> adoptForkedSession(Session session) async {
+    final deviceId = session.deviceId;
+    if (deviceId == null || deviceId.isEmpty) return;
+    if (conversationCacheRepository != null) {
+      conversationCacheRepository!.applySessionCreated(deviceId, session);
+    } else {
+      _onSessionCreated(deviceId, session);
+    }
+    await selectSession(session);
+  }
+
   Future<void> selectSession(Session session) async {
     final agents = _agentsFrom(agentCubit.state);
     final activeAgent = agentCubit.state is DeviceActive ? (agentCubit.state as DeviceActive).activeAgent : null;
@@ -332,6 +343,30 @@ class SessionCubit extends Cubit<SessionState> {
       );
     }
     emit(state.copyWith(selectedSession: session));
+  }
+
+  void applyHistoryRevision(String sessionId, int historyRevision) {
+    final selected = state.selectedSession;
+    if (selected == null || selected.id != sessionId) return;
+    final hasStaleListEntry = state.agentSessions.values.any(
+      (sessions) => sessions.any(
+        (session) => session.id == sessionId && session.historyRevision != historyRevision,
+      ),
+    );
+    if (selected.historyRevision == historyRevision && !hasStaleListEntry) return;
+    final sessionsByAgent = {
+      for (final entry in state.agentSessions.entries)
+        entry.key: [
+          for (final session in entry.value)
+            if (session.id == sessionId) session.copyWith(historyRevision: historyRevision) else session,
+        ],
+    };
+    emit(
+      state.copyWith(
+        selectedSession: selected.copyWith(historyRevision: historyRevision),
+        agentSessions: sessionsByAgent,
+      ),
+    );
   }
 
   void transferNewConversationDraftToSession(

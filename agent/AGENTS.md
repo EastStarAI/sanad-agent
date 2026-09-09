@@ -36,6 +36,7 @@ This contract applies to `agent/`.
 - Engine runtime collaborators mutate history through callbacks and cannot keep parallel history or current-turn state.
 - `AgentContextAssembler` emits one system message ordered stable identity, workspace context, then volatile memory/date/runtime metadata.
 - Provider adapters remain stateless and own wire translation only. Provider-specific endpoint/codec behavior must not leak into the runner.
+- Context-pressure recovery after daemon restart may reuse persisted provider input usage only after the active adapter remeasures the exact historical request prefix; the next request must still prove a strict wire extension on the same route.
 - Visible reasoning, final content, opaque provider continuation state, finish reason, and tool calls remain distinct typed data across streaming and persistence.
 
 ### Protocol and Platform Authority
@@ -50,7 +51,8 @@ This contract applies to `agent/`.
 - Durable sessions, work items, notices, pending input, provider metadata, and route transitions use one shared agent-state database connection with one repository owner per table.
 - Admission, terminal commit, failover, stop cleanup, and cross-table execution transitions remain transactional through their aggregate owner.
 - `hardware_id` is persistent local machine identity and is distinct from backend-assigned device ids.
-- `run_id` owns execution, `model_step_id` owns one model invocation, `tool_call_id` pairs tool use/result, raw `request_id` owns command correlation, and opaque `event_id` owns one canonical semantic event. Never substitute these identities.
+- `run_id` owns execution, `model_step_id` owns one model invocation, `tool_call_id` pairs tool use/result, raw `request_id` owns command correlation, and opaque `event_id` owns one canonical semantic event. `message_id` owns one persisted history record, `turn_id` owns one execution attempt's history records, and `history_revision` owns compare-and-swap for active-history mutations. Never substitute these identities for one another, for SQLite row ids, or for hydration indexes.
+- A live root `user_message` is published only after its durable history row commits, and it carries the same message/turn/request identity and replay eligibility that subsequent history hydration exposes.
 - Sanad auth, provider OAuth, provider secrets, durable state, and mutable worktree state remain separate storage concerns.
 
 ### Provider and Capability Authority

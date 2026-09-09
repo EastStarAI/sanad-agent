@@ -18,14 +18,28 @@ This contract applies to `agent/lib/interfaces/`.
 ## Identity
 - Preserve device, hardware, session, request, work-item, run, generation, model-step, tool-call, origin, and event identities without substituting one for another.
 - `run_id` is immutable execution ownership, `model_step_id` identifies one model invocation, `tool_call_id` pairs tool use/result, and `event_id` is opaque canonical event identity.
+- Compaction lifecycle transitions share one logical `compaction_id` but use distinct deterministic `event_id` values that remain identical across live delivery and history hydration.
+- Hydrated compaction lifecycle placement follows the durable logical tail-end anchor when edit/recovery rewrites its database row id; synthetic display timestamps never decide causal order.
 - Runtime-rich turn metadata enters through typed interface models, not scattered map parsing.
 
 ## Runtime Query Boundary
 - The daemon owns workspace browsing/creation, MCP management, skill inventory/load, slash commands, device settings, provider runtime, and conversation history/list queries.
+- Slash catalog entries use closed semantic types: `runtime_action` identifies a no-argument runtime operation and `skill` identifies model-directed skill insertion. Clients must not infer these semantics from command names or source labels.
 - Query responses must remain transport-neutral and usable over both local and cloud Sanad transports.
-- Cloud filesystem navigation and workspace-path mutation are disabled at the
-  cloud adapter boundary. Transport-neutral handlers may expose daemon-provided
-  roots and parent metadata only to an admitted local caller.
-- MCP configuration listing, inspection, and mutation are disabled at the cloud
-  adapter boundary. MCP servers configured locally remain available to the
-  per-turn capability runtime for both local and cloud-origin turns.
+- Cloud `device_id` that does not match the registered device fails closed as
+  `wrong_device` before session registration. Remote update, restart, managed
+  workspace, and MCP management commands are admitted without new capability
+  flags. Root-document `replace_mcp_config` remains rejected on cloud.
+- Authenticated Local Gateway health exposes only non-secret runtime facts needed for lifecycle verification, including binary version and whether the cloud adapter has completed authoritative registration; socket connection alone is not registration.
+- Cloud filesystem navigation is managed-remote: name-based create under
+  `SANAD_HOME/workspaces`, browse limited to that root and registered workspace
+  roots, and preview tokens for recursive delete and relocate.
+- Cloud MCP configuration listing, inspection, import/export, Advanced JSON,
+  OAuth, and reviewed mutations use the same daemon handlers as local. Secret
+  values stay out of snapshots, logs, and events. Cloud-origin turns still
+  execute configured MCP tools through `PermissionManager`.
+
+## Run Cancellation
+- `requestStop` terminalizes executing tools through an owner-validated durable transaction before emitting `stopped`.
+- Stop delivery order is cancelled tool terminals, `stopped`, then the final idle/queued execution snapshot; durable work cancellation is already committed before `stopped` is delivered.
+- Canonical cancelled `tool_result` events and history hydration expose the same run/generation/revision, reason, cleanup outcome, and start/terminal timestamps.

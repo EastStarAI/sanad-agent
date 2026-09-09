@@ -86,7 +86,7 @@ SPEC CHECKSUMS:
   auto_updater_macos: 3e3462c418fe4e731917eacd8d28eef7af84086d
   desktop_drop: 1eeeb9484299585770b6461e4f3d60950e99efa2
   file_selector_macos: 3e56eaea051180007b900eacb006686fd54da150
-  FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  FlutterMacOS: c232990155153907050900a2e175c7773903ba4e
   macos_window_utils: 721df4da91cb4bde7b2b7b6ae93cdead4851118f
   mp_audio_stream: 6c773f43499f206e814f16a25e70d7d0820a2437
   package_info_plus: 12f1c5c2cfe8727ca46cbd0b26677728972d9a5b
@@ -97,6 +97,6 @@ SPEC CHECKSUMS:
   url_launcher_macos: 175a54c831f4375a6cf895875f716ee5af3888ce
   window_manager: e25faf20d88283a0d46e7b1a759d07261ca27575
 
-PODFILE CHECKSUM: 4062a5d7621e35b4f677b9e411c2714a4f99d4c2
+PODFILE CHECKSUM: 32cd93bea4a742aadfebbcf392d60035c34780e6
 
 COCOAPODS: 1.16.2

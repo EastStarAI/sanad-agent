@@ -8,6 +8,7 @@ import 'package:sanad_client/features/conversations/domain/models/device_suspend
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -46,6 +47,23 @@ void main() {
     expect((socket.capturedCommands.single['payload'] as Map)['message'], 'hello');
   });
 
+  test('steerMessage preserves queued text and stable request identity', () async {
+    await commands.steerMessage(
+      'use the safer migration',
+      requestId: 'queued-request-1',
+      sessionId: 'session-1',
+    );
+
+    final command = socket.capturedCommands.single;
+    expect(command['command'], 'steer');
+    final payload = command['payload'] as Map<String, dynamic>;
+    expect(payload['request_id'], 'queued-request-1');
+    expect(payload['target_request_id'], 'queued-request-1');
+    expect(payload['command_request_id'], startsWith('req_'));
+    expect(payload['session_id'], 'session-1');
+    expect(payload['message'], 'use the safer migration');
+  });
+
   test('deleteSession fails when the daemon does not confirm deletion', () async {
     socket.setConnected(false);
 
@@ -76,6 +94,9 @@ void main() {
     final future = commands.replayTurn(
       sessionId: 'session-1',
       targetRequestId: 'target-1',
+      targetMessageId: 'message-1',
+      targetTurnId: 'turn-1',
+      expectedHistoryRevision: 4,
       action: TurnReplayAction.edit,
       message: 'edited text',
       providerInstanceId: 'provider-current',
@@ -88,10 +109,14 @@ void main() {
     final payload = command['payload'] as Map<String, dynamic>;
     expect(command['command'], 'session.turn_replay');
     expect(payload['target_request_id'], 'target-1');
+    expect(payload['target_message_id'], 'message-1');
+    expect(payload['target_turn_id'], 'turn-1');
+    expect(payload['expected_history_revision'], 4);
     expect(payload['provider_instance_id'], 'provider-current');
     expect(payload['model_id'], 'model-current');
     expect(payload['thinking_mode'], 'deep');
     expect(payload['confirmed_replay_unsafe'], isTrue);
+    expect(payload['confirmed_drop_steers'], isFalse);
 
     socket.eventRouter.routeEvent({
       'device_id': 'agent-1',
@@ -107,6 +132,43 @@ void main() {
     final result = await future;
     expect(result.isAccepted, isTrue);
     expect(result.safety, TurnReplaySafety.unsafe);
+  });
+
+  test('forkSession sends target identity only and returns the child', () async {
+    final future = commands.forkSession(
+      sessionId: 'session-1',
+      targetMessageId: 'm-final',
+      targetTurnId: 'turn-2',
+    );
+
+    final command = socket.capturedCommands.single;
+    final payload = command['payload'] as Map<String, dynamic>;
+    expect(command['command'], 'session.fork');
+    expect(payload['session_id'], 'session-1');
+    expect(payload['target_message_id'], 'm-final');
+    expect(payload['target_turn_id'], 'turn-2');
+    expect(payload.containsKey('messages'), isFalse);
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session.fork_result',
+      'payload': {
+        'request_id': payload['request_id'],
+        'outcome': 'accepted',
+        'child': {
+          'session_id': 'child-1',
+          'title': '(1) Refactor auth',
+          'created_at': '2026-08-30T00:00:00Z',
+          'updated_at': '2026-08-30T00:00:00Z',
+        },
+      },
+    });
+
+    final result = await future;
+    expect(result.isAccepted, isTrue);
+    expect(result.child?.id, 'child-1');
+    expect(result.child?.title, '(1) Refactor auth');
+    expect(result.child?.deviceId, 'agent-1');
   });
 
   test('getWorkspaces requests available workspaces', () async {
@@ -199,6 +261,18 @@ void main() {
             'command': 'test-sanad-plugin',
             'description': 'Prompts the model to test a plugin',
             'source': 'skill',
+            'type': 'skill',
+          },
+          {
+            'command': 'compact',
+            'description': 'Compact conversation context',
+            'source': 'sanad-agent',
+            'type': 'runtime_action',
+          },
+          {
+            'command': 'future-command',
+            'source': 'sanad-agent',
+            'type': 'unknown_future_type',
           },
         ],
       },
@@ -206,9 +280,11 @@ void main() {
 
     final commandsList = await future;
 
-    expect(commandsList, hasLength(1));
-    expect(commandsList.single.command, 'test-sanad-plugin');
-    expect(commandsList.single.sourceId, 'skill');
+    expect(commandsList, hasLength(2));
+    expect(commandsList.first.command, 'test-sanad-plugin');
+    expect(commandsList.first.sourceId, 'skill');
+    expect(commandsList.last.type, SlashCommandType.runtimeAction);
+    expect(commandsList.last.invocationText, '/compact');
   });
 
   test('browseWorkspaceTree requests runtime-owned file tree data', () async {
@@ -246,6 +322,32 @@ void main() {
     expect(snapshot.parentPath, '/repo');
     expect(snapshot.entries.single.name, 'sanad-client');
     expect(snapshot.entries.single.isDirectory, isTrue);
+  });
+
+  test('createWorkspace sends a name without a path for managed remote create', () async {
+    final future = commands.createWorkspace(name: 'remote-notes');
+
+    expect(socket.capturedCommands.single['command'], 'create_workspace');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    expect(payload.containsKey('path'), isFalse);
+    expect(payload['name'], 'remote-notes');
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'workspace_created',
+      'payload': {
+        'request_id': payload['request_id'],
+        'workspace': {
+          'id': 'workspace-2',
+          'name': 'remote-notes',
+          'path': '/home/sanad/workspaces/remote-notes',
+          'trust_state': 'trusted',
+        },
+      },
+    });
+
+    final workspace = await future;
+    expect(workspace.id, 'workspace-2');
+    expect(workspace.name, 'remote-notes');
   });
 
   test('createWorkspace sends path and returns the created workspace', () async {
@@ -357,6 +459,25 @@ void main() {
       },
     });
     await deleteFuture;
+  });
+
+  test('workspace removal requires the matching record-only acknowledgment', () async {
+    final future = commands.removeWorkspace(workspaceId: ' workspace-1 ');
+    final command = socket.capturedCommands.single;
+    final payload = command['payload'] as Map<String, dynamic>;
+    expect(command['command'], 'workspace.remove');
+    expect(payload['workspace_id'], 'workspace-1');
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'workspace.removed',
+      'payload': {
+        'request_id': payload['request_id'],
+        'workspace_id': 'workspace-1',
+      },
+    });
+
+    await future;
   });
 
   test('folder mutation surfaces daemon errors and disconnected requests', () async {
@@ -515,6 +636,521 @@ void main() {
     expect(store.currentMessages.single.text, 'done');
   });
 
+  test('history hydration reconciles a delivered steer by request id', () async {
+    Future<void> hydrateSteerHistory() async {
+      final future = commands.loadSessionHistory('session-1');
+      final payload = socket.capturedCommands.last['payload'] as Map<String, dynamic>;
+      socket.eventRouter.routeEvent({
+        'device_id': 'agent-1',
+        'event': 'session_history',
+        'payload': {
+          'request_id': payload['request_id'],
+          'has_more': false,
+          'messages': [
+            {
+              'event_id': 'history:session-1:10:tool_result:0',
+              'type': 'tool_result',
+              'tool': 'shell_execute',
+              'output': 'done',
+              'status': 'done',
+              'tool_call_id': 'tool-before-steer',
+              'session_id': 'session-1',
+              'created_at': '2026-09-02T13:59:58Z',
+            },
+            {
+              'event_id': 'history:session-1:10:user_message:1',
+              'type': 'user_message',
+              'content': 'show the secret timestamps',
+              'session_id': 'session-1',
+              'request_id': 'steer-request-1',
+              'created_at': '2026-09-02T13:59:59Z',
+              'metadata': {
+                'steer': true,
+                'input_kind': 'steer',
+                'request_id': 'steer-request-1',
+              },
+            },
+            {
+              'event_id': 'history:session-1:11:final_answer:0',
+              'type': 'final_answer',
+              'content': 'final response',
+              'session_id': 'session-1',
+              'created_at': '2026-09-02T14:00:10Z',
+            },
+          ],
+          'pending_steers': [
+            {
+              'session_id': 'session-1',
+              'request_id': 'steer-request-1',
+              'run_id': 'run-1',
+              'generation': 1,
+              'text': 'show the secret timestamps',
+              'received_at': '2026-09-02T13:59:59Z',
+              'updated_at': '2026-09-02T14:00:10Z',
+              'state': 'delivered',
+              'revision': 3,
+            },
+          ],
+        },
+      });
+      await future;
+    }
+
+    await hydrateSteerHistory();
+
+    expect(store.currentMessages, hasLength(3));
+    expect(store.currentMessages[1].id, 'history:session-1:10:user_message:1');
+    expect(store.currentMessages[1].requestId, 'steer-request-1');
+    expect(store.currentMessages[1].metadata?['pending_steer_state'], 'delivered');
+    expect(
+      store.currentMessages.where(
+        (event) => event.kind == EventKind.userMessage && event.requestId == 'steer-request-1',
+      ),
+      hasLength(1),
+    );
+
+    socket.clearCaptured();
+    final other = commands.loadSessionHistory('session-2');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': false,
+        'messages': const [],
+      },
+    });
+    await other;
+
+    socket.clearCaptured();
+    await hydrateSteerHistory();
+
+    expect(store.currentMessages, hasLength(3));
+    expect(store.currentMessages[1].id, 'history:session-1:10:user_message:1');
+    expect(
+      store.currentMessages.where(
+        (event) => event.kind == EventKind.userMessage && event.requestId == 'steer-request-1',
+      ),
+      hasLength(1),
+    );
+  });
+
+  test('loadOlderSessionHistory coalesces and prepends stable unique events', () async {
+    final initial = commands.loadSessionHistory('session-1');
+    final initialPayload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': initialPayload['request_id'],
+        'has_more': true,
+        'next_cursor': 'cursor-1',
+        'messages': [
+          {
+            'id': 'history:session-1:2:user_message:0',
+            'event_id': 'history:session-1:2:user_message:0',
+            'type': 'user_message',
+            'content': 'newer',
+            'created_at': '2026-01-02T00:00:00Z',
+          },
+        ],
+      },
+    });
+    await initial;
+    socket.clearCaptured();
+
+    final first = commands.loadOlderSessionHistory('session-1');
+    final second = commands.loadOlderSessionHistory('session-1');
+
+    expect(socket.capturedCommands, hasLength(1));
+    final olderPayload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    expect(olderPayload['cursor'], 'cursor-1');
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': olderPayload['request_id'],
+        'has_more': false,
+        'messages': [
+          {
+            'id': 'history:session-1:1:user_message:0',
+            'event_id': 'history:session-1:1:user_message:0',
+            'type': 'user_message',
+            'content': 'older',
+            'created_at': '2026-01-01T00:00:00Z',
+          },
+          {
+            'id': 'history:session-1:2:user_message:0',
+            'event_id': 'history:session-1:2:user_message:0',
+            'type': 'user_message',
+            'content': 'newer duplicate',
+            'created_at': '2026-01-02T00:00:00Z',
+          },
+        ],
+      },
+    });
+    await Future.wait([first, second]);
+
+    expect(store.currentMessages.map((event) => event.text), ['older', 'newer']);
+    expect(store.historyHasMore, isFalse);
+    expect(store.historyNextCursor, isNull);
+  });
+
+  test('older page merges tool-use into an existing terminal result', () async {
+    final initial = commands.loadSessionHistory('session-1');
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': true,
+        'next_cursor': 'tool-older',
+        'messages': [
+          {
+            'type': 'tool_result',
+            'tool': 'shell_execute',
+            'output': '{"isError":false,"output":"done\\n"}',
+            'status': 'done',
+            'tool_call_id': 'call-result-first',
+            'session_id': 'session-1',
+            'created_at': '2026-09-02T00:00:01Z',
+          },
+        ],
+      },
+    });
+    await initial;
+    socket.clearCaptured();
+
+    final older = commands.loadOlderSessionHistory('session-1');
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': false,
+        'messages': [
+          {
+            'type': 'tool_use',
+            'tool': 'shell_execute',
+            'input': {'command': 'echo done'},
+            'status': 'done',
+            'tool_call_id': 'call-result-first',
+            'session_id': 'session-1',
+            'created_at': '2026-09-02T00:00:00Z',
+          },
+        ],
+      },
+    });
+    await older;
+
+    expect(store.currentMessages, hasLength(1));
+    expect(store.currentMessages.single.toolInput, {'command': 'echo done'});
+    expect(
+      store.currentMessages.single.toolOutput,
+      '{"isError":false,"output":"done\\n"}',
+    );
+    expect(store.currentMessages.single.status, EventStatus.done);
+  });
+
+  test('complete loaded history survives session navigation and tail refresh', () async {
+    store.activateSession('session-1');
+    store.setHistory([
+      CanonicalEvent(
+        id: 'history:session-1:1:user_message:0',
+        kind: EventKind.userMessage,
+        text: 'oldest',
+        timestamp: DateTime.utc(2026, 1, 1),
+      ),
+      CanonicalEvent(
+        id: 'history:session-1:2:user_message:0',
+        kind: EventKind.userMessage,
+        text: 'newer',
+        timestamp: DateTime.utc(2026, 1, 2),
+      ),
+    ]);
+
+    final other = commands.loadSessionHistory('session-2');
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'messages': [_historyRow('other', 'other session')],
+      },
+    });
+    await other;
+    socket.clearCaptured();
+
+    final restored = commands.loadSessionHistory('session-1');
+    expect(store.currentMessages.map((event) => event.text), [
+      'oldest',
+      'newer',
+    ]);
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': true,
+        'next_cursor': 'tail-cursor',
+        'messages': [
+          _historyRow('history:session-1:2:user_message:0', 'newer refreshed'),
+          _historyRow('history:session-1:3:user_message:0', 'latest'),
+        ],
+      },
+    });
+    await restored;
+
+    expect(store.currentMessages.map((event) => event.text), [
+      'oldest',
+      'newer refreshed',
+      'latest',
+    ]);
+    expect(store.historyHasMore, isFalse);
+    expect(store.historyNextCursor, isNull);
+  });
+
+  test('retained terminal result merges with both hydrated tool fragments', () async {
+    store.activateSession('session-1');
+    store.setHistory([
+      CanonicalEvent(
+        id: 'tool_call-hydration-race',
+        kind: EventKind.toolCall,
+        status: EventStatus.done,
+        tool: const {
+          'name': 'shell_execute',
+          'output': '{"isError":false,"output":"153\\n/path\\n"}',
+        },
+        timestamp: DateTime.utc(2026, 9, 2, 0, 0, 1),
+        toolCallId: 'call-hydration-race',
+      ),
+    ]);
+
+    final history = commands.loadSessionHistory('session-1');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': false,
+        'messages': [
+          {
+            'type': 'tool_use',
+            'tool': 'shell_execute',
+            'input': {'command': 'generate output'},
+            'status': 'done',
+            'tool_call_id': 'call-hydration-race',
+            'session_id': 'session-1',
+            'created_at': '2026-09-02T00:00:00Z',
+          },
+          {
+            'type': 'tool_result',
+            'tool': 'shell_execute',
+            'output': '{"isError":false,"output":"153\\n/path\\n"}',
+            'status': 'done',
+            'tool_call_id': 'call-hydration-race',
+            'session_id': 'session-1',
+            'created_at': '2026-09-02T00:00:01Z',
+          },
+        ],
+      },
+    });
+    await history;
+
+    expect(store.currentMessages, hasLength(1));
+    expect(store.currentMessages.single.toolInput, {
+      'command': 'generate output',
+    });
+    expect(
+      store.currentMessages.single.toolOutput,
+      '{"isError":false,"output":"153\\n/path\\n"}',
+    );
+    expect(store.currentMessages.single.status, EventStatus.done);
+  });
+
+  test('anchored history sends the stable event id and replaces only on success', () async {
+    final tail = commands.loadSessionHistory('session-1');
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'messages': [_historyRow('tail', 'tail')],
+      },
+    });
+    await tail;
+    socket.clearCaptured();
+
+    final anchored = commands.loadAnchoredSessionHistory(
+      'session-1',
+      'history:session-1:42:user_message:0',
+    );
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    expect(payload['anchor_event_id'], 'history:session-1:42:user_message:0');
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'page_kind': 'anchor',
+        'messages': [_historyRow('anchor', 'anchored')],
+      },
+    });
+    await anchored;
+
+    expect(store.currentMessages.single.text, 'anchored');
+  });
+
+  test('anchored history appends bounded newer pages without duplicates', () async {
+    final anchored = commands.loadAnchoredSessionHistory(
+      'session-1',
+      'history:session-1:1:user_message:0',
+    );
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'page_kind': 'anchor',
+        'has_newer': true,
+        'next_newer_cursor': 'newer-1',
+        'messages': [_historyRow('event-1', 'first')],
+      },
+    });
+    await anchored;
+    socket.clearCaptured();
+
+    final newer = commands.loadNewerSessionHistory('session-1');
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    expect(payload['cursor'], 'newer-1');
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'page_kind': 'newer',
+        'has_newer': false,
+        'messages': [
+          _historyRow('event-1', 'first duplicate'),
+          _historyRow('event-2', 'second'),
+        ],
+      },
+    });
+    await newer;
+
+    expect(store.currentMessages.map((event) => event.text), [
+      'first duplicate',
+      'second',
+    ]);
+    expect(store.historyHasNewer, isFalse);
+    expect(store.historyNextNewerCursor, isNull);
+  });
+
+  test('newer page resolves a tool left running at the anchor boundary', () async {
+    final anchored = commands.loadAnchoredSessionHistory(
+      'session-1',
+      'history:session-1:1:tool_use:0',
+    );
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_newer': true,
+        'next_newer_cursor': 'tool-newer',
+        'messages': [
+          {
+            'id': 'tool-use',
+            'type': 'tool_use',
+            'tool': 'shell_execute',
+            'input': {'command': 'echo done'},
+            'tool_call_id': 'call-page-boundary',
+            'model_step_id': 'step-boundary',
+            'session_id': 'session-1',
+            'created_at': '2026-09-01T00:00:00Z',
+          },
+        ],
+      },
+    });
+    await anchored;
+    expect(store.currentMessages.single.status, EventStatus.running);
+    socket.clearCaptured();
+
+    final newer = commands.loadNewerSessionHistory('session-1');
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_newer': false,
+        'messages': [
+          {
+            'id': 'tool-result',
+            'type': 'tool_result',
+            'tool': 'shell_execute',
+            'output': 'done',
+            'status': 'done',
+            'tool_call_id': 'call-page-boundary',
+            'model_step_id': 'step-boundary',
+            'session_id': 'session-1',
+            'created_at': '2026-09-01T00:00:01Z',
+          },
+        ],
+      },
+    });
+    await newer;
+
+    expect(store.currentMessages, hasLength(1));
+    expect(store.currentMessages.single.status, EventStatus.done);
+    expect(store.currentMessages.single.toolOutput, 'done');
+  });
+
+  test('older no-progress cursor exhausts pagination without a request loop', () async {
+    final initial = commands.loadSessionHistory('session-1');
+    var payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': true,
+        'next_cursor': 'same-cursor',
+        'messages': [_historyRow('new', 'new')],
+      },
+    });
+    await initial;
+    socket.clearCaptured();
+
+    final older = commands.loadOlderSessionHistory('session-1');
+    payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'has_more': true,
+        'next_cursor': 'same-cursor',
+        'messages': const [],
+      },
+    });
+    await older;
+
+    expect(store.historyHasMore, isFalse);
+    socket.clearCaptured();
+    await commands.loadOlderSessionHistory('session-1');
+    expect(socket.capturedCommands, isEmpty);
+  });
+
   test('loadSessionHistory restores in-flight snapshot and preserves newer live chunks', () async {
     final future = commands.loadSessionHistory('session-1');
 
@@ -564,19 +1200,179 @@ void main() {
     expect(store.isCurrentConversationProcessing, isTrue);
   });
 
-  test('loadSessionHistory does not duplicate a live user message already persisted', () async {
+  test('loadSessionHistory preserves a live terminal tool over stale running history', () async {
+    final future = commands.loadSessionHistory('session-1');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+
+    store.apply(
+      CanonicalEvent(
+        id: 'tool_call-1',
+        kind: EventKind.toolCall,
+        status: EventStatus.done,
+        tool: const {
+          'name': 'file_read',
+          'output': 'fresh completed output',
+        },
+        timestamp: DateTime.parse('2026-08-14T12:00:01Z'),
+        sessionId: 'session-1',
+        runId: 'run-1',
+        toolCallId: 'call-1',
+      ),
+    );
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'messages': [
+          {
+            'id': 1,
+            'type': 'tool_call',
+            'status': 'running',
+            'tool_call_id': 'call-1',
+            'run_id': 'run-1',
+            'session_id': 'session-1',
+            'tool': {
+              'name': 'file_read',
+              'input': {'path': 'README.md'},
+            },
+            'created_at': '2026-08-14T12:00:00Z',
+          },
+        ],
+      },
+    });
+
+    await future;
+
+    expect(store.currentMessages, hasLength(1));
+    final tool = store.currentMessages.single;
+    expect(tool.status, EventStatus.done);
+    expect(tool.toolInput, {'path': 'README.md'});
+    expect(tool.toolOutput, 'fresh completed output');
+  });
+
+  test('loadSessionHistory hydrates the durable cancelled projection', () async {
+    final future = commands.loadSessionHistory('session-1');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'messages': [
+          {
+            'id': 1,
+            'type': 'tool_use',
+            'tool': 'shell_execute',
+            'input': {'command': 'sleep 30'},
+            'tool_call_id': 'call-cancelled',
+            'model_step_id': 'step-1',
+            'run_id': 'run-1',
+            'session_id': 'session-1',
+            'created_at': '2026-08-29T00:00:00Z',
+          },
+          {
+            'id': 2,
+            'type': 'tool_result',
+            'tool': 'shell_execute',
+            'output': 'Command cancelled by user.',
+            'status': 'cancelled',
+            'tool_call_id': 'call-cancelled',
+            'model_step_id': 'step-1',
+            'run_id': 'run-1',
+            'session_id': 'session-1',
+            'generation': 6,
+            'revision': 60,
+            'reason': 'user_stop',
+            'started_at': '2026-08-29T00:00:00Z',
+            'terminal_at': '2026-08-29T00:00:01Z',
+            'cleanup_outcome': 'completed',
+            'created_at': '2026-08-29T00:00:01Z',
+          },
+        ],
+      },
+    });
+
+    final history = await future;
+    final tool = history.single;
+    expect(tool.status, EventStatus.cancelled);
+    expect(tool.toolInput, {'command': 'sleep 30'});
+    expect(tool.toolOutput, 'Command cancelled by user.');
+    expect(tool.generation, 6);
+    expect(tool.revision, 60);
+    expect(tool.metadata, containsPair('reason', 'user_stop'));
+    expect(tool.metadata, containsPair('cleanup_outcome', 'completed'));
+  });
+
+  test('loadSessionHistory reapplies a newer live terminal revision', () async {
+    final future = commands.loadSessionHistory('session-1');
+    final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
+
+    store.apply(
+      CanonicalEvent(
+        id: 'tool_call-1',
+        kind: EventKind.toolCall,
+        status: EventStatus.cancelled,
+        tool: const {
+          'name': 'shell_execute',
+          'output': 'Command cancelled by user.',
+        },
+        timestamp: DateTime.parse('2026-08-29T00:00:02Z'),
+        sessionId: 'session-1',
+        runId: 'run-1',
+        toolCallId: 'call-1',
+        metadata: const {'generation': 3, 'revision': 30},
+      ),
+    );
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': payload['request_id'],
+        'messages': [
+          {
+            'id': 1,
+            'type': 'tool_result',
+            'tool': 'shell_execute',
+            'output': 'older timeout',
+            'status': 'error',
+            'tool_call_id': 'call-1',
+            'run_id': 'run-1',
+            'session_id': 'session-1',
+            'generation': 3,
+            'revision': 29,
+            'created_at': '2026-08-29T00:00:01Z',
+          },
+        ],
+      },
+    });
+
+    final history = await future;
+    expect(history.single.status, EventStatus.cancelled);
+    expect(history.single.toolOutput, 'Command cancelled by user.');
+    expect(history.single.revision, 30);
+  });
+
+  test('A to B to A reconciles a live user message with durable history identity', () async {
     final sentAt = DateTime.parse('2026-07-12T04:48:20Z');
     store.activateSession('session-1');
-    store.apply(
+    store.setHistory([
       CanonicalEvent(
         id: 'user_request-2',
         kind: EventKind.userMessage,
         text: 'Restart the agent',
         timestamp: sentAt,
         sessionId: 'session-1',
-        metadata: const {'request_id': 'request-2'},
+        metadata: const {
+          'message_id': 'message-2',
+          'request_id': 'request-2',
+        },
       ),
-    );
+    ]);
+    store.activateSession('session-2');
 
     final future = commands.loadSessionHistory('session-1');
     final payload = socket.capturedCommands.single['payload'] as Map<String, dynamic>;
@@ -588,9 +1384,13 @@ void main() {
         'messages': [
           {
             'id': 2,
+            'event_id': 'history-event-2',
             'sender': 'user',
             'type': 'user_message',
             'content': 'Restart the agent',
+            'message_id': 'message-2',
+            'request_id': 'request-2',
+            'session_id': 'session-1',
             'created_at': sentAt.toIso8601String(),
           },
         ],
@@ -599,10 +1399,39 @@ void main() {
 
     await future;
 
+    final matching = store.currentMessages.where(
+      (event) => event.messageId == 'message-2',
+    );
+    expect(matching, hasLength(1));
+    expect(matching.single.eventId, 'history-event-2');
+
+    store.activateSession('session-2');
+    final secondReload = commands.loadSessionHistory('session-1');
+    final secondPayload = socket.capturedCommands.last['payload'] as Map<String, dynamic>;
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_history',
+      'payload': {
+        'request_id': secondPayload['request_id'],
+        'messages': [
+          {
+            'id': 2,
+            'event_id': 'history-event-2',
+            'sender': 'user',
+            'type': 'user_message',
+            'content': 'Restart the agent',
+            'message_id': 'message-2',
+            'request_id': 'request-2',
+            'session_id': 'session-1',
+            'created_at': sentAt.toIso8601String(),
+          },
+        ],
+      },
+    });
+    await secondReload;
+
     expect(
-      store.currentMessages.where(
-        (event) => event.kind == EventKind.userMessage,
-      ),
+      store.currentMessages.where((event) => event.messageId == 'message-2'),
       hasLength(1),
     );
   });
@@ -1022,3 +1851,13 @@ void main() {
     expect(store.currentPendingSuspendedRequest, isNotNull);
   });
 }
+
+Map<String, dynamic> _historyRow(String id, String content) => {
+  'id': id,
+  'event_id': id,
+  'sender': 'user',
+  'type': 'user_message',
+  'content': content,
+  'created_at': '2026-01-01T00:00:00Z',
+  'session_id': 'session-1',
+};

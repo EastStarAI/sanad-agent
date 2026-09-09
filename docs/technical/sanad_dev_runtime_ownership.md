@@ -29,7 +29,9 @@ inventory makes Agent-only and Client-only groups verifiable while rejecting
 stale records, PID reuse, copied flags, and unrecorded partial managed groups.
 Additional manual or foreign Clients are outside that inventory: discovery may
 report them, but ordinary commands continue against the exact proven managed
-group and never mutate the extras.
+group and never mutate the extras. `sanad-dev ui` narrows that exact owned set
+again to launch profiles targeting `lib/driver_main.dart`; a regular managed
+Client can neither replace nor make a worktree's driver selection ambiguous.
 
 The resulting classes are managed, manual, orphaned, cross-owned,
 unverifiable, ambiguous, and stopped. Only managed groups accept ordinary
@@ -57,8 +59,11 @@ independently kills discovered children. Client targeting considers only
 lease-owned Clients and requires an exact managed device match, optionally
 disambiguated by VM-service port. An unmanaged Client with the same device does
 not make that managed selection ambiguous.
-`doctor` is read-only, and `doctor --fix` removes only an invalid/stale record
-when its launcher, Agent endpoint, and clients are all absent.
+`doctor` is read-only and prints one concrete next command/action for each
+classification. `doctor --fix` removes only an invalid/stale record when its
+launcher, Agent endpoint, and clients are all absent; a live endpoint alone is
+enough to preserve the lease, preventing a fix from converting a live orphan
+into an uncontrollable manual runtime.
 `cleanup-target-orphans` is the only target cleanup operation. It requires a
 dead recorded launcher, no target Agent, exact client nonce/profile identity,
 and a target Agent port different from the requester/source. IDE-owned,
@@ -182,6 +187,53 @@ The Runtime CLI remains `scripts/sanad_dev.dart`. Its client profile default is
 The development profile and endpoint overrides are explicit internal integration
 choices; `--no-cloud` is the explicit hosted-disable boundary. Automated tests
 inject fakes and never connect to Production.
+
+## Detached background launch
+
+`sanad-dev run --background` is the official detached source-runtime command.
+The foreground requester starts the same pinned Dart entry point in
+`ProcessStartMode.detached`, preserving the caller worktree and arguments while
+replacing the public flag with a private child marker. The detached launcher—not
+the requester shell—owns the Agent, Clients, journals, lease, and component
+control files. Background mode suppresses terminal sidecars and stdout mirroring;
+component output remains in the normal managed journals.
+
+The requester does not claim success merely because spawn returned. It waits for
+a new worktree-correlated startup attempt to become `managed` or `failed`, and
+also accepts an already-managed requested component set after an idempotent
+component request. After observing launcher death, the requester keeps a bounded
+two-second publication grace so the child's atomic attempt and locator writes
+win over PID polling; it then reports the staged result rather than a generic
+exit. Missing publication and overall handshake timeout are nonzero failures
+with a direct `status` recovery action. `--background` cannot
+be combined with `--dry-run`.
+
+## Startup-attempt diagnostics
+
+Before the launcher creates a managed lease, `run` creates a versioned startup
+attempt under the resolved Sanad Home and a worktree-scoped locator under the
+runtime metadata root. The attempt is diagnostic state, never ownership or
+liveness evidence. It advances through `preflight`, `recordCreated`,
+`componentsSpawned`, `readiness`, and `managed`; spawn/readiness failure records
+`cleanup`, a bounded non-secret reason, and the CLI exit status after owned
+process-tree cleanup. Journal attachment, terminal-adapter setup, and readiness
+probing share the same orchestration guard, so an exception after spawn cannot
+bypass tree cleanup. During startup, SIGINT and POSIX SIGTERM/SIGHUP enter one
+idempotent abort path that terminates every spawned tree, closes journals,
+deletes the lease, persists a staged interruption failure, then exits nonzero.
+Once managed, POSIX SIGHUP follows the controller's normal complete-pair cleanup
+rather than leaving supervised children behind.
+
+The record preserves both the requested Home selector/path and the resolved
+Home. Therefore a later `status` from the same worktree can explain a failed
+explicit-Home launch without presenting the default worktree Home as if it were
+the failed request. The locator is accepted only when its schema, worktree hash,
+attempt id, Home record, and Agent port agree. Invalid or stale locators are
+reported as diagnostics and cannot authorize mutation. A fresh `starting`
+attempt projects its exact stage in `status` for at most the six-minute
+component-control window, suppressing premature manual/orphaned/unverifiable
+labels without granting mutation. Expired or terminal attempts defer entirely
+to current process and lease evidence.
 
 ## Managed component journals
 

@@ -19,6 +19,7 @@ This contract applies to `client/lib/features/home/`.
 - Forced provider-setup gates must remain dismissible so users cannot be trapped outside Home.
 - Show the injected readable worktree label only for linked worktrees launched through the development runtime; normal and main-checkout runs must not show an isolation badge.
 - Render the bottom Home status bar only on native desktop platforms. Responsive width is a layout decision and must never make the status bar appear on Web or mobile.
+- The sidebar-header compact-window action is native-desktop-only and delegates all resize/restore state to `WindowManagerService`; Home presentation must not call `window_manager` directly or retain competing window bounds.
 
 ## Navigation Integration
 - Use the shared conversation history controller and typed destinations as the navigation authority.

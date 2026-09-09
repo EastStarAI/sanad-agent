@@ -161,6 +161,7 @@ class SessionRouteMutationCoordinator {
         requestId: active.requestId,
         transaction: tx,
         updatedAt: updatedAt,
+        turnStartedAt: active.createdAt,
       );
       return SessionRouteMutationResult(
         sessionId: sessionId,

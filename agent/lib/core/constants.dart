@@ -12,6 +12,20 @@ void setSanadStateHomeOverride(String? path) {
   _sanadStateHomeOverride = path;
 }
 
+/// Whether runtime state has been explicitly redirected away from the
+/// process's inherited Sanad Home.
+///
+/// Tests use this signal to prove that an on-disk state database is isolated
+/// before it is opened. `SANAD_HOME` alone is intentionally not sufficient:
+/// developer test commands commonly inherit the user's real Sanad Home.
+bool hasExplicitSanadStateIsolation() {
+  if (_sanadHomeOverride != null || _sanadStateHomeOverride != null) {
+    return true;
+  }
+  final stateHome = Platform.environment['SANAD_STATE_HOME'];
+  return stateHome != null && stateHome.isNotEmpty;
+}
+
 /// Returns the path to the Sanad home directory.
 /// Priority:
 /// 1. Manual override via setSanadHomeOverride()

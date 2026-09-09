@@ -9,9 +9,42 @@ description: "The stable release pipeline, protected signing boundaries, artifac
 
 The public `EastStarAI/sanad-agent` repository owns CI, artifact construction,
 signing orchestration, the release manifest, update-feed generation, and the
-canonical installer sources. The current patch release uses marketing version `1.0.4` and build number `5` for both Sanad Agent and Sanad Client. RC tags use `v1.0.4-rc.N`; Stable uses `v1.0.4`. The unpublished `v1.0.3` candidate tag is retained as failed provenance after its Windows smoke gate rejected a PowerShell reserved-variable collision; it owns no GitHub Release or Production asset. Each later candidate records its increasing build number in the checked-in contract.
+canonical installer sources. The current patch release uses marketing version `1.0.9` and build number `10` for both Sanad Agent and Sanad Client. RC tags use `v1.0.9-rc.N`; Stable uses `v1.0.9`. The unpublished `v1.0.3` candidate tag is retained as failed provenance after its Windows smoke gate rejected a PowerShell reserved-variable collision; it owns no GitHub Release or Production asset. Each later candidate records its increasing build number in the checked-in contract.
 
 Pull-request CI is read-only and never receives signing or deployment credentials. A protected validation-only dispatch from `main` can build the complete signed Agent/Client matrix, including a private IPA, as retained private artifacts without a tag, Draft, Release, TestFlight upload, or deployment. Signing jobs use protected GitHub Environments. Assembly remains contents-read; only the separate Draft and publication jobs receive contents-write.
+
+## Automated release preparation
+
+Future releases use the release-delivery reference loaded on demand by the
+repository `Sanad Pull Request Lifecycle` skill and the FVM-managed
+`agent/tool/release_tool.dart prepare-release` command. The command
+accepts one increasing Stable semantic version and build number, validates every
+source surface before writing, and updates Agent/Client package metadata,
+release-contract package lock entries, native Windows version resources, the
+canonical contract/tag/artifact filenames, release-note identity, changelog
+slot, and this current-release statement. `check-preparation` then rejects stale
+or unfinished release identity before a pull request can pass CI. Release prose
+remains derived from merged Git history by the skill rather than invented by the
+mechanical command.
+
+A release-preparation pull request may pass without `release-reviewed` only when
+`scripts/release/verify_metadata_release_diff.sh` proves the diff is exactly the
+11 established metadata/prose files and every changed mechanical line is a
+version, build, tag, or canonical artifact-filename substitution. The normal
+protected review remains fail-closed for any workflow, signing, deployment,
+script, installer-logic, task-plan, unrelated-file, or unexpected-line change.
+This narrow exception permits the explicitly requested release-delivery
+extension to prepare, push, and squash-merge the metadata PR without introducing
+an early publication decision. It grants no Environment, secret, tag rewrite, or publication access.
+
+After merge, the skill creates the immutable tag only on the verified public
+`main` commit, requires PR #129 merge commit
+`872a5b75aec8303bf59ea39e25826d017d0ad714` and every selected merged change to
+be ancestors, and identifies the release workflow by both tag and source SHA.
+It uses bounded polling and stops on any failed or ambiguous prerequisite. The
+one final human decision is requested only when the complete signed candidate,
+metadata, attestations, and private Draft have succeeded and the sole pending
+protected deployment is `release-publication`.
 
 ## Artifact channels
 
@@ -55,8 +88,11 @@ workflow fetches the authoritative notary log with a bounded retry and requires
 architecture plus `cdhash` match to the signed executable. This avoids relying
 on the local `codesign --test-requirement '=notarized'` online-ticket cache,
 which remained unavailable for more than ten minutes despite an accepted ticket
-for the exact raw CLI. `spctl --type execute` is not used because it rejects
-valid notarized non-bundle executables.
+for the exact raw CLI. Runtime installers instead require the canonical size and
+SHA-256 plus a valid Apple-anchored Developer ID signature with exact Team ID
+`UC2824B99G` and publisher name. They do not repeat the nondeterministic ticket
+lookup. `spctl --type execute` is not used because it rejects valid notarized
+non-bundle executables.
 
 The hosted macOS Client job restores the exported Sparkle Ed25519 key to a
 runner-temporary file and passes that file directly to Sparkle `sign_update`.

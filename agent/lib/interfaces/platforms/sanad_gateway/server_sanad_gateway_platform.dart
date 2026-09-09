@@ -22,27 +22,30 @@ import 'sanad_gateway_behavior.dart';
 import 'package:sanad_agent/infrastructure/voice/gemini_voice_provider.dart';
 import 'package:sanad_agent/infrastructure/voice/voice_engine.dart';
 import 'package:sanad_agent/infrastructure/voice/voice_transport_channel.dart';
+import 'package:sanad_agent/interfaces/models/device_control.dart';
+import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 
 class ServerSanadGatewayPlatform extends BasePlatform
     with SanadGatewayBehavior {
   static const _remoteWorkspaceManagementCommands = <String>{
+    CanonicalEventTypes.listWorkspaces,
     CanonicalEventTypes.createWorkspace,
+    CanonicalEventTypes.renameWorkspace,
+    CanonicalEventTypes.removeWorkspace,
     CanonicalEventTypes.relocateWorkspace,
     CanonicalEventTypes.browseWorkspaceTree,
     CanonicalEventTypes.createFolder,
     CanonicalEventTypes.renameFolder,
     CanonicalEventTypes.deleteFolder,
   };
-  static const _remoteWorkspaceManagementDisabledCode =
-      'remote_workspace_management_disabled';
-  static const _remoteWorkspaceManagementDisabledMessage =
-      'Remote workspace management is disabled for security reasons.';
+  static const _remoteMcpReplaceCommands = <String>{
+    CanonicalEventTypes.replaceMcpConfig,
+  };
   static const _remoteMcpManagementCommands = <String>{
     CanonicalEventTypes.listMcpServers,
     CanonicalEventTypes.saveMcpServer,
     CanonicalEventTypes.deleteMcpServer,
-    CanonicalEventTypes.replaceMcpConfig,
     CanonicalEventTypes.inspectMcpServer,
     CanonicalEventTypes.previewMcpImport,
     CanonicalEventTypes.exportMcpServers,
@@ -88,7 +91,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
   Future<void>? _authSynchronizationFuture;
   bool _authSynchronizationPending = false;
 
+  String? get registeredDeviceId => _registeredDeviceId;
+
   io.Socket? get socket => _socket;
+
+  bool get isCloudRegistered =>
+      (_socket?.connected ?? false) && _registeredDeviceId != null;
 
   @visibleForTesting
   set socketForTesting(io.Socket? s) => _socket = s;
@@ -199,7 +207,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
       _logger.info(
         '⬇️ [socket] Received execute_tool: ${envelope['tool_name']}',
       );
-      _logger.fine('⬇️ [socket] execute_tool payload: $envelope');
+      logFinePayload('⬇️ [socket] execute_tool payload:', envelope);
       // TODO: Implement tool execution mapping to agent tools
     });
 
@@ -219,7 +227,19 @@ class ServerSanadGatewayPlatform extends BasePlatform
       }
 
       if (_isRemoteWorkspaceManagementCommand(command)) {
-        await _rejectRemoteWorkspaceManagement(
+        await _dispatchManagedWorkspace(
+          command: command!,
+          requestId:
+              envelope['request_id']?.toString() ??
+              payload['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          payload: payload,
+        );
+        return;
+      }
+      if (_isRemoteMcpReplaceCommand(command)) {
+        await _rejectRemoteMcpManagement(
           command: command!,
           requestId:
               envelope['request_id']?.toString() ??
@@ -230,8 +250,31 @@ class ServerSanadGatewayPlatform extends BasePlatform
         return;
       }
       if (_isRemoteMcpManagementCommand(command)) {
-        await _rejectRemoteMcpManagement(
+        await _dispatchManagedMcp(
           command: command!,
+          requestId:
+              envelope['request_id']?.toString() ??
+              payload['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          payload: payload,
+        );
+        return;
+      }
+      if (DeviceCommandAdmission.isDeviceControlCommand(command)) {
+        await _dispatchDeviceControl(
+          command: command!,
+          requestId:
+              envelope['request_id']?.toString() ??
+              payload['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          payload: payload,
+        );
+        return;
+      }
+      if (_isMismatchedCloudDevice(deviceId)) {
+        await _rejectWrongDevice(
           requestId:
               envelope['request_id']?.toString() ??
               payload['request_id']?.toString(),
@@ -292,7 +335,19 @@ class ServerSanadGatewayPlatform extends BasePlatform
       }
 
       if (_isRemoteWorkspaceManagementCommand(event.type)) {
-        await _rejectRemoteWorkspaceManagement(
+        await _dispatchManagedWorkspace(
+          command: event.type,
+          requestId:
+              event.payload['request_id']?.toString() ??
+              envelope['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          payload: event.payload,
+        );
+        return;
+      }
+      if (_isRemoteMcpReplaceCommand(event.type)) {
+        await _rejectRemoteMcpManagement(
           command: event.type,
           requestId:
               event.payload['request_id']?.toString() ??
@@ -303,8 +358,31 @@ class ServerSanadGatewayPlatform extends BasePlatform
         return;
       }
       if (_isRemoteMcpManagementCommand(event.type)) {
-        await _rejectRemoteMcpManagement(
+        await _dispatchManagedMcp(
           command: event.type,
+          requestId:
+              event.payload['request_id']?.toString() ??
+              envelope['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          payload: event.payload,
+        );
+        return;
+      }
+      if (DeviceCommandAdmission.isDeviceControlCommand(event.type)) {
+        await _dispatchDeviceControl(
+          command: event.type,
+          requestId:
+              event.payload['request_id']?.toString() ??
+              envelope['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          payload: event.payload,
+        );
+        return;
+      }
+      if (_isMismatchedCloudDevice(deviceId)) {
+        await _rejectWrongDevice(
           requestId:
               event.payload['request_id']?.toString() ??
               envelope['request_id']?.toString(),
@@ -374,28 +452,77 @@ class ServerSanadGatewayPlatform extends BasePlatform
   bool _isRemoteWorkspaceManagementCommand(String? command) =>
       command != null && _remoteWorkspaceManagementCommands.contains(command);
 
-  Future<void> _rejectRemoteWorkspaceManagement({
+  Future<void> _dispatchManagedWorkspace({
     required String command,
     required String? requestId,
     required String sessionId,
     required String deviceId,
+    required Map<String, dynamic> payload,
   }) async {
-    _logger.warning('Blocking remote workspace command: $command');
-    await _emitAgentEvent({
-      'device_id': _registeredDeviceId ?? deviceId,
-      'type': 'event',
-      'event': 'error',
+    if (_isMismatchedCloudDevice(deviceId)) {
+      await _rejectWrongDevice(
+        requestId: requestId,
+        sessionId: sessionId,
+        deviceId: deviceId,
+      );
+      return;
+    }
+    final commandEnvelope = {
+      'command': command,
+      'device_id': deviceId,
       'payload': {
-        'request_id': requestId,
-        'code': _remoteWorkspaceManagementDisabledCode,
-        'message': _remoteWorkspaceManagementDisabledMessage,
+        ...payload,
+        'request_id': ?requestId,
+        'session_id': sessionId,
+        'device_id': deviceId,
+        'managed_remote': true,
       },
-      'session_id': sessionId,
-    });
+    };
+    await handleIncomingCommand(
+      envelope: commandEnvelope,
+      runtimeBridge: getIt<PlatformRuntimeBridge>(),
+      onResponse: _emitAgentEvent,
+    );
   }
+
+  bool _isRemoteMcpReplaceCommand(String? command) =>
+      command != null && _remoteMcpReplaceCommands.contains(command);
 
   bool _isRemoteMcpManagementCommand(String? command) =>
       command != null && _remoteMcpManagementCommands.contains(command);
+
+  Future<void> _dispatchManagedMcp({
+    required String command,
+    required String? requestId,
+    required String sessionId,
+    required String deviceId,
+    required Map<String, dynamic> payload,
+  }) async {
+    if (_isMismatchedCloudDevice(deviceId)) {
+      await _rejectWrongDevice(
+        requestId: requestId,
+        sessionId: sessionId,
+        deviceId: deviceId,
+      );
+      return;
+    }
+    final commandEnvelope = {
+      'command': command,
+      'device_id': deviceId,
+      'payload': {
+        ...payload,
+        'request_id': ?requestId,
+        'session_id': sessionId,
+        'device_id': deviceId,
+        'cloud_admitted': true,
+      },
+    };
+    await handleIncomingCommand(
+      envelope: commandEnvelope,
+      runtimeBridge: getIt<PlatformRuntimeBridge>(),
+      onResponse: _emitAgentEvent,
+    );
+  }
 
   Future<void> _rejectRemoteMcpManagement({
     required String command,
@@ -413,6 +540,64 @@ class ServerSanadGatewayPlatform extends BasePlatform
         'code': _remoteMcpManagementDisabledCode,
         'message': _remoteMcpManagementDisabledMessage,
       },
+      'session_id': sessionId,
+    });
+  }
+
+  Future<void> _dispatchDeviceControl({
+    required String command,
+    required String? requestId,
+    required String sessionId,
+    required String deviceId,
+    required Map<String, dynamic> payload,
+  }) async {
+    if (_isMismatchedCloudDevice(deviceId)) {
+      await _rejectWrongDevice(
+        requestId: requestId,
+        sessionId: sessionId,
+        deviceId: deviceId,
+      );
+      return;
+    }
+    final commandEnvelope = {
+      'command': command,
+      'device_id': deviceId,
+      'payload': {
+        ...payload,
+        'request_id': ?requestId,
+        'session_id': sessionId,
+      },
+    };
+    await handleIncomingCommand(
+      envelope: commandEnvelope,
+      runtimeBridge: getIt<PlatformRuntimeBridge>(),
+      onResponse: _emitAgentEvent,
+    );
+  }
+
+  bool _isMismatchedCloudDevice(String deviceId) {
+    final registered = _registeredDeviceId?.trim() ?? '';
+    final requested = deviceId.trim();
+    return registered.isNotEmpty &&
+        requested.isNotEmpty &&
+        requested != registered;
+  }
+
+  Future<void> _rejectWrongDevice({
+    required String? requestId,
+    required String sessionId,
+    required String deviceId,
+  }) async {
+    await _emitAgentEvent({
+      'device_id': _registeredDeviceId ?? deviceId,
+      'type': 'event',
+      'event': 'error',
+      'payload': DeviceControlError(
+        code: DeviceControlErrorCodes.wrongDevice,
+        message: 'The command targeted a different device.',
+        requestId: requestId,
+        deviceId: deviceId,
+      ).toPayload(),
       'session_id': sessionId,
     });
   }
@@ -556,7 +741,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
     } else {
       _logger.info('⬆️ [socket] Emitting device_event: $eventType');
     }
-    _logger.fine('⬆️ [socket] Device event payload: $canonicalEnvelope');
+    logFinePayload('⬆️ [socket] Device event payload:', canonicalEnvelope);
 
     _socket!.emit('device_event', canonicalEnvelope);
   }

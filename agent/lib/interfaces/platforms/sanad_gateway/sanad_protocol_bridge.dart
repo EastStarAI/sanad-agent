@@ -1,9 +1,13 @@
+import 'dart:io';
+
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/app_config.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/update/agent_update_service.dart';
 import 'package:sanad_agent/core/provider_runtime/env_file_service.dart';
 import 'package:sanad_agent/core/provider_runtime/model_options_service.dart';
 import 'package:sanad_agent/core/provider_runtime/model_selection_service.dart';
@@ -21,6 +25,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart'
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
@@ -28,11 +33,15 @@ import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.d
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/device_settings_service.dart';
+import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 
 import 'handlers/device_settings_command_handler.dart';
+import 'handlers/device_control_command_handler.dart';
 import 'handlers/provider_command_handler.dart';
+import 'handlers/session_fork_command_handler.dart';
 import 'handlers/session_query_handler.dart';
 import 'handlers/session_recovery_command_handler.dart';
+import 'handlers/session_compact_command_handler.dart';
 import 'handlers/session_turn_replay_command_handler.dart';
 import 'handlers/workspace_command_handler.dart';
 import 'protocol/canonical_events.dart';
@@ -48,7 +57,10 @@ class SanadProtocolBridge {
   WorkspaceCommandHandler? __workspaceHandler;
   SessionRecoveryCommandHandler? __recoveryHandler;
   SessionTurnReplayCommandHandler? __turnReplayHandler;
+  SessionCompactCommandHandler? __compactHandler;
+  SessionForkCommandHandler? __forkHandler;
   DeviceSettingsCommandHandler? __deviceSettingsHandler;
+  DeviceControlCommandHandler? __deviceControlHandler;
 
   /// Lazy accessors so optional runtime services registered after
   /// construction (e.g. in tests or deferred daemon startup) are only
@@ -94,6 +106,9 @@ class SanadProtocolBridge {
         routeTransitions: getIt.isRegistered<SessionRouteTransitionRepository>()
             ? getIt<SessionRouteTransitionRepository>()
             : null,
+        compactionBoundaries: getIt.isRegistered<CompactionBoundaryRepository>()
+            ? getIt<CompactionBoundaryRepository>()
+            : null,
         bridge: this,
       );
 
@@ -106,6 +121,9 @@ class SanadProtocolBridge {
         policyStore: getIt.isRegistered<WorkspacePolicyStore>()
             ? getIt<WorkspacePolicyStore>()
             : null,
+        admission: getIt.isRegistered<DeviceCommandAdmission>()
+            ? getIt<DeviceCommandAdmission>()
+            : null,
         bridge: this,
       );
 
@@ -114,6 +132,28 @@ class SanadProtocolBridge {
         settings: getIt<DeviceSettingsService>(),
         bridge: this,
       );
+
+  DeviceControlCommandHandler? get _deviceControlHandler {
+    if (__deviceControlHandler != null) return __deviceControlHandler;
+    if (getIt.isRegistered<DeviceControlCommandHandler>()) {
+      return __deviceControlHandler = getIt<DeviceControlCommandHandler>();
+    }
+    if (!getIt.isRegistered<DeviceCommandAdmission>() ||
+        !getIt.isRegistered<DaemonRestartCoordinator>() ||
+        !getIt.isRegistered<Config>()) {
+      return null;
+    }
+    return __deviceControlHandler = DeviceControlCommandHandler(
+      admission: getIt<DeviceCommandAdmission>(),
+      bridge: this,
+      restartCoordinator: getIt<DaemonRestartCoordinator>(),
+      updateService: () => AgentUpdateService(
+        currentVersion: getIt<Config>().version,
+        executablePath: Platform.resolvedExecutable,
+        isSourceManaged: AppConfig.isSourceRun,
+      ),
+    );
+  }
 
   SessionRecoveryCommandHandler? get _recoveryHandler => __recoveryHandler ??=
       (getIt.isRegistered<RuntimeRecoveryService>() &&
@@ -144,9 +184,29 @@ class SanadProtocolBridge {
                   getIt.isRegistered<PersistedRuntimeStateRepository>()
                   ? getIt<PersistedRuntimeStateRepository>()
                   : null,
+              compactionBoundaries:
+                  getIt.isRegistered<CompactionBoundaryRepository>()
+                  ? getIt<CompactionBoundaryRepository>()
+                  : null,
               bridge: this,
             )
           : null;
+
+  SessionCompactCommandHandler? get _compactHandler =>
+      __compactHandler ??= getIt.isRegistered<SessionRunOrchestrator>()
+      ? SessionCompactCommandHandler(
+          orchestrator: getIt<SessionRunOrchestrator>(),
+          bridge: this,
+        )
+      : null;
+
+  SessionForkCommandHandler? get _forkHandler =>
+      __forkHandler ??= getIt.isRegistered<SessionManager>()
+      ? SessionForkCommandHandler(
+          sessionManager: getIt<SessionManager>(),
+          bridge: this,
+        )
+      : null;
 
   GatewayEvent? translateCommand(Map<String, dynamic> data, String platformId) {
     return CanonicalToAgent.translate(data, platformId);
@@ -166,7 +226,12 @@ class SanadProtocolBridge {
         type: canonicalEventType,
         sessionId: response.sessionId,
         runId: response.runId,
-        payload: canonicalPayload,
+        payload: {
+          ...canonicalPayload,
+          if (response.turnId != null &&
+              !canonicalPayload.containsKey('turn_id'))
+            'turn_id': response.turnId,
+        },
         eventId: response.eventId,
         delivery: response.delivery,
       );
@@ -226,6 +291,11 @@ class SanadProtocolBridge {
       case 'workspace.rename':
         event = CanonicalEvent(
           type: CanonicalEventTypes.renameWorkspace,
+          payload: payload,
+        );
+      case 'workspace.remove':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.removeWorkspace,
           payload: payload,
         );
       case 'workspace.relocate':
@@ -342,6 +412,17 @@ class SanadProtocolBridge {
         event = CanonicalEvent(
           type: CanonicalEventTypes.deviceSettingsUpdate,
           payload: payload,
+        );
+      case CanonicalEventTypes.deviceUpdateCheck:
+      case CanonicalEventTypes.deviceUpdateApply:
+      case CanonicalEventTypes.deviceRuntimeRestart:
+        event = CanonicalEvent(
+          type: command!,
+          payload: {
+            ...payload,
+            if (data['device_id'] != null) 'device_id': data['device_id'],
+          },
+          sessionId: sessionId,
         );
       case 'provider.setup_status':
         event = CanonicalEvent(
@@ -541,6 +622,18 @@ class SanadProtocolBridge {
           sessionId: sessionId,
           payload: payload,
         );
+      case 'session.compact':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.sessionCompact,
+          sessionId: sessionId,
+          payload: payload,
+        );
+      case 'session.fork':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.sessionFork,
+          sessionId: sessionId,
+          payload: payload,
+        );
       // Plan 30: runtime recovery commands
       case 'session.runtime_retry':
         event = CanonicalEvent(
@@ -700,6 +793,11 @@ class SanadProtocolBridge {
           await _workspaceHandler.buildRenameWorkspaceEnvelope(event),
         );
         return;
+      case CanonicalEventTypes.removeWorkspace:
+        await emitEnvelope(
+          await _workspaceHandler.buildRemoveWorkspaceEnvelope(event),
+        );
+        return;
       case CanonicalEventTypes.relocateWorkspace:
         await emitEnvelope(
           await _workspaceHandler.buildRelocateWorkspaceEnvelope(event),
@@ -814,6 +912,18 @@ class SanadProtocolBridge {
         if (result.restartRequired) {
           getIt<DaemonRestartCoordinator>().scheduleRestart();
         }
+        return;
+      case CanonicalEventTypes.deviceUpdateCheck:
+      case CanonicalEventTypes.deviceUpdateApply:
+      case CanonicalEventTypes.deviceRuntimeRestart:
+        final handler = _deviceControlHandler;
+        if (handler == null) return;
+        await emitEnvelope(
+          await handler.buildEnvelope(
+            event,
+            deviceId: event.payload['device_id']?.toString(),
+          ),
+        );
         return;
       case CanonicalEventTypes.providerSetupStatus:
         await emitEnvelope(
@@ -1028,6 +1138,12 @@ class SanadProtocolBridge {
       // Task 49: historical turn edit/retry.
       case CanonicalEventTypes.sessionTurnReplay:
         await _turnReplayHandler?.handle(event, emitEnvelope);
+        return;
+      case CanonicalEventTypes.sessionCompact:
+        await _compactHandler?.handle(event, emitEnvelope);
+        return;
+      case CanonicalEventTypes.sessionFork:
+        await _forkHandler?.handle(event, emitEnvelope);
         return;
       // Plan 30: runtime recovery commands
       case CanonicalEventTypes.sessionRuntimeRetry:

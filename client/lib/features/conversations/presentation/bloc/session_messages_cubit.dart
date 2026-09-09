@@ -13,7 +13,9 @@ import 'package:sanad_client/features/conversations/domain/models/slash_command_
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
@@ -198,6 +200,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           clearRequestedSessionId: true,
           isHistoryLoading: false,
           showDelayedLoading: false,
+          hasOlderHistory: currentAgent != null && conversationRepository.historyHasMore(currentAgent),
+          hasNewerHistory: currentAgent != null && conversationRepository.historyHasNewer(currentAgent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
         ),
       );
       return;
@@ -273,6 +281,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           clearRequestedSessionId: true,
           isHistoryLoading: false,
           showDelayedLoading: false,
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
         ),
       );
     } else if (agent != null) {
@@ -316,6 +330,134 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       ),
     );
     unawaited(_loadHistoryForAtomicSwap(agent, sessionId, generation));
+  }
+
+  Future<void> loadOlderHistory() async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || state.isOlderHistoryLoading || !state.hasOlderHistory) {
+      return;
+    }
+    final generation = _requestGeneration;
+    emit(
+      state.copyWith(
+        isOlderHistoryLoading: true,
+        clearOlderHistoryError: true,
+      ),
+    );
+    try {
+      await conversationRepository.loadOlderSessionHistory(agent, sessionId);
+      if (isClosed || generation != _requestGeneration || state.activeSessionId != sessionId) {
+        return;
+      }
+      emit(
+        state.copyWith(
+          messages: conversationRepository.currentMessages(agent),
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
+        ),
+      );
+    } catch (error, stackTrace) {
+      if (isClosed || generation != _requestGeneration) return;
+      _logger.warning(
+        'Older history load failed device_id=${agent.id} '
+        'session_id=$sessionId error_type=${error.runtimeType}',
+        error,
+        stackTrace,
+      );
+      emit(
+        state.copyWith(
+          isOlderHistoryLoading: false,
+          olderHistoryError: 'Could not load earlier messages.',
+        ),
+      );
+    }
+  }
+
+  Future<void> loadNewerHistory() async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || state.isNewerHistoryLoading || !state.hasNewerHistory) {
+      return;
+    }
+    final generation = _requestGeneration;
+    emit(
+      state.copyWith(
+        isNewerHistoryLoading: true,
+        clearNewerHistoryError: true,
+      ),
+    );
+    try {
+      await conversationRepository.loadNewerSessionHistory(agent, sessionId);
+      if (isClosed || generation != _requestGeneration || state.activeSessionId != sessionId) {
+        return;
+      }
+      emit(
+        state.copyWith(
+          messages: conversationRepository.currentMessages(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
+        ),
+      );
+    } catch (error, stackTrace) {
+      if (isClosed || generation != _requestGeneration) return;
+      _logger.warning(
+        'Newer history load failed device_id=${agent.id} '
+        'session_id=$sessionId error_type=${error.runtimeType}',
+        error,
+        stackTrace,
+      );
+      emit(
+        state.copyWith(
+          isNewerHistoryLoading: false,
+          newerHistoryError: 'Could not load later messages.',
+        ),
+      );
+    }
+  }
+
+  Future<void> loadAnchoredHistory(String anchorEventId) async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || anchorEventId.trim().isEmpty) {
+      return;
+    }
+    if (state.messages.any((event) => event.id == anchorEventId)) return;
+    final generation = ++_requestGeneration;
+    try {
+      await conversationRepository.loadAnchoredSessionHistory(
+        agent,
+        sessionId,
+        anchorEventId,
+      );
+      if (isClosed || generation != _requestGeneration || state.activeSessionId != sessionId) {
+        return;
+      }
+      emit(
+        state.copyWith(
+          messages: conversationRepository.currentMessages(agent),
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
+        ),
+      );
+    } catch (error, stackTrace) {
+      if (isClosed || generation != _requestGeneration) return;
+      _logger.fine(
+        'Saved history anchor unavailable device_id=${agent.id} '
+        'session_id=$sessionId error_type=${error.runtimeType}',
+        error,
+        stackTrace,
+      );
+    }
   }
 
   /// Invalidates a deleted session even when it is merely the presentation
@@ -390,6 +532,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           clearRequestedSessionId: true,
           isHistoryLoading: false,
           showDelayedLoading: false,
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
         ),
       );
     } catch (error, stackTrace) {
@@ -871,9 +1019,13 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
   Future<TurnReplayResult> replayTurn({
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) async {
     final agent = _currentAgent;
     final sessionId = state.activeSessionId;
@@ -884,17 +1036,64 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         requiresConfirmation: false,
       );
     }
-    return conversationRepository.replayTurn(
+    final result = await conversationRepository.replayTurn(
       agent,
       sessionId: sessionId,
       targetRequestId: targetRequestId,
+      targetMessageId: targetMessageId,
+      targetTurnId: targetTurnId,
+      expectedHistoryRevision: expectedHistoryRevision ?? sessionCubit.state.selectedSession?.historyRevision ?? 0,
       action: action,
       message: message,
       providerInstanceId: state.nextMessageProviderId,
       modelId: state.nextMessageModel,
       thinkingMode: state.nextMessageThinkingMode,
       confirmedReplayUnsafe: confirmedReplayUnsafe,
+      confirmedDropSteers: confirmedDropSteers,
     );
+    final nextRevision = result.historyRevision;
+    final selected = sessionCubit.state.selectedSession;
+    if (nextRevision != null && selected != null && selected.id == sessionId) {
+      sessionCubit.applyHistoryRevision(sessionId, nextRevision);
+    }
+    return result;
+  }
+
+  Future<SessionForkResult> forkSession({
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || sessionId.isEmpty) {
+      return const SessionForkResult(outcome: 'missing_session');
+    }
+    final result = await conversationRepository.forkSession(
+      agent,
+      sessionId: sessionId,
+      targetMessageId: targetMessageId,
+      targetTurnId: targetTurnId,
+    );
+    final child = result.child;
+    if (result.isAccepted && child != null) {
+      try {
+        await sessionCubit.adoptForkedSession(
+          child.copyWith(deviceId: child.deviceId ?? agent.id),
+        );
+      } catch (error, stackTrace) {
+        _logger.warning(
+          'Fork committed but child navigation failed.',
+          error,
+          stackTrace,
+        );
+        return SessionForkResult(
+          outcome: result.outcome,
+          child: child,
+          navigationFailed: true,
+        );
+      }
+    }
+    return result;
   }
 
   Future<void> retryRuntimeNotice() async {
@@ -1311,6 +1510,18 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     await _ensureWorkspacesForAgent(agent, force: true);
   }
 
+  Future<SessionCompactResult> compactSession() async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || sessionId.isEmpty) {
+      return const SessionCompactResult(outcome: 'missing_session');
+    }
+    return conversationRepository.compactSession(
+      agent,
+      sessionId: sessionId,
+    );
+  }
+
   Future<List<SlashCommandEntry>> searchSlashCommands({String? query}) async {
     final agent = _currentAgent;
     if (agent == null) {
@@ -1375,8 +1586,9 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   }
 
   Future<DeviceWorkspace?> createWorkspace({
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) async {
     final agent = _currentAgent;
     if (agent == null) return null;
@@ -1387,11 +1599,13 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
               agent,
               path: path,
               name: name,
+              description: description,
             )
           : await conversationCacheRepository!.createWorkspace(
               agent,
               path: path,
               name: name,
+              description: description,
             );
       if (workspace == null) return null;
       final currentList = List<DeviceWorkspace>.from(_workspacesByAgentId[agent.id] ?? const []);

@@ -29,7 +29,7 @@ Success event: `workspace.relocated`, carrying the correlated request id and com
 
 A workspace row shows a missing-folder warning when unavailable and disables New Conversation for that workspace. A settings gear appears only while hovering the row. It opens `/settings?section=workspace&device_id=...&workspace_id=...`; Settings selects the exact inspection device and workspace without changing the active conversation device.
 
-The Workspace Settings overview owns `Rename Workspace` and `Change Path`. Local reachable desktop devices use the native directory picker; remote devices use daemon-owned browsing. Mutation results update the conversation cache only after the correlated authoritative response. A rejected mutation preserves the daemon-provided reason through the command and cache layers and displays it with the project's error toast; Settings does not replace it with a generic message or use a `SnackBar`.
+The Workspace Settings overview owns `Rename Workspace` and `Change Path`. Local reachable desktop devices use the native directory picker; remote devices use daemon-owned browsing. Mutation results update the conversation cache only after the correlated authoritative response. Each successful create, rename, relocate, or remove mutation invalidates older in-flight workspace-list generations for that device so a stale refresh cannot overwrite the confirmed result. A rejected mutation preserves the daemon-provided reason through the command and cache layers and displays it with the project's error toast; Settings does not replace it with a generic message or use a `SnackBar`.
 
 ## Legacy Cache Reconciliation
 

@@ -7,6 +7,7 @@ import '../../core/provider_runtime/provider_rate_limiter.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'llm_adapter.dart';
 import 'llm_request_options.dart';
+import 'provider_request_cancelled_exception.dart';
 
 /// Callback invoked when the rate limiter blocks a request. The runtime uses
 /// it to broadcast a `session.runtime_notice` (Plan 30 §6.3, §4.1). Returns a
@@ -79,7 +80,7 @@ class RateLimitedLLMAdapter implements LLMAdapter {
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async {
-    await _acquire();
+    await _acquire(options);
     return _inner.generateResponse(
       history,
       tools: tools,
@@ -95,7 +96,7 @@ class RateLimitedLLMAdapter implements LLMAdapter {
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async* {
-    await _acquire();
+    await _acquire(options);
     yield* _inner.generateStream(
       history,
       tools: tools,
@@ -104,7 +105,11 @@ class RateLimitedLLMAdapter implements LLMAdapter {
     );
   }
 
-  Future<void> _acquire() async {
+  Future<void> _acquire([LLMRequestOptions options = const LLMRequestOptions()]) async {
+    final scope = options.cancellationScope;
+    if (scope != null && !scope.isPublicationOpen) {
+      throw ProviderRequestCancelledException(operation: 'rate_limit_wait');
+    }
     if (!limiter.isLimited(providerInstanceId, requestsPerMinute)) {
       return;
     }
@@ -120,14 +125,28 @@ class RateLimitedLLMAdapter implements LLMAdapter {
         limit: requestsPerMinute,
       );
     }
+    final scopeCancel = scope?.whenCancelled;
+    final mergedCancel = _mergeCancelTokens(cancelToken, scopeCancel);
     final permit = await limiter.waitForSlot(
       providerInstanceId,
       requestsPerMinute,
-      cancelToken: cancelToken,
+      cancelToken: mergedCancel,
     );
     if (permit.cancelled) {
+      if (scope != null && !scope.isPublicationOpen) {
+        throw ProviderRequestCancelledException(operation: 'rate_limit_wait');
+      }
       throw RateLimitCancelled(providerInstanceId);
     }
+  }
+
+  static Future<void>? _mergeCancelTokens(
+    Future<void>? first,
+    Future<void>? second,
+  ) {
+    if (first == null) return second;
+    if (second == null) return first;
+    return Future.any([first, second]);
   }
 }
 

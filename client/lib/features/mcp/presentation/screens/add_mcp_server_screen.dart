@@ -17,14 +17,14 @@ enum _McpServerFormType { remote, stdio }
 class AddMcpServerScreen extends StatefulWidget {
   const AddMcpServerScreen({
     super.key,
-    this.workspacePath,
+    this.workspaceId,
     this.scopeLabel,
     this.scope = McpConfigScope.global,
     this.device,
     this.initialConfig,
   });
 
-  final String? workspacePath;
+  final String? workspaceId;
   final String? scopeLabel;
   final McpConfigScope scope;
   final DeviceConfig? device;
@@ -178,7 +178,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
         device: widget.device,
         serverName: _name.text.trim(),
         scope: widget.scope,
-        workspaceId: widget.workspacePath,
+        workspaceId: widget.workspaceId,
         draft: _draft(),
         secrets: _secretMutations(),
       );
@@ -223,13 +223,13 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
           flowId: flow.flowId,
           config: _draft(),
           scope: widget.scope,
-          workspaceId: widget.workspacePath,
+          workspaceId: widget.workspaceId,
         );
         final inspection = await context.read<McpRuntimeClient>().inspectServer(
           device: widget.device,
           serverName: _name.text.trim(),
           scope: widget.scope,
-          workspaceId: widget.workspacePath,
+          workspaceId: widget.workspaceId,
         );
         if (mounted) setState(() => _inspection = inspection);
       } else if (flow.error != null) {
@@ -271,7 +271,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
       await context.read<McpRuntimeClient>().saveServer(
         device: widget.device,
         scope: widget.scope,
-        workspaceId: widget.workspacePath,
+        workspaceId: widget.workspaceId,
         config: _draft(),
         secrets: _secretMutations(),
       );
@@ -556,6 +556,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SegmentedButton<_McpServerFormType>(
+          key: const Key('mcp_form_segment_btn'),
           segments: const [
             ButtonSegment(
               value: _McpServerFormType.remote,
@@ -588,6 +589,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
         _field(
           _name,
           'Name',
+          key: const Key('mcp_form_name_input'),
           hint: 'e.g. Memory Server',
           prefixIcon: const Icon(Icons.badge_outlined),
           enabled: !_isEditing,
@@ -597,6 +599,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
         _field(
           _description,
           'Description (optional)',
+          key: const Key('mcp_form_description_input'),
           hint: 'e.g. MCP server for persistent memory storage',
           prefixIcon: const Icon(Icons.description_outlined),
           maxLines: 2,
@@ -621,6 +624,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
               style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             FilledButton.icon(
+              key: const Key('mcp_form_test_btn'),
               onPressed: _isTesting ? null : _test,
               icon: _isTesting
                   ? const SizedBox.square(
@@ -653,9 +657,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
             leading: const Icon(Icons.key_outlined),
             title: Text('OAuth: ${_oauthFlow!.status.name}'),
             subtitle: _oauthFlow!.error == null ? null : Text(_oauthFlow!.error!),
-            trailing: _oauthFlow!.isTerminal
-                ? null
-                : TextButton(onPressed: _cancelOAuth, child: const Text('Cancel')),
+            trailing: _oauthFlow!.isTerminal ? null : TextButton(onPressed: _cancelOAuth, child: const Text('Cancel')),
           ),
           const SizedBox(height: 16),
         ],
@@ -696,6 +698,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
         ],
         const SizedBox(height: 20),
         CheckboxListTile(
+          key: const Key('mcp_form_accept_risks_checkbox'),
           value: _acceptedRisks,
           onChanged: (value) => setState(() => _acceptedRisks = value ?? false),
           controlAffinity: ListTileControlAffinity.leading,
@@ -728,6 +731,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
             ),
             const SizedBox(width: 12),
             FilledButton(
+              key: const Key('mcp_form_save_btn'),
               onPressed: _isSaving ? null : _save,
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -761,6 +765,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
     _field(
       _url,
       'Server URL',
+      key: const Key('mcp_form_url_input'),
       hint: 'https://example.com/mcp',
       prefixIcon: const Icon(Icons.link),
       required: true,
@@ -882,6 +887,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
     _field(
       _command,
       'Command',
+      key: const Key('mcp_form_command_input'),
       hint: 'e.g. npx, uvx, python, or node',
       prefixIcon: const Icon(Icons.terminal_outlined),
       required: true,
@@ -1073,6 +1079,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
   Widget _field(
     TextEditingController controller,
     String label, {
+    Key? key,
     String? hint,
     bool required = false,
     bool obscure = false,
@@ -1085,6 +1092,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
     Widget? suffixIcon,
     String? Function(String?)? validator,
   }) => TextFormField(
+    key: key,
     controller: controller,
     enabled: enabled,
     obscureText: obscure,

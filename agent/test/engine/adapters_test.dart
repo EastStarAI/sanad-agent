@@ -111,6 +111,38 @@ void main() {
       expect(response.message.content, 'Hello from OpenAI');
     });
 
+    test(
+      'returns fallback models instead of throwing on malformed base URL',
+      () async {
+        final adapter = BaseOpenAIAdapter(
+          config,
+          profile,
+          baseUrlOverride: 'not a url',
+        );
+
+        final models = await adapter.getAvailableModels();
+
+        expect(models, isNotEmpty);
+        expect(adapter.availableModelsSource, equals('fallback'));
+        expect(adapter.lastModelsException, isNotNull);
+      },
+    );
+
+    test('strips copied config prefixes before model discovery', () async {
+      final mockClient = MockClient((request) async {
+        expect(request.url.toString(), 'https://api.cursor.com/v1/models');
+        return http.Response(jsonEncode({'data': []}), 200);
+      });
+      final adapter = BaseOpenAIAdapter(
+        config,
+        profile,
+        client: mockClient,
+        baseUrlOverride: 'url https://api.cursor.com/v1',
+      );
+
+      await adapter.getAvailableModels();
+    });
+
     test('should filter models using ModelsDevService', () async {
       final tempCachePath = getTempCachePath();
       addTearDown(() => _cleanupTempCache(tempCachePath));
@@ -944,6 +976,25 @@ void main() {
       expect(response.usage?['prompt_tokens'], 10);
       expect(response.usage?['completion_tokens'], 5);
       expect(response.usage, isNot(contains('total_tokens')));
+      expect(response.finishReason, LLMFinishReason.stop);
+    });
+
+    test('maps Ollama length termination to finishReason', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'message': {'role': 'assistant', 'content': 'Truncated'},
+            'done': true,
+            'done_reason': 'length',
+          }),
+          200,
+        );
+      });
+
+      final adapter = OllamaAdapter(config, profile, client: mockClient);
+      final response = await adapter.generateResponse([]);
+
+      expect(response.finishReason, LLMFinishReason.length);
     });
 
     test(
@@ -1417,6 +1468,27 @@ void main() {
       ]);
 
       expect(response.finishReason, equals(LLMFinishReason.length));
+    });
+
+    test('maps pause_turn to an incomplete finishReason', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response(
+          jsonEncode({
+            'content': [
+              {'type': 'text', 'text': 'Partial'},
+            ],
+            'stop_reason': 'pause_turn',
+          }),
+          200,
+        );
+      });
+
+      final adapter = BaseAnthropicAdapter(config, profile, client: mockClient);
+      final response = await adapter.generateResponse([
+        Message(role: MessageRole.user, content: 'Hi'),
+      ]);
+
+      expect(response.finishReason, equals(LLMFinishReason.incomplete));
     });
 
     test(

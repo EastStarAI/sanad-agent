@@ -2,7 +2,7 @@
 title: "Plan 54: Durable Background Terminal Tasks and Session Wakeups"
 description: "تحويل أوامر shell الطويلة إلى مهام خلفية مملوكة وقابلة للتفاعل، مع بث حي وإيقاظ typed steer وواجهات مراقبة محلية وعامة."
 status: "pending"
-current_gate: "Waiting for Plan 50"
+current_gate: "Ready for 54a"
 priority: "high"
 depends_on: "Plan 50 complete; Task 36 authoritative steer/queue; Task 31 execution snapshots"
 related_to: "Task 34 partial-stream recovery; Tasks 51-53 conversation history and compaction"
@@ -58,7 +58,7 @@ reference_grounding: "required for tasks 54a-54h"
 
 | المهمة | الحالة | Gate الحالية | سقف الملفات | شرط الانتقال |
 |---|---|---|---:|---|
-| 54a Contracts/Storage | `pending` | Waiting for Plan 50 | 14 | Plan 50 complete |
+| 54a Contracts/Storage | `pending` | Ready for R0 | 14 | Plan 50 complete |
 | 54b PTY Supervisor | `pending` | Waiting | 14 | 54a complete |
 | 54c Shell/Agent Tools | `pending` | Waiting | 14 | 54a و54b complete |
 | 54d Timer/Wake | `pending` | Waiting | 14 | 54a complete |

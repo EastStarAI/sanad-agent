@@ -387,6 +387,12 @@ class DeviceManager {
         ];
         _rebuildInventory();
         _emitAgentsUpdate();
+      } else if (_isCloudGatewayReady) {
+        // A newly paired Agent can publish online status before this Client
+        // receives an inventory row for it. Reconcile authoritatively so the
+        // capabilities owner observes the new DeviceConfig and fetches model /
+        // thinking controls without requiring an Agent restart.
+        unawaited(fetchAgents());
       }
 
       _agentStatusController.add(data);

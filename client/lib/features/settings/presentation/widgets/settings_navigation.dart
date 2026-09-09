@@ -128,6 +128,7 @@ class SettingsNavigation extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 18),
                 child: NavigationTile(
+                  key: Key('nav_workspace_${workspace.name}'),
                   icon: Icons.folder_outlined,
                   label: workspace.name,
                   selected: selectedDestination == SettingsDestination.workspace && workspace.id == selectedWorkspaceId,
@@ -138,6 +139,7 @@ class SettingsNavigation extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 30),
                 child: TextButton(
+                  key: const Key('settings_show_all_workspaces_btn'),
                   onPressed: onToggleWorkspaces,
                   child: Text(showAllWorkspaces ? 'Show less' : 'Show all (${workspaces.length})'),
                 ),
@@ -187,6 +189,7 @@ class NavigationTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListTile(
+    key: Key('nav_tile_${label.toLowerCase().replaceAll(' ', '_')}'),
     dense: true,
     selected: selected,
     selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.15),
@@ -219,6 +222,7 @@ class DeviceNavigationTile extends StatelessWidget {
         : TextStyle(color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6));
 
     return ListTile(
+      key: Key('nav_device_${device.name}'),
       dense: true,
       selected: selected,
       selectedTileColor: theme.colorScheme.secondaryContainer.withValues(alpha: 0.15),

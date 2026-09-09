@@ -21,6 +21,11 @@ class ResolvedAgentEndpoint {
     required this.socketService,
     required this.isLocalReachable,
   });
+
+  String get protocolDeviceId => switch (scope) {
+    ConnectionScope.local => agent.hardwareId ?? agent.id,
+    ConnectionScope.cloud => agent.accountDeviceId ?? agent.id,
+  };
 }
 
 class DeviceConnectionCoordinator {

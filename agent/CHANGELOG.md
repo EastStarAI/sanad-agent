@@ -1,3 +1,35 @@
+## 1.0.9
+
+- Added provider-backed multilingual context compaction with typed JSON validation and bounded recovery (#139).
+- Propagated causal turn, run, and step IDs across live execution events and anchored steering messages to durable tool-call references (#142).
+- Added session affinity headers for OpenCode requests (#140).
+- Added canonical application attribution headers for OpenRouter requests (#141).
+
+## 1.0.8
+
+- Added revision-matched provider catalog context-window resolution for newly discovered models and prevented compaction failure when no source head is available (#136).
+
+## 1.0.7
+
+- Added durable conversation replay, materialized forks, paginated history, and synchronized live-history recovery (#125, #127, #128, #131).
+- Added run-scoped cancellation, safe forced-shutdown recovery, and protection against replaying active provider requests after controlled restart (#112, #117, #124).
+- Added durable model-aware context compaction and contained provider model-refresh failures (#118, #123).
+- Added secure device-scoped workspace and MCP control plus durable Linux headless Agent installation (#120, #121).
+- Hardened `sanad-dev` runtime ownership, background startup, and multi-driver control (#126).
+- Added deterministic release identity preparation and fail-closed metadata verification (#132).
+
+## 1.0.6
+
+- Hardened macOS Agent runtime trust verification to enforce Developer ID publisher requirements (#105).
+- Strengthened installer pairing contract guards and release manifest verification (#105).
+
+## 1.0.5
+
+- Upgraded macOS Keychain backend to Apple `SecItem` API, sanitized auth storage serialization, and automated CLI PATH configuration (#102).
+- Serialized concurrent Agent permission prompts per session to prevent approval race conditions (#99).
+- Added Flutter VM driver CLI for automated UI diagnostics and testing (#98).
+- Updated macOS release CI runner to macos-26 for Xcode 26 support (#101).
+
 ## 1.0.4
 
 - Corrected the Windows release smoke gate so PowerShell uses a writable Sanad Home variable instead of the reserved `$HOME` variable.

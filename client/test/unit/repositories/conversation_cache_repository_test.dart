@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -6,12 +9,12 @@ import 'package:sanad_client/features/conversations/domain/models/session_query.
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/features/conversations/domain/stores/conversation_cache_store.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
-import 'package:flutter_test/flutter_test.dart';
 
 /// Fake transport that records calls and returns canned results.
 class _FakeTransport implements ConversationRepository {
   List<Session> sessionsToReturn = [];
   List<DeviceWorkspace> workspacesToReturn = [];
+  Future<List<DeviceWorkspace>>? pendingWorkspaces;
   String? error;
   Object? workspaceMutationError;
   int getWorkspacesCalls = 0;
@@ -22,6 +25,8 @@ class _FakeTransport implements ConversationRepository {
   Future<List<DeviceWorkspace>> getWorkspaces(DeviceConfig agent) async {
     getWorkspacesCalls++;
     if (error != null) throw Exception(error);
+    final pending = pendingWorkspaces;
+    if (pending != null) return pending;
     return workspacesToReturn;
   }
 
@@ -56,6 +61,15 @@ class _FakeTransport implements ConversationRepository {
       name: 'Workspace',
       path: newPath,
     );
+  }
+
+  @override
+  Future<void> removeWorkspace(
+    DeviceConfig agent, {
+    required String workspaceId,
+  }) async {
+    final mutationError = workspaceMutationError;
+    if (mutationError != null) throw mutationError;
   }
 
   // The rest of the interface is not needed for these tests.
@@ -138,6 +152,84 @@ void main() {
       );
       expect(store.snapshot.contexts[device.id], isNull);
     });
+
+    test('workspace removal updates only workspace projections', () async {
+      transport.workspacesToReturn = const [
+        DeviceWorkspace(id: 'ws-1', name: 'Project', path: '/project'),
+      ];
+      await repo.refreshWorkspaces(device);
+      store.recordLastDestination(
+        ConversationDestination.newConversation(
+          deviceId: device.id,
+          workspaceId: 'ws-1',
+        ),
+      );
+
+      await repo.removeWorkspace(device, workspaceId: 'ws-1');
+
+      final context = store.snapshot.contexts[device.id]!;
+      expect(context.workspaces.workspaces, isEmpty);
+      expect(
+        context.lastDestination,
+        ConversationDestination.newConversation(deviceId: device.id),
+      );
+    });
+
+    test(
+      'workspace removal survives an older in-flight refresh response',
+      () async {
+        const workspace = DeviceWorkspace(
+          id: 'ws-1',
+          name: 'Project',
+          path: '/project',
+        );
+        transport.workspacesToReturn = const [workspace];
+        await repo.refreshWorkspaces(device);
+
+        final staleRefresh = Completer<List<DeviceWorkspace>>();
+        transport.pendingWorkspaces = staleRefresh.future;
+        final refreshFuture = repo.refreshWorkspaces(device);
+
+        await repo.removeWorkspace(device, workspaceId: workspace.id);
+        staleRefresh.complete(const [workspace]);
+        await refreshFuture;
+
+        expect(
+          store.snapshot.contexts[device.id]!.workspaces.workspaces,
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'workspace update survives an older in-flight refresh response',
+      () async {
+        const workspace = DeviceWorkspace(
+          id: 'ws-1',
+          name: 'Project',
+          path: '/old-path',
+        );
+        transport.workspacesToReturn = const [workspace];
+        await repo.refreshWorkspaces(device);
+
+        final staleRefresh = Completer<List<DeviceWorkspace>>();
+        transport.pendingWorkspaces = staleRefresh.future;
+        final refreshFuture = repo.refreshWorkspaces(device);
+
+        await repo.relocateWorkspace(
+          device,
+          workspaceId: workspace.id,
+          newPath: '/new-path',
+        );
+        staleRefresh.complete(const [workspace]);
+        await refreshFuture;
+
+        expect(
+          store.snapshot.contexts[device.id]!.workspaces.workspaces.single.path,
+          '/new-path',
+        );
+      },
+    );
 
     test('refreshUnscopedConversations fetches and caches sessions', () async {
       transport.sessionsToReturn = [

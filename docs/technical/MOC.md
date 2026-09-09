@@ -15,6 +15,7 @@ This directory owns the technical specifications of "HOW" the system is structur
 
 ## Active Specifications
 
+- **[Flutter VM Driver CLI Architecture](flutter_vm_driver_cli.md):** Driver-enabled Client instrumentation, standalone CLI boundary, deterministic selectors, and VM Service safety.
 - **[Local Gateway and Sanad Home Protection](user_data_protection_and_minimization.md):** Authenticated desktop-only loopback transport, credential delivery, secure filesystem roots, legacy migration, and worktree isolation.
 - **[Agent Interface and Runtime Architecture](agent_interface_runtime.md):** Gateway routing, active-run orchestration, recovery, and Sanad protocol translation.
 - **[Client Portal Authentication](client_authentication.md):** Portal-owned login, polling-token secrecy, refresh, and local credential persistence.
@@ -26,15 +27,19 @@ This directory owns the technical specifications of "HOW" the system is structur
 - **[Client Conversation Cache Schema](client_conversation_cache_schema.md):** Device-scoped local cache, drafts, destinations, and recovery data.
 - **[Device Runtime Settings Protocol](device_runtime_settings_protocol.md):** Client/daemon settings commands, ownership, validation, and synchronization.
 - **[Web Search Runtime](web_search_runtime.md):** Daemon-owned providers, DuckDuckGo redirect normalization, fallback behavior, and SSRF filtering.
-- **[Message Turn Replay Protocol](message_turn_replay_protocol.md):** Latest-turn identity, replay safety confirmation, authoritative idle boundary, history replacement, and route payload contract.
+- **[Message Turn Replay Protocol](message_turn_replay_protocol.md):** Latest-root-turn identity, soft rewind, authoritative idle boundary, steer exclusion, and route payload contract.
+- **[Session Fork Protocol](session_fork_protocol.md):** Daemon-authoritative materialized fork, lineage, atomic prefix copy, and idle child admission.
 - **[Run Cancellation and Process Ownership](run_cancellation_and_process_ownership.md):** Run-scoped Stop, provider/tool interruption, process containment, bounded cleanup, and live/history terminal parity.
 - **[Multimodal Tool Results and View Image](multimodal_tool_results_and_view_image.md):** Typed tool results, secure user attachments, tool-chosen image inspection, local/remote conversation media, provider translation, durability, and binary-safety boundaries.
 - **[Background Terminal Task Runtime](background_terminal_task_runtime.md):** Durable task ownership, atomic shell handoff, PTY supervision, cursor replay, typed wake admission, secure input, and lifecycle recovery.
-- **[Remote Workspace Folder Mutation Protocol](workspace_folder_mutation_protocol.md):** Daemon-owned create, rename, and recursive-delete commands used by the remote workspace picker, including validation and failure semantics.
+- **[Remote Device Control Protocol](remote_device_control_protocol.md):** Typed remote update, restart, admission errors, and correlation rules shared by local and cloud transports.
+- **[Remote Device Control Threat Model](remote_device_control_threat_model.md):** Trust boundaries, hosted ownership evidence, MCP payload handling, managed workspace roots, and gate-linked pass/fail tests for remote update, restart, workspaces, and MCP.
+- **[Remote Workspace Folder Mutation Protocol](workspace_folder_mutation_protocol.md):** Managed-root remote workspace create, constrained browse, and confirmation-gated folder mutations.
 - **[Workspace Identity, Rename, and Change Path Protocol](workspace_identity_protocol.md):** Stable UUID identity, missing-folder projection, scoped Settings routing, display rename, and path repair.
 - **Hosted data boundary:** The optional hosted service owns only the account, device-inventory, and usage data described in [Hosted Services Boundary](hosted_services_boundary.md); agent workspaces and conversations remain local.
 - **[مواصفات قاعدة البيانات المحلية للوكيل | Local Agent Database Schema Spec](agent_database_schema.md):** تفاصيل وتصميم جداول قاعدة البيانات المحلية (SQLite - state.db) التابعة للوكيل sanad-agent لحفظ الجلسات وتفاصيل التعليق.
 - **[بروتوكولات الاتصال ونظام نقل الأحداث | Communication Protocols & Event Flow Spec](communication_protocols.md):** توثيق شامل للاتصال الهجين وسوكت الأحداث، ومهام الانتظار والتوجيه والتعليق البرمجي.
+- **[Context Compaction Architecture](context_compaction.md):** Durable goal-preserving compaction ownership, vocabulary, wire-safety rules, and prototype retirement boundary (Plan 53).
 - **[معمارية تشغيل الوكيل المحلي | Local Agent Runtime & Prompt Assembly Spec](agent_runtime.md):** شرح معمارية تشغيل الوكيل المعتمد على لغة Dart، وترتيب موجه النظام والتحقق الأمني الذاتي.
 - **[Experimental Realtime Voice](voice_streaming.md):** Current Gemini Realtime transport, audio, interruption, and capability boundaries.
 - **[بروتوكول إعداد مزودي LLM والتخزين | Provider Protocol & Storage Spec](provider_protocol.md):** أوامر socket لإعداد المزودين، حالة المصادقة، التخزين المنفصل لـ OAuth tokens، وفصل configured عن runtime_ready.

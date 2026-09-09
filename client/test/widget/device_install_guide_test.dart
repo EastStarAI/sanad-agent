@@ -42,10 +42,13 @@ void main() {
 
       expect(
         find.textContaining(
-          'bash -s -- --pairing-token',
+          'curl -fsSL https://sanad.eaststarai.com/install.sh | '
+          "bash -s -- --pairing-token 'pairing-token'",
         ),
         findsOneWidget,
       );
+      expect(find.textContaining('mktemp'), findsNothing);
+      expect(find.textContaining('--pairing-token-stdin'), findsNothing);
       expect(
         find.textContaining(
           "-PairingToken 'pairing-token'",
@@ -56,6 +59,24 @@ void main() {
       expect(find.text('1\n2'), findsNothing);
     },
   );
+
+  testWidgets('shell-quotes pairing tokens without changing the installer URL', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: DeviceInstallGuide(token: "pairing' token"),
+        ),
+      ),
+    );
+
+    expect(
+      find.textContaining('https://sanad.eaststarai.com/install.sh'),
+      findsOneWidget,
+    );
+    expect(find.textContaining(r"'pairing'\'' token'"), findsOneWidget);
+  });
 
   testWidgets('keeps both command cards usable on a narrow screen', (
     tester,

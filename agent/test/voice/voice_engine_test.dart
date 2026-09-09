@@ -71,7 +71,10 @@ class FakeSessionManager implements SessionManager {
   final Map<String, List<Message>> dbMessages = {};
 
   @override
-  List<Message> getMessages(String sessionId) {
+  List<Message> getMessages(
+    String sessionId, {
+    bool includeSuperseded = false,
+  }) {
     return dbMessages.putIfAbsent(sessionId, () => []);
   }
 
