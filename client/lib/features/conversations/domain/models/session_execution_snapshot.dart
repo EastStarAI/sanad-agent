@@ -7,8 +7,7 @@ enum SessionExecutionState {
   waiting,
   blocked,
   resuming,
-  stopping
-  ;
+  stopping;
 
   static SessionExecutionState fromWireValue(Object? value) {
     final wireValue = value?.toString();

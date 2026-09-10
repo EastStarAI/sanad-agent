@@ -83,21 +83,21 @@ void main() {
   group('CronScheduler Tests', () {
     test('scheduleTask triggers event after delay', () async {
       final scheduler = getIt<CronScheduler>();
-      bool eventTriggered = false;
-
-      scheduler.eventStream.listen((event) {
-        if (event.type == 'cron' && event.message.content == 'Test Task') {
-          eventTriggered = true;
-        }
-      });
+      final event = scheduler.eventStream.firstWhere(
+        (event) => event.type == 'cron' && event.message.content == 'Test Task',
+      );
 
       scheduler.scheduleTask(
-        DateTime.now().add(Duration(milliseconds: 100)),
+        DateTime.now().add(const Duration(milliseconds: 1)),
         'Test Task',
       );
 
-      await Future.delayed(Duration(milliseconds: 200));
-      expect(eventTriggered, isTrue);
+      expect(
+        (await event.timeout(
+          const Duration(milliseconds: 250),
+        )).message.content,
+        'Test Task',
+      );
     });
   });
 
@@ -111,17 +111,14 @@ void main() {
 
       expect(result, contains('Task scheduled successfully'));
 
-      // Verify scheduler triggered
+      // This test owns command-to-scheduler registration. Timer delivery is
+      // covered separately by CronScheduler, so do not wait one real second.
       final scheduler = getIt<CronScheduler>();
-      bool eventTriggered = false;
-      scheduler.eventStream.listen((event) {
-        if (event.message.content == 'Auto Task') {
-          eventTriggered = true;
-        }
-      });
-
-      await Future.delayed(Duration(milliseconds: 1500));
-      expect(eventTriggered, isTrue);
+      final scheduled = scheduler.activeTasks.singleWhere(
+        (task) => task.task == 'Auto Task',
+      );
+      expect(scheduled.time.isAfter(DateTime.now()), isTrue);
+      scheduled.timer.cancel();
     });
 
     test('execute returns error for null or empty task', () async {

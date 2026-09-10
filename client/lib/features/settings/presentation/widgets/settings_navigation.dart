@@ -50,15 +50,10 @@ class SettingsNavigation extends StatelessWidget {
             child: Row(
               children: [
                 IconButton(
+                  key: const Key('settings_back_to_conversations_btn'),
                   icon: const Icon(Icons.arrow_back_rounded),
                   tooltip: 'Back to conversations',
-                  onPressed: () {
-                    if (context.canPop()) {
-                      context.pop();
-                    } else {
-                      context.go(AppRoutes.home);
-                    }
-                  },
+                  onPressed: () => context.go(AppRoutes.home),
                 ),
                 Text(
                   'Settings',

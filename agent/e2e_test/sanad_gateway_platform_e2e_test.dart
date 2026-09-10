@@ -53,6 +53,8 @@ class MockAuthManager extends AuthManager {
   bool get isAuthenticated => true;
   @override
   String get accessToken => 'mock_token';
+  @override
+  String get hardwareId => 'local-device-1';
 }
 
 class MockConfig extends Config {
@@ -293,7 +295,14 @@ Future<Map<String, dynamic>> _waitForEvent(
 ) async {
   final seen = <String>[];
   while (true) {
-    final frame = await _nextFrame(frames);
+    late final Map<String, dynamic> frame;
+    try {
+      frame = await _nextFrame(frames);
+    } on TimeoutException {
+      throw StateError(
+        'Timed out waiting for event $eventName. Seen: ${seen.join(', ')}',
+      );
+    }
     final type = frame['event']?.toString() ?? frame['type']?.toString() ?? '';
     if (type.isNotEmpty) {
       seen.add(type);
@@ -421,6 +430,7 @@ _startResumeRuntime({
   final gatewayManager = GatewayManager();
   final platform = getIt<LocalDaemonServerPlatform>();
   gatewayManager.registerPlatform(platform);
+  await getIt<SessionRunOrchestrator>().restorePersistedState();
   await gatewayManager.start();
   return (gatewayManager: gatewayManager, platform: platform);
 }
@@ -910,12 +920,12 @@ void main() {
       equals('register_success'),
     );
 
-    // The client identifies the logical device expected by its EventRouter
+    // The Client identifies the local hardware device expected by its EventRouter
     // even before it has bound this cloud-origin session locally.
     socket.add(
       jsonEncode({
         'type': 'execute_command',
-        'device_id': 'local-agent',
+        'device_id': 'local-device-1',
         'command': 'get_sessions',
         'payload': {'request_id': 'req-sessions'},
       }),
@@ -926,13 +936,13 @@ void main() {
       equals('device_event'),
     );
 
-    // Bind the conversation to the logical local alias, then issue an
+    // Bind the conversation to the explicit local hardware identity, then issue an
     // unrelated hardware-scoped command on the same socket. The latter must
     // not overwrite the conversation's routing identity.
     socket.add(
       jsonEncode({
         'type': 'execute_command',
-        'device_id': 'local-agent',
+        'device_id': 'local-device-1',
         'command': 'get_session_history',
         'payload': {
           'session_id': 'cloud-origin-session',
@@ -977,7 +987,7 @@ void main() {
         jsonDecode(frames.current as String) as Map<String, dynamic>;
     expect(eventFrame['type'], equals('device_event'));
     expect(eventFrame['event_id'], equals('evt-cloud-origin'));
-    expect(eventFrame['device_id'], equals('local-agent'));
+    expect(eventFrame['device_id'], equals('local-device-1'));
 
     await frames.cancel();
     await socket.close();
@@ -1328,6 +1338,11 @@ void main() {
         }),
       );
 
+      final permissionResolvedFrame = await _waitForEvent(
+        secondFrames,
+        CanonicalEventTypes.toolPermissionResolved,
+      );
+      expect(permissionResolvedFrame['payload']['outcome'], equals('resolved'));
       final toolResultFrame = await _waitForEvent(secondFrames, 'tool_result');
       expect(toolResultFrame['payload']['tool'], equals('shell_execute'));
       expect(

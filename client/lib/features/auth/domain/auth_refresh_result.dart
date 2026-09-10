@@ -9,11 +9,9 @@ class AuthRefreshResult {
   const AuthRefreshResult.success(String accessToken)
     : this._(outcome: AuthRefreshOutcome.success, accessToken: accessToken);
 
-  const AuthRefreshResult.terminalRejected()
-    : this._(outcome: AuthRefreshOutcome.terminalRejected);
+  const AuthRefreshResult.terminalRejected() : this._(outcome: AuthRefreshOutcome.terminalRejected);
 
-  const AuthRefreshResult.transientUnavailable()
-    : this._(outcome: AuthRefreshOutcome.transientUnavailable);
+  const AuthRefreshResult.transientUnavailable() : this._(outcome: AuthRefreshOutcome.transientUnavailable);
 
   bool get isSuccess => outcome == AuthRefreshOutcome.success;
   bool get isTerminal => outcome == AuthRefreshOutcome.terminalRejected;

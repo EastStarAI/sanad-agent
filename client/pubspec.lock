@@ -1014,6 +1014,13 @@ packages:
       relative: true
     source: path
     version: "1.0.0"
+  sanad_public_service_endpoints:
+    dependency: "direct main"
+    description:
+      path: "../shared/public_service_endpoints"
+      relative: true
+    source: path
+    version: "1.0.0"
   sanad_release_contract:
     dependency: "direct main"
     description:

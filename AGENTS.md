@@ -67,7 +67,8 @@ The `sanad-agent` repository is structured as follows:
 * **`release/`**: The versioned release contract, generated-output policy, and shared Dart contract package under `release/contract/` for manifest, checksum, and Appcast models consumed by the agent, client, and release tooling.
 * **`shared/`**: Focused pure-Dart runtime primitives consumed by both the agent and client; each package owns a local contract and must remain independent of presentation and agent execution domains.
 * **`scripts/`**: Management, build, and release helper scripts.
-  * `scripts/sanad_dev.dart` is the thin `sanad-dev` CLI entry point. Worktree runtime context, process supervision, instance discovery, and developer actions belong in focused modules under `scripts/sanad_dev/`; do not grow the entry point back into a monolith.
+  * `scripts/sanad_dev/` is the standalone Pure-Dart package for the `sanad-dev` CLI; production modules belong in its `lib/` and tests in its `test/`. `scripts/sanad_dev.dart` remains only a thin compatibility forwarder; do not grow it back into a monolith or return tool tests to the Client package.
+  * Source-runtime readiness and managed ownership must match the exact inherited launcher id and runtime nonce. Do not assume the invoking workspace and Agent source have the same Git root; private consumers may invoke the public repository as a nested submodule. When hashes differ, discovery may follow a source-matched Client's gateway only when the Client and Agent expose that same lease identity; unrelated runtimes remain fail-closed. Every runtime action, including `status`, `logs`, `restart`, `stop`, and `ui`, must honor the same explicit `--home` selection end to end.
 
 ---
 

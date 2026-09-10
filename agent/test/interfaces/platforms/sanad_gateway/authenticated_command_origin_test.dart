@@ -1,5 +1,21 @@
+import 'dart:async';
+
+import 'package:logging/logging.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/authenticated_command_origin.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_gateway_behavior.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
 import 'package:test/test.dart';
+
+final class _LoggingBehavior with SanadGatewayBehavior {
+  @override
+  final Logger logger = Logger('AuthenticatedOriginLoggingTest');
+
+  @override
+  SanadProtocolBridge get protocolBridge => throw UnsupportedError('unused');
+
+  @override
+  String get transportName => 'test';
+}
 
 void main() {
   group('AuthenticatedCommandOrigin', () {
@@ -29,6 +45,37 @@ void main() {
       expect(origin.safeDisplay, isNot(contains('192.0.2.1')));
       expect(origin.safeDisplay, isNot(contains('secret')));
     });
+
+    test(
+      'gateway payload diagnostics contain structural metadata only',
+      () async {
+        const canary = 'private-origin-and-command-canary';
+        final previousLevel = Logger.root.level;
+        Logger.root.level = Level.ALL;
+        final records = <LogRecord>[];
+        final StreamSubscription<LogRecord> subscription = Logger.root.onRecord
+            .listen(records.add);
+        addTearDown(() async {
+          await subscription.cancel();
+          Logger.root.level = previousLevel;
+        });
+
+        _LoggingBehavior().logFinePayload('Command payload:', {
+          'payload': {'content': canary},
+          'origin_client': {
+            'client_instance_id': canary,
+            'display_name': canary,
+          },
+        });
+        await Future<void>.delayed(Duration.zero);
+
+        final rendered = records.map((record) => record.message).join('\n');
+        expect(rendered, contains('field_count=2'));
+        expect(rendered, isNot(contains(canary)));
+        expect(rendered, isNot(contains('origin_client')));
+        expect(rendered, isNot(contains('content')));
+      },
+    );
 
     test('falls back for missing, malformed, and unknown versions', () {
       final fixtures = <Map<String, dynamic>>[

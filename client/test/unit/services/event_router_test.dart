@@ -27,6 +27,24 @@ void main() {
       await sub.cancel();
     });
 
+    test('merges an explicit device alias set without widening', () async {
+      final received = <Map<String, dynamic>>[];
+      final sub = router.forDevices({'hardware-1', 'cloud-1'}).listen(received.add);
+
+      for (final deviceId in ['hardware-1', 'cloud-1', 'other-1']) {
+        router.routeEvent({
+          'device_id': deviceId,
+          'event': 'final_answer',
+          'payload': {'content': deviceId},
+        });
+      }
+
+      await Future<void>.delayed(Duration.zero);
+      expect(received.map((event) => event['device_id']), ['hardware-1', 'cloud-1']);
+
+      await sub.cancel();
+    });
+
     test('does not route an event to a different device stream', () async {
       final device1Events = <Map<String, dynamic>>[];
       final device2Events = <Map<String, dynamic>>[];

@@ -9,8 +9,6 @@ import 'package:sanad_client/utils/app_platform.dart';
 
 enum ConnectionScope { cloud, local }
 
-const deliveryPresenceRenewalInterval = Duration(seconds: 20);
-
 class ResolvedAgentEndpoint {
   final DeviceConfig agent;
   final ConnectionScope scope;
@@ -49,8 +47,6 @@ class DeviceConnectionCoordinator {
   StreamSubscription? _localLifecycleSubscription;
   bool _isDisposed = false;
   Future<void>? _localConnectionFuture;
-  Timer? _deliveryPresenceRenewalTimer;
-  DeviceConfig? _deliveryPresenceDevice;
   final Set<String> _cloudInterestDeviceIds = {};
   String? _lastPublishedCloudInterestSignature;
 
@@ -174,7 +170,6 @@ class DeviceConnectionCoordinator {
   }
 
   Future<void> synchronizeDeliveryPresence(DeviceConfig agent) async {
-    _deliveryPresenceDevice = agent;
     await _synchronizeDeliveryPresence(agent);
   }
 
@@ -182,11 +177,13 @@ class DeviceConnectionCoordinator {
   /// the authoritative inventory. Per-device route synchronization may add an
   /// entry before inventory hydration, but it must never remove other devices.
   void synchronizeCloudInterests(Iterable<DeviceConfig> devices) {
+    final deviceList = devices.toList(growable: false);
     _cloudInterestDeviceIds
       ..clear()
       ..addAll(
-        devices.map((device) => device.accountDeviceId).whereType<String>().where((deviceId) => deviceId.isNotEmpty),
+        deviceList.map((device) => device.accountDeviceId).whereType<String>().where((deviceId) => deviceId.isNotEmpty),
       );
+
     if (_cloudSocketService.isConnected) {
       _publishCloudInterests();
     }
@@ -210,27 +207,6 @@ class DeviceConnectionCoordinator {
     _cloudInterestDeviceIds.add(deviceId);
     if (_cloudSocketService.isConnected) {
       _publishCloudInterests();
-    }
-    if (!isLocalCandidate(agent) || !_cloudSocketService.isConnected) return;
-
-    final assertion = await _cloudSocketService.requestLocalPresenceAssertion(
-      deviceId,
-    );
-    _localSocketService.setLocalPresenceAssertion(assertion);
-    if (assertion == null) {
-      _deliveryPresenceRenewalTimer?.cancel();
-      _deliveryPresenceRenewalTimer = null;
-      return;
-    }
-    _deliveryPresenceRenewalTimer ??= Timer.periodic(
-      deliveryPresenceRenewalInterval,
-      (_) {
-        final device = _deliveryPresenceDevice;
-        if (device != null) unawaited(_synchronizeDeliveryPresence(device));
-      },
-    );
-    if (_localSocketService.isConnected) {
-      await _localSocketService.refreshLocalHello();
     }
   }
 
@@ -294,9 +270,6 @@ class DeviceConnectionCoordinator {
 
   void dispose() {
     _isDisposed = true;
-    _deliveryPresenceRenewalTimer?.cancel();
-    _deliveryPresenceRenewalTimer = null;
-    _deliveryPresenceDevice = null;
     _cloudInterestDeviceIds.clear();
     final cloudSubscription = _cloudLifecycleSubscription;
     if (cloudSubscription != null) {

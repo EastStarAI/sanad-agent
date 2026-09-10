@@ -416,6 +416,10 @@ Widget _wrapInSettingsScroll(Widget child) => MaterialApp(
 void main() {
   setUp(() async {
     await getIt.reset();
+    getIt.registerSingleton<String>(
+      'hardware-1',
+      instanceName: 'hardwareId',
+    );
   });
 
   tearDown(() async {

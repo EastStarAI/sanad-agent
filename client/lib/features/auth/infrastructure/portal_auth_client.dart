@@ -145,33 +145,6 @@ class PortalAuthClient {
     return PortalAuthRefresh.fromJson(data);
   }
 
-  Future<Map<String, dynamic>> listAccountSessions({
-    required String accessToken,
-    String? cursor,
-    int limit = 100,
-  }) {
-    return _post('/auth/account/sessions', {
-      'access_token': accessToken,
-      'cursor': cursor,
-      'limit': limit,
-    });
-  }
-
-  Future<Map<String, dynamic>> revokeAccountPrincipal({
-    required String accessToken,
-    required String targetKind,
-    required String targetId,
-    required String requestId,
-  }) {
-    return _post('/auth/account/revoke', {
-      'access_token': accessToken,
-      'target_kind': targetKind,
-      'target_id': targetId,
-      'request_id': requestId,
-      'mode': 'target_only',
-    });
-  }
-
   Future<void> logout({String? accessToken, String? refreshToken}) async {
     try {
       await _post('/auth/logout', {

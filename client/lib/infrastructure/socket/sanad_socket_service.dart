@@ -39,6 +39,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   final SocketTransportMode _transportMode;
   final LocalGatewayCredentialProvider? _localCredentialProvider;
   final bool _localTransportEnabled;
+  final Duration Function(int attempt) _localReconnectDelay;
 
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
@@ -54,6 +55,15 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   final _eventsController = StreamController<Map<String, dynamic>>.broadcast();
   @override
   Stream<Map<String, dynamic>> get events => _eventsController.stream;
+
+  final _accountLifecycleResponseController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get accountLifecycleResponses => _accountLifecycleResponseController.stream;
+
+  final _accountLifecycleRevokeController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get accountLifecycleRevokeResults => _accountLifecycleRevokeController.stream;
+
+  final _accountLifecycleChangedController = StreamController<void>.broadcast();
+  Stream<void> get accountLifecycleChanges => _accountLifecycleChangedController.stream;
 
   final EventRouter _eventRouter = EventRouter();
   EventRouter get eventRouter => _eventRouter;
@@ -87,8 +97,6 @@ class SanadSocketService implements ISocketService, ISocketGateway {
   Future<void>? _connectFuture;
   Completer<void>? _readyCompleter;
   String? _lastIncomingEventName;
-  String? _localPresenceAssertion;
-  final Map<String, Completer<String?>> _presenceAssertionRequests = {};
 
   SanadSocketService({
     required String url,
@@ -99,6 +107,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     SocketTransportMode transportMode = SocketTransportMode.cloudSocketIo,
     LocalGatewayCredentialProvider? localCredentialProvider,
     bool localTransportEnabled = true,
+    Duration Function(int attempt)? localReconnectDelay,
   }) : _url = url,
        _hardwareId = hardwareId,
        _clientInstanceId = clientInstanceId,
@@ -108,7 +117,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
        _localCredentialProvider =
            localCredentialProvider ??
            (transportMode == SocketTransportMode.localWebSocket ? const LocalGatewayCredentialProvider() : null),
-       _localTransportEnabled = localTransportEnabled;
+       _localTransportEnabled = localTransportEnabled,
+       _localReconnectDelay = localReconnectDelay ?? _defaultLocalReconnectDelay;
 
   factory SanadSocketService.local({
     required String url,
@@ -117,6 +127,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     ClientDisplayMetadata? clientMetadata,
     LocalGatewayCredentialProvider credentialProvider = const LocalGatewayCredentialProvider(),
     bool enabled = true,
+    Duration Function(int attempt)? reconnectDelay,
   }) {
     return SanadSocketService(
       url: url,
@@ -126,7 +137,12 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       transportMode: SocketTransportMode.localWebSocket,
       localCredentialProvider: credentialProvider,
       localTransportEnabled: enabled,
+      localReconnectDelay: reconnectDelay,
     );
+  }
+
+  static Duration _defaultLocalReconnectDelay(int attempt) {
+    return Duration(seconds: (attempt * 2).clamp(2, 10));
   }
 
   bool get isLocalTransport => _transportMode == SocketTransportMode.localWebSocket;
@@ -188,8 +204,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
 
     try {
       await _readyCompleter!.future.timeout(const Duration(seconds: 10));
-    } catch (e) {
-      _logger.severe('[${hashCode}]: Connection timeout or error: $e');
+    } catch (_) {
+      _logger.severe('[${hashCode}]: Connection timeout or error');
       if (_lifecycleState != SocketLifecycleState.ready) {
         _setLifecycleState(SocketLifecycleState.error);
       }
@@ -207,7 +223,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       _socket = null;
     }
 
-    _logger.info('[${hashCode}]: Connecting to $_url');
+    _logger.info('[${hashCode}]: Connecting to cloud gateway');
     _socket = socket_io.io(
       _url,
       socket_io.OptionBuilder().setTransports(['websocket']).enableForceNew().disableAutoConnect().setExtraHeaders({
@@ -270,6 +286,24 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       );
     });
 
+    _socket!.on('auth_revoked', _handleAuthRevoked);
+
+    _socket!.on('account_lifecycle_response', (data) {
+      final payload = _asMap(data);
+      if (!_isDisposed && payload != null) {
+        _accountLifecycleResponseController.add(payload);
+      }
+    });
+    _socket!.on('account_lifecycle_revoke_result', (data) {
+      final payload = _asMap(data);
+      if (!_isDisposed && payload != null) {
+        _accountLifecycleRevokeController.add(payload);
+      }
+    });
+    _socket!.on('account_lifecycle_changed', (_) {
+      if (!_isDisposed) _accountLifecycleChangedController.add(null);
+    });
+
     _socket!.on('error', (data) {
       _setLifecycleState(SocketLifecycleState.error);
       _completeReadyError(StateError(data?.toString() ?? 'Socket error'));
@@ -282,30 +316,6 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     });
 
     _socket!.on('device_event', _handleCloudDeviceEvent);
-
-    _socket!.on('local_presence_assertion', (data) {
-      final payload = _asMap(data);
-      final deviceId = payload?['device_id']?.toString();
-      final assertion = payload?['presence_assertion']?.toString();
-      final completer = deviceId == null ? null : _presenceAssertionRequests.remove(deviceId);
-      if (assertion != null && assertion.isNotEmpty) {
-        completer?.complete(assertion);
-      } else {
-        completer?.complete(null);
-      }
-    });
-    _socket!.on('local_presence_assertion_error', (data) {
-      final payload = _asMap(data);
-      final deviceId = payload?['device_id']?.toString();
-      if (deviceId != null) {
-        _presenceAssertionRequests.remove(deviceId)?.complete(null);
-      } else {
-        for (final completer in _presenceAssertionRequests.values) {
-          if (!completer.isCompleted) completer.complete(null);
-        }
-        _presenceAssertionRequests.clear();
-      }
-    });
 
     _socket!.on('voice_audio_chunk_relay', (data) {
       if (_isDisposed) return;
@@ -344,34 +354,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     if (payload is Map<String, dynamic>) {
       _safeAdd(data);
     } else {
-      _logger.warning('⚠️ Received non-map payload: $data');
+      _logger.warning('⚠️ Received invalid device event payload shape');
     }
-  }
-
-  Future<String?> requestLocalPresenceAssertion(String deviceId) async {
-    if (isLocalTransport || !isReady || deviceId.isEmpty) return null;
-    final existing = _presenceAssertionRequests[deviceId];
-    if (existing != null) return existing.future;
-    final completer = Completer<String?>();
-    _presenceAssertionRequests[deviceId] = completer;
-    _socket?.emit('request_local_presence_assertion', {'device_id': deviceId});
-    try {
-      return await completer.future.timeout(const Duration(seconds: 5));
-    } on TimeoutException {
-      return null;
-    } finally {
-      _presenceAssertionRequests.remove(deviceId);
-    }
-  }
-
-  void setLocalPresenceAssertion(String? assertion) {
-    if (!isLocalTransport) return;
-    _localPresenceAssertion = assertion;
-  }
-
-  Future<void> refreshLocalHello() async {
-    if (!isLocalTransport || !isReady || _localSocket == null) return;
-    _sendLocalHello();
   }
 
   void _sendLocalHello() {
@@ -387,7 +371,6 @@ class SanadSocketService implements ISocketService, ISocketGateway {
           'account_sessions_v1',
           'delivery_presence_v1',
         ],
-        if (_localPresenceAssertion != null) 'local_presence_assertion': _localPresenceAssertion,
       }),
     );
   }
@@ -401,7 +384,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     final wsUri = LocalGatewayUriPolicy.requireWebSocket(
       _toLocalWebSocketUri(_url),
     );
-    _logger.info('[${hashCode}]: Connecting locally to $wsUri');
+    _logger.info('[${hashCode}]: Connecting to local Agent');
     try {
       final headers = await _localCredentialProvider!.headers();
       _localSocket = await WebSocket.connect(
@@ -422,7 +405,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
           _handleLocalReconnect();
         },
         onError: (Object error) {
-          _logger.severe('[${hashCode}]: Local socket error: $error');
+          _logger.severe('[${hashCode}]: Local socket error');
           _setSocketConnected(false);
           _setLifecycleState(SocketLifecycleState.error);
           _completeReadyError(StateError(error.toString()));
@@ -430,9 +413,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         },
         cancelOnError: true,
       );
-    } catch (e) {
+    } catch (_) {
       _logger.severe(
-        '[${hashCode}]: Local socket connection failed to establish: $e',
+        '[${hashCode}]: Local socket connection failed to establish',
       );
       _setSocketConnected(false);
       _setLifecycleState(SocketLifecycleState.error);
@@ -606,8 +589,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       } else {
         _socket!.emit('device_command', data);
       }
-    } catch (e) {
-      _logger.severe('[${hashCode}]: ❌ Error emitting device_command: $e');
+    } catch (_) {
+      _logger.severe('[${hashCode}]: ❌ Error emitting device command');
     }
   }
 
@@ -706,8 +689,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       } else {
         _socket!.emit('device_command', commandData);
       }
-    } catch (e) {
-      _logger.severe('[${hashCode}]: ❌ Error sending tool_result: $e');
+    } catch (_) {
+      _logger.severe('[${hashCode}]: ❌ Error sending tool result');
     }
   }
 
@@ -753,6 +736,9 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     unawaited(_connectionStatusController.close());
     unawaited(_lifecycleStateController.close());
     unawaited(_eventsController.close());
+    unawaited(_accountLifecycleResponseController.close());
+    unawaited(_accountLifecycleRevokeController.close());
+    unawaited(_accountLifecycleChangedController.close());
     _eventRouter.dispose();
     unawaited(_authSuccessController.close());
     unawaited(_authFailureController.close());
@@ -799,21 +785,21 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     }
 
     _reconnectAttempts++;
-    final delaySeconds = (_reconnectAttempts * 2).clamp(2, 10);
+    final delay = _localReconnectDelay(_reconnectAttempts);
     _logger.info(
-      '[${hashCode}]: Scheduling local WebSocket reconnect attempt #$_reconnectAttempts in ${delaySeconds}s...',
+      '[${hashCode}]: Scheduling local WebSocket reconnect attempt #$_reconnectAttempts in ${delay.inMilliseconds}ms...',
     );
 
-    _reconnectTimer = Timer(Duration(seconds: delaySeconds), () async {
+    _reconnectTimer = Timer(delay, () async {
       if (_isDisposed || _explicitDisconnect) return;
       _logger.info(
         '[${hashCode}]: Executing local WebSocket reconnect attempt #$_reconnectAttempts',
       );
       try {
         await connect();
-      } catch (e) {
+      } catch (_) {
         _logger.severe(
-          '[${hashCode}]: Reconnect attempt #$_reconnectAttempts failed: $e',
+          '[${hashCode}]: Reconnect attempt #$_reconnectAttempts failed',
         );
       }
     });
@@ -829,10 +815,21 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     _setLifecycleState(value);
   }
 
+  void _handleAuthRevoked(dynamic data) {
+    final payload = data is Map ? Map<String, dynamic>.from(data) : <String, dynamic>{};
+    _authFailureController.add({...payload, 'terminal': true});
+    _setLifecycleState(SocketLifecycleState.authFailed);
+  }
+
   @visibleForTesting
   void debugEmitAuthFailure(Map<String, dynamic> payload) {
     _authFailureController.add(payload);
     _setLifecycleState(SocketLifecycleState.authFailed);
+  }
+
+  @visibleForTesting
+  void debugHandleAuthRevoked(dynamic payload) {
+    _handleAuthRevoked(payload);
   }
 
   @visibleForTesting
@@ -886,10 +883,10 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       }
       _lastIncomingEventName = currentEventName;
 
-      final debugData = _formatDebugData(data);
+      final debugData = _formatDebugData(_boundedSocketLogData(event, data));
       _logger.info('$logMessage: $debugData');
-    } catch (e) {
-      _logger.severe('Logging Error (Incoming): $e');
+    } catch (_) {
+      _logger.severe('Logging error for incoming event');
     }
   }
 
@@ -904,11 +901,27 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         logMessage = '⬆️ [command \x1B[32m$command\x1B[0m] >';
       }
 
-      final debugData = _formatDebugData(data);
+      final debugData = _formatDebugData(_boundedSocketLogData(event, data));
       _logger.info('$logMessage: $debugData');
-    } catch (e) {
-      _logger.severe('Logging Error (Outgoing): $e');
+    } catch (_) {
+      _logger.severe('Logging error for outgoing event');
     }
+  }
+
+  Map<String, dynamic> _boundedSocketLogData(String event, dynamic data) {
+    final payload = data is Map ? data : const <String, dynamic>{};
+    if ({
+      'get_account_lifecycle',
+      'account_lifecycle_response',
+      'account_lifecycle_changed',
+      'revoke_account_principal',
+      'account_lifecycle_revoke_result',
+    }.contains(event)) {
+      return {
+        if (payload['version'] is num) 'version': payload['version'],
+      };
+    }
+    return {'field_count': payload.length};
   }
 
   String _formatDebugData(dynamic data, {int maxLength = 500}) {

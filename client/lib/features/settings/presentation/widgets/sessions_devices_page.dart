@@ -56,6 +56,13 @@ class _SessionsDevicesPageState extends State<SessionsDevicesPage> {
               Text('Sessions & Devices', style: Theme.of(context).textTheme.headlineSmall),
               const SizedBox(height: 6),
               const Text('Review signed-in Sanad Clients and connected Agent devices.'),
+              if (state.cloudUnavailable) ...[
+                const SizedBox(height: 12),
+                Text(
+                  'Sanad Cloud is unavailable. Showing the last synchronized snapshot.',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
               if (state.error != null) ...[
                 const SizedBox(height: 12),
                 Text(state.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
@@ -111,10 +118,12 @@ class _SessionsDevicesPageState extends State<SessionsDevicesPage> {
         ),
         actions: [
           TextButton(
+            key: const Key('confirm_revoke_cancel_btn'),
             onPressed: () => Navigator.of(dialogContext).pop(false),
             child: const Text('Cancel'),
           ),
           FilledButton(
+            key: const Key('confirm_revoke_action_btn'),
             onPressed: () => Navigator.of(dialogContext).pop(true),
             child: Text(current ? 'Sign out' : 'Revoke'),
           ),
@@ -168,6 +177,7 @@ class _PrincipalCard extends StatelessWidget {
             _PresenceBadge(principal.status),
             const SizedBox(width: 8),
             IconButton(
+              key: Key('revoke_session_btn_${principal.id}'),
               tooltip: principal.isCurrent ? 'Sign out current Client' : 'Revoke Client session',
               onPressed: busy ? null : onRevoke,
               icon: busy
@@ -208,12 +218,14 @@ class _AgentCard extends StatelessWidget {
         children: [
           _PresenceBadge(projection?.status ?? AccountPresenceStatus.unavailable),
           IconButton(
+            key: Key('open_agent_overview_btn_${device.id}'),
             tooltip: 'Open Agent overview',
             onPressed: onOpen,
             icon: const Icon(Icons.open_in_new),
           ),
           if (onRevoke != null)
             IconButton(
+              key: Key('revoke_agent_btn_${device.id}'),
               tooltip: 'Revoke Agent device',
               onPressed: busy ? null : onRevoke,
               icon: busy

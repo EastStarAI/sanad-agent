@@ -139,6 +139,22 @@ void main() {
       expect(socketService.isConnected, isFalse);
     });
 
+    test('logs out immediately when the authenticated family is revoked', () async {
+      socketService.debugEmitAuthFailure({
+        'terminal': true,
+        'reason': 'session_revoked',
+      });
+
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(authService.refreshCalls, 0);
+      expect(authService.logoutCalls, 1);
+      expect(authService.isAuthenticated, isFalse);
+      expect(socketService.seenTokens, contains(null));
+      expect(socketService.isConnected, isFalse);
+    });
+
     test(
       'keeps credentials and cached connection state on transient failure',
       () async {

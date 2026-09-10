@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_usage_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
@@ -28,6 +27,7 @@ import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_
 class ProviderUsageCubit extends Cubit<ProviderUsageState> {
   ProviderUsageCubit({
     required ProviderSetupClient client,
+    required this.localDeviceId,
     this.freshness = const Duration(hours: 1),
     DateTime Function()? now,
   }) : _client = client,
@@ -35,6 +35,7 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
        super(const ProviderUsageState());
 
   final ProviderSetupClient _client;
+  final String localDeviceId;
   final DateTime Function() _now;
 
   /// How long a snapshot is considered fresh before stale-while-revalidate.
@@ -349,7 +350,7 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
     }
   }
 
-  String _deviceId(DeviceConfig? agent) => agent?.id ?? DeviceInventoryIds.localDevice;
+  String _deviceId(DeviceConfig? agent) => agent?.id ?? localDeviceId;
 
   @override
   Future<void> close() async {

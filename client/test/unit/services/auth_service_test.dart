@@ -421,6 +421,29 @@ void main() {
       },
     );
 
+    test('concurrent logout triggers share one cleanup operation', () async {
+      final portal = StubPortalAuthClient();
+      authService.dispose();
+      authService = AuthService(
+        dio: MockDio(),
+        prefs: prefs,
+        settingsStore: mockStore,
+        portalAuth: portal,
+        colocatedCoupling: colocatedCoupling,
+      );
+      mockStore.authDocument = {
+        'access_token': 'test_token',
+        'refresh_token': 'test_refresh',
+        'hardware_id': 'test_hardware',
+      };
+
+      await Future.wait([authService.logout(), authService.logout()]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(colocatedCoupling.logoutCalls, 1);
+      expect(portal.logoutCalls, 1);
+    });
+
     test('unreachable Agent does not delay or fail Client logout', () async {
       colocatedCoupling.logoutResult = Completer<void>().future;
       mockStore.authDocument = {

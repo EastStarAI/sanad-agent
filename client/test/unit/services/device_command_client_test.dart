@@ -77,7 +77,7 @@ void main() {
   test('uses the cloud account id when a merged local row routes over cloud', () async {
     local.setConnected(false);
     final merged = DeviceConfig(
-      id: DeviceConfig.syntheticLocalId,
+      id: 'this-hardware',
       name: 'This device',
       hardwareId: 'this-hardware',
       metadata: const {'cloud_device_id': 'account-device'},
@@ -90,14 +90,17 @@ void main() {
       expectedEvent: 'device.settings.snapshot',
     );
     await Future<void>.delayed(Duration.zero);
-    final payload = cloud.capturedCommands.single['payload'] as Map<String, dynamic>;
+    final cloudCommand = cloud.capturedCommands.singleWhere(
+      (entry) => entry['command'] == 'device.settings.get',
+    );
+    final payload = cloudCommand['payload'] as Map<String, dynamic>;
     cloud.debugEmitEvent({
       'event': 'device.settings.snapshot',
       'payload': {'request_id': payload['request_id']},
     });
 
     await future;
-    expect(cloud.capturedCommands.single['device_id'], 'account-device');
+    expect(cloudCommand['device_id'], 'account-device');
   });
 
   test('fails closed for an offline device without sending a command', () async {

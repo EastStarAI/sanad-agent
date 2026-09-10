@@ -62,12 +62,22 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
   /// Phase 27 — per-socket device_id registry. When a socket sends a
   /// command, we record its device_id so that later platform_family
-  /// broadcasts can stamp each socket's copy with the device_id it expects
-  /// (e.g. "local-agent"). Without this, cloud-origin events mirrored to
-  /// local sockets carry the daemon's hardware_id, which the local client's
-  /// EventRouter has no listener for.
+  /// broadcasts can stamp each socket's copy with the device_id it expects.
+  /// Before the first command, the Agent hardware id is the local inventory
+  /// identity. Explicit session identity remains authoritative.
   final _socketDeviceIds = <WebSocket, String>{};
   final _clientInstances = <WebSocket, String>{};
+
+  String get _localDeviceId {
+    final hardwareId = getIt<AuthManager>().hardwareId;
+    if (hardwareId == null || hardwareId.isEmpty) {
+      throw StateError(
+        'Local Gateway started before hardware identity was initialized.',
+      );
+    }
+    return hardwareId;
+  }
+
   final _voiceEngines = <VoiceEngine>[];
 
   HttpServer? _server;
@@ -141,9 +151,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       rethrow;
     }
 
-    _logger.info(
-      'Local daemon gateway listening on ${_config.localGatewayUrl}',
-    );
+    _logger.info('Local daemon gateway listening');
     unawaited(_listen());
   }
 
@@ -531,6 +539,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
   void _acceptClient(WebSocket socket) {
     _clients.add(socket);
+    _socketDeviceIds[socket] = _localDeviceId;
     _logger.info(
       '🔌 [ws] Local client connected. Active local clients: ${_clients.length}',
     );
@@ -605,17 +614,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         return;
       }
       _clientInstances[socket] = instanceId;
-      final presenceAssertion = envelope['local_presence_assertion']
-          ?.toString();
-      if (presenceAssertion != null && presenceAssertion.isNotEmpty) {
-        deliveryPresence?.updateLocalMember(
-          socket,
-          clientInstanceId: instanceId,
-          presenceAssertion: presenceAssertion,
-        );
-      } else {
-        deliveryPresence?.removeLocalMember(socket);
-      }
+      deliveryPresence?.updateLocalMember(socket, clientInstanceId: instanceId);
       _sendToSocket(socket, const {
         'type': 'client.hello_ack',
         'protocol': 'sanad.identity_presence',
@@ -955,17 +954,29 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
           );
         }
       case DeliveryScope.platformFamily:
-        // Fan out to every connected local Sanad Client socket.
+        // Fan out locally first. Only successful sends may be excluded later
+        // from this event's Cloud copy.
+        final deliveredInstances = <String>{};
         for (final client in _clients.toList()) {
-          await _sendToSocket(
-            client,
-            _withSocketIdentity(
-              envelope,
+          try {
+            await _sendToSocket(
               client,
-              preserveEnvelopeDeviceId: deviceId?.isNotEmpty == true,
-            ),
-          );
+              _withSocketIdentity(
+                envelope,
+                client,
+                preserveEnvelopeDeviceId: deviceId?.isNotEmpty == true,
+              ),
+            );
+            final instanceId = _clientInstances[client];
+            if (instanceId != null) deliveredInstances.add(instanceId);
+          } on Object {
+            // Cloud remains eligible when a Local write does not complete.
+          }
         }
+        deliveryPresence?.recordLocalDelivery(
+          response.eventId,
+          deliveredInstances,
+        );
       case DeliveryScope.hardware:
         final target = delivery.targetHardwareId;
         final matched = <WebSocket>{};
@@ -1073,7 +1084,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     final deviceId =
         preserveEnvelopeDeviceId && envelopeDeviceId?.isNotEmpty == true
         ? envelopeDeviceId
-        : _socketDeviceIds[socket];
+        : (_socketDeviceIds[socket] ?? _localDeviceId);
     return _withDeviceIdentity(envelope, deviceId: deviceId);
   }
 

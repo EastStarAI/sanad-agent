@@ -64,9 +64,9 @@ class AuthService {
   final ClientDisplayMetadata? _clientMetadata;
   final _accessTokenController = StreamController<String?>.broadcast();
   final _authenticationExchangeController = StreamController<void>.broadcast();
-  final _loginChallengeController =
-      StreamController<AuthLoginChallenge?>.broadcast();
+  final _loginChallengeController = StreamController<AuthLoginChallenge?>.broadcast();
   Future<AuthRefreshResult>? _refreshFuture;
+  Future<void>? _logoutFuture;
 
   String? _backendAccessToken;
   String? _backendRefreshToken;
@@ -85,11 +85,9 @@ class AuthService {
   String? get accessToken => _backendAccessToken;
   String? get hardwareId => _hardwareId;
   Stream<String?> get accessTokenStream => _accessTokenController.stream;
-  Stream<void> get authenticationExchangeStream =>
-      _authenticationExchangeController.stream;
+  Stream<void> get authenticationExchangeStream => _authenticationExchangeController.stream;
   AuthLoginChallenge? get loginChallenge => _loginChallenge;
-  Stream<AuthLoginChallenge?> get loginChallengeStream =>
-      _loginChallengeController.stream;
+  Stream<AuthLoginChallenge?> get loginChallengeStream => _loginChallengeController.stream;
 
   AuthService({
     Dio? dio,
@@ -110,10 +108,8 @@ class AuthService {
        _prefs = prefs,
        _portalAuth = portalAuth ?? PortalAuthClient(),
        _colocatedCoupling = colocatedCoupling ?? ColocatedAuthCouplingClient(),
-       _callbackBindingFactory =
-           callbackBindingFactory ?? createAuthCallbackBinding,
-       _authorizationLauncher =
-           authorizationLauncher ?? _launchPortalAuthorization,
+       _callbackBindingFactory = callbackBindingFactory ?? createAuthCallbackBinding,
+       _authorizationLauncher = authorizationLauncher ?? _launchPortalAuthorization,
        _clientInstanceId = clientInstanceId,
        _clientMetadata = clientMetadata {
     _setupInterceptors();
@@ -131,8 +127,7 @@ class AuthService {
         if (decoded is Map) {
           final accessToken = decoded['access_token']?.toString();
           final refreshToken = decoded['refresh_token']?.toString();
-          if (accessToken?.isNotEmpty == true ||
-              refreshToken?.isNotEmpty == true) {
+          if (accessToken?.isNotEmpty == true || refreshToken?.isNotEmpty == true) {
             return (accessToken, refreshToken);
           }
         }
@@ -178,8 +173,7 @@ class AuthService {
               await logout();
               return handler.next(error);
             }
-            final alreadyRetried =
-                error.requestOptions.extra['auth_refresh_retried'] == true;
+            final alreadyRetried = error.requestOptions.extra['auth_refresh_retried'] == true;
             if (alreadyRetried) {
               await logout();
               return handler.next(error);
@@ -189,8 +183,7 @@ class AuthService {
             final refreshResult = await refreshAccessToken();
             if (refreshResult.isSuccess) {
               final opts = error.requestOptions;
-              opts.headers['Authorization'] =
-                  'Bearer ${refreshResult.accessToken}';
+              opts.headers['Authorization'] = 'Bearer ${refreshResult.accessToken}';
               opts.extra['auth_refresh_retried'] = true;
               try {
                 final retriedResponse = await _dio.fetch(opts);
@@ -295,9 +288,7 @@ class AuthService {
 
     final fileAccessToken = authDoc['access_token']?.toString();
     final fileRefreshToken = authDoc['refresh_token']?.toString();
-    if (fileAccessToken != null &&
-        fileAccessToken.isNotEmpty &&
-        fileAccessToken != _backendAccessToken) {
+    if (fileAccessToken != null && fileAccessToken.isNotEmpty && fileAccessToken != _backendAccessToken) {
       _backendAccessToken = fileAccessToken;
       _backendRefreshToken = fileRefreshToken;
       final prefs = await _getPrefs();
@@ -411,9 +402,7 @@ class AuthService {
       final random = Random.secure();
       final verifierBytes = List<int>.generate(64, (_) => random.nextInt(256));
       final verifier = base64Url.encode(verifierBytes).replaceAll('=', '');
-      final challenge = base64Url
-          .encode(sha256.convert(utf8.encode(verifier)).bytes)
-          .replaceAll('=', '');
+      final challenge = base64Url.encode(sha256.convert(utf8.encode(verifier)).bytes).replaceAll('=', '');
 
       final transaction = await _portalAuth.createClientTransaction(
         clientId: callback.clientId,
@@ -436,9 +425,7 @@ class AuthService {
       );
       if (!launched) {
         throw StateError(
-          kIsWeb
-              ? 'Popup was blocked. Allow popups and try again.'
-              : 'Could not open the system browser.',
+          kIsWeb ? 'Popup was blocked. Allow popups and try again.' : 'Could not open the system browser.',
         );
       }
 
@@ -514,6 +501,21 @@ class AuthService {
   }
 
   Future<void> logout() async {
+    final existing = _logoutFuture;
+    if (existing != null) return existing;
+
+    final operation = _performLogout();
+    _logoutFuture = operation;
+    try {
+      await operation;
+    } finally {
+      if (identical(_logoutFuture, operation)) {
+        _logoutFuture = null;
+      }
+    }
+  }
+
+  Future<void> _performLogout() async {
     var refreshToken = _backendRefreshToken;
     var accessToken = _backendAccessToken;
 
@@ -614,9 +616,7 @@ class AuthService {
         final fileAccessToken = authDoc['access_token']?.toString();
         final fileRefreshToken = authDoc['refresh_token']?.toString();
         final filePairChanged =
-            fileAccessToken != null &&
-            (fileAccessToken != accessBeforeLock ||
-                fileRefreshToken != refreshBeforeLock);
+            fileAccessToken != null && (fileAccessToken != accessBeforeLock || fileRefreshToken != refreshBeforeLock);
         if (filePairChanged) {
           _logger.info(
             'Detected updated access token in auth.json. Adopting it.',
@@ -651,9 +651,7 @@ class AuthService {
       final result = await _portalAuth.refresh(
         refreshToken: _backendRefreshToken!,
       );
-      final nextRefreshToken = result.refreshToken?.isNotEmpty == true
-          ? result.refreshToken!
-          : _backendRefreshToken!;
+      final nextRefreshToken = result.refreshToken?.isNotEmpty == true ? result.refreshToken! : _backendRefreshToken!;
 
       final prefs = await _getPrefs();
       await _persistAuthPair(

@@ -16,7 +16,6 @@ import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:sanad_client/features/settings/data/account_lifecycle_repository.dart';
 import 'package:sanad_client/features/settings/presentation/bloc/account_lifecycle_cubit.dart';
 
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/mcp/presentation/screens/mcp_server_management_screen.dart';
 
 import '../widgets/settings_navigation.dart';
@@ -224,7 +223,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           DeviceActive() => state.agents,
           DeviceNoActive() => state.agents,
           _ => const <DeviceConfig>[],
-        }.where((device) => device.id != DeviceInventoryIds.localDevice || device.isLocalReachable).toList();
+        }.where((device) => !device.isLocalInventoryDevice || device.isLocalReachable).toList();
         final activeDevice = state is DeviceActive ? state.activeAgent : null;
         final selected = devices.where((device) => device.id == _selectedDeviceId).firstOrNull;
 
@@ -289,15 +288,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       appBar: AppBar(
                         title: const Text('Settings'),
                         leading: IconButton(
+                          key: const Key('settings_back_to_conversations_btn'),
                           icon: const Icon(Icons.arrow_back_rounded),
                           tooltip: 'Back to conversations',
-                          onPressed: () {
-                            if (context.canPop()) {
-                              context.pop();
-                            } else {
-                              context.go(AppRoutes.home);
-                            }
-                          },
+                          onPressed: () => context.go(AppRoutes.home),
                         ),
                         actions: [
                           Builder(

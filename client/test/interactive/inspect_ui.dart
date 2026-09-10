@@ -2,7 +2,9 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
 
-import '../../../scripts/sanad_dev/runtime_context.dart';
+// Legacy diagnostic only: avoid making the Client package depend on sanad-dev.
+// ignore: avoid_relative_lib_imports
+import '../../../scripts/sanad_dev/lib/runtime_context.dart';
 
 /// inspect_ui.dart — Agent UI Inspection Tool
 ///

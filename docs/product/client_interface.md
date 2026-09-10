@@ -248,7 +248,7 @@ reserved for a future conversation-side file tree.
 
 ## Connection states
 
-The client presents local-agent and hosted-relay state without blocking cached
+The Client presents local Agent and hosted-relay state without blocking cached
 navigation. Depending on the target and platform, available actions include
 sign in, retry, start, repair, and restart.
 

@@ -62,7 +62,7 @@
   - الأدلة: `docs/technical/remote_device_control_protocol.md` و
     `docs/technical/remote_device_control_threat_model.md` و
     `docs/qa_maintenance/remote_device_control_qa.md`.
-  - ملاحظات المالك في G9 نُفذت: حصر `local-agent` كهوية
+  - ملاحظات المالك في G9 نُفذت: حصر الهوية المحلية الاصطناعية السابقة كهوية
     inventory فقط، إزالة Browse folders من Workspace Overview،
     وإضافة `workspace.remove` كحذف metadata-only يُبقي المسار
     والملفات والمحادثات. Agent analyze وClient analyze مرّا،
@@ -366,7 +366,7 @@ Sanad Gateway: فحص تحديث Agent البعيد وتطبيقه أو إعاد
 
 ### G9 — ملاحظات المالك ومراجعة الجودة
 
-- [x] حصر `local-agent` في هوية المخزون الاصطناعية المركزية، ومنع
+- [x] حصر الهوية المحلية الاصطناعية السابقة في هوية المخزون الاصطناعية المركزية، ومنع
   استخدام النص لاستنتاج النقل المحلي أو إنشاء جهاز MCP وهمي.
 - [x] إزالة **Browse folders** من Workspace Overview مع إبقاء browser
   dialog وأوامر daemon لميزة File Tree المستقبلية.

@@ -2,12 +2,6 @@ import 'package:sanad_client/features/devices/data/device_connection_coordinator
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
-class DeviceInventoryIds {
-  static const localDevice = DeviceConfig.syntheticLocalId;
-
-  const DeviceInventoryIds._();
-}
-
 abstract class DeviceInventorySource {
   List<DeviceConfig> snapshot();
 }
@@ -21,10 +15,11 @@ class LocalDeviceInventorySource implements DeviceInventorySource {
   List<DeviceConfig> snapshot() {
     if (!AppPlatform.isDesktop) return const <DeviceConfig>[];
 
+    final hardwareId = _connectionCoordinator.currentDeviceId;
     final localDevice = DeviceConfig(
-      id: DeviceInventoryIds.localDevice,
+      id: hardwareId,
       name: 'This device',
-      hardwareId: _connectionCoordinator.currentDeviceId,
+      hardwareId: hardwareId,
       isOnline: _connectionCoordinator.localSocketService.isConnected,
     );
     return [_connectionCoordinator.decorateAgent(localDevice)];
@@ -40,8 +35,8 @@ class DeviceInventoryOrdering {
   }
 
   static int compare(DeviceConfig left, DeviceConfig right) {
-    if (left.id == DeviceInventoryIds.localDevice && right.id != DeviceInventoryIds.localDevice) return -1;
-    if (left.id != DeviceInventoryIds.localDevice && right.id == DeviceInventoryIds.localDevice) return 1;
+    if (left.isLocalInventoryDevice && !right.isLocalInventoryDevice) return -1;
+    if (!left.isLocalInventoryDevice && right.isLocalInventoryDevice) return 1;
 
     final leftCreatedAt = left.createdAt;
     final rightCreatedAt = right.createdAt;
@@ -85,7 +80,7 @@ class DeviceInventoryMerger {
   }
 
   bool _isSameHardwareDevice(DeviceConfig device) {
-    return device.hardwareId == _connectionCoordinator.currentDeviceId || device.id == DeviceInventoryIds.localDevice;
+    return device.hardwareId == _connectionCoordinator.currentDeviceId;
   }
 
   DeviceConfig _localDeviceWithCloudDisplay(DeviceConfig localDevice, DeviceConfig cloudDevice) {

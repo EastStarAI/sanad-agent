@@ -287,6 +287,29 @@ void main() {
 
       await sub.cancel();
     });
+
+    test('auth revoked event emits a terminal auth failure', () async {
+      final realService = SanadSocketService(
+        url: 'http://localhost:8000',
+        hardwareId: 'device-1',
+      );
+      final failures = <Map<String, dynamic>>[];
+      final sub = realService.onAuthFailure.listen(failures.add);
+
+      realService.debugHandleAuthRevoked({
+        'version': 1,
+        'reason': 'session_revoked',
+      });
+
+      await Future<void>.delayed(Duration.zero);
+
+      expect(realService.lifecycleState, SocketLifecycleState.authFailed);
+      expect(failures.single['terminal'], isTrue);
+      expect(failures.single['reason'], 'session_revoked');
+
+      await sub.cancel();
+      realService.dispose();
+    });
   });
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -404,7 +427,11 @@ void main() {
   // ──────────────────────────────────────────────────────────────────────────
   group('Local WebSocket Reconnection', () {
     test('schedules reconnect on connection failure and executes retry', () async {
-      final service = SanadSocketService.local(url: 'ws://127.0.0.1:65530', hardwareId: 'dev-reconnect-test');
+      final service = SanadSocketService.local(
+        url: 'ws://127.0.0.1:65530',
+        hardwareId: 'dev-reconnect-test',
+        reconnectDelay: (_) => Duration.zero,
+      );
 
       final states = <SocketLifecycleState>[];
       final sub = service.lifecycleStateStream.listen(states.add);
@@ -419,10 +446,17 @@ void main() {
       expect(service.lifecycleState, SocketLifecycleState.error);
       states.clear();
 
-      // Wait 2.5 seconds for the automatic reconnect timer to fire
-      await Future<void>.delayed(const Duration(milliseconds: 2500));
+      // The injected zero-delay policy preserves the reconnect transition
+      // without making this unit test wait for production backoff.
+      final retryConnecting = service.lifecycleStateStream.firstWhere(
+        (state) => state == SocketLifecycleState.connecting,
+      );
+      final retryFailed = service.lifecycleStateStream.firstWhere(
+        (state) => state == SocketLifecycleState.error,
+      );
+      await retryConnecting.timeout(const Duration(milliseconds: 250));
+      await retryFailed.timeout(const Duration(milliseconds: 250));
 
-      // Reconnect attempt should have been triggered, transitioning state to connecting and then back to error (since port is still closed)
       expect(states, contains(SocketLifecycleState.connecting));
       expect(states, contains(SocketLifecycleState.error));
 
@@ -453,6 +487,45 @@ void main() {
     tearDown(() async {
       await logSubscription?.cancel();
       service.dispose();
+    });
+
+    test('account lifecycle logs omit request and principal details', () {
+      service.debugLogIncomingSocketEvent('account_lifecycle_response', {
+        'version': 1,
+        'request_id': 'private-request-id',
+        'items': [
+          {
+            'id': 'private-principal-id',
+            'name': 'private-device-name',
+            'client_instance_id': 'private-instance-id',
+          },
+        ],
+      });
+
+      expect(loggedMessages, hasLength(1));
+      expect(loggedMessages.single, contains('"version":1'));
+      expect(loggedMessages.single, isNot(contains('private-request-id')));
+      expect(loggedMessages.single, isNot(contains('private-principal-id')));
+      expect(loggedMessages.single, isNot(contains('private-device-name')));
+      expect(loggedMessages.single, isNot(contains('private-instance-id')));
+    });
+
+    test('device event logs contain metadata only', () {
+      const canary = 'private-command-content-canary';
+
+      service.debugLogIncomingSocketEvent('device_event', {
+        'event': 'final_answer',
+        'payload': {
+          'content': canary,
+          'client_instance_id': 'instance-$canary',
+          'display_name': 'name-$canary',
+        },
+      });
+
+      expect(loggedMessages, hasLength(1));
+      expect(loggedMessages.single, contains('"field_count":2'));
+      expect(loggedMessages.single, isNot(contains(canary)));
+      expect(loggedMessages.single, isNot(contains('payload')));
     });
 
     test('deduplicates consecutive thought_stream event logs but prints other consecutive events', () {

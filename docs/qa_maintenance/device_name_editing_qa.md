@@ -17,7 +17,7 @@ description: "QA scenarios and test matrices for verifying device renaming."
 | Scenario | Expected result |
 |---|---|
 | Rename a remote cloud device | Overview and Settings navigation show the authoritative new name. |
-| Rename the current merged local/cloud device | The request targets `cloud_device_id`; the visible row retains `local-agent` identity and shows the new name. |
+| Rename the current merged local/Cloud device | The request targets `cloud_device_id`; the visible row retains its `hardware_id` identity and shows the new name. |
 | Inspect a local-only device | No rename icon is shown. |
 | Submit an unchanged or blank name | Rename remains disabled and no request is sent. |
 | Gateway rejects or times out | The dialog remains open and displays the failure; the old name remains visible. |

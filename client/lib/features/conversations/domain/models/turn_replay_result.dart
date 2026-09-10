@@ -33,8 +33,7 @@ class TurnReplayResult {
       ),
       requiresConfirmation: json['requires_confirmation'] == true,
       requiresSteerDropConfirmation:
-          json['requires_steer_drop_confirmation'] == true ||
-          outcome == 'steer_reinjection_confirmation_required',
+          json['requires_steer_drop_confirmation'] == true || outcome == 'steer_reinjection_confirmation_required',
       containsSteers: json['contains_steers'] == true,
       historyRevision: revision is num ? revision.toInt() : int.tryParse(revision?.toString() ?? ''),
     );

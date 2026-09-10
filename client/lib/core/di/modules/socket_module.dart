@@ -42,8 +42,7 @@ class SocketModule {
     Map<String, dynamic> authDoc,
     String hardwareId,
   ) async {
-    final nextAuthDoc = Map<String, dynamic>.from(authDoc)
-      ..['hardware_id'] = hardwareId;
+    final nextAuthDoc = Map<String, dynamic>.from(authDoc)..['hardware_id'] = hardwareId;
 
     await settingsStore.saveAuthDocument(nextAuthDoc);
     await prefs.setString(_hardwareIdKey, hardwareId);

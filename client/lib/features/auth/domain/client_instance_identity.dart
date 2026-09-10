@@ -102,7 +102,5 @@ class ClientInstanceIdentity {
   }
 
   static bool _safeToken(String value) =>
-      value.isNotEmpty &&
-      value.length <= 32 &&
-      RegExp(r'^[A-Za-z0-9._+\-]+$').hasMatch(value);
+      value.isNotEmpty && value.length <= 32 && RegExp(r'^[A-Za-z0-9._+\-]+$').hasMatch(value);
 }

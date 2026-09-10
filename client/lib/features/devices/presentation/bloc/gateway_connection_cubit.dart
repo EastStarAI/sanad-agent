@@ -6,7 +6,6 @@ import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/models/gateway_connection_status.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
@@ -358,7 +357,7 @@ class GatewayConnectionCubit extends Cubit<GatewayConnectionStatus> {
   }
 
   bool _hasRegisteredDevices(List<DeviceConfig> devices) {
-    return devices.any((device) => device.id != DeviceInventoryIds.localDevice);
+    return devices.any((device) => device.accountDeviceId != null);
   }
 
   List<DeviceConfig> _devicesFromState(DeviceState state) {

@@ -4,7 +4,6 @@ import 'package:sanad_client/features/devices/domain/device_client_registry.dart
 import 'package:sanad_client/features/devices/domain/device_repository.dart';
 import 'package:sanad_client/core/interfaces/socket_service.dart';
 import 'package:sanad_client/features/conversations/domain/conversation_client.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../domain/models/device_config.dart';
@@ -106,8 +105,10 @@ class DeviceCubit extends Cubit<DeviceState> {
     final current = state;
     final stableAgents =
         current is DeviceActive &&
-            current.activeAgent.id == DeviceInventoryIds.localDevice &&
-            !agents.any((agent) => agent.representsDeviceId(DeviceInventoryIds.localDevice))
+            current.activeAgent.isLocalInventoryDevice &&
+            !agents.any(
+              (agent) => agent.representsDeviceId(current.activeAgent.id),
+            )
         ? <DeviceConfig>[
             current.activeAgent.copyWith(isOnline: false),
             ...agents,
@@ -191,9 +192,11 @@ class DeviceCubit extends Cubit<DeviceState> {
   }
 
   DeviceConfig? _defaultActiveAgent(List<DeviceConfig> agents) {
-    final registeredAgents = agents.where((agent) => agent.id != DeviceInventoryIds.localDevice).toList();
+    final registeredAgents = agents.where((agent) => agent.accountDeviceId != null).toList();
     if (registeredAgents.isEmpty) {
-      final localAgents = agents.where((agent) => agent.id == DeviceInventoryIds.localDevice && agent.isOnline);
+      final localAgents = agents.where(
+        (agent) => agent.isLocalInventoryDevice && agent.isOnline,
+      );
       return localAgents.firstOrNull;
     }
     final onlineAgents = registeredAgents.where((agent) => agent.isOnline);

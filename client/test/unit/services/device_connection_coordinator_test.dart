@@ -96,7 +96,7 @@ void main() {
       currentDeviceId: 'device-1',
     );
     final device = DeviceConfig(
-      id: DeviceConfig.syntheticLocalId,
+      id: 'this-hardware',
       name: 'Incomplete inventory row',
       isOnline: true,
     );
@@ -152,10 +152,8 @@ void main() {
     localSocket.dispose();
   });
 
-  test('announces per-device interest and binds local assertion before takeover', () async {
-    final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1')
-      ..setConnected(true)
-      ..presenceAssertion = 'assertion-1';
+  test('announces per-device cloud interest without a local assertion exchange', () async {
+    final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1')..setConnected(true);
     final localSocket = FakeSanadSocketService(hardwareId: 'device-1')..setConnected(true);
     final coordinator = DeviceConnectionCoordinator(
       cloudSocketService: cloudSocket,
@@ -163,7 +161,7 @@ void main() {
       currentDeviceId: 'device-1',
     );
     final agent = DeviceConfig(
-      id: 'local-agent',
+      id: 'device-1',
       name: 'Sanad Agent',
       hardwareId: 'device-1',
       metadata: const {'cloud_device_id': 'cloud-device-1'},
@@ -171,18 +169,14 @@ void main() {
 
     await coordinator.synchronizeDeliveryPresence(agent);
 
-    expect(
-      cloudSocket.capturedCommands.first,
+    expect(cloudSocket.capturedCommands, [
       {
         'event': 'delivery_presence_interest',
         'data': {
           'device_ids': ['cloud-device-1'],
         },
       },
-    );
-    expect(cloudSocket.capturedCommands.last['event'], 'request_local_presence_assertion');
-    expect(localSocket.appliedLocalPresenceAssertion, 'assertion-1');
-    expect(localSocket.localHelloRefreshes, 1);
+    ]);
 
     coordinator.dispose();
     cloudSocket.dispose();
@@ -239,30 +233,6 @@ void main() {
         'device_ids': ['device-a', 'device-b'],
       },
     });
-
-    coordinator.dispose();
-    cloudSocket.dispose();
-    localSocket.dispose();
-  });
-
-  test('keeps cloud route safe when assertion cannot be obtained', () async {
-    final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1')..setConnected(true);
-    final localSocket = FakeSanadSocketService(hardwareId: 'device-1')..setConnected(true);
-    final coordinator = DeviceConnectionCoordinator(
-      cloudSocketService: cloudSocket,
-      localSocketService: localSocket,
-      currentDeviceId: 'device-1',
-    );
-    final agent = DeviceConfig(
-      id: 'cloud-device-1',
-      name: 'Sanad Agent',
-      hardwareId: 'device-1',
-    );
-
-    await coordinator.synchronizeDeliveryPresence(agent);
-
-    expect(localSocket.appliedLocalPresenceAssertion, isNull);
-    expect(localSocket.localHelloRefreshes, 0);
 
     coordinator.dispose();
     cloudSocket.dispose();

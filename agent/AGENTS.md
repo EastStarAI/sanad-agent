@@ -70,7 +70,7 @@ This contract applies to `agent/`.
 - Do not create hidden scratch or temporary directories inside the repository.
 - Missing provider configuration must not prevent daemon startup; fail lazily when an LLM operation actually requires a provider.
 - Local/offline provider configurations remain valid and must not require an OpenAI-style key.
-- Sensitive payloads, tokens, provider secrets, pending steer text, and recovered draft text must not enter logs.
+- Sensitive payloads,tokens,provider secrets,pending steer text,recovered draft text,command payloads,event/final-answer content,custom Client names,and raw Client-instance identity must not enter logs;transport diagnostics are lifecycle/type/count metadata only.
 - Platform failures and asynchronous command failures must be contained so one transport cannot terminate the daemon or other interfaces.
 
 ## Development and Testing Requirements
@@ -79,6 +79,7 @@ This contract applies to `agent/`.
 - Run the full fast suite for broad engine, interface, provider-runtime, persistence, capability-registry, or shared-model changes.
 - Require daemon-backed E2E only when mocks cannot validate the boundary: local/cloud socket contracts, daemon bootstrap/lifecycle, persistent runtime state and restart recovery, provider readiness/model execution, worktree runtime isolation, or end-to-end session execution.
 - When interface/runtime ownership changes affect the local daemon contract, add or update real daemon-backed coverage rather than relying only on mocks.
+- Unit tests for retry, polling, scheduling, or asynchronous delivery inject deterministic wait/control seams or await the exact emitted event; they must not sleep through production backoff, polling intervals, or padded settling windows.
 - Every spawned test daemon uses a unique temporary `SANAD_STATE_HOME`, cleans it after shutdown, and preserves the normal shared identity/configuration boundary.
 - Daemon-backed tests use the deterministic E2E provider and must never inherit the live agent database, invoke the user's configured provider, or mutate user runtime state.
 - Documentation-only contract changes require documentation generation/lint integrity but do not require Dart analysis or runtime tests unless source code also changes.

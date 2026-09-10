@@ -14,7 +14,6 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_state.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -192,7 +191,7 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
                 Color? progressColor;
 
                 if (activeProviderId != null && activeProviderId.isNotEmpty) {
-                  final deviceId = widget.activeAgent?.id ?? DeviceInventoryIds.localDevice;
+                  final deviceId = widget.activeAgent?.id ?? getIt<ProviderUsageCubit>().localDeviceId;
                   final entry = usageState.entry(deviceId, activeProviderId);
                   final supports = usageState.support.supports(deviceId, activeProviderId);
 

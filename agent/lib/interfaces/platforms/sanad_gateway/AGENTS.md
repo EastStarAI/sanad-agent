@@ -15,8 +15,14 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Do not emit legacy agent type fields or legacy thread identity in new payloads.
 - Preserve opaque event id across transport copies and preserve run/model-step/tool-call distinctions.
 - A session-bound Local Gateway response retains the explicit device identity captured for that session. A later unrelated command on the same socket must not replace it with another device or hardware identity; socket identity is fallback-only when no session identity exists.
+- A newly accepted Local Gateway socket starts with the initialized Agent `hardware_id`, so platform-family events emitted before its first command still carry the canonical local inventory identity. Do not emit or accept a synthetic local runtime identity.
 - `thinking_mode` is the only session/persistence/protocol field name; do not accept or emit aliases.
 - Every request-correlated response carries the original request id.
+
+## Cross-Transport Delivery Presence
+- Platform-family fan-out is Local-first and awaited before Cloud serialization. Local write failures are isolated and remain Cloud-eligible.
+- `DeliveryPresenceController` owns bounded in-memory event-local delivery results. The Cloud adapter consumes each result once, intersects it with the fresh Gateway-authored Cloud instance lease, and emits sorted `local_delivery_client_instance_ids` only for instances that received the same canonical `event_id` locally.
+- Local delivery results and Local membership never leave Agent memory except for that one event-local exclusion list; missing/expired/ambiguous state preserves Cloud egress.
 
 ## Local Runtime Context
 - Rebuild per-turn workspace tools before assembling fresh runtime-owned system context for the runner.
@@ -104,7 +110,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
   runtime nonce only as local ownership evidence; neither value is an
   authentication credential, and managed mutation still requires the complete
   launcher lease and client identity to agree.
-- After an authenticated Local WebSocket upgrade, a new Client may send one bounded `client.hello` with protocol/version, Client instance UUID, allowlisted display metadata, capabilities, and an optional Gateway-minted device-bound presence assertion. Only an assertion-bearing hello contributes to the Agent full local-presence snapshot; the hello remains correlation-only, grants no command authorization, and absent/invalid proof preserves legacy Cloud delivery.
+- After an authenticated Local WebSocket upgrade, a Client may send one bounded `client.hello` with protocol/version, Client instance UUID, allowlisted display metadata, and capabilities. The Agent records that instance only for the lifetime of the authenticated Local socket; hello remains correlation-only, grants no command authorization, carries no Cloud assertion, and never creates cloud-published Local presence.
 - Native desktop authentication reconciliation is local-only. Accept exactly `{"type":"authentication_exchange"}` with no additional fields, reload owner-only `auth.json`, and broadcast no credentials. Reject unexpected fields before payload logging; never route this event through the cloud platform. CLI writers retry the authenticated HTTP trigger within a strict bound, require an explicit credential-free acknowledgment, treat an absent daemon as expected, and surface a restart instruction when a reachable daemon does not reconcile.
 - Automatic co-located coupling uses the authenticated loopback HTTP surface only. It may return bounded status, expiry, and non-secret enrollment request identity; it must never return or accept User tokens, Device Credentials, private device codes, proofs, or account identity. Authenticated body-free `DELETE` cancels the current pending enrollment through the Agent-owned private device code and proof, invalidates stale redemption completion, and returns only bounded status so the next start owns a fresh request. Query-bearing and unsupported-method requests fail closed.
 - Explicit Agent logout is admitted only as an authenticated local Desktop `POST /auth/logout` with no query or body. It delegates to `AuthManager.logout()`, returns bounded credential-free status, disconnects cloud authorization through the normal auth change signal, and never stops the Local Gateway.

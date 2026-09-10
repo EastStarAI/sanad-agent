@@ -24,7 +24,7 @@ scope: "Local Gateway session-bound device identity and live conversation event 
 ## Gates
 
 ### G0 — Diagnosis
-- [x] إثبات وصول الأحداث إلى WebSocket بهوية Hardware مع اشتراك المحادثة في `local-agent`.
+- [x] إثبات وصول الأحداث إلى WebSocket بهوية Hardware مع اشتراك المحادثة في الهوية المحلية الاصطناعية السابقة.
 - [x] تحديد أن `_rememberSocketIdentity` كانت تسمح لأمر جانبي بتغيير الهوية التي تستخدمها `_withSocketIdentity`.
 
 ### G1 — Implementation
@@ -33,13 +33,13 @@ scope: "Local Gateway session-bound device identity and live conversation event 
 - [x] عدم إجراء workaround في EventRouter أو Conversation Cubit.
 
 ### G2 — Verification
-- [x] إضافة اختبار WebSocket يربط جلسة بـ`local-agent`، ثم يرسل أمرًا جانبيًا بـHardware UUID، ثم يتحقق أن حدث الجلسة ما زال يحمل `local-agent`.
+- [x] إضافة اختبار WebSocket يربط جلسة بهوية صريحة، ثم يرسل أمرًا جانبيًا بهوية أخرى، ثم يتحقق أن حدث الجلسة ما زال يحمل الهوية الصريحة.
 - [x] نجاح تحليل الوكيل والاختبار المحدد.
 - [x] تحديث العقد والتوثيق الفني ومصفوفة QA.
 
 ## Acceptance Criteria
 
-- [x] Given جلسة محادثة مربوطة بـ`local-agent`، when يصل أمر جانبي على الـsocket نفسه بـ`device_id` مختلفة، then تبقى أحداث الجلسة اللاحقة موسومة بـ`local-agent`.
+- [x] Given جلسة محادثة مربوطة بهوية صريحة، when يصل أمر جانبي على الـsocket نفسه بـ`device_id` مختلفة، then تبقى أحداث الجلسة اللاحقة موسومة بهوية الجلسة الصريحة.
 - [x] EventRouter يستطيع تمرير الأحداث الحية إلى ConversationCommandGateway دون مغادرة المحادثة أو إعادة hydration.
 - [x] حدث غير مرتبط بجلسة ما زال يستطيع استخدام هوية الـsocket كـfallback.
 

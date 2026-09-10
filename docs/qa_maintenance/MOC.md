@@ -15,6 +15,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 
 ## Active Specifications
 
+- [Test Suite Performance and Ownership QA](test_suite_performance_qa.md): Package boundaries, deterministic timer/event testing, hotspot thresholds, and subprocess/port integration classification for Agent, Client, and `sanad-dev` suites.
 - [Flutter VM Driver CLI QA](flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
 - [Bundled Product Skills QA](bundled_product_skills_qa.md): Deterministic one-file embedding, SANAD_HOME install/update/remove, customization safety, fast startup, and release-artifact coverage.
 - [Local Gateway and Sanad Home Security QA](local_gateway_and_sanad_home_security_qa.md): Authentication, Host/Origin rejection, secure writes, legacy migration, restart, Windows ACL, and worktree isolation coverage.
@@ -26,6 +27,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Cross-Transport Delivery Presence QA](cross_transport_delivery_presence_qa.md): Assertion-bound Local membership, fail-safe Agent Cloud-egress leases, route transitions, and canonical event-id deduplication.
 - [Mobile Session and Resume Recovery QA](mobile_session_resume_recovery_qa.md): Typed refresh outcomes, foreground resume, stale-cache continuity, and authoritative mobile conversation resynchronization.
 - [Desktop Authentication Exchange QA](desktop_authentication_exchange_qa.md): Bidirectional login, refresh, logout, reconnect, and credential-free Local Gateway exchange coverage.
+- [Account Sessions and Devices QA](account_sessions_devices_qa.md): Account Client-session and Agent inventory presentation, hardware/account identity boundaries, cancellation, revocation, compact layout, and restart coverage.
 - [Device Name Editing QA](device_name_editing_qa.md): Device rename validation, synchronization, and failure coverage.
 - [Provider Account Usage Limits QA](provider_account_usage_limits_qa.md): Regression coverage for instance isolation, capability discovery, freshness, stale responses, and usage-card presentation.
 - [OpenRouter App Attribution QA](openrouter_app_attribution_qa.md): Exact app-attribution headers, sync/stream propagation, bearer-auth preservation, and provider-isolation coverage.

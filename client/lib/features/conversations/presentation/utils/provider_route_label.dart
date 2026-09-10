@@ -11,16 +11,12 @@ String? resolveProviderDisplayName({
   }
 
   if (_sessionMetadataMatchesProvider(session, normalizedProviderId)) {
-    final metadataDisplayName = session?.metadata?['provider_display_name']
-        ?.toString()
-        .trim();
+    final metadataDisplayName = session?.metadata?['provider_display_name']?.toString().trim();
     if (metadataDisplayName != null && metadataDisplayName.isNotEmpty) {
       return metadataDisplayName;
     }
 
-    final metadataDisplayFallback = session?.metadata?['provider_display']
-        ?.toString()
-        .trim();
+    final metadataDisplayFallback = session?.metadata?['provider_display']?.toString().trim();
     if (metadataDisplayFallback != null && metadataDisplayFallback.isNotEmpty) {
       return metadataDisplayFallback;
     }
@@ -40,9 +36,7 @@ String? resolveProviderDisplayName({
       .split('-')
       .where((part) => part.isNotEmpty)
       .map(
-        (part) => part.length == 1
-            ? part.toUpperCase()
-            : '${part[0].toUpperCase()}${part.substring(1)}',
+        (part) => part.length == 1 ? part.toUpperCase() : '${part[0].toUpperCase()}${part.substring(1)}',
       )
       .join(' ');
 }

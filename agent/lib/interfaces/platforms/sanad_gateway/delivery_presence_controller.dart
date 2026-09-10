@@ -1,67 +1,54 @@
-import 'dart:async';
+import 'dart:collection';
 
 import 'package:meta/meta.dart';
 
 const deliveryPresenceProtocol = 'sanad.identity_presence';
 const deliveryPresenceVersion = 1;
 const deliveryPresenceCapability = 'delivery_presence_v1';
-const deliveryPresenceRenewalInterval = Duration(seconds: 20);
+const deliveryPresenceMaxRecipientInstances = 128;
+const deliveryPresenceMaxPendingLocalEvents = 256;
 
-@immutable
-class LocalPresenceMember {
-  const LocalPresenceMember({
-    required this.clientInstanceId,
-    required this.presenceAssertion,
-  });
-
-  final String clientInstanceId;
-  final String presenceAssertion;
-
-  Map<String, dynamic> toJson() => {
-    'client_instance_id': clientInstanceId,
-    'presence_assertion': presenceAssertion,
-  };
-}
-
-@immutable
-class LocalPresenceSnapshot {
-  const LocalPresenceSnapshot({required this.revision, required this.members});
-
-  final int revision;
-  final List<LocalPresenceMember> members;
-}
+final _clientInstancePattern = RegExp(
+  r'^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$',
+  caseSensitive: false,
+);
 
 /// Transport-owned Plan 49 state shared by the Agent's local and cloud
-/// adapters. It never owns runtime events or durable conversation state.
+/// adapters. Local membership never leaves this in-memory owner.
 class DeliveryPresenceController {
   DeliveryPresenceController({DateTime Function()? now})
     : _now = now ?? DateTime.now;
 
   final DateTime Function() _now;
-  final Map<Object, LocalPresenceMember> _localMembers = {};
-  final StreamController<LocalPresenceSnapshot> _localChanges =
-      StreamController<LocalPresenceSnapshot>.broadcast(sync: true);
+  final Map<Object, String> _localInstances = {};
+  final LinkedHashMap<String, Set<String>> _localDeliveryByEvent =
+      LinkedHashMap();
 
-  int _localRevision = 0;
   int _interestRevision = 0;
-  int? _cloudRecipientCount;
+  Set<String>? _cloudInstances;
   DateTime? _interestExpiresAt;
   int _cloudEvents = 0;
   int _suppressedCloudEvents = 0;
   int _localEvents = 0;
 
-  Stream<LocalPresenceSnapshot> get localChanges => _localChanges.stream;
-  LocalPresenceSnapshot get localSnapshot => LocalPresenceSnapshot(
-    revision: _localRevision,
-    members: List.unmodifiable(_localMembers.values),
-  );
+  @visibleForTesting
+  Set<String> get localInstanceIds => Set.unmodifiable(_localInstances.values);
 
-  bool get hasFreshZeroInterest =>
-      _cloudRecipientCount == 0 &&
+  @visibleForTesting
+  Set<String>? get freshCloudOnlyInstanceIds {
+    if (!_hasFreshInterest) return null;
+    return Set.unmodifiable(_cloudInstances!.difference(localInstanceIds));
+  }
+
+  bool get _hasFreshInterest =>
+      _cloudInstances != null &&
       _interestExpiresAt != null &&
       _now().isBefore(_interestExpiresAt!);
 
-  bool get shouldEmitCloud => !hasFreshZeroInterest;
+  bool get shouldEmitCloud {
+    final cloudOnly = freshCloudOnlyInstanceIds;
+    return cloudOnly == null || cloudOnly.isNotEmpty;
+  }
 
   bool claimCloudEgress() {
     final emit = shouldEmitCloud;
@@ -84,69 +71,84 @@ class DeliveryPresenceController {
   bool updateLocalMember(
     Object connectionKey, {
     required String clientInstanceId,
-    required String presenceAssertion,
   }) {
-    if (clientInstanceId.isEmpty || presenceAssertion.isEmpty) return false;
-    final next = LocalPresenceMember(
-      clientInstanceId: clientInstanceId,
-      presenceAssertion: presenceAssertion,
-    );
-    final current = _localMembers[connectionKey];
-    if (current?.clientInstanceId == next.clientInstanceId &&
-        current?.presenceAssertion == next.presenceAssertion) {
-      return false;
+    final normalized = clientInstanceId.toLowerCase();
+    if (!_clientInstancePattern.hasMatch(normalized)) return false;
+    if (_localInstances[connectionKey] == normalized) return false;
+    _localInstances[connectionKey] = normalized;
+    return true;
+  }
+
+  bool removeLocalMember(Object connectionKey) =>
+      _localInstances.remove(connectionKey) != null;
+
+  void recordLocalDelivery(String eventId, Iterable<String> instanceIds) {
+    if (eventId.isEmpty) return;
+    final delivered = instanceIds
+        .map((value) => value.toLowerCase())
+        .where(_clientInstancePattern.hasMatch)
+        .take(deliveryPresenceMaxRecipientInstances)
+        .toSet();
+    _localDeliveryByEvent[eventId] = delivered;
+    while (_localDeliveryByEvent.length >
+        deliveryPresenceMaxPendingLocalEvents) {
+      _localDeliveryByEvent.remove(_localDeliveryByEvent.keys.first);
     }
-    _localMembers[connectionKey] = next;
-    _publishLocalChange();
-    return true;
   }
 
-  bool removeLocalMember(Object connectionKey) {
-    if (_localMembers.remove(connectionKey) == null) return false;
-    _publishLocalChange();
-    return true;
+  Set<String> takeLocalDelivery(String eventId) {
+    final delivered = _localDeliveryByEvent.remove(eventId) ?? const <String>{};
+    if (!_hasFreshInterest) return const <String>{};
+    return Set.unmodifiable(delivered.intersection(_cloudInstances!));
   }
 
-  LocalPresenceSnapshot renewLocalSnapshot() {
-    _publishLocalChange();
-    return localSnapshot;
-  }
-
-  /// Accepts only a valid, monotonic Gateway-authored lease. Invalid or
-  /// ambiguous input clears suppression immediately (safe Cloud fallback).
+  /// Accepts only a complete, bounded, monotonic Gateway-authored Cloud set.
+  /// Invalid or ambiguous input clears suppression immediately.
   bool acceptInterest(Map<String, dynamic> payload) {
     final revision = _asInt(payload['revision']);
-    final count = _asInt(payload['cloud_recipient_count']);
     final leaseMs = _asInt(payload['lease_ms']);
-    final valid =
+    final rawInstances = payload['cloud_recipient_instance_ids'];
+    final complete = payload['cloud_recipient_instances_complete'] == true;
+    final validEnvelope =
         payload['protocol'] == deliveryPresenceProtocol &&
         payload['version'] == deliveryPresenceVersion &&
         payload['type'] == 'cloud.delivery_interest' &&
         revision != null &&
         revision > 0 &&
-        count != null &&
-        count >= 0 &&
         leaseMs != null &&
-        leaseMs > 0;
-    if (!valid) {
+        leaseMs > 0 &&
+        complete &&
+        rawInstances is List &&
+        rawInstances.length <= deliveryPresenceMaxRecipientInstances;
+    if (!validEnvelope) {
       clearInterest();
       return false;
     }
     if (revision < _interestRevision) return false;
+
+    final instances = <String>{};
+    for (final value in rawInstances) {
+      if (value is! String) {
+        clearInterest();
+        return false;
+      }
+      final normalized = value.toLowerCase();
+      if (!_clientInstancePattern.hasMatch(normalized) ||
+          !instances.add(normalized)) {
+        clearInterest();
+        return false;
+      }
+    }
+
     _interestRevision = revision;
-    _cloudRecipientCount = count;
+    _cloudInstances = instances;
     _interestExpiresAt = _now().add(Duration(milliseconds: leaseMs));
     return true;
   }
 
   void clearInterest() {
-    _cloudRecipientCount = null;
+    _cloudInstances = null;
     _interestExpiresAt = null;
-  }
-
-  void _publishLocalChange() {
-    _localRevision += 1;
-    if (!_localChanges.isClosed) _localChanges.add(localSnapshot);
   }
 
   int? _asInt(Object? value) {
@@ -154,5 +156,5 @@ class DeliveryPresenceController {
     return int.tryParse(value?.toString() ?? '');
   }
 
-  Future<void> dispose() => _localChanges.close();
+  Future<void> dispose() async {}
 }

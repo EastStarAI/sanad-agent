@@ -4,6 +4,25 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:test/test.dart';
 
+const localInstance = '11111111-1111-4111-8111-111111111111';
+const remoteInstance = '22222222-2222-4222-8222-222222222222';
+const unknownInstance = '33333333-3333-4333-8333-333333333333';
+
+Map<String, dynamic> lease({
+  required int revision,
+  required List<String> instances,
+  int leaseMs = 30000,
+  bool complete = true,
+}) => {
+  'protocol': deliveryPresenceProtocol,
+  'version': deliveryPresenceVersion,
+  'type': 'cloud.delivery_interest',
+  'revision': revision,
+  'cloud_recipient_instances_complete': complete,
+  'cloud_recipient_instance_ids': instances,
+  'lease_ms': leaseMs,
+};
+
 void main() {
   late DateTime now;
   late DeliveryPresenceController controller;
@@ -15,18 +34,11 @@ void main() {
 
   tearDown(() => controller.dispose());
 
-  test('zero interest suppresses cloud only while a valid lease is fresh', () {
-    expect(controller.shouldEmitCloud, isTrue, reason: 'unknown is fail-open');
+  test('fresh empty cloud-only set suppresses until lease expiry', () {
+    expect(controller.shouldEmitCloud, isTrue, reason: 'unknown is fail-safe');
 
     expect(
-      controller.acceptInterest({
-        'protocol': deliveryPresenceProtocol,
-        'version': deliveryPresenceVersion,
-        'type': 'cloud.delivery_interest',
-        'revision': 1,
-        'cloud_recipient_count': 0,
-        'lease_ms': 30000,
-      }),
+      controller.acceptInterest(lease(revision: 1, instances: [])),
       isTrue,
     );
     expect(controller.shouldEmitCloud, isFalse);
@@ -35,60 +47,94 @@ void main() {
     expect(controller.shouldEmitCloud, isTrue, reason: 'expiry restores cloud');
   });
 
-  test(
-    'positive interest emits one cloud copy and stale revisions are ignored',
-    () {
-      controller.acceptInterest({
-        'protocol': deliveryPresenceProtocol,
-        'version': deliveryPresenceVersion,
-        'type': 'cloud.delivery_interest',
-        'revision': 4,
-        'cloud_recipient_count': 2,
-        'lease_ms': 30000,
-      });
+  test('derives cloud-only instances from cloud minus local sets', () {
+    controller.updateLocalMember(
+      'socket-local',
+      clientInstanceId: localInstance,
+    );
+    controller.acceptInterest(
+      lease(revision: 4, instances: [localInstance, remoteInstance]),
+    );
 
-      expect(controller.shouldEmitCloud, isTrue);
-      expect(
-        controller.acceptInterest({
-          'protocol': deliveryPresenceProtocol,
-          'version': deliveryPresenceVersion,
-          'type': 'cloud.delivery_interest',
-          'revision': 3,
-          'cloud_recipient_count': 0,
-          'lease_ms': 30000,
-        }),
-        isFalse,
-      );
-      expect(controller.shouldEmitCloud, isTrue);
-    },
-  );
-
-  test('malformed interest clears prior suppression for safe fallback', () {
-    controller.acceptInterest({
-      'protocol': deliveryPresenceProtocol,
-      'version': deliveryPresenceVersion,
-      'type': 'cloud.delivery_interest',
-      'revision': 1,
-      'cloud_recipient_count': 0,
-      'lease_ms': 30000,
-    });
-    expect(controller.shouldEmitCloud, isFalse);
-
-    expect(controller.acceptInterest({'revision': 2}), isFalse);
+    expect(controller.freshCloudOnlyInstanceIds, {remoteInstance});
     expect(controller.shouldEmitCloud, isTrue);
   });
 
   test(
-    'zero interest gates before response serialization dependencies',
-    () async {
+    'local disconnect immediately restores cloud egress from same lease',
+    () {
+      controller.updateLocalMember(
+        'socket-local',
+        clientInstanceId: localInstance,
+      );
+      controller.acceptInterest(lease(revision: 1, instances: [localInstance]));
+      expect(controller.shouldEmitCloud, isFalse);
+
+      controller.removeLocalMember('socket-local');
+
+      expect(controller.freshCloudOnlyInstanceIds, {localInstance});
+      expect(controller.shouldEmitCloud, isTrue);
+    },
+  );
+
+  test('lower revision cannot replace a newer cloud set', () {
+    controller.acceptInterest(lease(revision: 4, instances: [remoteInstance]));
+
+    expect(
+      controller.acceptInterest(lease(revision: 3, instances: [])),
+      isFalse,
+    );
+    expect(controller.freshCloudOnlyInstanceIds, {remoteInstance});
+  });
+
+  test('incomplete or malformed lease clears prior suppression', () {
+    controller.acceptInterest(lease(revision: 1, instances: []));
+    expect(controller.shouldEmitCloud, isFalse);
+
+    expect(
+      controller.acceptInterest(
+        lease(revision: 2, instances: [], complete: false),
+      ),
+      isFalse,
+    );
+    expect(controller.shouldEmitCloud, isTrue);
+
+    controller.acceptInterest(lease(revision: 3, instances: []));
+    expect(
       controller.acceptInterest({
-        'protocol': deliveryPresenceProtocol,
-        'version': deliveryPresenceVersion,
-        'type': 'cloud.delivery_interest',
-        'revision': 1,
-        'cloud_recipient_count': 0,
-        'lease_ms': 30000,
-      });
+        ...lease(revision: 4, instances: []),
+        'cloud_recipient_instance_ids': ['not-a-client-instance'],
+      }),
+      isFalse,
+    );
+    expect(controller.shouldEmitCloud, isTrue);
+  });
+
+  test('duplicate or oversized recipient sets fail toward cloud', () {
+    expect(
+      controller.acceptInterest(
+        lease(revision: 1, instances: [localInstance, localInstance]),
+      ),
+      isFalse,
+    );
+    expect(controller.shouldEmitCloud, isTrue);
+
+    final oversized = List<String>.generate(
+      deliveryPresenceMaxRecipientInstances + 1,
+      (index) =>
+          '${index.toRadixString(16).padLeft(8, '0')}-1111-4111-8111-111111111111',
+    );
+    expect(
+      controller.acceptInterest(lease(revision: 2, instances: oversized)),
+      isFalse,
+    );
+    expect(controller.shouldEmitCloud, isTrue);
+  });
+
+  test(
+    'fresh empty set gates before response serialization dependencies',
+    () async {
+      controller.acceptInterest(lease(revision: 1, instances: []));
       final platform = ServerSanadGatewayPlatform(deliveryPresence: controller);
 
       await platform.sendResponse(
@@ -107,32 +153,75 @@ void main() {
     },
   );
 
-  test(
-    'local membership snapshots are full, monotonic, and connection-scoped',
-    () async {
-      final snapshots = <LocalPresenceSnapshot>[];
-      final subscription = controller.localChanges.listen(snapshots.add);
+  test('event-local delivery is cloud-relevant, consumable, and bounded', () {
+    controller.acceptInterest(
+      lease(revision: 1, instances: [localInstance, remoteInstance]),
+    );
+    controller.recordLocalDelivery('event-1', [localInstance, unknownInstance]);
 
-      controller.updateLocalMember(
-        'socket-a',
-        clientInstanceId: 'instance-a',
-        presenceAssertion: 'assertion-a',
-      );
-      controller.updateLocalMember(
-        'socket-b',
-        clientInstanceId: 'instance-b',
-        presenceAssertion: 'assertion-b',
-      );
-      controller.removeLocalMember('socket-a');
+    expect(controller.takeLocalDelivery('event-1'), {localInstance});
+    expect(controller.takeLocalDelivery('event-1'), isEmpty);
 
-      expect(snapshots.map((value) => value.revision), [1, 2, 3]);
-      expect(snapshots[1].members.map((value) => value.clientInstanceId), {
-        'instance-a',
-        'instance-b',
-      });
-      expect(snapshots.last.members.single.clientInstanceId, 'instance-b');
+    for (
+      var index = 0;
+      index <= deliveryPresenceMaxPendingLocalEvents;
+      index++
+    ) {
+      controller.recordLocalDelivery('bounded-$index', [remoteInstance]);
+    }
+    expect(controller.takeLocalDelivery('bounded-0'), isEmpty);
+    expect(
+      controller.takeLocalDelivery(
+        'bounded-$deliveryPresenceMaxPendingLocalEvents',
+      ),
+      {remoteInstance},
+    );
+  });
 
-      await subscription.cancel();
-    },
-  );
+  test('connect disconnect and replacement transitions fail without loss', () {
+    controller.acceptInterest(lease(revision: 1, instances: [localInstance]));
+    controller.updateLocalMember('old-socket', clientInstanceId: localInstance);
+    expect(controller.shouldEmitCloud, isFalse);
+
+    controller.recordLocalDelivery('delivered-before-disconnect', [
+      localInstance,
+    ]);
+    controller.removeLocalMember('old-socket');
+    expect(controller.shouldEmitCloud, isTrue);
+    expect(controller.takeLocalDelivery('delivered-before-disconnect'), {
+      localInstance,
+    });
+
+    controller.updateLocalMember(
+      'failed-socket',
+      clientInstanceId: localInstance,
+    );
+    controller.recordLocalDelivery('failed-local-write', const <String>[]);
+    controller.removeLocalMember('failed-socket');
+    expect(controller.shouldEmitCloud, isTrue);
+    expect(controller.takeLocalDelivery('failed-local-write'), isEmpty);
+
+    controller.updateLocalMember(
+      'replacement-socket',
+      clientInstanceId: localInstance,
+    );
+    expect(controller.shouldEmitCloud, isFalse);
+  });
+
+  test('expired interest consumes event-local delivery without excluding', () {
+    controller.acceptInterest(lease(revision: 1, instances: [localInstance]));
+    controller.recordLocalDelivery('event-1', [localInstance]);
+    now = now.add(const Duration(seconds: 31));
+
+    expect(controller.takeLocalDelivery('event-1'), isEmpty);
+    expect(controller.takeLocalDelivery('event-1'), isEmpty);
+  });
+
+  test('local membership stays in-memory and connection-scoped', () {
+    controller.updateLocalMember('socket-a', clientInstanceId: localInstance);
+    controller.updateLocalMember('socket-b', clientInstanceId: remoteInstance);
+    controller.removeLocalMember('socket-a');
+
+    expect(controller.localInstanceIds, {remoteInstance});
+  });
 }
