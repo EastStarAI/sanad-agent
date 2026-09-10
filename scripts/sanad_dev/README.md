@@ -2,6 +2,14 @@
 
 `sanad-dev` is the canonical developer DX utility for running, observing, and debugging the open-source components of the SanadAgent system (Dart background daemon & Flutter client).
 
+## Package and tests
+
+The CLI implementation is a standalone Pure-Dart package. Production source is
+under `lib/`, tests are under `test/`, and `scripts/sanad_dev.dart` remains a
+compatibility forwarder. From `scripts/sanad_dev/`, use `fvm dart analyze` and
+`fvm dart test`; these tests are intentionally excluded from the Flutter Client
+suite. Bootstrap resolves this package before entering the runtime CLI.
+
 ## Running and bootstrapping
 
 From a fresh macOS/Linux checkout, install the user command once:
@@ -12,8 +20,8 @@ scripts/sanad-dev install
 
 Use `scripts/sanad-dev.ps1 install` in Windows PowerShell. No arguments display
 help without mutation. `install` owns verified FVM `4.1.2`, pinned Flutter, and
-the user shim; `setup` ensures install and resolves Release Contract, Agent, and
-Client packages without launching; `run` ensures stale or missing stages and
+the user shim; `setup` ensures install and resolves Release Contract, `sanad-dev`,
+Agent, and Client packages without launching; `run` ensures stale or missing stages and
 then launches. Work-performing stages stream real stdout/stderr and finish with
 duration plus outcome. The official source command is:
 

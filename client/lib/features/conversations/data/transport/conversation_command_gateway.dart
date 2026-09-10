@@ -40,7 +40,10 @@ class SocketConversationCommandGateway implements ConversationCommandGateway {
   bool get isConnected => _controller.isConnected;
 
   @override
-  Stream<Map<String, dynamic>> get events => _controller.eventRouter.forDevice(_config.id);
+  Stream<Map<String, dynamic>> get events => _controller.eventRouter.forDevices({
+    _config.id,
+    if (_config.cloudDeviceId case final cloudDeviceId?) cloudDeviceId,
+  });
 
   @override
   void sendCommand({
@@ -50,7 +53,9 @@ class SocketConversationCommandGateway implements ConversationCommandGateway {
     if (!_controller.isConnected) return;
 
     _controller.sendDeviceCommand(
-      deviceId: _config.id,
+      deviceId: _controller.isLocalTransport
+          ? (_config.hardwareId ?? _config.id)
+          : (_config.accountDeviceId ?? _config.id),
       command: command,
       payload: payload,
     );
@@ -82,7 +87,7 @@ class SocketConversationCommandGateway implements ConversationCommandGateway {
 
   void _handleIncomingEvent(Map<String, dynamic> event) {
     final deviceId = event['device_id'];
-    if (deviceId != null && deviceId != _config.id) return;
+    if (deviceId != null && (deviceId is! String || !_config.representsDeviceId(deviceId))) return;
 
     final payload = event['payload'] as Map<String, dynamic>? ?? {};
     final requestId = event['request_id'] as String? ?? payload['request_id'] as String? ?? payload['id'] as String?;

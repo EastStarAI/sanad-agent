@@ -2,7 +2,7 @@
 
 ## Goal
 
-Make desktop onboarding visibly local-first without presenting an unsupported local-agent action on mobile or web.
+Make desktop onboarding visibly local-first without presenting an unsupported local-Agent action on mobile or web.
 
 ## UX Contract
 

@@ -39,8 +39,14 @@ String checkNonAsciiCredential(String key, String value) {
   return sanitized;
 }
 
+Future<void> _waitForDeviceCodePoll(Duration duration) =>
+    Future<void>.delayed(duration);
+
 /// ChatGPT device-code login flow.
-Future<String?> runCodexDeviceCodeFlow({http.Client? clientOverride}) async {
+Future<String?> runCodexDeviceCodeFlow({
+  http.Client? clientOverride,
+  Future<void> Function(Duration duration) waitForPoll = _waitForDeviceCodePoll,
+}) async {
   final issuer = 'https://auth.openai.com';
   final clientId = 'app_EMoamEEZ73f0CkXaXp7hrann';
   final tokenUrl = 'https://auth.openai.com/oauth/token';
@@ -101,7 +107,7 @@ Future<String?> runCodexDeviceCodeFlow({http.Client? clientOverride}) async {
     String? codeVerifier;
 
     while (DateTime.now().difference(startTime) < maxWait) {
-      await Future.delayed(Duration(seconds: pollInterval));
+      await waitForPoll(Duration(seconds: pollInterval));
       stdout.write('.');
 
       final pollResp = await client.post(

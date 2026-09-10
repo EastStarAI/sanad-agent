@@ -40,7 +40,7 @@ void main() {
     final devices = merger.merge(const <DeviceConfig>[]);
 
     expect(devices, hasLength(1));
-    expect(devices.single.id, DeviceInventoryIds.localDevice);
+    expect(devices.single.id, 'device-1');
     expect(devices.single.name, 'This device');
     expect(devices.single.isLocalReachable, isTrue);
   });
@@ -69,7 +69,7 @@ void main() {
     final devices = merger.merge([cloudDevice]);
 
     expect(devices, hasLength(1));
-    expect(devices.single.id, DeviceInventoryIds.localDevice);
+    expect(devices.single.id, 'device-1');
     expect(devices.single.name, 'Sanad Agent (Macos)');
     expect(devices.single.isLocalReachable, isTrue);
     expect(devices.single.isOnline, isTrue);
@@ -102,7 +102,7 @@ void main() {
       ),
     ]);
 
-    expect(devices.map((device) => device.id), [DeviceInventoryIds.localDevice, 'oldest', 'newest']);
+    expect(devices.map((device) => device.id), ['device-1', 'oldest', 'newest']);
     expect(devices.first.cloudDeviceId, 'current-cloud');
   });
 
@@ -120,7 +120,7 @@ void main() {
     final devices = merger.merge([cloudDevice]);
 
     expect(devices, hasLength(1));
-    expect(devices.single.id, DeviceInventoryIds.localDevice);
+    expect(devices.single.id, 'device-1');
     expect(devices.single.metadata?['cloud_device_id'], 'cloud-device');
     expect(devices.single.isLocalReachable, isFalse);
     expect(devices.single.isOnline, isTrue);

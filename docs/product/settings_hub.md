@@ -14,7 +14,9 @@ Settings is the single place to manage the Sanad client, account, installed agen
 
 ## Navigation
 
-The primary Settings navigation contains Profile and General, followed by devices. On desktop, the current local device is pinned first; remaining devices are oldest-to-newest. Web and mobile show the complete device list oldest-to-newest. Selecting a device reveals Overview, Providers, MCP Servers, Skills, and its Workspaces. Up to six workspaces are visible initially; Show all and Show less expand or collapse the remainder.
+The primary Settings navigation contains Profile, General, and **Sessions & Devices**, followed by devices. Sessions & Devices is account-scoped: Client Sessions shows the current Client marker, normalized platform/app details, authoritative `Online` or `Offline` status, independent Last active time, and confirmed revoke. A presence-registry outage is shown as `Status unavailable` while retaining the last snapshot; it is never presented as Offline. Connected Agents reuses the existing device inventory, opens the selected device's Overview, and offers account revoke only for an account-backed device. Per-row operations are single-flight, and unknown outcomes refresh rather than claiming success. A confirmed revoke of the current Client completes the normal logout flow.
+
+The remaining device navigation follows these rules. On desktop, the current local device is pinned first; remaining devices are oldest-to-newest. On desktop, the current local device is pinned first; remaining devices are oldest-to-newest. Web and mobile show the complete device list oldest-to-newest. Selecting a device reveals Overview, Providers, MCP Servers, Skills, and its Workspaces. Up to six workspaces are visible initially; Show all and Show less expand or collapse the remainder.
 
 Selecting a device changes only the Settings inspection target. The conversation device changes only through Set as active in Overview.
 

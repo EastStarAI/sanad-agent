@@ -53,8 +53,9 @@ void main() {
   late _LenientClientRegistry clientRegistry;
 
   final localDevice = DeviceConfig(
-    id: 'local-agent',
+    id: 'hardware-1',
     name: 'This Mac',
+    hardwareId: 'hardware-1',
     isOnline: true,
   );
   final cloudDevice = DeviceConfig(

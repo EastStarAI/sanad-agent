@@ -41,6 +41,33 @@ void main() {
     expect(response?['event'], 'sessions_list');
   });
 
+  test('merged cloud identity completes a local-keyed request', () async {
+    final mergedGateway = SocketConversationCommandGateway(
+      config: DeviceConfig(
+        id: 'hardware-1',
+        name: 'Merged SanadAgent',
+        metadata: const {'cloud_device_id': 'cloud-1'},
+      ),
+      controller: socket,
+    );
+    addTearDown(mergedGateway.dispose);
+
+    final future = mergedGateway.request(
+      command: 'get_sessions',
+      payload: {'request_id': 'req-cloud'},
+      requestId: 'req-cloud',
+    );
+    expect(socket.capturedCommands.last['device_id'], 'cloud-1');
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'cloud-1',
+      'event': 'sessions_list',
+      'payload': {'request_id': 'req-cloud', 'sessions': []},
+    });
+
+    expect((await future)?['event'], 'sessions_list');
+  });
+
   test('duplicate request id is rejected without replacing the original waiter', () async {
     final first = gateway.request(
       command: 'get_sessions',

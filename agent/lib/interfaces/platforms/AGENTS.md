@@ -22,6 +22,7 @@ This contract applies to `agent/lib/interfaces/platforms/`.
 - The local daemon platform is an inbound loopback server using a configured dynamic port.
 - Keep local and cloud adapters independently startable and disposable.
 - Preserve hardware id separately from backend-assigned device id on every cloud event.
+- The local adapter tracks authenticated Local Client instance ids in memory only and always attempts Local dispatch. It never publishes Local membership to the cloud. The cloud adapter alone consumes the Gateway-authored Cloud-recipient lease; missing, invalid, stale, or expired state enables Cloud egress.
 - Initial cloud pairing sends the UI-issued pairing token with an
   agent-generated durable device token. Persist the proposed durable token
   before registration, finalize it only after success, and never log either

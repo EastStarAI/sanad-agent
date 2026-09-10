@@ -8,6 +8,7 @@ import 'package:sanad_client/features/devices/data/daemon/standalone_daemon_cont
 import 'package:sanad_client/features/devices/data/daemon/source_daemon_controller.dart';
 import 'package:sanad_client/core/di/modules/socket_module.dart';
 import 'package:sanad_client/core/di/modules/storage_module.dart';
+import 'package:sanad_client/core/di/local_device_identity_normalizer.dart';
 import 'package:sanad_client/core/interfaces/socket_service.dart';
 import 'package:sanad_client/features/devices/data/device_client_registry_impl.dart';
 import 'package:sanad_client/features/devices/data/device_repository_impl.dart';
@@ -16,10 +17,12 @@ import 'package:sanad_client/features/devices/domain/device_repository.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 import 'package:sanad_client/features/auth/domain/auth_repository.dart';
+import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/features/auth/data/auth_repository_impl.dart';
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
 import 'package:sanad_client/features/mcp/data/mcp_runtime_client.dart';
 import 'package:sanad_client/features/settings/data/device_settings_client.dart';
+import 'package:sanad_client/features/settings/data/account_lifecycle_repository.dart';
 import 'package:sanad_client/features/settings/data/device_control_client.dart';
 import 'package:sanad_client/features/settings/data/device_skills_client.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
@@ -61,13 +64,45 @@ Future<void> configureDependencies({
   }
   await startupTrace?.call('preferences-ready');
 
+  if (!getIt.isRegistered<ClientInstanceIdentity>()) {
+    getIt.registerLazySingleton<ClientInstanceIdentity>(
+      () => ClientInstanceIdentity(preferences: getIt<SharedPreferences>()),
+    );
+  }
+  if (!getIt.isRegistered<String>(instanceName: 'clientInstanceId')) {
+    getIt.registerSingleton<String>(
+      await getIt<ClientInstanceIdentity>().load(),
+      instanceName: 'clientInstanceId',
+    );
+  }
+  if (!getIt.isRegistered<ClientDisplayMetadata>()) {
+    getIt.registerSingleton<ClientDisplayMetadata>(
+      await getIt<ClientInstanceIdentity>().metadata(),
+    );
+  }
+
   if (!getIt.isRegistered<AuthService>()) {
-    getIt.registerLazySingleton<AuthService>(() => AuthService());
+    getIt.registerLazySingleton<AuthService>(
+      () => AuthService(
+        clientInstanceId: getIt<String>(instanceName: 'clientInstanceId'),
+        clientMetadata: getIt<ClientDisplayMetadata>(),
+      ),
+    );
   }
 
   if (!getIt.isRegistered<IAuthRepository>()) {
     getIt.registerLazySingleton<IAuthRepository>(
       () => AuthRepositoryImpl(getIt<AuthService>()),
+    );
+  }
+  if (!getIt.isRegistered<AccountLifecycleRepository>()) {
+    getIt.registerLazySingleton<AccountLifecycleRepository>(
+      () => AccountLifecycleSocketRepository(
+        socket: SanadAccountLifecycleSocket(
+          getIt<SanadSocketService>(instanceName: 'cloudSocketService'),
+        ),
+      ),
+      dispose: (repository) => repository.dispose(),
     );
   }
 
@@ -111,22 +146,34 @@ Future<void> configureDependencies({
     );
     getIt.registerSingleton<String>(hardwareId, instanceName: 'hardwareId');
   }
+  await LocalDeviceIdentityNormalizer.normalize(
+    getIt<SharedPreferences>(),
+    getIt<String>(instanceName: 'hardwareId'),
+  );
   await startupTrace?.call('hardware-id-ready');
 
-  if (!getIt.isRegistered<SanadSocketService>(instanceName: 'cloudSocketService')) {
+  if (!getIt.isRegistered<SanadSocketService>(
+    instanceName: 'cloudSocketService',
+  )) {
     getIt.registerLazySingleton<SanadSocketService>(
       () => socketModule.socketService(
         hardwareId: getIt<String>(instanceName: 'hardwareId'),
+        clientInstanceId: getIt<String>(instanceName: 'clientInstanceId'),
+        clientMetadata: getIt<ClientDisplayMetadata>(),
         accessToken: getIt<AuthService>().accessToken,
       ),
       instanceName: 'cloudSocketService',
     );
   }
 
-  if (!getIt.isRegistered<SanadSocketService>(instanceName: 'localSocketService')) {
+  if (!getIt.isRegistered<SanadSocketService>(
+    instanceName: 'localSocketService',
+  )) {
     getIt.registerLazySingleton<SanadSocketService>(
       () => socketModule.localSocketService(
         hardwareId: getIt<String>(instanceName: 'hardwareId'),
+        clientInstanceId: getIt<String>(instanceName: 'clientInstanceId'),
+        clientMetadata: getIt<ClientDisplayMetadata>(),
       ),
       instanceName: 'localSocketService',
     );
@@ -143,7 +190,9 @@ Future<void> configureDependencies({
   }
 
   if (!getIt.isRegistered<ISocketService>()) {
-    getIt.registerLazySingleton<ISocketService>(() => getIt<SanadSocketService>());
+    getIt.registerLazySingleton<ISocketService>(
+      () => getIt<SanadSocketService>(),
+    );
   }
 
   if (!getIt.isRegistered<LocalDaemonController>()) {
@@ -314,7 +363,10 @@ Future<void> configureDependencies({
 
   if (!getIt.isRegistered<ProviderUsageCubit>()) {
     getIt.registerLazySingleton<ProviderUsageCubit>(
-      () => ProviderUsageCubit(client: getIt<ProviderSetupClient>()),
+      () => ProviderUsageCubit(
+        client: getIt<ProviderSetupClient>(),
+        localDeviceId: getIt<String>(instanceName: 'hardwareId'),
+      ),
     );
   }
 

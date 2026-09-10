@@ -69,7 +69,8 @@ The command contract is layered and explicit:
 - `sanad-dev install` installs or verifies FVM `4.1.2`, the Flutter version from
   `.fvmrc`, and the checkout-owned user shim, then stops.
 - `sanad-dev setup` ensures the install layer, resolves the shared Release
-  Contract before Agent and Client packages, then stops without a runtime.
+  Contract, standalone `sanad-dev`, Agent, and Client packages in dependency
+  order, then stops without a runtime.
 - `sanad-dev run` ensures only missing or stale install/setup stages, then starts
   the requested runtime target.
 - `sanad-dev switch --runtime current` prepares the invoking target checkout and
@@ -564,6 +565,19 @@ cd client
 fvm flutter analyze
 fvm flutter test
 ```
+
+`sanad-dev` tooling:
+
+```bash
+cd scripts/sanad_dev
+fvm dart analyze
+fvm dart test
+```
+
+The `sanad-dev` package owns its Pure-Dart implementation and tests; they are
+not part of the Client Flutter suite. The shared public endpoint selector under
+`shared/public_service_endpoints/` is also a standalone Pure-Dart package and
+is verified from its own package root.
 
 Run focused tests for the changed behavior before broad suites. E2E or
 integration tests that bind shared ports run sequentially; normal unit and

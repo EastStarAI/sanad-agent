@@ -7,6 +7,9 @@ import 'package:sanad_agent/core/auth/colocated_auth_coupling.dart';
 import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/interfaces/models/gateway_event.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
@@ -43,6 +46,9 @@ class _ExchangeAuthManager extends AuthManager {
   String? get deviceToken => cloudDeviceCredential;
 
   @override
+  String? get hardwareId => 'hardware-1';
+
+  @override
   Stream<void> get changes => _controller.stream;
 
   @override
@@ -72,6 +78,7 @@ Future<int> _reserveFreePort() async {
 void main() {
   const token = LocalGatewayCredential('transport-test-token');
   late LocalDaemonServerPlatform platform;
+  late DeliveryPresenceController deliveryPresence;
   late _ExchangeAuthManager authManager;
   late int port;
   Future<void> Function()? upgradeHook;
@@ -89,7 +96,9 @@ void main() {
     );
     getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
     getIt.registerSingleton<PlatformRuntimeBridge>(PlatformRuntimeBridge());
+    deliveryPresence = DeliveryPresenceController();
     platform = LocalDaemonServerPlatform(
+      deliveryPresence: deliveryPresence,
       authCoupling: ColocatedAuthCoupling(
         authManager: authManager,
         authorizationClient: DeviceAuthorizationClient(
@@ -113,7 +122,30 @@ void main() {
 
   tearDown(() async {
     await platform.dispose();
+    await deliveryPresence.dispose();
     await getIt.reset();
+  });
+
+  test('local dispatch is attempted with zero connected clients', () async {
+    expect(deliveryPresence.localInstanceIds, isEmpty);
+    deliveryPresence.acceptInterest({
+      'protocol': deliveryPresenceProtocol,
+      'version': deliveryPresenceVersion,
+      'type': 'cloud.delivery_interest',
+      'revision': 1,
+      'cloud_recipient_instances_complete': true,
+      'cloud_recipient_instance_ids': const <String>[],
+      'lease_ms': 30000,
+    });
+
+    await platform.sendResponse(
+      GatewayResponse(
+        sessionId: 'no-local-recipients',
+        message: Message(role: MessageRole.assistant, content: 'ready'),
+      ),
+    );
+
+    expect(deliveryPresence.metrics, {'local': 1, 'cloud': 0, 'suppressed': 0});
   });
 
   test('HTTP rejects missing credentials before health logic', () async {
@@ -332,6 +364,217 @@ void main() {
 
     expect(firstFrame['type'], 'register_success');
     await socket.close();
+  });
+
+  test(
+    'platform broadcast before the first command uses local inventory identity',
+    () async {
+      final socket = await WebSocket.connect(
+        'ws://127.0.0.1:$port/ws',
+        headers: {LocalGatewayCredentials.headerName: token.value},
+      );
+      final frames = StreamIterator<dynamic>(socket);
+      expect(await frames.moveNext(), isTrue); // register_success
+
+      await platform.sendResponse(
+        GatewayResponse(
+          sessionId: 'unbound-session',
+          message: Message(role: MessageRole.assistant, content: 'ready'),
+        ),
+      );
+
+      expect(await frames.moveNext(), isTrue);
+      final event = jsonDecode(frames.current as String);
+      expect(event['type'], 'device_event');
+      expect(event['device_id'], 'hardware-1');
+
+      await frames.cancel();
+      await socket.close();
+    },
+  );
+
+  test(
+    'session response preserves explicit identity after unrelated command',
+    () async {
+      final socket = await WebSocket.connect(
+        'ws://127.0.0.1:$port/ws',
+        headers: {LocalGatewayCredentials.headerName: token.value},
+      );
+      final frames = StreamIterator<dynamic>(socket);
+      expect(await frames.moveNext(), isTrue); // register_success
+
+      socket.add(
+        jsonEncode({
+          'type': 'execute_command',
+          'command': 'test_identity_binding_only',
+          'device_id': 'session-device',
+          'hardware_id': 'session-hardware',
+          'payload': {'session_id': 'session-a'},
+        }),
+      );
+      socket.add(
+        jsonEncode({
+          'type': 'execute_command',
+          'command': 'test_identity_binding_only',
+          'device_id': 'unrelated-device',
+          'hardware_id': 'unrelated-hardware',
+          'payload': {'session_id': 'session-b'},
+        }),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      await platform.sendResponse(
+        GatewayResponse(
+          sessionId: 'session-a',
+          eventId: 'session-identity-event',
+          message: Message(role: MessageRole.assistant, content: 'ready'),
+        ),
+      );
+
+      expect(await frames.moveNext(), isTrue);
+      final event = jsonDecode(frames.current as String);
+      expect(event['device_id'], 'session-device');
+      expect(event['hardware_id'], 'session-hardware');
+      await frames.cancel();
+      await socket.close();
+    },
+  );
+
+  test(
+    'platform-family dispatch records every connected Local instance',
+    () async {
+      const instances = [
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+      ];
+      final sockets = <WebSocket>[];
+      final frames = <StreamIterator<dynamic>>[];
+      for (final instanceId in instances) {
+        final socket = await WebSocket.connect(
+          'ws://127.0.0.1:$port/ws',
+          headers: {LocalGatewayCredentials.headerName: token.value},
+        );
+        sockets.add(socket);
+        final iterator = StreamIterator<dynamic>(socket);
+        frames.add(iterator);
+        expect(await iterator.moveNext(), isTrue); // register_success
+        socket.add(
+          jsonEncode({
+            'type': 'client.hello',
+            'protocol': 'sanad.identity_presence',
+            'version': 1,
+            'client_instance_id': instanceId,
+          }),
+        );
+        expect(await iterator.moveNext(), isTrue); // client.hello_ack
+      }
+      deliveryPresence.acceptInterest({
+        'protocol': deliveryPresenceProtocol,
+        'version': deliveryPresenceVersion,
+        'type': 'cloud.delivery_interest',
+        'revision': 1,
+        'cloud_recipient_instances_complete': true,
+        'cloud_recipient_instance_ids': [
+          ...instances,
+          '33333333-3333-4333-8333-333333333333',
+        ],
+        'lease_ms': 30000,
+      });
+
+      await platform.sendResponse(
+        GatewayResponse(
+          sessionId: 'multi-local',
+          eventId: 'event-multi-local',
+          message: Message(role: MessageRole.assistant, content: 'ready'),
+        ),
+      );
+
+      for (final iterator in frames) {
+        expect(await iterator.moveNext(), isTrue);
+        expect(
+          jsonDecode(iterator.current as String)['event_id'],
+          'event-multi-local',
+        );
+      }
+      expect(deliveryPresence.takeLocalDelivery('event-multi-local'), {
+        ...instances,
+      });
+      for (final iterator in frames) {
+        await iterator.cancel();
+      }
+      for (final socket in sockets) {
+        await socket.close();
+      }
+    },
+  );
+
+  test('authenticated client hello binds a valid instance identity', () async {
+    final socket = await WebSocket.connect(
+      'ws://127.0.0.1:$port/ws',
+      headers: {LocalGatewayCredentials.headerName: token.value},
+    );
+    final frames = StreamIterator<dynamic>(socket);
+    expect(await frames.moveNext(), isTrue); // register_success compatibility
+
+    socket.add(
+      jsonEncode({
+        'type': 'client.hello',
+        'protocol': 'sanad.identity_presence',
+        'version': 1,
+        'client_instance_id': '11111111-1111-4111-8111-111111111111',
+        'metadata': {'platform_family': 'macos'},
+      }),
+    );
+    expect(await frames.moveNext(), isTrue);
+    final accepted = jsonDecode(frames.current as String);
+    expect(accepted, {
+      'type': 'client.hello_ack',
+      'protocol': 'sanad.identity_presence',
+      'version': 1,
+    });
+    expect(deliveryPresence.localInstanceIds, {
+      '11111111-1111-4111-8111-111111111111',
+    });
+    deliveryPresence.acceptInterest({
+      'protocol': deliveryPresenceProtocol,
+      'version': deliveryPresenceVersion,
+      'type': 'cloud.delivery_interest',
+      'revision': 1,
+      'cloud_recipient_instances_complete': true,
+      'cloud_recipient_instance_ids': const [
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+      ],
+      'lease_ms': 30000,
+    });
+    await platform.sendResponse(
+      GatewayResponse(
+        sessionId: 'session-1',
+        eventId: 'event-1',
+        message: Message(role: MessageRole.assistant, content: 'ready'),
+      ),
+    );
+    expect(await frames.moveNext(), isTrue);
+    expect(jsonDecode(frames.current as String)['event_id'], 'event-1');
+    expect(deliveryPresence.takeLocalDelivery('event-1'), {
+      '11111111-1111-4111-8111-111111111111',
+    });
+
+    socket.add(
+      jsonEncode({
+        'type': 'client.hello',
+        'protocol': 'sanad.identity_presence',
+        'version': 1,
+        'client_instance_id': 'device-or-sid-substitution',
+      }),
+    );
+    expect(await frames.moveNext(), isTrue);
+    final rejected = jsonDecode(frames.current as String);
+    expect(rejected['code'], 'INVALID_CLIENT_INSTANCE');
+
+    await frames.cancel();
+    await socket.close();
+    await Future<void>.delayed(Duration.zero);
+    expect(deliveryPresence.localInstanceIds, isEmpty);
   });
 
   test(

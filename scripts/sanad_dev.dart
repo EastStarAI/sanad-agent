@@ -1,26 +1,35 @@
-import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
-import 'dart:math';
 
-import 'sanad_dev/client_launch_profile.dart';
-import 'sanad_dev/cloud_endpoints.dart';
-import 'sanad_dev/component_journal.dart';
-import 'sanad_dev/command_options.dart';
-import 'sanad_dev/runtime_component_control.dart';
-import 'sanad_dev/runtime_context.dart';
-import 'sanad_dev/runtime_ownership.dart';
-import 'sanad_dev/runtime_switch.dart';
-import 'sanad_dev/terminal_launcher.dart';
-import 'sanad_dev/local_gateway_credential.dart';
-import 'sanad_dev/secure_runtime_file.dart';
-import 'sanad_dev/startup_attempt.dart';
-import 'sanad_dev/startup_probe.dart';
-
-part 'sanad_dev/cli.dart';
-part 'sanad_dev/developer_actions.dart';
-part 'sanad_dev/instance_discovery.dart';
-part 'sanad_dev/runtime_commands.dart';
-part 'sanad_dev/switch_commands.dart';
-
-final int startTimestamp = DateTime.now().millisecondsSinceEpoch;
+/// Compatibility entry point for callers that still invoke this historical
+/// script directly. The platform wrappers execute the package-owned CLI
+/// library without this extra process.
+Future<void> main(List<String> arguments) async {
+  final scriptsDirectory = File.fromUri(Platform.script).parent;
+  final packageDirectory = Directory(
+    '${scriptsDirectory.path}${Platform.pathSeparator}sanad_dev',
+  );
+  final packageConfig = File(
+    '${packageDirectory.path}${Platform.pathSeparator}.dart_tool'
+    '${Platform.pathSeparator}package_config.json',
+  );
+  if (!packageConfig.existsSync()) {
+    stderr.writeln(
+      'sanad-dev package is not ready. Run: '
+      'fvm dart pub get --directory scripts/sanad_dev',
+    );
+    exitCode = 1;
+    return;
+  }
+  final cli = File(
+    '${packageDirectory.path}${Platform.pathSeparator}lib'
+    '${Platform.pathSeparator}sanad_dev_cli.dart',
+  );
+  final process = await Process.start(
+    Platform.resolvedExecutable,
+    ['--packages=${packageConfig.path}', cli.path, ...arguments],
+    workingDirectory: Directory.current.path,
+    environment: Platform.environment,
+    mode: ProcessStartMode.inheritStdio,
+  );
+  exitCode = await process.exitCode;
+}

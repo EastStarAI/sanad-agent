@@ -3,15 +3,14 @@ import 'dart:convert';
 
 import 'package:crypto/crypto.dart';
 
-/// Phase 27 — bounded LRU deduplication of canonical events by
-/// `event_id + transport`.
+/// Bounded LRU deduplication of canonical events by `event_id`.
 ///
 /// The same logical event may arrive over both the local WebSocket and the
 /// cloud Socket.IO transports (e.g. during a transport switch or cloud
 /// fan-out to a same-device local client). The agent stamps every canonical
 /// event with a single `event_id` that is preserved across all transport
-/// copies; this temporary deduplicator keeps one copy per transport so a
-/// cloud delivery does not suppress the corresponding local delivery.
+/// copies; this deduplicator applies the first arriving copy only, regardless
+/// of transport, as a transition-race safety net.
 ///
 /// The cache is:
 /// - bounded by [maxEntries] (LRU eviction of the oldest entry when full).
@@ -27,7 +26,7 @@ class EventDeduplicator {
   final int maxEntries;
   final Duration maxAge;
 
-  // "<event_id>::<transport>::<payload fingerprint>" → insertion time.
+  // "<event_id>::<payload fingerprint>" → insertion time.
   // LinkedHashMap preserves insertion order, so `keys.first` is the
   // least-recently-used entry after re-insertion-on-access.
   final LinkedHashMap<String, int> _seen = LinkedHashMap();
@@ -45,7 +44,7 @@ class EventDeduplicator {
   }) {
     if (eventId == null || eventId.isEmpty) return true;
     final fingerprint = payload == null ? '' : _payloadFingerprint(payload);
-    final dedupeKey = '$eventId::$transport::$fingerprint';
+    final dedupeKey = '$eventId::$fingerprint';
     _sweepIfNeeded();
     if (_seen.containsKey(dedupeKey)) {
       // LRU bump: move to most-recent.

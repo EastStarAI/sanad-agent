@@ -71,7 +71,12 @@ class _ProviderSetupFlowState extends State<ProviderSetupFlow> {
       showReadyState: widget.showReadyState,
     );
     _ownsUsageCubit = widget.client != null;
-    _usageCubit = _ownsUsageCubit ? ProviderUsageCubit(client: _client) : getIt<ProviderUsageCubit>();
+    _usageCubit = _ownsUsageCubit
+        ? ProviderUsageCubit(
+            client: _client,
+            localDeviceId: widget.device?.id ?? getIt<String>(instanceName: 'hardwareId'),
+          )
+        : getIt<ProviderUsageCubit>();
 
     // Whenever the configured instances change, refresh the daemon's usage
     // support map and fetch usage in parallel for supported instances. This is

@@ -1,7 +1,6 @@
 enum MessageDeliveryIntent {
   auto,
-  queue
-  ;
+  queue;
 
   String get wireValue => name;
 }

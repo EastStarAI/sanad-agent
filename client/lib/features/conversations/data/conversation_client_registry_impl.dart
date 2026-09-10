@@ -66,6 +66,7 @@ class ConversationClientRegistryImpl implements ManagedConversationClientRegistr
   ConversationClient getOrCreateConversationClientForAgent(DeviceConfig config) {
     final existing = _clientsByAgentId[config.id];
     final existingScope = _scopeByAgentId[config.id];
+    existing?.updateConfig(config);
 
     final endpoint = _resolveEndpointForExistingClient(config);
     final configScope = endpoint.scope;
@@ -94,6 +95,9 @@ class ConversationClientRegistryImpl implements ManagedConversationClientRegistr
   @override
   void retainClientsFor(List<DeviceConfig> agents) {
     final liveAgentIds = agents.map((agent) => agent.id).toSet();
+    for (final agent in agents) {
+      _clientsByAgentId[agent.id]?.updateConfig(agent);
+    }
     final staleAgentIds = _clientsByAgentId.keys.where((id) => !liveAgentIds.contains(id)).toList();
     for (final id in staleAgentIds) {
       _clientsByAgentId.remove(id)?.dispose();

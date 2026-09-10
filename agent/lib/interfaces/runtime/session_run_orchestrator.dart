@@ -1087,8 +1087,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   }
 
   Future<void> handleEvent(GatewayEvent event) async {
-    _logger.info('Incoming event for session: ${event.sessionId}');
-    _logger.fine('Content: ${event.message.content}');
+    _logger.info('Incoming session event');
 
     if (event.type == 'stop') {
       _logger.info('Received STOP command for session: ${event.sessionId}');

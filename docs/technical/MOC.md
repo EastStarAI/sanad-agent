@@ -30,6 +30,7 @@ This directory owns the technical specifications of "HOW" the system is structur
 - **[Message Turn Replay Protocol](message_turn_replay_protocol.md):** Latest-root-turn identity, soft rewind, authoritative idle boundary, steer exclusion, and route payload contract.
 - **[Session Fork Protocol](session_fork_protocol.md):** Daemon-authoritative materialized fork, lineage, atomic prefix copy, and idle child admission.
 - **[Run Cancellation and Process Ownership](run_cancellation_and_process_ownership.md):** Run-scoped Stop, provider/tool interruption, process containment, bounded cleanup, and live/history terminal parity.
+- **[Multimodal Tool Results and View Image](multimodal_tool_results_and_view_image.md):** Typed tool results, secure user attachments, tool-chosen image inspection, local/remote conversation media, provider translation, durability, and binary-safety boundaries.
 - **[Background Terminal Task Runtime](background_terminal_task_runtime.md):** Durable task ownership, atomic shell handoff, PTY supervision, cursor replay, typed wake admission, secure input, and lifecycle recovery.
 - **[Remote Device Control Protocol](remote_device_control_protocol.md):** Typed remote update, restart, admission errors, and correlation rules shared by local and cloud transports.
 - **[Remote Device Control Threat Model](remote_device_control_threat_model.md):** Trust boundaries, hosted ownership evidence, MCP payload handling, managed workspace roots, and gate-linked pass/fail tests for remote update, restart, workspaces, and MCP.

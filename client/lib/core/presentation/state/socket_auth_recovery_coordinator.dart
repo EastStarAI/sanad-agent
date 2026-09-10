@@ -34,7 +34,14 @@ class SocketAuthRecoveryCoordinator {
   });
 
   void start() {
-    _authFailureSubscription ??= socketService.onAuthFailure.listen((_) {
+    _authFailureSubscription ??= socketService.onAuthFailure.listen((failure) {
+      if (failure['terminal'] == true) {
+        _pendingRecovery = _PendingRecovery.terminal;
+        if (_recoveryFuture == null) {
+          _drainPendingRecovery();
+        }
+        return;
+      }
       if (_refreshedReconnectInFlight) {
         _pendingRecovery = _PendingRecovery.terminal;
         return;

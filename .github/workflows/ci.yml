@@ -176,14 +176,10 @@ jobs:
           fvm dart pub get
           fvm dart test
       - name: Verify bootstrap, journals, and terminal quoting without hosted traffic
-        working-directory: client
-        run: >-
-          fvm flutter test
-          test/unit/scripts/sanad_dev_bootstrap_test.dart
-          test/unit/scripts/sanad_dev_component_journal_test.dart
-          test/unit/scripts/sanad_dev_terminal_launcher_test.dart
-          test/unit/scripts/sanad_dev_command_options_test.dart
-          test/unit/scripts/sanad_dev_cloud_endpoints_test.dart
+        working-directory: scripts/sanad_dev
+        run: |
+          fvm dart pub get
+          fvm dart test test/sanad_dev_bootstrap_test.dart test/sanad_dev_component_journal_test.dart test/sanad_dev_terminal_launcher_test.dart test/sanad_dev_command_options_test.dart test/sanad_dev_cloud_endpoints_test.dart
       - name: Parse Windows release scripts
         if: runner.os == 'Windows'
         shell: pwsh

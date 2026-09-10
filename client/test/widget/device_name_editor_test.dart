@@ -71,7 +71,11 @@ void main() {
   });
 
   testWidgets('does not offer rename for a local-only device', (tester) async {
-    final device = DeviceConfig(id: 'local-agent', name: 'This device');
+    final device = DeviceConfig(
+      id: 'hardware-1',
+      name: 'This device',
+      hardwareId: 'hardware-1',
+    );
     await tester.pumpWidget(
       buildEditor(device: device, onRename: (_) async {}),
     );

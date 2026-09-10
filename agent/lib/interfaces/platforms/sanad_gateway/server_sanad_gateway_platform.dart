@@ -15,6 +15,7 @@ import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
 
 import 'capabilities_loader.dart';
+import 'delivery_presence_controller.dart';
 import 'sanad_protocol_bridge.dart';
 import 'protocol/canonical_events.dart';
 import 'channels/cloud_session_channel.dart';
@@ -66,11 +67,13 @@ class ServerSanadGatewayPlatform extends BasePlatform
   final io.Socket Function(String uri, dynamic options)? socketFactory;
   final Future<DeviceKeyIdentity> Function() identityLoader;
   final http.Client _httpClient;
+  final DeliveryPresenceController? deliveryPresence;
 
   ServerSanadGatewayPlatform({
     this.socketFactory,
     Future<DeviceKeyIdentity> Function()? identityLoader,
     http.Client? httpClient,
+    this.deliveryPresence,
   }) : identityLoader = identityLoader ?? DeviceKeyIdentity.loadOrCreate,
        _httpClient = httpClient ?? http.Client();
 
@@ -136,7 +139,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
       final config = getIt<Config>();
       final gatewayUrl = config.gatewayUrl;
 
-      _logger.info('Connecting to Sanad Gateway at $gatewayUrl...');
+      _logger.info('Connecting to Sanad Gateway...');
 
       final options = io.OptionBuilder()
           .setTransports(['websocket'])
@@ -158,15 +161,16 @@ class ServerSanadGatewayPlatform extends BasePlatform
       await _register(challengeNonce: nonce);
     });
 
-    _socket!.onDisconnect((reason) {
+    _socket!.onDisconnect((_) {
       _registeredDeviceId = null;
-      _logger.info('🔌 Disconnected from Sanad Gateway (reason: $reason)');
+      deliveryPresence?.clearInterest();
+      _logger.info('🔌 Disconnected from Sanad Gateway');
     });
 
     _socket!.onConnectError(
-      (err) => _logger.severe('❌ Connection Error: $err'),
+      (_) => _logger.severe('❌ Sanad Gateway connection error'),
     );
-    _socket!.onError((err) => _logger.severe('❌ Socket Error: $err'));
+    _socket!.onError((_) => _logger.severe('❌ Sanad Gateway socket error'));
 
     _socket!.on('register_success', (data) async {
       final envelope = toMap(data);
@@ -175,16 +179,24 @@ class ServerSanadGatewayPlatform extends BasePlatform
         await authManager.completeDevicePairing();
       }
       _registeredDeviceId = envelope['device_id']?.toString();
-      _logger.info(
-        '⚡ Successfully registered with Sanad Gateway as device $_registeredDeviceId',
-      );
+      _logger.info('⚡ Successfully registered with Sanad Gateway');
+    });
+
+    _socket!.on('cloud_delivery_interest', (data) {
+      final accepted = deliveryPresence?.acceptInterest(toMap(data)) ?? false;
+      if (accepted) {
+        _socket?.emit('cloud_delivery_interest_ack', {
+          'version': deliveryPresenceVersion,
+          'revision': toMap(data)['revision'],
+        });
+      }
     });
 
     _socket!.on('register_failed', (data) async {
       final envelope = toMap(data);
       final message = envelope['error'] as String? ?? 'Registration failed';
       final code = envelope['code'] as String? ?? '';
-      _logger.severe('❌ Registration failed: $message (code: $code)');
+      _logger.severe('❌ Cloud registration failed');
 
       final authManager = getIt<AuthManager>();
       if (authManager.hasPendingDevicePairing) {
@@ -204,9 +216,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
     _socket!.on('execute_tool', (data) {
       final envelope = toMap(data);
-      _logger.info(
-        '⬇️ [socket] Received execute_tool: ${envelope['tool_name']}',
-      );
+      _logger.info('⬇️ [socket] Received execute_tool');
       logFinePayload('⬇️ [socket] execute_tool payload:', envelope);
       // TODO: Implement tool execution mapping to agent tools
     });
@@ -292,13 +302,11 @@ class ServerSanadGatewayPlatform extends BasePlatform
       );
 
       if (command == 'start_voice') {
-        _logger.info(
-          'Starting cloud voice session for session $sessionId, device $deviceId',
-        );
+        _logger.info('Starting cloud voice session');
         await _startVoiceSession(sessionId, deviceId);
         return;
       } else if (command == 'stop_voice') {
-        _logger.info('Stopping cloud voice session for session $sessionId');
+        _logger.info('Stopping cloud voice session');
         await _stopVoiceSession(sessionId);
         return;
       }
@@ -316,7 +324,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
         platformId,
       );
       if (gatewayEvent == null) {
-        _logger.warning('Unknown or unhandled command: $command');
+        _logger.warning('Unknown or unhandled cloud command');
         return;
       }
       _eventController.add(gatewayEvent);
@@ -530,7 +538,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
     required String sessionId,
     required String deviceId,
   }) async {
-    _logger.warning('Blocking remote MCP command: $command');
+    _logger.warning('Blocking remote MCP command');
     await _emitAgentEvent({
       'device_id': _registeredDeviceId ?? deviceId,
       'type': 'event',
@@ -618,8 +626,8 @@ class ServerSanadGatewayPlatform extends BasePlatform
       unawaited(
         engine
             .start({'session_id': sessionId, 'device_id': deviceId})
-            .catchError((Object err) {
-              _logger.severe('Failed to start cloud VoiceEngine: $err');
+            .catchError((Object _) {
+              _logger.severe('Failed to start cloud VoiceEngine');
               if (_voiceEngines[sessionId] == engine) {
                 _voiceEngines.remove(sessionId);
               }
@@ -632,15 +640,15 @@ class ServerSanadGatewayPlatform extends BasePlatform
         'event': 'voice_session_started',
         'payload': {'session_id': sessionId},
       });
-    } catch (e, stack) {
-      _logger.severe('Error starting cloud voice session: $e', e, stack);
+    } catch (_) {
+      _logger.severe('Error starting cloud voice session');
     }
   }
 
   Future<void> _stopVoiceSession(String sessionId) async {
     final engine = _voiceEngines.remove(sessionId);
     if (engine != null) {
-      _logger.info('Closing active voice engine for session $sessionId');
+      _logger.info('Closing active voice engine');
       await engine.close();
     }
   }
@@ -705,17 +713,21 @@ class ServerSanadGatewayPlatform extends BasePlatform
       'hardware_id': authManager.hardwareId,
       'platform': _getPlatformName(),
       ...capabilities.toJson(),
+      'transport_capabilities': const [deliveryPresenceCapability],
     };
 
-    _logger.info(
-      '⬆️ [socket] Registering device with hardware_id: ${authManager.hardwareId}',
-    );
+    _logger.info('⬆️ [socket] Registering Agent device');
     _logger.fine('⬆️ [socket] Registration fields: ${payload.keys.join(', ')}');
 
     targetSocket.emit('register_device', payload);
   }
 
-  Future<void> _emitAgentEvent(Map<String, dynamic> envelope) async {
+  Future<void> _emitAgentEvent(
+    Map<String, dynamic> envelope, {
+    bool egressClaimed = false,
+    Set<String> localDeliveryExclusions = const <String>{},
+  }) async {
+    if (!egressClaimed && deliveryPresence?.claimCloudEgress() == false) return;
     if (_socket == null || !_socket!.connected) {
       return;
     }
@@ -733,6 +745,9 @@ class ServerSanadGatewayPlatform extends BasePlatform
       ...envelope,
       'device_id': deviceId,
       'hardware_id': authManager.hardwareId,
+      if (localDeliveryExclusions.isNotEmpty)
+        'local_delivery_client_instance_ids': (localDeliveryExclusions.toList()
+          ..sort()),
     };
     final eventType =
         canonicalEnvelope['event'] ?? canonicalEnvelope['type'] ?? 'unknown';
@@ -755,9 +770,16 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   @override
   Future<void> sendResponse(GatewayResponse response) async {
+    final localDeliveryExclusions =
+        deliveryPresence?.takeLocalDelivery(response.eventId) ??
+        const <String>{};
+    // The interest gate precedes canonical translation/serialization.
+    if (deliveryPresence?.claimCloudEgress() == false) return;
     final canonicalEvent = _protocolBridge.translateResponse(response);
     await _emitAgentEvent(
       _protocolBridge.buildAgentEventEnvelope(canonicalEvent),
+      egressClaimed: true,
+      localDeliveryExclusions: localDeliveryExclusions,
     );
   }
 
