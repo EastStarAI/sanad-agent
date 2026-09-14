@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77e2/R0"
-remaining_estimate: "35%"
+current_gate: "77e3/R0"
+remaining_estimate: "30%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -164,7 +164,7 @@ detail = low | auto | high | original
 11. [x] [77d2 — Binary Redaction and Pruning](tasks/77d2-binary-redaction-and-pruning.md)
 12. [x] [77d3 — Daemon-backed View Image QA](tasks/77d3-view-image-integration-qa.md)
 13. [x] [77e1 — Attachment Model and Policy](tasks/77e1-attachment-model-and-policy.md)
-14. [ ] [77e2 — Agent Attachment Store](tasks/77e2-agent-attachment-store.md)
+14. [x] [77e2 — Agent Attachment Store](tasks/77e2-agent-attachment-store.md)
 15. [ ] [77e3 — Attachment Admission and Model Projection](tasks/77e3-attachment-admission-and-model-projection.md)
 16. [ ] [77f1 — Composer Attachment UX](tasks/77f1-composer-attachment-ux.md)
 17. [ ] [77f2 — User Message Attachment and Edit UX](tasks/77f2-user-message-attachment-edit-ux.md)
@@ -378,3 +378,16 @@ Next task:
 - Open findings: none.
 - Remaining estimate: `35%`.
 - Next task: `77e2 — Agent Attachment Store`, gate `R0`.
+
+### 2026-09-15 — 77e2 complete
+
+- Task/Gate: `77e2/G3`.
+- Status transition: `77e2 in_progress` → `complete`; plan advances to `77e3/R0`.
+- Owner/worktree: public repository in `77-hosted-attachment-media-relay`.
+- Files changed: private attachment store/repository, state schema, DI and session deletion integration, focused tests, evolution contract, technical design, QA matrix, task, and plan (`10/10` tracked paths).
+- Verification evidence: analyzer clean; 653 evolution/interfaces tests passed; Graphify rebuilt 23,900 nodes and 32,891 edges.
+- Exact-session grants, receiver-verified content, owner-only staging/promotion, durable message ownership, and idempotent partial/orphan/session cleanup passed.
+- Evidence fingerprint: `sha256:1f92463d390f35c6731087bc335672a612766e50a396b08131ba380c2557750a`; post-implementation parity satisfied without deviation.
+- Open findings: none.
+- Remaining estimate: `30%`.
+- Next task: `77e3 — Attachment Gateway and Client Admission`, gate `R0`.

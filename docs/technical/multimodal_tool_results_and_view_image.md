@@ -69,6 +69,12 @@ For a direct local route, an existing file on the agent device may resolve to it
 
 Folders are not transferred recursively in v1. A folder reference is valid only when that path already exists on the agent device and ordinary workspace/external-path authorization permits browsing it.
 
+### Agent attachment store
+
+`AttachmentStore` uses `<SANAD_STATE_HOME>/attachments` as its fixed isolation root. In-progress uploads live under the private `.partial` child and accept bounded chunks only. Commit recomputes byte count and SHA-256, inspects PNG/JPEG/GIF/WebP/PDF/text magic/content rather than trusting declared MIME, creates an opaque UUID-owned directory, atomically renames `payload` on the same filesystem, and inserts metadata only when both the owning session and message already exist. Unix-like roots/directories/files are enforced as `0700`/`0600`; Windows relies on the protected user state-home boundary.
+
+The `user_attachments` table stores opaque attachment/media IDs, exact session/message ownership, safe name, verified MIME/size/hash/kind, and a generated relative path. Its insert trigger rejects a message from another session. Runtime resolution requires the exact `(session_id, attachment_id)` pair and returns no sibling or workspace authority. Session deletion atomically cascades metadata and then removes owned directories; initialization removes interrupted partials, metadata whose message no longer exists, and promoted directories absent from metadata. All cleanup paths are idempotent, and closed failures contain neither caller filenames nor local paths.
+
 ## Model projection for attachments
 
 User attachment admission does not create provider image/file parts. The runner gives the model the user's text followed by a bounded ordered projection containing safe name, kind, and the admitted agent-local path, with guidance to call `view_image`, file read, or directory browsing when needed. Attachment bytes enter a provider request only as the result of an explicit tool call. Request dumps, logs, public events, and client history never contain the private path projection or file bytes.

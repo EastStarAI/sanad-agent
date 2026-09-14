@@ -313,6 +313,40 @@ class AgentStateDatabase {
       ON sessions(workspace_id, last_user_message_at DESC, session_id DESC);
     ''');
 
+    // ── session-owned attachments ───────────────────────────────────────
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS user_attachments (
+        attachment_id TEXT PRIMARY KEY,
+        media_id TEXT NOT NULL UNIQUE,
+        session_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        safe_name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+        sha256 TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('image', 'file')),
+        relative_path TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions (session_id)
+          ON DELETE CASCADE
+      );
+    ''');
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_user_attachments_session_message
+      ON user_attachments(session_id, message_id);
+    ''');
+    db.execute('''
+      CREATE TRIGGER IF NOT EXISTS user_attachments_message_owner_insert
+      BEFORE INSERT ON user_attachments
+      WHEN NOT EXISTS (
+        SELECT 1 FROM messages
+        WHERE message_id = NEW.message_id AND session_id = NEW.session_id
+      )
+      BEGIN
+        SELECT RAISE(ABORT, 'attachment message/session ownership mismatch');
+      END;
+    ''');
+
     // ── scheduled_tasks ───────────────────────────────────────────────────
     db.execute('''
       CREATE TABLE IF NOT EXISTS scheduled_tasks (

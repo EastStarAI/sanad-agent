@@ -22,6 +22,7 @@ import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart
 import 'package:sanad_agent/capabilities/skills/skill_load_service.dart';
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
@@ -117,6 +118,9 @@ void setupDI() {
   // Registered before SessionDB/SessionManager and the provider repository so
   // they can all share one connection to state.db and never open it twice.
   getIt.registerLazySingleton<AgentStateDatabase>(() => AgentStateDatabase());
+  getIt.registerLazySingleton<AttachmentStore>(
+    () => AttachmentStore(getIt<AgentStateDatabase>()),
+  );
 
   // Persisted runtime state repository (post-Plan 30): durable mirror of
   // suspended runs, queued messages, and active runtime notices.
