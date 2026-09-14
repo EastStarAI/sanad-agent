@@ -125,7 +125,7 @@ Surrounding text, order, tool-call identity, error state, and compatibility cont
 
 - Tool events, logs, approval payloads, plugin notifications, and history queries use safe text/status/media metadata only.
 - User attachment and View Image events never carry bytes, data URI, absolute paths, or reusable media credentials.
-- `LLMRequestDumper` recursively replaces image base64/data URIs with MIME/byte-count markers in a deep copy; the live request is unchanged.
+- `LLMRequestDumper` recursively replaces canonical, Anthropic, and Responses typed-image payloads with `image_redacted` MIME/decoded-byte metadata in a deep copy. Data URIs become `[image payload redacted: mime=<mime>, bytes=<count>]`, raw base64 becomes the equivalent binary/unknown-MIME marker, no payload sample survives, and the live request is unchanged.
 - Generic character truncation never scans base64. Image and attachment budgets run before history insertion.
 - Errors contain no bytes, data URI, file contents, absolute external paths, or stack traces.
 

@@ -33,6 +33,7 @@ import '../core/secrets_redactor.dart';
 import 'agent_context_assembler.dart';
 import 'llm_request_dumper.dart';
 import 'history_healer.dart';
+import 'history_image_pruner.dart';
 import 'metrics_tracker.dart';
 import 'tool_concurrency_evaluator.dart';
 import 'adapters/llm_http_exception.dart';
@@ -553,6 +554,13 @@ class AgentRunner {
 
   void _saveHistory() {
     sessionManager.saveSessionHistory(sessionId, history);
+  }
+
+  void _pruneProcessedHistoryImages() {
+    final result = HistoryImagePruner.prune(history);
+    if (!result.changed) return;
+    history = List<Message>.of(result.messages);
+    _saveHistory();
   }
 
   void _reloadPersistedHistory() {
@@ -1485,6 +1493,7 @@ class AgentRunner {
       await pluginManager.notifyMessage(responseMessage);
       await pluginManager.runPostExecution(responseMessage);
       _saveHistory();
+      _pruneProcessedHistoryImages();
     }
     if (responseMessage.toolCalls?.isNotEmpty ?? false) {
       final toolCalls = responseMessage.toolCalls!;
@@ -1886,6 +1895,7 @@ class AgentRunner {
         await pluginManager.notifyMessage(assistantMessage);
         await pluginManager.runPostExecution(assistantMessage);
         _saveHistory();
+        _pruneProcessedHistoryImages();
       }
       if (isToolCall && assistantMessage.toolCalls != null) {
         if (_stopRequested) return;
@@ -2609,7 +2619,9 @@ class _RunnerToolCallbacks
       },
     );
     _runner.history.add(toolMessage);
-    await _runner.pluginManager.notifyMessage(toolMessage);
+    await _runner.pluginManager.notifyMessage(
+      toolMessage.copyWith(clearToolResult: true),
+    );
     _runner._saveHistory();
     _runner.sessionManager.deleteSuspendedCheckpointByToolCallId(toolCall.id);
   }

@@ -184,14 +184,18 @@ void main() {
 
         final messagesJson = decoded['request']['body']['messages'] as List;
 
-        // Data URI should be truncated
+        // Data URI and raw base64 are fully redacted without samples.
         final userContent = messagesJson[0]['content'] as String;
-        expect(userContent, contains('[Base64 Data Truncated'));
-        expect(userContent, startsWith('data:image/png;base64,'));
+        expect(
+          userContent,
+          '[image payload redacted: mime=image/png, bytes=900]',
+        );
 
-        // Raw base64 block should be truncated
         final assistantContent = messagesJson[1]['content'] as String;
-        expect(assistantContent, contains('[Raw Base64 Data Truncated'));
+        expect(
+          assistantContent,
+          '[binary payload redacted: mime=unknown, bytes=900]',
+        );
       },
     );
 
@@ -298,6 +302,104 @@ void main() {
         );
       },
     );
+  });
+
+  group('binary redaction', () {
+    test(
+      'replaces recursive typed image payloads with MIME and byte count',
+      () {
+        final png = base64.encode(const [1, 2, 3, 4]);
+        final payload = {
+          'canonical': {
+            'type': 'image',
+            'dataBase64': png,
+            'mimeType': 'image/png',
+          },
+          'anthropic': {
+            'type': 'image',
+            'source': {
+              'type': 'base64',
+              'media_type': 'image/webp',
+              'data': png,
+            },
+          },
+          'responses': [
+            {'type': 'input_image', 'image_url': 'data:image/jpeg;base64,$png'},
+          ],
+        };
+
+        final sanitized = LLMRequestDumper.sanitizePayloadForTesting(payload);
+        expect(sanitized['canonical'], {
+          'type': 'image_redacted',
+          'mime_type': 'image/png',
+          'decoded_bytes': 4,
+        });
+        expect(sanitized['anthropic'], {
+          'type': 'image_redacted',
+          'mime_type': 'image/webp',
+          'decoded_bytes': 4,
+        });
+        expect(sanitized['responses'].single, {
+          'type': 'image_redacted',
+          'mime_type': 'image/jpeg',
+          'decoded_bytes': 4,
+        });
+        expect(jsonEncode(sanitized), isNot(contains(png)));
+      },
+    );
+
+    test('redacts data URIs and malformed typed blocks without samples', () {
+      final png = base64.encode(List<int>.filled(1200, 7));
+      final sanitized = LLMRequestDumper.sanitizePayloadForTesting({
+        'uri': 'data:image/png;base64,$png',
+        'malformed_uri': 'data:image/png;base64,not base64!',
+        'malformed': {
+          'type': 'image',
+          'dataBase64': 'not base64!',
+          'mimeType': 'image/png',
+        },
+        'raw': png,
+      });
+
+      expect(
+        sanitized['uri'],
+        '[image payload redacted: mime=image/png, bytes=1200]',
+      );
+      expect(
+        sanitized['malformed_uri'],
+        '[image payload redacted: mime=image/png, bytes=unknown]',
+      );
+      expect(sanitized['malformed'], {
+        'type': 'image_redacted',
+        'mime_type': 'image/png',
+        'decoded_bytes': null,
+      });
+      expect(
+        sanitized['raw'],
+        '[binary payload redacted: mime=unknown, bytes=1200]',
+      );
+      expect(jsonEncode(sanitized), isNot(contains(png.substring(0, 30))));
+    });
+
+    test('sanitization deep-copies and does not mutate the live request', () {
+      final png = base64.encode(const [9, 8, 7]);
+      final live = {
+        'messages': [
+          {
+            'content': [
+              {'type': 'image', 'dataBase64': png, 'mimeType': 'image/png'},
+            ],
+          },
+        ],
+      };
+      final before = jsonEncode(live);
+
+      final sanitized = LLMRequestDumper.sanitizePayloadForTesting(live);
+
+      expect(jsonEncode(live), before);
+      expect(jsonEncode(sanitized), isNot(contains(png)));
+      expect(identical(sanitized, live), isFalse);
+    });
   });
 }
 

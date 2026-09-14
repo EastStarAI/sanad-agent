@@ -322,48 +322,100 @@ class LLMRequestDumper {
     return errorMap;
   }
 
-  /// Recursively traverse the payload to find and sanitize string values
+  /// Returns a recursively sanitized deep copy for diagnostics. The live
+  /// provider payload is never mutated.
+  static dynamic sanitizePayloadForTesting(dynamic value) =>
+      _sanitizePayload(value);
+
+  /// Recursively traverses a payload, replacing typed image blocks and data
+  /// URIs before generic secret/string redaction.
   static dynamic _sanitizePayload(dynamic value) {
     if (value is Map) {
-      return value.map((k, v) => MapEntry(k, _sanitizePayload(v)));
-    } else if (value is List) {
-      return value.map(_sanitizePayload).toList();
-    } else if (value is String) {
-      return _sanitizeString(value);
+      final image = _imagePayloadMetadata(value);
+      if (image != null) return image;
+      return value.map((key, child) => MapEntry(key, _sanitizePayload(child)));
     }
+    if (value is List) return value.map(_sanitizePayload).toList();
+    if (value is String) return _sanitizeString(value);
     return value;
   }
 
-  /// Sanitize a string value: first pass through central SecretsRedactor to
-  /// strip API keys / tokens / auth headers, then apply structural transforms
-  /// (base64 truncation, legacy prefix masking).
+  static Map<String, dynamic>? _imagePayloadMetadata(Map value) {
+    final type = value['type']?.toString();
+    if (type != 'image' && type != 'image_url' && type != 'input_image') {
+      return null;
+    }
+
+    String? mimeType;
+    String? payload;
+    if (value['dataBase64'] is String) {
+      payload = value['dataBase64'] as String;
+      mimeType = value['mimeType']?.toString();
+    } else if (value['data'] is String) {
+      payload = value['data'] as String;
+      mimeType = value['mimeType']?.toString();
+    } else if (value['source'] is Map) {
+      final source = value['source'] as Map;
+      payload = source['data'] is String ? source['data'] as String : null;
+      mimeType = (source['media_type'] ?? source['mimeType'])?.toString();
+    } else if (value['image_url'] is Map) {
+      final imageUrl = value['image_url'] as Map;
+      payload = imageUrl['url'] is String ? imageUrl['url'] as String : null;
+    } else if (value['image_url'] is String) {
+      payload = value['image_url'] as String;
+    }
+    if (payload == null) return null;
+
+    final dataUri = _parseDataUri(payload);
+    mimeType ??= dataUri?.mimeType;
+    final base64Value = dataUri?.payload ?? payload;
+    return {
+      'type': 'image_redacted',
+      'mime_type': mimeType ?? 'unknown',
+      'decoded_bytes': _decodedBase64Bytes(base64Value),
+    };
+  }
+
+  static ({String mimeType, String payload})? _parseDataUri(String value) {
+    if (!value.toLowerCase().startsWith('data:')) return null;
+    final separator = value.toLowerCase().indexOf(';base64,');
+    if (separator <= 5) return null;
+    final mimeType = value.substring(5, separator);
+    if (mimeType.contains(',') || mimeType.contains(';')) return null;
+    return (
+      mimeType: mimeType,
+      payload: value.substring(separator + ';base64,'.length),
+    );
+  }
+
+  static int? _decodedBase64Bytes(String value) {
+    if (value.isEmpty ||
+        value.length % 4 != 0 ||
+        !RegExp(r'^[A-Za-z0-9+/]*={0,2}$').hasMatch(value)) {
+      return null;
+    }
+    final padding = value.endsWith('==')
+        ? 2
+        : value.endsWith('=')
+        ? 1
+        : 0;
+    return (value.length * 3 ~/ 4) - padding;
+  }
+
+  /// Sanitizes one string without retaining any sample of binary payloads.
   static String _sanitizeString(String val) {
-    // 0. Central redaction — must run first so that patterns like
-    //    `api_key: sk-abc...` inside error bodies are caught before any
-    //    structural transform might obscure them.
+    final dataUri = _parseDataUri(val);
+    if (dataUri != null) {
+      final bytes = _decodedBase64Bytes(dataUri.payload);
+      return '[image payload redacted: mime=${dataUri.mimeType}, bytes=${bytes ?? 'unknown'}]';
+    }
+
     val = _redactor.redact(val);
-
-    // 1. Truncate Data URI base64 strings (e.g. data:image/png;base64,iVBORw...)
-    if (val.startsWith('data:') &&
-        val.contains(';base64,') &&
-        val.length > 500) {
-      final parts = val.split(';base64,');
-      if (parts.length == 2) {
-        final header = parts[0];
-        final base64Sample = parts[1].substring(0, 30);
-        return '$header;base64,$base64Sample... [Base64 Data Truncated, Original Size: ${val.length} characters]';
-      }
+    if (val.length > 1000 &&
+        !val.contains(RegExp(r'\s')) &&
+        RegExp(r'^[A-Za-z0-9+/]*={0,2}$').hasMatch(val)) {
+      return '[binary payload redacted: mime=unknown, bytes=${_decodedBase64Bytes(val) ?? 'unknown'}]';
     }
-
-    // 2. Truncate raw base64 blocks (long strings without spaces consisting only of base64 alphabet)
-    if (val.length > 1000 && !val.contains(RegExp(r'\s'))) {
-      final base64Regex = RegExp(r'^[A-Za-z0-9+/=]+$');
-      if (base64Regex.hasMatch(val)) {
-        return '${val.substring(0, 50)}... [Raw Base64 Data Truncated, Original Size: ${val.length} characters]';
-      }
-    }
-
-    // 3. Redact common secret API key structures found inside conversation histories or prompts
     if (val.startsWith('sk-') && val.length > 20) {
       return _maskApiKey(val) ?? val;
     }
@@ -374,7 +426,6 @@ class LLMRequestDumper {
       final token = val.substring(7);
       return 'Bearer ${_maskApiKey(token)}';
     }
-
     return val;
   }
 }

@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77d2/R0"
-remaining_estimate: "50%"
+current_gate: "77d3/R0"
+remaining_estimate: "45%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -161,7 +161,7 @@ detail = low | auto | high | original
 8. [x] [77c1 — Rich Provider Codecs](tasks/77c1-rich-provider-codecs.md)
 9. [x] [77c2 — Adapter Capability and Fallback](tasks/77c2-adapter-capability-and-fallback.md)
 10. [x] [77d1 — Atomic Result Durability](tasks/77d1-atomic-tool-result-durability.md)
-11. [ ] [77d2 — Binary Redaction and Pruning](tasks/77d2-binary-redaction-and-pruning.md)
+11. [x] [77d2 — Binary Redaction and Pruning](tasks/77d2-binary-redaction-and-pruning.md)
 12. [ ] [77d3 — Daemon-backed View Image QA](tasks/77d3-view-image-integration-qa.md)
 13. [ ] [77e1 — Attachment Model and Policy](tasks/77e1-attachment-model-and-policy.md)
 14. [ ] [77e2 — Agent Attachment Store](tasks/77e2-agent-attachment-store.md)
@@ -339,3 +339,16 @@ Next task:
 - Open findings: none.
 - Remaining estimate: `50%`.
 - Next task: `77d2 — Binary Redaction and Pruning`, gate `R0`.
+
+### 2026-09-15 — 77d2 complete
+
+- Task/Gate: `77d2/D3`.
+- Status transition: `77d2 in_progress` → `complete`; plan advances to `77d3/R0`.
+- Owner/worktree: public repository in `77-hosted-attachment-media-relay`.
+- Files changed: deep-copy request-dump sanitation, pure completed-turn image pruner, runner/plugin integration, focused dumper/pruner tests, engine contract, owning technical design and QA matrix, task, and plan (`10/10` tracked paths).
+- Verification evidence: analyzer clean; 18 focused engine tests and 430 sequential interface tests passed; three-turn/24-MiB/current-loop/idempotency and typed-image/data-URI/raw-base64/non-mutation obligations covered; Graphify rebuilt 23,742 nodes and 32,676 edges.
+- Two unrelated Local Gateway timing flakes seen in earlier broad attempts passed individually and disappeared in the complete sequential interface run.
+- Evidence fingerprint: `sha256:986ef702424054d5e8f905701deab8ea3d55ac84846bd4ed1f8deb1d2b66bf5d`; post-implementation parity satisfied without deviation.
+- Open findings: none.
+- Remaining estimate: `45%`.
+- Next task: `77d3 — Daemon-backed View Image QA`, gate `R0`.
