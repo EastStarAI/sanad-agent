@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 import 'package:logging/logging.dart';
 
+import '../../../core/models/tool_execution_result.dart';
 import '../../../infrastructure/platform/automation_service_factory.dart';
 import '../../models/local_tool_spec.dart';
 import '../base_tool.dart';
@@ -38,6 +39,15 @@ class ScreenshotTool extends SpecBackedTool {
     Map<String, dynamic> args, {
     ToolContext? context,
   }) async {
+    final result = await executeResult(args, context: context);
+    return result.displayText;
+  }
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async {
     final monitorNumber = args['monitor_number'] ?? 1;
     final service = AutomationServiceFactory.instance;
 
@@ -68,7 +78,9 @@ class ScreenshotTool extends SpecBackedTool {
         await File(filePath).writeAsBytes(bytes);
         _logger.info('Saved screenshot to: $filePath');
 
-        return 'Screenshot taken successfully from monitor $monitorNumber , imagePaht: $filePath ';
+        return ToolExecutionResult.text(
+          'Screenshot taken successfully from monitor $monitorNumber , imagePaht: $filePath ',
+        );
       }
     } catch (e) {
       _logger.warning(
@@ -76,6 +88,8 @@ class ScreenshotTool extends SpecBackedTool {
       );
     }
 
-    return 'Screenshot taken successfully from monitor $monitorNumber';
+    return ToolExecutionResult.text(
+      'Screenshot taken successfully from monitor $monitorNumber',
+    );
   }
 }

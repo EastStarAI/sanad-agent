@@ -1,11 +1,13 @@
 import 'dart:io';
 
 import 'package:get_it/get_it.dart';
+import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/delegate_task_tool.dart';
 import 'package:sanad_agent/capabilities/tools/list_scheduled_tasks_tool.dart';
+import 'package:sanad_agent/capabilities/tools/runtime/spec_backed_tool.dart';
 import 'package:sanad_agent/capabilities/tools/schedule_task_tool.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
@@ -70,6 +72,29 @@ void main() {
     });
 
     test(
+      'callback normalizes string protocol output into typed text',
+      () async {
+        ToolContext? receivedContext;
+        final tool = CallbackTool(
+          toolSpec: _callbackSpec,
+          onExecute: (args, {context}) async {
+            receivedContext = context;
+            return 'callback\ntext  ';
+          },
+        );
+        final context = ToolContext(sessionId: 'callback-session');
+
+        final typed = await tool.executeResult({}, context: context);
+        final legacy = await tool.execute({}, context: context);
+
+        expect(typed.displayText, 'callback\ntext  ');
+        expect(legacy, typed.displayText);
+        expect(typed.blocks.single, isA<ToolTextBlock>());
+        expect(receivedContext, same(context));
+      },
+    );
+
+    test(
       'schedule and list typed results preserve legacy projections',
       () async {
         final schedule = ScheduleTaskTool();
@@ -106,6 +131,19 @@ void main() {
     );
   });
 }
+
+const _callbackSpec = LocalToolSpec(
+  name: 'callback_test',
+  displayName: 'Callback Test',
+  description: 'Test callback normalization.',
+  inputSchema: {'type': 'object'},
+  source: {'type': 'test', 'id': 'callback'},
+  category: 'test',
+  workspaceRequired: false,
+  approval: {'mode': 'default', 'sensitive': false},
+  execution: {'target': 'local_runtime', 'timeout_ms': 1000},
+  serverName: 'test',
+);
 
 class _LegacyTextTool extends BaseTool {
   @override

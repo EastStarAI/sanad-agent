@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77a4/R0"
-remaining_estimate: "84%"
+current_gate: "77a5/R0"
+remaining_estimate: "78%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -154,7 +154,7 @@ detail = low | auto | high | original
 1. [x] [77a1 — Core Result Model](tasks/77a1-core-tool-result-model.md)
 2. [x] [77a2 — Text Tool Migration A](tasks/77a2-text-tool-migration-a.md)
 3. [x] [77a3 — Text Tool Migration B](tasks/77a3-text-tool-migration-b.md)
-4. [ ] [77a4 — Text Tool Migration C](tasks/77a4-text-tool-migration-c.md)
+4. [x] [77a4 — Text Tool Migration C](tasks/77a4-text-tool-migration-c.md)
 5. [ ] [77a5 — Coordinator and Message Integration](tasks/77a5-tool-result-coordinator-integration.md)
 6. [ ] [77b1 — Image Policy Worker](tasks/77b1-image-policy-worker.md)
 7. [ ] [77b2 — Secure View Image Catalog](tasks/77b2-secure-view-image-catalog.md)
@@ -248,3 +248,16 @@ Next task:
 - Open findings: none; catalog callback cutover remains outside this scoped batch.
 - Remaining estimate: `84%`.
 - Next task: `77a4 — Text Tool Migration C`.
+
+### 2026-09-14 — 77a4 complete
+
+- Task/Gate: `77a4/A3`.
+- Status transition: `77a4 in_progress` → `complete`; plan advances to `77a5/R0`.
+- Owner/worktree: public repository in `77-hosted-attachment-media-relay`.
+- Files changed: four system tools, callback boundary, two focused test files, capability-tools contract, task, and plan.
+- Verification evidence: analyzer clean; 28 tests passed with 2 platform-specific skips; Graphify rebuilt.
+- Documentation/contracts updated: tools contract, task 77a4, and this plan.
+- Evidence fingerprint: `sha256:477c6a964da28b0914da3cb0f52881421561ccd9f8afd859fc6833380353bc43`; post-implementation parity satisfied.
+- Open findings: rich callback protocol cutover remains explicitly outside this task; MCP/platform protocols are unchanged.
+- Remaining estimate: `78%`.
+- Next task: `77a5 — Coordinator and Message Integration`.

@@ -1,4 +1,5 @@
 import 'dart:async';
+import '../../../core/models/tool_execution_result.dart';
 import '../../../infrastructure/platform/automation_service_factory.dart';
 import '../../models/local_tool_spec.dart';
 import '../base_tool.dart';
@@ -38,6 +39,15 @@ class MouseTool extends SpecBackedTool {
     Map<String, dynamic> args, {
     ToolContext? context,
   }) async {
+    final result = await executeResult(args, context: context);
+    return result.displayText;
+  }
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async {
     final action = args['action'] as String;
     final x = args['x'] is int
         ? args['x'] as int
@@ -62,6 +72,8 @@ class MouseTool extends SpecBackedTool {
 
     await service.simulateMouse(action: action, x: x, y: y, dx: dx, dy: dy);
 
-    return 'Mouse action "$action" executed successfully.';
+    return ToolExecutionResult.text(
+      'Mouse action "$action" executed successfully.',
+    );
   }
 }

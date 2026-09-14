@@ -6,6 +6,7 @@ import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/shell_execute_tool.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
@@ -228,12 +229,15 @@ void main() {
       'bounds streaming output while preserving the beginning and end',
       () async {
         final tool = ShellExecuteTool(workspacePath: workspaceDir.path);
-        final resultString = await tool.execute({
+        final typedResult = await tool.executeResult({
           'command': "printf START; yes x | head -c 40000; printf END",
         });
-        final result = jsonDecode(resultString) as Map<String, dynamic>;
+        final result =
+            jsonDecode(typedResult.displayText) as Map<String, dynamic>;
         final output = result['output'] as String;
 
+        expect(typedResult.isError, isFalse);
+        expect(typedResult.blocks.single, isA<ToolTextBlock>());
         expect(output, startsWith('START'));
         expect(output, contains('END'));
         expect(output, contains('OUTPUT TRUNCATED'));
@@ -259,12 +263,14 @@ void main() {
         },
       );
 
-      final resultString = await tool.execute({
+      final typedResult = await tool.executeResult({
         'command': _longRunningCommand,
         'timeout_ms': 100,
       }, context: context);
 
-      final result = jsonDecode(resultString);
+      final result = jsonDecode(typedResult.displayText);
+      expect(typedResult.isError, isTrue);
+      expect(typedResult.errorCode, ToolResultErrorCode.timedOut);
       expect(result['isError'], isTrue);
       expect(result['output']?.toString(), contains('Command timed out'));
     });

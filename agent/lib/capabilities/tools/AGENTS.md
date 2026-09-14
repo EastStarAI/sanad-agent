@@ -8,6 +8,7 @@ This contract applies to `agent/lib/capabilities/tools/`.
 - Accept optional `ToolContext` and preserve session/workspace/tool-call identity where required.
 - Keep execution logic out of registries, protocol handlers, and presentation-facing clients.
 - Register one canonical implementation and reuse it across direct runtime and query surfaces.
+- `CallbackTool` normalizes string-owned MCP/platform callback outputs into typed text without changing either bridge protocol or callback context; rich callback results require an explicit future protocol cutover.
 
 ## Replay Safety
 - `restartReplaySafe` remains false unless re-execution after an unknown crash boundary is provably harmless.
@@ -23,6 +24,7 @@ This contract applies to `agent/lib/capabilities/tools/`.
 - Persist a redacted shell process fingerprint and bounded output progress while the command runs so startup can verify and reclaim the exact orphan containment without signaling a reused PID.
 - Propagate session and tool-call identity to child processes through the reserved restart-request environment boundary; never expose message content or tool arguments there.
 - Keep command output bounded and free of injected operational instructions.
+- Shell typed error status comes from terminal execution state, never output-string parsing; preserve the legacy encoded payload as the text projection.
 
 ## Workspace Search
 - `search_glob` and `search_grep` execute through focused workspace handlers.
