@@ -1,3 +1,10 @@
+## 1.0.10
+
+- Added account session and device lifecycle management with secure remote revocation and immediate cross-transport disconnect.
+- Added cloud delivery presence and device-interest coordination so Local and Cloud routes remain isolated and authoritative.
+- Added authoritative command-origin propagation and stable Client instance identity across reconnects.
+- Improved multi-runtime development, source-runtime ownership, and automated macOS/Web/iOS validation.
+
 ## 1.0.9
 
 - Added provider-backed multilingual context compaction with typed JSON validation and bounded recovery (#139).
