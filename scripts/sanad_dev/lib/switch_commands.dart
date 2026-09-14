@@ -700,6 +700,11 @@ class _SwitchableRuntimeController {
       } else {
         arguments.add(slotArgument);
       }
+      applySanadDevWebPort(
+        arguments,
+        device: request.deviceId ?? _defaultDesktopDevice(),
+        environment: _clientEnvironment,
+      );
       final process = await Process.start(
         'fvm',
         arguments,

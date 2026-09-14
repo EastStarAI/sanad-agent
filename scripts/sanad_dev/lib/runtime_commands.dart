@@ -796,6 +796,11 @@ Future<void> handleRun({
     if (driverMode) '--print-dtd',
     if (driverMode) ...['-t', 'lib/driver_main.dart'],
   ];
+  applySanadDevWebPort(
+    flutterArguments,
+    device: device,
+    environment: Platform.environment,
+  );
   final clientEnvironment = buildUnifiedSanadHomeEnvironment(
     Platform.environment,
     sanadHome: runtime.sanadHome,
@@ -1063,6 +1068,27 @@ Future<void> handleRun({
   );
   final clientExitCode = await controller.run();
   if (clientExitCode != 0) exitCode = clientExitCode;
+}
+
+const sanadDevWebPortEnvironmentKey = 'SANAD_DEV_WEB_PORT';
+
+void applySanadDevWebPort(
+  List<String> arguments, {
+  required String device,
+  required Map<String, String> environment,
+}) {
+  arguments.removeWhere((argument) => argument.startsWith('--web-port='));
+  if (device != 'chrome') return;
+
+  final rawPort = environment[sanadDevWebPortEnvironmentKey]?.trim() ?? '';
+  if (rawPort.isEmpty) return;
+  final port = int.tryParse(rawPort);
+  if (port == null || port < 1 || port > 65535) {
+    throw FormatException(
+      '$sanadDevWebPortEnvironmentKey must be a valid TCP port: $rawPort',
+    );
+  }
+  arguments.add('--web-port=$port');
 }
 
 Future<ClientInstance?> _waitForManagedClientIdentity({

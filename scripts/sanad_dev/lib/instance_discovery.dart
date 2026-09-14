@@ -85,11 +85,13 @@ Future<List<ClientInstance>> discoverClientInstances() async {
     final processes = await _discoverProcessSnapshots();
     final runtime = await _currentRuntime();
 
-    // First, find all development-service processes
+    // First, find all Dart development-service processes. Native Flutter uses
+    // the development-service entry point, while Flutter Web launches the DDS
+    // AOT snapshot directly.
     final devServices = <Map<String, dynamic>>[];
     for (final process in processes) {
       final line = process.searchableCommand;
-      if (line.contains('development-service')) {
+      if (isDartDevelopmentServiceProcess(process.arguments)) {
         final regExp = RegExp(
           r'--vm-service-uri=http://127.0.0.1:(\d+)(?:/([A-Za-z0-9_\-=]+))?/?',
         );
@@ -176,10 +178,19 @@ Future<List<ClientInstance>> discoverClientInstances() async {
           }
         }
       }
+      var serviceToken = ds['token'] as String;
+      if (launchProfile != null && bindPort != null && bindPort != 0) {
+        serviceToken =
+            await managedVmServiceAuthCodeFromJournal(
+              profile: launchProfile,
+              vmServicePort: port,
+            ) ??
+            serviceToken;
+      }
       instances.add(
         ClientInstance(
           port,
-          ds['token'] as String,
+          serviceToken,
           matchedPath,
           deviceId,
           pid: clientPid,
@@ -191,6 +202,62 @@ Future<List<ClientInstance>> discoverClientInstances() async {
     print('Error discovering client instances: $e');
   }
   return instances;
+}
+
+bool isDartDevelopmentServiceProcess(List<String> arguments) {
+  final command = arguments.join(' ').toLowerCase();
+  if (command.contains('development-service')) return true;
+  final launchesDdsSnapshot = command.contains('dds_aot.dart.snapshot') ||
+      command.contains('dds.dart.snapshot');
+  return launchesDdsSnapshot &&
+      arguments.any((argument) => argument.startsWith('--vm-service-uri=')) &&
+      arguments.any((argument) => argument.startsWith('--bind-port=')) &&
+      arguments.contains('--serve-devtools');
+}
+
+String? latestVmServiceAuthCodeFromJournalLines(
+  Iterable<String> lines, {
+  required int vmServicePort,
+}) {
+  final pattern = RegExp(
+    '(?:http|ws)://127\\.0\\.0\\.1:$vmServicePort/'
+    r'([A-Za-z0-9_\-=]+)/?(?:ws)?',
+  );
+  for (final line in lines.toList(growable: false).reversed) {
+    final match = pattern.firstMatch(line);
+    if (match != null) return match.group(1);
+  }
+  return null;
+}
+
+Future<String?> managedVmServiceAuthCodeFromJournal({
+  required ClientLaunchProfile profile,
+  required int vmServicePort,
+}) async {
+  final sanadHome = profile.define('SANAD_HOME');
+  final gateway = Uri.tryParse(profile.define('LOCAL_GATEWAY_URL') ?? '');
+  if (sanadHome == null || sanadHome.isEmpty || gateway?.hasPort != true) {
+    return null;
+  }
+  try {
+    final lines = await readComponentJournalTail(
+      sanadHome: sanadHome,
+      agentPort: gateway!.port,
+      key: componentJournalKey(
+        component: 'client',
+        vmServicePort: vmServicePort,
+      ),
+      lines: 80,
+    );
+    return latestVmServiceAuthCodeFromJournalLines(
+      lines,
+      vmServicePort: vmServicePort,
+    );
+  } on Object {
+    // Journals provide only the Web VM authentication code for diagnostics;
+    // process arguments and the launcher lease remain ownership evidence.
+    return null;
+  }
 }
 
 bool matchesFlutterRunnerToDevelopmentService(
@@ -330,7 +397,7 @@ Get-CimInstance Win32_Process |
 
 bool _isRelevantClientProcess(List<String> arguments) {
   final command = arguments.join(' ').toLowerCase();
-  return command.contains('development-service') ||
+  return isDartDevelopmentServiceProcess(arguments) ||
       command.contains('flutter_tools') ||
       command.contains('flutter run');
 }

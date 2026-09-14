@@ -35,3 +35,4 @@ This contract applies to `client/lib/features/auth/`.
 - Send refresh tokens in request bodies, never query strings.
 - Desktop auth persistence containing bearer credentials must use owner-only filesystem permissions on Unix-like systems.
 - Keep browser-visible state free of private polling and refresh credentials.
+- Driver builds may expose the current browser authorization URL only through a dedicated VM extension for the selected Client. The value remains in memory, never enters general UI snapshots or logs, and the extension fails when no active challenge exists; production entry points do not register it.

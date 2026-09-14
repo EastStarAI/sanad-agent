@@ -29,7 +29,18 @@ inventory makes Agent-only and Client-only groups verifiable while rejecting
 stale records, PID reuse, copied flags, and unrecorded partial managed groups.
 Additional manual or foreign Clients are outside that inventory: discovery may
 report them, but ordinary commands continue against the exact proven managed
-group and never mutate the extras. `sanad-dev ui` narrows that exact owned set
+group and never mutate the extras. Client discovery recognizes both the native
+`development-service` entry point and Flutter Web's direct DDS snapshot when
+its exact VM URI and bind-port arguments map to a matching Flutter runner.
+Flutter Web may generate an external VM authentication code different from the
+upstream DDS URI; the managed Client journal can recover that code only for
+diagnostic attachment after process/profile correlation. Journal text never
+establishes liveness or ownership. When `SANAD_DEV_WEB_PORT` is present,
+`sanad-dev` validates it as a TCP port and adds `--web-port` only to Chrome;
+the owning launcher reapplies it when starting an additional Chrome Client. This
+allows a persistent browser profile to retain origin-scoped Web Storage across
+stops without leaking the setting into native platform launches. `sanad-dev ui`
+narrows the exact owned set
 again to launch profiles targeting `lib/driver_main.dart`; a regular managed
 Client can neither replace nor make a worktree's driver selection ambiguous.
 

@@ -703,7 +703,7 @@ void main() {
     },
   );
 
-  test('UI driver selection ignores non-driver managed clients', () {
+  test('UI driver selection preserves every managed driver client', () {
     final driver = sanad_dev.ClientInstance(
       51084,
       'driver-token',
@@ -715,6 +715,19 @@ void main() {
         defines: {},
         target: 'lib/driver_main.dart',
         deviceId: 'macos',
+      ),
+    );
+    final secondDriver = sanad_dev.ClientInstance(
+      51086,
+      'second-driver-token',
+      clientDirectory,
+      'chrome',
+      pid: 103,
+      launchProfile: const launch_profile.ClientLaunchProfile(
+        compileArguments: [],
+        defines: {},
+        target: 'lib/driver_main.dart',
+        deviceId: 'chrome',
       ),
     );
     final regular = sanad_dev.ClientInstance(
@@ -734,13 +747,16 @@ void main() {
       classification: runtime_ownership.RuntimeOwnershipClass.managed,
       state: sanad_dev.RuntimeProcessState(
         agent: null,
-        ownedClients: [regular, driver],
+        ownedClients: [regular, driver, secondDriver],
         crossOwnedClients: const [],
         ambiguousClients: const [],
       ),
     );
 
-    expect(sanad_dev.selectManagedUiDriverClients(assessment), [driver]);
+    expect(sanad_dev.selectManagedUiDriverClients(assessment), [
+      driver,
+      secondDriver,
+    ]);
   });
 
   test('source-switch status is explicitly historical', () {

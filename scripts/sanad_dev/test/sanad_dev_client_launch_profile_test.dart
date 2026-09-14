@@ -24,6 +24,53 @@ void main() {
     'lib/driver_main.dart',
   ];
 
+  group('stable Flutter Web origin', () {
+    test('applies the configured port to Chrome only', () {
+      final chromeArguments = <String>['flutter', 'run', '-d', 'chrome'];
+      sanad_dev.applySanadDevWebPort(
+        chromeArguments,
+        device: 'chrome',
+        environment: const {'SANAD_DEV_WEB_PORT': '58880'},
+      );
+      expect(chromeArguments, contains('--web-port=58880'));
+
+      final macosArguments = <String>[
+        'flutter',
+        'run',
+        '-d',
+        'macos',
+        '--web-port=12345',
+      ];
+      sanad_dev.applySanadDevWebPort(
+        macosArguments,
+        device: 'macos',
+        environment: const {'SANAD_DEV_WEB_PORT': '58880'},
+      );
+      expect(macosArguments, isNot(contains(startsWith('--web-port='))));
+    });
+
+    test('replaces inherited Web ports for additional Chrome clients', () {
+      final arguments = <String>['--web-port=12345'];
+      sanad_dev.applySanadDevWebPort(
+        arguments,
+        device: 'chrome',
+        environment: const {'SANAD_DEV_WEB_PORT': '58880'},
+      );
+      expect(arguments, ['--web-port=58880']);
+    });
+
+    test('rejects an invalid configured Web port', () {
+      expect(
+        () => sanad_dev.applySanadDevWebPort(
+          <String>[],
+          device: 'chrome',
+          environment: const {'SANAD_DEV_WEB_PORT': '70000'},
+        ),
+        throwsFormatException,
+      );
+    });
+  });
+
   test('derives a bounded preference namespace for an additional Client', () {
     expect(
       sanadDevPreferencesPrefixForClientInstance('sanad.abcd.', '49h-local2'),
@@ -313,6 +360,48 @@ void main() {
       isTrue,
     );
   });
+
+  test('Flutter Web DDS snapshot is a development service', () {
+    const webDdsArguments = [
+      'dartaotruntime',
+      '/sdk/snapshots/dds_aot.dart.snapshot',
+      '--vm-service-uri=http://127.0.0.1:44456/upstream=',
+      '--bind-address=127.0.0.1',
+      '--bind-port=51945',
+      '--serve-devtools',
+      '--app-name=Unknown web app',
+    ];
+
+    expect(sanad_dev.isDartDevelopmentServiceProcess(webDdsArguments), isTrue);
+    expect(
+      sanad_dev.isDartDevelopmentServiceProcess(const [
+        'dartaotruntime',
+        '/sdk/snapshots/dds_aot.dart.snapshot',
+        '--bind-port=51945',
+      ]),
+      isFalse,
+    );
+  });
+
+  test(
+    'latest managed Web VM auth code comes from the newest journal line',
+    () {
+      expect(
+        sanad_dev.latestVmServiceAuthCodeFromJournalLines(const [
+          'Debug service listening on ws://127.0.0.1:51945/oldCode=/ws',
+          'A Dart VM Service on Chrome is available at: '
+              'http://127.0.0.1:51945/new_Code-2=',
+        ], vmServicePort: 51945),
+        'new_Code-2=',
+      );
+      expect(
+        sanad_dev.latestVmServiceAuthCodeFromJournalLines(const [
+          'http://127.0.0.1:51944/unrelated=',
+        ], vmServicePort: 51945),
+        isNull,
+      );
+    },
+  );
 
   test('linked worktree profile validates against its matching agent', () {
     final profile = extractClientLaunchProfile(worktreeArguments);
