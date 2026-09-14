@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77b1/R0"
-remaining_estimate: "70%"
+current_gate: "77b2/R0"
+remaining_estimate: "65%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -156,7 +156,7 @@ detail = low | auto | high | original
 3. [x] [77a3 — Text Tool Migration B](tasks/77a3-text-tool-migration-b.md)
 4. [x] [77a4 — Text Tool Migration C](tasks/77a4-text-tool-migration-c.md)
 5. [x] [77a5 — Coordinator and Message Integration](tasks/77a5-tool-result-coordinator-integration.md)
-6. [ ] [77b1 — Image Policy Worker](tasks/77b1-image-policy-worker.md)
+6. [x] [77b1 — Image Policy Worker](tasks/77b1-image-policy-worker.md)
 7. [ ] [77b2 — Secure View Image Catalog](tasks/77b2-secure-view-image-catalog.md)
 8. [ ] [77c1 — Rich Provider Codecs](tasks/77c1-rich-provider-codecs.md)
 9. [ ] [77c2 — Adapter Capability and Fallback](tasks/77c2-adapter-capability-and-fallback.md)
@@ -274,3 +274,16 @@ Next task:
 - Open findings: concrete text projections remain for non-engine compatibility; engine execution is typed and missing typed implementations fail closed.
 - Remaining estimate: `70%`.
 - Next task: `77b1 — Image Policy Worker`.
+
+### 2026-09-14 — 77b1 complete
+
+- Task/Gate: `77b1/B3`.
+- Status transition: `77b1 in_progress` → `complete`; plan advances to `77b2/R0`.
+- Owner/worktree: public repository in `77-hosted-attachment-media-relay`.
+- Files changed: dependency/lock, central image policy, isolate worker, two focused test files, capability contract, technical design, task, and plan (10 tracked paths).
+- Verification evidence: analyzer clean; 8 focused tests passed; Graphify rebuilt.
+- Documentation/contracts updated: capabilities contract, multimodal technical design, task 77b1, and this plan.
+- Evidence fingerprint: `sha256:649b8758bdef850c34646defccb7fa1e87a55791873bc7337d05502b564761ad`; post-implementation parity satisfied without deviation.
+- Open findings: none; path authorization remains intentionally owned by `77b2`.
+- Remaining estimate: `65%`.
+- Next task: `77b2 — Secure View Image Catalog`.

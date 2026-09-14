@@ -23,3 +23,9 @@ This contract applies to `agent/lib/capabilities/`.
 - Never infer replay safety from tool name or successful partial output.
 - `ToolContext` may carry `runId`, `generation`, and `RunCancellationScope`; cooperative cancellation is opt-in via `isCooperativelyCancellable`.
 - `shell_execute` owns its process tree through `ProcessTreeController` and must distinguish user cancellation from timeout in terminal output.
+
+## Image Processing Boundary
+- `capabilities/image/image_policy.dart` is the sole owner of image byte, pixel, edge, base64, detail, timeout, concurrency, and encoder limits.
+- Accept image types from verified PNG/JPEG/WebP magic bytes and decoder metadata, never filenames or caller MIME claims; animated, multi-frame, corrupt, deceptive, and over-limit input fails closed.
+- Decode, resize, and encode only in killable isolates behind the shared FIFO concurrency bound. The image worker accepts and returns bytes in memory and must never create temporary files.
+- `original` preserves verified source bytes. Other detail modes never enlarge and may pass compliant bytes unchanged; required normalization uses PNG for actual transparency and JPEG for opaque pixels.

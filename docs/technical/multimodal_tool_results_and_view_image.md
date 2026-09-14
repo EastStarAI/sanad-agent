@@ -53,6 +53,8 @@ The loader accepts static PNG/JPEG/WebP based on magic bytes. It rejects directo
 
 `original` preserves the verified source bytes, MIME, and dimensions. It fails when any hard dimension/pixel/payload ceiling is exceeded; it never silently resizes. Decode/resize/encode runs outside the daemon event loop and leaves no filesystem artifact.
 
+`ImagePolicy` is the single implementation owner for these limits and boundary predicates. `ImageWorker` accepts bytes only, validates format/frame/dimensions before constructing a success, and moves byte ownership across isolates with transferable typed data. One process-wide FIFO semaphore admits at most two workers. Each admitted operation owns a killable isolate; the 15-second timeout kills it immediately and releases the permit without writing source or normalized bytes to disk. Closed failures distinguish unsupported/corrupt input, oversized input/output, processing failure, and timeout without echoing bytes or private paths.
+
 The coordinator applies the image-count and aggregate payload ceilings in tool-call order. A result crossing the remaining batch budget becomes `batch_image_budget_exceeded` with text only.
 
 ## User attachment admission
