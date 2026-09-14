@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77e1/R0"
-remaining_estimate: "40%"
+current_gate: "77e2/R0"
+remaining_estimate: "35%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -163,7 +163,7 @@ detail = low | auto | high | original
 10. [x] [77d1 — Atomic Result Durability](tasks/77d1-atomic-tool-result-durability.md)
 11. [x] [77d2 — Binary Redaction and Pruning](tasks/77d2-binary-redaction-and-pruning.md)
 12. [x] [77d3 — Daemon-backed View Image QA](tasks/77d3-view-image-integration-qa.md)
-13. [ ] [77e1 — Attachment Model and Policy](tasks/77e1-attachment-model-and-policy.md)
+13. [x] [77e1 — Attachment Model and Policy](tasks/77e1-attachment-model-and-policy.md)
 14. [ ] [77e2 — Agent Attachment Store](tasks/77e2-agent-attachment-store.md)
 15. [ ] [77e3 — Attachment Admission and Model Projection](tasks/77e3-attachment-admission-and-model-projection.md)
 16. [ ] [77f1 — Composer Attachment UX](tasks/77f1-composer-attachment-ux.md)
@@ -365,3 +365,16 @@ Next task:
 - Open findings: none.
 - Remaining estimate: `40%`.
 - Next task: `77e1 — Attachment Model and Policy`, gate `R0`.
+
+### 2026-09-15 — 77e1 complete
+
+- Task/Gate: `77e1/G3`.
+- Status transition: `77e1 in_progress` → `complete`; plan advances to `77e2/R0`.
+- Owner/worktree: public repository in `77-hosted-attachment-media-relay`.
+- Files changed: canonical attachment schema/policy, Message JSON integration, public export, focused tests, core contract, technical design, QA matrix, task, and plan (`10/10` tracked paths).
+- Verification evidence: build runner passed; analyzer clean; 1,364 core/capabilities/engine/interfaces tests passed with 13 skips; Graphify rebuilt 23,845 nodes and 32,808 edges.
+- Public projection preserves ordered safe metadata without Agent-local references or binary; limits are centrally locked at 5 MiB/file, 4 files, and 20 MiB/message.
+- Evidence fingerprint: `sha256:1f92463d390f35c6731087bc335672a612766e50a396b08131ba380c2557750a`; post-implementation parity satisfied without deviation.
+- Open findings: none.
+- Remaining estimate: `35%`.
+- Next task: `77e2 — Agent Attachment Store`, gate `R0`.

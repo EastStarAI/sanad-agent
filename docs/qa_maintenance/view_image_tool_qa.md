@@ -76,6 +76,8 @@ Both sync and stream paths use the same builder and pass identical assertions.
 
 Automated coverage ownership: `agent/test/engine/llm_request_dumper_test.dart` proves canonical/Anthropic/Responses typed-image, data-URI, raw-base64, malformed-size, secret-redaction, and non-mutation behavior. `agent/test/engine/history_image_pruner_test.dart` proves exact three-turn and 24-MiB policy, tool-loop turn counting, current-loop protection, oldest-first replacement, idempotency, and preservation of text/order/tool identity/error state. `agent/test/engine/agent_runner_test.dart` and `agent/test/interfaces/` retain runner persistence and binary-free event/history-query compatibility. `agent/e2e_test/view_image_tool_e2e_test.dart` proves pixel-derived rich output, external deny/allow-once/full-access, text-only fallback, controlled restart after durable completion, source deletion, one stable tool identity, and binary/path-redacted daemon events/history.
 
+Automated model/policy ownership: `agent/test/core/models/user_attachment_test.dart` covers closed schema v1, durable/public projection separation, role and MIME/kind invariants, immutable ordering, legacy parsing, malformed metadata, and boundary-1/boundary/boundary+1 admission limits.
+
 ## User attachment admission matrix
 
 | Scenario | Required result |

@@ -23,7 +23,7 @@ Every result contains at least one non-empty text block. `displayText` is a dete
 
 `Message.toolResult` is permitted only for `MessageRole.tool`. New tool messages persist both the typed result and the compatibility `content=displayText`; typed content is authoritative and serialization rejects a divergent projection. Old messages with only `content` remain valid and require no database migration.
 
-User messages may carry ordered typed attachment references independently from text. Their durable/public projection contains opaque identity, safe name, verified MIME/size/hash, kind, and availability only. Agent-local executable paths remain private to the runtime projection; attachment bytes and absolute paths are forbidden in canonical conversation events and client cache JSON.
+User messages may carry immutable ordered typed attachment references independently from text, and only user-role messages may own them. Schema v1 closes attachment/media identity, safe basename, normalized MIME, byte size, lowercase SHA-256, image/file kind, Agent-local reference, and available/unavailable status. Durable Agent history retains the local reference for later tools; `UserAttachmentPolicy.publicProjection` removes it for event/history/cache consumers while preserving order and safe metadata. The same policy owner enforces 5 MiB/file, 4 files/message, and 20 MiB aggregate with closed non-echoing error codes. Attachment bytes, base64, open metadata, client-local paths, and absolute Agent paths are forbidden in public projections.
 
 ## Text-tool compatibility
 

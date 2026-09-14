@@ -54,6 +54,7 @@ This contract applies to `agent/lib/core/`.
 ## Message and Continuation Models
 - `ToolExecutionResult` is the provider-neutral schema-v1 authority for ordered tool text/image blocks. Its `displayText` is derived from non-empty text blocks, image metadata and base64 shape are validated before construction, and unsupported schema/block/detail/error values fail closed.
 - `Message.toolResult` is valid only for tool-role messages. When present, it is authoritative and compatibility `Message.content` must equal its derived `displayText`; legacy content-only tool messages remain valid.
+- `Message.attachments` is an immutable ordered list valid only on user-role messages. `UserAttachment` and `UserAttachmentPolicy` are the sole schema/admission authority; durable JSON may contain the Agent-local reference, but event/history/cache consumers must use the path-free public projection.
 - Separate visible `Message.thought`, `Message.reasoning`, final `Message.content`, and opaque typed provider continuation state.
 - Provider state carries namespace and optional issuer, survives persistence, and may be cleared only explicitly for the matching owner.
 - Preserve state-only assistant messages and typed terminal finish reason across restart.

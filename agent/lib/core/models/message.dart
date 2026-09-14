@@ -3,6 +3,7 @@ import 'tool_call.dart';
 import 'tool_execution_result.dart';
 import 'llm_provider_state.dart';
 import 'llm_finish_reason.dart';
+import 'user_attachment.dart';
 
 part 'message.g.dart';
 
@@ -12,6 +13,11 @@ enum MessageRole { system, user, assistant, tool }
 class Message {
   final MessageRole role;
   final String? content;
+
+  /// Ordered canonical attachments for a user-role message.
+  @JsonKey(defaultValue: <UserAttachment>[])
+  final List<UserAttachment> attachments;
+
   final List<ToolCall>? toolCalls;
   final String? toolCallId;
 
@@ -44,6 +50,7 @@ class Message {
   Message({
     required this.role,
     String? content,
+    List<UserAttachment> attachments = const [],
     this.toolCalls,
     this.toolCallId,
     this.toolResult,
@@ -52,7 +59,15 @@ class Message {
     this.providerState,
     this.finishReason = LLMFinishReason.unknown,
     this.metadata,
-  }) : content = content ?? toolResult?.displayText {
+  }) : content = content ?? toolResult?.displayText,
+       attachments = List<UserAttachment>.unmodifiable(attachments) {
+    if (attachments.isNotEmpty && role != MessageRole.user) {
+      throw ArgumentError.value(
+        role,
+        'role',
+        'attachments are valid only for user messages',
+      );
+    }
     if (toolResult != null && role != MessageRole.tool) {
       throw ArgumentError.value(
         role,
@@ -76,6 +91,7 @@ class Message {
   Message copyWith({
     MessageRole? role,
     String? content,
+    List<UserAttachment>? attachments,
     List<ToolCall>? toolCalls,
     String? toolCallId,
     ToolExecutionResult? toolResult,
@@ -96,6 +112,7 @@ class Message {
     return Message(
       role: role ?? this.role,
       content: nextContent,
+      attachments: attachments ?? this.attachments,
       toolCalls: toolCalls ?? this.toolCalls,
       toolCallId: toolCallId ?? this.toolCallId,
       toolResult: nextToolResult,
