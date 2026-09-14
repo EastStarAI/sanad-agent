@@ -29,6 +29,8 @@ description: "Regression matrix for typed results, user attachments, View Image 
 | PNG/JPEG/WebP with misleading extension | Magic MIME controls behavior. |
 | Empty/corrupt/text/animated/multi-frame | Typed terminal failure with no image block. |
 
+Automated coverage ownership: `agent/test/capabilities/view_image_handler_test.dart` proves canonical internal/external/symlink/attachment paths, approval-before-byte-read, safe ordered results, and text-only failures. `agent/test/capabilities/runtime_catalog_test.dart` proves source-scope registration, exact schema, replay safety, default approval, denial, and full-access behavior. `agent/test/capabilities/permission_manager_test.dart` remains the shared approval-owner regression suite.
+
 ## Locked boundary matrix
 
 Test boundary-1, boundary, and boundary+1 for each numeric limit.

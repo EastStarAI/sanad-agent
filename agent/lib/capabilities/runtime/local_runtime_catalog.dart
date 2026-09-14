@@ -15,6 +15,7 @@ import 'package:sanad_agent/capabilities/tools/system/mouse_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/keyboard_tool.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 
@@ -26,6 +27,10 @@ import 'workspace_tools/file_read_handler.dart';
 import 'workspace_tools/file_write_handler.dart';
 import 'workspace_tools/search_glob_handler.dart';
 import 'workspace_tools/search_grep_handler.dart';
+import 'workspace_tools/view_image_handler.dart';
+
+typedef AdmittedAttachmentPathsResolver =
+    Future<List<String>> Function(String sessionId);
 
 class LocalRuntimeCatalog {
   LocalRuntimeCatalog({
@@ -36,6 +41,7 @@ class LocalRuntimeCatalog {
     PermissionManager? permissionManager,
     PlatformRuntimeBridge? platformRuntimeBridge,
     WorkspacePathResolver? pathResolver,
+    AdmittedAttachmentPathsResolver? admittedAttachmentPathsResolver,
   }) : _workspaceRuntimeService = workspaceRuntimeService,
        _webSearchService = webSearchService ?? WebSearchService(),
        _webFetchService = webFetchService ?? WebFetchService(),
@@ -43,7 +49,9 @@ class LocalRuntimeCatalog {
        _permissionManager = permissionManager ?? PermissionManager(),
        _platformRuntimeBridge =
            platformRuntimeBridge ?? PlatformRuntimeBridge(),
-       _pathResolver = pathResolver ?? const WorkspacePathResolver();
+       _pathResolver = pathResolver ?? const WorkspacePathResolver(),
+       _admittedAttachmentPathsResolver =
+           admittedAttachmentPathsResolver ?? _noAdmittedAttachmentPaths;
 
   final LocalWorkspaceRuntimeService _workspaceRuntimeService;
   final WorkspacePathResolver _pathResolver;
@@ -52,12 +60,20 @@ class LocalRuntimeCatalog {
   final McpRuntimeManager _mcpRuntimeManager;
   final PermissionManager _permissionManager;
   final PlatformRuntimeBridge _platformRuntimeBridge;
+  final AdmittedAttachmentPathsResolver _admittedAttachmentPathsResolver;
+
+  static Future<List<String>> _noAdmittedAttachmentPaths(
+    String sessionId,
+  ) async => const [];
 
   Future<List<BaseTool>> buildTools({
     required ToolsRegistry registry,
     required AgentTurnRequest request,
   }) async {
     final workspacePath = await _resolveWorkspacePath(request.workspaceId);
+    final admittedAttachmentPaths = await _admittedAttachmentPathsResolver(
+      request.sessionId,
+    );
     final tools = <BaseTool>[
       // TEMPORARILY DISABLED: tool_search — paused for review.
       // _buildSearchTool(registry),
@@ -69,6 +85,12 @@ class LocalRuntimeCatalog {
 
     if (workspacePath != null && workspacePath.isNotEmpty) {
       tools.addAll(_buildWorkspaceTools(workspacePath, request));
+    }
+    if ((workspacePath != null && workspacePath.isNotEmpty) ||
+        admittedAttachmentPaths.isNotEmpty) {
+      tools.add(
+        _buildViewImageTool(workspacePath, admittedAttachmentPaths, request),
+      );
     }
 
     final hasConfig = getIt.isRegistered<Config>();
@@ -348,6 +370,68 @@ class LocalRuntimeCatalog {
           workspacePath: workspacePath,
         );
       },
+    );
+  }
+
+  BaseTool _buildViewImageTool(
+    String? workspacePath,
+    List<String> admittedAttachmentPaths,
+    AgentTurnRequest request,
+  ) {
+    final hasWorkspace = workspacePath != null && workspacePath.isNotEmpty;
+    final spec = LocalToolSpec(
+      name: 'view_image',
+      displayName: 'View Image',
+      description:
+          'Inspect one local PNG, JPEG, or WebP image from the current workspace or admitted session attachments.',
+      inputSchema: const {
+        'type': 'object',
+        'properties': {
+          'path': {'type': 'string'},
+          'detail': {
+            'type': 'string',
+            'enum': ['low', 'auto', 'high', 'original'],
+            'default': 'auto',
+          },
+        },
+        'required': ['path'],
+        'additionalProperties': false,
+      },
+      source: hasWorkspace
+          ? const {'type': 'builtin_workspace', 'id': 'sanad-agent.workspace'}
+          : const {
+              'type': 'builtin_attachment',
+              'id': 'sanad-agent.attachments',
+            },
+      category: 'workspace_io',
+      workspaceRequired: hasWorkspace,
+      approval: const {'mode': 'workspace', 'sensitive': false},
+      execution: const {
+        'target': 'local_runtime',
+        'timeout_ms': 30000,
+        'restart_replay_safe': true,
+      },
+      serverName: hasWorkspace ? 'workspace' : 'attachments',
+    );
+    final handler = ViewImageHandler(_pathResolver);
+    return _ResultCallbackTool(
+      toolSpec: spec,
+      onExecuteResult: (args, {context}) => handler.executeResult(
+        args,
+        workspacePath: workspacePath,
+        admittedAttachmentPaths: admittedAttachmentPaths,
+        context: context,
+        authorizeExternal:
+            (canonicalPath, originalArguments, toolContext) async {
+              await _authorizeExternalWorkspacePath(
+                toolName: 'view_image',
+                arguments: {...originalArguments, 'path': canonicalPath},
+                context: toolContext,
+                request: request,
+                workspacePath: workspacePath!,
+              );
+            },
+      ),
     );
   }
 
@@ -835,4 +919,33 @@ class LocalRuntimeCatalog {
       },
     );
   }
+}
+
+typedef _ResultExecutionCallback =
+    Future<ToolExecutionResult> Function(
+      Map<String, dynamic> args, {
+      ToolContext? context,
+    });
+
+final class _ResultCallbackTool extends SpecBackedTool {
+  _ResultCallbackTool({
+    required this.toolSpec,
+    required _ResultExecutionCallback onExecuteResult,
+  }) : _onExecuteResult = onExecuteResult;
+
+  @override
+  final LocalToolSpec toolSpec;
+  final _ResultExecutionCallback _onExecuteResult;
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) => _onExecuteResult(args, context: context);
+
+  @override
+  Future<String> execute(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => (await executeResult(args, context: context)).displayText;
 }

@@ -35,6 +35,8 @@ The schema is `view_image(path: string, detail?: low|auto|high|original)`, with 
 
 Authorization order is canonicalize, classify, authorize, then stat/read. An internal target proceeds directly. An external canonical target requires a decision scoped to `view_image` or `full_access`. Caller spelling, extension, or a symlink cannot weaken the classification.
 
+The runtime catalog resolves admitted attachment paths through a daemon-owned session callback rather than generic turn metadata. With a workspace, the tool source is workspace-scoped; without one, exact canonical files from that callback form the only readable scope. An attachment grant neither authorizes siblings nor widens workspace policy. External workspace approval is keyed as `external_workspace_path::view_image::<canonical-target>` and uses the established permission checkpoint owner before file bytes are opened. Success orders a safe dimensions/MIME/detail summary before the image block; failures contain text only and a closed error code.
+
 The loader accepts static PNG/JPEG/WebP based on magic bytes. It rejects directories, empty/corrupt/deceptive/multi-frame content and applies the following central policy:
 
 | Policy | Locked value |
