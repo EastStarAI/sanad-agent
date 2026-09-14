@@ -25,6 +25,11 @@ This contract applies to `agent/lib/engine/adapters/`.
 - Responses requests keep server storage disabled and encrypted reasoning replay explicitly scoped.
 - Anthropic, OpenAI-compatible, Ollama, and other protocols keep translation isolated in their owning adapters.
 
+## Rich Tool-Result Translation
+- Rich tool results are validated and mapped from canonical ordered blocks by the shared provider-neutral wire codec; adapters must not read paths, process image bytes, or mutate canonical messages.
+- Codex Responses emits ordered `input_text`/`input_image` function outputs, preserves `call_id`, and maps canonical `original` detail to wire `high`.
+- Anthropic emits nested text/image `tool_result` content, preserves `tool_use_id`, omits detail, and emits `is_error: true` only for typed failures. Legacy text-only output remains a wire string.
+
 ## Model Discovery
 - Provider/template aliases stay aligned with registry identities.
 - Family-level metadata may cover newly introduced model variants when exact catalog metadata lags.

@@ -9,6 +9,7 @@ import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/core/models/llm_finish_reason.dart';
 import 'package:sanad_agent/engine/adapters/provider_registry.dart';
 import 'package:sanad_agent/engine/adapters/provider_profile.dart';
@@ -1330,6 +1331,124 @@ void main() {
         ),
       );
     });
+
+    test(
+      'sync and stream preserve rich tool ordering pairing and error state',
+      () async {
+        final richResult = ToolExecutionResult(
+          blocks: [
+            ToolTextBlock(text: 'before'),
+            ToolImageBlock(
+              dataBase64: 'AQID',
+              mimeType: 'image/webp',
+              width: 2,
+              height: 1,
+              detail: ToolImageDetail.high,
+            ),
+            ToolTextBlock(text: 'after'),
+          ],
+        );
+        final errorResult = ToolExecutionResult.text(
+          'failed safely',
+          isError: true,
+          errorCode: ToolResultErrorCode.executionFailed,
+        );
+        final history = [
+          Message(role: MessageRole.user, content: 'inspect'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(id: 'tool_image', name: 'view_image', arguments: {}),
+              ToolCall(id: 'tool_error', name: 'other', arguments: {}),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            content: richResult.displayText,
+            toolCallId: 'tool_image',
+            toolResult: richResult,
+          ),
+          Message(
+            role: MessageRole.tool,
+            content: errorResult.displayText,
+            toolCallId: 'tool_error',
+            toolResult: errorResult,
+          ),
+        ];
+        late Map<String, dynamic> syncBody;
+        final syncAdapter = BaseAnthropicAdapter(
+          config,
+          profile,
+          client: MockClient((request) async {
+            syncBody = (jsonDecode(request.body) as Map)
+                .cast<String, dynamic>();
+            return http.Response(
+              jsonEncode({
+                'content': [
+                  {'type': 'text', 'text': 'ok'},
+                ],
+                'stop_reason': 'end_turn',
+              }),
+              200,
+            );
+          }),
+        );
+        late Map<String, dynamic> streamBody;
+        final streamAdapter = BaseAnthropicAdapter(
+          config,
+          profile,
+          client: StreamingTestClient((request) {
+            streamBody = (jsonDecode((request as http.Request).body) as Map)
+                .cast<String, dynamic>();
+            return http.StreamedResponse(
+              Stream.value(
+                utf8.encode(
+                  'data: ${jsonEncode({
+                    'type': 'message_delta',
+                    'delta': {'stop_reason': 'end_turn'},
+                  })}\n',
+                ),
+              ),
+              200,
+              headers: {'content-type': 'text/event-stream'},
+            );
+          }),
+        );
+
+        await syncAdapter.generateResponse(history);
+        await streamAdapter.generateStream(history).toList();
+
+        for (final body in [syncBody, streamBody]) {
+          final messages = body['messages'] as List;
+          final userWithResults = messages.last as Map;
+          final results = userWithResults['content'] as List;
+          expect(results, hasLength(2));
+          expect(results[0], {
+            'type': 'tool_result',
+            'tool_use_id': 'tool_image',
+            'content': [
+              {'type': 'text', 'text': 'before'},
+              {
+                'type': 'image',
+                'source': {
+                  'type': 'base64',
+                  'media_type': 'image/webp',
+                  'data': 'AQID',
+                },
+              },
+              {'type': 'text', 'text': 'after'},
+            ],
+          });
+          expect(results[1], {
+            'type': 'tool_result',
+            'tool_use_id': 'tool_error',
+            'content': 'failed safely',
+            'is_error': true,
+          });
+        }
+        expect(richResult.blocks[1], isA<ToolImageBlock>());
+      },
+    );
 
     test(
       'should merge consecutive tool results into one user message and strip orphan tool_use',

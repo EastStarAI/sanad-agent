@@ -6,6 +6,8 @@ import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
+import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_codec.dart';
@@ -947,6 +949,87 @@ void main() {
         'max_output_tokens',
       );
     });
+
+    test(
+      'sync and stream send ordered rich function output with exact call id',
+      () async {
+        final bodies = <Map<String, dynamic>>[];
+        final adapter = CodexResponsesAdapter(
+          config,
+          profile,
+          client: MockClient.streaming((request, _) async {
+            bodies.add(_map(jsonDecode((request as http.Request).body)));
+            return http.StreamedResponse(
+              Stream.value(
+                utf8.encode(
+                  _sseResponse({
+                    'status': 'completed',
+                    'output': [
+                      {
+                        'type': 'message',
+                        'role': 'assistant',
+                        'status': 'completed',
+                        'content': [
+                          {'type': 'output_text', 'text': 'ok'},
+                        ],
+                      },
+                    ],
+                  }),
+                ),
+              ),
+              200,
+            );
+          }),
+        );
+        final richResult = ToolExecutionResult(
+          blocks: [
+            ToolTextBlock(text: 'before'),
+            ToolImageBlock(
+              dataBase64: 'AQID',
+              mimeType: 'image/png',
+              width: 1,
+              height: 1,
+              detail: ToolImageDetail.original,
+            ),
+            ToolTextBlock(text: 'after'),
+          ],
+        );
+        final history = [
+          Message(role: MessageRole.user, content: 'inspect'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(id: 'call_image_1', name: 'view_image', arguments: {}),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            content: richResult.displayText,
+            toolCallId: 'call_image_1',
+            toolResult: richResult,
+          ),
+        ];
+
+        await adapter.generateResponse(history);
+        await adapter.generateStream(history).toList();
+
+        expect(bodies, hasLength(2));
+        for (final body in bodies) {
+          final output = (body['input'] as List).last as Map;
+          expect(output['call_id'], 'call_image_1');
+          expect(output['output'], [
+            {'type': 'input_text', 'text': 'before'},
+            {
+              'type': 'input_image',
+              'image_url': 'data:image/png;base64,AQID',
+              'detail': 'high',
+            },
+            {'type': 'input_text', 'text': 'after'},
+          ]);
+        }
+        expect(richResult.blocks[1], isA<ToolImageBlock>());
+      },
+    );
 
     test('preflight rejects malformed tool history before network', () async {
       var sent = false;

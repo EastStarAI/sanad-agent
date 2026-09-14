@@ -6,6 +6,7 @@ import '../../core/models/llm_provider_state.dart';
 import '../../core/models/message.dart';
 import '../../core/models/tool_call.dart';
 import 'llm_request_options.dart';
+import 'tool_result_wire_codec.dart';
 
 class CodexResponsesException implements Exception {
   final String message;
@@ -352,7 +353,7 @@ class CodexResponsesCodec {
         input.add({
           'type': 'function_call_output',
           'call_id': callId,
-          'output': message.content ?? '',
+          'output': ToolResultWireCodec.responsesOutput(message),
         });
         continue;
       }
@@ -481,9 +482,7 @@ class CodexResponsesCodec {
         }
       } else if (type == 'function_call_output') {
         _requireNonEmpty(item, 'call_id', index);
-        if (item['output'] is! String) {
-          throw FormatException('Function output[$index] must be a string.');
-        }
+        _validateFunctionOutput(item['output'], index);
       } else if (type == 'message') {
         if (item['role'] != 'assistant' || item['content'] is! List) {
           throw FormatException(
@@ -687,6 +686,50 @@ class CodexResponsesCodec {
         return _normalizedToken(thinkingMode);
       default:
         return null;
+    }
+  }
+
+  static void _validateFunctionOutput(Object? output, int index) {
+    if (output is String) return;
+    if (output is! List || output.isEmpty) {
+      throw FormatException(
+        'Function output[$index] must be a string or non-empty content list.',
+      );
+    }
+    for (var partIndex = 0; partIndex < output.length; partIndex++) {
+      final part = _map(output[partIndex]);
+      if (part == null) {
+        throw FormatException(
+          'Function output[$index][$partIndex] must be an object.',
+        );
+      }
+      switch (part['type']) {
+        case 'input_text':
+          if (part['text'] is! String ||
+              (part['text'] as String).trim().isEmpty) {
+            throw FormatException(
+              'Function output[$index][$partIndex] has invalid text.',
+            );
+          }
+          break;
+        case 'input_image':
+          final imageUrl = part['image_url'];
+          final detail = part['detail'];
+          if (imageUrl is! String ||
+              !RegExp(
+                r'^data:image/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$',
+              ).hasMatch(imageUrl) ||
+              !const {'low', 'auto', 'high'}.contains(detail)) {
+            throw FormatException(
+              'Function output[$index][$partIndex] has invalid image data.',
+            );
+          }
+          break;
+        default:
+          throw FormatException(
+            'Function output[$index][$partIndex] has unsupported type.',
+          );
+      }
     }
   }
 

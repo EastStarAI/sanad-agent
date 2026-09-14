@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77c1/R0"
-remaining_estimate: "60%"
+current_gate: "77c2/R0"
+remaining_estimate: "57%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -158,7 +158,7 @@ detail = low | auto | high | original
 5. [x] [77a5 — Coordinator and Message Integration](tasks/77a5-tool-result-coordinator-integration.md)
 6. [x] [77b1 — Image Policy Worker](tasks/77b1-image-policy-worker.md)
 7. [x] [77b2 — Secure View Image Catalog](tasks/77b2-secure-view-image-catalog.md)
-8. [ ] [77c1 — Rich Provider Codecs](tasks/77c1-rich-provider-codecs.md)
+8. [x] [77c1 — Rich Provider Codecs](tasks/77c1-rich-provider-codecs.md)
 9. [ ] [77c2 — Adapter Capability and Fallback](tasks/77c2-adapter-capability-and-fallback.md)
 10. [ ] [77d1 — Atomic Result Durability](tasks/77d1-atomic-tool-result-durability.md)
 11. [ ] [77d2 — Binary Redaction and Pruning](tasks/77d2-binary-redaction-and-pruning.md)
@@ -300,3 +300,16 @@ Next task:
 - Open findings: daemon attachment storage will supply the session resolver in `77e2`; its default is an empty fail-closed scope.
 - Remaining estimate: `60%`.
 - Next task: `77c1 — Rich Provider Codecs`.
+
+### 2026-09-14 — 77c1 complete
+
+- Task/Gate: `77c1/C3`.
+- Status transition: `77c1 in_progress` → `complete`; plan advances to `77c2/R0`.
+- Owner/worktree: public repository in `77-hosted-attachment-media-relay`.
+- Files changed: shared rich-result wire codec, Responses and Anthropic adapters, two focused request-capture test files, adapter contract, technical design, task, and plan (9 tracked paths).
+- Verification evidence: analyzer clean; 61 focused adapter tests passed; exact sync/stream captures passed; Graphify rebuilt 23,656 nodes and 32,536 edges.
+- Documentation/contracts updated: adapter contract, multimodal technical design, task 77c1, this plan, and ignored run evidence.
+- Evidence fingerprint: `sha256:2af004c77e76f850df9ab9b0abe23409cdcf470ecd3831c08cfc62c66823f85c`; post-implementation parity satisfied without deviation.
+- Open findings: none; text-only capability/fallback projection remains intentionally owned by `77c2`.
+- Remaining estimate: `57%`.
+- Next task: `77c2 — Adapter Capability and Fallback`.

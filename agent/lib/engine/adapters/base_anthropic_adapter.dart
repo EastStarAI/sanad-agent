@@ -18,6 +18,7 @@ import 'llm_request_options.dart';
 import 'opencode_session_affinity.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
+import 'tool_result_wire_codec.dart';
 import '../llm_request_dumper.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 
@@ -666,13 +667,20 @@ class BaseAnthropicAdapter implements LLMAdapter {
     final wireMessages = <Map<String, dynamic>>[];
     for (final m in nonSystem) {
       if (m.role == MessageRole.tool) {
+        final toolUseId = m.toolCallId?.trim() ?? '';
+        if (toolUseId.isEmpty) {
+          throw const FormatException(
+            'Anthropic tool result is missing toolCallId.',
+          );
+        }
         wireMessages.add({
           'role': 'user',
           'content': [
             {
               'type': 'tool_result',
-              'tool_use_id': m.toolCallId ?? '',
-              'content': m.content ?? '',
+              'tool_use_id': toolUseId,
+              'content': ToolResultWireCodec.anthropicContent(m),
+              if (m.toolResult?.isError == true) 'is_error': true,
             },
           ],
         });

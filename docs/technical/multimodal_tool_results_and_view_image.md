@@ -97,7 +97,7 @@ After pruning or expiry, the row remains stable and renders `Image no longer ava
 | OpenAI-compatible Chat | `textOnly` | display text plus omission marker |
 | Ollama/custom/missing/unknown | `textOnly` | display text plus omission marker |
 
-Responses preserves `call_id`; `original` maps to wire `detail=high` while retaining original bytes. Anthropic preserves `tool_use_id` and does not serialize detail. Standard Chat tool messages never receive `image_url`, because the standard tool-message contract is text-only.
+Responses preserves `call_id`; `original` maps to wire `detail=high` while retaining original bytes. Its shared sync/stream builder emits a string for legacy text-only results and a non-empty ordered content array for rich results; structured output is validated locally before HTTP. Anthropic preserves `tool_use_id`, nests ordered canonical blocks under `tool_result.content`, does not serialize detail, and emits `is_error: true` only for typed failures. Its existing consecutive-result merge and alternation healing operate on the enclosing tool-result blocks without flattening nested content or changing pairing. Standard Chat tool messages never receive `image_url`, because the standard tool-message contract is text-only.
 
 The fallback suffix is exactly `[Image omitted: active provider does not accept image tool results.]`, added once when at least one image block is omitted. It exists only in the provider request and does not mutate canonical history. It is a deterministic degradation, not an error eligible for transparent retry or failover.
 
