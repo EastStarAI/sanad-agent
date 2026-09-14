@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:logging/logging.dart';
 import '../../core/models/message.dart';
 import '../../core/models/tool_call.dart';
+import '../../core/models/tool_execution_result.dart';
 import '../../capabilities/registry/tools_registry.dart';
 import '../../capabilities/tools/base_tool.dart';
 import '../../core/di.dart';
@@ -85,6 +86,7 @@ class ToolExecutionCoordinator {
     );
 
     final finalResults = <String, String>{};
+    final typedResults = <String, ToolExecutionResult>{};
     final toolCallsToRun = <ToolCall>[];
     final interruptedTools = <String, String>{};
     final toolReplaySafety = <String, bool>{
@@ -164,6 +166,7 @@ class ToolExecutionCoordinator {
               toolCallsToRun,
               callbacks: callbacks,
               ctx: ctx,
+              typedResults: typedResults,
               cancellationScope: cancellationScope,
               onToolEvent: onToolEvent,
             )
@@ -171,6 +174,7 @@ class ToolExecutionCoordinator {
               toolCallsToRun,
               callbacks: callbacks,
               ctx: ctx,
+              typedResults: typedResults,
               cancellationScope: cancellationScope,
               onToolEvent: onToolEvent,
             );
@@ -192,30 +196,41 @@ class ToolExecutionCoordinator {
       updatedMeta['completed_tool_outputs'] as Map? ?? const {},
     );
     for (final toolCall in toolCalls) {
-      finalResults[toolCall.id] = ToolOutputGuard.guardResult(
-        allCompleted[toolCall.id]?.toString() ??
-            finalResults[toolCall.id] ??
-            'Error: No result for tool call',
+      final outputRecord = allOutputs[toolCall.id];
+      final legacyIsError =
+          _lockedCancelledResult(toolCall.id) != null ||
+          (outputRecord is Map && outputRecord['is_error'] == true);
+      typedResults.putIfAbsent(
+        toolCall.id,
+        () => ToolExecutionResult.text(
+          allCompleted[toolCall.id]?.toString() ??
+              finalResults[toolCall.id] ??
+              'Error: No result for tool call',
+          isError: legacyIsError,
+          errorCode: legacyIsError ? ToolResultErrorCode.executionFailed : null,
+        ),
       );
     }
-    final batchGuardedResults = ToolOutputGuard.guardBatch(finalResults);
-    finalResults
+    final batchGuardedResults = _guardTypedBatch(typedResults);
+    typedResults
       ..clear()
       ..addAll(batchGuardedResults);
+    finalResults
+      ..clear()
+      ..addEntries(
+        typedResults.entries.map(
+          (entry) => MapEntry(entry.key, entry.value.displayText),
+        ),
+      );
 
     // Add all guarded results to history in the original tool-call order.
     // Presence checks preserve idempotency for resumed single-tool paths.
     for (final toolCall in toolCalls) {
       if (!_canPublishToolEvents(cancellationScope)) return;
-      final result = finalResults[toolCall.id]!;
+      final result = typedResults[toolCall.id]!;
       final alreadyAdded = callbacks.isToolMessagePresent(toolCall.id);
       if (!alreadyAdded) {
-        final outputRecord = allOutputs[toolCall.id];
-        final isError =
-            _lockedCancelledResult(toolCall.id) != null ||
-            (outputRecord is Map && outputRecord['is_error'] == true) ||
-            _resultIndicatesError(result);
-        await callbacks.addToolMessage(toolCall, result, isError: isError);
+        await _appendToolMessage(callbacks, toolCall, result);
       }
     }
     if (!_canPublishToolEvents(cancellationScope)) return;
@@ -265,8 +280,17 @@ class ToolExecutionCoordinator {
     return record?.isTerminalCancelled == true ? record!.message : null;
   }
 
-  String _applyLateResultIsolation(String toolCallId, String result) {
-    return _lockedCancelledResult(toolCallId) ?? result;
+  ToolExecutionResult _applyLateResultIsolation(
+    String toolCallId,
+    ToolExecutionResult result,
+  ) {
+    final cancelled = _lockedCancelledResult(toolCallId);
+    if (cancelled == null) return result;
+    return ToolExecutionResult.text(
+      cancelled,
+      isError: true,
+      errorCode: ToolResultErrorCode.executionFailed,
+    );
   }
 
   Future<void> _maybeEmitToolEvent(
@@ -283,6 +307,7 @@ class ToolExecutionCoordinator {
     List<ToolCall> toolCallsToRun, {
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
+    required Map<String, ToolExecutionResult> typedResults,
     RunCancellationScope? cancellationScope,
     required Future<void> Function({
       required String toolName,
@@ -329,14 +354,14 @@ class ToolExecutionCoordinator {
         emitStartEvent: false,
         appendToHistory: false,
       );
-      var result = execution.result;
+      var typedResult = execution.result;
+      var result = typedResult.displayText;
       if (!_canPublishToolEvents(cancellationScope)) return results;
       final deferred = DeferredToolResultDescriptor.tryParseToolResult(
         result,
         sessionId: sessionId,
         toolCallId: toolCall.id,
       );
-      var isError = execution.isError;
       if (deferred != null) {
         checkpointCoordinator.saveCheckpoint(
           ctx: ctx,
@@ -345,21 +370,28 @@ class ToolExecutionCoordinator {
         );
         final resolution = await deferredToolResultResolver.resolve(deferred);
         if (!_canPublishToolEvents(cancellationScope)) return results;
-        result = resolution.output;
-        isError = resolution.isError;
+        typedResult = ToolExecutionResult.text(
+          resolution.output,
+          isError: resolution.isError,
+          errorCode: resolution.isError
+              ? ToolResultErrorCode.executionFailed
+              : null,
+        );
+        result = typedResult.displayText;
         if (onToolEvent != null) {
           await _maybeEmitToolEvent(
             cancellationScope,
             emit: () => onToolEvent(
               toolName: toolCall.name,
               output: result,
-              isError: isError,
+              isError: typedResult.isError,
               isStart: false,
               toolRunId: toolCall.id,
             ),
           );
         }
       }
+      typedResults[toolCall.id] = typedResult;
       results[toolCall.id] = result;
 
       // Save result and clear executing
@@ -370,7 +402,7 @@ class ToolExecutionCoordinator {
           toolCall.id: checkpointCoordinator.toolOutputRecord(
             toolCall,
             result,
-            isError: isError,
+            isError: typedResult.isError,
             sentToProvider: false,
           ),
         },
@@ -385,6 +417,7 @@ class ToolExecutionCoordinator {
     List<ToolCall> toolCallsToRun, {
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
+    required Map<String, ToolExecutionResult> typedResults,
     RunCancellationScope? cancellationScope,
     required Future<void> Function({
       required String toolName,
@@ -435,6 +468,11 @@ class ToolExecutionCoordinator {
         final tool = registry.getTool(toolCall.name);
         if (tool == null) {
           final result = 'Error: Tool ${toolCall.name} not found';
+          typedResults[toolCall.id] = ToolExecutionResult.text(
+            result,
+            isError: true,
+            errorCode: ToolResultErrorCode.notFound,
+          );
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
           checkpointCoordinator.saveCheckpoint(
@@ -453,20 +491,19 @@ class ToolExecutionCoordinator {
           return;
         }
         try {
-          final rawResult = await tool.execute(
+          final rawResult = await tool.executeResult(
             toolCall.arguments,
             context: _toolContextFor(
               toolCall,
               cancellationScope: cancellationScope,
             ),
           );
-          final isolatedResult = _applyLateResultIsolation(
-            toolCall.id,
-            rawResult,
+          final typedResult = _guardTypedResult(
+            _applyLateResultIsolation(toolCall.id, rawResult),
           );
-          final isError = _resultIndicatesError(isolatedResult);
-          final result = ToolOutputGuard.guardResult(isolatedResult);
+          final result = typedResult.displayText;
           if (!_canPublishToolEvents(cancellationScope)) return;
+          typedResults[toolCall.id] = typedResult;
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
           checkpointCoordinator.saveCheckpoint(
@@ -476,7 +513,7 @@ class ToolExecutionCoordinator {
               toolCall.id: checkpointCoordinator.toolOutputRecord(
                 toolCall,
                 result,
-                isError: isError,
+                isError: typedResult.isError,
                 sentToProvider: false,
               ),
             },
@@ -485,6 +522,11 @@ class ToolExecutionCoordinator {
         } catch (e) {
           if (!_canPublishToolEvents(cancellationScope)) return;
           final result = 'Error executing tool: $e';
+          typedResults[toolCall.id] = ToolExecutionResult.text(
+            result,
+            isError: true,
+            errorCode: ToolResultErrorCode.executionFailed,
+          );
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
           checkpointCoordinator.saveCheckpoint(
@@ -582,10 +624,10 @@ class ToolExecutionCoordinator {
       forcedIsError: forcedIsError,
       appendToHistory: true,
     );
-    return execution.result;
+    return execution.result.displayText;
   }
 
-  Future<({String result, bool isError})> _executeSingleToolCall(
+  Future<({ToolExecutionResult result})> _executeSingleToolCall(
     ToolCall toolCall, {
     required ToolExecutionCallbacks callbacks,
     RunCancellationScope? cancellationScope,
@@ -617,23 +659,35 @@ class ToolExecutionCoordinator {
       );
     }
     if (!_canPublishToolEvents(cancellationScope)) {
-      return (result: 'Error: Tool execution cancelled.', isError: true);
+      return (
+        result: ToolExecutionResult.text(
+          'Error: Tool execution cancelled.',
+          isError: true,
+          errorCode: ToolResultErrorCode.executionFailed,
+        ),
+      );
     }
 
-    String result;
-    bool isError = forcedIsError;
+    ToolExecutionResult typedResult;
     if (forcedOutput != null) {
-      result = forcedOutput;
+      typedResult = ToolExecutionResult.text(
+        forcedOutput,
+        isError: forcedIsError,
+        errorCode: forcedIsError ? ToolResultErrorCode.executionFailed : null,
+      );
     } else {
       final tool = registry.getTool(toolCall.name);
       if (tool == null) {
-        result = 'Error: Tool ${toolCall.name} not found';
-        isError = true;
+        typedResult = ToolExecutionResult.text(
+          'Error: Tool ${toolCall.name} not found',
+          isError: true,
+          errorCode: ToolResultErrorCode.notFound,
+        );
       } else {
         try {
-          result = _applyLateResultIsolation(
+          typedResult = _applyLateResultIsolation(
             toolCall.id,
-            await tool.execute(
+            await tool.executeResult(
               toolCall.arguments,
               context: _toolContextFor(
                 toolCall,
@@ -641,19 +695,19 @@ class ToolExecutionCoordinator {
               ),
             ),
           );
-          if (_lockedCancelledResult(toolCall.id) != null) {
-            isError = true;
-          }
         } catch (e) {
-          result = 'Error executing tool: $e';
-          isError = true;
+          typedResult = ToolExecutionResult.text(
+            'Error executing tool: $e',
+            isError: true,
+            errorCode: ToolResultErrorCode.executionFailed,
+          );
         }
       }
     }
-    isError = isError || _resultIndicatesError(result);
-    result = ToolOutputGuard.guardResult(result);
+    typedResult = _guardTypedResult(typedResult);
+    final result = typedResult.displayText;
     if (!_canPublishToolEvents(cancellationScope)) {
-      return (result: result, isError: isError);
+      return (result: typedResult);
     }
 
     final isDeferredResult =
@@ -669,7 +723,7 @@ class ToolExecutionCoordinator {
         emit: () => onToolEvent(
           toolName: toolCall.name,
           output: result,
-          isError: isError,
+          isError: typedResult.isError,
           isStart: false,
           toolRunId: toolCall.id,
         ),
@@ -677,9 +731,81 @@ class ToolExecutionCoordinator {
     }
 
     if (appendToHistory) {
-      await callbacks.addToolMessage(toolCall, result, isError: isError);
+      await _appendToolMessage(callbacks, toolCall, typedResult);
     }
-    return (result: result, isError: isError);
+    return (result: typedResult);
+  }
+
+  static ToolExecutionResult _guardTypedResult(
+    ToolExecutionResult result, {
+    int maxChars = ToolOutputGuard.maxResultChars,
+  }) {
+    final textBlocks = result.blocks.whereType<ToolTextBlock>().toList();
+    final totalChars = textBlocks.fold<int>(
+      0,
+      (sum, block) => sum + block.text.length,
+    );
+    if (totalChars <= maxChars) return result;
+    var remainingChars = maxChars;
+    var remainingTextBlocks = textBlocks.length;
+    final blocks = <ToolResultBlock>[];
+    for (final block in result.blocks) {
+      if (block is! ToolTextBlock) {
+        blocks.add(block);
+        continue;
+      }
+      final allowance = remainingTextBlocks == 0
+          ? 1
+          : (remainingChars ~/ remainingTextBlocks).clamp(1, maxChars);
+      final text = ToolOutputGuard.guardResult(block.text, maxChars: allowance);
+      blocks.add(ToolTextBlock(text: text));
+      remainingChars = (remainingChars - text.length).clamp(0, maxChars);
+      remainingTextBlocks--;
+    }
+    return ToolExecutionResult(
+      blocks: blocks,
+      isError: result.isError,
+      errorCode: result.errorCode,
+    );
+  }
+
+  static Map<String, ToolExecutionResult> _guardTypedBatch(
+    Map<String, ToolExecutionResult> results,
+  ) {
+    final guarded = <String, ToolExecutionResult>{
+      for (final entry in results.entries)
+        entry.key: _guardTypedResult(entry.value),
+    };
+    final total = guarded.values.fold<int>(
+      0,
+      (sum, result) => sum + result.displayText.length,
+    );
+    if (total <= ToolOutputGuard.maxBatchChars || guarded.isEmpty) {
+      return guarded;
+    }
+    final fairShare = ToolOutputGuard.maxBatchChars ~/ guarded.length;
+    return {
+      for (final entry in guarded.entries)
+        entry.key: _guardTypedResult(entry.value, maxChars: fairShare),
+    };
+  }
+
+  static Future<void> _appendToolMessage(
+    ToolExecutionCallbacks callbacks,
+    ToolCall toolCall,
+    ToolExecutionResult result,
+  ) {
+    if (callbacks is TypedToolExecutionCallbacks) {
+      return (callbacks as TypedToolExecutionCallbacks).addTypedToolMessage(
+        toolCall,
+        result,
+      );
+    }
+    return callbacks.addToolMessage(
+      toolCall,
+      result.displayText,
+      isError: result.isError,
+    );
   }
 
   static bool _resultIndicatesError(String result) {
@@ -692,6 +818,13 @@ class ToolExecutionCoordinator {
       return false;
     }
   }
+}
+
+abstract interface class TypedToolExecutionCallbacks {
+  Future<void> addTypedToolMessage(
+    ToolCall toolCall,
+    ToolExecutionResult result,
+  );
 }
 
 /// Bridges history mutations from the coordinator back to the runner so the

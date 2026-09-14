@@ -62,13 +62,20 @@ void main() {
       expect(typed.errorCode, ToolResultErrorCode.invalidInput);
     });
 
-    test('default typed bridge preserves legacy text byte-for-byte', () async {
+    test('missing typed implementation fails closed', () async {
       final tool = _LegacyTextTool();
 
-      final result = await tool.executeResult({});
-
-      expect(result.displayText, 'legacy\ntext  ');
-      expect(result.isError, isFalse);
+      expect(
+        () => tool.executeResult({}),
+        throwsA(
+          isA<UnsupportedError>().having(
+            (error) => error.message,
+            'message',
+            contains('must provide typed executeResult'),
+          ),
+        ),
+      );
+      expect(await tool.execute({}), 'legacy\ntext  ');
     });
 
     test(

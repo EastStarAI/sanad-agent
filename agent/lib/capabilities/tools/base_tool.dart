@@ -19,15 +19,21 @@ abstract class BaseTool {
   /// Defaults to false. Tools that spawn side effects must opt in explicitly.
   bool get isCooperativelyCancellable => false;
 
-  /// Transitional typed boundary while text tools migrate in Tasks 77a2–77a4.
+  /// Authoritative provider-neutral result for one execution.
   ///
-  /// Unported tools retain byte-for-byte text behavior through this wrapper.
-  /// Task 77a5 removes the bridge when every implementation is typed.
+  /// Every production tool must implement this boundary explicitly. There is
+  /// no fallback that infers a typed result from legacy text.
   Future<ToolExecutionResult> executeResult(
     Map<String, dynamic> args, {
     ToolContext? context,
-  }) async => ToolExecutionResult.text(await execute(args, context: context));
+  }) => throw UnsupportedError(
+    'Tool implementations must provide typed executeResult output.',
+  );
 
+  /// Temporary text projection for direct legacy callers.
+  ///
+  /// The engine and coordinator must consume [executeResult], never this
+  /// compatibility surface.
   Future<String> execute(Map<String, dynamic> args, {ToolContext? context});
 }
 

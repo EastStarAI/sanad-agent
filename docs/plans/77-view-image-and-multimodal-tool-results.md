@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77a5/R0"
-remaining_estimate: "78%"
+current_gate: "77b1/R0"
+remaining_estimate: "70%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -155,7 +155,7 @@ detail = low | auto | high | original
 2. [x] [77a2 — Text Tool Migration A](tasks/77a2-text-tool-migration-a.md)
 3. [x] [77a3 — Text Tool Migration B](tasks/77a3-text-tool-migration-b.md)
 4. [x] [77a4 — Text Tool Migration C](tasks/77a4-text-tool-migration-c.md)
-5. [ ] [77a5 — Coordinator and Message Integration](tasks/77a5-tool-result-coordinator-integration.md)
+5. [x] [77a5 — Coordinator and Message Integration](tasks/77a5-tool-result-coordinator-integration.md)
 6. [ ] [77b1 — Image Policy Worker](tasks/77b1-image-policy-worker.md)
 7. [ ] [77b2 — Secure View Image Catalog](tasks/77b2-secure-view-image-catalog.md)
 8. [ ] [77c1 — Rich Provider Codecs](tasks/77c1-rich-provider-codecs.md)
@@ -261,3 +261,16 @@ Next task:
 - Open findings: rich callback protocol cutover remains explicitly outside this task; MCP/platform protocols are unchanged.
 - Remaining estimate: `78%`.
 - Next task: `77a5 — Coordinator and Message Integration`.
+
+### 2026-09-14 — 77a5 complete
+
+- Task/Gate: `77a5/A3`.
+- Status transition: `77a5 in_progress` → `complete`; plan advances to `77b1/R0`.
+- Owner/worktree: public repository in `77-hosted-attachment-media-relay`.
+- Files changed: base boundary, coordinator, runner callback/history integration, three focused test files, two owning contracts, task, and plan.
+- Verification evidence: analyzer clean; 210 tests passed with 5 platform-specific skips; Graphify rebuilt.
+- Documentation/contracts updated: capability-tools contract, engine-runtime contract, task 77a5, and this plan.
+- Evidence fingerprint: `sha256:477c6a964da28b0914da3cb0f52881421561ccd9f8afd859fc6833380353bc43`; post-implementation parity satisfied.
+- Open findings: concrete text projections remain for non-engine compatibility; engine execution is typed and missing typed implementations fail closed.
+- Remaining estimate: `70%`.
+- Next task: `77b1 — Image Policy Worker`.

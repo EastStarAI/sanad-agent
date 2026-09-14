@@ -13,8 +13,9 @@ This contract applies to `agent/lib/engine/runtime/`.
 - Parallelize only compatible independent tools.
 - Interactive tools, shell execution, and overlapping file paths force sequential execution.
 - Persist completion checkpoint after each tool needed for restart safety.
-- Bound every tool result before completion events, checkpoint persistence, or history insertion, and enforce an aggregate budget across each tool-call batch; this boundary includes built-in, workspace, MCP, platform, resumed, and future registered tools.
-- Preserve a structured tool result's `isError` or `is_error` classification across its completion event, checkpoint output record, and history metadata. A non-`Error` text prefix does not override an explicit structured failure.
+- Consume `ToolExecutionResult` from tools for sequential and parallel execution. Bound text blocks before completion events, checkpoint persistence, or history insertion, and enforce an aggregate text budget across each tool-call batch; image blocks retain order and never enter character counting or text previews.
+- Append one typed `Message.toolResult` for each tool-call id through rich runner callbacks. Events, plugins, legacy callbacks, and checkpoint previews receive bounded `displayText` only and never binary blocks.
+- Preserve typed `isError` classification across completion events, checkpoint output records, and history metadata. Do not parse typed output strings or use implicit `toString()` to infer status; only explicitly normalized legacy recovery records may use their persisted error metadata.
 
 ## Continuation Checkpoints
 - `ContinuationCheckpointCoordinator` owns checkpoint schema and read/write orchestration for the active work item.

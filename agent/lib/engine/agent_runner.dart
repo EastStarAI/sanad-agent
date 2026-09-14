@@ -5,6 +5,7 @@ import 'package:meta/meta.dart';
 import 'package:uuid/uuid.dart';
 
 import '../core/models/message.dart';
+import '../core/models/tool_execution_result.dart';
 import '../core/models/agent_response.dart';
 import '../core/models/llm_provider_state.dart';
 import '../core/models/llm_usage_snapshot.dart';
@@ -2569,7 +2570,8 @@ class AgentRunner {
 
 /// Bridges [ToolExecutionCoordinator] history mutations back to the runner
 /// so the coordinator never owns a history list.
-class _RunnerToolCallbacks implements ToolExecutionCallbacks {
+class _RunnerToolCallbacks
+    implements ToolExecutionCallbacks, TypedToolExecutionCallbacks {
   final AgentRunner _runner;
 
   _RunnerToolCallbacks(this._runner);
@@ -2579,10 +2581,23 @@ class _RunnerToolCallbacks implements ToolExecutionCallbacks {
     ToolCall toolCall,
     String result, {
     required bool isError,
-  }) async {
+  }) => addTypedToolMessage(
+    toolCall,
+    ToolExecutionResult.text(
+      result,
+      isError: isError,
+      errorCode: isError ? ToolResultErrorCode.executionFailed : null,
+    ),
+  );
+
+  @override
+  Future<void> addTypedToolMessage(
+    ToolCall toolCall,
+    ToolExecutionResult result,
+  ) async {
     final toolMessage = Message(
       role: MessageRole.tool,
-      content: result,
+      toolResult: result,
       toolCallId: toolCall.id,
       metadata: {
         if (_runner._authoritativeRunId != null)
@@ -2590,7 +2605,7 @@ class _RunnerToolCallbacks implements ToolExecutionCallbacks {
         'tool_call_id': toolCall.id,
         if (_runner.currentModelStepId != null)
           'model_step_id': _runner.currentModelStepId,
-        'is_error': isError,
+        'is_error': result.isError,
       },
     );
     _runner.history.add(toolMessage);
@@ -2651,8 +2666,33 @@ class _RunnerSteerCallbacks implements steer_lib.SteerCallbacks {
     Map<String, dynamic>? metadata,
   }) {
     final msg = _runner.history[index];
+    var updatedToolResult = msg.toolResult;
+    var clearToolResult = false;
+    if (content != null && updatedToolResult != null) {
+      final previousText = updatedToolResult.displayText;
+      if (content.startsWith(previousText)) {
+        final suffix = content.substring(previousText.length);
+        final blocks = updatedToolResult.blocks.toList();
+        final lastTextIndex = blocks.lastIndexWhere(
+          (block) => block is ToolTextBlock,
+        );
+        final previousBlock = blocks[lastTextIndex] as ToolTextBlock;
+        blocks[lastTextIndex] = ToolTextBlock(
+          text: '${previousBlock.text}$suffix',
+        );
+        updatedToolResult = ToolExecutionResult(
+          blocks: blocks,
+          isError: updatedToolResult.isError,
+          errorCode: updatedToolResult.errorCode,
+        );
+      } else {
+        clearToolResult = true;
+      }
+    }
     _runner.history[index] = msg.copyWith(
       content: content ?? msg.content,
+      toolResult: clearToolResult ? null : updatedToolResult,
+      clearToolResult: clearToolResult,
       metadata: metadata ?? msg.metadata,
     );
   }

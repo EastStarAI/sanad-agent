@@ -6,6 +6,7 @@ import 'package:test/test.dart';
 import 'package:get_it/get_it.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
@@ -163,7 +164,15 @@ class ProviderStateRejectingAdapter implements LLMAdapter {
   }
 }
 
-class MockTool extends BaseTool {
+mixin _TypedTextTestTool on BaseTool {
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult.text(await execute(args, context: context));
+}
+
+class MockTool extends BaseTool with _TypedTextTestTool {
   @override
   ToolSchema get schema =>
       ToolSchema(name: 'test_tool', description: 'desc', parameters: {});
@@ -193,9 +202,19 @@ class StructuredErrorTool extends BaseTool {
         'Command timed out after 2000 ms.',
     'terminal_reason': 'timed_out',
   });
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult.text(
+    await execute(args, context: context),
+    isError: true,
+    errorCode: ToolResultErrorCode.timedOut,
+  );
 }
 
-class DelayedTool extends BaseTool {
+class DelayedTool extends BaseTool with _TypedTextTestTool {
   final Completer<void> started = Completer<void>();
   final Completer<void> release = Completer<void>();
 
@@ -1400,6 +1419,13 @@ void main() {
           .where((message) => message.role == MessageRole.tool)
           .toList();
       expect(toolResults, hasLength(2));
+      expect(toolResults.every((message) => message.toolResult != null), isTrue);
+      expect(
+        toolResults.every(
+          (message) => message.content == message.toolResult!.displayText,
+        ),
+        isTrue,
+      );
       expect(
         toolResults.map((message) => message.metadata?['run_id']).toSet(),
         {'run-segmented'},
@@ -5020,7 +5046,7 @@ class _ImmediateRetryRecoveryService extends RuntimeRecoveryService {
   }) async => true;
 }
 
-class GateDTestTool extends BaseTool {
+class GateDTestTool extends BaseTool with _TypedTextTestTool {
   final String _name;
   final Future<String> Function(Map<String, dynamic> args, ToolContext? context)
   _executeFn;

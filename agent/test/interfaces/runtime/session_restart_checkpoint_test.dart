@@ -6,6 +6,7 @@ import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
@@ -492,6 +493,12 @@ class _HangingTool extends BaseTool {
     if (!started.isCompleted) started.complete();
     return _result.future;
   }
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult.text(await execute(args, context: context));
 }
 
 Future<bool> _isCompleted<T>(Future<T> future) async {
