@@ -475,6 +475,120 @@ class SessionExecutionStateCoordinator {
     return outcome;
   }
 
+  /// Atomically appends one owner-bound rich tool result to canonical history
+  /// and removes its temporary checkpoint copy. Repeated promotion is accepted
+  /// only when the same tool message is already durable.
+  bool promoteCompletedToolResult({
+    required String sessionId,
+    required String workItemId,
+    required String runId,
+    required int generation,
+    required String toolCallId,
+    required Message historyMessage,
+  }) {
+    return _state.transaction((tx) {
+      final active = _workItems.findActiveWorkItem(sessionId);
+      if (active == null ||
+          active.workItemId != workItemId ||
+          (active.state != SessionWorkState.running &&
+              active.state != SessionWorkState.resuming) ||
+          active.continuationMetadata['owner_run_id'] != runId ||
+          active.continuationMetadata['owner_generation'] != generation ||
+          historyMessage.role != MessageRole.tool ||
+          historyMessage.toolCallId != toolCallId ||
+          historyMessage.toolResult == null) {
+        return false;
+      }
+
+      final rows = tx.db.select(
+        '''
+        SELECT id, data, message_id, turn_id, history_status, input_kind,
+               request_id, run_id, superseded_by_turn_id
+        FROM messages
+        WHERE session_id = ?
+          AND (history_status = 'active' OR history_status IS NULL)
+        ORDER BY id ASC
+        ''',
+        [sessionId],
+      );
+      Message? durableToolMessage;
+      for (final row in rows) {
+        final message = MessageHistoryIdentity.fromRow(row);
+        if (message.role == MessageRole.tool &&
+            message.toolCallId == toolCallId) {
+          durableToolMessage = message;
+          break;
+        }
+      }
+
+      final metadata = Map<String, dynamic>.from(active.continuationMetadata);
+      final richResults = Map<String, dynamic>.from(
+        metadata['completed_tool_results_v2'] as Map? ?? const {},
+      );
+      final rawEnvelope = richResults[toolCallId];
+      if (durableToolMessage != null) {
+        if (jsonEncode(durableToolMessage.toolResult?.toJson()) !=
+            jsonEncode(historyMessage.toolResult!.toJson())) {
+          return false;
+        }
+        if (rawEnvelope != null) {
+          richResults.remove(toolCallId);
+          _storeRichCheckpointMap(metadata, richResults);
+          _workItems.transitionWorkItemState(
+            workItemId: workItemId,
+            fromState: active.state,
+            toState: active.state,
+            continuationMetadata: metadata,
+            transaction: tx,
+          );
+        }
+        return true;
+      }
+      if (rawEnvelope is! Map) return false;
+      final envelope = Map<String, dynamic>.from(rawEnvelope);
+      final rawResult = envelope['result'];
+      if (envelope['schema_version'] != 2 ||
+          envelope['session_id'] != sessionId ||
+          envelope['work_item_id'] != workItemId ||
+          envelope['run_id'] != runId ||
+          envelope['generation'] != generation ||
+          envelope['tool_call_id'] != toolCallId ||
+          rawResult is! Map ||
+          jsonEncode(rawResult) !=
+              jsonEncode(historyMessage.toolResult!.toJson())) {
+        return false;
+      }
+
+      MessageHistoryIdentity.persist(tx.db, sessionId, historyMessage);
+      SessionHistoryRevisionRepository.bumpDatabase(tx.db, sessionId);
+      tx.db.execute(
+        'DELETE FROM suspended_checkpoints WHERE tool_call_id = ?',
+        [toolCallId],
+      );
+      richResults.remove(toolCallId);
+      _storeRichCheckpointMap(metadata, richResults);
+      _workItems.transitionWorkItemState(
+        workItemId: workItemId,
+        fromState: active.state,
+        toState: active.state,
+        continuationMetadata: metadata,
+        transaction: tx,
+      );
+      return true;
+    });
+  }
+
+  static void _storeRichCheckpointMap(
+    Map<String, dynamic> metadata,
+    Map<String, dynamic> richResults,
+  ) {
+    if (richResults.isEmpty) {
+      metadata.remove('completed_tool_results_v2');
+    } else {
+      metadata['completed_tool_results_v2'] = richResults;
+    }
+  }
+
   /// Commits cancelled tool terminals for the exact active run owner.
   ///
   /// Checkpoint outputs and their history messages are written in one

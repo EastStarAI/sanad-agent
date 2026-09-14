@@ -25,6 +25,9 @@ This contract applies to `agent/lib/engine/runtime/`.
 - A missing checkpoint may be repaired as `initial_model_request` only when the owned user message is durable and there is no provider-in-flight, executing-tool, completed-result, or deferred-result evidence. Persist the repair marker so retry cannot reinterpret an ambiguous boundary repeatedly.
 - Tools that support crash diagnostics may persist bounded, redacted execution progress under the active checkpoint. Progress is evidence for terminal recovery, never permission to replay an unsafe tool.
 - Persist sequential tool completion and executing-marker removal together.
+- Owner-bound rich completions use `completed_tool_results_v2` envelopes containing schema version plus session/work/run/generation/tool identity. Save the individually guarded typed result immediately, then replace it with the aggregate-guarded typed result before canonical history promotion.
+- Restore v2 snapshots without reopening tool source paths. Reject stale ownership; degrade a structurally corrupt rich payload to the deterministic text-only unavailable terminal instead of replaying the tool. Legacy/non-owned checkpoints remain text-only compatible.
+- Promote a v2 result through `SessionExecutionStateCoordinator` before the runner history callback; never append an owner-bound rich result only to volatile history.
 - A typed deferred tool result may keep one non-idempotent tool executing only
   when its requester-bound descriptor is durable. Startup resolves that
   descriptor exactly once into the original tool result; it never replays the

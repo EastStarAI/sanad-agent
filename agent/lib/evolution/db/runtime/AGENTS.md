@@ -22,6 +22,7 @@ This contract applies to `agent/lib/evolution/db/runtime/`.
 - Admission reads active durable work and inserts the next work item in one transaction.
 - Terminal commit validates session, work item, run id, generation, and expected running/resuming state before assistant persistence and completion.
 - Cancelled tool terminalization validates the same owner and commits checkpoint output plus history message in one transaction; a completed tool or repeated/stale writer is a no-op.
+- Rich-result promotion validates session/work/run/generation/tool identity and exact typed-result equality, then persists one canonical tool message, bumps history revision, removes the suspended checkpoint, and removes only that `completed_tool_results_v2` entry in one transaction. A retry succeeds idempotently only when the same typed result is already durable; stale owners, missing snapshots, or divergent results do not mutate history.
 - Stop commits work cancellation before its acknowledgement, but may defer publishing the resulting idle/queued snapshot until cancelled tool terminals and `stopped` have been delivered.
 - Stale claims and stale terminal commits are no-ops.
 

@@ -1,6 +1,8 @@
 import '../../core/di.dart';
 import '../../core/secrets_redactor.dart';
+import '../../core/models/message.dart';
 import '../../core/models/tool_call.dart';
+import '../../core/models/tool_execution_result.dart';
 import '../../evolution/db/persisted_runtime_state_repository.dart';
 import 'deferred_tool_result.dart';
 import 'tool_terminal_record.dart';
@@ -28,6 +30,9 @@ class ContinuationCheckpointCoordinator {
   static const String checkpointKindInitialModelRequest =
       'initial_model_request';
   static const String checkpointKindAfterToolResult = 'after_tool_result';
+  static const String _completedToolResultsV2 = 'completed_tool_results_v2';
+  static const String corruptToolResultMarker =
+      '[Tool result unavailable: stored rich result is corrupt.]';
 
   /// Allowed checkpoint kinds for safe resume (Gate D.1).
   static const Set<String> _allowedKinds = {
@@ -88,6 +93,7 @@ class ContinuationCheckpointCoordinator {
     required CheckpointContext ctx,
     List<String>? currentlyExecutingToolCallIds,
     Map<String, String>? additionalToolResults,
+    Map<String, ToolExecutionResult>? additionalToolResultsV2,
     Map<String, Map<String, dynamic>>? additionalToolOutputs,
     Map<String, Map<String, dynamic>>? additionalDeferredToolResults,
     Iterable<String>? removeDeferredToolCallIds,
@@ -128,6 +134,30 @@ class ContinuationCheckpointCoordinator {
       results.addAll(additionalToolResults);
     }
     meta['completed_tool_results'] = results;
+
+    if (additionalToolResultsV2 != null) {
+      final ownerRunId = meta['owner_run_id'];
+      final ownerGeneration = meta['owner_generation'];
+      // Legacy/non-owned work remains text-only. Rich durability is enabled
+      // only after authoritative run ownership has been bound.
+      if (ownerRunId is String && ownerGeneration is int) {
+        final richResults = Map<String, dynamic>.from(
+          meta[_completedToolResultsV2] as Map? ?? const {},
+        );
+        for (final entry in additionalToolResultsV2.entries) {
+          richResults[entry.key] = {
+            'schema_version': 2,
+            'session_id': sessionId,
+            'work_item_id': activeItem.workItemId,
+            'run_id': ownerRunId,
+            'generation': ownerGeneration,
+            'tool_call_id': entry.key,
+            'result': entry.value.toJson(),
+          };
+        }
+        meta[_completedToolResultsV2] = richResults;
+      }
+    }
 
     final outputs = Map<String, dynamic>.from(
       meta['completed_tool_outputs'] as Map? ?? const {},
@@ -226,6 +256,103 @@ class ContinuationCheckpointCoordinator {
       continuationMetadata: meta,
     );
   }
+
+  /// Restores owner-bound rich results without reopening their source paths.
+  /// Corrupt payloads become deterministic text-only terminal results and are
+  /// never re-executed.
+  Map<String, ToolExecutionResult> restoreCompletedToolResultsV2() {
+    final repo = _repo;
+    if (repo == null) return <String, ToolExecutionResult>{};
+    final activeItem = repo.findActiveWorkItem(sessionId);
+    if (activeItem == null) return <String, ToolExecutionResult>{};
+    return _decodeRichResults(
+      activeItem.continuationMetadata,
+      workItemId: activeItem.workItemId,
+    );
+  }
+
+  /// Atomically promotes one checkpointed rich result into canonical history.
+  /// A stale owner or missing checkpoint is a hard stop: appending only to the
+  /// runner's in-memory history would make an executed tool replayable.
+  void promoteCompletedToolResult(Message toolMessage) {
+    final repo = _repo;
+    if (repo == null) return;
+    final activeItem = repo.findActiveWorkItem(sessionId);
+    if (activeItem == null) return;
+    final toolCallId = toolMessage.toolCallId;
+    final richResults = activeItem.continuationMetadata[_completedToolResultsV2];
+    if (toolCallId == null ||
+        richResults is! Map ||
+        !richResults.containsKey(toolCallId)) {
+      return;
+    }
+    final runId = activeItem.continuationMetadata['owner_run_id'];
+    final generation = activeItem.continuationMetadata['owner_generation'];
+    if (runId is! String ||
+        generation is! int ||
+        !repo.executionState.promoteCompletedToolResult(
+          sessionId: sessionId,
+          workItemId: activeItem.workItemId,
+          runId: runId,
+          generation: generation,
+          toolCallId: toolCallId,
+          historyMessage: toolMessage,
+        )) {
+      throw StateError('Cannot atomically promote tool result for $toolCallId');
+    }
+  }
+
+  Map<String, ToolExecutionResult> _decodeRichResults(
+    Map<String, dynamic> metadata, {
+    required String workItemId,
+  }) {
+    final rawResults = metadata[_completedToolResultsV2];
+    if (rawResults == null) return <String, ToolExecutionResult>{};
+    if (rawResults is! Map) {
+      throw StateError('Invalid rich tool-result checkpoint container');
+    }
+    final ownerRunId = metadata['owner_run_id'];
+    final ownerGeneration = metadata['owner_generation'];
+    if (ownerRunId is! String || ownerGeneration is! int) {
+      throw StateError('Rich tool-result checkpoint has no active owner');
+    }
+    final decoded = <String, ToolExecutionResult>{};
+    for (final entry in rawResults.entries) {
+      final toolCallId = entry.key.toString();
+      final raw = entry.value;
+      if (raw is! Map) {
+        decoded[toolCallId] = _corruptToolResult();
+        continue;
+      }
+      final envelope = Map<String, dynamic>.from(raw);
+      if (envelope['session_id'] != sessionId ||
+          envelope['work_item_id'] != workItemId ||
+          envelope['run_id'] != ownerRunId ||
+          envelope['generation'] != ownerGeneration ||
+          envelope['tool_call_id'] != toolCallId) {
+        throw StateError('Stale rich tool-result checkpoint owner');
+      }
+      final rawResult = envelope['result'];
+      if (envelope['schema_version'] != 2 || rawResult is! Map) {
+        decoded[toolCallId] = _corruptToolResult();
+        continue;
+      }
+      try {
+        decoded[toolCallId] = ToolExecutionResult.fromJson(
+          Map<String, dynamic>.from(rawResult),
+        );
+      } catch (_) {
+        decoded[toolCallId] = _corruptToolResult();
+      }
+    }
+    return decoded;
+  }
+
+  static ToolExecutionResult _corruptToolResult() => ToolExecutionResult.text(
+    corruptToolResultMarker,
+    isError: true,
+    errorCode: ToolResultErrorCode.executionFailed,
+  );
 
   void saveExecutingToolProgress(
     String toolCallId,
@@ -355,6 +482,7 @@ class ContinuationCheckpointCoordinator {
     }
 
     final meta = Map<String, dynamic>.from(activeItem.continuationMetadata);
+    _decodeRichResults(meta, workItemId: activeItem.workItemId);
     final checkpointKind = meta['checkpoint_kind']?.toString();
 
     // Gate D.1: never classify an ambiguous event as one of the safe kinds.

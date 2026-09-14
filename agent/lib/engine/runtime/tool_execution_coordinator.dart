@@ -78,6 +78,8 @@ class ToolExecutionCoordinator {
     final completedResults = Map<String, String>.from(
       checkpointMeta['completed_tool_results'] as Map? ?? const {},
     );
+    final restoredTypedResults = checkpointCoordinator
+        .restoreCompletedToolResultsV2();
     final currentlyExecuting = List<String>.from(
       checkpointMeta['currently_executing_tools'] as List? ?? const [],
     );
@@ -108,9 +110,18 @@ class ToolExecutionCoordinator {
           deferred.requesterToolCallId == toolCall.id) {
         final resolution = await deferredToolResultResolver.resolve(deferred);
         completedResults[toolCall.id] = resolution.output;
+        final typedResolution = ToolExecutionResult.text(
+          resolution.output,
+          isError: resolution.isError,
+          errorCode: resolution.isError
+              ? ToolResultErrorCode.executionFailed
+              : null,
+        );
+        restoredTypedResults[toolCall.id] = typedResolution;
         checkpointCoordinator.saveCheckpoint(
           ctx: ctx,
           additionalToolResults: {toolCall.id: resolution.output},
+          additionalToolResultsV2: {toolCall.id: typedResolution},
           additionalToolOutputs: {
             toolCall.id: checkpointCoordinator.toolOutputRecord(
               toolCall,
@@ -125,8 +136,12 @@ class ToolExecutionCoordinator {
               .toList(),
         );
       }
-      if (completedResults.containsKey(toolCall.id)) {
-        finalResults[toolCall.id] = completedResults[toolCall.id]!;
+      if (completedResults.containsKey(toolCall.id) ||
+          restoredTypedResults.containsKey(toolCall.id)) {
+        final restored = restoredTypedResults[toolCall.id];
+        if (restored != null) typedResults[toolCall.id] = restored;
+        finalResults[toolCall.id] =
+            restored?.displayText ?? completedResults[toolCall.id]!;
         _logger.info(
           '🔄 [Agent] Resuming tool call ${toolCall.name} from checkpoint.',
         );
@@ -136,6 +151,11 @@ class ToolExecutionCoordinator {
             'Error: Tool execution was interrupted by a daemon crash/restart. Non-idempotent tool cannot be safely re-run.';
         finalResults[toolCall.id] = errMsg;
         interruptedTools[toolCall.id] = errMsg;
+        typedResults[toolCall.id] = ToolExecutionResult.text(
+          errMsg,
+          isError: true,
+          errorCode: ToolResultErrorCode.executionFailed,
+        );
         _logger.warning(
           '⚠️ [Agent] Tool call ${toolCall.name} was interrupted in a non-idempotent state. Skipping re-execution for safety.',
         );
@@ -148,6 +168,10 @@ class ToolExecutionCoordinator {
       checkpointCoordinator.saveCheckpoint(
         ctx: ctx,
         additionalToolResults: interruptedTools,
+        additionalToolResultsV2: {
+          for (final toolCallId in interruptedTools.keys)
+            toolCallId: typedResults[toolCallId]!,
+        },
         additionalToolOutputs: {
           for (final entry in interruptedTools.entries)
             entry.key: checkpointCoordinator.toolOutputRecord(
@@ -222,6 +246,11 @@ class ToolExecutionCoordinator {
           (entry) => MapEntry(entry.key, entry.value.displayText),
         ),
       );
+    checkpointCoordinator.saveCheckpoint(
+      ctx: ctx,
+      additionalToolResults: finalResults,
+      additionalToolResultsV2: typedResults,
+    );
 
     // Add all guarded results to history in the original tool-call order.
     // Presence checks preserve idempotency for resumed single-tool paths.
@@ -230,7 +259,12 @@ class ToolExecutionCoordinator {
       final result = typedResults[toolCall.id]!;
       final alreadyAdded = callbacks.isToolMessagePresent(toolCall.id);
       if (!alreadyAdded) {
-        await _appendToolMessage(callbacks, toolCall, result);
+        await _appendToolMessage(
+          callbacks,
+          checkpointCoordinator,
+          toolCall,
+          result,
+        );
       }
     }
     if (!_canPublishToolEvents(cancellationScope)) return;
@@ -398,6 +432,7 @@ class ToolExecutionCoordinator {
       checkpointCoordinator.saveCheckpoint(
         ctx: ctx,
         additionalToolResults: {toolCall.id: result},
+        additionalToolResultsV2: {toolCall.id: typedResult},
         additionalToolOutputs: {
           toolCall.id: checkpointCoordinator.toolOutputRecord(
             toolCall,
@@ -478,6 +513,7 @@ class ToolExecutionCoordinator {
           checkpointCoordinator.saveCheckpoint(
             ctx: ctx,
             additionalToolResults: {toolCall.id: result},
+            additionalToolResultsV2: {toolCall.id: typedResults[toolCall.id]!},
             additionalToolOutputs: {
               toolCall.id: checkpointCoordinator.toolOutputRecord(
                 toolCall,
@@ -509,6 +545,7 @@ class ToolExecutionCoordinator {
           checkpointCoordinator.saveCheckpoint(
             ctx: ctx,
             additionalToolResults: {toolCall.id: result},
+            additionalToolResultsV2: {toolCall.id: typedResults[toolCall.id]!},
             additionalToolOutputs: {
               toolCall.id: checkpointCoordinator.toolOutputRecord(
                 toolCall,
@@ -532,6 +569,7 @@ class ToolExecutionCoordinator {
           checkpointCoordinator.saveCheckpoint(
             ctx: ctx,
             additionalToolResults: {toolCall.id: result},
+            additionalToolResultsV2: {toolCall.id: typedResults[toolCall.id]!},
             additionalToolOutputs: {
               toolCall.id: checkpointCoordinator.toolOutputRecord(
                 toolCall,
@@ -731,7 +769,12 @@ class ToolExecutionCoordinator {
     }
 
     if (appendToHistory) {
-      await _appendToolMessage(callbacks, toolCall, typedResult);
+      await _appendToolMessage(
+        callbacks,
+        checkpointCoordinator,
+        toolCall,
+        typedResult,
+      );
     }
     return (result: typedResult);
   }
@@ -792,9 +835,18 @@ class ToolExecutionCoordinator {
 
   static Future<void> _appendToolMessage(
     ToolExecutionCallbacks callbacks,
+    ContinuationCheckpointCoordinator checkpointCoordinator,
     ToolCall toolCall,
     ToolExecutionResult result,
   ) {
+    checkpointCoordinator.promoteCompletedToolResult(
+      Message(
+        role: MessageRole.tool,
+        toolResult: result,
+        toolCallId: toolCall.id,
+        metadata: {'tool_call_id': toolCall.id, 'is_error': result.isError},
+      ),
+    );
     if (callbacks is TypedToolExecutionCallbacks) {
       return (callbacks as TypedToolExecutionCallbacks).addTypedToolMessage(
         toolCall,
