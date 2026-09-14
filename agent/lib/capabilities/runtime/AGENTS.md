@@ -20,7 +20,7 @@ This contract applies to `agent/lib/capabilities/runtime/`.
 - When no valid workspace is attached, emit one concise context sentence stating that file and terminal tools are unavailable and direct workspace-dependent requests to the upper-left workspace control.
 
 ## Workspace Services
-- Use focused handlers for read, write, edit, glob, grep, and tree operations; do not recreate a monolithic workspace service.
+- Use focused handlers for read, write, edit, glob, grep, and tree operations; do not recreate a monolithic workspace service. Migrated handlers own typed `executeResult` output and retain `execute` only as an exact text projection while the runtime catalog callback boundary remains textual.
 - Resolve and canonicalize every workspace-tool path before host access. Internal paths execute directly; external paths require an explicit `PermissionManager` decision unless workspace policy is `full_access`, and authorization remains bound to the canonical target.
 - Recursive workspace search skips common generated/dependency trees and unreadable non-UTF-8 candidates rather than failing the entire query.
 - Return host-root and parent navigation metadata for remote browsing rather than requiring client path inference.

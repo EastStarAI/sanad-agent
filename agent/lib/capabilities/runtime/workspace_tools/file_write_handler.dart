@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import '../../../core/models/tool_execution_result.dart';
 import '../workspace_path_resolver.dart';
 import 'workspace_tools_utils.dart';
 
@@ -10,6 +11,19 @@ class FileWriteHandler {
   const FileWriteHandler(this._pathResolver);
 
   Future<String> execute(
+    Map<String, dynamic> arguments,
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
+    final result = await executeResult(
+      arguments,
+      workspacePath,
+      authorizedExternalRoot: authorizedExternalRoot,
+    );
+    return result.displayText;
+  }
+
+  Future<ToolExecutionResult> executeResult(
     Map<String, dynamic> arguments,
     String workspacePath, {
     String? authorizedExternalRoot,
@@ -50,7 +64,7 @@ class FileWriteHandler {
     if (patch != null) {
       payload['patch'] = patch;
     }
-    return WorkspaceToolsUtils.encode(payload);
+    return ToolExecutionResult.text(WorkspaceToolsUtils.encode(payload));
   }
 
   String _generateSimpleDiff(String original, String updated) {

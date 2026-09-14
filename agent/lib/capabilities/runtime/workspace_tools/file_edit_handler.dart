@@ -1,4 +1,5 @@
 import 'dart:io';
+import '../../../core/models/tool_execution_result.dart';
 import '../workspace_path_resolver.dart';
 import 'workspace_tools_utils.dart';
 
@@ -8,6 +9,19 @@ class FileEditHandler {
   const FileEditHandler(this._pathResolver);
 
   Future<String> execute(
+    Map<String, dynamic> arguments,
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
+    final result = await executeResult(
+      arguments,
+      workspacePath,
+      authorizedExternalRoot: authorizedExternalRoot,
+    );
+    return result.displayText;
+  }
+
+  Future<ToolExecutionResult> executeResult(
     Map<String, dynamic> arguments,
     String workspacePath, {
     String? authorizedExternalRoot,
@@ -59,22 +73,24 @@ class FileEditHandler {
       patchBuffer.writeln('+ $line');
     }
 
-    return WorkspaceToolsUtils.encode({
-      'filePath': _pathResolver.relativeToWorkspace(
-        workspaceRoot: workspaceRoot,
-        resolvedPath: resolvedPath,
-      ),
-      'oldString': oldString.length > 100
-          ? '${oldString.substring(0, 100)}...'
-          : oldString,
-      'newString': newString.length > 100
-          ? '${newString.substring(0, 100)}...'
-          : newString,
-      'patch': patchBuffer.toString().trimRight(),
-      'replaceAll': replaceAll,
-      'numReplacements': replaceAll ? matches : 1,
-      'startLine': editResult.startLine,
-    });
+    return ToolExecutionResult.text(
+      WorkspaceToolsUtils.encode({
+        'filePath': _pathResolver.relativeToWorkspace(
+          workspaceRoot: workspaceRoot,
+          resolvedPath: resolvedPath,
+        ),
+        'oldString': oldString.length > 100
+            ? '${oldString.substring(0, 100)}...'
+            : oldString,
+        'newString': newString.length > 100
+            ? '${newString.substring(0, 100)}...'
+            : newString,
+        'patch': patchBuffer.toString().trimRight(),
+        'replaceAll': replaceAll,
+        'numReplacements': replaceAll ? matches : 1,
+        'startLine': editResult.startLine,
+      }),
+    );
   }
 
   _EditResult _smartReplace(

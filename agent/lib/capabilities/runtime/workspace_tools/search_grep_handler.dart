@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import '../../../core/models/tool_execution_result.dart';
 import '../workspace_path_resolver.dart';
 import 'workspace_tools_utils.dart';
 
@@ -14,6 +15,19 @@ class SearchGrepHandler {
   const SearchGrepHandler(this._pathResolver);
 
   Future<String> execute(
+    Map<String, dynamic> arguments,
+    String workspacePath, {
+    String? authorizedExternalRoot,
+  }) async {
+    final result = await executeResult(
+      arguments,
+      workspacePath,
+      authorizedExternalRoot: authorizedExternalRoot,
+    );
+    return result.displayText;
+  }
+
+  Future<ToolExecutionResult> executeResult(
     Map<String, dynamic> arguments,
     String workspacePath, {
     String? authorizedExternalRoot,
@@ -212,7 +226,7 @@ class SearchGrepHandler {
     );
   }
 
-  String _encodeResult({
+  ToolExecutionResult _encodeResult({
     required Set<String> filenames,
     required List<String> contentLines,
     required int offset,
@@ -220,16 +234,18 @@ class SearchGrepHandler {
     required bool truncated,
     String? truncationReason,
   }) {
-    return WorkspaceToolsUtils.encode({
-      'numFiles': filenames.length,
-      'filenames': filenames.toList(growable: false),
-      'content': contentLines,
-      'numLines': contentLines.length,
-      'appliedOffset': offset,
-      'totalMatches': totalMatches,
-      'truncated': truncated,
-      'truncationReason': ?truncationReason,
-    });
+    return ToolExecutionResult.text(
+      WorkspaceToolsUtils.encode({
+        'numFiles': filenames.length,
+        'filenames': filenames.toList(growable: false),
+        'content': contentLines,
+        'numLines': contentLines.length,
+        'appliedOffset': offset,
+        'totalMatches': totalMatches,
+        'truncated': truncated,
+        'truncationReason': ?truncationReason,
+      }),
+    );
   }
 
   String _resolveSearchRoot({
