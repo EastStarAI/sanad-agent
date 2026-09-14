@@ -4,7 +4,7 @@
 This contract applies to `agent/lib/capabilities/tools/`.
 
 ## Tool Implementation
-- Every tool implements the common tool boundary, exposes a valid JSON-schema parameter contract, and returns an asynchronous textual result.
+- Every tool implements the common tool boundary and exposes a valid JSON-schema parameter contract. During Plan 77 migration, `executeResult` is the typed authority for migrated tools while the temporary base bridge wraps unported asynchronous text results byte-for-byte; legacy `execute` remains available until the coordinator cutover in 77a5.
 - Accept optional `ToolContext` and preserve session/workspace/tool-call identity where required.
 - Keep execution logic out of registries, protocol handlers, and presentation-facing clients.
 - Register one canonical implementation and reuse it across direct runtime and query surfaces.

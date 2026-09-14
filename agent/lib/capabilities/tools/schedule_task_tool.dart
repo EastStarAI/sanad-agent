@@ -1,7 +1,8 @@
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
-import 'package:sanad_agent/evolution/cron_scheduler.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
+import 'package:sanad_agent/evolution/cron_scheduler.dart';
 
 class ScheduleTaskTool extends BaseTool {
   @override
@@ -30,15 +31,29 @@ class ScheduleTaskTool extends BaseTool {
   Future<String> execute(
     Map<String, dynamic> args, {
     ToolContext? context,
+  }) async => (await executeResult(args, context: context)).displayText;
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
   }) async {
     final taskVal = args['task'];
     final timeVal = args['time'];
 
     if (taskVal == null || taskVal is! String || taskVal.trim().isEmpty) {
-      return 'Error: "task" parameter is required and must be a non-empty string.';
+      return ToolExecutionResult.text(
+        'Error: "task" parameter is required and must be a non-empty string.',
+        isError: true,
+        errorCode: ToolResultErrorCode.invalidInput,
+      );
     }
     if (timeVal == null || timeVal is! String || timeVal.trim().isEmpty) {
-      return 'Error: "time" parameter is required and must be a non-empty string.';
+      return ToolExecutionResult.text(
+        'Error: "time" parameter is required and must be a non-empty string.',
+        isError: true,
+        errorCode: ToolResultErrorCode.invalidInput,
+      );
     }
 
     final task = taskVal;
@@ -67,7 +82,11 @@ class ScheduleTaskTool extends BaseTool {
     }
 
     if (scheduledTime == null) {
-      return 'Error: Could not parse time "$timeStr". Please use ISO8601 format or "in X minutes".';
+      return ToolExecutionResult.text(
+        'Error: Could not parse time "$timeStr". Please use ISO8601 format or "in X minutes".',
+        isError: true,
+        errorCode: ToolResultErrorCode.invalidInput,
+      );
     }
 
     try {
@@ -77,9 +96,15 @@ class ScheduleTaskTool extends BaseTool {
         task,
         sessionId: context?.sessionId,
       );
-      return 'Task scheduled successfully for $scheduledTime';
-    } catch (e) {
-      return 'Error: CronScheduler not available or failed. $e';
+      return ToolExecutionResult.text(
+        'Task scheduled successfully for $scheduledTime',
+      );
+    } catch (error) {
+      return ToolExecutionResult.text(
+        'Error: CronScheduler not available or failed. $error',
+        isError: true,
+        errorCode: ToolResultErrorCode.executionFailed,
+      );
     }
   }
 }

@@ -2,6 +2,7 @@ import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 
 class DelegateTaskTool extends BaseTool {
   @override
@@ -30,15 +31,29 @@ class DelegateTaskTool extends BaseTool {
   Future<String> execute(
     Map<String, dynamic> args, {
     ToolContext? context,
+  }) async => (await executeResult(args, context: context)).displayText;
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
   }) async {
     final taskVal = args['task'];
     final roleVal = args['role'];
 
     if (taskVal == null || taskVal is! String || taskVal.trim().isEmpty) {
-      return 'Error: "task" parameter is required and must be a non-empty string.';
+      return ToolExecutionResult.text(
+        'Error: "task" parameter is required and must be a non-empty string.',
+        isError: true,
+        errorCode: ToolResultErrorCode.invalidInput,
+      );
     }
     if (roleVal != null && roleVal is! String) {
-      return 'Error: "role" parameter, if provided, must be a string.';
+      return ToolExecutionResult.text(
+        'Error: "role" parameter, if provided, must be a string.',
+        isError: true,
+        errorCode: ToolResultErrorCode.invalidInput,
+      );
     }
 
     final task = taskVal;
@@ -60,9 +75,15 @@ class DelegateTaskTool extends BaseTool {
 
     try {
       final response = await subAgent.sendMessage(task);
-      return 'Sub-agent result:\n${response.content ?? "No content returned."}';
-    } catch (e) {
-      return 'Error during sub-agent execution: $e';
+      return ToolExecutionResult.text(
+        'Sub-agent result:\n${response.content ?? "No content returned."}',
+      );
+    } catch (error) {
+      return ToolExecutionResult.text(
+        'Error during sub-agent execution: $error',
+        isError: true,
+        errorCode: ToolResultErrorCode.executionFailed,
+      );
     }
   }
 }

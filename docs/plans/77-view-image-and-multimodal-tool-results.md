@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77a2/R0"
-remaining_estimate: "95%"
+current_gate: "77a3/R0"
+remaining_estimate: "90%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -152,7 +152,7 @@ detail = low | auto | high | original
 ### 4.1 Task map
 
 1. [x] [77a1 — Core Result Model](tasks/77a1-core-tool-result-model.md)
-2. [ ] [77a2 — Text Tool Migration A](tasks/77a2-text-tool-migration-a.md)
+2. [x] [77a2 — Text Tool Migration A](tasks/77a2-text-tool-migration-a.md)
 3. [ ] [77a3 — Text Tool Migration B](tasks/77a3-text-tool-migration-b.md)
 4. [ ] [77a4 — Text Tool Migration C](tasks/77a4-text-tool-migration-c.md)
 5. [ ] [77a5 — Coordinator and Message Integration](tasks/77a5-tool-result-coordinator-integration.md)
@@ -222,3 +222,16 @@ Next task:
 - Open findings: none blocking.
 - Remaining estimate: `95%`.
 - Next task: `77a2 — Text Tool Migration A`.
+
+### 2026-09-14 — 77a2 complete
+
+- Task/Gate: `77a2/A3`.
+- Status transition: `77a2 in_progress` → `complete`; plan advances to `77a3/R0`.
+- Owner/worktree: public repository in `77-hosted-attachment-media-relay`.
+- Files changed: transitional base boundary, four migrated tools, two focused test files, capability-tools contract, task, and plan.
+- Verification evidence: analyzer clean; 11 focused tests and 8 existing evolution regressions passed; Graphify rebuilt.
+- Documentation/contracts updated: capability-tools contract, task 77a2, and this plan.
+- Evidence fingerprint: `sha256:477c6a964da28b0914da3cb0f52881421561ccd9f8afd859fc6833380353bc43`; post-implementation parity satisfied.
+- Open findings: bridge removal remains intentionally owned by `77a5`.
+- Remaining estimate: `90%`.
+- Next task: `77a3 — Text Tool Migration B`.
