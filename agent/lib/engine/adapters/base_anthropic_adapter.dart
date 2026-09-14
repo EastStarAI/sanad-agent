@@ -22,7 +22,8 @@ import 'tool_result_wire_codec.dart';
 import '../llm_request_dumper.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 
-class BaseAnthropicAdapter implements LLMAdapter {
+class BaseAnthropicAdapter
+    implements LLMAdapter, ToolResultMediaCapabilityProvider {
   final _logger = Logger('BaseAnthropicAdapter');
   final Config config;
   final ProviderProfile profile;
@@ -66,6 +67,10 @@ class BaseAnthropicAdapter implements LLMAdapter {
   String get _apiKey => apiKeyOverride ?? config.apiKeyFor(profile);
   String get availableModelsSource => _availableModelsSource;
   Object? get lastModelsException => _lastModelsException;
+
+  @override
+  ToolResultMediaCapability get toolResultMediaCapability =>
+      ToolResultMediaCapability.imageToolResults;
 
   @override
   Future<List<ModelOption>> getAvailableModels() async {

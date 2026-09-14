@@ -29,6 +29,8 @@ This contract applies to `agent/lib/engine/adapters/`.
 - Rich tool results are validated and mapped from canonical ordered blocks by the shared provider-neutral wire codec; adapters must not read paths, process image bytes, or mutate canonical messages.
 - Codex Responses emits ordered `input_text`/`input_image` function outputs, preserves `call_id`, and maps canonical `original` detail to wire `high`.
 - Anthropic emits nested text/image `tool_result` content, preserves `tool_use_id`, omits detail, and emits `is_error: true` only for typed failures. Legacy text-only output remains a wire string.
+- Tool-result media capability is a closed protocol declaration: unknown and ordinary OpenAI-compatible/Ollama routes default to `textOnly`; Responses and Anthropic opt into `imageToolResults`; transparent wrappers delegate exactly and fixtures choose explicitly. Never infer this capability from model names or provider failures.
+- Text-only routes retain scalar tool content and identity, omit every image block, and append `[Image omitted: active provider does not accept image tool results.]` once in the detached wire projection. Degradation never mutates canonical history or triggers retry/failover.
 
 ## Model Discovery
 - Provider/template aliases stay aligned with registry identities.

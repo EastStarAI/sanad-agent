@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77c2/R0"
-remaining_estimate: "57%"
+current_gate: "77d1/R0"
+remaining_estimate: "54%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -159,7 +159,7 @@ detail = low | auto | high | original
 6. [x] [77b1 — Image Policy Worker](tasks/77b1-image-policy-worker.md)
 7. [x] [77b2 — Secure View Image Catalog](tasks/77b2-secure-view-image-catalog.md)
 8. [x] [77c1 — Rich Provider Codecs](tasks/77c1-rich-provider-codecs.md)
-9. [ ] [77c2 — Adapter Capability and Fallback](tasks/77c2-adapter-capability-and-fallback.md)
+9. [x] [77c2 — Adapter Capability and Fallback](tasks/77c2-adapter-capability-and-fallback.md)
 10. [ ] [77d1 — Atomic Result Durability](tasks/77d1-atomic-tool-result-durability.md)
 11. [ ] [77d2 — Binary Redaction and Pruning](tasks/77d2-binary-redaction-and-pruning.md)
 12. [ ] [77d3 — Daemon-backed View Image QA](tasks/77d3-view-image-integration-qa.md)
@@ -313,3 +313,16 @@ Next task:
 - Open findings: none; text-only capability/fallback projection remains intentionally owned by `77c2`.
 - Remaining estimate: `57%`.
 - Next task: `77c2 — Adapter Capability and Fallback`.
+
+### 2026-09-14 — 77c2 complete
+
+- Task/Gate: `77c2/C3`.
+- Status transition: `77c2 in_progress` → `complete`; plan advances to `77d1/R0`.
+- Owner/worktree: public repository in `77-hosted-attachment-media-relay`.
+- Files changed: closed media-capability contract and fallback projection, two rich adapters, configurable E2E fixture, delegating rate-limit wrapper, OpenAI-compatible request builder, focused adapter test, adapter contract, task, and plan (10 tracked paths).
+- Verification evidence: analyzer clean; 51 adapter-directory tests passed; rich-to-text sync/stream route captures proved identity, one marker, no base64, and immutable canonical history; Graphify rebuilt 23,673 nodes and 32,575 edges.
+- Documentation/contracts updated: adapter contract, task 77c2, this plan, and ignored parity evidence; the owning multimodal design already specified the implemented locked behavior without change.
+- Evidence fingerprint: `sha256:2af004c77e76f850df9ab9b0abe23409cdcf470ecd3831c08cfc62c66823f85c`; post-implementation parity satisfied without deviation.
+- Open findings: none.
+- Remaining estimate: `54%`.
+- Next task: `77d1 — Atomic Result Durability`.

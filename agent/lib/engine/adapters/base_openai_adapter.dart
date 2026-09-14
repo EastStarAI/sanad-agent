@@ -842,7 +842,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
   ) {
     final data = <String, dynamic>{
       'role': _roleToString(message.role),
-      'content': message.content ?? '',
+      'content': message.role == MessageRole.tool
+          ? textOnlyToolResultContent(message)
+          : message.content ?? '',
     };
     if (message.toolCalls != null) {
       data['tool_calls'] = message.toolCalls!

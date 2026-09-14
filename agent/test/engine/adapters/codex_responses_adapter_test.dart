@@ -9,10 +9,19 @@ import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
+import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
+import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_codec.dart';
 import 'package:sanad_agent/engine/adapters/codex_models_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
+import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
+import 'package:sanad_agent/engine/adapters/e2e_fixture_adapter.dart';
+import 'package:sanad_agent/engine/adapters/missing_provider_adapter.dart';
+import 'package:sanad_agent/engine/adapters/mock_adapter.dart';
+import 'package:sanad_agent/engine/adapters/ollama_adapter.dart';
+import 'package:sanad_agent/engine/adapters/rate_limited_llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_state_rejected_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_profile.dart';
@@ -42,6 +51,188 @@ void main() {
         apiMode: 'codex_responses',
       );
     });
+
+    test('declares closed capabilities and delegates wrappers', () {
+      const openAi = ProviderProfile(name: 'openai', apiMode: 'chat');
+      const anthropic = ProviderProfile(
+        name: 'anthropic',
+        apiMode: 'anthropic_messages',
+      );
+      const ollama = ProviderProfile(name: 'ollama', apiMode: 'chat');
+      final richAdapters = <LLMAdapter>[
+        BaseAnthropicAdapter(config, anthropic),
+        CodexResponsesAdapter(config, profile),
+        const E2eFixtureAdapter(),
+      ];
+      final textAdapters = <LLMAdapter>[
+        BaseOpenAIAdapter(config, openAi),
+        OllamaAdapter(config, ollama),
+        const MissingProviderAdapter(message: 'missing'),
+        MockLLMAdapter(),
+        const E2eFixtureAdapter(
+          toolResultMediaCapability: ToolResultMediaCapability.textOnly,
+        ),
+      ];
+
+      expect(
+        richAdapters.map((adapter) => adapter.toolResultMediaCapability),
+        everyElement(ToolResultMediaCapability.imageToolResults),
+      );
+      expect(
+        textAdapters.map((adapter) => adapter.toolResultMediaCapability),
+        everyElement(ToolResultMediaCapability.textOnly),
+      );
+      for (final inner in [...richAdapters, ...textAdapters]) {
+        final wrapper = RateLimitedLLMAdapter(
+          inner,
+          providerInstanceId: 'test',
+          requestsPerMinute: 0,
+          limiter: ProviderRateLimiter(),
+        );
+        expect(
+          wrapper.toolResultMediaCapability,
+          inner.toolResultMediaCapability,
+        );
+      }
+    });
+
+    test(
+      'route change projects one immutable text fallback in sync and stream',
+      () async {
+        final richResult = ToolExecutionResult(
+          blocks: [
+            ToolTextBlock(text: 'visible summary'),
+            ToolImageBlock(
+              dataBase64: 'cGl4ZWxz',
+              mimeType: 'image/png',
+              width: 1,
+              height: 1,
+              detail: ToolImageDetail.auto,
+            ),
+          ],
+        );
+        final history = [
+          Message(role: MessageRole.user, content: 'inspect'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(id: 'call_route', name: 'view_image', arguments: {}),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            content: richResult.displayText,
+            toolCallId: 'call_route',
+            toolResult: richResult,
+          ),
+        ];
+        final canonicalBefore = jsonEncode(
+          history.map((message) => message.toJson()).toList(),
+        );
+        late Map<String, dynamic> richBody;
+        final richAdapter = CodexResponsesAdapter(
+          config,
+          profile,
+          client: MockClient.streaming((request, _) async {
+            richBody = _map(jsonDecode((request as http.Request).body));
+            return http.StreamedResponse(
+              Stream.value(
+                utf8.encode(
+                  _sseResponse({
+                    'status': 'completed',
+                    'output': [
+                      {
+                        'type': 'message',
+                        'role': 'assistant',
+                        'status': 'completed',
+                        'content': [
+                          {'type': 'output_text', 'text': 'ok'},
+                        ],
+                      },
+                    ],
+                  }),
+                ),
+              ),
+              200,
+            );
+          }),
+        );
+        late Map<String, dynamic> syncBody;
+        final syncAdapter = BaseOpenAIAdapter(
+          config,
+          const ProviderProfile(name: 'openai', apiMode: 'chat'),
+          baseUrlOverride: 'https://example.test/v1',
+          apiKeyOverride: 'test',
+          defaultModelOverride: 'test-model',
+          client: MockClient((request) async {
+            syncBody = _map(jsonDecode(request.body));
+            return http.Response(
+              jsonEncode({
+                'choices': [
+                  {
+                    'message': {'content': 'ok'},
+                    'finish_reason': 'stop',
+                  },
+                ],
+              }),
+              200,
+            );
+          }),
+        );
+        late Map<String, dynamic> streamBody;
+        final streamAdapter = BaseOpenAIAdapter(
+          config,
+          const ProviderProfile(name: 'custom', apiMode: 'chat'),
+          baseUrlOverride: 'https://example.test/v1',
+          apiKeyOverride: 'test',
+          defaultModelOverride: 'test-model',
+          client: MockClient.streaming((request, _) async {
+            streamBody = _map(jsonDecode((request as http.Request).body));
+            return http.StreamedResponse(
+              Stream.value(
+                utf8.encode(
+                  'data: ${jsonEncode({
+                    'choices': [
+                      {
+                        'delta': {'content': 'ok'},
+                        'finish_reason': 'stop',
+                      },
+                    ],
+                  })}\n\ndata: [DONE]\n\n',
+                ),
+              ),
+              200,
+              headers: {'content-type': 'text/event-stream'},
+            );
+          }),
+        );
+
+        await richAdapter.generateResponse(history);
+        await syncAdapter.generateResponse(history);
+        await streamAdapter.generateStream(history).toList();
+
+        expect((richBody['input'] as List).last['output'], isA<List>());
+        const fallback =
+            'visible summary\n[Image omitted: active provider does not accept image tool results.]';
+        for (final body in [syncBody, streamBody]) {
+          final toolMessage = (body['messages'] as List).last as Map;
+          expect(toolMessage['role'], 'tool');
+          expect(toolMessage['tool_call_id'], 'call_route');
+          expect(toolMessage['content'], fallback);
+          expect(toolMessage['content'], isNot(contains('cGl4ZWxz')));
+          expect(
+            imageToolResultOmissionMarker
+                .allMatches(toolMessage['content'] as String)
+                .length,
+            1,
+          );
+        }
+        expect(
+          jsonEncode(history.map((message) => message.toJson()).toList()),
+          canonicalBefore,
+        );
+      },
+    );
 
     test('fetches the Codex-specific model catalog', () async {
       late http.Request captured;

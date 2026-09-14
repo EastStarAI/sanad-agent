@@ -26,9 +26,16 @@ import 'provider_state_rejected_exception.dart';
 ///
 /// Sync and stream share one request codec and one final response normalizer.
 class CodexResponsesAdapter extends BaseOpenAIAdapter
-    implements WireInputTokenEstimator, WireInputUsageMeasurer {
+    implements
+        WireInputTokenEstimator,
+        WireInputUsageMeasurer,
+        ToolResultMediaCapabilityProvider {
   final _modelsLogger = Logger('CodexResponsesAdapter');
   final CodexModelsService _modelsService;
+
+  @override
+  ToolResultMediaCapability get toolResultMediaCapability =>
+      ToolResultMediaCapability.imageToolResults;
 
   CodexResponsesAdapter(
     super.config,

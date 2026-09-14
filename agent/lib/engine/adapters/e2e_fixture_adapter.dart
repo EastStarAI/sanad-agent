@@ -12,7 +12,11 @@ import 'llm_request_options.dart';
 ///
 /// Unlike transport-level fixtures, this adapter runs through AgentRunner and
 /// the normal persistence/event pipeline without contacting an external model.
-class E2eFixtureAdapter implements LLMAdapter, WireInputUsageMeasurer {
+class E2eFixtureAdapter
+    implements
+        LLMAdapter,
+        WireInputUsageMeasurer,
+        ToolResultMediaCapabilityProvider {
   static const providerId = 'e2e-provider';
   static const modelId = 'e2e-model';
   static const responseText = 'e2e-success';
@@ -42,7 +46,12 @@ class E2eFixtureAdapter implements LLMAdapter, WireInputUsageMeasurer {
   static const shellToolCallId = 'e2e-shell-crash-tool-call';
   static const shellCrashResponseText = 'SHELL_INTERRUPTED_RESUMED';
 
-  const E2eFixtureAdapter();
+  @override
+  final ToolResultMediaCapability toolResultMediaCapability;
+
+  const E2eFixtureAdapter({
+    this.toolResultMediaCapability = ToolResultMediaCapability.imageToolResults,
+  });
 
   AgentResponse _response(List<Message> history, List<ToolSchema>? tools) {
     String? latestUserContent;
