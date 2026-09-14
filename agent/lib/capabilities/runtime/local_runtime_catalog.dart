@@ -16,6 +16,7 @@ import 'package:sanad_agent/capabilities/tools/system/keyboard_tool.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 
@@ -71,9 +72,14 @@ class LocalRuntimeCatalog {
     required AgentTurnRequest request,
   }) async {
     final workspacePath = await _resolveWorkspacePath(request.workspaceId);
-    final admittedAttachmentPaths = await _admittedAttachmentPathsResolver(
+    final injectedAttachmentPaths = await _admittedAttachmentPathsResolver(
       request.sessionId,
     );
+    final admittedAttachmentPaths = injectedAttachmentPaths.isNotEmpty
+        ? injectedAttachmentPaths
+        : getIt.isRegistered<AttachmentStore>()
+        ? await getIt<AttachmentStore>().resolveAttachedPaths(request.sessionId)
+        : const <String>[];
     final tools = <BaseTool>[
       // TEMPORARILY DISABLED: tool_search — paused for review.
       // _buildSearchTool(registry),

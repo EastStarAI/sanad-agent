@@ -5,6 +5,7 @@ import 'package:meta/meta.dart';
 import 'package:uuid/uuid.dart';
 
 import '../core/models/message.dart';
+import '../core/models/user_attachment.dart';
 import '../core/models/tool_execution_result.dart';
 import '../core/models/agent_response.dart';
 import '../core/models/llm_provider_state.dart';
@@ -16,6 +17,7 @@ import 'adapters/llm_adapter.dart';
 import 'adapters/llm_request_options.dart';
 import '../core/di.dart';
 import '../core/config.dart';
+import '../evolution/attachments/attachment_store.dart';
 import '../evolution/session_manager.dart';
 import '../evolution/db/runtime/session_route_mutation_coordinator.dart';
 import '../evolution/db/persisted_runtime_state_repository.dart';
@@ -589,11 +591,19 @@ class AgentRunner {
   /// Commits one root user input before any live event exposes it to clients.
   /// Re-entry with the same request id reuses the durable row without notifying
   /// plugins or mutating history a second time.
+  List<UserAttachment> _pendingUserAttachments = const [];
+
+  void configureUserAttachments(List<UserAttachment> attachments) {
+    _pendingUserAttachments = List<UserAttachment>.unmodifiable(attachments);
+  }
+
   Future<Message> commitUserMessage(
     String? userContent, {
     String? requestId,
     DateTime? receivedAt,
   }) async {
+    final attachments = _pendingUserAttachments;
+    _pendingUserAttachments = const [];
     _reloadPersistedHistory();
     var index = _persistedUserMessageIndex(requestId);
     if (index == -1) {
@@ -601,6 +611,7 @@ class AgentRunner {
         Message(
           role: MessageRole.user,
           content: userContent ?? '',
+          attachments: attachments,
           metadata: {
             if (requestId != null && requestId.isNotEmpty)
               'request_id': requestId,
@@ -611,8 +622,29 @@ class AgentRunner {
         ),
         requestId,
       );
-      await pluginManager.notifyMessage(history[index]);
-      _saveHistory();
+      if (attachments.isNotEmpty) {
+        if (requestId == null || requestId.isEmpty) {
+          throw StateError('Attachment admission requires a request identity.');
+        }
+        final attachmentStore = getIt<AttachmentStore>();
+        history = attachmentStore.claimAdmissionAndPersist(
+          sessionId: sessionId,
+          admissionId: requestId,
+          attachmentIds: attachments
+              .map((attachment) => attachment.id)
+              .toList(),
+          persist: (transaction, admitted) {
+            history[index] = history[index].copyWith(attachments: admitted);
+            return sessionManager.saveSessionHistoryInTransaction(
+              sessionId,
+              history,
+              transaction,
+            );
+          },
+        );
+      } else {
+        _saveHistory();
+      }
       _reloadPersistedHistory();
       index = requestId == null || requestId.isEmpty
           ? history.length - 1
@@ -622,6 +654,7 @@ class AgentRunner {
           'Committed user message is missing from session history.',
         );
       }
+      await pluginManager.notifyMessage(history[index]);
     }
     _currentTurnStartIndex = index;
     return history[index];
@@ -2272,6 +2305,48 @@ class AgentRunner {
     return effectiveHistory;
   }
 
+  @visibleForTesting
+  static Future<List<Message>> projectUserAttachmentsForProvider({
+    required AttachmentStore store,
+    required String sessionId,
+    required List<Message> messages,
+  }) async {
+    final projected = <Message>[];
+    for (final message in messages) {
+      if (message.role != MessageRole.user || message.attachments.isEmpty) {
+        projected.add(message);
+        continue;
+      }
+      final lines = <String>[
+        message.content ?? '',
+        '',
+        'Agent-local attachments (inspect only with the appropriate tool):',
+      ];
+      for (final attachment in message.attachments) {
+        try {
+          final path = await store.resolvePath(
+            sessionId: sessionId,
+            attachmentId: attachment.id,
+          );
+          lines.add(
+            '- ${attachment.safeName} (${attachment.kind.name}): $path',
+          );
+        } on AttachmentStoreException {
+          lines.add(
+            '- ${attachment.safeName} (${attachment.kind.name}): unavailable',
+          );
+        }
+      }
+      lines.add(
+        'Use view_image for images and the scoped read/list tools for files; do not infer file contents from names.',
+      );
+      projected.add(
+        message.copyWith(content: lines.join('\n'), attachments: const []),
+      );
+    }
+    return projected;
+  }
+
   Future<List<Message>> _prepareProviderHistory({
     String? runtimeSystemPrompt,
   }) async {
@@ -2288,7 +2363,12 @@ class AgentRunner {
       );
       effectiveHistory = await pluginManager.runPreExecution(effectiveHistory);
     }
-    return effectiveHistory;
+    if (!getIt.isRegistered<AttachmentStore>()) return effectiveHistory;
+    return projectUserAttachmentsForProvider(
+      store: getIt<AttachmentStore>(),
+      sessionId: sessionId,
+      messages: effectiveHistory,
+    );
   }
 
   Future<bool> _maybeRunPreflightCompaction({

@@ -7,8 +7,10 @@ import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
 
 import '../../core/constants.dart';
+import '../../core/models/message.dart';
 import '../../core/models/user_attachment.dart';
 import '../db/agent_state_database.dart';
+import '../db/message_history_identity.dart';
 
 /// Closed failures safe to surface without filenames, paths, or bytes.
 enum AttachmentStoreErrorCode {
@@ -148,8 +150,15 @@ final class AttachmentStore {
   Future<UserAttachment> commit(
     AttachmentUpload upload, {
     required String sessionId,
-    required String messageId,
+    required String admissionId,
   }) async {
+    if (admissionId.trim().isEmpty ||
+        admissionId.contains('/') ||
+        admissionId.contains(r'\')) {
+      throw const AttachmentStoreException(
+        AttachmentStoreErrorCode.ownershipMismatch,
+      );
+    }
     final pending = _pending.remove(upload.id);
     if (pending == null) {
       throw const AttachmentStoreException(
@@ -186,15 +195,16 @@ final class AttachmentStore {
         transaction.db.execute(
           '''
           INSERT INTO user_attachments (
-            attachment_id, media_id, session_id, message_id, safe_name,
-            mime_type, byte_size, sha256, kind, relative_path, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            attachment_id, media_id, session_id, admission_id, status,
+            safe_name, mime_type, byte_size, sha256, kind, relative_path,
+            created_at
+          ) VALUES (?, ?, ?, ?, 'staged', ?, ?, ?, ?, ?, ?, ?)
           ''',
           [
             attachmentId,
             mediaId,
             sessionId,
-            messageId,
+            admissionId,
             pending.safeName,
             mime,
             size,
@@ -230,6 +240,128 @@ final class AttachmentStore {
     if (pending != null) await _deleteIfPresent(pending.file);
   }
 
+  /// Loads an ordered admission owned by exactly one session/request.
+  List<UserAttachment> loadAdmission({
+    required String sessionId,
+    required String admissionId,
+    required List<String> attachmentIds,
+  }) {
+    if (attachmentIds.toSet().length != attachmentIds.length ||
+        attachmentIds.length > UserAttachmentPolicy.maxFilesPerMessage) {
+      throw const AttachmentStoreException(
+        AttachmentStoreErrorCode.ownershipMismatch,
+      );
+    }
+    final attachments = <UserAttachment>[];
+    for (final attachmentId in attachmentIds) {
+      final rows = _state.db.select(
+        '''
+        SELECT * FROM user_attachments
+        WHERE attachment_id = ? AND session_id = ? AND admission_id = ?
+        ''',
+        [attachmentId, sessionId, admissionId],
+      );
+      if (rows.length != 1) {
+        throw const AttachmentStoreException(
+          AttachmentStoreErrorCode.ownershipMismatch,
+        );
+      }
+      attachments.add(_attachmentFromRow(rows.single));
+    }
+    final validation = UserAttachmentPolicy.validate(attachments);
+    if (validation is AttachmentAdmissionFailure) {
+      throw const AttachmentStoreException(
+        AttachmentStoreErrorCode.ownershipMismatch,
+      );
+    }
+    return List<UserAttachment>.unmodifiable(attachments);
+  }
+
+  /// Persists the user history and claims staged rows in one state transaction.
+  List<Message> claimAdmissionAndPersist({
+    required String sessionId,
+    required String admissionId,
+    required List<String> attachmentIds,
+    required List<Message> Function(
+      AgentStateTransaction transaction,
+      List<UserAttachment> attachments,
+    )
+    persist,
+  }) {
+    final attachments = loadAdmission(
+      sessionId: sessionId,
+      admissionId: admissionId,
+      attachmentIds: attachmentIds,
+    );
+    try {
+      return _state.transaction((transaction) {
+        final persisted = persist(transaction, attachments);
+        final userMessages = persisted.where(
+          (message) =>
+              message.role == MessageRole.user &&
+              MessageHistoryIdentity.requestIdOf(message) == admissionId,
+        );
+        if (userMessages.length != 1) {
+          throw const AttachmentStoreException(
+            AttachmentStoreErrorCode.ownershipMismatch,
+          );
+        }
+        final messageId = MessageHistoryIdentity.read(
+          userMessages.single,
+        ).messageId;
+        if (messageId.isEmpty) {
+          throw const AttachmentStoreException(
+            AttachmentStoreErrorCode.ownershipMismatch,
+          );
+        }
+        for (final attachmentId in attachmentIds) {
+          transaction.db.execute(
+            '''
+          UPDATE user_attachments
+          SET message_id = ?, status = 'attached'
+          WHERE attachment_id = ? AND session_id = ? AND admission_id = ?
+            AND (status = 'staged' OR message_id = ?)
+          ''',
+            [messageId, attachmentId, sessionId, admissionId, messageId],
+          );
+          if (transaction.db.updatedRows != 1) {
+            throw const AttachmentStoreException(
+              AttachmentStoreErrorCode.ownershipMismatch,
+            );
+          }
+        }
+        return persisted;
+      });
+    } on AttachmentStoreException {
+      rethrow;
+    } on Object {
+      throw const AttachmentStoreException(
+        AttachmentStoreErrorCode.ownershipMismatch,
+      );
+    }
+  }
+
+  Future<List<String>> resolveAttachedPaths(String sessionId) async {
+    final rows = _state.db.select(
+      "SELECT attachment_id FROM user_attachments WHERE session_id = ? AND status = 'attached' ORDER BY created_at, attachment_id",
+      [sessionId],
+    );
+    final paths = <String>[];
+    for (final row in rows) {
+      try {
+        paths.add(
+          await resolvePath(
+            sessionId: sessionId,
+            attachmentId: row['attachment_id'] as String,
+          ),
+        );
+      } on AttachmentStoreException {
+        // A missing owned file is unavailable, never broadened to another path.
+      }
+    }
+    return List<String>.unmodifiable(paths);
+  }
+
   /// Resolves an exact-session grant; attachment references alone confer no
   /// access and callers never choose or concatenate a filesystem path.
   Future<String> resolvePath({
@@ -239,7 +371,7 @@ final class AttachmentStore {
     final rows = _state.db.select(
       '''
       SELECT relative_path FROM user_attachments
-      WHERE attachment_id = ? AND session_id = ?
+      WHERE attachment_id = ? AND session_id = ? AND status = 'attached'
       ''',
       [attachmentId, sessionId],
     );
@@ -290,7 +422,7 @@ final class AttachmentStore {
     if (!await _root.exists()) return;
     final staleRows = _state.db.select('''
       SELECT attachment_id, relative_path FROM user_attachments AS attachment
-      WHERE NOT EXISTS (
+      WHERE attachment.status = 'attached' AND NOT EXISTS (
         SELECT 1 FROM messages AS message
         WHERE message.message_id = attachment.message_id
           AND message.session_id = attachment.session_id
@@ -327,6 +459,22 @@ final class AttachmentStore {
       }
     }
   }
+
+  static UserAttachment _attachmentFromRow(dynamic row) => UserAttachment(
+    id: row['attachment_id'] as String,
+    safeName: row['safe_name'] as String,
+    mimeType: row['mime_type'] as String,
+    sizeBytes: row['byte_size'] as int,
+    sha256: row['sha256'] as String,
+    kind: row['kind'] == 'image'
+        ? UserAttachmentKind.image
+        : UserAttachmentKind.file,
+    agentLocalReference: p.join(
+      storageDirectoryName,
+      row['relative_path'] as String,
+    ),
+    mediaId: row['media_id'] as String,
+  );
 
   static String sanitizeFileName(String input) {
     final basename = input.split(RegExp(r'[/\\]')).last;

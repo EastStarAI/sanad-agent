@@ -1,3 +1,5 @@
+import '../../../core/models/user_attachment.dart';
+
 /// Shared model option DTO used internally by provider/model runtime services.
 ///
 /// It is intentionally kept separate from the external `capabilities` payload:
@@ -113,6 +115,14 @@ class AgentCapabilities {
       'supports_local_tool_runtime': supportsLocalToolRuntime,
       'supports_slash_commands': supportsSlashCommands,
       'delivery_presence_v1': true,
+      'attachment_media_v1': {
+        'version': 1,
+        'ordered_references': true,
+        'max_file_bytes': UserAttachmentPolicy.maxFileBytes,
+        'max_files_per_message': UserAttachmentPolicy.maxFilesPerMessage,
+        'max_total_bytes_per_message':
+            UserAttachmentPolicy.maxTotalBytesPerMessage,
+      },
       'model_selection_scope': modelSelectionScope,
       'thinking_mode_scope': thinkingModeScope,
       'thinking_stream_mode': thinkingStreamMode,

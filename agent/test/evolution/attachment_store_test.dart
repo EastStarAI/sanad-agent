@@ -1,8 +1,13 @@
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/db/session_db.dart';
+import 'package:sanad_agent/engine/agent_runner.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/translators/canonical_to_agent.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -33,6 +38,57 @@ void main() {
   });
 
   test(
+    'canonical think preserves ordered opaque IDs and rejects unsafe lists',
+    () {
+      final translated = CanonicalToAgent.translate({
+        'command': 'think',
+        'payload': {
+          'session_id': 'session-a',
+          'request_id': 'request-a',
+          'message': 'inspect',
+          'attachment_ids': ['attachment-a', 'attachment-b'],
+        },
+      }, 'local');
+      expect(translated?.turnRequest?.metadata['attachment_ids'], [
+        'attachment-a',
+        'attachment-b',
+      ]);
+      for (final ids in [
+        ['attachment-a', 'attachment-a'],
+        ['../attachment-a'],
+        [1],
+        List<String>.filled(5, 'attachment'),
+      ]) {
+        expect(
+          CanonicalToAgent.translate({
+            'command': 'think',
+            'payload': {
+              'session_id': 'session-a',
+              'request_id': 'request-a',
+              'message': 'inspect',
+              'attachment_ids': ids,
+            },
+          }, 'local'),
+          isNull,
+        );
+      }
+    },
+  );
+
+  test('capabilities publish versioned authoritative attachment limits', () {
+    final capability =
+        AgentCapabilities(displayName: 'test').toJson()['capabilities']
+            as Map<String, dynamic>;
+    expect(capability['attachment_media_v1'], {
+      'version': 1,
+      'ordered_references': true,
+      'max_file_bytes': 5 * 1024 * 1024,
+      'max_files_per_message': 4,
+      'max_total_bytes_per_message': 20 * 1024 * 1024,
+    });
+  });
+
+  test(
     'streams, inspects, hashes, promotes, and resolves exact-session grant',
     () async {
       final bytes = <int>[
@@ -60,18 +116,45 @@ void main() {
       final attachment = await store.commit(
         upload,
         sessionId: 'session-a',
-        messageId: 'message-a',
+        admissionId: 'message-a',
       );
 
       expect(attachment.safeName, 'photo.exe');
       expect(attachment.mimeType, 'image/png');
       expect(attachment.kind.name, 'image');
       expect(attachment.agentLocalReference, isNot(contains(home.path)));
+      _claim(
+        store,
+        sessionId: 'session-a',
+        admissionId: 'message-a',
+        messageId: 'message-a',
+        attachmentId: attachment.id,
+      );
       final path = await store.resolvePath(
         sessionId: 'session-a',
         attachmentId: attachment.id,
       );
       expect(await File(path).readAsBytes(), bytes);
+      final providerProjection =
+          await AgentRunner.projectUserAttachmentsForProvider(
+            store: store,
+            sessionId: 'session-a',
+            messages: [
+              Message(
+                role: MessageRole.user,
+                content: 'inspect this',
+                attachments: [attachment],
+              ),
+            ],
+          );
+      expect(providerProjection.single.content, startsWith('inspect this\n\n'));
+      expect(providerProjection.single.content, contains(path));
+      expect(providerProjection.single.content, contains('Use view_image'));
+      expect(providerProjection.single.attachments, isEmpty);
+      expect(
+        providerProjection.single.toJson().toString(),
+        isNot(contains('iVBOR')),
+      );
       await expectLater(
         store.resolvePath(sessionId: 'session-b', attachmentId: attachment.id),
         throwsA(
@@ -113,7 +196,11 @@ void main() {
       );
       await store.write(mismatch, [1, 2, 3]);
       await expectLater(
-        store.commit(mismatch, sessionId: 'session-a', messageId: 'message-a'),
+        store.commit(
+          mismatch,
+          sessionId: 'session-a',
+          admissionId: 'message-a',
+        ),
         throwsA(
           isA<AttachmentStoreException>().having(
             (error) => error.code,
@@ -142,6 +229,13 @@ void main() {
     () async {
       final interrupted = await store.create(fileName: 'interrupted.txt');
       await store.write(interrupted, [1, 2, 3]);
+      final stagedUpload = await store.create(fileName: 'retry.txt');
+      await store.write(stagedUpload, 'retry'.codeUnits);
+      final staged = await store.commit(
+        stagedUpload,
+        sessionId: 'session-a',
+        admissionId: 'request-retry',
+      );
       final orphan = Directory(
         '${home.path}${Platform.pathSeparator}attachments'
         '${Platform.pathSeparator}opaque-orphan',
@@ -155,6 +249,17 @@ void main() {
       await restarted.initialize();
 
       expect(orphan.existsSync(), isFalse);
+      expect(
+        restarted
+            .loadAdmission(
+              sessionId: 'session-a',
+              admissionId: 'request-retry',
+              attachmentIds: [staged.id],
+            )
+            .single
+            .id,
+        staged.id,
+      );
       expect(
         Directory(
           '${home.path}${Platform.pathSeparator}attachments'
@@ -170,8 +275,19 @@ void main() {
     () async {
       final wrong = await store.create(fileName: 'wrong.txt');
       await store.write(wrong, 'wrong'.codeUnits);
-      await expectLater(
-        store.commit(wrong, sessionId: 'session-a', messageId: 'message-b'),
+      final wrongAttachment = await store.commit(
+        wrong,
+        sessionId: 'session-a',
+        admissionId: 'message-b',
+      );
+      expect(
+        () => _claim(
+          store,
+          sessionId: 'session-a',
+          admissionId: 'message-b',
+          messageId: 'message-b',
+          attachmentId: wrongAttachment.id,
+        ),
         throwsA(
           isA<AttachmentStoreException>().having(
             (error) => error.code,
@@ -186,7 +302,14 @@ void main() {
       final attachment = await store.commit(
         upload,
         sessionId: 'session-a',
+        admissionId: 'message-a',
+      );
+      _claim(
+        store,
+        sessionId: 'session-a',
+        admissionId: 'message-a',
         messageId: 'message-a',
+        attachmentId: attachment.id,
       );
       final path = await store.resolvePath(
         sessionId: 'session-a',
@@ -207,13 +330,74 @@ void main() {
     },
   );
 
+  test(
+    'message persistence and attachment claim are atomic and retry-safe',
+    () async {
+      final upload = await store.create(fileName: 'atomic.txt');
+      await store.write(upload, 'atomic'.codeUnits);
+      final attachment = await store.commit(
+        upload,
+        sessionId: 'session-a',
+        admissionId: 'request-atomic',
+      );
+      final sessions = SessionDB.fromState(state);
+      final candidate = Message(
+        role: MessageRole.user,
+        content: 'inspect',
+        attachments: [attachment],
+        metadata: const {'request_id': 'request-atomic'},
+      );
+
+      List<Message> persist() => store.claimAdmissionAndPersist(
+        sessionId: 'session-a',
+        admissionId: 'request-atomic',
+        attachmentIds: [attachment.id],
+        persist: (transaction, admitted) =>
+            sessions.replaceMessagesInTransaction('session-a', [
+              candidate.copyWith(attachments: admitted),
+            ], transaction),
+      );
+
+      final first = persist();
+      final replay = store.loadAdmission(
+        sessionId: 'session-a',
+        admissionId: 'request-atomic',
+        attachmentIds: [attachment.id],
+      );
+      expect(first.single.attachments.single.id, attachment.id);
+      expect(replay.single.id, attachment.id);
+      expect(
+        state.db.select(
+          "SELECT status FROM user_attachments WHERE attachment_id = ?",
+          [attachment.id],
+        ).single['status'],
+        'attached',
+      );
+      expect(
+        state.db
+            .select(
+              "SELECT COUNT(*) AS count FROM messages WHERE session_id = 'session-a'",
+            )
+            .single['count'],
+        1,
+      );
+    },
+  );
+
   test('message-orphan cleanup removes metadata and bytes', () async {
     final upload = await store.create(fileName: 'message-owned.txt');
     await store.write(upload, 'owned'.codeUnits);
     final attachment = await store.commit(
       upload,
       sessionId: 'session-a',
+      admissionId: 'message-a',
+    );
+    _claim(
+      store,
+      sessionId: 'session-a',
+      admissionId: 'message-a',
       messageId: 'message-a',
+      attachmentId: attachment.id,
     );
     final path = await store.resolvePath(
       sessionId: 'session-a',
@@ -256,6 +440,32 @@ void main() {
   );
 }
 
+void _claim(
+  AttachmentStore store, {
+  required String sessionId,
+  required String admissionId,
+  required String messageId,
+  required String attachmentId,
+}) {
+  store.claimAdmissionAndPersist(
+    sessionId: sessionId,
+    admissionId: admissionId,
+    attachmentIds: [attachmentId],
+    persist: (_, attachments) => [
+      Message(
+        role: MessageRole.user,
+        content: 'test',
+        attachments: attachments,
+        metadata: {
+          'request_id': admissionId,
+          'message_id': messageId,
+          'turn_id': 'turn-$messageId',
+        },
+      ),
+    ],
+  );
+}
+
 void _insertSessionAndMessage(
   AgentStateDatabase state, {
   required String sessionId,
@@ -272,7 +482,7 @@ void _insertSessionAndMessage(
   state.db.execute(
     '''
     INSERT INTO messages (session_id, data, message_id)
-    VALUES (?, '{}', ?)
+    VALUES (?, '{"role":"user","content":"test","attachments":[]}', ?)
     ''',
     [sessionId, messageId],
   );

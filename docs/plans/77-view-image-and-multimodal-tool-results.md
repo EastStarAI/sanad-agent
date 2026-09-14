@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77e3/R0"
-remaining_estimate: "30%"
+current_gate: "77f1/R0"
+remaining_estimate: "24%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -165,7 +165,7 @@ detail = low | auto | high | original
 12. [x] [77d3 — Daemon-backed View Image QA](tasks/77d3-view-image-integration-qa.md)
 13. [x] [77e1 — Attachment Model and Policy](tasks/77e1-attachment-model-and-policy.md)
 14. [x] [77e2 — Agent Attachment Store](tasks/77e2-agent-attachment-store.md)
-15. [ ] [77e3 — Attachment Admission and Model Projection](tasks/77e3-attachment-admission-and-model-projection.md)
+15. [x] [77e3 — Attachment Admission and Model Projection](tasks/77e3-attachment-admission-and-model-projection.md)
 16. [ ] [77f1 — Composer Attachment UX](tasks/77f1-composer-attachment-ux.md)
 17. [ ] [77f2 — User Message Attachment and Edit UX](tasks/77f2-user-message-attachment-edit-ux.md)
 18. [ ] [77f3 — View Image Timeline Media](tasks/77f3-view-image-timeline-media.md)
@@ -390,4 +390,13 @@ Next task:
 - Evidence fingerprint: `sha256:1f92463d390f35c6731087bc335672a612766e50a396b08131ba380c2557750a`; post-implementation parity satisfied without deviation.
 - Open findings: none.
 - Remaining estimate: `30%`.
-- Next task: `77e3 — Attachment Gateway and Client Admission`, gate `R0`.
+- Next task: `77e3 — Attachment Admission and Model Projection`, gate `R0`.
+
+### 2026-09-15 — 77e3 complete
+
+- Task/Gate: `77e3/G3`; status advances to `77f1/R0`.
+- Implemented two-phase staged/attached ownership, atomic user-message claim, ordered canonical IDs, deterministic provider-only path projection, attachment-scoped tool paths, capability publication, migration, and restart-safe staged recovery.
+- Verification: analyzer clean; focused suite 9/9 plus AgentRunner replay 1/1; Graphify 23,923 nodes and 32,930 edges; reference parity clean.
+- File budget: `10/10`; hosted execution proof remains in its required later gates, not bypassed.
+- Remaining estimate: `24%`.
+- Next task: `77f1 — Composer Attachment UX`, gate `R0`.
