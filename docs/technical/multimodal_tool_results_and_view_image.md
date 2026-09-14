@@ -109,6 +109,8 @@ Rich tool-image content is inline JSON in `Message.toolResult`; v1 adds no blob 
 
 `SessionExecutionStateCoordinator` owns the transaction that validates exact typed-result equality, appends the canonical tool message, bumps the history revision, removes its suspended checkpoint, and removes its rich checkpoint copy. A retry is idempotent only when that same typed result is already durable. `completed_tool_outputs` contains only bounded redacted text/status metadata and never rich bytes/base64. Each typed completion is saved immediately and the aggregate batch guard is saved again before promotion, so the checkpoint and canonical message cannot diverge. After a completed result is durable, restart/retry uses that inline snapshot and never reopens a changed or deleted path. A structurally malformed persisted result becomes `[Tool result unavailable: stored rich result is corrupt.]` and is not re-executed; an owner mismatch fails closed.
 
+Daemon-backed QA interrupts the provider request only after it has received the completed rich result, then uses the controlled forced-restart contract and explicit runtime retry. The resumed provider request consumes the preserved `after_tool_result` snapshot after source deletion. Public `view_image` lifecycle logs omit arguments, while tool events and history-query tool inputs replace the local path with `[local image path redacted]`; approval remains the sole explicit path-review surface.
+
 ## Retention and pruning
 
 Pruning runs after a successful assistant-message persistence:

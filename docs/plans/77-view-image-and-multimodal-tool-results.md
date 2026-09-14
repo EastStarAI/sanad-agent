@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77d3/R0"
-remaining_estimate: "45%"
+current_gate: "77e1/R0"
+remaining_estimate: "40%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -162,7 +162,7 @@ detail = low | auto | high | original
 9. [x] [77c2 — Adapter Capability and Fallback](tasks/77c2-adapter-capability-and-fallback.md)
 10. [x] [77d1 — Atomic Result Durability](tasks/77d1-atomic-tool-result-durability.md)
 11. [x] [77d2 — Binary Redaction and Pruning](tasks/77d2-binary-redaction-and-pruning.md)
-12. [ ] [77d3 — Daemon-backed View Image QA](tasks/77d3-view-image-integration-qa.md)
+12. [x] [77d3 — Daemon-backed View Image QA](tasks/77d3-view-image-integration-qa.md)
 13. [ ] [77e1 — Attachment Model and Policy](tasks/77e1-attachment-model-and-policy.md)
 14. [ ] [77e2 — Agent Attachment Store](tasks/77e2-agent-attachment-store.md)
 15. [ ] [77e3 — Attachment Admission and Model Projection](tasks/77e3-attachment-admission-and-model-projection.md)
@@ -352,3 +352,16 @@ Next task:
 - Open findings: none.
 - Remaining estimate: `45%`.
 - Next task: `77d3 — Daemon-backed View Image QA`, gate `R0`.
+
+### 2026-09-15 — 77d3 complete
+
+- Task/Gate: `77d3/D3`.
+- Status transition: `77d3 in_progress` → `complete`; plan advances to `77e1/R0` and remains open for attachments plus hosted relay.
+- Owner/worktree: public repository in `77-hosted-attachment-media-relay`.
+- Files changed: deterministic rich/text fixture route, daemon E2E, lifecycle/history path redaction, engine contract, owning technical design and QA matrix, task, and plan (`10/10` tracked paths).
+- Verification evidence: analyzer clean; 894 capabilities/engine/interfaces tests passed with 5 skips; 4 sequential daemon E2E scenarios passed; Graphify rebuilt 23,798 nodes and 32,753 edges.
+- Daemon proof covers pixel-derived answer, external deny/allow/full-access, text fallback, controlled restart after completed result, source deletion, one stable tool identity, and binary-free captures.
+- Evidence fingerprint: `sha256:986ef702424054d5e8f905701deab8ea3d55ac84846bd4ed1f8deb1d2b66bf5d`; post-implementation parity satisfied without deviation.
+- Open findings: none.
+- Remaining estimate: `40%`.
+- Next task: `77e1 — Attachment Model and Policy`, gate `R0`.

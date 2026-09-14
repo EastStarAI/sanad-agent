@@ -1,6 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:image/image.dart' as img;
 
 import '../../capabilities/models/tool_schema.dart';
+import '../../core/models/tool_execution_result.dart';
 import '../../core/models/agent_response.dart';
 import '../../core/models/message.dart';
 import '../../core/models/tool_call.dart';
@@ -45,6 +50,12 @@ class E2eFixtureAdapter
   static const shellToolName = 'shell_execute';
   static const shellToolCallId = 'e2e-shell-crash-tool-call';
   static const shellCrashResponseText = 'SHELL_INTERRUPTED_RESUMED';
+  static const viewImagePromptPrefix = '__SANAD_E2E_VIEW_IMAGE__';
+  static const viewImageToolName = 'view_image';
+  static const viewImageToolCallId = 'e2e-view-image-tool-call';
+  static const viewImagePixelResponseText = 'PIXELS_MAGENTA';
+  static const viewImageTextFallbackResponseText = 'IMAGE_TEXT_ONLY_FALLBACK';
+  static const viewImageInvalidResponseText = 'INVALID_IMAGE_RESULT';
 
   @override
   final ToolResultMediaCapability toolResultMediaCapability;
@@ -53,7 +64,10 @@ class E2eFixtureAdapter
     this.toolResultMediaCapability = ToolResultMediaCapability.imageToolResults,
   });
 
-  AgentResponse _response(List<Message> history, List<ToolSchema>? tools) {
+  Future<AgentResponse> _response(
+    List<Message> history,
+    List<ToolSchema>? tools,
+  ) async {
     String? latestUserContent;
     for (final message in history) {
       if (message.role == MessageRole.user) {
@@ -224,6 +238,63 @@ class E2eFixtureAdapter
               ? shellCrashResponseText
               : 'INVALID_SHELL_INTERRUPTION_RESULT',
         ),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
+    final isViewImageScenario =
+        latestUserContent?.startsWith(viewImagePromptPrefix) ?? false;
+    final hasViewImageTool =
+        tools?.any((tool) => tool.name == viewImageToolName) ?? false;
+    if (isViewImageScenario && hasViewImageTool) {
+      Message? toolResult;
+      for (final message in history) {
+        if (message.role == MessageRole.tool &&
+            message.toolCallId == viewImageToolCallId) {
+          toolResult = message;
+        }
+      }
+      if (toolResult == null) {
+        final encodedPath = latestUserContent!.substring(
+          viewImagePromptPrefix.length,
+        );
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: viewImageToolCallId,
+                name: viewImageToolName,
+                arguments: {'path': jsonDecode(encodedPath).toString()},
+              ),
+            ],
+          ),
+          isToolCall: true,
+          model: modelId,
+          provider: providerId,
+          finishReason: LLMFinishReason.toolCalls,
+        );
+      }
+
+      await _pauseAfterViewImageResultIfRequested();
+      final imageBlocks =
+          toolResultMediaCapability ==
+              ToolResultMediaCapability.imageToolResults
+          ? toolResult.toolResult?.blocks.whereType<ToolImageBlock>().toList(
+                  growable: false,
+                ) ??
+                const <ToolImageBlock>[]
+          : const <ToolImageBlock>[];
+      final responseText = switch (imageBlocks) {
+        [] when toolResult.toolResult?.isError ?? false =>
+          viewImageInvalidResponseText,
+        [] => viewImageTextFallbackResponseText,
+        [final imageBlock, ...] => _classifyFixtureImage(imageBlock),
+      };
+      return AgentResponse(
+        message: Message(role: MessageRole.assistant, content: responseText),
         model: modelId,
         provider: providerId,
         finishReason: LLMFinishReason.stop,
@@ -419,6 +490,30 @@ class E2eFixtureAdapter
     );
   }
 
+  static Future<void> _pauseAfterViewImageResultIfRequested() async {
+    final readyPath = Platform.environment['SANAD_E2E_VIEW_IMAGE_PAUSE_FILE'];
+    if (readyPath == null || readyPath.isEmpty) return;
+    final ready = File(readyPath);
+    await ready.parent.create(recursive: true);
+    await ready.writeAsString('tool-result-received', flush: true);
+    final release = File('$readyPath.release');
+    while (!release.existsSync()) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+  }
+
+  static String _classifyFixtureImage(ToolImageBlock block) {
+    final decoded = img.decodeImage(base64Decode(block.dataBase64));
+    if (decoded == null || decoded.width == 0 || decoded.height == 0) {
+      return viewImageInvalidResponseText;
+    }
+    final pixel = decoded.getPixel(decoded.width ~/ 2, decoded.height ~/ 2);
+    final isMagenta = pixel.r > 180 && pixel.b > 180 && pixel.g < 100;
+    return isMagenta
+        ? viewImagePixelResponseText
+        : viewImageInvalidResponseText;
+  }
+
   @override
   Future<AgentResponse> generateResponse(
     List<Message> history, {
@@ -458,7 +553,7 @@ class E2eFixtureAdapter
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async* {
-    yield _response(history, tools);
+    yield await _response(history, tools);
   }
 
   @override

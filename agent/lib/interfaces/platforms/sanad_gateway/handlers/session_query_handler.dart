@@ -32,6 +32,14 @@ import '../sanad_protocol_bridge.dart';
 /// explicitly by the [SanadProtocolBridge] rather than resolved via the service
 /// locator, so the handler stays decoupled from other runtime owners.
 class SessionQueryHandler {
+  static String _visibleToolInput(String name, Map<String, dynamic> arguments) {
+    if (name != 'view_image') return jsonEncode(arguments);
+    return jsonEncode({
+      'path': '[local image path redacted]',
+      if (arguments['detail'] != null) 'detail': arguments['detail'],
+    });
+  }
+
   final SessionManager _sessionManager;
   final SanadProtocolBridge _bridge;
   final SessionRunOrchestrator? _orchestrator;
@@ -269,7 +277,7 @@ class SessionQueryHandler {
             'sender': 'ai',
             'type': 'tool_use',
             'tool': toolCall.name,
-            'input': jsonEncode(toolCall.arguments),
+            'input': _visibleToolInput(toolCall.name, toolCall.arguments),
             'status': 'done',
             'run_id': ?runId,
             'model_step_id': ?modelStepId,

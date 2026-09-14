@@ -48,6 +48,15 @@ class ToolExecutionCoordinator {
   }) : deferredToolResultResolver =
            deferredToolResultResolver ?? const DeferredToolResultResolver();
 
+  static String _eventInputFor(ToolCall toolCall) {
+    if (toolCall.name != 'view_image') return jsonEncode(toolCall.arguments);
+    return jsonEncode({
+      'path': '[local image path redacted]',
+      if (toolCall.arguments['detail'] != null)
+        'detail': toolCall.arguments['detail'],
+    });
+  }
+
   /// Executes a batch of tool calls sequentially or in parallel.
   ///
   /// [callbacks] bridge history mutations and history-save back to the runner
@@ -356,10 +365,8 @@ class ToolExecutionCoordinator {
     final results = <String, String>{};
     for (final toolCall in toolCallsToRun) {
       if (!_canPublishToolEvents(cancellationScope)) return results;
-      final argumentsString = jsonEncode(toolCall.arguments);
-      _logger.info(
-        '🛠️ [Agent] Requesting tool call: ${toolCall.name} (arguments: $argumentsString)',
-      );
+      final argumentsString = _eventInputFor(toolCall);
+      _logger.info('🛠️ [Agent] Requesting tool call: ${toolCall.name}');
       if (onToolEvent != null) {
         await _maybeEmitToolEvent(
           cancellationScope,
@@ -683,7 +690,7 @@ class ToolExecutionCoordinator {
     bool forcedIsError = false,
     required bool appendToHistory,
   }) async {
-    final argumentsString = jsonEncode(toolCall.arguments);
+    final argumentsString = _eventInputFor(toolCall);
     if (emitStartEvent && onToolEvent != null) {
       await _maybeEmitToolEvent(
         cancellationScope,

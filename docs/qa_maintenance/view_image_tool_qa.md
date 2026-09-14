@@ -74,7 +74,7 @@ Both sync and stream paths use the same builder and pass identical assertions.
 | Events/logs/plugins/history query | Bounded text/status only. |
 | Request dump | Deep-copy marker contains safe MIME/size only; live payload still contains the valid image. |
 
-Automated coverage ownership: `agent/test/engine/llm_request_dumper_test.dart` proves canonical/Anthropic/Responses typed-image, data-URI, raw-base64, malformed-size, secret-redaction, and non-mutation behavior. `agent/test/engine/history_image_pruner_test.dart` proves exact three-turn and 24-MiB policy, tool-loop turn counting, current-loop protection, oldest-first replacement, idempotency, and preservation of text/order/tool identity/error state. `agent/test/engine/agent_runner_test.dart` and `agent/test/interfaces/` retain runner persistence and binary-free event/history-query compatibility.
+Automated coverage ownership: `agent/test/engine/llm_request_dumper_test.dart` proves canonical/Anthropic/Responses typed-image, data-URI, raw-base64, malformed-size, secret-redaction, and non-mutation behavior. `agent/test/engine/history_image_pruner_test.dart` proves exact three-turn and 24-MiB policy, tool-loop turn counting, current-loop protection, oldest-first replacement, idempotency, and preservation of text/order/tool identity/error state. `agent/test/engine/agent_runner_test.dart` and `agent/test/interfaces/` retain runner persistence and binary-free event/history-query compatibility. `agent/e2e_test/view_image_tool_e2e_test.dart` proves pixel-derived rich output, external deny/allow-once/full-access, text-only fallback, controlled restart after durable completion, source deletion, one stable tool identity, and binary/path-redacted daemon events/history.
 
 ## User attachment admission matrix
 

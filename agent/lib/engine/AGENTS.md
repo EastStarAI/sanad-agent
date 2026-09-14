@@ -25,6 +25,7 @@ This contract applies to `agent/lib/engine/`.
 - Manual recovery of an ambiguous tool must reconcile the complete durable assistant tool-call batch before another model request: reuse completed results, neutralize only started unsafe calls, execute never-started calls normally, and append exactly one provider-visible result per call in original order.
 - After a successfully persisted assistant message, prune canonical tool-image history by completed assistant turns: protect the current/incomplete loop and latest three completed turns, then enforce the 24-MiB retained-image cap oldest-first. Replace image blocks in place with the processed marker, preserve text/order/tool identity/error state, and persist only when the idempotent transform changes history.
 - Plugin notifications for tool results receive a text-only message copy; canonical history alone retains `toolResult` blocks. Events and history queries likewise project bounded `content`, never rich blocks.
+- `view_image` tool lifecycle logs, public events, and history-query projections redact the local path while preserving safe detail/status and stable tool-call identity; approval requests remain the explicit path-review surface.
 - LLM request diagnostics recursively sanitize a deep copy. Typed image blocks and data URIs become MIME/decoded-size metadata with no payload sample, and the live provider request remains untouched.
 
 ## Provider-Neutral Completion
