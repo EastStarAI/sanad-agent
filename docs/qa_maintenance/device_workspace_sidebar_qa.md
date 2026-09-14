@@ -12,8 +12,8 @@ description: "Focused QA coverage for the Plan 32c device-scoped sidebar, includ
 
 - Restarting or temporarily disconnecting the local daemon keeps the current timeline, sidebar rows, selected row, and workspace expansion visible.
 - Switching devices restores each device's own last destination and highlights only the row matching both its device id and session id.
-- Restarting the client with a persisted cloud device never falls back to `local-agent` before cloud inventory resolves and never requests that cloud session through an unrelated device.
-- A same-hardware cloud id represented by the merged `local-agent` inventory entry remains selected instead of being treated as authoritatively deleted.
+- Restarting the Client with a persisted Cloud device never falls back to the hardware-keyed local row before Cloud inventory resolves and never requests that Cloud session through an unrelated device.
+- A same-hardware Cloud id represented by the merged hardware-keyed local row remains selected instead of being treated as authoritatively deleted.
 
 ## Manual Validation Scenarios
 
@@ -24,7 +24,7 @@ description: "Focused QA coverage for the Plan 32c device-scoped sidebar, includ
 3. Create a device while both interfaces remain connected, then toggle an older device Online/Offline.
 4. **Expected:** `device_created` inserts by creation time and `device_status_changed` changes only status; neither event disturbs chronological order.
 5. On desktop, ensure the local machine also has a matching cloud record.
-6. **Expected:** local/cloud merge produces one `local-agent` row pinned first, followed by all other devices oldest→newest. A local-only placeholder is also pinned first.
+6. **Expected:** local/Cloud merge produces one hardware-keyed row pinned first with its account id retained separately, followed by all other devices oldest→newest. A local-only row is also pinned first.
 
 ### 0. Empty inventory loading lifecycle
 1. Sign in with no cached or local devices while the cloud inventory response is delayed.

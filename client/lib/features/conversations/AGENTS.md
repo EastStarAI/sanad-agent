@@ -12,12 +12,13 @@ Incoming events follow:
 
 - Presentation must never bypass the repository/client chain or parse transport payloads.
 - Preserve exactly one managed conversation client per device.
+- A merged local/cloud device client must subscribe to both its canonical local id and its server-owned `cloud_device_id`; command responses and conversation events accept only those explicit aliases and must reject every other device id. Inventory refresh must update aliases on the existing managed client and rebind its event routing without replacing its conversation store.
 - Reverse tool execution and tool results remain transport/runtime concerns; presentation never owns that protocol.
 
 ## Session Identity
 - Represent sessions with `Session` from `client/lib/features/conversations/domain/models/session.dart`.
 - A session may carry `deviceId` for routing context but must not carry agent/device runtime-type discriminators.
-- Route commands by explicit `device_id`; do not reintroduce type-based routing.
+- Route commands by explicit `device_id`; Local uses the represented hardware id and Cloud uses the represented account device id. Do not reintroduce type-based routing.
 - Create the session eagerly before the first dispatch, with or without a workspace, then activate and select it. Do not send client-generated placeholder session ids to `think`.
 - Mark an automatically derived first-message title as placeholder ownership; explicit user titles remain final.
 - Immediately synchronize `SessionCubit.selectedSession` after local session creation; do not wait for the remote `session_created` event.

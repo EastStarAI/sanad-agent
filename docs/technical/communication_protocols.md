@@ -38,6 +38,27 @@ Sanad supports two separate routes for client-to-agent communication to balance 
                                                 └────────────────────────┘
 ```
 
+### 1.1 Cross-transport delivery presence
+
+A desktop Client keeps its authenticated Cloud Socket connected while using a
+same-device Local route. It publishes its complete authoritative set of account
+`device_id` interests through replace-set `delivery_presence_interest`; adding
+or selecting one device must not remove other inventory devices. Its authenticated
+Local `client.hello` carries the same Client-owned instance id but no Cloud
+assertion. Local membership remains in Agent memory and is never published to
+Gateway or Redis.
+
+The Agent attempts Local dispatch for every event, even with zero Local sockets.
+Gateway returns `cloud_delivery_interest` with a bounded current Cloud-recipient
+instance set, monotonic revision, and lease. The Agent derives
+`cloud_instances - local_instances`; a fresh empty difference suppresses Cloud
+serialization, while missing, malformed, stale, unsupported, disconnected, or
+expired state enables Cloud egress. A Cloud copy carries bounded event-local ids
+actually delivered locally. Gateway rereads its current Cloud connections and
+sends to every interested connection except those ids; it stores no Local state.
+The Client applies the first copy of a canonical `event_id` across Local and
+Cloud only as transition-race protection.
+
 ---
 
 ## 2. Socket.IO Event Schema
@@ -91,6 +112,14 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
     are not stored as hosted settings. Task 82 remote update, restart,
     workspace, and MCP commands follow
     [Remote Device Control Threat Model](remote_device_control_threat_model.md).
+  - Before emitting `execute_command`, the Gateway strips command-origin aliases
+    from the envelope and nested payload and writes one `origin_client` v1 object
+    from the authenticated connection registry. The object contains only public
+    session/instance references and allowlisted kind/platform/display metadata.
+    Older authenticated connections receive the neutral display
+    `Authenticated Client`. The Agent parses this object only for bounded
+    lifecycle logging; it never changes authorization, execution, delivery, or
+    response routing, and malformed metadata cannot stop command processing.
 
 #### B.1. Workspace Policy Commands (Plan 25)
 - **Command: `workspace.get_policy`**
@@ -146,6 +175,9 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
 #### A. Registration
 - **Event: `register_device` (Daemon → Backend)**
   - Registers the running local agent with the Gateway.
+  - Payload keeps the device-runtime `capabilities` object separate from the
+    `transport_capabilities` negotiation list; `delivery_presence_v1` belongs
+    only to the latter and must not replace the runtime capability object.
   - Payload contains the system's unique `hardware_id` (obtained from `auth.json`).
   - First pairing sends `pairing_token` plus an agent-generated and
     pre-persisted `proposed_device_token`. The Gateway atomically binds
@@ -171,7 +203,7 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
 #### C. Event Stream Forwarding
 - **Event: `device_event` (Daemon → Backend → Client)**
   - Streams thought outputs, status updates, or tool execution requests.
-  - On the Local Gateway, a session-bound event keeps the logical `device_id` captured when that session was bound (for example, `local-agent`). Unrelated capability, model, or settings commands sharing the WebSocket may carry another device or hardware identity, but cannot overwrite the session event identity. The last socket identity is used only when an event has no session-bound identity.
+  - On the Local Gateway, a session-bound event keeps the explicit `device_id` captured when that session was bound. Unrelated capability, model, or settings commands sharing the WebSocket cannot overwrite the session event identity. Socket identity is fallback-only; before the first command it is initialized to the Agent `hardware_id`.
   - Payload Schema:
     ```json
     {
@@ -403,7 +435,7 @@ stateDiagram-v2
 - Evaluates the active socket states and matches the user's `hardware_id`.
 - Resolves the active `ConnectionScope` (`cloud` | `local`) for each target device.
 - **Local Reachability Rule:** If the target device's `hardware_id` matches the local machine's fingerprint, the coordinator treats it as a local candidate. It upgrades the connection to the local daemon and bypasses cloud routing when the local socket is active.
-- **Synthetic identity boundary:** `local-agent` is a stable client inventory/cache id only. The coordinator never uses that text to infer transport; a matching `hardware_id` plus live local socket state is required. Once transport is resolved, commands target the hardware identity locally and the durable account device identity in cloud, never the synthetic row id.
+- **Identity namespace boundary:** the desktop local inventory/cache row uses Agent `hardware_id`; a merged row retains Backend `device_id` as `cloud_device_id`, and `client_instance_id` remains independent. The coordinator uses same-hardware evidence plus live socket state. Commands target hardware identity locally and durable account device identity in Cloud; there is no third synthetic runtime identity.
 - **Transition continuity:** Swapping connection scopes does not destroy the active conversation session cache. UI-side chat histories persist in-memory to prevent screen blanks during reconnects or local takeovers.
 - **Restart reconciliation:** When a conversation is already bound to the local daemon, a bounded grace period keeps that binding and its cached sessions visible while the daemon restarts. The first session snapshot after reconnect is merged with the retained snapshot, then the client requests history for the active session to recover final answers, queue state, and runtime notices emitted while disconnected. A missing session in this transitional snapshot is not deletion proof; explicit `session_deleted` or an explicit manual refresh owns removal.
 - **History/live reconciliation:** Reconnect and post-replay hydration treat the returned history range as authoritative without discarding retained events that are provably outside that range. Matching is kind-aware and prefers durable domain identity: user/steer rows use `message_id`, then `request_id`, then `turn_id`; assistant rows use `message_id`, then `run_id`, then `turn_id`; tools use `tool_call_id` plus phase-compatible folding; lifecycle notices use request/turn/run identity. `event_id` remains transport identity and is only a fallback for same-kind rows. Legacy user rows with no canonical identity may use same-session text plus a bounded timestamp match. Hydration merges complementary live/history fields into one canonical event, preserves richer live streaming state until terminal history arrives, and runs through one shared reducer for initial load, pagination, cache restore, and replay fallback.
@@ -415,8 +447,10 @@ The Flutter client builds its visible device list from platform-specific invento
 
 - **Desktop clients:** merge a local inventory source with the cloud inventory when the user is authenticated. The local source represents the current machine as `This device` and exists independently from Sanad Gateway login state.
 - **Web and mobile clients:** use the cloud inventory only. They must not create a local placeholder, attempt localhost daemon discovery, or expose local-only runtime controls.
-- **Hybrid desktop clients:** when a cloud device has the same `hardware_id` as the current machine and the local daemon is reachable, the UI keeps the stable local entry identity and applies the cloud display name and cloud metadata to it instead of switching the visible device id.
-- **Canonical ordering:** desktop pins its synthetic or same-hardware merged `local-agent` row first, then orders every other device by `created_at` ascending. Web/mobile have no local row and are fully oldest-to-newest. The Client reapplies this ordering after initial fetch, `device_created`, updates/status changes, and local/cloud merging; equal timestamps use device id as a stable tie-breaker, while records without a creation timestamp follow timestamped records.
+- **Hybrid desktop clients:** when a cloud device has the same `hardware_id` as the current machine, the UI keeps the hardware-keyed local row and applies the Cloud display name and metadata while retaining the Backend id separately as `cloud_device_id`.
+- **Canonical ordering:** desktop pins its hardware-keyed local or same-hardware merged row first, then orders every other device by `created_at` ascending. Web/mobile have no local row and are fully oldest-to-newest. The Client reapplies this ordering after initial fetch, `device_created`, updates/status changes, and local/cloud merging; equal timestamps use device id as a stable tie-breaker, while records without a creation timestamp follow timestamped records.
+
+After hardware-id initialization, the Client idempotently rekeys legacy local active selection, route preferences, conversation context, session drafts, and viewport anchors into `hardware_id`; existing hardware-keyed destination state wins collisions and rebound destinations carry the hardware id. This compatibility step never touches Agent/Backend databases, credentials, or conversation history.
 
 Logout clears only the cloud inventory. It must not remove the desktop local source while the local daemon remains reachable.
 
@@ -424,7 +458,7 @@ Logout clears only the cloud inventory. It must not remove the desktop local sou
 
 Device names are account-owned inventory metadata. The client sends `update_device` with the durable backend `device_id`, a trimmed non-empty `name` of at most 255 characters, and a UUID-backed `request_id`. The backend returns `device_updated` and echoes both `request_id` and `device_id` for success and error responses. A successful response includes the authoritative serialized device and is broadcast to the user's app room so every connected client refreshes its inventory projection.
 
-The synthetic desktop id `local-agent` is never a valid mutation target. When the visible local entry is merged with its cloud record, the client sends the entry's `cloud_device_id`. A local-only entry has no durable rename target.
+The desktop row's `hardware_id` is never Backend mutation authority. When the visible local entry is merged with its Cloud record, the Client sends the entry's `cloud_device_id`. A local-only entry has no durable rename target.
 
 ### 3.4. Cloud App Connection Identity
 
@@ -687,8 +721,8 @@ Every `device_event` carries a canonical delivery contract alongside the existin
 External families (`telegram`/`whatsapp`/`cli`) use `origin` delivery and never enter `sanad_client` synchronization, including for runtime suspension prompts. A `tool_permission_request` fans out only when the captured run origin belongs to `sanad_client`; local, cloud, web, and mobile Sanad Client transports are one logical platform family.
 
 ### 6.4. Event Identity & Deduplication
-- `event_id` is minted once at event creation and preserved across all local/cloud copies. It is NOT regenerated per transport, NOT derived from content/timestamp alone, and NOT reused. Most producers use UUID-backed ids; durable lifecycle producers may use a deterministic opaque transition id when history must reconstruct the exact live identity. Compaction uses `context_compaction:<compaction_id>:<status>` while retaining one logical `compaction_id` for tile folding.
-- The Flutter client currently applies a temporary mitigation that deduplicates by `event_id + transport` via a shared `EventDeduplicator` injected into both transports by `DeviceConnectionCoordinator`. This still blocks repeated deliveries on the same transport while allowing one cloud copy and one local copy of the same logical event.
+- `event_id` is minted once at event creation as a UUID-backed identifier and preserved across all local/cloud copies. It is NOT regenerated per transport, NOT derived from content/timestamp alone, and NOT reused. Most producers use UUID-backed ids; durable lifecycle producers may use a deterministic opaque transition id when history must reconstruct the exact live identity. Compaction uses `context_compaction:<compaction_id>:<status>` while retaining one logical `compaction_id` for tile folding.
+- The Flutter client applies transition-race deduplication by canonical `event_id` via one shared `EventDeduplicator` injected into both transports by `DeviceConnectionCoordinator`. The first Local or Cloud copy is applied and every later copy of that logical event is dropped regardless of transport.
 - Incoming `device_event` debug logging happens after this check, so a dropped transport copy is not reported as a second applied event.
 - The dedupe cache is bounded (LRU + age), in-memory only, independent of the durable conversation log, and cleared on full logout — NOT on a same-device transport switch.
 - Events without `event_id` are still processed (backward compat) but producers are expected to stamp it.
@@ -701,7 +735,7 @@ External families (`telegram`/`whatsapp`/`cli`) use `origin` delivery and never 
 | Local platform | Resolves the scope to concrete sockets (origin socket, all sanad_client sockets, or hardware-matched sockets) and stamps each outgoing copy with the recipient socket's registered `device_id` |
 | Cloud platform | Forwards the canonical envelope to Sanad Gateway; rewrites `device_id`/`hardware_id` from registration state |
 | Backend | Validates the `delivery` envelope, rejects non-`sanad_client` families, and routes by scope (origin → request registry, platform_family → user room, hardware → matched app connections) WITHOUT inspecting the event `name` |
-| Flutter client | Deduplicates by `event_id + transport` (temporary mitigation), routes by `device_id`/`session_id`, updates background session state without switching the open conversation |
+| Flutter client | Deduplicates globally by canonical `event_id` across Local/Cloud, routes by `device_id`/`session_id`, updates background session state without switching the open conversation |
 
 ### 6.6. Failure Handling
 - **Cloud down:** local keeps receiving runtime events; cloud does not accumulate unbounded copies. On cloud return, history and durable state are re-hydrated; no live stream is replayed as new.

@@ -16,6 +16,8 @@ description: "Regression matrix for moving one active sanad-dev pair between sou
 | User directly confirms the identified runtime and target worktree | The agent may invoke the command once; failure or rollback requires a new direct instruction before retry. |
 | Authorized switch targets an unprepared worktree | The same switch command idempotently prepares Contract, Agent, and Client packages before submitting the handoff; no separate setup command is required. |
 | Target preparation fails | The command fails before writing the handoff transaction, and the source runtime remains unchanged. |
+| Background run or status discovery is invoked from a private worktree that contains the public source as a submodule | Agent readiness and ownership match the inherited launcher id and runtime nonce rather than requiring the private and public Git-root hashes to match. Status may recover the Agent through the source-matched Client gateway only when that same lease identity matches, then reports the healthy detached pair as managed without requiring `--port`. |
+| `status`, `logs`, `restart`, `stop`, or `ui` receives an explicit isolated `--home` | Discovery reads Agent credentials and the launcher lease from that home consistently. `ui` removes the launcher-only home option before forwarding arguments to the Flutter driver CLI; no command silently falls back to the primary home. |
 | Agent requests `switch --runtime current` from a target worktree after authorization | Only the requester pair drains and restarts from the target source. |
 | Authorized source handoff begins | The agent runs `status` from the source worktree first and records the selected source, branch, agent, and clients. |
 | Agent-origin target startup succeeds | The original switch tool call returns `complete`; the agent then runs `status` from the target worktree and verifies its source, branch, agent, and clients. |
@@ -29,7 +31,7 @@ description: "Regression matrix for moving one active sanad-dev pair between sou
 | One agent has macOS and iPhone Simulator clients | Status lists both clients; switch preserves both device ids and VM-service ports and completes only after both are healthy. |
 | One target client fails startup | The target group is terminated and the agent plus every previous client are restored. |
 | Status is invoked from a different worktree with an explicit agent port | Output distinguishes the command worktree/branch from the selected runtime source/branch. |
-| Target Client paths match the invoking worktree but the Agent workspace hash does not, or vice versa | Switch reports inconsistent Agent/Client sources and fails closed; it does not claim the runtime already uses the target. |
+| Target Client paths match the invoking worktree but the Agent workspace hash does not, or vice versa, and no exact shared launcher id/runtime nonce proves a nested-source pair | Switch reports inconsistent Agent/Client sources and fails closed; it does not claim the runtime already uses the target. |
 | Agent workspace hash and every managed Client source match the target | Switch may report that the runtime already uses the target without submitting another handoff. |
 | Human command is ambiguous | Command fails and requests `--port`; no manifest or process mutation occurs. |
 | Target worktree already runs a pair | Command fails before drain; neither runtime changes. |

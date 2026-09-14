@@ -2690,7 +2690,12 @@ void main() {
           // budget is exhausted, the notice must still report network_error,
           // not unknown, and must not show "Recovery needs your input".
           // We throw a plain socket exception so the classifier maps it to
-          // network_error via body pattern matching.
+          // network_error via body pattern matching. Retry timing itself is
+          // covered by RuntimeRecoveryService tests, so this policy test uses
+          // an immediate waiter instead of sleeping through production backoff.
+          await GetIt.I.unregister<RuntimeRecoveryService>();
+          recovery = _ImmediateRetryRecoveryService(repo, limiter);
+          GetIt.I.registerSingleton<RuntimeRecoveryService>(recovery);
           final adapter = _BodyFailingAdapter(
             body: 'SocketException: connection reset by peer',
           );
@@ -3242,7 +3247,12 @@ void main() {
       test(
         'non-HTTP error (network) message appears redacted in notice',
         () async {
-          // Simulate a non-HTTP socket error containing a fake token.
+          // Simulate a non-HTTP socket error containing a fake token without
+          // sleeping through the production network retry backoff.
+          await GetIt.I.unregister<RuntimeRecoveryService>();
+          GetIt.I.registerSingleton<RuntimeRecoveryService>(
+            _ImmediateRetryRecoveryService(repo, ProviderRateLimiter()),
+          );
           final adapter = _ThrowingAdapter(
             error: Exception(
               'SocketException: Connection refused — Bearer sk-test-abcdefghij12345678',
@@ -4995,6 +5005,19 @@ void main() {
       );
     });
   });
+}
+
+class _ImmediateRetryRecoveryService extends RuntimeRecoveryService {
+  _ImmediateRetryRecoveryService(super.repo, super.limiter)
+    : super(autoFailoverEnabled: false);
+
+  @override
+  Future<bool> waitForRetry(
+    String sessionId,
+    Duration delay, {
+    bool addJitter = true,
+    String? runId,
+  }) async => true;
 }
 
 class GateDTestTool extends BaseTool {

@@ -34,7 +34,7 @@ import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 class SocketConversationClient implements ConversationClient {
   static final _logger = Logger('SocketConversationClient');
 
-  final DeviceConfig _config;
+  DeviceConfig _config;
   final DeviceEventMapper _mapper;
   final DeviceConversationStore _store;
   final _sessionsController = StreamController<List<Session>>.broadcast();
@@ -636,6 +636,27 @@ class SocketConversationClient implements ConversationClient {
     );
   }
 
+  void updateConfig(DeviceConfig config) {
+    if (config.id != _config.id) {
+      throw ArgumentError.value(config.id, 'config.id', 'Cannot replace the managed device identity.');
+    }
+    final retainedCloudDeviceId = config.cloudDeviceId ?? _config.cloudDeviceId;
+    final updatedConfig = retainedCloudDeviceId == config.cloudDeviceId
+        ? config
+        : config.copyWith(
+            metadata: {
+              ...?config.metadata,
+              'cloud_device_id': retainedCloudDeviceId,
+            },
+          );
+    final aliasesChanged = updatedConfig.cloudDeviceId != _config.cloudDeviceId;
+    _config = updatedConfig;
+    final socketService = _socketService;
+    if (aliasesChanged && socketService != null) {
+      _bindSocketService(socketService);
+    }
+  }
+
   void updateSocketService(SanadSocketService socketService) {
     if (identical(_socketService, socketService)) {
       return;
@@ -668,7 +689,7 @@ class SocketConversationClient implements ConversationClient {
       mapper: _mapper,
     );
     _eventHandler = ConversationEventHandler(
-      deviceId: _config.id,
+      device: _config,
       gateway: gateway,
       conversationStore: _store,
       mapper: _mapper,

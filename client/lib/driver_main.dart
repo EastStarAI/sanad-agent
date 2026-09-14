@@ -6,10 +6,44 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 
 void main() {
   // Enable integration testing with the Flutter Driver extension.
   enableFlutterDriverExtension(enableTextEntryEmulation: false);
+
+  developer.registerExtension('ext.sanad_client.auth_url', (
+    method,
+    parameters,
+  ) async {
+    if (!getIt.isRegistered<AuthService>()) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': 'Authentication service is not ready'}),
+      );
+    }
+
+    final challenge = getIt<AuthService>().loginChallenge;
+    if (challenge == null) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': 'No active authentication challenge'}),
+      );
+    }
+
+    final authUri = Uri.tryParse(challenge.authUrl);
+    if (authUri == null || (authUri.scheme != 'http' && authUri.scheme != 'https') || authUri.host.isEmpty) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': 'Active authentication challenge URL is invalid'}),
+      );
+    }
+
+    return developer.ServiceExtensionResponse.result(
+      json.encode({'status': 'ok', 'auth_url': challenge.authUrl}),
+    );
+  });
 
   const Set<String> ignoredNoiseTypes = {
     'SizedBox',

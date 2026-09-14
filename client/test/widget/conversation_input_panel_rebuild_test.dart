@@ -701,7 +701,7 @@ void main() {
   ) async {
     final providerClient = _FakeRecoveryProviderClient();
     getIt.registerSingleton<ProviderSetupClient>(providerClient);
-    final usageCubit = ProviderUsageCubit(client: providerClient);
+    final usageCubit = ProviderUsageCubit(localDeviceId: 'hardware-1', client: providerClient);
     getIt.registerSingleton<ProviderUsageCubit>(usageCubit);
     addTearDown(usageCubit.close);
 

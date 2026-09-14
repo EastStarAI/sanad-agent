@@ -3,8 +3,7 @@ import 'package:equatable/equatable.dart';
 enum SessionRouteSource {
   user,
   recovery,
-  autoFailover
-  ;
+  autoFailover;
 
   static SessionRouteSource fromWireValue(Object? value) => switch (value?.toString()) {
     'user' => SessionRouteSource.user,

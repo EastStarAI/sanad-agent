@@ -1527,7 +1527,7 @@ class AgentRunner {
     if (_authoritativeRunId == null) {
       markProviderResponseTerminalCommitted();
     }
-    _logger.info('🏁 [Agent] Final Answer: ${responseMessage.content ?? ''}');
+    _logger.info('🏁 [Agent] Final answer committed');
     return responseMessage;
   }
 
@@ -1944,10 +1944,10 @@ class AgentRunner {
         if (_authoritativeRunId == null) {
           _settleProviderRequest();
         }
-        _logger.info('🏁 [Agent] Final Answer: $fullContent');
+        _logger.info('🏁 [Agent] Final answer committed');
       }
     } else if (fullContent.isNotEmpty) {
-      _logger.info('🏁 [Agent] Final Answer: $fullContent');
+      _logger.info('🏁 [Agent] Final answer committed');
       final assistantMessage = Message(
         role: MessageRole.assistant,
         content: fullContent,

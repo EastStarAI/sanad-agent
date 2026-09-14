@@ -247,6 +247,7 @@ not silently substitute a different model.
 
 Settings distinguish:
 
+- account Client sessions and connected Agent devices, including current session, authoritative presence, Last active, and confirmed revoke;
 - application preferences, such as appearance;
 - device-level provider, MCP, skill, and runtime configuration;
 - workspace-specific context, capabilities, and permissions.
@@ -260,7 +261,7 @@ reserved for a future conversation-side file tree.
 
 ## Connection states
 
-The client presents local-agent and hosted-relay state without blocking cached
+The Client presents local Agent and hosted-relay state without blocking cached
 navigation. Depending on the target and platform, available actions include
 sign in, retry, start, repair, and restart.
 

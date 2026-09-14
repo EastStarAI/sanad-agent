@@ -44,10 +44,12 @@ void main() {
   test('sends update check to the cloud device without a local HTTP call', () async {
     final future = client.checkForUpdates(cloudDevice());
     await Future<void>.delayed(Duration.zero);
-    expect(cloud.capturedCommands.single['command'], 'device.update.check');
-    expect(cloud.capturedCommands.single['device_id'], 'cloud-device');
+    final command = cloud.capturedCommands.singleWhere(
+      (entry) => entry['command'] == 'device.update.check',
+    );
+    expect(command['device_id'], 'cloud-device');
     expect(local.capturedCommands, isEmpty);
-    final payload = cloud.capturedCommands.single['payload'] as Map<String, dynamic>;
+    final payload = command['payload'] as Map<String, dynamic>;
     cloud.debugEmitEvent({
       'event': 'device.update.check.result',
       'payload': {
@@ -68,9 +70,11 @@ void main() {
   test('restart uses the protocol command for a cloud device', () async {
     final future = client.restartAgent(cloudDevice());
     await Future<void>.delayed(Duration.zero);
-    expect(cloud.capturedCommands.single['command'], 'device.runtime.restart');
+    final command = cloud.capturedCommands.singleWhere(
+      (entry) => entry['command'] == 'device.runtime.restart',
+    );
     expect(local.capturedCommands, isEmpty);
-    final payload = cloud.capturedCommands.single['payload'] as Map<String, dynamic>;
+    final payload = command['payload'] as Map<String, dynamic>;
     cloud.debugEmitEvent({
       'event': 'device.runtime.restart.accepted',
       'payload': {'request_id': payload['request_id'], 'status': 'accepted'},
@@ -81,8 +85,9 @@ void main() {
   test('force restart sends an explicit force flag', () async {
     final future = client.restartAgent(cloudDevice(), force: true);
     await Future<void>.delayed(Duration.zero);
-    final command = cloud.capturedCommands.single;
-    expect(command['command'], 'device.runtime.restart');
+    final command = cloud.capturedCommands.singleWhere(
+      (entry) => entry['command'] == 'device.runtime.restart',
+    );
     final payload = command['payload'] as Map<String, dynamic>;
     expect(payload['force'], isTrue);
     cloud.debugEmitEvent({

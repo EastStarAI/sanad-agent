@@ -201,6 +201,30 @@ class FlutterVmController {
     }
   }
 
+  /// Returns the active browser authentication URL from this exact driver VM.
+  Future<String> authUrl() async {
+    final isolateId = await _discoverIsolateId('ext.sanad_client.auth_url');
+    final result = await _callRpc('ext.sanad_client.auth_url', {
+      'isolateId': isolateId,
+    }) as Map<String, dynamic>?;
+    final value = result?['auth_url'];
+    if (result?['status'] != 'ok' || value is! String) {
+      throw const _DriverException(
+        'The client returned no active authentication URL.',
+      );
+    }
+
+    final uri = Uri.tryParse(value);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      throw const _DriverException(
+        'The client returned an invalid authentication URL.',
+      );
+    }
+    return value;
+  }
+
   /// Find UI elements matching key, text, type, or query.
   Future<List<UiElement>> findElements({
     String? key,

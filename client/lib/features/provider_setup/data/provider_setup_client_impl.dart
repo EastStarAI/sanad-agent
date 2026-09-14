@@ -1,6 +1,5 @@
 import 'package:sanad_client/features/devices/data/device_command_client.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/auth_session_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/model_options_dto.dart';
@@ -498,7 +497,7 @@ class ProviderSetupClientImpl extends ProviderSetupClient {
     final target =
         agent ??
         DeviceConfig(
-          id: DeviceInventoryIds.localDevice,
+          id: _connectionCoordinator.currentDeviceId,
           name: 'This device',
           hardwareId: _connectionCoordinator.currentDeviceId,
           isOnline: _connectionCoordinator.localSocketService.isConnected,

@@ -67,6 +67,8 @@ dependencies:
     path: ../release/contract
   sanad_auth_lock:
     path: ../shared/auth_lock
+  sanad_public_service_endpoints:
+    path: ../shared/public_service_endpoints
 
   flutter_highlight: ^0.7.0
   highlight: ^0.7.0
