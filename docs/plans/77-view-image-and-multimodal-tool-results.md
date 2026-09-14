@@ -1,9 +1,11 @@
 ---
 title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
-status: "pending"
+status: "in_progress"
 priority: "high"
-current_gate: "77a1"
+current_gate: "77a2/R0"
+remaining_estimate: "95%"
+active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
 
@@ -111,7 +113,18 @@ detail = low | auto | high | original
 - marker التقليم: `[image data removed after model processing]`. persisted block تالفة تصبح `[image data unavailable: invalid persisted payload]` بلا re-execution.
 - logs وevents وplugin notifications وrequest dumps لا تكشف base64 أو attachment bytes أو absolute private paths.
 
-## 3. ترتيب المهام
+## 3. طريقة التنفيذ المعتمدة
+
+- ينفذ العمل كاملًا داخل Worktree `77-hosted-attachment-media-relay` فقط، مع بقاء فرع المستودع العام داخل الـsubmodule وفرع المستودع الخاص متطابقين مع سجل التقدم.
+- تنفذ المهام بترتيب Task map أدناه دون فتح مسارات تنفيذ متوازية. داخل كل مهمة تنفذ البوابات بالترتيب المكتوب، ولا تبدأ بوابة قبل إغلاق سابقتها بالأدلة المطلوبة.
+- عند إغلاق كل بوابة: تحدّث checklist و`current_gate` وسجل الأدلة ونسبة المتبقي داخل ملف المهمة نفسه قبل متابعة البوابة التالية.
+- عند إغلاق كل مهمة: تحدّث حالتها إلى `complete`، ثم تحدّث checklist و`current_gate` و`remaining_estimate` وسجل التقدم في هذه الخطة، وتشغّل تحقق المهمة كاملًا، ثم تنشئ commit مركزًا وتدفع فرع المستودع المالك قبل الانتقال للمهمة التالية.
+- إذا غيّرت مهمة عامة gitlink المستودع العام، يثبّت المستودع الخاص ذلك المؤشر في commit مركز ويدفع فرعه؛ لا تنشأ PR أثناء التنفيذ.
+- تنفذ بوابات مهمة hosted relay الخاصة `G0` إلى `G6` بالترتيب بعد `77g1` وقبل بدء `77g2`، لأن `77g2` بوابة التكافؤ البعيد ولا يمكن إغلاقها قبل اكتمال capability الخاصة.
+- بعد اكتمال جميع المهام والبوابات الآلية، ينفذ الاختبار التفاعلي النهائي محليًا وعن بُعد وتوثق أدلته. إنشاء PR مؤجل حتى اكتمال الخطة كلها ونجاح هذا الاختبار.
+- أي عائق يغيّر الحالة إلى `blocked` في ملف المهمة والخطة مع السبب والأثر ونسبة المتبقي؛ لا يُتجاوز ترتيب التنفيذ بصمت.
+
+## 4. ترتيب المهام
 
 ```text
 77a1 -> 77a2 -> 77a3 -> 77a4 -> 77a5
@@ -136,32 +149,32 @@ detail = low | auto | high | original
                                     77g1 -> 77g2
 ```
 
-### 3.1 Task map
+### 4.1 Task map
 
-1. [77a1 — Core Result Model](tasks/77a1-core-tool-result-model.md)
-2. [77a2 — Text Tool Migration A](tasks/77a2-text-tool-migration-a.md)
-3. [77a3 — Text Tool Migration B](tasks/77a3-text-tool-migration-b.md)
-4. [77a4 — Text Tool Migration C](tasks/77a4-text-tool-migration-c.md)
-5. [77a5 — Coordinator and Message Integration](tasks/77a5-tool-result-coordinator-integration.md)
-6. [77b1 — Image Policy Worker](tasks/77b1-image-policy-worker.md)
-7. [77b2 — Secure View Image Catalog](tasks/77b2-secure-view-image-catalog.md)
-8. [77c1 — Rich Provider Codecs](tasks/77c1-rich-provider-codecs.md)
-9. [77c2 — Adapter Capability and Fallback](tasks/77c2-adapter-capability-and-fallback.md)
-10. [77d1 — Atomic Result Durability](tasks/77d1-atomic-tool-result-durability.md)
-11. [77d2 — Binary Redaction and Pruning](tasks/77d2-binary-redaction-and-pruning.md)
-12. [77d3 — Daemon-backed View Image QA](tasks/77d3-view-image-integration-qa.md)
-13. [77e1 — Attachment Model and Policy](tasks/77e1-attachment-model-and-policy.md)
-14. [77e2 — Agent Attachment Store](tasks/77e2-agent-attachment-store.md)
-15. [77e3 — Attachment Admission and Model Projection](tasks/77e3-attachment-admission-and-model-projection.md)
-16. [77f1 — Composer Attachment UX](tasks/77f1-composer-attachment-ux.md)
-17. [77f2 — User Message Attachment and Edit UX](tasks/77f2-user-message-attachment-edit-ux.md)
-18. [77f3 — View Image Timeline Media](tasks/77f3-view-image-timeline-media.md)
-19. [77g1 — Local Attachment Integration QA](tasks/77g1-local-attachment-integration-qa.md)
-20. [77g2 — Remote Attachment Integration QA](tasks/77g2-remote-attachment-integration-qa.md)
+1. [x] [77a1 — Core Result Model](tasks/77a1-core-tool-result-model.md)
+2. [ ] [77a2 — Text Tool Migration A](tasks/77a2-text-tool-migration-a.md)
+3. [ ] [77a3 — Text Tool Migration B](tasks/77a3-text-tool-migration-b.md)
+4. [ ] [77a4 — Text Tool Migration C](tasks/77a4-text-tool-migration-c.md)
+5. [ ] [77a5 — Coordinator and Message Integration](tasks/77a5-tool-result-coordinator-integration.md)
+6. [ ] [77b1 — Image Policy Worker](tasks/77b1-image-policy-worker.md)
+7. [ ] [77b2 — Secure View Image Catalog](tasks/77b2-secure-view-image-catalog.md)
+8. [ ] [77c1 — Rich Provider Codecs](tasks/77c1-rich-provider-codecs.md)
+9. [ ] [77c2 — Adapter Capability and Fallback](tasks/77c2-adapter-capability-and-fallback.md)
+10. [ ] [77d1 — Atomic Result Durability](tasks/77d1-atomic-tool-result-durability.md)
+11. [ ] [77d2 — Binary Redaction and Pruning](tasks/77d2-binary-redaction-and-pruning.md)
+12. [ ] [77d3 — Daemon-backed View Image QA](tasks/77d3-view-image-integration-qa.md)
+13. [ ] [77e1 — Attachment Model and Policy](tasks/77e1-attachment-model-and-policy.md)
+14. [ ] [77e2 — Agent Attachment Store](tasks/77e2-agent-attachment-store.md)
+15. [ ] [77e3 — Attachment Admission and Model Projection](tasks/77e3-attachment-admission-and-model-projection.md)
+16. [ ] [77f1 — Composer Attachment UX](tasks/77f1-composer-attachment-ux.md)
+17. [ ] [77f2 — User Message Attachment and Edit UX](tasks/77f2-user-message-attachment-edit-ux.md)
+18. [ ] [77f3 — View Image Timeline Media](tasks/77f3-view-image-timeline-media.md)
+19. [ ] [77g1 — Local Attachment Integration QA](tasks/77g1-local-attachment-integration-qa.md)
+20. [ ] [77g2 — Remote Attachment Integration QA](tasks/77g2-remote-attachment-integration-qa.md)
 
 كل مهمة لها سقف ملفات مستقل لا يتجاوز `10`. لا يعمل فرعان بالتوازي على Message أو coordinator أو conversation cache schema أو ملفات الخطة نفسها. `77g2` لا يبدأ قبل اكتمال capability المقابلة واختبارها في المستودع المغلق.
 
-## 4. بوابات القبول الكلية
+## 5. بوابات القبول الكلية
 
 - [ ] الأدوات النصية تحافظ على النص والأخطاء والـreplay الحالية بعد التحويل typed.
 - [ ] `view_image` تطبق authorization قبل قراءة bytes وتعيد نتائج صورية للمزودات المدعومة.
@@ -176,7 +189,7 @@ detail = low | auto | high | original
 - [ ] hosted capability القديمة/الغائبة تفشل مغلقًا دون fallback داخل command JSON.
 - [ ] daemon-backed fixtures تثبت pixels، edit، expiry، interruption، وعزل user/device/session.
 
-## 5. إدارة التقدم
+## 6. إدارة التقدم
 
 - الحالات: `pending`, `in_progress`, `blocked`, `in_review`, `complete`.
 - يحل المنفذ evidence packet الخاصة بعائلة المهمة قبل Gate R0؛ `77e*` و`77f*` و`77g*` تستخدم packet `77e` حتى تنشأ packet أضيق.
@@ -196,3 +209,16 @@ Open findings:
 Remaining estimate:
 Next task:
 ```
+
+### 2026-09-14 — 77a1 complete
+
+- Task/Gate: `77a1/A3`.
+- Status transition: `77a1 in_progress` → `complete`; plan advances to `77a2/R0`.
+- Owner/worktree: public repository in `77-hosted-attachment-media-relay`.
+- Files changed: core result/message models, generated JSON, public export, focused tests, owning contract/design, task, and plan.
+- Verification evidence: build runner passed; analyzer clean; 13 focused tests passed; legacy model regression included in the earlier 18-test gate; Graphify rebuilt.
+- Documentation/contracts updated: `agent/lib/core/AGENTS.md`, technical multimodal design, task 77a1, and this plan.
+- Evidence fingerprint: `sha256:477c6a964da28b0914da3cb0f52881421561ccd9f8afd859fc6833380353bc43`; post-implementation parity satisfied.
+- Open findings: none blocking.
+- Remaining estimate: `95%`.
+- Next task: `77a2 — Text Tool Migration A`.

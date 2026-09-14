@@ -17,7 +17,7 @@ description: "Provider-neutral tool results, secure user attachments, tool-chose
 
 ## Canonical result model
 
-`ToolExecutionResult` schema version 1 contains ordered sealed blocks, `isError`, and an optional closed `ToolResultErrorCode`. Blocks are `ToolTextBlock(text)` or `ToolImageBlock(dataBase64, mimeType, width, height, detail)`.
+`ToolExecutionResult` schema version 1 contains an immutable ordered block list, `isError`, and an optional closed `ToolResultErrorCode`. Blocks serialize with explicit `text` or `image` discriminators and are represented by `ToolTextBlock(text)` or `ToolImageBlock(dataBase64, mimeType, width, height, detail)`. Detail wire values are `low`, `auto`, `high`, and `original`; error codes use bounded snake-case wire values and are rejected when unknown or attached to a non-error result.
 
 Every result contains at least one non-empty text block. `displayText` is a deterministic getter derived from text blocks after `ToolOutputGuard`; it is not serialized as a second source of truth. An image block is valid only when base64 decodes, MIME is PNG/JPEG/WebP, dimensions are positive and match validated metadata, and the common image policy has accepted it.
 

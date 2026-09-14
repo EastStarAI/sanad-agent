@@ -1,5 +1,6 @@
 import 'package:json_annotation/json_annotation.dart';
 import 'tool_call.dart';
+import 'tool_execution_result.dart';
 import 'llm_provider_state.dart';
 import 'llm_finish_reason.dart';
 
@@ -13,6 +14,13 @@ class Message {
   final String? content;
   final List<ToolCall>? toolCalls;
   final String? toolCallId;
+
+  /// Authoritative rich result for a tool-role message.
+  ///
+  /// [content] remains the compatibility projection and must equal
+  /// [ToolExecutionResult.displayText] when this field is present.
+  final ToolExecutionResult? toolResult;
+
   final String? thought;
   final String? reasoning;
 
@@ -35,15 +43,31 @@ class Message {
 
   Message({
     required this.role,
-    this.content,
+    String? content,
     this.toolCalls,
     this.toolCallId,
+    this.toolResult,
     this.thought,
     this.reasoning,
     this.providerState,
     this.finishReason = LLMFinishReason.unknown,
     this.metadata,
-  });
+  }) : content = content ?? toolResult?.displayText {
+    if (toolResult != null && role != MessageRole.tool) {
+      throw ArgumentError.value(
+        role,
+        'role',
+        'toolResult is valid only for tool messages',
+      );
+    }
+    if (toolResult != null && this.content != toolResult!.displayText) {
+      throw ArgumentError.value(
+        content,
+        'content',
+        'must equal toolResult.displayText',
+      );
+    }
+  }
 
   factory Message.fromJson(Map<String, dynamic> json) =>
       _$MessageFromJson(json);
@@ -54,6 +78,8 @@ class Message {
     String? content,
     List<ToolCall>? toolCalls,
     String? toolCallId,
+    ToolExecutionResult? toolResult,
+    bool clearToolResult = false,
     String? thought,
     String? reasoning,
     LLMProviderState? providerState,
@@ -61,11 +87,18 @@ class Message {
     LLMFinishReason? finishReason,
     Map<String, dynamic>? metadata,
   }) {
+    final nextToolResult = clearToolResult
+        ? null
+        : toolResult ?? this.toolResult;
+    final nextContent = toolResult != null && content == null
+        ? toolResult.displayText
+        : content ?? this.content;
     return Message(
       role: role ?? this.role,
-      content: content ?? this.content,
+      content: nextContent,
       toolCalls: toolCalls ?? this.toolCalls,
       toolCallId: toolCallId ?? this.toolCallId,
+      toolResult: nextToolResult,
       thought: thought ?? this.thought,
       reasoning: reasoning ?? this.reasoning,
       providerState: clearProviderState

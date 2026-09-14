@@ -13,6 +13,11 @@ Message _$MessageFromJson(Map<String, dynamic> json) => Message(
       ?.map((e) => ToolCall.fromJson(e as Map<String, dynamic>))
       .toList(),
   toolCallId: json['toolCallId'] as String?,
+  toolResult: json['toolResult'] == null
+      ? null
+      : ToolExecutionResult.fromJson(
+          json['toolResult'] as Map<String, dynamic>,
+        ),
   thought: json['thought'] as String?,
   reasoning: json['reasoning'] as String?,
   providerState: json['providerState'] == null
@@ -35,6 +40,7 @@ Map<String, dynamic> _$MessageToJson(Message instance) => <String, dynamic>{
   'content': instance.content,
   'toolCalls': instance.toolCalls?.map((e) => e.toJson()).toList(),
   'toolCallId': instance.toolCallId,
+  'toolResult': instance.toolResult?.toJson(),
   'thought': instance.thought,
   'reasoning': instance.reasoning,
   'providerState': instance.providerState?.toJson(),
