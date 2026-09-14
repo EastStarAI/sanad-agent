@@ -1,12 +1,13 @@
 import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_usage_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_state.dart';
+
+const _localDeviceId = 'hardware-1';
 
 /// Fake [ProviderSetupClient] that records calls and returns scripted usage
 /// results. Used to exercise the freshness / staleness / disposal logic of
@@ -107,6 +108,7 @@ void main() {
       final client = _FakeUsageClient()..supportMap = {'a': true, 'b': false};
       final cubit = ProviderUsageCubit(
         client: client,
+        localDeviceId: _localDeviceId,
         freshness: const Duration(minutes: 1),
       );
       addTearDown(cubit.close);
@@ -117,14 +119,14 @@ void main() {
       );
 
       // 'a' is supported and got a snapshot; fresh phase with one window row.
-      final a = cubit.state.entry(DeviceInventoryIds.localDevice, 'a');
+      final a = cubit.state.entry(_localDeviceId, 'a');
       expect(a, isNotNull);
       expect(a!.phase, ProviderUsagePhase.fresh);
       expect(a.result!.status, 'available');
       expect(a.result!.snapshot!.windows, hasLength(1));
 
       // 'b' is unsupported → hidden, no fetch request was sent for it.
-      final b = cubit.state.entry(DeviceInventoryIds.localDevice, 'b');
+      final b = cubit.state.entry(_localDeviceId, 'b');
       expect(b, isNotNull);
       expect(b!.phase, ProviderUsagePhase.hidden);
       expect(b.result!.status, 'unsupported');
@@ -144,6 +146,7 @@ void main() {
       final client = _FakeUsageClient();
       final cubit = ProviderUsageCubit(
         client: client,
+        localDeviceId: _localDeviceId,
         freshness: const Duration(minutes: 1),
       );
       addTearDown(cubit.close);
@@ -170,6 +173,7 @@ void main() {
     final client = _FakeUsageClient();
     final cubit = ProviderUsageCubit(
       client: client,
+      localDeviceId: _localDeviceId,
       freshness: const Duration(minutes: 1),
     );
     addTearDown(cubit.close);
@@ -191,6 +195,7 @@ void main() {
 
       final cubit = ProviderUsageCubit(
         client: client,
+        localDeviceId: _localDeviceId,
         freshness: const Duration(minutes: 1),
       );
       addTearDown(cubit.close);
@@ -223,12 +228,13 @@ void main() {
         };
       final cubit = ProviderUsageCubit(
         client: client,
+        localDeviceId: _localDeviceId,
         freshness: const Duration(minutes: 1),
       );
       addTearDown(cubit.close);
 
       await cubit.onInstancesLoaded(agent: _local, instanceIds: const ['a']);
-      final a = cubit.state.entry(DeviceInventoryIds.localDevice, 'a')!;
+      final a = cubit.state.entry(_localDeviceId, 'a')!;
       expect(a.phase, ProviderUsagePhase.needsAttention);
       expect(a.result!.status, 'unavailable');
 
@@ -249,7 +255,7 @@ void main() {
         ),
       };
       await cubit.refresh(instanceId: 'a', agent: _local);
-      final updated = cubit.state.entry(DeviceInventoryIds.localDevice, 'a')!;
+      final updated = cubit.state.entry(_localDeviceId, 'a')!;
       expect(updated.phase, ProviderUsagePhase.fresh);
     },
   );
@@ -261,11 +267,12 @@ void main() {
       final client = _FakeUsageClient();
       final cubit = ProviderUsageCubit(
         client: client,
+        localDeviceId: _localDeviceId,
         freshness: const Duration(minutes: 1),
       );
       addTearDown(cubit.close);
 
-      const localDevice = DeviceInventoryIds.localDevice;
+      const localDevice = _localDeviceId;
       final remoteAgent = DeviceConfig(
         id: 'remote-1',
         name: 'Remote',
@@ -309,6 +316,7 @@ void main() {
       final client = _FakeUsageClient();
       final cubit = ProviderUsageCubit(
         client: client,
+        localDeviceId: _localDeviceId,
         freshness: const Duration(minutes: 1),
       );
       addTearDown(cubit.close);
@@ -358,7 +366,7 @@ void main() {
 
       // The on-screen snapshot must reflect the second fetch, even though the
       // first one has not yet resolved at the time it was written.
-      final after = cubit.state.entry(DeviceInventoryIds.localDevice, 'a')!;
+      final after = cubit.state.entry(_localDeviceId, 'a')!;
       expect(after.result!.snapshot!.source, 'second');
 
       // Re-arming the latency would overwrite 'second' if the orphan wasn't
@@ -368,7 +376,7 @@ void main() {
       // Give the rejected orphan a chance to run its no-op state mutation before
       // reading the final state.
       await Future<void>.delayed(Duration.zero);
-      final finalState = cubit.state.entry(DeviceInventoryIds.localDevice, 'a')!;
+      final finalState = cubit.state.entry(_localDeviceId, 'a')!;
       expect(
         finalState.result!.snapshot!.source,
         'second',
@@ -403,6 +411,7 @@ void main() {
         };
       final cubit = ProviderUsageCubit(
         client: client,
+        localDeviceId: _localDeviceId,
         freshness: const Duration(minutes: 1),
         now: () => now,
       );
@@ -410,7 +419,7 @@ void main() {
 
       await cubit.onInstancesLoaded(agent: _local, instanceIds: const ['a']);
       expect(
-        cubit.state.entry(DeviceInventoryIds.localDevice, 'a')!.fetchedAt,
+        cubit.state.entry(_localDeviceId, 'a')!.fetchedAt,
         now,
         reason: 'freshness must use the daemon snapshot fetched_at',
       );
@@ -441,14 +450,14 @@ void main() {
         instanceIds: const ['a'],
       );
       await Future<void>.delayed(Duration.zero);
-      final whilePending = cubit.state.entry(DeviceInventoryIds.localDevice, 'a')!;
+      final whilePending = cubit.state.entry(_localDeviceId, 'a')!;
       expect(whilePending.phase, ProviderUsagePhase.staleRefreshing);
       expect(whilePending.result!.snapshot!.source, 'initial');
       expect(whilePending.backgroundRefreshing, isTrue);
 
       pending.complete();
       await refresh;
-      final refreshed = cubit.state.entry(DeviceInventoryIds.localDevice, 'a')!;
+      final refreshed = cubit.state.entry(_localDeviceId, 'a')!;
       expect(refreshed.phase, ProviderUsagePhase.fresh);
       expect(refreshed.result!.snapshot!.source, 'refreshed');
     },
@@ -472,6 +481,7 @@ void main() {
     final client = _FakeUsageClient()..usageResults = {'a': initial};
     final cubit = ProviderUsageCubit(
       client: client,
+      localDeviceId: _localDeviceId,
       freshness: const Duration(minutes: 1),
       now: () => now,
     );
@@ -486,7 +496,7 @@ void main() {
     );
 
     await cubit.onInstancesLoaded(agent: _local, instanceIds: const ['a']);
-    final entry = cubit.state.entry(DeviceInventoryIds.localDevice, 'a')!;
+    final entry = cubit.state.entry(_localDeviceId, 'a')!;
     expect(entry.phase, ProviderUsagePhase.needsAttention);
     expect(entry.result!.snapshot!.source, 'initial');
     expect(entry.attentionResult!.status, 'unavailable');
@@ -495,7 +505,7 @@ void main() {
   test('late response cannot restore a removed instance', () async {
     final pending = Completer<void>();
     final client = _FakeUsageClient()..usageGetLatency = () => pending.future;
-    final cubit = ProviderUsageCubit(client: client);
+    final cubit = ProviderUsageCubit(client: client, localDeviceId: _localDeviceId);
     addTearDown(cubit.close);
 
     final load = cubit.onInstancesLoaded(
@@ -507,13 +517,13 @@ void main() {
     pending.complete();
     await load;
 
-    expect(cubit.state.entry(DeviceInventoryIds.localDevice, 'a'), isNull);
+    expect(cubit.state.entry(_localDeviceId, 'a'), isNull);
   });
 
   test('late support response is ignored after the device scope is cleared', () async {
     final pending = Completer<void>();
     final client = _FakeUsageClient()..usageSupportLatency = () => pending.future;
-    final cubit = ProviderUsageCubit(client: client);
+    final cubit = ProviderUsageCubit(client: client, localDeviceId: _localDeviceId);
     addTearDown(cubit.close);
 
     final load = cubit.onInstancesLoaded(
@@ -525,26 +535,27 @@ void main() {
     pending.complete();
     await load;
 
-    expect(cubit.state.entry(DeviceInventoryIds.localDevice, 'a'), isNull);
+    expect(cubit.state.entry(_localDeviceId, 'a'), isNull);
   });
 
   test('removed instance is dropped from state', () async {
     final client = _FakeUsageClient();
     final cubit = ProviderUsageCubit(
       client: client,
+      localDeviceId: _localDeviceId,
       freshness: const Duration(minutes: 1),
     );
     addTearDown(cubit.close);
 
     await cubit.onInstancesLoaded(agent: _local, instanceIds: const ['a']);
     expect(
-      cubit.state.entry(DeviceInventoryIds.localDevice, 'a'),
+      cubit.state.entry(_localDeviceId, 'a'),
       isNotNull,
     );
 
     cubit.onInstanceRemoved(agent: _local, instanceId: 'a');
     expect(
-      cubit.state.entry(DeviceInventoryIds.localDevice, 'a'),
+      cubit.state.entry(_localDeviceId, 'a'),
       isNull,
       reason: 'removal must drop the corresponding entry',
     );
@@ -553,7 +564,7 @@ void main() {
   test('reset replaces usage only with the authoritative refreshed snapshot', () async {
     final refreshedAt = DateTime.utc(2026, 7, 19, 14);
     final client = _FakeUsageClient();
-    final cubit = ProviderUsageCubit(client: client);
+    final cubit = ProviderUsageCubit(client: client, localDeviceId: _localDeviceId);
     addTearDown(cubit.close);
     await cubit.onInstancesLoaded(agent: _local, instanceIds: const ['a']);
     client.resetResult = ProviderUsageResetResultDto(
@@ -581,7 +592,7 @@ void main() {
     final result = await cubit.reset(instanceId: 'a', agent: _local);
 
     expect(result.status, 'reset');
-    final entry = cubit.state.entry(DeviceInventoryIds.localDevice, 'a')!;
+    final entry = cubit.state.entry(_localDeviceId, 'a')!;
     expect(entry.result!.snapshot!.source, 'reset-refresh');
     expect(entry.result!.snapshot!.availableResets, 0);
     expect(entry.fetchedAt, refreshedAt);
@@ -598,7 +609,7 @@ void main() {
       message: 'Resetting now may waste this credit.',
       confirmationToken: 'confirm-a',
     );
-    final cubit = ProviderUsageCubit(client: client);
+    final cubit = ProviderUsageCubit(client: client, localDeviceId: _localDeviceId);
     addTearDown(cubit.close);
     await cubit.onInstancesLoaded(agent: _local, instanceIds: const ['a']);
 

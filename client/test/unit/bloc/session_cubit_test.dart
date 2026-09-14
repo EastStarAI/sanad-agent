@@ -1,7 +1,6 @@
 import 'dart:async';
 
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/infrastructure/devices/models/device_client.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
@@ -345,7 +344,8 @@ void main() {
   test('local cache does not refresh through stale cloud-online state while local transport is down', () async {
     socket.setConnected(true);
     final localAgent = DeviceConfig(
-      id: DeviceInventoryIds.localDevice,
+      id: 'hardware-1',
+      hardwareId: 'hardware-1',
       name: 'Sanad Agent (Macos)',
       isOnline: true,
       metadata: const {'is_local_reachable': false},
@@ -1444,7 +1444,7 @@ void main() {
 
   test('resetForLogout retains local clients that remain in the post-logout inventory', () async {
     final localAgent = DeviceConfig(
-      id: 'local-agent',
+      id: 'device-1',
       name: 'This device',
       hardwareId: 'device-1',
       isOnline: true,

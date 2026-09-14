@@ -13,6 +13,10 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | `enter-text` with only a key and no text | Fails before connecting; the key value is never treated as input text |
 | Missing batch recipe | Fails before connecting with a bounded error |
 | Explicit VM endpoint | Is preserved exactly and does not trigger process-table discovery |
+| Active authentication URL | The controller selects the isolate advertising `ext.sanad_client.auth_url` and returns the HTTP(S) URL from that Client only |
+| Missing authentication challenge | `auth-url` exits nonzero with a bounded error and no fallback to another isolate, Client, browser, or heap object |
+| Invalid authentication URL | Non-HTTP(S) values are rejected without echoing the rejected value |
+| Authentication URL output | Human mode writes only the URL to stdout; the value is absent from general snapshots and persisted runtime surfaces |
 | Element query | Matches key, tooltip, type suffix, and free-text query deterministically |
 | Analyzer and formatter | All changed Client and script sources pass |
 
@@ -22,6 +26,7 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | --- | --- |
 | Current worktree has no live driver client | `sanad-dev ui` fails closed and explains the driver prerequisite |
 | Current worktree has a live driver client | Its recorded VM endpoint is forwarded to the standalone CLI |
+| Current worktree has multiple live driver Clients | Automatic selection fails closed; `auth-url` and other commands require the intended Client's explicit VM endpoint |
 | Explicit VM endpoint is supplied | The caller endpoint is preserved, including equals-style options |
 | Windows host | FVM child execution uses shell resolution for the platform wrapper |
 | Help request with no runtime | Help remains available |
@@ -31,6 +36,8 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Scenario | Expected result |
 | --- | --- |
 | Snapshot | Returns keyed/textual elements and the current worktree badge |
+| Fresh macOS authentication | After UI-driven sign-out and sign-in, `auth-url` for the explicit macOS VM can be captured directly into a temporary shell variable, opened in the automation browser, unset, and followed by a Client snapshot proving Cloud reconnection |
+| Completed or absent authentication | The same explicit VM returns a nonzero `auth-url` result after the in-memory challenge is cleared |
 | Tooltip-wrapped action | Actionable child contains the inherited tooltip |
 | Selected semantic action | Keyed output reports semantic label, button role, and selected state without duplicate wrapper rows |
 | Obscured text field | Snapshot omits its current value |

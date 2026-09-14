@@ -10,7 +10,7 @@ class ToastUtils {
   static const defaultDuration = Duration(seconds: 5);
 
   static void showError(BuildContext context, String message) {
-    _logger.warning('User-visible error toast: $message');
+    _logger.warning('Showing user-visible error toast');
     toastification.show(
       context: context,
       type: ToastificationType.error,

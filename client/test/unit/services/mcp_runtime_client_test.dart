@@ -300,9 +300,9 @@ void main() {
     );
     await Future<void>.delayed(Duration.zero);
 
-    expect(cloudSocket.capturedCommands, hasLength(1));
-    expect(cloudSocket.capturedCommands.single['command'], 'save_mcp_server');
-    final previewPayload = cloudSocket.capturedCommands.single['payload'] as Map<String, dynamic>;
+    var saveCommands = cloudSocket.capturedCommands.where((entry) => entry['command'] == 'save_mcp_server').toList();
+    expect(saveCommands, hasLength(1));
+    final previewPayload = saveCommands.single['payload'] as Map<String, dynamic>;
     cloudSocket.debugEmitEvent({
       'type': 'device_event',
       'event': 'mcp.server.save.preview',
@@ -314,8 +314,9 @@ void main() {
     });
     await Future<void>.delayed(Duration.zero);
 
-    expect(cloudSocket.capturedCommands, hasLength(2));
-    final confirmPayload = cloudSocket.capturedCommands.last['payload'] as Map<String, dynamic>;
+    saveCommands = cloudSocket.capturedCommands.where((entry) => entry['command'] == 'save_mcp_server').toList();
+    expect(saveCommands, hasLength(2));
+    final confirmPayload = saveCommands.last['payload'] as Map<String, dynamic>;
     expect(confirmPayload['confirmation_token'], 'ticket-1');
     expect(confirmPayload['confirmation_fingerprint'], 'fp-1');
     cloudSocket.debugEmitEvent({

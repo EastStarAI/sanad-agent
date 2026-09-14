@@ -13,20 +13,26 @@ import '../../mocks/mock_socket_service.dart';
 void main() {
   late FakeSanadSocketService socket;
   late SocketConversationCommandGateway gateway;
+  late DeviceConfig device;
   late DeviceConversationStore store;
   late ConversationEventHandler handler;
   late List<String> replayHydrationRequests;
 
   setUp(() {
     socket = FakeSanadSocketService()..setConnected(true);
+    device = DeviceConfig(
+      id: 'agent-1',
+      name: 'SanadAgent',
+      metadata: const {'cloud_device_id': 'cloud-agent-1'},
+    );
     gateway = SocketConversationCommandGateway(
-      config: DeviceConfig(id: 'agent-1', name: 'SanadAgent'),
+      config: device,
       controller: socket,
     );
     store = DeviceConversationStore()..activateSession('session-1');
     replayHydrationRequests = [];
     handler = ConversationEventHandler(
-      deviceId: 'agent-1',
+      device: device,
       gateway: gateway,
       conversationStore: store,
       mapper: UnifiedDeviceMapper(),
@@ -54,6 +60,30 @@ void main() {
 
     expect(store.currentMessages.single.kind, EventKind.finalAnswer);
     expect(store.currentMessages.single.text, 'answer');
+  });
+
+  test('accepts merged cloud identity and rejects another device', () async {
+    socket.eventRouter.routeEvent({
+      ..._envelope('final_answer', {
+        'content': 'cloud answer',
+        'session_id': 'session-1',
+      }),
+      'device_id': 'cloud-agent-1',
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(store.currentMessages.single.text, 'cloud answer');
+
+    handler.handleIncomingEvent({
+      ..._envelope('final_answer', {
+        'content': 'foreign answer',
+        'session_id': 'session-1',
+      }),
+      'device_id': 'another-agent',
+    });
+
+    expect(store.currentMessages, hasLength(1));
+    expect(store.currentMessages.single.text, 'cloud answer');
   });
 
   test('accepted replay without a local boundary requests authoritative tail hydration', () async {

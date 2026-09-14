@@ -2,7 +2,6 @@ import 'package:logging/logging.dart';
 import 'dart:async';
 
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/core/interfaces/socket_service.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
@@ -845,7 +844,7 @@ class SessionCubit extends Cubit<SessionState> {
 
   bool _canRefreshConversations(DeviceConfig agent) {
     if (!agent.isOnline) return false;
-    return agent.id != DeviceInventoryIds.localDevice || agent.isLocalReachable;
+    return !agent.isLocalInventoryDevice || agent.isLocalReachable;
   }
 
   List<DeviceConfig> _agentsFrom(DeviceState agentState) {

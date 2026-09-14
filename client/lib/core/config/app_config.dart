@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 
-import 'public_service_endpoints.dart';
+import 'package:sanad_public_service_endpoints/public_service_endpoints.dart';
 
 enum AppEnvironment { local, dev, prod, stg }
 

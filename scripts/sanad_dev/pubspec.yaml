@@ -1,0 +1,13 @@
+name: sanad_dev
+description: Pure-Dart runtime tooling and tests for the sanad-dev CLI.
+publish_to: none
+
+environment:
+  sdk: ^3.10.7
+
+dependencies:
+  sanad_public_service_endpoints:
+    path: ../../shared/public_service_endpoints
+
+dev_dependencies:
+  test: ^1.25.0

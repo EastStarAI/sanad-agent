@@ -68,8 +68,7 @@ void main() {
       final registerSuccess =
           jsonDecode(frames.current as String) as Map<String, dynamic>;
       expect(registerSuccess['type'], equals('register_success'));
-      final deviceId =
-          registerSuccess['device_id']?.toString() ?? 'local-agent';
+      final deviceId = registerSuccess['device_id'] as String;
 
       final sessionId =
           'tool-permission-e2e-${DateTime.now().millisecondsSinceEpoch}';
@@ -248,8 +247,7 @@ void main() {
         'register_success',
         timeout: const Duration(seconds: 10),
       );
-      final deviceId =
-          registerSuccess['device_id']?.toString() ?? 'local-agent';
+      final deviceId = registerSuccess['device_id'] as String;
       final sessionId =
           'parallel-permission-e2e-${DateTime.now().millisecondsSinceEpoch}';
       socket.add(

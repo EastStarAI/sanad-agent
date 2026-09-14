@@ -3544,7 +3544,7 @@ Use the review skill.''',
         platformId: 'test-platform',
         message: Message(
           role: MessageRole.user,
-          content: 'token=abc123def456ghi789',
+          content: 'token=fixture-value',
         ),
         metadata: {
           'authorization': 'Bearer secret-token-123456',

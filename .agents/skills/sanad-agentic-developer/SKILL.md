@@ -1,11 +1,18 @@
 ---
 name: Sanad Agentic Developer
-description: Standard operating procedures for live and isolated Sanad development, sanad-dev runtime control, diagnostics, verification, Git worktrees, and Pull Request delivery.
+description: Standard operating procedures for live and isolated Sanad development, multiple managed Agents and Clients, sanad-dev runtime control, automated macOS Client sign-in, diagnostics, verification, Git worktrees, and Pull Request delivery.
 ---
 
 # Sanad Agentic Developer Protocol
 
 Use this protocol to choose the correct development boundary, modify Sanad, verify the result, control the active runtime, and deliver reviewable changes.
+
+## Progressive References
+
+Load only the detailed procedure needed for the current task:
+
+- Read [Public Multi-Runtime Development](references/public-multi-runtime-development.md) before running multiple Agents, Homes, Clients, devices, worktrees, or workspaces concurrently.
+- Read [Local macOS Authentication](references/local-macos-auth-login.md) before automating a fresh macOS Client sign-in through `sanad-dev ui` and `agent-browser`.
 
 ## 1. Choose the Development Mode
 
@@ -137,7 +144,7 @@ sanad-dev status
 
 Local and cloud gateway connections are enabled by default. Use `--no-cloud` only for explicit local-only verification. `--cloud` is an explicit restatement of the default, not a requirement for normal connected development.
 
-Use `--home user` only when a linked worktree intentionally needs the primary user's Sanad Home. Otherwise allow the launcher to choose the worktree-scoped home; an explicit custom home must be an absolute path.
+Use `--home user` only when a linked worktree intentionally needs the primary user's Sanad Home. Otherwise allow the launcher to choose the worktree-scoped Home. Whenever a runtime uses a non-primary Home outside the current checkout's launcher-derived default, pass `--home <absolute-path>` explicitly to every `sanad-dev` command for that runtime, including `run`, `status`, logs, UI, restart, reload, and stop. Setting `SANAD_HOME` alone does not select the runtime for `sanad-dev` discovery or ownership.
 
 `run --background` is the sole official detached launch mode. It starts one detached launcher that remains the owner of the Agent, Clients, journals, and complete process trees, then returns success only after a bounded handshake proves the requested components are managed. Never wrap `sanad-dev run` in user-composed `nohup`, `screen`, `script`, or shell-background recipes. A temporary or non-TTY shell must use `--background`; launcher interruption before managed must publish a staged failure and clean every process it spawned.
 

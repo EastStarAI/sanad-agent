@@ -39,6 +39,26 @@ void main() {
     localSocket.dispose();
   });
 
+  test('fetches inventory when created after the cloud socket is already ready', () async {
+    manager.dispose();
+    coordinator.dispose();
+    cloudSocket.dispose();
+    localSocket.dispose();
+
+    cloudSocket = FakeSanadSocketService(hardwareId: 'current-device')..setConnected(true);
+    localSocket = FakeSanadSocketService(hardwareId: 'current-device');
+    coordinator = DeviceConnectionCoordinator(
+      cloudSocketService: cloudSocket,
+      localSocketService: localSocket,
+      currentDeviceId: 'current-device',
+    );
+
+    manager = await DeviceManager.create(cloudSocket, coordinator);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(cloudSocket.capturedCommands.single['event'], 'get_devices');
+  });
+
   test('authoritative inventory clears a persisted cloud device that no longer exists', () async {
     await manager.handleDevicesResponseForTesting({
       'status': 'ok',
@@ -77,8 +97,8 @@ void main() {
       ],
     });
 
-    expect(manager.getActiveAgentId(), 'local-agent');
-    expect(manager.getActiveAgent()?.id, 'local-agent');
+    expect(manager.getActiveAgentId(), 'current-device');
+    expect(manager.getActiveAgent()?.id, 'current-device');
     expect(manager.getActiveAgent()?.cloudDeviceId, savedDeviceId);
   });
 
@@ -128,7 +148,7 @@ void main() {
 
     await rename;
     expect(manager.agents.single.name, 'New name');
-    expect(manager.agents.single.id, 'local-agent');
+    expect(manager.agents.single.id, 'current-device');
   });
 
   test('rename surfaces a correlated backend error', () async {
@@ -149,7 +169,11 @@ void main() {
 
   test('local-only device cannot be renamed', () async {
     cloudSocket.setConnected(true);
-    final localOnly = DeviceConfig(id: 'local-agent', name: 'This device');
+    final localOnly = DeviceConfig(
+      id: 'current-device',
+      name: 'This device',
+      hardwareId: 'current-device',
+    );
 
     await expectLater(manager.renameAgent(localOnly, 'New name'), throwsA(isA<DeviceMutationException>()));
     expect(cloudSocket.capturedCommands, isEmpty);

@@ -237,19 +237,37 @@ class GatewayManager {
     GatewayResponse response,
     BasePlatform? originPlatform,
   ) {
+    unawaited(_deliverPlatformFamilySequentially(response));
+  }
+
+  Future<void> _deliverPlatformFamilySequentially(
+    GatewayResponse response,
+  ) async {
     final family = response.delivery.platformFamily!;
-    var delivered = 0;
-    for (final platform in _platforms) {
-      if (platform.descriptor.platformFamily != family) continue;
-      if (_isUserEchoSuppressed(response, platform)) continue;
-      _send(platform, response);
-      delivered++;
-    }
-    if (delivered == 0) {
+    final targets =
+        _platforms
+            .where(
+              (platform) =>
+                  platform.descriptor.platformFamily == family &&
+                  !_isUserEchoSuppressed(response, platform),
+            )
+            .toList(growable: false)
+          ..sort((left, right) {
+            final leftLocal =
+                left.descriptor.transport == PlatformTransport.local ? 0 : 1;
+            final rightLocal =
+                right.descriptor.transport == PlatformTransport.local ? 0 : 1;
+            return leftLocal.compareTo(rightLocal);
+          });
+    if (targets.isEmpty) {
       _logger.warning(
         'platform_family delivery ${_shortEventId(response)} '
         'reached 0 platforms (family=${family.value}).',
       );
+      return;
+    }
+    for (final platform in targets) {
+      await _sendAwaited(platform, response);
     }
   }
 
@@ -298,6 +316,22 @@ class GatewayManager {
   bool _isUserEchoSuppressed(GatewayResponse response, BasePlatform platform) {
     return response.message.role == MessageRole.user &&
         !platform.shouldReceiveUserEcho;
+  }
+
+  Future<void> _sendAwaited(
+    BasePlatform platform,
+    GatewayResponse response,
+  ) async {
+    try {
+      await platform.sendResponse(response);
+    } catch (error, stack) {
+      _logger.warning(
+        'Failed to deliver ${_shortEventId(response)} '
+        'to ${platform.platformId}: $error',
+        error,
+        stack,
+      );
+    }
   }
 
   void _send(BasePlatform platform, GatewayResponse response) {

@@ -15,16 +15,20 @@ This directory owns the specifications of test cases, manual validation flows, t
 
 ## Active Specifications
 
+- [Test Suite Performance and Ownership QA](test_suite_performance_qa.md): Package boundaries, deterministic timer/event testing, hotspot thresholds, and subprocess/port integration classification for Agent, Client, and `sanad-dev` suites.
 - [Flutter VM Driver CLI QA](flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
 - [Bundled Product Skills QA](bundled_product_skills_qa.md): Deterministic one-file embedding, SANAD_HOME install/update/remove, customization safety, fast startup, and release-artifact coverage.
 - [Local Gateway and Sanad Home Security QA](local_gateway_and_sanad_home_security_qa.md): Authentication, Host/Origin rejection, secure writes, legacy migration, restart, Windows ACL, and worktree isolation coverage.
 - [Memory Tool Reliability QA](memory_tool_reliability.md): Regression coverage for compact results, atomic batches, drift recovery, bounded retries, content safety, and frozen snapshots.
+- [View Image Tool QA](view_image_tool_qa.md): Regression coverage for secure image loading, user attachment admission, composer/timeline/edit UX, local/remote media hydration, multimodal codecs, recovery, pruning, and binary-safe projections.
 - [Runtime Source Switch QA](runtime_source_switch_qa.md): Regression coverage for requester-scoped pair selection, multi-runtime isolation, retained runtime identity, target conflicts, and full-pair rollback.
 - [Release Verification Matrix](release_verification.md): Local and hosted evidence required for release identity, signing, installation, update, rollback, and supply-chain safety.
 - [Community Governance QA](community_governance_qa.md): Static and live verification for labels, templates, skills, protected CI, Discord routing, and repository governance.
 - [Conversation Cache Recovery QA](conversation_cache_recovery_qa.md): Local cache, draft, reconnect, and restart recovery coverage.
+- [Cross-Transport Delivery Presence QA](cross_transport_delivery_presence_qa.md): Assertion-bound Local membership, fail-safe Agent Cloud-egress leases, route transitions, and canonical event-id deduplication.
 - [Mobile Session and Resume Recovery QA](mobile_session_resume_recovery_qa.md): Typed refresh outcomes, foreground resume, stale-cache continuity, and authoritative mobile conversation resynchronization.
 - [Desktop Authentication Exchange QA](desktop_authentication_exchange_qa.md): Bidirectional login, refresh, logout, reconnect, and credential-free Local Gateway exchange coverage.
+- [Account Sessions and Devices QA](account_sessions_devices_qa.md): Account Client-session and Agent inventory presentation, hardware/account identity boundaries, cancellation, revocation, compact layout, and restart coverage.
 - [Device Name Editing QA](device_name_editing_qa.md): Device rename validation, synchronization, and failure coverage.
 - [Provider Account Usage Limits QA](provider_account_usage_limits_qa.md): Regression coverage for instance isolation, capability discovery, freshness, stale responses, and usage-card presentation.
 - [OpenRouter App Attribution QA](openrouter_app_attribution_qa.md): Exact app-attribution headers, sync/stream propagation, bearer-auth preservation, and provider-isolation coverage.

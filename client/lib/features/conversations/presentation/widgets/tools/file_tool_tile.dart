@@ -405,14 +405,10 @@ class _FileToolTileState extends State<FileToolTile> {
           RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
         backgroundColor: WidgetStateProperty.resolveWith((states) {
-          return states.contains(WidgetState.selected)
-              ? colors.primary.withValues(alpha: 0.2)
-              : Colors.transparent;
+          return states.contains(WidgetState.selected) ? colors.primary.withValues(alpha: 0.2) : Colors.transparent;
         }),
         foregroundColor: WidgetStateProperty.resolveWith((states) {
-          return states.contains(WidgetState.selected)
-              ? colors.primary
-              : colors.onSurfaceVariant;
+          return states.contains(WidgetState.selected) ? colors.primary : colors.onSurfaceVariant;
         }),
         side: WidgetStatePropertyAll(
           BorderSide(color: colors.onSurface.withValues(alpha: 0.05)),

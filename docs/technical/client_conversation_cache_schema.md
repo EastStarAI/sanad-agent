@@ -72,11 +72,11 @@ start and across device switches:
 - **Disconnect continuity.** A temporary state with known inventory but no
   resolved active device does not replace the cache's active device with null
   or clear the presented timeline. Same-hardware cloud and local inventory
-  entries recognize the cloud id represented by the canonical `local-agent`
-  entry before deciding that a persisted device was deleted. The canonical
-  `local-agent` conversation cache refreshes only while the local transport is
-  reachable; a stale cloud-online flag during daemon restart must not replace
-  its cached sections with empty cloud responses.
+  entries recognize the Cloud id represented by the canonical hardware-keyed
+  local row before deciding that a persisted device was deleted. The local
+  conversation cache refreshes only while the local transport is reachable; a
+  stale Cloud-online flag during daemon restart must not replace its cached
+  sections with empty Cloud responses.
 
 ## 3. Resource Lifecycle States
 

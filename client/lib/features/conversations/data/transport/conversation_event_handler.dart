@@ -8,6 +8,7 @@ import 'package:sanad_client/features/conversations/domain/models/session_route_
 import 'package:sanad_client/features/conversations/domain/models/pending_steer_record.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
+import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 
 class ConversationEventHandler {
   static const Set<String> _streamingEvents = {
@@ -31,7 +32,7 @@ class ConversationEventHandler {
     'context_compaction.failed',
   };
 
-  final String _deviceId;
+  final DeviceConfig _device;
   final ConversationCommandGateway _gateway;
   final DeviceConversationStore _conversationStore;
   final DeviceEventMapper _mapper;
@@ -39,12 +40,12 @@ class ConversationEventHandler {
   late final StreamSubscription<Map<String, dynamic>> _eventSubscription;
 
   ConversationEventHandler({
-    required String deviceId,
+    required DeviceConfig device,
     required ConversationCommandGateway gateway,
     required DeviceConversationStore conversationStore,
     required DeviceEventMapper mapper,
     Future<void> Function(String sessionId)? onReplayTailHydrationRequired,
-  }) : _deviceId = deviceId,
+  }) : _device = device,
        _gateway = gateway,
        _conversationStore = conversationStore,
        _mapper = mapper,
@@ -58,7 +59,7 @@ class ConversationEventHandler {
     final runId = payload['run_id'] as String?;
 
     final deviceId = event['device_id'];
-    if (deviceId != null && deviceId != _deviceId) {
+    if (deviceId != null && (deviceId is! String || !_device.representsDeviceId(deviceId))) {
       return;
     }
 
