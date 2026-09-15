@@ -5,6 +5,7 @@ import 'package:sqlite3/sqlite3.dart';
 
 import '../../../core/models/message.dart';
 import '../../models/session_execution_snapshot.dart';
+import '../../models/suspended_checkpoint.dart';
 import '../../models/pending_steer_record.dart';
 import '../../models/stop_recovery_outcome.dart';
 import '../session_history_revision_repository.dart';
@@ -409,6 +410,107 @@ class SessionExecutionStateCoordinator {
     });
     _publish(mutation.execution);
     return mutation;
+  }
+
+  /// Atomically accepts a suspended Ask User or permission decision together
+  /// with the exact durable work-owner transition. A crash can therefore
+  /// observe either the unresolved wait or a complete recoverable decision,
+  /// never a consumed checkpoint whose work item is still waiting.
+  SuspendedDecisionClaim? claimSuspendedDecision({
+    required SuspendedCheckpoint checkpoint,
+    Map<String, dynamic>? decision,
+    bool reclaimPersistedDecision = false,
+  }) {
+    SessionExecutionSnapshotChange? publishedChange;
+    final claim = _state.transaction((tx) {
+      final rows = tx.db.select(
+        'SELECT * FROM suspended_checkpoints WHERE request_id = ? LIMIT 1',
+        [checkpoint.requestId],
+      );
+      if (rows.isEmpty) return null;
+      final durableCheckpoint = SuspendedCheckpoint.fromRow(
+        Map<String, Object?>.from(rows.first),
+      );
+      if (durableCheckpoint.sessionId != checkpoint.sessionId ||
+          durableCheckpoint.toolCallId != checkpoint.toolCallId) {
+        return null;
+      }
+      final expectedStatus = reclaimPersistedDecision
+          ? 'decision_ready'
+          : 'awaiting_permission';
+      if (durableCheckpoint.status != expectedStatus) return null;
+      final resolvedDecision = reclaimPersistedDecision
+          ? durableCheckpoint.resolvedDecision
+          : decision;
+      if (resolvedDecision == null) return null;
+
+      final active = _workItems.findActiveWorkItem(checkpoint.sessionId);
+      if (active == null ||
+          (active.state != SessionWorkState.waiting &&
+              active.state != SessionWorkState.blocked)) {
+        return null;
+      }
+      final executingTools = List<String>.from(
+        active.continuationMetadata['currently_executing_tools'] as List? ??
+            const [],
+      );
+      final runId = active.continuationMetadata['owner_run_id']?.toString();
+      final generationRaw = active.continuationMetadata['owner_generation'];
+      final generation = switch (generationRaw) {
+        int() => generationRaw,
+        String() => int.tryParse(generationRaw),
+        _ => null,
+      };
+      if (!executingTools.contains(checkpoint.toolCallId) ||
+          runId == null ||
+          runId.isEmpty ||
+          generation == null) {
+        return null;
+      }
+
+      tx.db.execute(
+        '''
+        UPDATE suspended_checkpoints
+        SET status = 'decision_ready', resolved_decision = ?, updated_at = ?
+        WHERE request_id = ? AND status = ?
+        ''',
+        [
+          jsonEncode(resolvedDecision),
+          DateTime.now().toUtc().toIso8601String(),
+          checkpoint.requestId,
+          expectedStatus,
+        ],
+      );
+      if (tx.db.updatedRows != 1) return null;
+      _workItems.transitionWorkItemState(
+        workItemId: active.workItemId,
+        fromState: active.state,
+        toState: SessionWorkState.resuming,
+        transaction: tx,
+      );
+      final claimedWork = _workItems.findWorkItem(active.workItemId);
+      if (claimedWork == null) {
+        throw StateError('Suspended decision claim lost its work item.');
+      }
+      final claimedCheckpointRows = tx.db.select(
+        'SELECT * FROM suspended_checkpoints WHERE request_id = ? LIMIT 1',
+        [checkpoint.requestId],
+      );
+      if (claimedCheckpointRows.isEmpty) {
+        throw StateError('Suspended decision claim lost its checkpoint.');
+      }
+      publishedChange = _recomputeInTransaction(checkpoint.sessionId, tx);
+      return SuspendedDecisionClaim(
+        checkpoint: SuspendedCheckpoint.fromRow(
+          Map<String, Object?>.from(claimedCheckpointRows.first),
+        ),
+        workItem: claimedWork,
+        runId: runId,
+        generation: generation,
+      );
+    });
+    if (publishedChange != null) _publish(publishedChange!);
+    return claim;
   }
 
   /// Persists the final assistant result and closes the exact owning work item
@@ -966,6 +1068,20 @@ class SessionExecutionMutation<T> {
     required this.value,
     required this.execution,
     required this.applied,
+  });
+}
+
+class SuspendedDecisionClaim {
+  final SuspendedCheckpoint checkpoint;
+  final SessionWorkItem workItem;
+  final String runId;
+  final int generation;
+
+  const SuspendedDecisionClaim({
+    required this.checkpoint,
+    required this.workItem,
+    required this.runId,
+    required this.generation,
   });
 }
 

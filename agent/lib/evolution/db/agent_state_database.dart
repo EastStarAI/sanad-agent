@@ -357,10 +357,15 @@ class AgentStateDatabase {
         status TEXT NOT NULL,
         tool_arguments TEXT NOT NULL,
         permission_payload TEXT NOT NULL,
+        resolved_decision TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL
       );
     ''');
+    _safeAddColumn(
+      db,
+      'ALTER TABLE suspended_checkpoints ADD COLUMN resolved_decision TEXT',
+    );
 
     // ── Plan 29: provider_instances ───────────────────────────────────────
     db.execute('''

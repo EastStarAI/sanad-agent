@@ -28,6 +28,8 @@ class ContinuationCheckpointCoordinator {
   static const String checkpointKindInitialModelRequest =
       'initial_model_request';
   static const String checkpointKindAfterToolResult = 'after_tool_result';
+  static const String automaticUnknownToolRecoveryKey =
+      'auto_recover_interrupted_tools_as_unknown';
 
   /// Allowed checkpoint kinds for safe resume (Gate D.1).
   static const Set<String> _allowedKinds = {
@@ -42,10 +44,12 @@ class ContinuationCheckpointCoordinator {
   /// A null result means the interruption does not contain enough evidence to
   /// identify the checkpoint that safely preceded the provider request.
   static Map<String, dynamic>? metadataForInterruptedProviderRetry(
-    Map<String, dynamic> metadata,
-  ) {
+    Map<String, dynamic> metadata, {
+    bool requireExplicitRestartMarker = true,
+  }) {
     if (metadata['checkpoint_kind'] != checkpointKindModelRequestInFlight ||
-        metadata['restart_interrupted_provider_request'] != true ||
+        (requireExplicitRestartMarker &&
+            metadata['restart_interrupted_provider_request'] != true) ||
         List<Object?>.from(
           metadata['currently_executing_tools'] as List? ?? const [],
         ).isNotEmpty) {
@@ -286,6 +290,21 @@ class ContinuationCheckpointCoordinator {
     );
   }
 
+  void clearAutomaticUnknownToolRecoveryIntent() {
+    final repo = _repo;
+    if (repo == null) return;
+    final activeItem = repo.findActiveWorkItem(sessionId);
+    if (activeItem == null) return;
+    final meta = Map<String, dynamic>.from(activeItem.continuationMetadata);
+    if (meta.remove(automaticUnknownToolRecoveryKey) == null) return;
+    repo.transitionWorkItemState(
+      workItemId: activeItem.workItemId,
+      fromState: activeItem.state,
+      toState: activeItem.state,
+      continuationMetadata: meta,
+    );
+  }
+
   /// Repairs only the crash window after the owned user message was saved and
   /// before the first provider checkpoint was written.
   bool repairMissingPreProviderCheckpoint({
@@ -343,6 +362,7 @@ class ContinuationCheckpointCoordinator {
   ResumeResult restoreCheckpointForResume({
     required int currentHistoryLength,
     bool allowAmbiguousToolInterruption = false,
+    bool neutralizeAllInterruptedTools = false,
   }) {
     final repo = _repo;
     if (repo == null) {
@@ -393,6 +413,10 @@ class ContinuationCheckpointCoordinator {
           deferred.requesterSessionId == sessionId &&
           deferred.requesterToolCallId == toolId) {
         deferredToolCallIds.add(toolId);
+        continue;
+      }
+      if (neutralizeAllInterruptedTools) {
+        ambiguousToolCallIds.add(toolId);
         continue;
       }
       final isReplaySafe = toolReplaySafety[toolId] == true;

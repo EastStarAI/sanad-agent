@@ -677,6 +677,9 @@ void main() {
             matching: sequence.terminal,
           );
 
+          // Long cancelled shell output may trigger a compaction request before
+          // the fresh turn. Script both deterministic provider calls.
+          h.fakeLlm.enqueueText('compaction-summary-after-stop');
           h.fakeLlm.enqueueText('new-turn-after-stop');
           await client1.sendThink(
             sessionId: sessionId,
@@ -719,7 +722,7 @@ void main() {
   );
 
   test(
-    'F.2.9 ordinary restart preserves ask-user suspension and resumes once',
+    'F.2.9 SIGKILL preserves ask-user suspension and resumes once',
     () async {
       final h = await _RecoveryHarness.create();
       try {
@@ -754,11 +757,7 @@ void main() {
             timeout: const Duration(seconds: 30),
           );
 
-          final restart = await h.requestOrdinaryRestart(
-            timeout: const Duration(seconds: 5),
-          );
-          expect(restart['success'], isTrue);
-          expect(restart['outcome'], equals('safe'));
+          await h.killFirstDaemon();
 
           final client2 = await h.startSecondDaemon();
           try {
@@ -819,6 +818,194 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
+
+  test(
+    'F.2.10 SIGKILL during provider stream resumes from predecessor once',
+    () async {
+      final h = await _RecoveryHarness.create();
+      try {
+        h.fakeLlm.enqueuePartialHang('partial-before-sigkill');
+        h.fakeLlm.enqueueText('provider-resumed-after-sigkill');
+        final client1 = await h.startFirstDaemon();
+        final sessionId = 'gate-f-f210-${_unique()}';
+        try {
+          await client1.sendThink(
+            sessionId: sessionId,
+            requestId: 'f210-think-${_unique()}',
+            message: 'survive a provider crash',
+          );
+          await h.fakeLlm.waitForHangStart(
+            timeout: const Duration(seconds: 30),
+          );
+          await h.killFirstDaemon();
+          h.fakeLlm.releaseHang();
+
+          final client2 = await h.startSecondDaemon();
+          try {
+            final history = await client2.loadSessionHistory(
+              sessionId: sessionId,
+              requestId: 'f210-history-${_unique()}',
+              timeout: const Duration(seconds: 30),
+            );
+            expect(
+              jsonEncode(history['messages']),
+              contains('provider-resumed-after-sigkill'),
+              reason:
+                  'startup may finish before the replacement client attaches',
+            );
+            expect(
+              h.fakeLlm.requestsEqualTo(h.fakeLlm.firstRequestBody),
+              equals(2),
+              reason: 'startup must issue exactly one replacement request',
+            );
+          } finally {
+            await client2.close();
+          }
+        } finally {
+          await client1.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'F.2.11 SIGKILL preserves permission wait and approved tool runs once',
+    () async {
+      final h = await _RecoveryHarness.create(
+        permissionMode: WorkspacePermissionMode.defaultMode,
+      );
+      try {
+        const toolCallId = 'call-f211-permission';
+        final output = File('${h.workspaceDir.path}/permission-ran.txt');
+        h.fakeLlm.enqueueToolCall(
+          toolName: 'shell_execute',
+          args: const <String, dynamic>{
+            'command': 'printf permission-ran > permission-ran.txt',
+          },
+          toolCallId: toolCallId,
+        );
+        h.fakeLlm.enqueueText('permission-resumed-after-sigkill');
+        final client1 = await h.startFirstDaemon();
+        final sessionId = 'gate-f-f211-${_unique()}';
+        try {
+          await client1.sendThink(
+            sessionId: sessionId,
+            requestId: 'f211-think-${_unique()}',
+            message: 'run one approved shell action',
+            workspaceId: h.workspaceDir.path,
+          );
+          final permissionRequestId = await client1.waitForPermissionRequest(
+            sessionId: sessionId,
+            toolName: 'shell_execute',
+            timeout: const Duration(seconds: 30),
+          );
+          await h.killFirstDaemon();
+
+          final client2 = await h.startSecondDaemon();
+          try {
+            await client2.sendPermissionResponse(
+              sessionId: sessionId,
+              requestId: permissionRequestId,
+              answer: 'Allow once',
+            );
+            expect(
+              await client2.waitForFinalAnswer(
+                sessionId: sessionId,
+                timeout: const Duration(seconds: 30),
+              ),
+              contains('permission-resumed-after-sigkill'),
+            );
+            expect(await output.readAsString(), equals('permission-ran'));
+          } finally {
+            await client2.close();
+          }
+        } finally {
+          await client1.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'F.2.12 SIGKILL during a tool records unknown outcome without replay',
+    () async {
+      final h = await _RecoveryHarness.create();
+      try {
+        const toolCallId = 'call-f212-tool';
+        final starts = File('${h.workspaceDir.path}/tool-starts.txt');
+        h.fakeLlm.enqueueToolCall(
+          toolName: 'shell_execute',
+          args: const <String, dynamic>{
+            'command':
+                'echo started >> tool-starts.txt; while :; do sleep 0.1; done',
+            'timeout_ms': 60000,
+          },
+          toolCallId: toolCallId,
+        );
+        h.fakeLlm.enqueueText('compaction-summary-after-tool-crash');
+        h.fakeLlm.enqueueText('tool-unknown-outcome-resumed');
+        final client1 = await h.startFirstDaemon();
+        final sessionId = 'gate-f-f212-${_unique()}';
+        try {
+          await client1.sendThink(
+            sessionId: sessionId,
+            requestId: 'f212-think-${_unique()}',
+            message: 'run the crashable tool once',
+            workspaceId: h.workspaceDir.path,
+          );
+          await client1.waitForToolCall(
+            sessionId: sessionId,
+            toolName: 'shell_execute',
+            timeout: const Duration(seconds: 30),
+          );
+          final deadline = DateTime.now().add(const Duration(seconds: 5));
+          while (!starts.existsSync() && DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+          }
+          expect(starts.existsSync(), isTrue);
+          await h.killFirstDaemon();
+
+          final client2 = await h.startSecondDaemon();
+          try {
+            var encodedHistory = '';
+            for (var attempt = 0; attempt < 30; attempt++) {
+              final history = await client2.loadSessionHistory(
+                sessionId: sessionId,
+                requestId: 'f212-history-$attempt-${_unique()}',
+                timeout: const Duration(seconds: 30),
+              );
+              encodedHistory = jsonEncode(history['messages']);
+              if (encodedHistory.contains('tool-unknown-outcome-resumed')) {
+                break;
+              }
+              await Future<void>.delayed(const Duration(milliseconds: 200));
+            }
+            expect(encodedHistory, contains('tool-unknown-outcome-resumed'));
+            expect(encodedHistory, contains('unknown'));
+            expect(
+              (await starts.readAsLines()).where((line) => line == 'started'),
+              hasLength(1),
+              reason: 'startup must not execute the interrupted tool again',
+            );
+          } finally {
+            await client2.close();
+          }
+        } finally {
+          await client1.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+    testOn: 'linux || mac-os',
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 }
 
 // ─── Test harness ─────────────────────────────────────────────────────────
@@ -857,6 +1044,7 @@ class _RecoveryHarness {
   static Future<_RecoveryHarness> create({
     String templateId = _template,
     bool autoFailover = false,
+    WorkspacePermissionMode permissionMode = WorkspacePermissionMode.fullAccess,
   }) async {
     final worktreeDir = Directory.current;
     final sanadHome = await Directory.systemTemp.createTemp('sanad-f-home-');
@@ -879,7 +1067,7 @@ class _RecoveryHarness {
     }
     await const WorkspacePolicyStore().savePermissionMode(
       workspaceDir.path,
-      WorkspacePermissionMode.fullAccess,
+      permissionMode,
     );
 
     final gatewayPort =
@@ -1339,6 +1527,7 @@ class FakeLlmServer {
   final List<_LlmResponse> _responses = [];
   final List<String> _requestBodies = [];
   Completer<void>? _hangStarted;
+  Completer<void>? _hangReleased;
   int _requestCount = 0;
 
   int get requestCount => _requestCount;
@@ -1375,11 +1564,17 @@ class FakeLlmServer {
 
   void enqueuePartialHang(String content) {
     _hangStarted = Completer<void>();
+    _hangReleased = Completer<void>();
     _responses.add(_LlmResponse.partialHang(content));
   }
 
   Future<void> waitForHangStart({required Duration timeout}) =>
       _hangStarted!.future.timeout(timeout);
+
+  void releaseHang() {
+    final release = _hangReleased;
+    if (release != null && !release.isCompleted) release.complete();
+  }
 
   Future<void> _serve() async {
     await for (final request in _server) {
@@ -1426,11 +1621,16 @@ class FakeLlmServer {
           await request.response.flush();
           _hangStarted?.complete();
           try {
-            while (true) {
-              await Future<void>.delayed(const Duration(milliseconds: 50));
+            while (!(_hangReleased?.isCompleted ?? false)) {
+              await Future.any<void>([
+                Future<void>.delayed(const Duration(milliseconds: 50)),
+                if (_hangReleased != null) _hangReleased!.future,
+              ]);
+              if (_hangReleased?.isCompleted ?? false) break;
               request.response.write(': connection-probe\n\n');
               await request.response.flush();
             }
+            await request.response.close();
           } catch (_) {
             // The request-owned client was closed by cancellation.
           }
