@@ -29,7 +29,7 @@ void main() {
     () async {
       final holder = await Process.start(
         Platform.resolvedExecutable,
-        ['run', 'test/core/sanad_home/runtime_lock_holder.dart', home.path],
+        ['test/core/sanad_home/runtime_lock_holder.dart', home.path],
         workingDirectory: Directory.current.path,
         environment: <String, String>{
           ...Platform.environment,
@@ -37,13 +37,28 @@ void main() {
           'SANAD_STATE_HOME': home.path,
         },
       );
+      final helperStderr = StringBuffer();
+      final stderrSubscription = holder.stderr
+          .transform(utf8.decoder)
+          .listen(helperStderr.write);
 
       try {
-        final ready = await holder.stdout
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())
-            .first
-            .timeout(const Duration(seconds: 10));
+        late final String ready;
+        try {
+          ready = await holder.stdout
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())
+              .first
+              .timeout(const Duration(seconds: 10));
+        } on StateError {
+          final exitCode = await holder.exitCode.timeout(
+            const Duration(seconds: 10),
+          );
+          fail(
+            'Runtime lock helper exited before readiness '
+            '(exit $exitCode): ${helperStderr.toString().trim()}',
+          );
+        }
         expect(ready, 'locked');
 
         await expectLater(
@@ -63,6 +78,7 @@ void main() {
         expect(lease.isReleased, isTrue);
       } finally {
         holder.kill();
+        await stderrSubscription.cancel();
       }
     },
   );
