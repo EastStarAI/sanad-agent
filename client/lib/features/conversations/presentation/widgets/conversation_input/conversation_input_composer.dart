@@ -1,5 +1,8 @@
 import 'dart:async';
 
+import 'package:desktop_drop/desktop_drop.dart';
+import 'package:file_selector/file_selector.dart';
+import 'package:super_clipboard/super_clipboard.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
@@ -8,6 +11,7 @@ import 'package:sanad_client/features/conversations/domain/models/llm_usage_snap
 import 'package:sanad_client/features/conversations/presentation/bloc/composer_slash_commands_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/composer_slash_commands_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
@@ -39,6 +43,20 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:google_fonts/google_fonts.dart';
 
+String _formatAttachmentBytes(int bytes) {
+  if (bytes >= 1024 * 1024) return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MiB';
+  if (bytes >= 1024) return '${(bytes / 1024).toStringAsFixed(1)} KiB';
+  return '$bytes B';
+}
+
+ConversationInputCubit? _maybeInputCubit(BuildContext context) {
+  try {
+    return context.read<ConversationInputCubit>();
+  } on ProviderNotFoundException {
+    return null;
+  }
+}
+
 class ConversationInputComposer extends StatelessWidget {
   final SlashCommandTextController chatController;
   final FocusNode chatFocusNode;
@@ -56,6 +74,7 @@ class ConversationInputComposer extends StatelessWidget {
   final Future<bool> Function() onConfirmFullAccess;
   final GlobalKey<PopupMenuButtonState<String>> agentSelectorKey;
   final Future<void> Function(DeviceConfig? activeAgent) onPickAndCreateWorkspace;
+  final Future<List<XFile>> Function()? pickAttachmentFiles;
 
   final int maxLines;
 
@@ -76,6 +95,7 @@ class ConversationInputComposer extends StatelessWidget {
     required this.onConfirmFullAccess,
     required this.agentSelectorKey,
     required this.onPickAndCreateWorkspace,
+    this.pickAttachmentFiles,
     this.maxLines = 8,
     this.sessionId,
   });
@@ -85,6 +105,13 @@ class ConversationInputComposer extends StatelessWidget {
     final supportsKeyboardSlashNavigation = !kIsWeb
         ? !(defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS)
         : true;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!context.mounted) return;
+      _maybeInputCubit(context)?.setDraftScope(
+        deviceId: agentSlice.activeAgent?.id,
+        sessionId: sessionId,
+      );
+    });
 
     return BlocBuilder<ComposerSlashCommandsCubit, ComposerSlashCommandsState>(
       builder: (context, slashState) {
@@ -119,27 +146,32 @@ class ConversationInputComposer extends StatelessWidget {
               ),
               const SizedBox(height: 10),
             ],
-            _UnifiedComposerContainer(
-              chatController: chatController,
+            _AttachmentPasteListener(
               chatFocusNode: chatFocusNode,
-              agentSlice: agentSlice,
-              inputSlice: inputSlice,
               capabilities: capabilities,
-              inputBgColor: inputBgColor,
-              borderColor: borderColor,
-              dimTextColor: dimTextColor,
-              chipBgColor: chipBgColor,
-              onSelectSlashSuggestion: onSelectSlashSuggestion,
-              onSendAttempt: onSendAttempt,
-              onStop: onStop,
-              sessionId: sessionId,
-              onConfirmFullAccess: onConfirmFullAccess,
-              supportsKeyboardSlashNavigation: supportsKeyboardSlashNavigation,
-              slashState: slashState,
-              context: context,
-              agentSelectorKey: agentSelectorKey,
-              onPickAndCreateWorkspace: onPickAndCreateWorkspace,
-              maxLines: maxLines,
+              child: _UnifiedComposerContainer(
+                chatController: chatController,
+                chatFocusNode: chatFocusNode,
+                agentSlice: agentSlice,
+                inputSlice: inputSlice,
+                capabilities: capabilities,
+                inputBgColor: inputBgColor,
+                borderColor: borderColor,
+                dimTextColor: dimTextColor,
+                chipBgColor: chipBgColor,
+                onSelectSlashSuggestion: onSelectSlashSuggestion,
+                onSendAttempt: onSendAttempt,
+                onStop: onStop,
+                sessionId: sessionId,
+                onConfirmFullAccess: onConfirmFullAccess,
+                supportsKeyboardSlashNavigation: supportsKeyboardSlashNavigation,
+                slashState: slashState,
+                context: context,
+                agentSelectorKey: agentSelectorKey,
+                onPickAndCreateWorkspace: onPickAndCreateWorkspace,
+                pickAttachmentFiles: pickAttachmentFiles,
+                maxLines: maxLines,
+              ),
             ),
           ],
         );
@@ -179,6 +211,207 @@ class ConversationInputComposer extends StatelessWidget {
   }
 }
 
+class _AttachmentPasteListener extends StatefulWidget {
+  const _AttachmentPasteListener({
+    required this.chatFocusNode,
+    required this.capabilities,
+    required this.child,
+  });
+
+  final FocusNode chatFocusNode;
+  final Capability capabilities;
+  final Widget child;
+
+  @override
+  State<_AttachmentPasteListener> createState() => _AttachmentPasteListenerState();
+}
+
+class _AttachmentPasteListenerState extends State<_AttachmentPasteListener> {
+  ClipboardEvents? _events;
+
+  @override
+  void initState() {
+    super.initState();
+    _events = ClipboardEvents.instance;
+    _events?.registerPasteEventListener(_onPasteEvent);
+  }
+
+  @override
+  void dispose() {
+    _events?.unregisterPasteEventListener(_onPasteEvent);
+    super.dispose();
+  }
+
+  void _onPasteEvent(ClipboardReadEvent event) {
+    if (!widget.chatFocusNode.hasFocus) return;
+    unawaited(_readImage(awaitReader: event.getClipboardReader));
+  }
+
+  Future<void> _readImage({
+    required Future<ClipboardReader> Function() awaitReader,
+  }) async {
+    try {
+      final reader = await awaitReader();
+      for (final item in reader.items) {
+        if (!item.canProvide(Formats.png)) continue;
+        final bytes = await item.readFileBytes(Formats.png);
+        if (!mounted || bytes == null) return;
+        await context.read<ConversationInputCubit>().addDraftAttachment(
+          name: 'pasted-image.png',
+          bytes: bytes,
+          source: DraftAttachmentSource.paste,
+          capability: widget.capabilities,
+        );
+        return;
+      }
+    } catch (_) {
+      // Normal text paste must remain unaffected when image extraction fails.
+    }
+  }
+
+  KeyEventResult _onKeyEvent(FocusNode _, KeyEvent event) {
+    if (_events != null || event is! KeyDownEvent) return KeyEventResult.ignored;
+    final isPaste =
+        event.logicalKey == LogicalKeyboardKey.keyV &&
+        (HardwareKeyboard.instance.isMetaPressed || HardwareKeyboard.instance.isControlPressed);
+    final clipboard = SystemClipboard.instance;
+    if (isPaste && clipboard != null) {
+      unawaited(_readImage(awaitReader: clipboard.read));
+    }
+    return KeyEventResult.ignored;
+  }
+
+  @override
+  Widget build(BuildContext context) => Focus(
+    onKeyEvent: _onKeyEvent,
+    child: widget.child,
+  );
+}
+
+extension on DataReader {
+  Future<Uint8List?> readFileBytes(FileFormat format) {
+    final completer = Completer<Uint8List?>();
+    final progress = getFile(
+      format,
+      (file) async {
+        try {
+          completer.complete(await file.readAll());
+        } catch (error, stackTrace) {
+          completer.completeError(error, stackTrace);
+        }
+      },
+      onError: completer.completeError,
+    );
+    if (progress == null) completer.complete(null);
+    return completer.future;
+  }
+}
+
+class _AttachmentRail extends StatelessWidget {
+  const _AttachmentRail({
+    required this.attachments,
+    required this.error,
+    required this.borderColor,
+    required this.dimTextColor,
+  });
+
+  final List<DraftAttachment> attachments;
+  final String? error;
+  final Color borderColor;
+  final Color dimTextColor;
+
+  @override
+  Widget build(BuildContext context) {
+    if (attachments.isEmpty && error == null) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (attachments.isNotEmpty)
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final attachment in attachments)
+                  Container(
+                    key: ValueKey('draft_attachment_${attachment.id}'),
+                    width: 180,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: borderColor),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 32,
+                          height: 32,
+                          child: attachment.isImage
+                              ? ClipRRect(
+                                  borderRadius: BorderRadius.circular(4),
+                                  child: Image.memory(
+                                    attachment.bytes,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, _, _) => const Icon(Symbols.image, size: 20),
+                                  ),
+                                )
+                              : const Icon(Symbols.draft, size: 20),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                attachment.name,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              Text(
+                                '${_formatAttachmentBytes(attachment.sizeBytes)} · ${attachment.status.name}',
+                                style: TextStyle(fontSize: 11, color: dimTextColor),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (attachment.status == DraftAttachmentStatus.failed)
+                          IconButton(
+                            key: ValueKey('retry_attachment_${attachment.id}'),
+                            tooltip: 'Retry attachment',
+                            onPressed: () => context.read<ConversationInputCubit>().retryDraftAttachment(attachment.id),
+                            icon: const Icon(Symbols.refresh, size: 18),
+                            visualDensity: VisualDensity.compact,
+                          ),
+                        IconButton(
+                          key: ValueKey('remove_attachment_${attachment.id}'),
+                          tooltip: 'Remove attachment',
+                          onPressed: () => context.read<ConversationInputCubit>().removeDraftAttachment(attachment.id),
+                          icon: const Icon(Symbols.close, size: 18),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          if (error != null) ...[
+            const SizedBox(height: 6),
+            Text(
+              error!,
+              key: const Key('attachment_error'),
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.error,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
 class _UnifiedComposerContainer extends StatelessWidget {
   final SlashCommandTextController chatController;
   final FocusNode chatFocusNode;
@@ -196,6 +429,7 @@ class _UnifiedComposerContainer extends StatelessWidget {
   final Future<bool> Function() onConfirmFullAccess;
   final GlobalKey<PopupMenuButtonState<String>> agentSelectorKey;
   final Future<void> Function(DeviceConfig? activeAgent) onPickAndCreateWorkspace;
+  final Future<List<XFile>> Function()? pickAttachmentFiles;
   final bool supportsKeyboardSlashNavigation;
   final ComposerSlashCommandsState slashState;
   final BuildContext context;
@@ -217,6 +451,7 @@ class _UnifiedComposerContainer extends StatelessWidget {
     required this.onConfirmFullAccess,
     required this.agentSelectorKey,
     required this.onPickAndCreateWorkspace,
+    this.pickAttachmentFiles,
     required this.supportsKeyboardSlashNavigation,
     required this.slashState,
     required this.context,
@@ -253,6 +488,7 @@ class _UnifiedComposerContainer extends StatelessWidget {
                 child: _WorkspaceWarning(onRefresh: () => context.read<ConversationInputCubit>().refreshWorkspaces()),
               ),
             ],
+            _buildAttachmentRail(context),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
               child: MultilineSubmissionShortcuts(
@@ -328,11 +564,58 @@ class _UnifiedComposerContainer extends StatelessWidget {
       ),
     );
 
-    return GestureDetector(
+    final focusSurface = GestureDetector(
       key: const Key('composer_focus_surface'),
       behavior: HitTestBehavior.opaque,
       onTap: chatFocusNode.requestFocus,
       child: composerCard,
+    );
+    if (!capabilities.supportsAttachments) return focusSurface;
+    return DropTarget(
+      onDragDone: (details) async {
+        for (final file in details.files) {
+          await _addFile(context, file, DraftAttachmentSource.drop);
+        }
+        chatFocusNode.requestFocus();
+      },
+      child: focusSurface,
+    );
+  }
+
+  Widget _buildAttachmentRail(BuildContext context) {
+    final cubit = _maybeInputCubit(context);
+    if (cubit == null) return const SizedBox.shrink();
+    return BlocBuilder<ConversationInputCubit, ConversationInputState>(
+      bloc: cubit,
+      buildWhen: (previous, current) =>
+          previous.draftAttachments != current.draftAttachments || previous.attachmentError != current.attachmentError,
+      builder: (context, state) => _AttachmentRail(
+        attachments: state.draftAttachments,
+        error: state.attachmentError,
+        borderColor: borderColor,
+        dimTextColor: dimTextColor,
+      ),
+    );
+  }
+
+  Future<void> _pickFiles(BuildContext context) async {
+    final files = await (pickAttachmentFiles ?? openFiles)();
+    for (final file in files) {
+      await _addFile(context, file, DraftAttachmentSource.picker);
+    }
+    chatFocusNode.requestFocus();
+  }
+
+  Future<void> _addFile(
+    BuildContext context,
+    XFile file,
+    DraftAttachmentSource source,
+  ) async {
+    await context.read<ConversationInputCubit>().addDraftAttachment(
+      name: file.name,
+      bytes: await file.readAsBytes(),
+      source: source,
+      capability: capabilities,
     );
   }
 
@@ -390,14 +673,19 @@ class _UnifiedComposerContainer extends StatelessWidget {
           Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // TODO: Implement upload file functionality feature later
-              // IconButton(
-              //   icon: Icon(Icons.add, size: 18, color: dimTextColor),
-              //   onPressed: () {},
-              //   constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-              //   padding: EdgeInsets.zero,
-              // ),
-              // const SizedBox(width: 8),
+              Semantics(
+                label: 'Add attachments',
+                button: true,
+                child: IconButton(
+                  key: const Key('composer_add_attachment'),
+                  tooltip: 'Add attachments',
+                  icon: Icon(Symbols.add, size: 20, color: dimTextColor),
+                  onPressed: () => _pickFiles(context),
+                  constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                  padding: EdgeInsets.zero,
+                ),
+              ),
+              const SizedBox(width: 8),
               if (!hasPendingRequest &&
                   capabilities.supportsToolPermissions &&
                   inputSlice.selectedWorkspace != null) ...[
@@ -1061,7 +1349,20 @@ class _SendStopButton extends StatelessWidget {
     final isEmpty = chatController.exportPlainText().trim().isEmpty;
 
     final hasWorkspace = !inputSlice.requiresWorkspace || inputSlice.selectedWorkspace != null;
-    final canSend = agentSlice.isOnline && !isEmpty && hasWorkspace && inputSlice.pendingSuspendedRequest == null;
+    final inputCubit = _maybeInputCubit(context);
+    final attachments = inputCubit == null
+        ? const <DraftAttachment>[]
+        : context.watch<ConversationInputCubit>().state.draftAttachments;
+    final attachmentsReady = attachments.every(
+      (attachment) => attachment.status == DraftAttachmentStatus.ready,
+    );
+    final hasContent = !isEmpty || attachments.isNotEmpty;
+    final canSend =
+        agentSlice.isOnline &&
+        hasContent &&
+        attachmentsReady &&
+        hasWorkspace &&
+        inputSlice.pendingSuspendedRequest == null;
 
     final executionSnapshot = inputSlice.executionSnapshot;
     final isStopping = executionSnapshot?.isStopping ?? false;

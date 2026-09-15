@@ -1,3 +1,5 @@
+import 'dart:ui' show SemanticsAction;
+
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
@@ -12,6 +14,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:sanad_client/utils/app_platform.dart';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -56,13 +59,14 @@ void main() {
   ConversationInputSlice idleSlice({
     SessionExecutionSnapshot? executionSnapshot,
     bool isAwaitingMessageAcceptance = false,
+    DeviceWorkspace? selectedWorkspace,
   }) => ConversationInputSlice(
     isProcessing: false,
     nextMessageModel: null,
     nextMessageProviderId: null,
     nextMessageThinkingMode: null,
-    availableWorkspaces: [],
-    selectedWorkspace: null,
+    availableWorkspaces: selectedWorkspace == null ? [] : [selectedWorkspace],
+    selectedWorkspace: selectedWorkspace,
     isLoadingWorkspaces: false,
     requiresWorkspace: false,
     permissionMode: WorkspacePermissionMode.defaultMode,
@@ -80,6 +84,7 @@ void main() {
     required ConversationInputSlice inputSlice,
     required ConversationInputAgentSlice agentSlice,
     void Function({MessageDeliveryIntent intent})? onSendAttempt,
+    Future<List<XFile>> Function()? pickAttachmentFiles,
   }) {
     return tester.pumpWidget(
       MultiBlocProvider(
@@ -106,6 +111,7 @@ void main() {
               onConfirmFullAccess: () async => true,
               agentSelectorKey: GlobalKey<PopupMenuButtonState<String>>(),
               onPickAndCreateWorkspace: (_) async {},
+              pickAttachmentFiles: pickAttachmentFiles,
             ),
           ),
         ),
@@ -132,6 +138,42 @@ void main() {
     await tester.tapAt(Offset(rect.right - 12, rect.top + 12));
     await tester.pump();
 
+    expect(focusNode.hasFocus, isTrue);
+  });
+
+  testWidgets('attachment picker is accessible, invoked once, and preserves text focus', (tester) async {
+    var pickerCalls = 0;
+    const workspace = DeviceWorkspace(id: 'workspace-1', name: 'Project', path: '/project');
+    await pumpComposer(
+      tester,
+      capabilities: const Capability(
+        supportsAttachments: true,
+        attachmentMaxFileBytes: 5 * 1024 * 1024,
+        attachmentMaxFilesPerMessage: 4,
+        attachmentMaxTotalBytesPerMessage: 20 * 1024 * 1024,
+        supportsToolPermissions: true,
+      ),
+      inputSlice: idleSlice(selectedWorkspace: workspace),
+      agentSlice: onlineAgentSlice,
+      pickAttachmentFiles: () async {
+        pickerCalls += 1;
+        return const <XFile>[];
+      },
+    );
+    await tester.enterText(find.byKey(const Key('chat_input')), 'keep this draft');
+    final addButton = find.byKey(const Key('composer_add_attachment'));
+    expect(addButton, findsOneWidget);
+    final semantics = tester.getSemantics(addButton);
+    expect(semantics.tooltip, 'Add attachments');
+    expect(semantics.getSemanticsData().hasAction(SemanticsAction.tap), isTrue);
+    expect(semantics.getSemanticsData().flagsCollection.isButton, isTrue);
+    expect(tester.getCenter(addButton).dx, lessThan(tester.getCenter(find.text('Default')).dx));
+
+    await tester.tap(addButton);
+    await tester.pump();
+
+    expect(pickerCalls, 1);
+    expect(chatController.text, 'keep this draft');
     expect(focusNode.hasFocus, isTrue);
   });
 

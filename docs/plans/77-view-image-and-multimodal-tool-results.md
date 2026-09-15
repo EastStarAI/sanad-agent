@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77f1/R0"
-remaining_estimate: "24%"
+current_gate: "77f2/R0"
+remaining_estimate: "20%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -166,7 +166,7 @@ detail = low | auto | high | original
 13. [x] [77e1 — Attachment Model and Policy](tasks/77e1-attachment-model-and-policy.md)
 14. [x] [77e2 — Agent Attachment Store](tasks/77e2-agent-attachment-store.md)
 15. [x] [77e3 — Attachment Admission and Model Projection](tasks/77e3-attachment-admission-and-model-projection.md)
-16. [ ] [77f1 — Composer Attachment UX](tasks/77f1-composer-attachment-ux.md)
+16. [x] [77f1 — Composer Attachment UX](tasks/77f1-composer-attachment-ux.md)
 17. [ ] [77f2 — User Message Attachment and Edit UX](tasks/77f2-user-message-attachment-edit-ux.md)
 18. [ ] [77f3 — View Image Timeline Media](tasks/77f3-view-image-timeline-media.md)
 19. [ ] [77g1 — Local Attachment Integration QA](tasks/77g1-local-attachment-integration-qa.md)
@@ -400,3 +400,28 @@ Next task:
 - File budget: `10/10`; hosted execution proof remains in its required later gates, not bypassed.
 - Remaining estimate: `24%`.
 - Next task: `77f1 — Composer Attachment UX`, gate `R0`.
+
+### 2026-09-15 — 77f1 G1 complete
+
+- Task/Gate: `77f1/G1`; plan advances to `77f1/G2`.
+- Added capability-gated picker, image-paste, and desktop-drop entry points through one transient draft controller while preserving focus and ordinary text paste.
+- Focused analyzer found no errors; the sole import-info finding was removed before advancing.
+- Remaining estimate: `22%`.
+- Next gate: `77f1/G2 — Rail and state`.
+
+### 2026-09-15 — 77f1 G2 complete
+
+- Task/Gate: `77f1/G2`; plan advances to `77f1/G3`.
+- Added responsive draft cards, lifecycle/retry/remove controls, ready-gated sending, and device/session-isolated restoration without an optimistic sent row.
+- Verification: Client analyzer clean; focused controller 35/35 and composer regression 19/19 passed.
+- Remaining estimate: `21%`.
+- Next gate: `77f1/G3 — Tests and visual proof`.
+
+### 2026-09-15 — 77f1 complete
+
+- Task/Gate: `77f1/G3`; plan advances to `77f2/R0`.
+- Delivered capability-gated picker/paste/drop admission, device/session-scoped immutable drafts, responsive lifecycle rail, ready-gated send, retry/remove, and an injectable picker test boundary.
+- Verification: analyzer clean; focused composer 20/20; full Client fast suite 1,155/1,155; visible isolated Flutter runtime; Graphify 23,969 nodes/32,999 edges/864 communities; reference parity satisfied.
+- File budget: `10/10`; open findings: none.
+- Remaining estimate: `20%`.
+- Next task: `77f2`, gate `R0`.

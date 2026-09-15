@@ -1,4 +1,7 @@
 import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:uuid/uuid.dart';
 
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -21,6 +24,8 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
 
   final SessionMessagesCubit messagesCubit;
   StreamSubscription? _messagesSubscription;
+  final Map<String, ({List<DraftAttachment> attachments, String? error})> _draftsByScope = {};
+  String _draftScope = '';
 
   ConversationInputCubit({
     required this.messagesCubit,
@@ -30,14 +35,126 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
         _stateFromMessages(
           state,
           isAwaitingMessageAcceptance: this.state.isAwaitingMessageAcceptance,
+        ).copyWith(
+          draftAttachments: this.state.draftAttachments,
+          attachmentError: this.state.attachmentError,
         ),
       );
     });
   }
 
+  void setDraftScope({required String? deviceId, required String? sessionId}) {
+    final nextScope = '${deviceId ?? ''}\u0000${sessionId ?? ''}';
+    if (nextScope == _draftScope) return;
+    if (_draftScope.isNotEmpty) {
+      _draftsByScope[_draftScope] = (
+        attachments: state.draftAttachments,
+        error: state.attachmentError,
+      );
+    }
+    _draftScope = nextScope;
+    final restored = _draftsByScope[nextScope];
+    emit(
+      state.copyWith(
+        draftAttachments: restored?.attachments ?? const [],
+        attachmentError: restored?.error,
+        clearAttachmentError: restored?.error == null,
+      ),
+    );
+  }
+
   void setMessageAcceptancePending(bool isPending) {
     if (state.isAwaitingMessageAcceptance == isPending) return;
     emit(state.copyWith(isAwaitingMessageAcceptance: isPending));
+  }
+
+  Future<void> addDraftAttachment({
+    required String name,
+    required Uint8List bytes,
+    required DraftAttachmentSource source,
+    required Capability capability,
+  }) async {
+    if (!capability.supportsAttachments) {
+      emit(
+        state.copyWith(
+          attachmentError: 'Attachments are not supported by this agent.',
+        ),
+      );
+      return;
+    }
+    final current = state.draftAttachments;
+    if (bytes.length > capability.attachmentMaxFileBytes) {
+      emit(state.copyWith(attachmentError: 'Each attachment must be 5 MiB or smaller.'));
+      return;
+    }
+    if (current.length >= capability.attachmentMaxFilesPerMessage) {
+      emit(state.copyWith(attachmentError: 'A message accepts at most 4 attachments.'));
+      return;
+    }
+    final total = current.fold<int>(0, (sum, item) => sum + item.sizeBytes) + bytes.length;
+    if (total > capability.attachmentMaxTotalBytesPerMessage) {
+      emit(state.copyWith(attachmentError: 'Attachments must total 20 MiB or less per message.'));
+      return;
+    }
+    final item = DraftAttachment(
+      id: const Uuid().v4(),
+      name: _safeDraftName(name),
+      bytes: bytes,
+      source: source,
+    );
+    emit(
+      state.copyWith(
+        draftAttachments: List.unmodifiable([...current, item]),
+        clearAttachmentError: true,
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+    emit(
+      state.copyWith(
+        draftAttachments: List.unmodifiable([
+          for (final attachment in state.draftAttachments)
+            attachment.id == item.id
+                ? attachment.copyWith(
+                    status: DraftAttachmentStatus.ready,
+                    clearError: true,
+                  )
+                : attachment,
+        ]),
+      ),
+    );
+  }
+
+  void removeDraftAttachment(String id) {
+    emit(
+      state.copyWith(
+        draftAttachments: List.unmodifiable(
+          state.draftAttachments.where((attachment) => attachment.id != id),
+        ),
+        clearAttachmentError: true,
+      ),
+    );
+  }
+
+  void retryDraftAttachment(String id) {
+    emit(
+      state.copyWith(
+        draftAttachments: List.unmodifiable([
+          for (final attachment in state.draftAttachments)
+            attachment.id == id
+                ? attachment.copyWith(
+                    status: DraftAttachmentStatus.ready,
+                    clearError: true,
+                  )
+                : attachment,
+        ]),
+        clearAttachmentError: true,
+      ),
+    );
+  }
+
+  static String _safeDraftName(String input) {
+    final name = input.split(RegExp(r'[/\\]')).last.trim();
+    return name.isEmpty || name == '.' || name == '..' ? 'attachment' : name;
   }
 
   Future<void> sendMessage(String text, {MessageDeliveryIntent intent = MessageDeliveryIntent.auto}) async {

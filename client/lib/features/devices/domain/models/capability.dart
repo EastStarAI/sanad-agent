@@ -16,6 +16,9 @@ class Capability {
   final bool supportsStop;
   final bool supportsWorkplace;
   final bool supportsAttachments;
+  final int attachmentMaxFileBytes;
+  final int attachmentMaxFilesPerMessage;
+  final int attachmentMaxTotalBytesPerMessage;
   final bool supportsUpdateSessionName;
   final bool supportsDeleteSession;
   final bool supportsSlashCommands;
@@ -47,6 +50,9 @@ class Capability {
     this.supportsStop = false,
     this.supportsWorkplace = false,
     this.supportsAttachments = false,
+    this.attachmentMaxFileBytes = 0,
+    this.attachmentMaxFilesPerMessage = 0,
+    this.attachmentMaxTotalBytesPerMessage = 0,
     this.supportsUpdateSessionName = false,
     this.supportsDeleteSession = false,
     this.supportsSlashCommands = false,
@@ -72,6 +78,12 @@ class Capability {
 
   factory Capability.fromJson(Map<String, dynamic> json) {
     final caps = json['capabilities'] as Map<String, dynamic>? ?? json;
+    final attachmentMedia = caps['attachment_media_v1'];
+    final attachmentContract = attachmentMedia is Map
+        ? Map<String, dynamic>.from(attachmentMedia)
+        : const <String, dynamic>{};
+    final attachmentVersion = attachmentContract['version'];
+    final supportsAttachmentMedia = attachmentVersion == 1 && attachmentContract['ordered_references'] == true;
 
     return Capability(
       supportsModelChange: caps['supports_model_change'] ?? false,
@@ -80,7 +92,10 @@ class Capability {
       supportsVoiceCall: caps['supports_voice_call'] ?? false,
       supportsStop: caps['supports_stop'] ?? false,
       supportsWorkplace: caps['supports_workplace'] ?? false,
-      supportsAttachments: caps['supports_attachments'] ?? false,
+      supportsAttachments: supportsAttachmentMedia,
+      attachmentMaxFileBytes: (attachmentContract['max_file_bytes'] as num?)?.toInt() ?? 0,
+      attachmentMaxFilesPerMessage: (attachmentContract['max_files_per_message'] as num?)?.toInt() ?? 0,
+      attachmentMaxTotalBytesPerMessage: (attachmentContract['max_total_bytes_per_message'] as num?)?.toInt() ?? 0,
       supportsUpdateSessionName: caps['supports_update_session_name'] ?? false,
       supportsDeleteSession: caps['supports_delete_session'] ?? false,
       supportsSlashCommands: caps['supports_slash_commands'] ?? false,
@@ -118,6 +133,9 @@ class Capability {
         other.supportsStop == supportsStop &&
         other.supportsWorkplace == supportsWorkplace &&
         other.supportsAttachments == supportsAttachments &&
+        other.attachmentMaxFileBytes == attachmentMaxFileBytes &&
+        other.attachmentMaxFilesPerMessage == attachmentMaxFilesPerMessage &&
+        other.attachmentMaxTotalBytesPerMessage == attachmentMaxTotalBytesPerMessage &&
         other.supportsUpdateSessionName == supportsUpdateSessionName &&
         other.supportsDeleteSession == supportsDeleteSession &&
         other.supportsSlashCommands == supportsSlashCommands &&
@@ -150,6 +168,9 @@ class Capability {
     supportsStop,
     supportsWorkplace,
     supportsAttachments,
+    attachmentMaxFileBytes,
+    attachmentMaxFilesPerMessage,
+    attachmentMaxTotalBytesPerMessage,
     supportsUpdateSessionName,
     supportsDeleteSession,
     supportsSlashCommands,

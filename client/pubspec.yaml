@@ -91,6 +91,7 @@ dependencies:
   mp_audio_stream: ^0.2.2
   diff_match_patch: ^0.4.1
   desktop_drop: ^0.7.1
+  super_clipboard: ^0.9.1
 dev_dependencies:
   flutter_test:
     sdk: flutter
