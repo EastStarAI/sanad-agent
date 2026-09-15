@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/sanad_home/loopback_policy.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
@@ -61,6 +62,7 @@ Future<void> main(List<String> args) async {
       LocalDaemonServerPlatform(
         security: security,
         deliveryPresence: getIt<DeliveryPresenceController>(),
+        viewImageMediaHistoryLoader: getIt<SessionManager>().getMessages,
       ),
     );
   } else {

@@ -93,6 +93,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         'status': row['status'] ?? metadata['status'],
         'provider_instance_id': row['provider_instance_id'] ?? metadata['provider_instance_id'],
         'model_id': row['model_id'] ?? metadata['model_id'],
+        'media': row['media'] ?? metadata['media'],
       },
       'tool_call' => <String, dynamic>{
         'tool': row['tool'] ?? toolMetadata ?? _historyToolName(metadata['tool']),
@@ -330,7 +331,11 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
           id: _toolId(toolCallId, eventId, timestamp),
           kind: EventKind.toolCall,
           status: isCancelled ? EventStatus.cancelled : (isError ? EventStatus.error : EventStatus.done),
-          tool: {'name': event['tool'] ?? '', 'output': output},
+          tool: {
+            'name': event['tool'] ?? '',
+            'output': output,
+            if (event['media'] is Map) 'media': Map<String, dynamic>.from(event['media'] as Map),
+          },
           timestamp: timestamp,
           sessionId: sessionId,
           runId: runId,

@@ -45,6 +45,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - History omits absent optional runtime, metadata, and request fields rather than emitting null.
 - Hydrate durable pending steer, unacknowledged draft recovery, runtime notice, route transitions, canonical reasoning/tool/final events, and latest context usage.
 - Tool input/output appears once in canonical fields and is not duplicated in content.
+- `view_image` tool results expose only deterministic opaque media identity, safe name, verified MIME/dimensions, and availability in live/history projections. The authenticated loopback media route resolves bytes from the exact durable typed result without creating another stored copy; it requires matching hardware device, session, and media identity, permits one valid byte range, and emits private/no-store plus `nosniff` headers. Cross-device/session requests and malformed scopes return no image bytes, and bytes/base64/private paths never enter events or logs.
 - Route-transition history snapshots provider display names and anchors ordering to durable request identity.
 
 ## Recovery Commands

@@ -66,6 +66,12 @@ class AgentToCanonical {
     } else if (response.isToolResult) {
       type = 'tool_result';
       final terminalMetadata = response.message.metadata;
+      final media = ViewImageMediaProjection.project(
+        sessionId: response.sessionId,
+        toolName: response.toolName,
+        toolCallId: response.toolCallId,
+        result: response.message.toolResult,
+      );
       payload = {
         'tool': response.toolName,
         'output': response.message.content,
@@ -73,6 +79,7 @@ class AgentToCanonical {
         'status': response.isToolCancelled
             ? 'cancelled'
             : (response.isToolError ? 'error' : 'done'),
+        if (media != null) 'media': media.toPublicJson(),
         if (response.runId != null) 'run_id': response.runId,
         if (response.turnId != null) 'turn_id': response.turnId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,

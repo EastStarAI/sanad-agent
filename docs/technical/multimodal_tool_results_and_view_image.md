@@ -89,7 +89,11 @@ Edit restores existing attachments as ready references without re-upload, allows
 
 The canonical tool event is titled `View Image` and carries only opaque `media_id`, safe name, verified MIME, dimensions, and availability. The thumbnail appears below the title, hydrates near the viewport, and opens the full image in the shared lightbox. Local clients fetch through the authenticated Local Gateway; remote clients use the compatible hosted media capability. Access is bound to user, target device, session, media identity, purpose, and expiry. Base64, absolute paths, and public URLs never enter the event.
 
-After pruning or expiry, the row remains stable and renders `Image no longer available`. Hydration is cancellable on disposal or session/device switch and uses bounded transient cache storage.
+After pruning or expiry, the row remains stable and renders `Image unavailable`. Hydration is cancellable on disposal or session/device switch and uses bounded transient cache storage.
+
+For the local path, the Agent derives `media_id = SHA-256(session_id NUL tool_call_id NUL image_block_index)` and resolves it back against the session's durable typed tool result; it does not write a second media copy. `GET /media/view-image/<media_id>` is authenticated by the Local Gateway header and admits only the exact hardware device/session/media scope. It supports one valid byte range and responds with verified content type/length, `Accept-Ranges: bytes`, `Cache-Control: private, no-store`, `X-Content-Type-Options: nosniff`, and a safe inline filename. Invalid scope, methods, query, body, or ranges return no image bytes.
+
+The Client mapper preserves the identical metadata map for live and hydrated rows. A typed repository validator rejects malformed identity, unsafe names, unsupported MIME, non-positive dimensions, and unknown availability before retrieval. Local hydration uses the active hardware identity and owner-only credential header, enforces a 12 MiB response ceiling, coalesces in-flight loads, cancels transport when the last listener leaves, and retains at most 12 entries/24 MiB in an in-memory LRU. The timeline renders loading, unavailable, thumbnail, decode-failure, and accessible zoomable lightbox states without owning HTTP or credential access.
 
 ## Provider capability and translation
 

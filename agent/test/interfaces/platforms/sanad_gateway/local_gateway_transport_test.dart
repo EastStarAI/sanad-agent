@@ -8,12 +8,16 @@ import 'package:sanad_agent/core/auth/device_authorization_client.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/tool_call.dart';
+import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/translators/agent_to_canonical.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:test/test.dart';
 
@@ -81,6 +85,7 @@ void main() {
   late DeliveryPresenceController deliveryPresence;
   late _ExchangeAuthManager authManager;
   late int port;
+  late List<Message> mediaMessages;
   Future<void> Function()? upgradeHook;
 
   setUp(() async {
@@ -97,6 +102,31 @@ void main() {
     getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
     getIt.registerSingleton<PlatformRuntimeBridge>(PlatformRuntimeBridge());
     deliveryPresence = DeliveryPresenceController();
+    final imageResult = ToolExecutionResult(
+      blocks: [
+        ToolTextBlock(text: 'Image loaded (2×1, image/png, auto).'),
+        ToolImageBlock(
+          dataBase64: base64.encode(const [1, 2, 3, 4]),
+          mimeType: 'image/png',
+          width: 2,
+          height: 1,
+          detail: ToolImageDetail.auto,
+        ),
+      ],
+    );
+    mediaMessages = [
+      Message(
+        role: MessageRole.assistant,
+        toolCalls: [
+          ToolCall(id: 'call-view-1', name: 'view_image', arguments: const {}),
+        ],
+      ),
+      Message(
+        role: MessageRole.tool,
+        toolCallId: 'call-view-1',
+        toolResult: imageResult,
+      ),
+    ];
     platform = LocalDaemonServerPlatform(
       deliveryPresence: deliveryPresence,
       authCoupling: ColocatedAuthCoupling(
@@ -116,6 +146,7 @@ void main() {
       beforeUpgradeAuthentication: () async {
         await upgradeHook?.call();
       },
+      viewImageMediaHistoryLoader: (_) => mediaMessages,
     );
     await platform.initialize();
   });
@@ -160,6 +191,109 @@ void main() {
     expect(response.statusCode, HttpStatus.unauthorized);
     expect(body['reason'], 'missing_credential');
   });
+
+  test(
+    'view-image media is binary-free publicly and exact-scope range retrieval is authenticated',
+    () async {
+      final media = ViewImageMediaProjection.project(
+        sessionId: 'session-1',
+        toolName: 'view_image',
+        toolCallId: 'call-view-1',
+        result: mediaMessages.last.toolResult,
+      )!;
+      expect(media.toPublicJson(), {
+        'media_id': media.mediaId,
+        'name': 'view-image.png',
+        'mime_type': 'image/png',
+        'width': 2,
+        'height': 1,
+        'availability': 'available',
+      });
+      expect(jsonEncode(media.toPublicJson()), isNot(contains('AQIDBA==')));
+      final liveEvent = AgentToCanonical.translate(
+        GatewayResponse(
+          sessionId: 'session-1',
+          message: mediaMessages.last,
+          toolName: 'view_image',
+          toolCallId: 'call-view-1',
+          isToolResult: true,
+        ),
+      );
+      expect(liveEvent.payload['media'], media.toPublicJson());
+      expect(jsonEncode(liveEvent.toJson()), isNot(contains('AQIDBA==')));
+
+      Future<HttpClientResponse> fetch({
+        String sessionId = 'session-1',
+        String deviceId = 'hardware-1',
+        String? range,
+        bool authenticated = true,
+      }) async {
+        final client = HttpClient();
+        addTearDown(() => client.close(force: true));
+        final uri =
+            Uri.parse(
+              'http://127.0.0.1:$port/media/view-image/${media.mediaId}',
+            ).replace(
+              queryParameters: {'session_id': sessionId, 'device_id': deviceId},
+            );
+        final request = await client.getUrl(uri);
+        if (authenticated) {
+          request.headers.set(LocalGatewayCredentials.headerName, token.value);
+        }
+        if (range != null) request.headers.set(HttpHeaders.rangeHeader, range);
+        return request.close();
+      }
+
+      final partial = await fetch(range: 'bytes=1-2');
+      expect(partial.statusCode, HttpStatus.partialContent);
+      expect(
+        await partial.fold<List<int>>([], (all, chunk) => all..addAll(chunk)),
+        [2, 3],
+      );
+      expect(partial.headers.contentType?.mimeType, 'image/png');
+      expect(partial.headers.value('x-content-type-options'), 'nosniff');
+      expect(
+        partial.headers.value(HttpHeaders.cacheControlHeader),
+        'private, no-store',
+      );
+
+      final unauthenticated = await fetch(authenticated: false);
+      expect(unauthenticated.statusCode, HttpStatus.unauthorized);
+      await unauthenticated.drain<void>();
+      final invalidRange = await fetch(range: 'bytes=99-100');
+      expect(invalidRange.statusCode, HttpStatus.requestedRangeNotSatisfiable);
+      expect(
+        await invalidRange.fold<int>(0, (count, chunk) => count + chunk.length),
+        0,
+      );
+
+      final wrongDevice = await fetch(deviceId: 'hardware-2');
+      expect(wrongDevice.statusCode, HttpStatus.forbidden);
+      await wrongDevice.drain<void>();
+      final wrongSession = await fetch(sessionId: 'session-2');
+      expect(wrongSession.statusCode, HttpStatus.notFound);
+      await wrongSession.drain<void>();
+
+      mediaMessages[1] = Message(
+        role: MessageRole.tool,
+        content: 'Image Size: 2x1. MIME: image/png. Detail: auto.',
+        toolCallId: 'call-view-1',
+        toolResult: ToolExecutionResult(
+          blocks: [
+            ToolTextBlock(
+              text: 'Image Size: 2x1. MIME: image/png. Detail: auto.',
+            ),
+          ],
+        ),
+      );
+      final expired = await fetch();
+      expect(expired.statusCode, HttpStatus.notFound);
+      expect(
+        await expired.fold<int>(0, (count, chunk) => count + chunk.length),
+        0,
+      );
+    },
+  );
 
   test('HTTP rejects a hostile Host with a valid credential', () async {
     final client = HttpClient();

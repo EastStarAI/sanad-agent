@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -7,6 +8,7 @@ import 'package:sanad_client/utils/link_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/plan_task_list.dart';
 import 'package:sanad_client/shared/widgets/copy_button.dart';
 import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
+import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/compaction_event_tile.dart';
@@ -42,6 +44,7 @@ class EventTile extends StatefulWidget {
   final bool isForkPending;
   final Future<void> Function()? onFork;
   final ToolWaitingIndicator waitingIndicator;
+  final ViewImageMediaLoader? viewImageMediaLoader;
 
   const EventTile({
     super.key,
@@ -62,6 +65,7 @@ class EventTile extends StatefulWidget {
     this.isForkPending = false,
     this.onFork,
     this.waitingIndicator = ToolWaitingIndicator.none,
+    this.viewImageMediaLoader,
   });
 
   @override
@@ -635,6 +639,14 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   Widget _buildToolContent() {
     final toolName = widget.event.toolName ?? '';
     final category = ToolPresentationHelper.cleanToolTitle(toolName);
+    final media = widget.event.viewImageMedia;
+    if (toolName == 'view_image' && media != null) {
+      return _ViewImageToolTile(
+        media: media,
+        sessionId: widget.event.sessionId ?? '',
+        loader: widget.viewImageMediaLoader,
+      );
+    }
 
     // A terminal result can arrive before its matching tool-use input during
     // live/history reconciliation. The specialized tile still unwraps and
@@ -693,4 +705,159 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     }
     return Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7);
   }
+}
+
+class _ViewImageToolTile extends StatefulWidget {
+  const _ViewImageToolTile({
+    required this.media,
+    required this.sessionId,
+    this.loader,
+  });
+
+  final ViewImageMedia media;
+  final String sessionId;
+  final ViewImageMediaLoader? loader;
+
+  @override
+  State<_ViewImageToolTile> createState() => _ViewImageToolTileState();
+}
+
+class _ViewImageToolTileState extends State<_ViewImageToolTile> {
+  ViewImageMediaLoad? _load;
+
+  @override
+  void initState() {
+    super.initState();
+    _startLoad();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ViewImageToolTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.media.mediaId != widget.media.mediaId ||
+        oldWidget.media.isAvailable != widget.media.isAvailable ||
+        oldWidget.sessionId != widget.sessionId) {
+      _load?.cancel();
+      _startLoad();
+    }
+  }
+
+  void _startLoad() {
+    _load = null;
+    if (!widget.media.isAvailable || widget.sessionId.isEmpty) return;
+    final loader = widget.loader ?? ViewImageMediaRepository.local();
+    _load = loader.load(media: widget.media, sessionId: widget.sessionId);
+  }
+
+  @override
+  void dispose() {
+    _load?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final load = _load;
+    if (load == null) return const _UnavailableViewImage();
+    return FutureBuilder<Uint8List>(
+      future: load.bytes,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) return const _UnavailableViewImage();
+        final bytes = snapshot.data;
+        if (bytes == null) {
+          return const SizedBox(
+            key: Key('view_image_loading'),
+            height: 120,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        return Semantics(
+          button: true,
+          label: 'Open View Image preview',
+          child: InkWell(
+            key: const Key('view_image_thumbnail'),
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => _showLightbox(context, bytes),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                minWidth: 160,
+                minHeight: 120,
+                maxHeight: 280,
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: AspectRatio(
+                  aspectRatio: widget.media.width / widget.media.height,
+                  child: Image.memory(
+                    bytes,
+                    fit: BoxFit.contain,
+                    semanticLabel: 'View Image thumbnail',
+                    errorBuilder: (_, _, _) => const _UnavailableViewImage(),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _showLightbox(BuildContext context, Uint8List bytes) {
+    return showDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      builder: (dialogContext) => Dialog(
+        key: const Key('view_image_lightbox'),
+        insetPadding: const EdgeInsets.all(24),
+        child: Stack(
+          children: [
+            Semantics(
+              label: 'View Image full-size preview',
+              child: InteractiveViewer(
+                minScale: 0.5,
+                maxScale: 5,
+                child: Center(
+                  child: Image.memory(
+                    bytes,
+                    fit: BoxFit.contain,
+                    semanticLabel: 'View Image full-size preview',
+                  ),
+                ),
+              ),
+            ),
+            PositionedDirectional(
+              top: 8,
+              end: 8,
+              child: IconButton(
+                key: const Key('view_image_lightbox_close'),
+                tooltip: 'Close image preview',
+                onPressed: () => Navigator.of(dialogContext).pop(),
+                icon: const Icon(Icons.close),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _UnavailableViewImage extends StatelessWidget {
+  const _UnavailableViewImage();
+
+  @override
+  Widget build(BuildContext context) => Container(
+    key: const Key('view_image_unavailable'),
+    constraints: const BoxConstraints(minHeight: 96),
+    alignment: Alignment.center,
+    decoration: BoxDecoration(
+      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+      borderRadius: BorderRadius.circular(12),
+    ),
+    child: Semantics(
+      label: 'View Image unavailable',
+      child: const Text('Image unavailable'),
+    ),
+  );
 }

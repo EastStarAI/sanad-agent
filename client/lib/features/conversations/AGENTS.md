@@ -14,6 +14,7 @@ Incoming events follow:
 - Preserve exactly one managed conversation client per device.
 - A merged local/cloud device client must subscribe to both its canonical local id and its server-owned `cloud_device_id`; command responses and conversation events accept only those explicit aliases and must reject every other device id. Inventory refresh must update aliases on the existing managed client and rebind its event routing without replacing its conversation store.
 - Reverse tool execution and tool results remain transport/runtime concerns; presentation never owns that protocol.
+- `view_image` live and history rows preserve the same validated metadata map through `UnifiedDeviceMapper`. The timeline obtains bytes only through the conversation data repository, never by reading credentials or transport payloads in presentation. Local retrieval is scoped by hardware device + session + opaque media id, cancels when the tile is disposed/replaced, and uses a bounded in-memory LRU only. Unavailable media keeps a stable row; available thumbnails and their lightbox must carry accessible labels and close affordances.
 
 ## Session Identity
 - Represent sessions with `Session` from `client/lib/features/conversations/domain/models/session.dart`.

@@ -303,6 +303,12 @@ class SessionQueryHandler {
         final isError =
             message.metadata?['is_error'] == true ||
             visibleContent.startsWith('Error:');
+        final media = ViewImageMediaProjection.project(
+          sessionId: sessionId,
+          toolName: resolvedToolContext.toolName,
+          toolCallId: resolvedToolContext.toolCallId,
+          result: message.toolResult,
+        );
 
         historyMessages.add({
           'id': msgId,
@@ -314,6 +320,7 @@ class SessionQueryHandler {
           'status':
               message.metadata?['status']?.toString() ??
               (isError ? 'error' : 'done'),
+          if (media != null) 'media': media.toPublicJson(),
           if (resolvedToolContext.runId != null)
             'run_id': resolvedToolContext.runId,
           if (resolvedToolContext.modelStepId != null)

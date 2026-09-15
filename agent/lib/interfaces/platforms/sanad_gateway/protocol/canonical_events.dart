@@ -1,5 +1,141 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
+
+import '../../../../core/models/message.dart';
+import '../../../../core/models/tool_execution_result.dart';
 import '../../../models/delivery/models.dart';
 import '../../../models/device_control.dart';
+
+enum CanonicalMediaAvailability { available, unavailable }
+
+final class CanonicalViewImageMedia {
+  const CanonicalViewImageMedia({
+    required this.mediaId,
+    required this.safeName,
+    required this.mimeType,
+    required this.width,
+    required this.height,
+    required this.availability,
+    this.bytes,
+  });
+
+  final String mediaId;
+  final String safeName;
+  final String mimeType;
+  final int width;
+  final int height;
+  final CanonicalMediaAvailability availability;
+
+  /// Agent-internal retrieval bytes. Never serialize this field.
+  final Uint8List? bytes;
+
+  Map<String, dynamic> toPublicJson() => {
+    'media_id': mediaId,
+    'name': safeName,
+    'mime_type': mimeType,
+    'width': width,
+    'height': height,
+    'availability': availability.name,
+  };
+}
+
+final class ViewImageMediaProjection {
+  static const _toolName = 'view_image';
+  static final RegExp _summaryPattern = RegExp(
+    r'^Image loaded \(([1-9][0-9]*)×([1-9][0-9]*), (image/(?:png|jpeg|webp)),',
+  );
+
+  static CanonicalViewImageMedia? project({
+    required String sessionId,
+    required String? toolName,
+    required String? toolCallId,
+    required ToolExecutionResult? result,
+  }) {
+    if (toolName != _toolName ||
+        toolCallId == null ||
+        toolCallId.isEmpty ||
+        result == null ||
+        result.isError) {
+      return null;
+    }
+    final imageIndex = result.blocks.indexWhere(
+      (block) => block is ToolImageBlock,
+    );
+    final image = imageIndex < 0
+        ? null
+        : result.blocks[imageIndex] as ToolImageBlock;
+    final summary = _summary(result);
+    if (image == null && summary == null) return null;
+    final mimeType = image?.mimeType ?? summary!.$3;
+    final width = image?.width ?? summary!.$1;
+    final height = image?.height ?? summary!.$2;
+    final stableIndex = imageIndex < 0 ? 1 : imageIndex;
+    return CanonicalViewImageMedia(
+      mediaId: _mediaId(sessionId, toolCallId, stableIndex),
+      safeName: _safeName(mimeType),
+      mimeType: mimeType,
+      width: width,
+      height: height,
+      availability: image == null
+          ? CanonicalMediaAvailability.unavailable
+          : CanonicalMediaAvailability.available,
+      bytes: image == null
+          ? null
+          : Uint8List.fromList(base64.decode(image.dataBase64)),
+    );
+  }
+
+  static CanonicalViewImageMedia? resolve({
+    required String sessionId,
+    required String mediaId,
+    required List<Message> messages,
+  }) {
+    final toolNames = <String, String>{};
+    for (final message in messages) {
+      for (final call in message.toolCalls ?? const []) {
+        toolNames[call.id] = call.name;
+      }
+      if (message.role != MessageRole.tool) continue;
+      final projection = project(
+        sessionId: sessionId,
+        toolName: toolNames[message.toolCallId],
+        toolCallId: message.toolCallId,
+        result: message.toolResult,
+      );
+      if (projection?.mediaId == mediaId) return projection;
+    }
+    return null;
+  }
+
+  static (int, int, String)? _summary(ToolExecutionResult result) {
+    for (final block in result.blocks.whereType<ToolTextBlock>()) {
+      final match = _summaryPattern.firstMatch(block.text);
+      if (match != null) {
+        return (
+          int.parse(match.group(1)!),
+          int.parse(match.group(2)!),
+          match.group(3)!,
+        );
+      }
+    }
+    return null;
+  }
+
+  static String _mediaId(String sessionId, String toolCallId, int index) =>
+      sha256
+          .convert(utf8.encode('$sessionId\u0000$toolCallId\u0000$index'))
+          .toString();
+
+  static String _safeName(String mimeType) => switch (mimeType) {
+    'image/jpeg' => 'view-image.jpg',
+    'image/webp' => 'view-image.webp',
+    _ => 'view-image.png',
+  };
+}
+
+typedef ViewImageMediaHistoryLoader = List<Message> Function(String sessionId);
 
 /// Represents a standard event in the Sanad Unified Protocol.
 class CanonicalEvent {

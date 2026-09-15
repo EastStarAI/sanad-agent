@@ -1,8 +1,14 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
+import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
@@ -395,6 +401,109 @@ void main() {
     expect(find.text('-3'), findsOneWidget);
     expect(find.text('1 file modified'), findsOneWidget);
   });
+
+  test('view-image metadata maps identically from live and history', () {
+    final media = _mediaJson('a');
+    final mapper = UnifiedDeviceMapper();
+    final live = mapper.mapLiveEvent({
+      'event': 'tool_result',
+      'payload': {
+        'session_id': 'session-1',
+        'tool_call_id': 'call-1',
+        'tool': 'view_image',
+        'output': 'Image Size: 1x1.',
+        'media': media,
+      },
+    });
+    final history = mapper.mapHistory([
+      {
+        'type': 'tool_result',
+        'session_id': 'session-1',
+        'tool_call_id': 'call-1',
+        'tool': 'view_image',
+        'output': 'Image Size: 1x1.',
+        'media': media,
+      },
+    ]).single;
+
+    expect(live?.viewImageMedia?.mediaId, history.viewImageMedia?.mediaId);
+    expect(live?.viewImageMedia?.name, 'view-image.png');
+  });
+
+  testWidgets('view-image thumbnail opens an accessible lightbox', (tester) async {
+    final loader = _FakeMediaLoader.completed(_onePixelPng);
+    await tester.pumpWidget(
+      _app(
+        EventTile(
+          event: _viewImageEvent(),
+          isExpanded: true,
+          viewImageMediaLoader: loader,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('View Image', findRichText: true), findsOneWidget);
+    expect(find.byKey(const Key('view_image_thumbnail')), findsOneWidget);
+    await tester.tap(find.byKey(const Key('view_image_thumbnail')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('view_image_lightbox')), findsOneWidget);
+    expect(find.byTooltip('Close image preview'), findsOneWidget);
+    await tester.tap(find.byKey(const Key('view_image_lightbox_close')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('view_image_lightbox')), findsNothing);
+  });
+
+  testWidgets('view-image shows unavailable state and cancels hydration on disposal', (tester) async {
+    final unavailable = _viewImageEvent(availability: 'unavailable');
+    await tester.pumpWidget(
+      _app(EventTile(event: unavailable, isExpanded: true)),
+    );
+    expect(find.byKey(const Key('view_image_unavailable')), findsOneWidget);
+
+    final loader = _FakeMediaLoader.pending();
+    await tester.pumpWidget(
+      _app(
+        EventTile(
+          event: _viewImageEvent(),
+          isExpanded: true,
+          viewImageMediaLoader: loader,
+        ),
+      ),
+    );
+    expect(find.byKey(const Key('view_image_loading')), findsOneWidget);
+    await tester.pumpWidget(const MaterialApp(home: SizedBox()));
+    expect(loader.cancelled, isTrue);
+  });
+
+  test('view-image repository scopes requests and evicts its bounded cache', () async {
+    var requests = 0;
+    final repository = ViewImageMediaRepository(
+      baseUrl: 'http://127.0.0.1:58184',
+      hardwareId: 'hardware-1',
+      headerProvider: () async => {'x-sanad-local-token': 'test-token'},
+      maximumCacheEntries: 1,
+      clientFactory: () => MockClient((request) async {
+        requests++;
+        expect(request.headers['x-sanad-local-token'], 'test-token');
+        expect(request.url.queryParameters['session_id'], 'session-1');
+        expect(request.url.queryParameters['device_id'], 'hardware-1');
+        return http.Response.bytes(
+          _onePixelPng,
+          200,
+          headers: {'content-type': 'image/png'},
+        );
+      }),
+    );
+    final first = ViewImageMedia.fromJson(_mediaJson('a'))!;
+    final second = ViewImageMedia.fromJson(_mediaJson('b'))!;
+
+    await repository.load(media: first, sessionId: 'session-1').bytes;
+    await repository.load(media: first, sessionId: 'session-1').bytes;
+    await repository.load(media: second, sessionId: 'session-1').bytes;
+    await repository.load(media: first, sessionId: 'session-1').bytes;
+    expect(requests, 3);
+  });
 }
 
 Widget _app(Widget child, {double width = 800}) => MaterialApp(
@@ -453,3 +562,47 @@ CanonicalEvent _tool(
   },
   timestamp: DateTime.utc(2026, 8, 14),
 );
+
+Map<String, dynamic> _mediaJson(String character, {String availability = 'available'}) => {
+  'media_id': List.filled(64, character).join(),
+  'name': 'view-image.png',
+  'mime_type': 'image/png',
+  'width': 1,
+  'height': 1,
+  'availability': availability,
+};
+
+CanonicalEvent _viewImageEvent({String availability = 'available'}) => CanonicalEvent(
+  id: 'tool_view_image',
+  kind: EventKind.toolCall,
+  status: EventStatus.done,
+  sessionId: 'session-1',
+  tool: {
+    'name': 'view_image',
+    'output': 'Image Size: 1x1.',
+    'media': _mediaJson('a', availability: availability),
+  },
+  timestamp: DateTime.utc(2026, 9, 15),
+);
+
+final Uint8List _onePixelPng = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+);
+
+class _FakeMediaLoader implements ViewImageMediaLoader {
+  _FakeMediaLoader.completed(Uint8List bytes) : _completer = Completer<Uint8List>()..complete(bytes);
+
+  _FakeMediaLoader.pending() : _completer = Completer<Uint8List>();
+
+  final Completer<Uint8List> _completer;
+  bool cancelled = false;
+
+  @override
+  ViewImageMediaLoad load({
+    required ViewImageMedia media,
+    required String sessionId,
+  }) => ViewImageMediaLoad(
+    bytes: _completer.future,
+    cancel: () => cancelled = true,
+  );
+}

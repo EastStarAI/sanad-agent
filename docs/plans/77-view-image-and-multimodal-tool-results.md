@@ -4,7 +4,7 @@ description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقا�
 status: "in_progress"
 priority: "high"
 current_gate: "77f2/R0"
-remaining_estimate: "20%"
+remaining_estimate: "16%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -168,7 +168,7 @@ detail = low | auto | high | original
 15. [x] [77e3 — Attachment Admission and Model Projection](tasks/77e3-attachment-admission-and-model-projection.md)
 16. [x] [77f1 — Composer Attachment UX](tasks/77f1-composer-attachment-ux.md)
 17. [ ] [77f2 — User Message Attachment and Edit UX](tasks/77f2-user-message-attachment-edit-ux.md)
-18. [ ] [77f3 — View Image Timeline Media](tasks/77f3-view-image-timeline-media.md)
+18. [x] [77f3 — View Image Timeline Media](tasks/77f3-view-image-timeline-media.md)
 19. [ ] [77g1 — Local Attachment Integration QA](tasks/77g1-local-attachment-integration-qa.md)
 20. [ ] [77g2 — Remote Attachment Integration QA](tasks/77g2-remote-attachment-integration-qa.md)
 
@@ -424,4 +424,36 @@ Next task:
 - Verification: analyzer clean; focused composer 20/20; full Client fast suite 1,155/1,155; visible isolated Flutter runtime; Graphify 23,969 nodes/32,999 edges/864 communities; reference parity satisfied.
 - File budget: `10/10`; open findings: none.
 - Remaining estimate: `20%`.
+- Next task: `77f2`, gate `R0`.
+
+### 2026-09-15 — 77f3 R0 complete
+
+- Task/Gate: `77f3/R0`; dependency-correct execution advances to `77f3/G1` before `77f2`.
+- Packet `77e` resolved at the pinned fingerprint. The public media projection is binary/path/credential-free and retrieval is exact-scope authenticated before byte access.
+- Local retrieval is owned by the authenticated loopback Gateway; hosted retrieval remains capability-gated for the later private relay gates. Client hydration is bounded, cancellable, and degrades to a stable unavailable state.
+- Remaining estimate: `19%`.
+- Next gate: `77f3/G1 — Agent projection and retrieval`.
+
+### 2026-09-15 — 77f3 G1 complete
+
+- Task/Gate: `77f3/G1`; plan advances to `77f3/G2`.
+- Live/history projection now derives one opaque media identity without another durable image copy. The authenticated Local Gateway resolves bytes from exact session history and supports safe partial responses.
+- Wrong device/session admission returns no bytes; public JSON contains metadata only. Focused analyzer clean and Local Gateway suite 22/22 passed sequentially.
+- Remaining estimate: `18%`.
+- Next gate: `77f3/G2 — Client rendering`.
+
+### 2026-09-15 — 77f3 G2 complete
+
+- Task/Gate: `77f3/G2`; plan advances to `77f3/G3`.
+- Client live/history mapping now preserves one validated View Image media model. Local hydration is repository-owned, authenticated, bounded, coalesced, and cancellable; the timeline supplies stable unavailable/thumbnail states and an accessible Lightbox.
+- Focused Client analyzer clean and mapper/repository/widget suite 14/14 passed; exceptional budget is 15/15 tracked files.
+- Remaining estimate: `17%`.
+- Next gate: `77f3/G3 — Tests`.
+
+### 2026-09-16 — 77f3 complete
+
+- Task/Gate: `77f3/G3`; task is complete and the dependency-correct plan returns to `77f2/R0`.
+- Agent exposes binary-free live/history metadata and authenticated exact-scope local retrieval without a second durable media copy. Client renders bounded thumbnails/unavailable state and an accessible Lightbox through a cancellable bounded repository.
+- Verification: both analyzers clean; Agent changed-path suites `22/22` and `43/43`; Client focused `14/14` and full `1,159/1,159`; visible isolated macOS build; Graphify `24,059 / 33,140 / 849`; reference parity recorded. The unrelated failing Agent monolith baseline is documented in the task/evidence and is not claimed green.
+- Remaining estimate: `16%`.
 - Next task: `77f2`, gate `R0`.
