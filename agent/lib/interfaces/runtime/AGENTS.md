@@ -32,6 +32,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
   `DeviceControlCommandHandler` executes update check/apply and supervised
   restart after admission.
 - Runtime collaborators do not open database connections or duplicate table ownership.
+- An in-process CLI owns and tears down its bridge sink, workspace/MCP runtime resources, orchestrator subscriptions, database owner, and state-root lease; it never starts daemon transports or schedulers.
 
 ## Terminal Commit
 - Deliver final assistant output only after an idempotent durable commit validates the exact session, work item, run, generation, and expected running/resuming state.

@@ -4,6 +4,7 @@ import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/sanad_home/loopback_policy.dart';
+import 'package:sanad_agent/core/sanad_home/runtime_ownership.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/interfaces/gateway_manager.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
@@ -18,11 +19,14 @@ import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 
 import 'package:sanad_agent/core/utils/logger.dart';
 
+SanadHomeFileLockLease? _runtimeOwnership;
+
 Future<void> main(List<String> args) async {
   // Must run before DI/config/auth can read or open anything under either
   // configured runtime root. The outer CLI also performs this for supervised
   // launches; keeping it here protects direct daemon entry points and tests.
   await SanadHomeBootstrap.prepareAll();
+  _runtimeOwnership ??= await SanadRuntimeOwnership.acquire();
   setupDI();
 
   final config = getIt<Config>();

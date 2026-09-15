@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import '../../capabilities/models/tool_schema.dart';
 import '../../core/models/agent_response.dart';
@@ -41,6 +43,8 @@ class E2eFixtureAdapter implements LLMAdapter, WireInputUsageMeasurer {
   static const shellToolName = 'shell_execute';
   static const shellToolCallId = 'e2e-shell-crash-tool-call';
   static const shellCrashResponseText = 'SHELL_INTERRUPTED_RESUMED';
+  static const delayedResponsePromptPrefix = '__SANAD_E2E_DELAY__';
+  static const runtimeFailurePrompt = '__SANAD_E2E_RUNTIME_FAILURE__';
 
   const E2eFixtureAdapter();
 
@@ -410,13 +414,44 @@ class E2eFixtureAdapter implements LLMAdapter, WireInputUsageMeasurer {
     );
   }
 
+  Future<void> _waitForDelayedFixture(
+    List<Message> history,
+    LLMRequestOptions options,
+  ) async {
+    String? prompt;
+    for (final message in history.reversed) {
+      if (message.role == MessageRole.user) {
+        prompt = message.content;
+        break;
+      }
+    }
+    if (prompt == runtimeFailurePrompt) {
+      throw StateError('deterministic E2E provider failure');
+    }
+    if (prompt == null || !prompt.startsWith(delayedResponsePromptPrefix)) {
+      return;
+    }
+    final readyPath = prompt.substring(delayedResponsePromptPrefix.length);
+    if (readyPath.isNotEmpty) File(readyPath).writeAsStringSync('ready');
+    final delay = Future<void>.delayed(const Duration(seconds: 30));
+    final cancellation = options.cancellationScope?.whenCancelled;
+    if (cancellation == null) {
+      await delay;
+    } else {
+      await Future.any<void>([delay, cancellation]);
+    }
+  }
+
   @override
   Future<AgentResponse> generateResponse(
     List<Message> history, {
     List<ToolSchema>? tools,
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
-  }) async => _response(history, tools);
+  }) async {
+    await _waitForDelayedFixture(history, options);
+    return _response(history, tools);
+  }
 
   @override
   Future<WireInputMeasurement?> measureInput(
@@ -449,6 +484,7 @@ class E2eFixtureAdapter implements LLMAdapter, WireInputUsageMeasurer {
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async* {
+    await _waitForDelayedFixture(history, options);
     yield _response(history, tools);
   }
 

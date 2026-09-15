@@ -49,6 +49,7 @@ This contract applies to `agent/`.
 
 ### Persistence and Identity Authority
 - Durable sessions, work items, notices, pending input, provider metadata, and route transitions use one shared agent-state database connection with one repository owner per table.
+- The daemon and in-process standalone CLI acquire the same exclusive state-root ownership lease before opening the agent-state database; a second runtime fails closed and never competes for SQLite.
 - Admission, terminal commit, failover, stop cleanup, and cross-table execution transitions remain transactional through their aggregate owner.
 - `hardware_id` is persistent local machine identity and is distinct from backend-assigned device ids.
 - `run_id` owns execution, `model_step_id` owns one model invocation, `tool_call_id` pairs tool use/result, raw `request_id` owns command correlation, and opaque `event_id` owns one canonical semantic event. `message_id` owns one persisted history record, `turn_id` owns one execution attempt's history records, and `history_revision` owns compare-and-swap for active-history mutations. Never substitute these identities for one another, for SQLite row ids, or for hydration indexes.
@@ -66,6 +67,7 @@ This contract applies to `agent/`.
 - Keep `SANAD_HOME` stable for machine identity, auth, provider credentials, base configuration, and durable user-owned files.
 - `sanad-dev` linked-worktree runs provide one isolated `SANAD_HOME` containing identity, credentials, sessions, memories, and request dumps; they must remove inherited `SANAD_STATE_HOME`.
 - External and test harnesses may still use `SANAD_STATE_HOME` to redirect mutable state without relocating identity or provider credentials.
+- E2E tests that initialize DI/SQLite or launch an agent process must set temporary `SANAD_HOME` and `SANAD_STATE_HOME` roots explicitly; Dart child processes must receive both variables instead of inheriting the caller's values.
 - Source worktrees consume global Sanad configuration and must not create a competing repository-local `.env`.
 - Do not create hidden scratch or temporary directories inside the repository.
 - Missing provider configuration must not prevent daemon startup; fail lazily when an LLM operation actually requires a provider.
