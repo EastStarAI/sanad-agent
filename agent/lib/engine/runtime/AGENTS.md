@@ -19,7 +19,7 @@ This contract applies to `agent/lib/engine/runtime/`.
 ## Continuation Checkpoints
 - `ContinuationCheckpointCoordinator` owns checkpoint schema and read/write orchestration for the active work item.
 - Receive history/current-turn values through an immutable context and return restored values; do not own them.
-- Persist checkpoint kind, completed results, executing tools, replay safety, model step, and owner identity. A provider invocation is durably marked `model_request_in_flight` until its response is saved or the live process receives a definitive request failure; known failures restore the previous safe checkpoint, while startup blocks a genuinely interrupted unknown outcome instead of replaying it automatically. Explicit Retry or Change Provider may reclaim a force-interrupted request only by atomically replacing that marker with its recognized `checkpoint_before_model_request` while claiming the blocked work as `resuming`; missing or unknown predecessors remain blocked without a provider call.
+- Persist checkpoint kind, completed results, executing tools, replay safety, model step, and owner identity. A provider invocation is durably marked `model_request_in_flight` until its response is saved or the live process receives a definitive request failure. Startup and known failures restore a recognized `checkpoint_before_model_request` and resume under the same owner; missing or unknown predecessors remain blocked without a provider call.
 - Provider admission during a controlled restart is an atomic gate: checking that no drain owns the runner and committing both durable and in-memory provider-in-flight markers must contain no await boundary. A runner that reaches a safe post-tool or continuation boundary while drain is active remains parked and consumes no additional provider request until drain cancellation or process replacement.
 - A missing checkpoint may be repaired as `initial_model_request` only when the owned user message is durable and there is no provider-in-flight, executing-tool, completed-result, or deferred-result evidence. Persist the repair marker so retry cannot reinterpret an ambiguous boundary repeatedly.
 - Tools that support crash diagnostics may persist bounded, redacted execution progress under the active checkpoint. Progress is evidence for terminal recovery, never permission to replay an unsafe tool.
@@ -28,7 +28,7 @@ This contract applies to `agent/lib/engine/runtime/`.
   when its requester-bound descriptor is durable. Startup resolves that
   descriptor exactly once into the original tool result; it never replays the
   external mutation.
-- Automatic resume fails closed on ambiguous unsafe tools; explicit manual continuation records a neutral unknown-outcome result without replaying the side effect.
+- Automatic crash recovery of an owned recognized checkpoint records a neutral unknown-outcome result for every started tool without a durable result, never replays that tool, and continues the model loop; malformed or ownerless checkpoints remain blocked.
 - A tool terminalized during startup remains a recovery batch member until its original assistant call and completed result have been restored with the same tool-call id before the next provider invocation.
 - Resume only through the interface runtime's claimed owner.
 

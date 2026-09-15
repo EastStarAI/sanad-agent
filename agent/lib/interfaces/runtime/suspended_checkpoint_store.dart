@@ -21,6 +21,18 @@ class SuspendedCheckpointStore {
     return _manager.listSuspendedCheckpoints(status: 'awaiting_permission');
   }
 
+  Future<List<SuspendedCheckpoint>> listRecoverable() async {
+    return _manager
+        .listSuspendedCheckpoints()
+        .where(
+          (checkpoint) =>
+              checkpoint.status == 'awaiting_permission' ||
+              checkpoint.status == 'decision_ready' ||
+              checkpoint.status == 'executing_tool',
+        )
+        .toList(growable: false);
+  }
+
   Future<void> updateStatus({
     required String requestId,
     required String status,
