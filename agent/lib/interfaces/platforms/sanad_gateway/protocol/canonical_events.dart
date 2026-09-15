@@ -59,6 +59,8 @@ class CanonicalEventTypes {
   static const String sessionHistory = 'session_history';
   static const String getSessions = 'get_sessions';
   static const String sessionsList = 'sessions_list';
+  static const String searchSessions = 'search_sessions';
+  static const String sessionSearchResults = 'session_search_results';
   static const String updateSessionTitle = 'update_session_title';
   static const String sessionUpdated = 'session_updated';
   static const String deleteSession = 'delete_session';
