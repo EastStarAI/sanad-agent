@@ -4157,7 +4157,7 @@ void main() {
       );
 
       test(
-        'manual retry continues ambiguous tool without replaying its side effect',
+        'automatic crash recovery reports an interrupted tool as unknown without replaying it',
         () async {
           final session = sessionManager.createSession('gpt-4o');
           sessionManager.saveSessionHistory(session.sessionId, [
@@ -4200,6 +4200,7 @@ void main() {
                 'currently_executing_tools': ['call-ambiguous-manual'],
                 'completed_tool_results': <String, dynamic>{},
                 'tool_replay_safety': {'call-ambiguous-manual': false},
+                'auto_recover_interrupted_tools_as_unknown': true,
               },
               createdAt: DateTime.now(),
               updatedAt: DateTime.now(),
@@ -4220,7 +4221,6 @@ void main() {
             existingSessionId: session.sessionId,
           );
 
-          runner.allowManualAmbiguousToolRecovery();
           final chunks = await runner.resumeStream().toList();
 
           expect(chunks.join(), 'continued after interruption');
@@ -4253,6 +4253,7 @@ void main() {
               .findWorkItem('w-ambiguous-manual')!
               .continuationMetadata;
           expect(metadata['currently_executing_tools'], isNull);
+          expect(metadata['auto_recover_interrupted_tools_as_unknown'], isNull);
           expect(
             (metadata['completed_tool_results'] as Map).containsKey(
               'call-ambiguous-manual',

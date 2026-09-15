@@ -159,6 +159,50 @@ class SessionTurnExecutor {
     }
   }
 
+  ActiveRun adoptPersistedRun({
+    required String sessionId,
+    required String workItemId,
+    required String runId,
+    required int generation,
+    required AgentRunner agentRunner,
+  }) {
+    final existing = activeRuns[sessionId];
+    if (existing != null && ownsRun(existing)) {
+      throw StateError('Session $sessionId already has an active run.');
+    }
+    final activeRun = ActiveRun(
+      sessionId: sessionId,
+      generation: generation,
+      runId: runId,
+      workItemId: workItemId,
+      completer: Completer<void>(),
+      agentRunner: agentRunner,
+      turnId: _findLatestDurableTurnId(sessionId),
+    );
+    final currentGeneration = _sessionGenerations[sessionId] ?? 0;
+    if (generation > currentGeneration) {
+      _sessionGenerations[sessionId] = generation;
+    }
+    activeRuns[sessionId] = activeRun;
+    agentRunner.attachCancellationScope(activeRun.cancellationScope);
+    agentRunner.beginAuthoritativeRun(
+      runId,
+      workItemId: workItemId,
+      generation: generation,
+    );
+    return activeRun;
+  }
+
+  void releasePersistedRun(ActiveRun activeRun) {
+    if (identical(activeRuns[activeRun.sessionId], activeRun)) {
+      activeRuns.remove(activeRun.sessionId);
+    }
+    activeRun.cancellationScope.markCompleted();
+    activeRun.complete();
+    activeRun.agentRunner.detachCancellationScope(activeRun.cancellationScope);
+    activeRun.agentRunner.endAuthoritativeRun(activeRun.runId);
+  }
+
   Future<void> runTurn({
     required GatewayEvent event,
     required AgentTurnRequest turnRequest,

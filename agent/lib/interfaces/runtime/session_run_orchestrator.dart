@@ -54,6 +54,12 @@ class SuspendedRun {
   });
 }
 
+typedef PersistedSuspendedDecisionResumer =
+    Future<bool> Function({
+      required SuspendedCheckpoint checkpoint,
+      required Future<void> Function(GatewayResponse response) emitResponse,
+    });
+
 class SessionRunOrchestrator implements SessionQueueProviderOverride {
   static const controlledRestartCheckpointTimeout = Duration(minutes: 1);
   static const providerRestartCancellationTimeout = Duration(seconds: 5);
@@ -69,6 +75,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   final Set<String> _compactingSessions = {};
   final Set<String> _resumingSessions = {};
   bool _controlledRestartDraining = false;
+  final PersistedSuspendedDecisionResumer? _resumePersistedSuspendedDecision;
 
   final _responseController = StreamController<GatewayResponse>.broadcast();
   Stream<GatewayResponse> get responses => _responseController.stream;
@@ -88,7 +95,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     return _persistedState;
   }
 
-  SessionRunOrchestrator() {
+  SessionRunOrchestrator({
+    PersistedSuspendedDecisionResumer? resumePersistedSuspendedDecision,
+  }) : _resumePersistedSuspendedDecision = resumePersistedSuspendedDecision {
     _queueCoordinator = SessionQueueCoordinator(
       getPersistedState: () => persistedState,
       defaultModelForProvider: _defaultModelForProvider,
@@ -158,6 +167,31 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       commandRequestId: commandRequestId,
       outcome: _wireName(result.outcome.name),
     );
+  }
+
+  ActiveRun adoptPersistedSuspendedRun({
+    required String sessionId,
+    required String workItemId,
+    required String runId,
+    required int generation,
+    required AgentRunner agentRunner,
+  }) {
+    _busySessions.add(sessionId);
+    return _turnExecutor.adoptPersistedRun(
+      sessionId: sessionId,
+      workItemId: workItemId,
+      runId: runId,
+      generation: generation,
+      agentRunner: agentRunner,
+    );
+  }
+
+  bool ownsPersistedSuspendedRun(ActiveRun activeRun) =>
+      _turnExecutor.ownsRun(activeRun) &&
+      activeRun.cancellationScope.isPublicationOpen;
+
+  void releasePersistedSuspendedRun(ActiveRun activeRun) {
+    _turnExecutor.releasePersistedRun(activeRun);
   }
 
   /// Reconciles the in-memory projection after a restart-restored suspended
@@ -1922,7 +1956,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       queueCoordinator: _queueCoordinator,
       suspendedEvents: _suspendedEvents,
       busySessions: _busySessions,
-      listAwaitingSuspensions: _listAwaitingSuspensions,
+      listAwaitingSuspensions: _resumePersistedSuspendedDecision == null
+          ? _listAwaitingSuspensions
+          : _listRecoverableSuspensions,
       runTurnCallback:
           ({
             required GatewayEvent event,
@@ -1938,6 +1974,39 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       resumeSuspendedCallback: _resumeRestoredSuspended,
     );
     await restorer.restorePersistedState();
+    final decisionResumer = _resumePersistedSuspendedDecision;
+    if (decisionResumer != null) {
+      final checkpoints = await _listRecoverableSuspensions();
+      for (final checkpoint in checkpoints.where(
+        (candidate) =>
+            candidate.status == 'decision_ready' &&
+            candidate.resolvedDecision != null,
+      )) {
+        final active = persistedState?.findActiveWorkItem(checkpoint.sessionId);
+        final executingTools = List<String>.from(
+          active?.continuationMetadata['currently_executing_tools'] as List? ??
+              const [],
+        );
+        if (active?.state != SessionWorkState.waiting ||
+            !executingTools.contains(checkpoint.toolCallId)) {
+          continue;
+        }
+        Future.microtask(() async {
+          try {
+            await decisionResumer(
+              checkpoint: checkpoint,
+              emitResponse: (response) async => _emitResponse(response),
+            );
+          } catch (error, stackTrace) {
+            _logger.severe(
+              'Failed to reclaim a persisted suspended decision.',
+              error,
+              stackTrace,
+            );
+          }
+        });
+      }
+    }
   }
 
   /// Gate F.1 fallback: when startup restore fails partway, do not leave
@@ -1950,7 +2019,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       queueCoordinator: _queueCoordinator,
       suspendedEvents: _suspendedEvents,
       busySessions: _busySessions,
-      listAwaitingSuspensions: _listAwaitingSuspensions,
+      listAwaitingSuspensions: _resumePersistedSuspendedDecision == null
+          ? _listAwaitingSuspensions
+          : _listRecoverableSuspensions,
       runTurnCallback:
           ({
             required GatewayEvent event,
@@ -1973,6 +2044,13 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       return Future.value(const <SuspendedCheckpoint>[]);
     }
     return getIt<SuspendedCheckpointStore>().listAwaitingPermission();
+  }
+
+  Future<List<SuspendedCheckpoint>> _listRecoverableSuspensions() {
+    if (!getIt.isRegistered<SuspendedCheckpointStore>()) {
+      return Future.value(const <SuspendedCheckpoint>[]);
+    }
+    return getIt<SuspendedCheckpointStore>().listRecoverable();
   }
 
   Future<void> _runRestoredTurn({

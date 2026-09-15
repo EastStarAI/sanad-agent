@@ -63,15 +63,16 @@ This contract applies to `agent/lib/interfaces/runtime/`.
   launcher outcome into the same tool call instead of replaying the mutation.
 - Permanent stop supersedes any prepared or waiting restart and prevents the cancelled restart from issuing a later normal exit.
 - A safe preparation may complete as a permanent supervised stop when an external launcher is taking ownership; this must preserve the checkpoint boundary while preventing the old supervisor from respawning.
-- Resume interrupted tools automatically only when every executing operation explicitly declares restart replay safety and ownership metadata is complete.
-- Unsafe, ownerless, or ambiguous interrupted work becomes blocked rather than guessed complete.
+- Owned interrupted work with a recognized checkpoint resumes automatically. Every started tool without a durable terminal result becomes one neutral unknown-outcome result visible to the model; recovery never replays that tool, including tools marked replay-safe.
+- Ownerless, malformed, or unrecognized interrupted work remains blocked rather than guessed complete.
 - A crashed foreground shell with owned persisted progress is terminalized once as `interrupted`, including bounded partial output and verified containment cleanup. Resume restores the original assistant tool call and its matching terminal result into canonical history before invoking the model; recovery itself does not replay the command. Missing or conflicting ownership remains blocked.
-- Explicit manual Retry or Change Provider may close ambiguous unsafe tools with a neutral unknown-outcome result and continue, but must never replay their side effects.
+- Manual Retry and Change Provider remain available for blocked recovery but are not prerequisites for a recognized owned interrupted-tool continuation.
 - An unresolved suspended checkpoint covering every executing tool call is an interactive `waiting` owner, not an ambiguous interrupted-tool failure.
 - The same fully covered unresolved interactive checkpoint is a safe ordinary-restart boundary. Restart preserves the unanswered ask/permission and must not require force, synthesize a tool result, or classify the tool as interrupted.
 - Repeated startup while an interactive checkpoint is unanswered preserves the same request in `waiting`; it emits neither an interruption result nor a blocked notice.
-- Restart-restored permission or clarifying input must claim durable `resuming` ownership and commit `completed` before terminal delivery.
-- After that terminal commit, the suspended-resume path must reconcile the orchestrator's in-memory suspension/busy projection and drain queued work; durable `idle` cannot coexist with stale admission ownership.
+- Permission or clarifying input persists its resolved decision and claims durable `resuming` ownership atomically. A second process interruption reclaims `decision_ready` once without losing the answer; an approved permission marked `executing_tool` is never replayed and follows unknown-outcome recovery.
+- Every claimed suspended continuation adopts a real `ActiveRun`; Stop invalidates and cancels it, late output fails publication ownership, and concurrent message input becomes Steer rather than Queue.
+- The suspended continuation must commit `completed` before terminal delivery, then reconcile the orchestrator's in-memory suspension/busy projection and drain queued work; durable `idle` cannot coexist with stale admission ownership.
 - Startup may hydrate a runtime notice only when active non-terminal work owns it; terminal historical sessions cannot receive fallback recovery notices.
 - Restored waiting work recreates a real auto-resume callback and claims suspended ownership before publishing resuming/cleared state.
 - A failed resume preserves controllable ownership and cannot silently strand work.

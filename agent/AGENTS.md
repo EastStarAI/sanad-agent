@@ -28,7 +28,7 @@ This contract applies to `agent/`.
 - Final delivery occurs only after a successful idempotent durable terminal commit for the exact owner.
 - Stop invalidates the active owner before awaiting cancellation and atomically releases recovery, durable work, and owned queued state without deleting newer-generation input.
 - Retry, resume, route change, and automatic failover require an atomic claim of the current durable owner; stale or concurrent losers are controlled no-ops.
-- Crash recovery replays only tools whose own persisted contract explicitly marks restart re-execution safe; ambiguous work becomes visible and controllable blocked recovery.
+- Crash recovery never replays a started tool without a durable result. Owned recognized checkpoints receive a neutral unknown-outcome result and continue automatically; only ownerless, malformed, or unrecognized state becomes blocked recovery.
 - A resumable daemon shutdown must cross the global checkpoint drain and exit without session-wide Stop so startup recovery retains safe non-terminal work. Destructive shutdown requires an explicit cancellation mode and terminalizes owned work before exit.
 
 ### Engine and Context Authority

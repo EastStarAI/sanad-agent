@@ -106,7 +106,18 @@ void setupDI() {
   getIt.registerLazySingleton<Config>(() => Config());
   getIt.registerLazySingleton<ModelsDevService>(() => ModelsDevService());
   getIt.registerLazySingleton<SessionRunOrchestrator>(
-    () => SessionRunOrchestrator(),
+    () => SessionRunOrchestrator(
+      resumePersistedSuspendedDecision:
+          ({required checkpoint, required emitResponse}) {
+            final decision = checkpoint.resolvedDecision;
+            if (decision == null) return Future.value(false);
+            return getIt<SuspendedResumeService>().resumePersistedDecision(
+              requestId: checkpoint.requestId,
+              decision: decision,
+              emitResponse: emitResponse,
+            );
+          },
+    ),
   );
   getIt.registerLazySingleton<SessionQueueProviderOverride>(
     () => getIt<SessionRunOrchestrator>(),
