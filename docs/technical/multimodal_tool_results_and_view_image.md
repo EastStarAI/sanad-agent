@@ -81,9 +81,13 @@ User attachment admission does not create provider image/file parts. The runner 
 
 ## Conversation rendering and edit
 
-A sent user message renders attachment images/file cards above its text in original order. Images open an accessible lightbox; generic files use a safe preview when supported or an authenticated download. The public model never exposes agent paths or reusable media credentials.
+A sent user message renders attachment images/file cards above its text in original order. Images open an accessible lightbox; generic files use a bounded text preview up to 256 KiB when supported or an authenticated save flow. Loading is cancellable and bounded; unavailable or integrity-failed payloads preserve a stable card. The public model never exposes agent paths or reusable media credentials.
 
-Edit restores existing attachments as ready references without re-upload, allows add/remove through the same draft pipeline, and keeps the original canonical message unchanged until new admission and replay both succeed. Cancel discards only transient edits. Session/device navigation isolates and clears the transient edit owner according to the existing edit contract.
+Live and history projection both use `UserAttachmentPolicy.publicProjection`; the Client mapper accepts only the closed safe metadata schema. Local retrieval is authenticated and bound to hardware device, session, and opaque media identity. Before responding, the Agent locates the exact durable session reference and revalidates size and SHA-256; responses use a generic filename, `private, no-store`, and `nosniff`.
+
+Edit restores existing attachments as ready opaque references without download or re-upload and allows add/remove/retry through a separate transient edit owner. New files are checked against the same 4-file, 5 MiB/file, and 20 MiB aggregate policy and remain transient until replay. The private authenticated replay command sends existing `reference_id` values plus validated new bytes; no bytes enter public events/history/cache/logs.
+
+The Agent clones every retained existing payload internally into distinct replacement-admission ownership before dispatch. Partial, stale, or rejected staging deletes only unclaimed replacement payloads. The original canonical message and its payloads remain unchanged until daemon acceptance. Cancel or session/device navigation discards only transient edits; replay failure keeps the editor and draft available for retry, while acceptance clears them and dispatches one replacement turn.
 
 ## View Image timeline media
 

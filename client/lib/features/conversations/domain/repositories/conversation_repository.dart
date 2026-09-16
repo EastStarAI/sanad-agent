@@ -17,6 +17,43 @@ import 'package:sanad_client/features/conversations/domain/models/turn_replay_re
 import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
+abstract interface class AttachmentReplayClient {
+  Future<TurnReplayResult> replayTurnWithAttachments({
+    required String sessionId,
+    required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    required int expectedHistoryRevision,
+    required TurnReplayAction action,
+    required String message,
+    required List<Map<String, dynamic>> attachmentEdits,
+    String? providerInstanceId,
+    String? modelId,
+    String? thinkingMode,
+    bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
+  });
+}
+
+abstract interface class AttachmentReplayRepository {
+  Future<TurnReplayResult> replayTurnWithAttachments(
+    DeviceConfig agent, {
+    required String sessionId,
+    required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    required int expectedHistoryRevision,
+    required TurnReplayAction action,
+    required String message,
+    required List<Map<String, dynamic>> attachmentEdits,
+    String? providerInstanceId,
+    String? modelId,
+    String? thinkingMode,
+    bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
+  });
+}
+
 abstract class ConversationRepository {
   Stream<List<Session>> watchSessions(DeviceConfig agent);
   Stream<Session> watchSessionCreated(DeviceConfig agent);

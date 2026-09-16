@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77f2/R0"
-remaining_estimate: "16%"
+current_gate: "77g1/R0"
+remaining_estimate: "8%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -167,7 +167,7 @@ detail = low | auto | high | original
 14. [x] [77e2 — Agent Attachment Store](tasks/77e2-agent-attachment-store.md)
 15. [x] [77e3 — Attachment Admission and Model Projection](tasks/77e3-attachment-admission-and-model-projection.md)
 16. [x] [77f1 — Composer Attachment UX](tasks/77f1-composer-attachment-ux.md)
-17. [ ] [77f2 — User Message Attachment and Edit UX](tasks/77f2-user-message-attachment-edit-ux.md)
+17. [x] [77f2 — User Message Attachment and Edit UX](tasks/77f2-user-message-attachment-edit-ux.md)
 18. [x] [77f3 — View Image Timeline Media](tasks/77f3-view-image-timeline-media.md)
 19. [ ] [77g1 — Local Attachment Integration QA](tasks/77g1-local-attachment-integration-qa.md)
 20. [ ] [77g2 — Remote Attachment Integration QA](tasks/77g2-remote-attachment-integration-qa.md)
@@ -180,7 +180,7 @@ detail = low | auto | high | original
 - [ ] `view_image` تطبق authorization قبل قراءة bytes وتعيد نتائج صورية للمزودات المدعومة.
 - [ ] زر `+` في يسار composer بجوار Permission Mode يفتح File Picker؛ paste/drop/picker تستخدم pipeline واحدة.
 - [ ] أي ملف فوق 5 MiB أو الرسالة فوق 4 ملفات/20 MiB ترفض قبل قبول turn، محليًا وعن بُعد.
-- [ ] user bubble وEdit يعرضان attachments بالترتيب، وEdit لا يعيد رفع المرفقات الموجودة.
+- [x] user bubble وEdit يعرضان attachments بالترتيب، وEdit لا يعيد رفع المرفقات الموجودة.
 - [ ] النموذج لا يستقبل attachment bytes تلقائيًا؛ يرى النص ومسارات agent-owned ويقرر الأدوات.
 - [ ] remote client path لا يعبر إلى تاريخ الوكيل أو النموذج، والرسالة تنتظر staging ACK.
 - [ ] حدث `View Image` يعرض thumbnail قابلة للضغط محليًا وعن بُعد دون base64/path عام.
@@ -457,3 +457,22 @@ Next task:
 - Verification: both analyzers clean; Agent changed-path suites `22/22` and `43/43`; Client focused `14/14` and full `1,159/1,159`; visible isolated macOS build; Graphify `24,059 / 33,140 / 849`; reference parity recorded. The unrelated failing Agent monolith baseline is documented in the task/evidence and is not claimed green.
 - Remaining estimate: `16%`.
 - Next task: `77f2`, gate `R0`.
+
+### 2026-09-16 — 77f2 R0 complete
+
+- Task/Gate: `77f2/R0`; plan advances to `77f2/G1`.
+- Packet `77e` was revalidated at the locked fingerprint/revisions. Cache/edit review confirms no current typed user-attachment Client projection and locks safe metadata-only cache plus a distinct transient edit owner that cannot mutate canonical history before replay acceptance.
+- Required evidence run records Adopt/Adapt/Reject decisions and the exact domain/cache/edit gaps.
+- Remaining estimate: `15%`.
+- Next gate: `77f2/G1 — Timeline projection`.
+
+### 2026-09-16 — 77f2 complete
+
+- Task/Gate: `77f2/G3`; task is complete and the plan advances to `77g1/R0`.
+- Delivered strict binary-free live/history/cache attachment projection, authenticated exact-scope media retrieval with integrity revalidation, responsive image/file/unavailable rendering, accessible Lightbox and bounded preview/save flow, plus isolated inline attachment editing.
+- Existing references hydrate without Client transfer and are cloned inside the Agent into distinct replay ownership; new bytes stay in the private authenticated replay command. Failed staging removes only unclaimed replacement payloads, and canonical history remains unchanged until acceptance.
+- Verification: full Agent and Client analyzers clean; Agent Local Gateway `23/23`, replay `18/18`, store `9/9`; Client focused widgets `42/42`; visible isolated macOS build; Graphify `24,152 / 33,294 / 842`; `git diff --check` clean.
+- Documentation/contracts updated: Agent Gateway contract, Client conversations contract, multimodal technical design, task, plan, and evidence run. File budget: `25/25`; open findings: none blocking.
+- Evidence fingerprint: `sha256:1f92463d390f35c6731087bc335672a612766e50a396b08131ba380c2557750a`; post-implementation decisions remain aligned.
+- Remaining estimate: `8%`.
+- Next task: `77g1 — Local Attachment Integration QA`, gate `R0`.

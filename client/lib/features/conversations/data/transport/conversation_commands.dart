@@ -246,6 +246,7 @@ class ConversationCommands {
     int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
+    List<Map<String, dynamic>>? attachmentEdits,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
@@ -273,6 +274,7 @@ class ConversationCommands {
         'confirmed_replay_unsafe': confirmedReplayUnsafe,
         'confirmed_drop_steers': confirmedDropSteers,
         if (message != null) 'message': message,
+        if (attachmentEdits != null) 'attachment_edits': attachmentEdits,
         if (providerInstanceId != null && providerInstanceId.trim().isNotEmpty)
           'provider_instance_id': providerInstanceId.trim(),
         if (modelId != null && modelId.trim().isNotEmpty) 'model_id': modelId.trim(),

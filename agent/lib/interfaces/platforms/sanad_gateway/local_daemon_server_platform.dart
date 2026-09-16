@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:logging/logging.dart';
 import 'package:sanad_release_contract/release_contract.dart';
 import 'package:sanad_agent/core/app_config.dart';
@@ -12,6 +13,7 @@ import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/core/sanad_home/loopback_policy.dart';
 import 'package:sanad_agent/core/update/agent_update_service.dart';
 import 'package:sanad_agent/core/utils/logger.dart';
@@ -277,6 +279,12 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         request.uri.pathSegments[0] == 'media' &&
         request.uri.pathSegments[1] == 'view-image') {
       await _handleViewImageMedia(request, request.uri.pathSegments[2]);
+      return;
+    }
+    if (request.uri.pathSegments.length == 3 &&
+        request.uri.pathSegments[0] == 'media' &&
+        request.uri.pathSegments[1] == 'attachment') {
+      await _handleAttachmentMedia(request, request.uri.pathSegments[2]);
       return;
     }
 
@@ -852,6 +860,100 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     }
   }
 
+  Future<void> _handleAttachmentMedia(
+    HttpRequest request,
+    String mediaId,
+  ) async {
+    final hasBody =
+        request.headers.contentLength > 0 ||
+        request.headers.value(HttpHeaders.transferEncodingHeader) != null;
+    final query = request.uri.queryParameters;
+    final sessionId = query['session_id']?.trim();
+    final deviceId = query['device_id']?.trim();
+    final validMediaId = RegExp(r'^[A-Za-z0-9_-]{1,200}$').hasMatch(mediaId);
+    if (request.method != 'GET' ||
+        hasBody ||
+        query.length != 2 ||
+        sessionId == null ||
+        sessionId.isEmpty ||
+        deviceId == null ||
+        deviceId.isEmpty ||
+        !validMediaId) {
+      request.response.statusCode = HttpStatus.badRequest;
+      await request.response.close();
+      return;
+    }
+    if (deviceId != _localDeviceId) {
+      request.response.statusCode = HttpStatus.forbidden;
+      await request.response.close();
+      return;
+    }
+
+    UserAttachment? attachment;
+    try {
+      for (final message
+          in viewImageMediaHistoryLoader?.call(sessionId) ?? const []) {
+        for (final candidate in message.attachments) {
+          if (candidate.mediaId == mediaId) {
+            attachment = candidate;
+            break;
+          }
+        }
+        if (attachment != null) break;
+      }
+    } on Object {
+      attachment = null;
+    }
+    if (attachment == null ||
+        attachment.status != UserAttachmentStatus.available ||
+        attachment.agentLocalReference.trim().isEmpty) {
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+      return;
+    }
+
+    List<int>? bytes;
+    try {
+      bytes = await File(attachment.agentLocalReference).readAsBytes();
+      if (bytes.length != attachment.sizeBytes ||
+          bytes.length > 5 * 1024 * 1024 ||
+          sha256.convert(bytes).toString() != attachment.sha256) {
+        bytes = null;
+      }
+    } on Object {
+      bytes = null;
+    }
+    if (bytes == null) {
+      request.response.statusCode = HttpStatus.notFound;
+      await request.response.close();
+      return;
+    }
+
+    final disposition = attachment.kind == UserAttachmentKind.image
+        ? 'inline'
+        : 'attachment';
+    request.response.headers
+      ..contentType = ContentType.parse(attachment.mimeType)
+      ..set(HttpHeaders.cacheControlHeader, 'private, no-store')
+      ..set('X-Content-Type-Options', 'nosniff')
+      ..set(
+        'content-disposition',
+        '$disposition; filename="${_safeAttachmentDownloadName(attachment.safeName)}"',
+      )
+      ..contentLength = bytes.length;
+    request.response.add(bytes);
+    await request.response.close();
+  }
+
+  String _safeAttachmentDownloadName(String safeName) {
+    final extension = RegExp(
+      r'\.([A-Za-z0-9]{1,10})$',
+    ).firstMatch(safeName)?.group(1);
+    return extension == null
+        ? 'attachment'
+        : 'attachment.${extension.toLowerCase()}';
+  }
+
   Future<void> _handleViewImageMedia(
     HttpRequest request,
     String mediaId,
@@ -941,10 +1043,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       ..set(HttpHeaders.acceptRangesHeader, 'bytes')
       ..set(HttpHeaders.cacheControlHeader, 'private, no-store')
       ..set('X-Content-Type-Options', 'nosniff')
-      ..set(
-        'content-disposition',
-        'inline; filename="${media.safeName}"',
-      )
+      ..set('content-disposition', 'inline; filename="${media.safeName}"')
       ..contentLength = end - start + 1;
     request.response.add(bytes.sublist(start, end + 1));
     await request.response.close();

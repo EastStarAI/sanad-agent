@@ -1024,6 +1024,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
+    List<Map<String, dynamic>>? attachmentEdits,
     bool confirmedReplayUnsafe = false,
     bool confirmedDropSteers = false,
   }) async {
@@ -1036,21 +1037,50 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         requiresConfirmation: false,
       );
     }
-    final result = await conversationRepository.replayTurn(
-      agent,
-      sessionId: sessionId,
-      targetRequestId: targetRequestId,
-      targetMessageId: targetMessageId,
-      targetTurnId: targetTurnId,
-      expectedHistoryRevision: expectedHistoryRevision ?? sessionCubit.state.selectedSession?.historyRevision ?? 0,
-      action: action,
-      message: message,
-      providerInstanceId: state.nextMessageProviderId,
-      modelId: state.nextMessageModel,
-      thinkingMode: state.nextMessageThinkingMode,
-      confirmedReplayUnsafe: confirmedReplayUnsafe,
-      confirmedDropSteers: confirmedDropSteers,
-    );
+    final revision = expectedHistoryRevision ?? sessionCubit.state.selectedSession?.historyRevision ?? 0;
+    final repository = conversationRepository;
+    final TurnReplayResult result;
+    if (attachmentEdits != null) {
+      if (repository is! AttachmentReplayRepository || message == null) {
+        return const TurnReplayResult(
+          outcome: 'attachments_unsupported',
+          safety: TurnReplaySafety.unknown,
+          requiresConfirmation: false,
+        );
+      }
+      result = await (repository as AttachmentReplayRepository).replayTurnWithAttachments(
+        agent,
+        sessionId: sessionId,
+        targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+        expectedHistoryRevision: revision,
+        action: action,
+        message: message,
+        attachmentEdits: attachmentEdits,
+        providerInstanceId: state.nextMessageProviderId,
+        modelId: state.nextMessageModel,
+        thinkingMode: state.nextMessageThinkingMode,
+        confirmedReplayUnsafe: confirmedReplayUnsafe,
+        confirmedDropSteers: confirmedDropSteers,
+      );
+    } else {
+      result = await repository.replayTurn(
+        agent,
+        sessionId: sessionId,
+        targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+        expectedHistoryRevision: revision,
+        action: action,
+        message: message,
+        providerInstanceId: state.nextMessageProviderId,
+        modelId: state.nextMessageModel,
+        thinkingMode: state.nextMessageThinkingMode,
+        confirmedReplayUnsafe: confirmedReplayUnsafe,
+        confirmedDropSteers: confirmedDropSteers,
+      );
+    }
     final nextRevision = result.historyRevision;
     final selected = sessionCubit.state.selectedSession;
     if (nextRevision != null && selected != null && selected.id == sessionId) {

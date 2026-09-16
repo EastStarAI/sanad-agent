@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/evolution/models/session_query.dart';
 import 'package:sanad_agent/evolution/models/session_history_page.dart';
@@ -194,6 +195,10 @@ class SessionQueryHandler {
           'sender': 'user',
           'type': 'user_message',
           'content': message.content ?? '',
+          if (message.attachments.isNotEmpty)
+            'attachments': UserAttachmentPolicy.publicProjection(
+              message.attachments,
+            ),
           'created_at': metadata?['received_at'] ?? msgTime,
           'session_id': sessionId,
           ...MessageHistoryIdentity.wireFields(message),

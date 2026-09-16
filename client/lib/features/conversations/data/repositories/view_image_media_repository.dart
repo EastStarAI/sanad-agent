@@ -62,6 +62,104 @@ int? _positiveInt(Object? value) {
   return parsed != null && parsed > 0 ? parsed : null;
 }
 
+class UserMessageAttachment {
+  const UserMessageAttachment({
+    required this.id,
+    required this.mediaId,
+    required this.safeName,
+    required this.mimeType,
+    required this.sizeBytes,
+    required this.sha256,
+    required this.isImage,
+    required this.isAvailable,
+  });
+
+  final String id;
+  final String mediaId;
+  final String safeName;
+  final String mimeType;
+  final int sizeBytes;
+  final String sha256;
+  final bool isImage;
+  final bool isAvailable;
+
+  static UserMessageAttachment? fromJson(Object? value) {
+    if (value is! Map) return null;
+    final json = value.cast<Object?, Object?>();
+    final id = json['id']?.toString() ?? '';
+    final mediaId = json['mediaId']?.toString() ?? '';
+    final safeName = json['safeName']?.toString() ?? '';
+    final mimeType = json['mimeType']?.toString() ?? '';
+    final sizeBytes = json['sizeBytes'];
+    final sha = json['sha256']?.toString() ?? '';
+    final kind = json['kind']?.toString();
+    final status = json['status']?.toString();
+    if (json.keys.any((key) => !_publicAttachmentKeys.contains(key)) ||
+        json['schemaVersion'] != 1 ||
+        !_opaqueId.hasMatch(id) ||
+        !_opaqueId.hasMatch(mediaId) ||
+        safeName.isEmpty ||
+        safeName == '.' ||
+        safeName == '..' ||
+        safeName.contains('/') ||
+        safeName.contains(r'\') ||
+        !_mimeType.hasMatch(mimeType) ||
+        sizeBytes is! int ||
+        sizeBytes < 0 ||
+        sizeBytes > 5 * 1024 * 1024 ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(sha) ||
+        (kind != 'image' && kind != 'file') ||
+        (status != 'available' && status != 'unavailable') ||
+        (kind == 'image') != mimeType.startsWith('image/')) {
+      return null;
+    }
+    return UserMessageAttachment(
+      id: id,
+      mediaId: mediaId,
+      safeName: safeName,
+      mimeType: mimeType,
+      sizeBytes: sizeBytes,
+      sha256: sha,
+      isImage: kind == 'image',
+      isAvailable: status == 'available',
+    );
+  }
+
+  static const _publicAttachmentKeys = {
+    'schemaVersion',
+    'id',
+    'safeName',
+    'mimeType',
+    'sizeBytes',
+    'sha256',
+    'kind',
+    'mediaId',
+    'status',
+  };
+  static final _opaqueId = RegExp(r'^[^/\\\x00-\x20\x7f]{1,200}$');
+  static final _mimeType = RegExp(
+    r'^[a-z0-9][a-z0-9.+-]*/[a-z0-9][a-z0-9.+-]*$',
+  );
+}
+
+extension UserMessageAttachmentsEvent on CanonicalEvent {
+  List<UserMessageAttachment> get userAttachments {
+    final raw = metadata?['attachments'];
+    if (raw is! List || raw.length > 4) return const [];
+    final parsed = <UserMessageAttachment>[];
+    final ids = <String>{};
+    var totalBytes = 0;
+    for (final value in raw) {
+      final attachment = UserMessageAttachment.fromJson(value);
+      if (attachment == null || !ids.add(attachment.id)) return const [];
+      totalBytes += attachment.sizeBytes;
+      if (totalBytes > 20 * 1024 * 1024) return const [];
+      parsed.add(attachment);
+    }
+    return List.unmodifiable(parsed);
+  }
+}
+
 typedef CancelMediaLoad = void Function();
 
 class ViewImageMediaLoad {
@@ -78,7 +176,14 @@ abstract interface class ViewImageMediaLoader {
   });
 }
 
-class ViewImageMediaRepository implements ViewImageMediaLoader {
+abstract interface class UserAttachmentMediaLoader {
+  ViewImageMediaLoad loadAttachment({
+    required UserMessageAttachment attachment,
+    required String sessionId,
+  });
+}
+
+class ViewImageMediaRepository implements ViewImageMediaLoader, UserAttachmentMediaLoader {
   ViewImageMediaRepository({
     required this.baseUrl,
     required this.hardwareId,
@@ -113,8 +218,34 @@ class ViewImageMediaRepository implements ViewImageMediaLoader {
   ViewImageMediaLoad load({
     required ViewImageMedia media,
     required String sessionId,
+  }) => _loadResource(
+    sessionId: sessionId,
+    mediaId: media.mediaId,
+    route: 'view-image',
+    mimeType: media.mimeType,
+    maximumBytes: maximumMediaBytes,
+  );
+
+  @override
+  ViewImageMediaLoad loadAttachment({
+    required UserMessageAttachment attachment,
+    required String sessionId,
+  }) => _loadResource(
+    sessionId: sessionId,
+    mediaId: attachment.mediaId,
+    route: 'attachment',
+    mimeType: attachment.mimeType,
+    maximumBytes: 5 * 1024 * 1024,
+  );
+
+  ViewImageMediaLoad _loadResource({
+    required String sessionId,
+    required String mediaId,
+    required String route,
+    required String mimeType,
+    required int maximumBytes,
   }) {
-    final key = '$hardwareId\u0000$sessionId\u0000${media.mediaId}';
+    final key = '$route\u0000$hardwareId\u0000$sessionId\u0000$mediaId';
     final cached = _cache.remove(key);
     if (cached != null) {
       _cache[key] = cached;
@@ -133,15 +264,23 @@ class ViewImageMediaRepository implements ViewImageMediaLoader {
     final client = _clientFactory();
     final shared = _SharedMediaRequest(client)..listeners = 1;
     _inFlight[key] = shared;
-    shared.future = _fetch(client, media, sessionId)
-        .then((bytes) {
-          if (!shared.cancelled) _store(key, bytes);
-          return bytes;
-        })
-        .whenComplete(() {
-          if (_inFlight[key] == shared) _inFlight.remove(key);
-          client.close();
-        });
+    shared.future =
+        _fetch(
+              client,
+              sessionId: sessionId,
+              mediaId: mediaId,
+              route: route,
+              mimeType: mimeType,
+              maximumBytes: maximumBytes,
+            )
+            .then((bytes) {
+              if (!shared.cancelled) _store(key, bytes);
+              return bytes;
+            })
+            .whenComplete(() {
+              if (_inFlight[key] == shared) _inFlight.remove(key);
+              client.close();
+            });
     return _handleFor(key, shared);
   }
 
@@ -163,17 +302,20 @@ class ViewImageMediaRepository implements ViewImageMediaLoader {
   }
 
   Future<Uint8List> _fetch(
-    http.Client client,
-    ViewImageMedia media,
-    String sessionId,
-  ) async {
+    http.Client client, {
+    required String sessionId,
+    required String mediaId,
+    required String route,
+    required String mimeType,
+    required int maximumBytes,
+  }) async {
     final base = Uri.parse(baseUrl);
     if ((base.scheme != 'http' && base.scheme != 'https') ||
         !const {'127.0.0.1', 'localhost', '::1'}.contains(base.host)) {
       throw const ViewImageMediaException('unsafe_gateway');
     }
     final uri = base.replace(
-      path: '${base.path.replaceFirst(RegExp(r'/+$'), '')}/media/view-image/${Uri.encodeComponent(media.mediaId)}',
+      path: '${base.path.replaceFirst(RegExp(r'/+$'), '')}/media/$route/${Uri.encodeComponent(mediaId)}',
       queryParameters: {
         'session_id': sessionId,
         'device_id': hardwareId,
@@ -185,16 +327,16 @@ class ViewImageMediaRepository implements ViewImageMediaLoader {
       throw ViewImageMediaException('http_${response.statusCode}');
     }
     final contentType = response.headers['content-type']?.split(';').first.trim();
-    if (contentType != media.mimeType) {
+    if (contentType != mimeType) {
       throw const ViewImageMediaException('mime_mismatch');
     }
     final contentLength = response.contentLength;
-    if (contentLength != null && contentLength > maximumMediaBytes) {
+    if (contentLength != null && contentLength > maximumBytes) {
       throw const ViewImageMediaException('media_too_large');
     }
     final builder = BytesBuilder(copy: false);
     await for (final chunk in response.stream) {
-      if (builder.length + chunk.length > maximumMediaBytes) {
+      if (builder.length + chunk.length > maximumBytes) {
         client.close();
         throw const ViewImageMediaException('media_too_large');
       }

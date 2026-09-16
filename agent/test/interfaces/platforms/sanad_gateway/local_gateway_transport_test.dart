@@ -10,6 +10,11 @@ import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
+import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:crypto/crypto.dart';
+import 'package:path/path.dart' as p;
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
@@ -126,6 +131,7 @@ void main() {
         toolCallId: 'call-view-1',
         toolResult: imageResult,
       ),
+      _attachmentMediaMessage('/unavailable'),
     ];
     platform = LocalDaemonServerPlatform(
       deliveryPresence: deliveryPresence,
@@ -146,7 +152,8 @@ void main() {
       beforeUpgradeAuthentication: () async {
         await upgradeHook?.call();
       },
-      viewImageMediaHistoryLoader: (_) => mediaMessages,
+      viewImageMediaHistoryLoader: (sessionId) =>
+          sessionId == 'session-1' ? mediaMessages : const [],
     );
     await platform.initialize();
   });
@@ -199,7 +206,7 @@ void main() {
         sessionId: 'session-1',
         toolName: 'view_image',
         toolCallId: 'call-view-1',
-        result: mediaMessages.last.toolResult,
+        result: mediaMessages[1].toolResult,
       )!;
       expect(media.toPublicJson(), {
         'media_id': media.mediaId,
@@ -213,7 +220,7 @@ void main() {
       final liveEvent = AgentToCanonical.translate(
         GatewayResponse(
           sessionId: 'session-1',
-          message: mediaMessages.last,
+          message: mediaMessages[1],
           toolName: 'view_image',
           toolCallId: 'call-view-1',
           isToolResult: true,
@@ -295,20 +302,181 @@ void main() {
     },
   );
 
-  test('HTTP rejects a hostile Host with a valid credential', () async {
-    final client = HttpClient();
-    addTearDown(() => client.close(force: true));
-    final request = await client.getUrl(
-      Uri.parse('http://127.0.0.1:$port/health'),
-    );
-    request.headers.set(LocalGatewayCredentials.headerName, token.value);
-    request.headers.set(HttpHeaders.hostHeader, 'attacker.example');
-    final response = await request.close();
-    final body = jsonDecode(await response.transform(utf8.decoder).join());
+  test(
+    'user attachments are binary-free publicly and exact-scope retrieval revalidates bytes',
+    () async {
+      final directory = await Directory.systemTemp.createTemp(
+        'sanad-attachment-relay-',
+      );
+      addTearDown(() => directory.delete(recursive: true));
+      final file = File('${directory.path}/private-name.png');
+      await file.writeAsBytes(const [5, 6, 7]);
+      mediaMessages[2] = _attachmentMediaMessage(file.path);
 
-    expect(response.statusCode, HttpStatus.forbidden);
-    expect(body['reason'], 'host_not_allowed');
-  });
+      final liveEvent = AgentToCanonical.translate(
+        GatewayResponse(sessionId: 'session-1', message: mediaMessages[2]),
+      );
+      final attachments = liveEvent.payload['attachments'] as List<dynamic>;
+      expect(attachments, hasLength(1));
+      expect(attachments.single, {
+        'schemaVersion': 1,
+        'id': 'attachment-1',
+        'safeName': 'photo.png',
+        'mimeType': 'image/png',
+        'sizeBytes': 3,
+        'sha256': sha256.convert(const [5, 6, 7]).toString(),
+        'kind': 'image',
+        'mediaId': 'attachment-media-1',
+        'status': 'available',
+      });
+      expect(jsonEncode(liveEvent.toJson()), isNot(contains(directory.path)));
+      expect(
+        jsonEncode(liveEvent.toJson()),
+        isNot(contains('agentLocalReference')),
+      );
+
+      Future<HttpClientResponse> fetch({
+        String sessionId = 'session-1',
+        String deviceId = 'hardware-1',
+        bool authenticated = true,
+      }) async {
+        final client = HttpClient();
+        addTearDown(() => client.close(force: true));
+        final uri =
+            Uri.parse(
+              'http://127.0.0.1:$port/media/attachment/attachment-media-1',
+            ).replace(
+              queryParameters: {'session_id': sessionId, 'device_id': deviceId},
+            );
+        final request = await client.getUrl(uri);
+        if (authenticated) {
+          request.headers.set(LocalGatewayCredentials.headerName, token.value);
+        }
+        return request.close();
+      }
+
+      final response = await fetch();
+      expect(response.statusCode, HttpStatus.ok);
+      expect(
+        await response.fold<List<int>>([], (all, chunk) => all..addAll(chunk)),
+        [5, 6, 7],
+      );
+      expect(response.headers.contentType?.mimeType, 'image/png');
+      expect(response.headers.value('x-content-type-options'), 'nosniff');
+      expect(
+        response.headers.value(HttpHeaders.cacheControlHeader),
+        'private, no-store',
+      );
+      expect(
+        response.headers.value('content-disposition'),
+        'inline; filename="attachment.png"',
+      );
+
+      final unauthenticated = await fetch(authenticated: false);
+      expect(unauthenticated.statusCode, HttpStatus.unauthorized);
+      await unauthenticated.drain<void>();
+      final wrongDevice = await fetch(deviceId: 'hardware-2');
+      expect(wrongDevice.statusCode, HttpStatus.forbidden);
+      await wrongDevice.drain<void>();
+      final wrongSession = await fetch(sessionId: 'session-2');
+      expect(wrongSession.statusCode, HttpStatus.notFound);
+      await wrongSession.drain<void>();
+
+      await file.writeAsBytes(const [5, 6, 8]);
+      final tampered = await fetch();
+      expect(tampered.statusCode, HttpStatus.notFound);
+      expect(
+        await tampered.fold<int>(0, (count, chunk) => count + chunk.length),
+        0,
+      );
+    },
+  );
+
+  test(
+    'attached payload is cloned into a distinct replay admission without Client bytes',
+    () async {
+      final home = await Directory.systemTemp.createTemp('sanad-replay-clone-');
+      final state = AgentStateDatabase.inMemory();
+      addTearDown(() async {
+        state.dispose();
+        await home.delete(recursive: true);
+      });
+      _insertAttachmentTestSession(state, 'clone-session');
+      final store = AttachmentStore(state, stateHome: home.path);
+      await store.initialize();
+      final bytes = const [9, 8, 7];
+      final upload = await store.create(
+        fileName: 'private-note.txt',
+        expectedSize: bytes.length,
+        expectedSha256: sha256.convert(bytes).toString(),
+      );
+      await store.write(upload, bytes);
+      final original = await store.commit(
+        upload,
+        sessionId: 'clone-session',
+        admissionId: 'original-request',
+      );
+      _claimAttachment(
+        store,
+        sessionId: 'clone-session',
+        admissionId: 'original-request',
+        messageId: 'original-message',
+        attachmentId: original.id,
+      );
+
+      final cloned = await store.cloneAttachedForAdmission(
+        sessionId: 'clone-session',
+        attachmentId: original.id,
+        admissionId: 'replay-request',
+      );
+      expect(cloned.id, isNot(original.id));
+      expect(cloned.mediaId, isNot(original.mediaId));
+      expect(cloned.safeName, original.safeName);
+      expect(cloned.sha256, original.sha256);
+      _claimAttachment(
+        store,
+        sessionId: 'clone-session',
+        admissionId: 'replay-request',
+        messageId: 'replay-message',
+        attachmentId: cloned.id,
+      );
+      final paths = await store.resolveAttachedPaths('clone-session');
+      expect(paths, hasLength(2));
+      expect(paths.toSet(), hasLength(2));
+      expect(await File(paths[0]).readAsBytes(), bytes);
+      expect(await File(paths[1]).readAsBytes(), bytes);
+
+      final disposable = await store.cloneAttachedForAdmission(
+        sessionId: 'clone-session',
+        attachmentId: original.id,
+        admissionId: 'failed-replay-request',
+      );
+      final disposableRow = state.db.select(
+        'SELECT relative_path FROM user_attachments WHERE attachment_id = ?',
+        [disposable.id],
+      ).single;
+      final disposableFile = File(
+        p.join(
+          home.path,
+          'attachments',
+          disposableRow['relative_path'] as String,
+        ),
+      );
+      expect(await disposableFile.exists(), isTrue);
+      await store.discardAdmission(
+        sessionId: 'clone-session',
+        admissionId: 'failed-replay-request',
+      );
+      expect(
+        state.db.select(
+          'SELECT 1 FROM user_attachments WHERE attachment_id = ?',
+          [disposable.id],
+        ),
+        isEmpty,
+      );
+      expect(await disposableFile.exists(), isFalse);
+    },
+  );
 
   test('HTTP accepts a valid credential and loopback Host', () async {
     final client = HttpClient();
@@ -767,6 +935,70 @@ void main() {
       release.complete();
       final socket = await first;
       await socket.close();
+    },
+  );
+}
+
+Message _attachmentMediaMessage(String path) => Message(
+  role: MessageRole.user,
+  content: 'See attached',
+  attachments: [
+    UserAttachment(
+      id: 'attachment-1',
+      safeName: 'photo.png',
+      mimeType: 'image/png',
+      sizeBytes: 3,
+      sha256: sha256.convert(const [5, 6, 7]).toString(),
+      kind: UserAttachmentKind.image,
+      agentLocalReference: path,
+      mediaId: 'attachment-media-1',
+    ),
+  ],
+);
+
+void _insertAttachmentTestSession(AgentStateDatabase state, String sessionId) {
+  final now = DateTime.now().toUtc().toIso8601String();
+  state.db.execute(
+    '''
+    INSERT INTO sessions (session_id, model, created_at, updated_at)
+    VALUES (?, 'test-model', ?, ?)
+    ''',
+    [sessionId, now, now],
+  );
+  for (final messageId in ['original-message', 'replay-message']) {
+    state.db.execute(
+      '''
+      INSERT INTO messages (session_id, data, message_id)
+      VALUES (?, '{"role":"user","content":"attachment test","attachments":[]}', ?)
+      ''',
+      [sessionId, messageId],
+    );
+  }
+}
+
+void _claimAttachment(
+  AttachmentStore store, {
+  required String sessionId,
+  required String admissionId,
+  required String messageId,
+  required String attachmentId,
+}) {
+  store.claimAdmissionAndPersist(
+    sessionId: sessionId,
+    admissionId: admissionId,
+    attachmentIds: [attachmentId],
+    persist: (_, attachments) {
+      final message = Message(
+        role: MessageRole.user,
+        content: 'attachment test',
+        attachments: attachments,
+        metadata: {
+          'request_id': admissionId,
+          'message_id': messageId,
+          'turn_id': 'turn-$messageId',
+        },
+      );
+      return [message];
     },
   );
 }

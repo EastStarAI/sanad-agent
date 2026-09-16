@@ -1,7 +1,13 @@
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:uuid/uuid.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/rendering.dart' show ScrollDirection;
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+import 'package:sanad_client/features/conversations/data/repositories/view_image_media_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_execution_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_visual_state.dart';
@@ -9,6 +15,7 @@ import 'package:sanad_client/features/home/presentation/widgets/new_chat_view.da
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input_panel.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_activity_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/tool_group_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/turn_replay_confirmation_dialog.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
@@ -16,6 +23,7 @@ import 'package:sanad_client/features/conversations/domain/models/message_delive
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import '../widgets/sidebar/sidebar_composition.dart';
@@ -54,6 +62,7 @@ class BrainActivityView extends StatefulWidget {
   final String? newerHistoryError;
   final Future<void> Function()? onLoadNewerHistory;
   final Future<void> Function(String eventId)? onLoadAnchoredHistory;
+  final Future<List<InlineEditAttachmentSelection>> Function()? pickEditAttachmentFiles;
 
   const BrainActivityView({
     super.key,
@@ -79,6 +88,7 @@ class BrainActivityView extends StatefulWidget {
     this.newerHistoryError,
     this.onLoadNewerHistory,
     this.onLoadAnchoredHistory,
+    this.pickEditAttachmentFiles,
   });
 
   @override
@@ -113,6 +123,8 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   final Set<String> _pendingEntranceEventIds = {};
   TextEditingController? _editController;
   String? _editingEventId;
+  List<InlineEditAttachment> _editAttachments = const [];
+  String? _editAttachmentError;
   String? _replayPendingEventId;
   String? _forkPendingEventId;
   int _openAnchorIndex = 0;
@@ -892,6 +904,10 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     setState(() {
       _editController = TextEditingController(text: event.text);
       _editingEventId = event.id;
+      _editAttachments = List.unmodifiable(
+        event.userAttachments.map(InlineEditAttachment.existing),
+      );
+      _editAttachmentError = null;
     });
   }
 
@@ -899,8 +915,144 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     _editController?.dispose();
     _editController = null;
     _editingEventId = null;
+    _editAttachments = const [];
+    _editAttachmentError = null;
     if (notify && mounted) setState(() {});
   }
+
+  Future<void> _addInlineEditAttachments() async {
+    List<InlineEditAttachmentSelection> selections;
+    try {
+      selections = await (widget.pickEditAttachmentFiles?.call() ?? _pickInlineEditAttachments());
+    } on Object {
+      if (mounted) {
+        setState(
+          () => _editAttachmentError = 'Could not open the selected attachment.',
+        );
+      }
+      return;
+    }
+    for (final selection in selections) {
+      if (!mounted || _editingEventId == null) return;
+      final bytes = selection.bytes;
+      final name = _safeAttachmentName(selection.name);
+      final error = _inlineAttachmentValidationError(bytes.length);
+      final item = InlineEditAttachment(
+        id: const Uuid().v4(),
+        name: name,
+        sizeBytes: bytes.length,
+        isImage: RegExp(
+          r'\.(png|jpe?g|gif|webp)$',
+          caseSensitive: false,
+        ).hasMatch(name),
+        isExisting: false,
+        bytes: bytes,
+        status: error == null ? InlineEditAttachmentStatus.ready : InlineEditAttachmentStatus.failed,
+        error: error,
+      );
+      setState(() {
+        _editAttachments = List.unmodifiable([..._editAttachments, item]);
+        _editAttachmentError = error;
+      });
+    }
+  }
+
+  Future<List<InlineEditAttachmentSelection>> _pickInlineEditAttachments() async {
+    final files = await openFiles();
+    final selections = <InlineEditAttachmentSelection>[];
+    for (final file in files) {
+      selections.add(
+        InlineEditAttachmentSelection(
+          name: file.name,
+          bytes: await file.readAsBytes(),
+        ),
+      );
+    }
+    return selections;
+  }
+
+  String? _inlineAttachmentValidationError(
+    int nextBytes, {
+    String? excludingId,
+  }) {
+    final retained = _editAttachments.where((attachment) => attachment.id != excludingId).toList(growable: false);
+    if (retained.length >= 4) {
+      return 'A message accepts at most 4 attachments.';
+    }
+    if (nextBytes > 5 * 1024 * 1024) {
+      return 'Each attachment must be 5 MiB or smaller.';
+    }
+    final total =
+        retained.fold<int>(
+          0,
+          (sum, item) => sum + item.sizeBytes,
+        ) +
+        nextBytes;
+    if (total > 20 * 1024 * 1024) {
+      return 'Attachments must total 20 MiB or less per message.';
+    }
+    return null;
+  }
+
+  static String _safeAttachmentName(String input) {
+    final name = input.split(RegExp(r'[/\\]')).last.trim();
+    return name.isEmpty || name == '.' || name == '..' ? 'attachment' : name;
+  }
+
+  void _removeInlineEditAttachment(String id) {
+    setState(() {
+      _editAttachments = List.unmodifiable(
+        _editAttachments.where((attachment) => attachment.id != id),
+      );
+      _editAttachmentError = null;
+    });
+  }
+
+  void _retryInlineEditAttachment(String id) {
+    final index = _editAttachments.indexWhere((attachment) => attachment.id == id);
+    if (index < 0) return;
+    final item = _editAttachments[index];
+    final error = item.bytes == null
+        ? 'Could not read the selected attachment.'
+        : _inlineAttachmentValidationError(
+            item.bytes!.length,
+            excludingId: item.id,
+          );
+    setState(() {
+      _editAttachments = List.unmodifiable([
+        for (var i = 0; i < _editAttachments.length; i++)
+          if (i == index)
+            InlineEditAttachment(
+              id: item.id,
+              name: item.name,
+              sizeBytes: item.sizeBytes,
+              isImage: item.isImage,
+              isExisting: item.isExisting,
+              bytes: item.bytes,
+              status: error == null ? InlineEditAttachmentStatus.ready : InlineEditAttachmentStatus.failed,
+              error: error,
+            )
+          else
+            _editAttachments[i],
+      ]);
+      _editAttachmentError = error;
+    });
+  }
+
+  List<Map<String, dynamic>> _serializeInlineEditAttachments() => List.unmodifiable(
+    _editAttachments.map((attachment) {
+      if (attachment.isExisting) {
+        return <String, dynamic>{'reference_id': attachment.id};
+      }
+      final bytes = attachment.bytes!;
+      return <String, dynamic>{
+        'name': attachment.name,
+        'size_bytes': bytes.length,
+        'sha256': sha256.convert(bytes).toString(),
+        'data_base64': base64Encode(bytes),
+      };
+    }),
+  );
 
   Future<void> _replayTurn(
     CanonicalEvent event, {
@@ -912,18 +1064,20 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       return;
     }
     setState(() => _replayPendingEventId = event.id);
-    final cubit = context.read<ConversationInputCubit>();
+    final messagesCubit = context.read<SessionMessagesCubit>();
+    final attachmentEdits = action == TurnReplayAction.edit ? _serializeInlineEditAttachments() : null;
     var confirmedUnsafe = false;
     var confirmedDropSteers = false;
     var retriedAfterRevisionMismatch = false;
     late TurnReplayResult result;
     while (true) {
-      result = await cubit.replayTurn(
+      result = await messagesCubit.replayTurn(
         targetRequestId: requestId,
         targetMessageId: event.messageId,
         targetTurnId: event.turnId,
         action: action,
         message: message,
+        attachmentEdits: attachmentEdits,
         confirmedReplayUnsafe: confirmedUnsafe,
         confirmedDropSteers: confirmedDropSteers,
       );
@@ -1265,12 +1419,25 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         isEditing: _editingEventId == event.id,
         isReplayPending: _replayPendingEventId == event.id,
         editController: _editingEventId == event.id ? _editController : null,
+        editAttachments: _editingEventId == event.id ? _editAttachments : const [],
+        editAttachmentError: _editingEventId == event.id ? _editAttachmentError : null,
+        onAddEditAttachment: _editingEventId == event.id ? _addInlineEditAttachments : null,
+        onRemoveEditAttachment: _editingEventId == event.id ? _removeInlineEditAttachment : null,
+        onRetryEditAttachment: _editingEventId == event.id ? _retryInlineEditAttachment : null,
         onBeginEdit: canReplay ? () => _beginInlineEdit(event) : null,
         onCancelEdit: _cancelInlineEdit,
         onSubmitEdit: canReplay
             ? () async {
                 final text = _editController?.text.trim() ?? '';
                 if (text.isEmpty) return;
+                if (_editAttachments.any(
+                  (attachment) => attachment.status == InlineEditAttachmentStatus.failed,
+                )) {
+                  setState(() {
+                    _editAttachmentError = 'Remove or retry failed attachments before sending.';
+                  });
+                  return;
+                }
                 await _replayTurn(
                   event,
                   action: TurnReplayAction.edit,

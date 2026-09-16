@@ -45,6 +45,12 @@ class EventTile extends StatefulWidget {
   final Future<void> Function()? onFork;
   final ToolWaitingIndicator waitingIndicator;
   final ViewImageMediaLoader? viewImageMediaLoader;
+  final UserAttachmentMediaLoader? userAttachmentMediaLoader;
+  final List<InlineEditAttachment> editAttachments;
+  final String? editAttachmentError;
+  final Future<void> Function()? onAddEditAttachment;
+  final ValueChanged<String>? onRemoveEditAttachment;
+  final ValueChanged<String>? onRetryEditAttachment;
 
   const EventTile({
     super.key,
@@ -66,6 +72,12 @@ class EventTile extends StatefulWidget {
     this.onFork,
     this.waitingIndicator = ToolWaitingIndicator.none,
     this.viewImageMediaLoader,
+    this.userAttachmentMediaLoader,
+    this.editAttachments = const [],
+    this.editAttachmentError,
+    this.onAddEditAttachment,
+    this.onRemoveEditAttachment,
+    this.onRetryEditAttachment,
   });
 
   @override
@@ -198,6 +210,12 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
           onCancelEdit: widget.onCancelEdit,
           onSubmitEdit: widget.onSubmitEdit,
           onRetry: widget.onRetry,
+          attachmentMediaLoader: widget.userAttachmentMediaLoader,
+          editAttachments: widget.editAttachments,
+          editAttachmentError: widget.editAttachmentError,
+          onAddEditAttachment: widget.onAddEditAttachment,
+          onRemoveEditAttachment: widget.onRemoveEditAttachment,
+          onRetryEditAttachment: widget.onRetryEditAttachment,
         );
       case EventKind.informational:
         if (widget.event.metadata?['informational_kind'] == 'session_fork') {

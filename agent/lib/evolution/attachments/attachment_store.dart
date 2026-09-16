@@ -240,6 +240,49 @@ final class AttachmentStore {
     if (pending != null) await _deleteIfPresent(pending.file);
   }
 
+  /// Creates a separately owned staged reference from an attached payload.
+  /// Bytes remain inside the private store and never cross the Client boundary.
+  Future<UserAttachment> cloneAttachedForAdmission({
+    required String sessionId,
+    required String attachmentId,
+    required String admissionId,
+  }) async {
+    final rows = _state.db.select(
+      '''
+      SELECT * FROM user_attachments
+      WHERE attachment_id = ? AND session_id = ? AND status = 'attached'
+      ''',
+      [attachmentId, sessionId],
+    );
+    if (rows.length != 1) {
+      throw const AttachmentStoreException(
+        AttachmentStoreErrorCode.ownershipMismatch,
+      );
+    }
+    final source = _attachmentFromRow(rows.single);
+    final path = File(
+      p.join(_root.path, rows.single['relative_path'] as String),
+    );
+    final upload = await create(
+      fileName: source.safeName,
+      expectedSize: source.sizeBytes,
+      expectedSha256: source.sha256,
+    );
+    try {
+      await for (final chunk in path.openRead()) {
+        await write(upload, chunk);
+      }
+      return await commit(
+        upload,
+        sessionId: sessionId,
+        admissionId: admissionId,
+      );
+    } on Object {
+      await cancel(upload);
+      rethrow;
+    }
+  }
+
   /// Loads an ordered admission owned by exactly one session/request.
   List<UserAttachment> loadAdmission({
     required String sessionId,
@@ -392,6 +435,37 @@ final class AttachmentStore {
   }
 
   /// Deletes database ownership atomically, then owned bytes idempotently.
+  /// Removes unclaimed payloads owned by a failed request admission.
+  Future<void> discardAdmission({
+    required String sessionId,
+    required String admissionId,
+  }) async {
+    final rows = _state.db.select(
+      '''
+      SELECT attachment_id, relative_path FROM user_attachments
+      WHERE session_id = ? AND admission_id = ? AND status = 'staged'
+      ''',
+      [sessionId, admissionId],
+    );
+    if (rows.isEmpty) return;
+    _state.transaction((transaction) {
+      transaction.db.execute(
+        '''
+        DELETE FROM user_attachments
+        WHERE session_id = ? AND admission_id = ? AND status = 'staged'
+        ''',
+        [sessionId, admissionId],
+      );
+    });
+    for (final row in rows) {
+      await _deleteDirectoryIfPresent(
+        Directory(
+          p.join(_root.path, p.dirname(row['relative_path'] as String)),
+        ),
+      );
+    }
+  }
+
   Future<void> deleteSession(String sessionId) async =>
       deleteSessionSync(sessionId);
 

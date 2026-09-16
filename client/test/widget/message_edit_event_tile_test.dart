@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 void main() {
@@ -169,5 +170,79 @@ void main() {
     expect(input.textInputAction, TextInputAction.newline);
     expect(controller.text, 'first line\nsecond line');
     expect(submissions, 0);
+  });
+
+  testWidgets('inline editor restores existing and new attachments with isolated actions', (tester) async {
+    final controller = TextEditingController(text: 'edited message');
+    addTearDown(controller.dispose);
+    final removed = <String>[];
+    final retried = <String>[];
+    var addCalls = 0;
+    final attachments = [
+      const InlineEditAttachment(
+        id: 'existing-1',
+        name: 'photo.png',
+        sizeBytes: 68,
+        isImage: true,
+        isExisting: true,
+      ),
+      const InlineEditAttachment(
+        id: 'new-1',
+        name: 'notes.txt',
+        sizeBytes: 12,
+        isImage: false,
+        isExisting: false,
+      ),
+      const InlineEditAttachment(
+        id: 'failed-1',
+        name: 'failed.txt',
+        sizeBytes: 12,
+        isImage: false,
+        isExisting: false,
+        status: InlineEditAttachmentStatus.failed,
+        error: 'Upload failed',
+      ),
+    ];
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: EventTile(
+            event: event,
+            canReplay: true,
+            isEditing: true,
+            editController: controller,
+            editAttachments: attachments,
+            editAttachmentError: 'Upload failed',
+            onAddEditAttachment: () async => addCalls += 1,
+            onRemoveEditAttachment: removed.add,
+            onRetryEditAttachment: retried.add,
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const Key('inline_edit_attachment_rail')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('inline_edit_attachment_existing-1')),
+      findsOneWidget,
+    );
+    expect(find.text('Ready · existing'), findsOneWidget);
+    expect(find.text('Ready · new'), findsOneWidget);
+    expect(find.text('Failed'), findsOneWidget);
+    expect(find.byKey(const Key('inline_edit_attachment_error')), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('add_inline_edit_attachment')));
+    await tester.tap(
+      find.byKey(const ValueKey('remove_inline_edit_attachment_existing-1')),
+    );
+    await tester.tap(
+      find.byKey(const ValueKey('retry_inline_edit_attachment_failed-1')),
+    );
+    await tester.pump();
+
+    expect(addCalls, 1);
+    expect(removed, ['existing-1']);
+    expect(retried, ['failed-1']);
   });
 }

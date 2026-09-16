@@ -1,4 +1,5 @@
 import '../../../../core/models/message.dart';
+import '../../../../core/models/user_attachment.dart';
 import '../../../../evolution/db/message_history_identity.dart';
 import '../../../models/gateway_event.dart';
 import '../protocol/canonical_events.dart';
@@ -38,6 +39,10 @@ class AgentToCanonical {
       payload = {
         'id': 'msg_${DateTime.now().millisecondsSinceEpoch}',
         'content': response.message.content ?? '',
+        if (response.message.attachments.isNotEmpty)
+          'attachments': UserAttachmentPolicy.publicProjection(
+            response.message.attachments,
+          ),
         'status': 'done',
         'timestamp':
             response.message.metadata?['received_at'] ??

@@ -46,6 +46,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Hydrate durable pending steer, unacknowledged draft recovery, runtime notice, route transitions, canonical reasoning/tool/final events, and latest context usage.
 - Tool input/output appears once in canonical fields and is not duplicated in content.
 - `view_image` tool results expose only deterministic opaque media identity, safe name, verified MIME/dimensions, and availability in live/history projections. The authenticated loopback media route resolves bytes from the exact durable typed result without creating another stored copy; it requires matching hardware device, session, and media identity, permits one valid byte range, and emits private/no-store plus `nosniff` headers. Cross-device/session requests and malformed scopes return no image bytes, and bytes/base64/private paths never enter events or logs.
+- User-message attachment live/history projections use `UserAttachmentPolicy.publicProjection` only. The authenticated loopback attachment route resolves an exact session-owned durable reference, revalidates size and SHA-256 before response, emits a generic filename with `private, no-store` and `nosniff`, and returns no payload for wrong device/session/media scope or changed bytes.
 - Route-transition history snapshots provider display names and anchors ordering to durable request identity.
 
 ## Recovery Commands
@@ -54,7 +55,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Restart draft recovery is text-free until a first-writer claim succeeds; only the winning direct response carries recovered items.
 - User-stop recovery requires its private owner token for acknowledgment. Restart recovery requires the durable winning claimant id.
 - History and broadcasts never grant recovery ownership or expose claimed text.
-- Turn edit/retry classifies replay safety before cancellation, requires explicit unsafe/unknown confirmation, rejects steer targets before Stop, serializes one replay per session, waits for an authoritative `idle` snapshot after scoped stop, then atomically soft-rewinds and accepts the replacement user record before dispatch.
+- Turn edit/retry classifies replay safety before cancellation, requires explicit unsafe/unknown confirmation, rejects steer targets before Stop, serializes one replay per session, waits for an authoritative `idle` snapshot after scoped stop, then atomically soft-rewinds and accepts the replacement user record before dispatch. Existing attachment references are cloned inside the Agent into distinct replacement-admission ownership; new bytes are accepted only from the private authenticated replay command after size/hash validation. Failed or stale admissions discard only their unclaimed staged payloads.
 - `session.fork` materializes an independent child from a durable terminal final-answer identity. The daemon copies the active prefix server-side in one transaction; the child starts idle and does not inherit runtime work. Child history derives one trailing stable `session.forked` UI event from session lineage without persisting it as a model-visible message.
 
 ## Runtime Queries and Provider Commands

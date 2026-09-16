@@ -80,6 +80,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       'previous_provider_display_name':
           row['previous_provider_display_name'] ?? metadata['previous_provider_display_name'],
       'provider_display_name': row['provider_display_name'] ?? metadata['provider_display_name'],
+      'attachments': row['attachments'] ?? metadata['attachments'],
     };
     final historyStructuredFields = switch (type) {
       'tool_use' => <String, dynamic>{
@@ -628,6 +629,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       if (event['started_at'] != null) 'started_at': event['started_at'],
       if (event['terminal_at'] != null) 'terminal_at': event['terminal_at'],
       if (event['cleanup_outcome'] != null) 'cleanup_outcome': event['cleanup_outcome'],
+      if (event['attachments'] is List) 'attachments': event['attachments'],
     };
     return normalized.isEmpty ? null : normalized;
   }

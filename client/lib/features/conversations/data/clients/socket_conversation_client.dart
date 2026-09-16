@@ -28,10 +28,11 @@ import 'package:sanad_client/features/conversations/domain/models/compaction_eve
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
+import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
-class SocketConversationClient implements ConversationClient {
+class SocketConversationClient implements ConversationClient, AttachmentReplayClient {
   static final _logger = Logger('SocketConversationClient');
 
   DeviceConfig _config;
@@ -284,6 +285,37 @@ class SocketConversationClient implements ConversationClient {
     expectedHistoryRevision: expectedHistoryRevision,
     action: action,
     message: message,
+    providerInstanceId: providerInstanceId,
+    modelId: modelId,
+    thinkingMode: thinkingMode,
+    confirmedReplayUnsafe: confirmedReplayUnsafe,
+    confirmedDropSteers: confirmedDropSteers,
+  );
+
+  @override
+  Future<TurnReplayResult> replayTurnWithAttachments({
+    required String sessionId,
+    required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    required int expectedHistoryRevision,
+    required TurnReplayAction action,
+    required String message,
+    required List<Map<String, dynamic>> attachmentEdits,
+    String? providerInstanceId,
+    String? modelId,
+    String? thinkingMode,
+    bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
+  }) => _commands!.replayTurn(
+    sessionId: sessionId,
+    targetRequestId: targetRequestId,
+    targetMessageId: targetMessageId,
+    targetTurnId: targetTurnId,
+    expectedHistoryRevision: expectedHistoryRevision,
+    action: action,
+    message: message,
+    attachmentEdits: attachmentEdits,
     providerInstanceId: providerInstanceId,
     modelId: modelId,
     thinkingMode: thinkingMode,

@@ -1,4 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
+import 'package:sanad_agent/core/models/user_attachment.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
@@ -23,6 +28,7 @@ class SessionTurnReplayCommandHandler {
   final PersistedRuntimeStateRepository? _persistedState;
   final CompactionBoundaryRepository? _compactionBoundaries;
   final SanadProtocolBridge _bridge;
+  final AttachmentStore? _attachmentStore;
   final Duration _idleWaitTimeout;
   final Duration _idlePollInterval;
   final Set<String> _sessionsInFlight = <String>{};
@@ -33,6 +39,7 @@ class SessionTurnReplayCommandHandler {
     PersistedRuntimeStateRepository? persistedState,
     CompactionBoundaryRepository? compactionBoundaries,
     required SanadProtocolBridge bridge,
+    AttachmentStore? attachmentStore,
     Duration idleWaitTimeout = defaultIdleWaitTimeout,
     Duration idlePollInterval = defaultIdlePollInterval,
   }) : _orchestrator = orchestrator,
@@ -40,6 +47,7 @@ class SessionTurnReplayCommandHandler {
        _persistedState = persistedState,
        _compactionBoundaries = compactionBoundaries,
        _bridge = bridge,
+       _attachmentStore = attachmentStore,
        _idleWaitTimeout = idleWaitTimeout,
        _idlePollInterval = idlePollInterval;
 
@@ -112,6 +120,8 @@ class SessionTurnReplayCommandHandler {
       return;
     }
 
+    AttachmentStore? stagedAttachmentStore;
+    var retainStagedAttachments = false;
     try {
       final replay = TurnReplayService(
         sessionManager: _sessionManager,
@@ -237,6 +247,46 @@ class SessionTurnReplayCommandHandler {
         return;
       }
       final targetRunId = _targetRunId(postIdle);
+      final rawAttachmentEdits = event.payload['attachment_edits'];
+      final sourceSession = _sessionManager.getSession(sessionId);
+      final hasRetrySourceAttachments =
+          rawAttachmentEdits == null &&
+          action == 'retry' &&
+          sourceSession != null &&
+          postIdle.targetMessageIndex >= 0 &&
+          postIdle.targetMessageIndex < sourceSession.messages.length &&
+          sourceSession
+              .messages[postIdle.targetMessageIndex]
+              .attachments
+              .isNotEmpty;
+      if ((rawAttachmentEdits is List && rawAttachmentEdits.isNotEmpty) ||
+          hasRetrySourceAttachments) {
+        stagedAttachmentStore = _attachmentStore;
+      }
+      List<UserAttachment> replayAttachments;
+      try {
+        replayAttachments = await _stageReplayAttachments(
+          event: event,
+          inspection: postIdle,
+          sessionId: sessionId,
+          admissionId: commandRequestId,
+          action: action,
+        );
+      } on Object {
+        await _emitResult(
+          emitEnvelope,
+          sessionId: sessionId,
+          requestId: commandRequestId,
+          targetRequestId: targetRequestId,
+          targetMessageId: targetMessageId,
+          targetTurnId: targetTurnId,
+          action: action,
+          outcome: 'attachment_admission_failed',
+          safety: postIdle.safety,
+          historyRevision: postIdle.historyRevision,
+        );
+        return;
+      }
       final admission = replay.admitReplacement(
         inspection: postIdle,
         replacementRequestId: commandRequestId,
@@ -295,6 +345,10 @@ class SessionTurnReplayCommandHandler {
         metadata: {
           'turn_replay_action': action,
           'replayed_request_id': targetRequestId,
+          if (replayAttachments.isNotEmpty)
+            'attachment_ids': replayAttachments
+                .map((attachment) => attachment.id)
+                .toList(growable: false),
         },
       );
       final gatewayEvent = GatewayEvent(
@@ -303,6 +357,7 @@ class SessionTurnReplayCommandHandler {
         message: Message(
           role: MessageRole.user,
           content: replayMessage,
+          attachments: replayAttachments,
           metadata: {
             'request_id': commandRequestId,
             'message_id': admission.replacementMessageId,
@@ -331,6 +386,7 @@ class SessionTurnReplayCommandHandler {
         containsSteers: postIdle.containsSteers,
         historyRevision: admission.historyRevision,
       );
+      retainStagedAttachments = true;
       unawaited(_orchestrator.handleEvent(gatewayEvent));
     } catch (_) {
       await _emitResult(
@@ -345,8 +401,110 @@ class SessionTurnReplayCommandHandler {
         safety: TurnReplaySafety.unknown,
       );
     } finally {
-      _sessionsInFlight.remove(sessionId);
+      try {
+        if (stagedAttachmentStore != null && !retainStagedAttachments) {
+          await stagedAttachmentStore.discardAdmission(
+            sessionId: sessionId,
+            admissionId: commandRequestId,
+          );
+        }
+      } finally {
+        _sessionsInFlight.remove(sessionId);
+      }
     }
+  }
+
+  Future<List<UserAttachment>> _stageReplayAttachments({
+    required CanonicalEvent event,
+    required TurnReplayInspection inspection,
+    required String sessionId,
+    required String admissionId,
+    required String action,
+  }) async {
+    final session = _sessionManager.getSession(sessionId);
+    if (session == null ||
+        inspection.targetMessageIndex < 0 ||
+        inspection.targetMessageIndex >= session.messages.length) {
+      throw const FormatException('Attachment source is unavailable.');
+    }
+    final originals =
+        session.messages[inspection.targetMessageIndex].attachments;
+    final originalsById = {for (final item in originals) item.id: item};
+    final raw = event.payload['attachment_edits'];
+    final edits = raw == null && action == 'retry'
+        ? originals.map<Object?>((item) => {'reference_id': item.id}).toList()
+        : raw;
+    if (edits is! List ||
+        edits.length > UserAttachmentPolicy.maxFilesPerMessage) {
+      throw const FormatException('Attachment edits are invalid.');
+    }
+    if (edits.isEmpty) return const [];
+    final store = _attachmentStore;
+    if (store == null) {
+      throw const FormatException('Attachment store is unavailable.');
+    }
+    final staged = <UserAttachment>[];
+    for (final value in edits) {
+      if (value is! Map) {
+        throw const FormatException('Attachment edit is invalid.');
+      }
+      final json = Map<String, dynamic>.from(value);
+      if (json.keys.length == 1 && json['reference_id'] is String) {
+        final id = (json['reference_id'] as String).trim();
+        if (!originalsById.containsKey(id)) {
+          throw const FormatException('Attachment reference is invalid.');
+        }
+        staged.add(
+          await store.cloneAttachedForAdmission(
+            sessionId: sessionId,
+            attachmentId: id,
+            admissionId: admissionId,
+          ),
+        );
+        continue;
+      }
+      const keys = {'name', 'size_bytes', 'sha256', 'data_base64'};
+      if (json.keys.toSet().difference(keys).isNotEmpty ||
+          json.keys.length != keys.length ||
+          json['name'] is! String ||
+          json['size_bytes'] is! int ||
+          json['sha256'] is! String ||
+          json['data_base64'] is! String) {
+        throw const FormatException('Attachment upload is invalid.');
+      }
+      final declaredSize = json['size_bytes'] as int;
+      final declaredSha = json['sha256'] as String;
+      final bytes = base64Decode(json['data_base64'] as String);
+      if (declaredSize != bytes.length ||
+          bytes.length > UserAttachmentPolicy.maxFileBytes ||
+          !RegExp(r'^[a-f0-9]{64}$').hasMatch(declaredSha) ||
+          sha256.convert(bytes).toString() != declaredSha) {
+        throw const FormatException('Attachment upload is invalid.');
+      }
+      final upload = await store.create(
+        fileName: json['name'] as String,
+        expectedSize: declaredSize,
+        expectedSha256: declaredSha,
+      );
+      try {
+        await store.write(upload, bytes);
+        staged.add(
+          await store.commit(
+            upload,
+            sessionId: sessionId,
+            admissionId: admissionId,
+          ),
+        );
+      } on Object {
+        await store.cancel(upload);
+        rethrow;
+      }
+    }
+    final validation = UserAttachmentPolicy.validate(staged);
+    if (validation is AttachmentAdmissionFailure) {
+      throw const FormatException('Attachment edits exceed policy.');
+    }
+    return List.unmodifiable(staged);
   }
 
   /// Stop acknowledgement and terminal work items are not dispatch authority.
