@@ -1,7 +1,20 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+const _cleanupAttempts = 20;
+const _cleanupRetryDelay = Duration(milliseconds: 250);
+const cliAotSuccessFileEnvironment = 'SANAD_CLI_AOT_SUCCESS_FILE';
+
 Future<void> main() async {
+  final successFilePath = Platform.environment[cliAotSuccessFileEnvironment];
+  final successFile = successFilePath == null || successFilePath.trim().isEmpty
+      ? null
+      : File(successFilePath);
+  if (successFile != null && await successFile.exists()) {
+    await successFile.delete();
+  }
+
   final root = await Directory.systemTemp.createTemp('sanad-cli-aot-smoke-');
   final executable = File(
     '${root.path}/sanad${Platform.isWindows ? '.exe' : ''}',
@@ -60,10 +73,38 @@ Future<void> main() async {
         'AOT pipe run failed ($pipeExit): stdout=$pipeStdout stderr=$pipeStderr',
       );
     }
-
-    stdout.writeln('Sanad CLI AOT JSON and pipe smoke passed.');
   } finally {
-    if (await root.exists()) await root.delete(recursive: true);
+    await deleteDirectoryWithRetry(root);
+  }
+
+  if (successFile != null) {
+    await successFile.parent.create(recursive: true);
+    await successFile.writeAsString('passed\n', flush: true);
+  }
+  stdout.writeln('Sanad CLI AOT JSON and pipe smoke passed.');
+}
+
+Future<void> deleteDirectoryWithRetry(
+  Directory directory, {
+  int maxAttempts = _cleanupAttempts,
+  Duration retryDelay = _cleanupRetryDelay,
+  FutureOr<void> Function()? delete,
+  Future<void> Function(Duration) wait = Future<void>.delayed,
+}) async {
+  if (maxAttempts < 1) {
+    throw ArgumentError.value(maxAttempts, 'maxAttempts', 'must be positive');
+  }
+  if (!await directory.exists()) return;
+
+  final deleteOperation = delete ?? () => directory.delete(recursive: true);
+  for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await deleteOperation();
+      return;
+    } on FileSystemException {
+      if (attempt == maxAttempts) rethrow;
+      await wait(retryDelay);
+    }
   }
 }
 
