@@ -225,7 +225,7 @@ void main() {
   );
 
   test(
-    'restart cleanup removes interrupted partials and promoted orphans',
+    'restart cleanup removes interrupted partials and unclaimed payloads',
     () async {
       final interrupted = await store.create(fileName: 'interrupted.txt');
       await store.write(interrupted, [1, 2, 3]);
@@ -250,15 +250,25 @@ void main() {
 
       expect(orphan.existsSync(), isFalse);
       expect(
-        restarted
-            .loadAdmission(
-              sessionId: 'session-a',
-              admissionId: 'request-retry',
-              attachmentIds: [staged.id],
-            )
-            .single
-            .id,
-        staged.id,
+        () => restarted.loadAdmission(
+          sessionId: 'session-a',
+          admissionId: 'request-retry',
+          attachmentIds: [staged.id],
+        ),
+        throwsA(
+          isA<AttachmentStoreException>().having(
+            (error) => error.code,
+            'code',
+            AttachmentStoreErrorCode.ownershipMismatch,
+          ),
+        ),
+      );
+      expect(
+        Directory(
+          '${home.path}${Platform.pathSeparator}attachments'
+          '${Platform.pathSeparator}${staged.id}',
+        ).existsSync(),
+        isFalse,
       );
       expect(
         Directory(

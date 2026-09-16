@@ -40,6 +40,7 @@ import 'handlers/device_settings_command_handler.dart';
 import 'handlers/device_control_command_handler.dart';
 import 'handlers/provider_command_handler.dart';
 import 'handlers/session_fork_command_handler.dart';
+import 'handlers/attachment_admission_command_handler.dart';
 import 'handlers/session_query_handler.dart';
 import 'handlers/session_recovery_command_handler.dart';
 import 'handlers/session_compact_command_handler.dart';
@@ -58,6 +59,7 @@ class SanadProtocolBridge {
   WorkspaceCommandHandler? __workspaceHandler;
   SessionRecoveryCommandHandler? __recoveryHandler;
   SessionTurnReplayCommandHandler? __turnReplayHandler;
+  AttachmentAdmissionCommandHandler? __attachmentAdmissionHandler;
   SessionCompactCommandHandler? __compactHandler;
   SessionForkCommandHandler? __forkHandler;
   DeviceSettingsCommandHandler? __deviceSettingsHandler;
@@ -196,6 +198,14 @@ class SanadProtocolBridge {
             )
           : null;
 
+  AttachmentAdmissionCommandHandler? get _attachmentAdmissionHandler =>
+      __attachmentAdmissionHandler ??= getIt.isRegistered<AttachmentStore>()
+      ? AttachmentAdmissionCommandHandler(
+          store: getIt<AttachmentStore>(),
+          bridge: this,
+        )
+      : null;
+
   SessionCompactCommandHandler? get _compactHandler =>
       __compactHandler ??= getIt.isRegistered<SessionRunOrchestrator>()
       ? SessionCompactCommandHandler(
@@ -253,6 +263,12 @@ class SanadProtocolBridge {
 
     CanonicalEvent? event;
     switch (command) {
+      case 'attachment.admit':
+        event = CanonicalEvent(
+          type: 'attachment.admit',
+          sessionId: sessionId,
+          payload: payload,
+        );
       case 'get_sessions':
         event = CanonicalEvent(
           type: CanonicalEventTypes.getSessions,
@@ -672,6 +688,12 @@ class SanadProtocolBridge {
     Future<void> Function(Map<String, dynamic> envelope) emitEnvelope,
   ) async {
     switch (event.type) {
+      case 'attachment.admit':
+        final handler = _attachmentAdmissionHandler;
+        if (handler != null) {
+          await handler.handle(event, emitEnvelope);
+        }
+        return;
       case CanonicalEventTypes.getSessionHistory:
         await emitEnvelope(_sessionQueryHandler.buildHistoryEnvelope(event));
         return;

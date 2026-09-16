@@ -30,7 +30,9 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Persist per-turn route/workspace metadata required for canonical history without persisting the ephemeral system prompt.
 
 ## Turn Admission and Echoes
-- Translate `think` into a typed runtime request preserving session, message, workspace, provider/model, thinking mode, request id, and delivery intent.
+- Translate `think` into a typed runtime request preserving session, message, workspace, provider/model, thinking mode, request id, delivery intent, and ordered opaque attachment ids.
+- Initial user attachments use the authenticated private `attachment.admit` command before `think`. Its closed payload accepts name, declared size, SHA-256, and base64 only; the receiver enforces 5 MiB/file, 4 files, 20 MiB/message, verifies bytes before staging, returns only opaque ids after success, and removes every partial/staged item on failure. The same request id owns admission and turn claim.
+- A pending admission contributes exact Agent-owned paths while per-turn tools are built, so an unscoped attachment turn can expose `view_image` immediately without broad workspace permission. The durable user-message claim remains atomic and restart removes every unclaimed staged payload.
 - The orchestrator alone classifies automatic input as immediate, queued, or steer from durable state plus current active run.
 - Sanad local and cloud transports consume orchestrator-authored user echoes; clients must not synthesize acceptance or queue rows.
 - A queued echo preserves raw request id and queued marker; promoted execution uses the same id without the marker.

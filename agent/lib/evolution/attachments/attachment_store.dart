@@ -321,6 +321,45 @@ final class AttachmentStore {
   }
 
   /// Persists the user history and claims staged rows in one state transaction.
+  Future<List<String>> resolveAdmissionPaths({
+    required String sessionId,
+    required String admissionId,
+    required List<String> attachmentIds,
+  }) async {
+    loadAdmission(
+      sessionId: sessionId,
+      admissionId: admissionId,
+      attachmentIds: attachmentIds,
+    );
+    final paths = <String>[];
+    for (final attachmentId in attachmentIds) {
+      final rows = _state.db.select(
+        '''
+        SELECT relative_path FROM user_attachments
+        WHERE attachment_id = ? AND session_id = ? AND admission_id = ?
+          AND status = 'staged'
+        ''',
+        [attachmentId, sessionId, admissionId],
+      );
+      if (rows.length != 1) {
+        throw const AttachmentStoreException(
+          AttachmentStoreErrorCode.ownershipMismatch,
+        );
+      }
+      final candidate = p.normalize(
+        p.join(_root.path, rows.single['relative_path'] as String),
+      );
+      if (!p.isWithin(_root.path, candidate) ||
+          !await File(candidate).exists()) {
+        throw const AttachmentStoreException(
+          AttachmentStoreErrorCode.unavailable,
+        );
+      }
+      paths.add(candidate);
+    }
+    return List<String>.unmodifiable(paths);
+  }
+
   List<Message> claimAdmissionAndPersist({
     required String sessionId,
     required String admissionId,
@@ -491,15 +530,17 @@ final class AttachmentStore {
     }
   }
 
-  /// Deletes promoted directories that have no durable metadata owner.
+  /// Deletes interrupted staged payloads and attached payloads without a durable message owner.
   Future<void> cleanupOrphans() async {
     if (!await _root.exists()) return;
     final staleRows = _state.db.select('''
       SELECT attachment_id, relative_path FROM user_attachments AS attachment
-      WHERE attachment.status = 'attached' AND NOT EXISTS (
-        SELECT 1 FROM messages AS message
-        WHERE message.message_id = attachment.message_id
-          AND message.session_id = attachment.session_id
+      WHERE attachment.status = 'staged' OR (
+        attachment.status = 'attached' AND NOT EXISTS (
+          SELECT 1 FROM messages AS message
+          WHERE message.message_id = attachment.message_id
+            AND message.session_id = attachment.session_id
+        )
       )
     ''');
     if (staleRows.isNotEmpty) {

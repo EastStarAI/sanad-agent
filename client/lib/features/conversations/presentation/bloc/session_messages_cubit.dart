@@ -779,13 +779,17 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     );
   }
 
-  Future<void> sendMessage(String text, {MessageDeliveryIntent intent = MessageDeliveryIntent.auto}) async {
+  Future<bool> sendMessage(
+    String text, {
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+    List<Map<String, dynamic>> attachments = const [],
+  }) async {
     final agent = _currentAgent;
-    if (agent == null) return;
+    if (agent == null) return false;
     final workspaceId = _selectedWorkspaceForAgent(agent)?.id;
     if (_requiresWorkspace(agent) && (workspaceId == null || workspaceId.isEmpty)) {
       emit(state.copyWith(error: 'Select a workspace before sending your first Sanad Agent message.'));
-      return;
+      return false;
     }
 
     try {
@@ -820,25 +824,47 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         emit(state.copyWith(activeSessionId: targetSessionId));
       }
 
-      final requestId = await conversationRepository.sendMessage(
-        agent,
-        text,
-        sessionId: targetSessionId,
-        workspaceId: workspaceId,
-        providerId: _effectiveProviderFor(agent, targetSessionId),
-        model: _effectiveModelFor(agent, targetSessionId),
-        thinkingMode: _nextMessageThinkingByAgentId[agent.id],
-        intent: intent,
-      );
+      final repository = conversationRepository;
+      final String? requestId;
+      if (attachments.isNotEmpty) {
+        if (repository is! AttachmentSendRepository) {
+          throw StateError('Attachment admission is unavailable.');
+        }
+        requestId = await (repository as AttachmentSendRepository).sendMessageWithAttachments(
+          agent,
+          text,
+          sessionId: targetSessionId,
+          workspaceId: workspaceId,
+          providerId: _effectiveProviderFor(agent, targetSessionId),
+          model: _effectiveModelFor(agent, targetSessionId),
+          thinkingMode: _nextMessageThinkingByAgentId[agent.id],
+          attachments: attachments,
+          intent: intent,
+        );
+      } else {
+        requestId = await repository.sendMessage(
+          agent,
+          text,
+          sessionId: targetSessionId,
+          workspaceId: workspaceId,
+          providerId: _effectiveProviderFor(agent, targetSessionId),
+          model: _effectiveModelFor(agent, targetSessionId),
+          thinkingMode: _nextMessageThinkingByAgentId[agent.id],
+          intent: intent,
+        );
+      }
       if (requestId != null && targetSessionId.isNotEmpty) {
         sessionCubit.markSessionDraftAwaitingAcceptance(
           agent.id,
           targetSessionId,
           requestId,
         );
+        return true;
       }
+      return false;
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
+      return false;
     }
   }
 

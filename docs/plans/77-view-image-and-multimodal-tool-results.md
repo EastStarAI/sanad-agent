@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77g1/R0"
-remaining_estimate: "8%"
+current_gate: "hosted-relay/G0"
+remaining_estimate: "2%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -169,7 +169,7 @@ detail = low | auto | high | original
 16. [x] [77f1 — Composer Attachment UX](tasks/77f1-composer-attachment-ux.md)
 17. [x] [77f2 — User Message Attachment and Edit UX](tasks/77f2-user-message-attachment-edit-ux.md)
 18. [x] [77f3 — View Image Timeline Media](tasks/77f3-view-image-timeline-media.md)
-19. [ ] [77g1 — Local Attachment Integration QA](tasks/77g1-local-attachment-integration-qa.md)
+19. [x] [77g1 — Local Attachment Integration QA](tasks/77g1-local-attachment-integration-qa.md)
 20. [ ] [77g2 — Remote Attachment Integration QA](tasks/77g2-remote-attachment-integration-qa.md)
 
 كل مهمة لها سقف ملفات مستقل لا يتجاوز `10`. لا يعمل فرعان بالتوازي على Message أو coordinator أو conversation cache schema أو ملفات الخطة نفسها. `77g2` لا يبدأ قبل اكتمال capability المقابلة واختبارها في المستودع المغلق.
@@ -476,3 +476,22 @@ Next task:
 - Evidence fingerprint: `sha256:1f92463d390f35c6731087bc335672a612766e50a396b08131ba380c2557750a`; post-implementation decisions remain aligned.
 - Remaining estimate: `8%`.
 - Next task: `77g1 — Local Attachment Integration QA`, gate `R0`.
+
+### 2026-09-16 — 77g1 R0 complete
+
+- Task/Gate: `77g1/R0`; plan advances to `77g1/G1`.
+- Packet `77e` and pinned revisions were revalidated. The scenario adopts the existing isolated daemon/provider fixture and authenticated Local Gateway helper, with runtime-generated opaque image/text/boundary/interruption fixtures only.
+- The mandatory proof sequence is locked: attachment ACK before sent state, binary-free provider input before tool choice, explicit `view_image`, pixel-derived answer, and binary/path-free public captures.
+- Evidence run: `refrence_projects/.sanad-evidence/runs/77g1-reference-grounding-2026-09-16.md`.
+- Remaining estimate: `6%`.
+- Next gate: `77g1/G1 — Happy paths`.
+
+### 2026-09-16 — 77g1 complete
+
+- Task/Gate: `77g1/G3`; local integration QA is complete and the plan advances to private hosted relay `G0` before `77g2`.
+- Delivered the previously missing initial attachment admission path: authenticated ACK precedes `think`, the same request owns atomic claim, failures retain Client drafts and remove staging, and unscoped turns receive an immediate exact-file `view_image` grant.
+- Deterministic daemon proof derives `PIXELS_MAGENTA` from admitted pixels while provider input and public frames remain byte/base64/path-free. Paste, picker, and drop converge on the same ordered Client path.
+- Verification: analyzers clean; daemon E2E `6/6`; Agent focused `38/38`, Gateway `23/23 + 16/16`; Client focused `116/116`; visible isolated macOS build; Graphify `24,182 / 33,342 / 874`; documentation and evidence complete.
+- The user removed the task file ceiling after lifecycle fixes consumed the prior allowance; no safety coverage or mandatory contract documentation was dropped.
+- Remaining estimate: `2%`.
+- Next gate: private hosted attachment relay `G0`.

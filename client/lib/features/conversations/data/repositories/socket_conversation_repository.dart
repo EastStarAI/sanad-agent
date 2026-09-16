@@ -21,7 +21,8 @@ import 'package:sanad_client/features/conversations/domain/models/session_fork_r
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
-class SocketConversationRepository implements ConversationRepository, AttachmentReplayRepository {
+class SocketConversationRepository
+    implements ConversationRepository, AttachmentSendRepository, AttachmentReplayRepository {
   final ConversationClientRegistry _clientRegistry;
 
   SocketConversationRepository(this._clientRegistry);
@@ -159,6 +160,36 @@ class SocketConversationRepository implements ConversationRepository, Attachment
       providerId: providerId,
       model: model,
       thinkingMode: thinkingMode,
+      intent: intent,
+    );
+  }
+
+  @override
+  Future<String?> sendMessageWithAttachments(
+    DeviceConfig agent,
+    String message, {
+    required String sessionId,
+    String? workspaceId,
+    String? context,
+    String? providerId,
+    String? model,
+    String? thinkingMode,
+    required List<Map<String, dynamic>> attachments,
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+  }) {
+    final client = _clientFor(agent);
+    if (client is! AttachmentSendClient) {
+      throw StateError('Attachment admission is unavailable.');
+    }
+    return (client as AttachmentSendClient).sendMessageWithAttachments(
+      message,
+      sessionId: sessionId,
+      workspaceId: workspaceId,
+      context: context,
+      providerId: providerId,
+      model: model,
+      thinkingMode: thinkingMode,
+      attachments: attachments,
       intent: intent,
     );
   }

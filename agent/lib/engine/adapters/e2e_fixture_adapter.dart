@@ -51,6 +51,8 @@ class E2eFixtureAdapter
   static const shellToolCallId = 'e2e-shell-crash-tool-call';
   static const shellCrashResponseText = 'SHELL_INTERRUPTED_RESUMED';
   static const viewImagePromptPrefix = '__SANAD_E2E_VIEW_IMAGE__';
+  static const attachmentImagePrompt = '__SANAD_E2E_ATTACHMENT_IMAGE__';
+  static const attachmentImageToolCallId = 'e2e-attachment-image-tool-call';
   static const viewImageToolName = 'view_image';
   static const viewImageToolCallId = 'e2e-view-image-tool-call';
   static const viewImagePixelResponseText = 'PIXELS_MAGENTA';
@@ -244,10 +246,84 @@ class E2eFixtureAdapter
       );
     }
 
-    final isViewImageScenario =
-        latestUserContent?.startsWith(viewImagePromptPrefix) ?? false;
+    String? attachmentProjection;
+    for (final message in history) {
+      if (message.role == MessageRole.user &&
+          (message.content ?? '').contains(attachmentImagePrompt)) {
+        attachmentProjection = message.content;
+      }
+    }
     final hasViewImageTool =
         tools?.any((tool) => tool.name == viewImageToolName) ?? false;
+    if (attachmentProjection != null && hasViewImageTool) {
+      Message? toolResult;
+      for (final message in history) {
+        if (message.role == MessageRole.tool &&
+            message.toolCallId == attachmentImageToolCallId) {
+          toolResult = message;
+        }
+      }
+      if (toolResult == null) {
+        final projection = attachmentProjection;
+        final path = RegExp(
+          r'^- .+ \(image\): (.+)$',
+          multiLine: true,
+        ).firstMatch(projection)?.group(1);
+        final projectionIsSafe =
+            path != null &&
+            path.isNotEmpty &&
+            !projection.contains('data_base64') &&
+            !projection.contains('dataBase64') &&
+            !projection.contains('iVBOR');
+        if (!projectionIsSafe) {
+          return AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: viewImageInvalidResponseText,
+            ),
+            model: modelId,
+            provider: providerId,
+            finishReason: LLMFinishReason.stop,
+          );
+        }
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: attachmentImageToolCallId,
+                name: viewImageToolName,
+                arguments: {'path': path},
+              ),
+            ],
+          ),
+          isToolCall: true,
+          model: modelId,
+          provider: providerId,
+          finishReason: LLMFinishReason.toolCalls,
+        );
+      }
+      final imageBlocks =
+          toolResult.toolResult?.blocks.whereType<ToolImageBlock>().toList(
+            growable: false,
+          ) ??
+          const <ToolImageBlock>[];
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: switch (imageBlocks) {
+            [final imageBlock, ...] => _classifyFixtureImage(imageBlock),
+            _ => viewImageInvalidResponseText,
+          },
+        ),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
+    final isViewImageScenario =
+        latestUserContent?.startsWith(viewImagePromptPrefix) ?? false;
     if (isViewImageScenario && hasViewImageTool) {
       Message? toolResult;
       for (final message in history) {

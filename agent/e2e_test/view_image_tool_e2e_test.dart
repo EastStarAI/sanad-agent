@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:image/image.dart' as img;
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
@@ -43,6 +44,128 @@ void main() {
         harness.serializedSessionFrames(sessionId),
         isNot(contains('base64')),
       );
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'local attachment admission stays binary-free until the model chooses view_image',
+    () async {
+      final harness = await _ViewImageHarness.start();
+      addTearDown(harness.close);
+      final image = await harness.writeMagentaImage(
+        harness.external,
+        name: 'opaque-attachment.bin',
+      );
+      final bytes = await image.readAsBytes();
+      final sessionId = harness.nextSessionId('attachment');
+      await harness.createSession(sessionId);
+      final requestId = 'attachment-$sessionId';
+      final attachmentIds = await harness.admitAttachments(
+        sessionId: sessionId,
+        requestId: requestId,
+        attachments: [
+          {
+            'name': 'opaque-payload.bin',
+            'size_bytes': bytes.length,
+            'sha256': sha256.convert(bytes).toString(),
+            'data_base64': base64Encode(bytes),
+          },
+        ],
+      );
+      expect(attachmentIds, hasLength(1));
+
+      harness.sendAdmittedAttachment(
+        sessionId: sessionId,
+        requestId: requestId,
+        attachmentIds: attachmentIds,
+      );
+      final userEvent = await harness.probe.waitForDeviceEvent(
+        sessionId: sessionId,
+        eventType: 'user_message',
+      );
+      final userPayload = jsonEncode(userEvent['payload']);
+      expect(userPayload, contains('opaque-payload.bin'));
+      expect(userPayload, isNot(contains('data_base64')));
+      expect(userPayload, isNot(contains(image.path)));
+      expect(userPayload, isNot(contains('agent_local_reference')));
+
+      final answer = await harness.probe
+          .waitForDeviceEvent(sessionId: sessionId, eventType: 'final_answer')
+          .onError((error, stackTrace) {
+            throw StateError(
+              'Final answer missing. Frames: ${harness.serializedSessionFrames(sessionId)}',
+            );
+          });
+      expect(
+        answer['payload']['content'],
+        E2eFixtureAdapter.viewImagePixelResponseText,
+        reason: harness.serializedSessionFrames(sessionId),
+      );
+      final frames = harness.serializedSessionFrames(sessionId);
+      expect(frames, isNot(contains('data_base64')));
+      expect(frames, isNot(contains('iVBOR')));
+      expect(frames, isNot(contains(image.path)));
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'attachment admission rejects receiver boundaries and cleans partial staging',
+    () async {
+      final harness = await _ViewImageHarness.start();
+      addTearDown(harness.close);
+      final sessionId = harness.nextSessionId('attachment-rejection');
+      await harness.createSession(sessionId);
+      final bytes = utf8.encode('valid-first-payload');
+      final valid = {
+        'name': 'valid.bin',
+        'size_bytes': bytes.length,
+        'sha256': sha256.convert(bytes).toString(),
+        'data_base64': base64Encode(bytes),
+      };
+
+      final partialFailure = await harness.requestAttachmentAdmission(
+        sessionId: sessionId,
+        requestId: 'partial-$sessionId',
+        attachments: [
+          valid,
+          {
+            ...valid,
+            'name': 'invalid.bin',
+            'sha256': List.filled(64, '0').join(),
+          },
+        ],
+      );
+      expect(partialFailure['outcome'], 'admission_failed');
+
+      final oversized = await harness.requestAttachmentAdmission(
+        sessionId: sessionId,
+        requestId: 'oversized-$sessionId',
+        attachments: [
+          {...valid, 'size_bytes': 5 * 1024 * 1024 + 1},
+        ],
+      );
+      expect(oversized['outcome'], 'admission_failed');
+
+      final tooMany = await harness.requestAttachmentAdmission(
+        sessionId: sessionId,
+        requestId: 'count-$sessionId',
+        attachments: List<Map<String, dynamic>>.generate(
+          5,
+          (index) => {...valid, 'name': 'file-$index.bin'},
+        ),
+      );
+      expect(tooMany['outcome'], 'invalid_request');
+
+      final attachmentRoot = Directory(
+        '${harness.sanadStateHome.path}/attachments',
+      );
+      final ownedDirectories = attachmentRoot
+          .listSync()
+          .whereType<Directory>()
+          .where((entry) => !entry.path.endsWith('/.partial'));
+      expect(ownedDirectories, isEmpty);
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
@@ -299,6 +422,84 @@ final class _ViewImageHarness {
     return file;
   }
 
+  Future<void> createSession(String sessionId) async {
+    final requestId = 'create-$sessionId';
+    socket.add(
+      jsonEncode({
+        'type': 'execute_command',
+        'device_id': deviceId,
+        'command': 'create_session',
+        'payload': {
+          'request_id': requestId,
+          'session_id': sessionId,
+          'title': 'Attachment fixture',
+          'provider_id': E2eFixtureAdapter.providerId,
+          'model': E2eFixtureAdapter.modelId,
+        },
+      }),
+    );
+    await probe.waitForRequest(requestId);
+  }
+
+  Future<List<String>> admitAttachments({
+    required String sessionId,
+    required String requestId,
+    required List<Map<String, dynamic>> attachments,
+  }) async {
+    final payload = await requestAttachmentAdmission(
+      sessionId: sessionId,
+      requestId: requestId,
+      attachments: attachments,
+    );
+    if (payload['outcome'] != 'accepted') {
+      throw StateError('Attachment admission failed: ${payload['outcome']}');
+    }
+    return (payload['attachment_ids'] as List).cast<String>();
+  }
+
+  Future<Map<String, dynamic>> requestAttachmentAdmission({
+    required String sessionId,
+    required String requestId,
+    required List<Map<String, dynamic>> attachments,
+  }) async {
+    socket.add(
+      jsonEncode({
+        'type': 'execute_command',
+        'device_id': deviceId,
+        'command': 'attachment.admit',
+        'payload': {
+          'request_id': requestId,
+          'session_id': sessionId,
+          'attachments': attachments,
+        },
+      }),
+    );
+    final result = await probe.waitForRequest(requestId);
+    return Map<String, dynamic>.from(result['payload'] as Map? ?? const {});
+  }
+
+  void sendAdmittedAttachment({
+    required String sessionId,
+    required String requestId,
+    required List<String> attachmentIds,
+  }) {
+    socket.add(
+      jsonEncode({
+        'type': 'execute_command',
+        'device_id': deviceId,
+        'command': 'think',
+        'payload': {
+          'request_id': requestId,
+          'session_id': sessionId,
+          'provider_instance_id': E2eFixtureAdapter.providerId,
+          'model': E2eFixtureAdapter.modelId,
+          'message': E2eFixtureAdapter.attachmentImagePrompt,
+          'attachment_ids': attachmentIds,
+        },
+      }),
+    );
+  }
+
   void sendViewImage({required String sessionId, required String imagePath}) {
     socket.add(
       jsonEncode({
@@ -464,6 +665,14 @@ final class _FrameProbe {
 
   Future<Map<String, dynamic>> waitForFrameType(String type) =>
       _waitFor((frame) => frame['type'] == type, 'frame type $type');
+
+  Future<Map<String, dynamic>> waitForRequest(String requestId) => _waitFor(
+    (frame) =>
+        frame['request_id'] == requestId ||
+        (frame['payload'] is Map &&
+            (frame['payload'] as Map)['request_id'] == requestId),
+    'request $requestId',
+  );
 
   Future<Map<String, dynamic>> waitForDeviceEvent({
     required String sessionId,

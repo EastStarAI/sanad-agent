@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
@@ -159,7 +161,8 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
 
   Future<void> sendMessage(String text, {MessageDeliveryIntent intent = MessageDeliveryIntent.auto}) async {
     final trimmedText = text.trim();
-    if (trimmedText.isEmpty) return;
+    final attachments = state.draftAttachments;
+    if (trimmedText.isEmpty && attachments.isEmpty) return;
     if (state.pendingSuspendedRequest != null) {
       emit(
         state.copyWith(
@@ -178,7 +181,28 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     }
 
     try {
-      await messagesCubit.sendMessage(trimmedText, intent: intent);
+      final accepted = await messagesCubit.sendMessage(
+        trimmedText,
+        intent: intent,
+        attachments: [
+          for (final attachment in attachments)
+            {
+              'name': attachment.name,
+              'size_bytes': attachment.sizeBytes,
+              'sha256': sha256.convert(attachment.bytes).toString(),
+              'data_base64': base64Encode(attachment.bytes),
+            },
+        ],
+      );
+      if (accepted && attachments.isNotEmpty) {
+        _draftsByScope.remove(_draftScope);
+        emit(
+          state.copyWith(
+            draftAttachments: const [],
+            clearAttachmentError: true,
+          ),
+        );
+      }
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
     }

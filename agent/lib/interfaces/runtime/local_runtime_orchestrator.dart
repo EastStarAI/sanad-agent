@@ -100,6 +100,9 @@ class LocalRuntimeOrchestrator {
       _runtimeCatalog.buildTools(
         registry: agentRunner.registry,
         request: request,
+        pendingAttachmentIds: attachments
+            .map((attachment) => attachment.id)
+            .toList(growable: false),
       ),
     ).asyncExpand((tools) {
       agentRunner.registry.registerTools(tools);

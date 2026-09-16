@@ -78,6 +78,75 @@ class ConversationCommands {
     return requestId;
   }
 
+  Future<String?> sendMessageWithAttachments(
+    String message, {
+    required String sessionId,
+    String? workspaceId,
+    String? context,
+    String? providerId,
+    String? model,
+    String? thinkingMode,
+    required List<Map<String, dynamic>> attachments,
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+  }) async {
+    if (!_gateway.isConnected) return null;
+    if (attachments.isEmpty) {
+      return sendMessage(
+        message,
+        sessionId: sessionId,
+        workspaceId: workspaceId,
+        context: context,
+        providerId: providerId,
+        model: model,
+        thinkingMode: thinkingMode,
+        intent: intent,
+      );
+    }
+    final requestId = generateConversationRequestId();
+    final response = await _gateway.request(
+      command: 'attachment.admit',
+      requestId: requestId,
+      timeout: const Duration(seconds: 30),
+      payload: {
+        'request_id': requestId,
+        'session_id': sessionId,
+        'attachments': attachments,
+      },
+    );
+    final responsePayload = response?['payload'] is Map
+        ? Map<String, dynamic>.from(response!['payload'] as Map)
+        : const <String, dynamic>{};
+    final rawIds = responsePayload['attachment_ids'];
+    final attachmentIds = rawIds is List
+        ? rawIds.whereType<String>().where((id) => id.isNotEmpty).toList(growable: false)
+        : const <String>[];
+    if (responsePayload['outcome'] != 'accepted' || attachmentIds.length != attachments.length) {
+      throw StateError('Attachment admission failed.');
+    }
+
+    _conversationStore.beginOutgoingRequest(
+      requestId: requestId,
+      sessionId: sessionId,
+      isDraftRequest: false,
+    );
+    _gateway.sendCommand(
+      command: 'think',
+      payload: {
+        'request_id': requestId,
+        'session_id': sessionId,
+        'message': message,
+        'attachment_ids': attachmentIds,
+        'delivery_intent': intent.wireValue,
+        if (workspaceId != null && workspaceId.trim().isNotEmpty) 'workspace_id': workspaceId.trim(),
+        if (context != null && context.trim().isNotEmpty) 'context': context.trim(),
+        if (providerId != null && providerId.trim().isNotEmpty) 'provider_id': providerId.trim(),
+        if (model != null && model.trim().isNotEmpty) 'model': model.trim(),
+        if (thinkingMode != null && thinkingMode.trim().isNotEmpty) 'thinking_mode': thinkingMode.trim(),
+      },
+    );
+    return requestId;
+  }
+
   Future<void> steerMessage(
     String message, {
     required String requestId,

@@ -21,7 +21,7 @@ import 'package:sanad_client/features/conversations/domain/models/session_fork_r
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
-class FakeConversationRepository implements ConversationRepository {
+class FakeConversationRepository implements ConversationRepository, AttachmentSendRepository {
   bool transportReady = true;
   final Map<String, List<Session>> _sessionsByAgentId = {};
   final Map<String, List<CanonicalEvent>> _messagesByAgentId = {};
@@ -58,6 +58,8 @@ class FakeConversationRepository implements ConversationRepository {
   loadAnchoredHistoryHandler;
   final List<String> sentMessages = [];
   final List<Map<String, String?>> sentMessageRequests = [];
+  final List<List<Map<String, dynamic>>> sentAttachmentRequests = [];
+  bool failAttachmentAdmission = false;
   final List<Map<String, String?>> steerMessageRequests = [];
   final List<String?> stoppedSessionIds = [];
   final List<Map<String, String?>> retriedRuntimeNotices = [];
@@ -277,6 +279,36 @@ class FakeConversationRepository implements ConversationRepository {
       'intent': intent.name,
     });
     return 'fake-request-${sentMessageRequests.length}';
+  }
+
+  @override
+  Future<String?> sendMessageWithAttachments(
+    DeviceConfig agent,
+    String message, {
+    required String sessionId,
+    String? workspaceId,
+    String? context,
+    String? providerId,
+    String? model,
+    String? thinkingMode,
+    required List<Map<String, dynamic>> attachments,
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+  }) async {
+    sentAttachmentRequests.add(attachments);
+    if (failAttachmentAdmission) {
+      throw StateError('Attachment admission failed.');
+    }
+    return sendMessage(
+      agent,
+      message,
+      sessionId: sessionId,
+      workspaceId: workspaceId,
+      context: context,
+      providerId: providerId,
+      model: model,
+      thinkingMode: thinkingMode,
+      intent: intent,
+    );
   }
 
   @override

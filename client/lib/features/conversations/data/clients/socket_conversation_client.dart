@@ -32,7 +32,7 @@ import 'package:sanad_client/features/conversations/domain/repositories/conversa
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
-class SocketConversationClient implements ConversationClient, AttachmentReplayClient {
+class SocketConversationClient implements ConversationClient, AttachmentSendClient, AttachmentReplayClient {
   static final _logger = Logger('SocketConversationClient');
 
   DeviceConfig _config;
@@ -197,6 +197,29 @@ class SocketConversationClient implements ConversationClient, AttachmentReplayCl
       intent: intent,
     );
   }
+
+  @override
+  Future<String?> sendMessageWithAttachments(
+    String message, {
+    required String sessionId,
+    String? workspaceId,
+    String? context,
+    String? providerId,
+    String? model,
+    String? thinkingMode,
+    required List<Map<String, dynamic>> attachments,
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+  }) => _commands!.sendMessageWithAttachments(
+    message,
+    sessionId: sessionId,
+    workspaceId: workspaceId,
+    context: context,
+    providerId: providerId,
+    model: model,
+    thinkingMode: thinkingMode,
+    attachments: attachments,
+    intent: intent,
+  );
 
   @override
   Future<void> steerMessage(

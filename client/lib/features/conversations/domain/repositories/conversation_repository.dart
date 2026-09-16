@@ -17,6 +17,35 @@ import 'package:sanad_client/features/conversations/domain/models/turn_replay_re
 import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
+abstract interface class AttachmentSendClient {
+  Future<String?> sendMessageWithAttachments(
+    String message, {
+    required String sessionId,
+    String? workspaceId,
+    String? context,
+    String? providerId,
+    String? model,
+    String? thinkingMode,
+    required List<Map<String, dynamic>> attachments,
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+  });
+}
+
+abstract interface class AttachmentSendRepository {
+  Future<String?> sendMessageWithAttachments(
+    DeviceConfig agent,
+    String message, {
+    required String sessionId,
+    String? workspaceId,
+    String? context,
+    String? providerId,
+    String? model,
+    String? thinkingMode,
+    required List<Map<String, dynamic>> attachments,
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+  });
+}
+
 abstract interface class AttachmentReplayClient {
   Future<TurnReplayResult> replayTurnWithAttachments({
     required String sessionId,

@@ -70,16 +70,31 @@ class LocalRuntimeCatalog {
   Future<List<BaseTool>> buildTools({
     required ToolsRegistry registry,
     required AgentTurnRequest request,
+    List<String> pendingAttachmentIds = const [],
   }) async {
     final workspacePath = await _resolveWorkspacePath(request.workspaceId);
+    final pendingAttachmentPaths =
+        getIt.isRegistered<AttachmentStore>() &&
+            pendingAttachmentIds.isNotEmpty &&
+            request.requestId != null
+        ? await getIt<AttachmentStore>().resolveAdmissionPaths(
+            sessionId: request.sessionId,
+            admissionId: request.requestId!,
+            attachmentIds: pendingAttachmentIds,
+          )
+        : const <String>[];
     final injectedAttachmentPaths = await _admittedAttachmentPathsResolver(
       request.sessionId,
     );
-    final admittedAttachmentPaths = injectedAttachmentPaths.isNotEmpty
+    final persistedAttachmentPaths = injectedAttachmentPaths.isNotEmpty
         ? injectedAttachmentPaths
         : getIt.isRegistered<AttachmentStore>()
         ? await getIt<AttachmentStore>().resolveAttachedPaths(request.sessionId)
         : const <String>[];
+    final admittedAttachmentPaths = {
+      ...persistedAttachmentPaths,
+      ...pendingAttachmentPaths,
+    }.toList(growable: false);
     final tools = <BaseTool>[
       // TEMPORARILY DISABLED: tool_search — paused for review.
       // _buildSearchTool(registry),
