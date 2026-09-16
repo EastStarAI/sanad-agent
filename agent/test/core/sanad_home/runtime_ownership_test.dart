@@ -27,10 +27,13 @@ void main() {
   test(
     'rejects a second process and releases ownership deterministically',
     () async {
+      final packageRoot = File('pubspec.yaml').existsSync()
+          ? Directory.current
+          : Directory.fromUri(Directory.current.uri.resolve('agent/'));
       final holder = await Process.start(
         Platform.resolvedExecutable,
         ['test/core/sanad_home/runtime_lock_holder.dart', home.path],
-        workingDirectory: Directory.current.path,
+        workingDirectory: packageRoot.path,
         environment: <String, String>{
           ...Platform.environment,
           'SANAD_HOME': home.path,
