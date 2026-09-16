@@ -21,7 +21,7 @@ evidence_fingerprint: "sha256:1f92463d390f35c6731087bc335672a612766e50a396b08131
 - remote client-local path يرفض ولا يترجم إلى agent path.
 - model projection مرتبة ومحدودة: safe name، kind، agent-local path، وإرشاد استخدام الأداة المناسبة.
 - لا تنشأ provider image/file parts تلقائيًا من user attachments.
-- hosted transport capability/version عامة؛ تفاصيل تنفيذ الخدمة المغلقة لا توثق هنا.
+- hosted transport تستخدم `supports_attachments` الحالية مع wire protocol versioned؛ تفاصيل تنفيذ الخدمة المغلقة لا توثق هنا.
 - غياب capability عن remote route يفشل مغلقًا ويحافظ على draft.
 
 ## Gates
@@ -41,7 +41,7 @@ evidence_fingerprint: "sha256:1f92463d390f35c6731087bc335672a612766e50a396b08131
 - [x] إبقاء اختيار `view_image`/read/list للنموذج.
 
 ### G3 — Capability and recovery
-- [x] نشر ودعم attachment/media capability versioned.
+- [x] اعتماد `supports_attachments` الحالية ودعم attachment/media wire protocol versioned.
 - [x] استعادة pending/failed admission كdraft قابل للمحاولة دون optimistic message كاذبة.
 
 ## Acceptance criteria

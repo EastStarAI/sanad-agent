@@ -2,7 +2,7 @@
 title: "Task 77g2: Remote Attachment Integration QA"
 status: "pending"
 priority: "high"
-depends_on: "77g1, compatible hosted attachment/media capability"
+depends_on: "77g1, hosted relay with supports_attachments"
 current_gate: "R0"
 remaining_estimate: "100%"
 evidence_id: "77e"
@@ -16,7 +16,7 @@ evidence_id: "77e"
 
 ## Locked scope
 
-- الاختبار يتعامل فقط مع public capability/versioned contract.
+- الاختبار يتعامل فقط مع `supports_attachments` الحالية وعقد wire events العام versioned.
 - client-local path لا يصل إلى daemon history أو model request.
 - transfer/admission يكتمل قبل قبول turn؛ interruption قابل لإعادة المحاولة.
 - media fetch يصل إلى العميل الطالب فقط وفق user/device/session binding.
@@ -27,7 +27,7 @@ evidence_id: "77e"
 
 ### R0 — Cross-repository readiness
 - [ ] حل packet `77e` وتسجيل fingerprint.
-- [ ] توثيق إصدار capability المتوافق وإثبات نجاح اختبارات المستودع المغلق دون نسخ تفاصيله هنا.
+- [ ] توثيق دعم `supports_attachments` وإصدار wire protocol المتوافق وإثبات نجاح اختبارات المستودع المغلق دون نسخ تفاصيله هنا.
 
 ### G1 — Remote happy path
 - [ ] نقل ملف حتى 5 MiB واعتماده ثم إرسال user turn.
@@ -37,7 +37,7 @@ evidence_id: "77e"
 ### G2 — Security and failures
 - [ ] اختبار wrong user/device/session وexpired media identity.
 - [ ] اختبار disconnect/retry/idempotency وcleanup.
-- [ ] اختبار 5 MiB+1 و4/20 MiB وcapability mismatch.
+- [ ] اختبار 5 MiB+1 و4/20 MiB و`supports_attachments=false`.
 
 ### G3 — Closure
 - [ ] تشغيل E2E المتسلسل والاختبارات العامة bounded output.

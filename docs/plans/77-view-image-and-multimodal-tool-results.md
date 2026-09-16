@@ -3,7 +3,7 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "hosted-relay/G0"
+current_gate: "77g2/R0"
 remaining_estimate: "2%"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
@@ -102,7 +102,7 @@ detail = low | auto | high | original
 - OpenAI-compatible Chat وOllama وcustom وunknown/missing هي `textOnly`; لا تعتمد القدرة على model-name أو endpoint probing.
 - Responses يستخدم `function_call_output.output` من `input_text`/`input_image`. Anthropic يستخدم nested text/image blocks داخل `tool_result`.
 - text-only adapter ترسل `displayText` ثم marker واحد: `[Image omitted: active provider does not accept image tool results.]` بلا retry أو mutation للتاريخ.
-- hosted attachment/media transport تعلن capability/version؛ client يخفي أو يعطل remote attachment actions عند غيابها ويفشل مغلقًا بدل تضمين bytes في `device_command`.
+- hosted attachment/media transport تستخدم capability الحالية `supports_attachments` مع wire events versioned؛ client يخفي أو يعطل remote attachment actions عند غياب الدعم ويفشل مغلقًا بدل تضمين bytes في `device_command`.
 - تفاصيل تنفيذ hosted service ومكوناته الداخلية تملكها خطة المستودع المغلق فقط؛ هذا المستودع يثبت العقود العامة والـcompatibility behavior.
 
 ### 2.9 الاستدامة والتقادم
@@ -120,7 +120,7 @@ detail = low | auto | high | original
 - عند إغلاق كل بوابة: تحدّث checklist و`current_gate` وسجل الأدلة ونسبة المتبقي داخل ملف المهمة نفسه قبل متابعة البوابة التالية.
 - عند إغلاق كل مهمة: تحدّث حالتها إلى `complete`، ثم تحدّث checklist و`current_gate` و`remaining_estimate` وسجل التقدم في هذه الخطة، وتشغّل تحقق المهمة كاملًا، ثم تنشئ commit مركزًا وتدفع فرع المستودع المالك قبل الانتقال للمهمة التالية.
 - إذا غيّرت مهمة عامة gitlink المستودع العام، يثبّت المستودع الخاص ذلك المؤشر في commit مركز ويدفع فرعه؛ لا تنشأ PR أثناء التنفيذ.
-- تنفذ بوابات مهمة hosted relay الخاصة `G0` إلى `G6` بالترتيب بعد `77g1` وقبل بدء `77g2`، لأن `77g2` بوابة التكافؤ البعيد ولا يمكن إغلاقها قبل اكتمال capability الخاصة.
+- تنفذ بوابات مهمة hosted relay الخاصة `G0` إلى `G6` بالترتيب بعد `77g1` وقبل بدء `77g2`، لأن `77g2` بوابة التكافؤ البعيد ولا يمكن إغلاقها قبل اكتمال relay المتوافق مع `supports_attachments`.
 - بعد اكتمال جميع المهام والبوابات الآلية، ينفذ الاختبار التفاعلي النهائي محليًا وعن بُعد وتوثق أدلته. إنشاء PR مؤجل حتى اكتمال الخطة كلها ونجاح هذا الاختبار.
 - أي عائق يغيّر الحالة إلى `blocked` في ملف المهمة والخطة مع السبب والأثر ونسبة المتبقي؛ لا يُتجاوز ترتيب التنفيذ بصمت.
 
@@ -172,7 +172,7 @@ detail = low | auto | high | original
 19. [x] [77g1 — Local Attachment Integration QA](tasks/77g1-local-attachment-integration-qa.md)
 20. [ ] [77g2 — Remote Attachment Integration QA](tasks/77g2-remote-attachment-integration-qa.md)
 
-كل مهمة لها سقف ملفات مستقل لا يتجاوز `10`. لا يعمل فرعان بالتوازي على Message أو coordinator أو conversation cache schema أو ملفات الخطة نفسها. `77g2` لا يبدأ قبل اكتمال capability المقابلة واختبارها في المستودع المغلق.
+لا يعمل فرعان بالتوازي على Message أو coordinator أو conversation cache schema أو ملفات الخطة نفسها. `77g2` لا يبدأ قبل اكتمال hosted relay المقابل واختباره في المستودع المغلق.
 
 ## 5. بوابات القبول الكلية
 
@@ -495,3 +495,12 @@ Next task:
 - The user removed the task file ceiling after lifecycle fixes consumed the prior allowance; no safety coverage or mandatory contract documentation was dropped.
 - Remaining estimate: `2%`.
 - Next gate: private hosted attachment relay `G0`.
+
+### 2026-09-16 — Hosted relay complete
+
+- Private hosted relay gates `G0–G6` are complete; the plan advances to `77g2/R0`.
+- The public compatibility boundary reuses `supports_attachments=true` and versioned relay event envelopes; no relay-specific capability field is introduced.
+- Source-neutral guarantees are now covered: 5 MiB/file, 4 files and 20 MiB/turn, 256 KiB chunks, exact requester return, bounded TTL/concurrency/rate, ordered idempotency, authoritative Agent admission, and zero binary fallback through `device_command`/`device_event`.
+- Private verification passed the full Backend unit suite `203/203` and the relevant relay/Gateway/voice/command integration selection `98/98`.
+- Remaining estimate: `2%`.
+- Next gate: `77g2/R0 — Cross-repository readiness`.
