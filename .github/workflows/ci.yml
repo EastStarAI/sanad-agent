@@ -136,6 +136,29 @@ jobs:
         working-directory: agent
         run: fvm dart test
 
+  cli-automation:
+    name: CLI automation (${{ matrix.os }})
+    needs: classify
+    if: needs.classify.outputs.agent == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      - name: Resolve agent dependencies
+        working-directory: agent
+        run: fvm dart pub get
+      - name: Verify isolated CLI contracts
+        working-directory: agent
+        run: fvm dart test test/guards/e2e_state_isolation_contract_test.dart
+      - name: Verify AOT one-shot, pipe, and JSON output
+        working-directory: agent
+        run: fvm dart run tool/cli_aot_smoke.dart
+
   client:
     needs: classify
     if: needs.classify.outputs.client == 'true'

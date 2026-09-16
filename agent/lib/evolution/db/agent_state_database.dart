@@ -1206,9 +1206,9 @@ class AgentStateDatabase {
   }
 
   void dispose() {
-    if (_owned) {
-      _db.dispose();
-    }
+    if (!_owned) return;
+    _owned = false;
+    _db.dispose();
   }
 }
 

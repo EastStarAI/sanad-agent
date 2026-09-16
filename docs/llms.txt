@@ -130,6 +130,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [خارطة المعمارية والرمز التقني](docs/technical/MOC.md): فهرس وخارطة وثائق المعمارية البرمجية، تصميم قواعد البيانات، وواجهات برمجة التطبيقات.
 - [مواصفات قاعدة البيانات المحلية للوكيل](docs/technical/agent_database_schema.md): تصميم جداول قاعدة البيانات المحلية (SQLite - state.db) التابعة للوكيل sanad-agent لحفظ الجلسات وتفاصيل التعليق.
 - [Agent Interface and Runtime Architecture](docs/technical/agent_interface_runtime.md): Architecture of gateway routing, active-run orchestration, Sanad protocol translation, recovery, and local/cloud platform adapters.
+- [Sanad CLI Architecture](docs/technical/sanad_cli_architecture.md): Attached and in-process transports, runtime ownership, automation output, cancellation, and test-isolation contracts.
 - [معمارية تشغيل الوكيل المحلي](docs/technical/agent_runtime.md): تصميم محرك تشغيل الوكيل (sanad-agent) وتركيب موجه النظام (System Prompt) للـ KV-Cache والتأمين الأمني.
 - [Context Compaction Architecture](docs/technical/context_compaction.md): Durable goal-preserving compaction ownership, vocabulary, and wire-safety rules (Plan 53).
 - [Context Compaction Engine Design](docs/agent_engine/context_compaction_design.md): Engine pipeline, pressure budgeting, goal-preservation sections, and verification fixtures (Plan 53c).
