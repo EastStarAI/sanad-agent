@@ -146,6 +146,7 @@ class OneshotRunner {
     CliTurnClient? client,
     Duration timeout = const Duration(minutes: 5),
     Stream<ProcessSignal>? signalStream,
+    Stream<ProcessSignal> Function(ProcessSignal)? signalWatcher,
   }) async {
     final out = stdoutSink ?? stdout;
     final err = stderrSink ?? stderr;
@@ -353,14 +354,18 @@ class OneshotRunner {
       if (signalStream != null) {
         subscriptions.add(signalStream.listen(handleSignal));
       } else {
+        final watchSignal =
+            signalWatcher ?? (ProcessSignal signal) => signal.watch();
         for (final signal in <ProcessSignal>[
           ProcessSignal.sigint,
           ProcessSignal.sigterm,
         ]) {
           try {
-            subscriptions.add(signal.watch().listen(handleSignal));
+            subscriptions.add(watchSignal(signal).listen(handleSignal));
           } on UnsupportedError {
             // The platform does not expose this process signal.
+          } on SignalException {
+            // Windows reports unsupported POSIX signals as SignalException.
           }
         }
       }

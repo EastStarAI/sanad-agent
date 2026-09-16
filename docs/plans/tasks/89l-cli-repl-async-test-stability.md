@@ -31,7 +31,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] تحديد sleeps المماثلة في مجموعة REPL E2E ومراجعة fixture المالكة.
 - [x] قياس suite قبل/بعد CLI واكتشاف flake أقدم في cleanup لعضوية Local Gateway ظهر في النسختين.
 - [x] تدقيق Windows AOT log وإثبات أن cleanup فشل مرتين بينما سجل `fvm` الخطوة ناجحة لغياب marker مستقل.
-- [x] أثبت marker في أول run له أنه يمنع النجاح الكاذب: كشف تجاوز cold-start لمهلة AOT ذات 30 ثانية على Windows.
+- [x] أثبت marker أنه يمنع النجاح الكاذب، ثم كشف التشخيص المحسّن السبب الأصلي: `SignalException` عند مراقبة `SIGTERM` غير المدعومة على Windows.
 
 ### G1 — التنفيذ
 
@@ -41,6 +41,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] إضافة observer اختبارية تنتظر إزالة عضو Local Gateway الفعلية بعد إغلاق socket.
 - [x] إضافة bounded retry لتنظيف AOT واختبارات transient/persistent failure.
 - [x] جعل مهلة AOT cold-start مستقلة ومحدودة بـ60 ثانية، وقتل child process عند تجاوزها مع stdout/stderr تشخيصيين.
+- [x] احتواء `SignalException` للإشارات غير المدعومة مع regression test، مع إبقاء SIGINT/SIGTERM على المنصات الداعمة.
 - [x] إضافة success marker وفحص shell مستقل لكل من Windows وUnix.
 
 ### G2 — التحقق والتسليم
@@ -50,7 +51,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] نجاح سيناريو Local Gateway الفاشل 30 مرة تحت 5 عمليات متوازية.
 - [x] نجاح اختباري AOT cleanup للخطأ المؤقت والدائم.
 - [x] نجاح AOT smoke المحلي الحقيقي وظهور marker بعد cleanup.
-- [x] نجاح حزمة CLI وحزمة Agent الكاملة: 1763 passed، 13 skipped.
+- [x] نجاح حزمة CLI وحزمة Agent الكاملة بعد regression test: 1764 passed، 13 skipped.
 - [x] تحديث Graphify وفتح PR مستقل.
 - [ ] نجاح Windows AOT cleanup وsuccess marker في Public CI دون rerun.
 
