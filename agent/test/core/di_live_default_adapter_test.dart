@@ -23,7 +23,7 @@ void main() {
       'sanad-live-default-adapter-',
     );
     setSanadHomeOverride(sanadHome.path);
-    setSanadStateHomeOverride(null);
+    setSanadStateHomeOverride(sanadHome.path);
     setupDI();
   });
 

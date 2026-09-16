@@ -185,6 +185,79 @@ testing workflows, follow the
 | Headless server | A paired macOS, Linux, or Windows server | Desktop, mobile, or web client | Required |
 | Standalone CLI | The current computer or server | Terminal | Not required locally; required for connected-device access |
 
+## Command Line Interface (CLI)
+
+Sanad includes a full-featured terminal interface and interactive REPL that communicates with the local agent daemon or runs standalone.
+
+### Interactive Chat (REPL)
+
+Start an interactive reasoning session right in your terminal:
+
+```bash
+sanad
+# or
+sanad chat --model claude-3-7-sonnet --thinking
+```
+
+Inside the REPL, manage sessions and inspect tools with interactive slash commands:
+- `/ws` or `/workspace`: View active workspace, list (`/ws list`), or switch (`/ws switch <target>`).
+- `/model`: Inspect active model or switch (`/model switch <name>`).
+- `/steer <instruction>`: Steer an active agent run mid-flight without aborting.
+- `/stop`: Interrupt an active turn cleanly (`Ctrl+C` also supported).
+- `/compact`: Trigger context compaction for long-running sessions.
+- `/skills` & `/mcp`: Inspect installed skills and connected MCP servers.
+- `/help`: Display REPL shortcut reference.
+
+### One-Shot Tasks & Unix Pipes
+
+Execute one-shot tasks directly without entering interactive chat:
+
+```bash
+# Execute prompt directly
+sanad -p "Explain the difference between TCP and UDP"
+# or
+sanad run "Find all TODO comments in lib/"
+
+# Pipe input from stdin into Sanad
+cat server.log | sanad run "Identify any connection timeouts"
+
+# Output structured JSON for automation and scripts
+sanad run "Count lines of code in src" --json
+
+# Quiet mode: suppress banners and output only final assistant text
+sanad run "Generate a random UUID" --quiet
+
+# Run in-process without a daemon, with a bounded deadline
+sanad run --standalone --timeout 300 "Review this workspace"
+
+# Dangerous and invocation-scoped: auto-approve every gated tool
+sanad run --standalone --allow-all-tools "Run the trusted maintenance script"
+```
+
+Standalone and daemon modes share the same engine and exclusive state-root ownership. A standalone invocation refuses to open SQLite when another runtime owns the selected Sanad Home. Timeout, SIGINT, and SIGTERM return `124`, `130`, and `143`; `--json` reserves stdout for one result object.
+
+### Workspace Management
+
+Auto-discover and manage project workspaces from the command line:
+
+```bash
+sanad ws list                          # List registered workspaces with security policy
+sanad ws current                       # Show active workspace, path, and connected MCP servers
+sanad ws switch <name|id>              # Switch the active workspace
+sanad ws add [path]                    # Register existing folder as workspace (defaults to .)
+sanad ws create <name>                 # Create a new folder and register as workspace
+sanad ws tree                          # View hierarchical directory tree of active workspace
+sanad ws policy [default|full_access]  # View or toggle security permission mode
+```
+
+### Diagnostics & Inspection
+
+```bash
+sanad doctor                           # Inspect environment health, Sanad Home, and daemon connectivity
+sanad models                           # List available and configured AI models
+sanad providers                        # Inspect supported AI providers
+```
+
 ## How it works
 
 ```text
