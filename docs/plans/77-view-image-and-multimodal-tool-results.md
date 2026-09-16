@@ -501,6 +501,6 @@ Next task:
 - Private hosted relay gates `G0–G6` are complete; the plan advances to `77g2/R0`.
 - The public compatibility boundary reuses `supports_attachments=true` and versioned relay event envelopes; no relay-specific capability field is introduced.
 - Source-neutral guarantees are now covered: 5 MiB/file, 4 files and 20 MiB/turn, 256 KiB chunks, exact requester return, bounded TTL/concurrency/rate, ordered idempotency, authoritative Agent admission, and zero binary fallback through `device_command`/`device_event`.
-- Private verification passed the full Backend unit suite `203/203` and the relevant relay/Gateway/voice/command integration selection `98/98`.
+- Private verification passed the full Backend unit suite `204/204` and the relevant relay/Gateway/voice/command integration selection `99/99`.
 - Remaining estimate: `2%`.
 - Next gate: `77g2/R0 — Cross-repository readiness`.
