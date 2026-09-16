@@ -361,11 +361,21 @@ class OneshotRunner {
           ProcessSignal.sigterm,
         ]) {
           try {
-            subscriptions.add(watchSignal(signal).listen(handleSignal));
+            subscriptions.add(
+              watchSignal(signal).listen(
+                handleSignal,
+                onError: (Object error, StackTrace stackTrace) {
+                  if (error is UnsupportedError || error is SignalException) {
+                    return;
+                  }
+                  Zone.current.handleUncaughtError(error, stackTrace);
+                },
+              ),
+            );
           } on UnsupportedError {
             // The platform does not expose this process signal.
           } on SignalException {
-            // Windows reports unsupported POSIX signals as SignalException.
+            // Some runtimes report unsupported signals synchronously.
           }
         }
       }

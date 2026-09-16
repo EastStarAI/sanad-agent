@@ -41,7 +41,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] إضافة observer اختبارية تنتظر إزالة عضو Local Gateway الفعلية بعد إغلاق socket.
 - [x] إضافة bounded retry لتنظيف AOT واختبارات transient/persistent failure.
 - [x] جعل مهلة AOT cold-start مستقلة ومحدودة بـ60 ثانية، وقتل child process عند تجاوزها مع stdout/stderr تشخيصيين.
-- [x] احتواء `SignalException` للإشارات غير المدعومة مع regression test، مع إبقاء SIGINT/SIGTERM على المنصات الداعمة.
+- [x] احتواء `SignalException` المتزامنة أو الواردة عبر signal stream للإشارات غير المدعومة مع regression test، وتمرير الأخطاء الأخرى إلى Zone.
 - [x] إضافة success marker وفحص shell مستقل لكل من Windows وUnix.
 
 ### G2 — التحقق والتسليم

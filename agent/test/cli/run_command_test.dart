@@ -1059,7 +1059,9 @@ void main() {
           signalWatcher: (signal) {
             watchedSignals.add(signal);
             if (signal == ProcessSignal.sigterm) {
-              throw SignalException('SIGTERM is unsupported');
+              return Stream<ProcessSignal>.error(
+                SignalException('SIGTERM is unsupported'),
+              );
             }
             return const Stream<ProcessSignal>.empty();
           },
