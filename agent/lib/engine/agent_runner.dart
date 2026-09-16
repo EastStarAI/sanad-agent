@@ -2074,11 +2074,16 @@ class AgentRunner {
   }
 
   Future<void> _restoreCheckpointForResume({String? requestId}) async {
-    final allowAmbiguousToolInterruption = _allowManualAmbiguousToolRecovery;
-    _allowManualAmbiguousToolRecovery = false;
     final activeItem = getIt.isRegistered<PersistedRuntimeStateRepository>()
         ? getIt<PersistedRuntimeStateRepository>().findActiveWorkItem(sessionId)
         : null;
+    final recoverInterruptedToolsAsUnknown =
+        activeItem?.continuationMetadata[ContinuationCheckpointCoordinator
+            .automaticUnknownToolRecoveryKey] ==
+        true;
+    final allowAmbiguousToolInterruption =
+        _allowManualAmbiguousToolRecovery || recoverInterruptedToolsAsUnknown;
+    _allowManualAmbiguousToolRecovery = false;
     final expectedRequestId = requestId ?? activeItem?.requestId;
     final expectedMessage = activeItem?.payload['message']?.toString();
     final hasOwnedUserMessage = history.any((message) {
@@ -2098,6 +2103,7 @@ class AgentRunner {
     final result = _checkpointCoordinator.restoreCheckpointForResume(
       currentHistoryLength: history.length,
       allowAmbiguousToolInterruption: allowAmbiguousToolInterruption,
+      neutralizeAllInterruptedTools: recoverInterruptedToolsAsUnknown,
     );
     if (result.resumeHistoryLength < 0) return; // no-op (no repo / no item)
 
@@ -2148,6 +2154,9 @@ class AgentRunner {
         ctx: _checkpointCtx,
         cancellationScope: _cancellationScope,
       );
+    }
+    if (recoverInterruptedToolsAsUnknown) {
+      _checkpointCoordinator.clearAutomaticUnknownToolRecoveryIntent();
     }
   }
 

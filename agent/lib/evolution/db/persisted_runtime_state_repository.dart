@@ -6,6 +6,7 @@ import 'package:sqlite3/sqlite3.dart';
 import '../../core/models/message.dart';
 import 'message_history_identity.dart';
 import '../models/session_execution_snapshot.dart';
+import '../models/suspended_checkpoint.dart';
 import 'agent_state_database.dart';
 import 'runtime/legacy_runtime_state_migrator.dart';
 import 'runtime/pending_input_repository.dart';
@@ -459,6 +460,16 @@ class PersistedRuntimeStateRepository {
         requestId: requestId,
       )
       .applied;
+
+  SuspendedDecisionClaim? claimSuspendedDecision({
+    required SuspendedCheckpoint checkpoint,
+    Map<String, dynamic>? decision,
+    bool reclaimPersistedDecision = false,
+  }) => _executionState.claimSuspendedDecision(
+    checkpoint: checkpoint,
+    decision: decision,
+    reclaimPersistedDecision: reclaimPersistedDecision,
+  );
 
   /// Returns the authoritative active conversation rows, including identity
   /// columns that may not yet be mirrored by an in-memory session snapshot.

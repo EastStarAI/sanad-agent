@@ -31,6 +31,7 @@ void main() {
       if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
     });
     setSanadHomeOverride(tempDir.path);
+    setSanadStateHomeOverride(tempDir.path);
 
     final state = AgentStateDatabase();
     addTearDown(state.dispose);

@@ -964,10 +964,11 @@ class SessionDB {
         status,
         tool_arguments,
         permission_payload,
+        resolved_decision,
         created_at,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(request_id) DO UPDATE SET
         checkpoint_id = excluded.checkpoint_id,
         session_id = excluded.session_id,
@@ -976,6 +977,7 @@ class SessionDB {
         status = excluded.status,
         tool_arguments = excluded.tool_arguments,
         permission_payload = excluded.permission_payload,
+        resolved_decision = excluded.resolved_decision,
         updated_at = excluded.updated_at;
     ''');
     stmt.execute([
@@ -987,6 +989,7 @@ class SessionDB {
       row['status'],
       row['tool_arguments'],
       row['permission_payload'],
+      row['resolved_decision'],
       row['created_at'],
       row['updated_at'],
     ]);

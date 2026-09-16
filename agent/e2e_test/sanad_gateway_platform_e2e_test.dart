@@ -450,6 +450,7 @@ void main() {
       'sanad-agent-gateway-test',
     );
     setSanadHomeOverride(tempSanadHome.path);
+    setSanadStateHomeOverride(tempSanadHome.path);
     getIt.registerSingleton<AuthManager>(MockAuthManager());
     getIt.registerSingleton<Config>(MockConfig());
     getIt.registerSingleton<SessionManager>(SessionManager());
@@ -466,6 +467,7 @@ void main() {
     // ignore: invalid_use_of_visible_for_testing_member
     SessionManager.resetForTesting();
     setSanadHomeOverride(null);
+    setSanadStateHomeOverride(null);
     await getIt.reset();
     if (tempSanadHome.existsSync()) {
       await tempSanadHome.delete(recursive: true);
@@ -489,6 +491,7 @@ void main() {
         'sanad-agent-gateway-test',
       );
       setSanadHomeOverride(tempSanadHome.path);
+      setSanadStateHomeOverride(tempSanadHome.path);
       getIt.registerSingleton<AuthManager>(MockAuthManager());
       getIt.registerSingleton<Config>(TestLocalConfig(port));
       getIt.registerSingleton<SessionManager>(SessionManager());
@@ -555,6 +558,7 @@ void main() {
       'sanad-agent-gateway-test',
     );
     setSanadHomeOverride(tempSanadHome.path);
+    setSanadStateHomeOverride(tempSanadHome.path);
     getIt.registerSingleton<AuthManager>(AuthManager());
     getIt.registerSingleton<Config>(TestLocalConfig(port));
     getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
@@ -899,6 +903,7 @@ void main() {
       'sanad-agent-gateway-test',
     );
     setSanadHomeOverride(tempSanadHome.path);
+    setSanadStateHomeOverride(tempSanadHome.path);
     getIt.registerSingleton<AuthManager>(MockAuthManager());
     getIt.registerSingleton<Config>(TestLocalConfig(port));
     getIt.registerSingleton<SessionManager>(SessionManager());
@@ -1008,6 +1013,7 @@ void main() {
         'sanad-agent-gateway-test',
       );
       setSanadHomeOverride(tempSanadHome.path);
+      setSanadStateHomeOverride(tempSanadHome.path);
       getIt.registerSingleton<AuthManager>(MockAuthManager());
       getIt.registerSingleton<Config>(TestLocalConfig(port));
       getIt.registerSingleton<SessionManager>(SessionManager());
@@ -1032,6 +1038,7 @@ void main() {
         'sanad-agent-gateway-test',
       );
       setSanadHomeOverride(tempSanadHome.path);
+      setSanadStateHomeOverride(tempSanadHome.path);
       getIt.registerSingleton<AuthManager>(MockAuthManager());
       getIt.registerSingleton<Config>(TestLocalConfig(port));
       getIt.registerSingleton<SessionManager>(SessionManager());

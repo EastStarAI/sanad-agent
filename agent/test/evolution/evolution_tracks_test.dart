@@ -19,6 +19,7 @@ void main() {
   setUp(() async {
     tempDir = Directory.systemTemp.createTempSync('sanad_evolution_test_');
     setSanadHomeOverride(tempDir.path);
+    setSanadStateHomeOverride(tempDir.path);
 
     // Clear DI and setup again for test
     if (GetIt.I.isRegistered<SessionManager>()) {
@@ -42,6 +43,7 @@ void main() {
   tearDown(() async {
     SessionManager.resetForTesting();
     setSanadHomeOverride(null);
+    setSanadStateHomeOverride(null);
     if (tempDir.existsSync()) {
       tempDir.deleteSync(recursive: true);
     }

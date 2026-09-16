@@ -221,6 +221,173 @@ Unsupported providers do not display invented usage values.
 - Answer an agent question from its inline card by choosing a suggested answer
   or entering a custom response.
 
+## Command Line Interface (CLI) Guide
+
+Sanad includes a rich command-line tool (`sanad`) that gives you full access to
+all agent capabilities directly from the terminal without requiring the desktop client.
+
+### Connection and Runtime Modes
+
+1. **Attached Gateway Mode (Default):**
+   When the background daemon is running, `sanad` automatically connects to it
+   over a local authenticated WebSocket (`ws://127.0.0.1:58085/gateway`). Workspaces,
+   conversations, active runs, and provider configurations are shared seamlessly
+   with the desktop and web clients.
+
+2. **Standalone Fallback Mode:**
+   When running on a headless server without a daemon, in CI/CD containers, or
+   when `--standalone` is passed, the CLI falls back to executing in-process
+   using local provider credentials and state.
+
+### Interactive Chat (REPL)
+
+To launch an interactive reasoning session, simply run:
+
+```bash
+sanad
+```
+
+Or pass flags to customize the session:
+
+```bash
+sanad chat --workspace my-project --model claude-3-7-sonnet --thinking
+```
+
+#### Interactive Slash Commands
+
+The interactive REPL intercepts slash commands locally without consuming LLM turns:
+
+| Command | Description |
+|---|---|
+| `/help` | Show interactive command reference and shortcuts |
+| `/workspace`, `/ws` | Display active workspace, list all (`/ws list`), or switch (`/ws switch <target>`) |
+| `/model` | Show active model, list options (`/model list`), or switch (`/model switch <name>`) |
+| `/session` | View session details, start new session (`/session new`), or view history |
+| `/skills` | List bundled and user-installed agent skills |
+| `/mcp` | List configured Model Context Protocol (MCP) servers and status |
+| `/compact` | Trigger context compaction to prune conversation history while preserving context |
+| `/steer <instruction>` | Redirect agent execution mid-turn at the next safe step boundary |
+| `/queue <instruction>` | Queue a prompt to execute immediately after the current turn finishes |
+| `/stop` | Cleanly interrupt an active turn (`Ctrl+C` also interrupts during turns) |
+| `/clear` | Clear the terminal display |
+| `/history` | View command history from `SANAD_HOME/cli_history` |
+| `/thinking` | Toggle deep reasoning / thinking stream output on or off |
+| `/exit`, `/quit` | Exit the REPL session (`Ctrl+D` on an empty line also exits) |
+
+#### Interactive Permissions & Clarifications
+
+When a tool requests approval for a sensitive action (such as executing shell commands or writing files), the REPL prompts for approval:
+- `[y] Allow Once`: Grants permission for the single invocation (default).
+- `[s] Allow for this Session`: Approves the tool for the lifetime of the session.
+- `[w] Allow for entire Workspace`: Grants permission for all sessions in this workspace.
+- `[n] Deny`: Rejects the tool invocation.
+
+When the agent requires clarification via `system_ask_user`, an interactive choice menu is rendered with options and a write-in (`[w]`) answer mode.
+
+### Headless Tasks & Unix Pipes
+
+Execute one-shot tasks or pipe data through standard Unix pipelines:
+
+```bash
+# Direct one-shot prompt
+sanad -p "Explain how DNS resolution works"
+# or
+sanad run "Scan lib/ for memory leaks"
+
+# Pipe log output or source code into Sanad
+cat debug.log | sanad run "Find the root cause of these errors"
+git diff | sanad run "Generate a commit message following Conventional Commits"
+
+# Machine-readable JSON output (ideal for scripts and automated CI workflows)
+sanad run "Analyze dependencies" --json
+
+# Quiet mode: outputs only the final assistant text, suppressing progress and banners
+sanad run "Generate a UUID v4" --quiet
+```
+
+#### Headless Execution and Cancellation Policy
+
+In headless non-interactive mode, sensitive tools requiring interactive permission are rejected by default. For a trusted, isolated invocation, `--allow-all-tools` explicitly auto-approves every gated tool for that run only; it does not modify the workspace's durable permission policy:
+
+```bash
+sanad run "Run test suite and fix failing tests" --allow-all-tools
+```
+
+`--timeout <seconds>` is accepted before or after `run`, defaults to 300 seconds, and accepts values from 1 through 86400. Timeout returns exit code `124`, SIGINT returns `130`, and SIGTERM returns `143`; each path requests one bounded Stop before cleanup. `--json` writes one result object to stdout, while diagnostics stay on stderr. `--quiet` writes only the final assistant text.
+
+#### GitHub Actions
+
+Use separate runner-temporary identity and state roots. Provision the selected provider's non-secret instance metadata in an organization-specific preceding step, and pass credentials only through protected GitHub secrets—never command arguments or workflow output:
+
+```yaml
+jobs:
+  sanad-task:
+    runs-on: ubuntu-24.04
+    env:
+      SANAD_HOME: ${{ runner.temp }}/sanad-home
+      SANAD_STATE_HOME: ${{ runner.temp }}/sanad-state
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      - run: fvm dart pub get
+        working-directory: agent
+      # Restore/provision provider metadata here without printing credentials.
+      - name: Run Sanad and validate its JSON envelope
+        working-directory: agent
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          fvm dart run bin/sanad_agent.dart run --standalone --json \
+            --timeout 300 "Review this repository" > "$RUNNER_TEMP/sanad.json"
+          jq -e '.exit_code == 0 and (.text | type == "string")' \
+            "$RUNNER_TEMP/sanad.json"
+```
+
+The repository's own CI uses the secret-free deterministic E2E provider and `agent/tool/cli_aot_smoke.dart`; that fixture is strictly for automated verification, not normal user workloads.
+
+### Workspace Management (`sanad ws`)
+
+Workspaces isolate project files, skills, MCP servers, and security policies. The CLI automatically detects your active workspace by climbing parent directories from your current working directory (`CWD`).
+
+```bash
+# List registered workspaces with active marker (*) and policy
+sanad ws list
+
+# Show detailed information about the currently active workspace
+sanad ws current
+
+# Switch the active workspace in local CLI state
+sanad ws switch <workspace-name-or-id>
+
+# Register current or specified directory as a workspace
+sanad ws add .
+sanad ws add /path/to/project --name "My Project"
+
+# Create a new directory and register it as a workspace
+sanad ws create new-service --path ~/projects
+
+# Display directory tree of active workspace
+sanad ws tree
+sanad ws tree src/components --max-entries 50
+
+# View or update security policy mode (default or full_access)
+sanad ws policy
+sanad ws policy full_access
+```
+
+### Diagnostics & Inspection
+
+```bash
+# Verify environment health, Sanad Home, configuration, and daemon status
+sanad doctor
+
+# Inspect configured and supported AI models
+sanad models
+
+# Inspect configured AI providers
+sanad providers
+```
+
 ## Included skills
 
 Every source or standalone Agent run installs the product-managed

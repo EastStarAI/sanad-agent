@@ -44,6 +44,8 @@ class LocalWorkspaceRuntimeService {
              ),
            ),
        _mcpOAuthService = mcpOAuthService ?? McpOAuthService(),
+       _ownsMcpRuntimeManager = mcpRuntimeManager == null,
+       _ownsMcpOAuthService = mcpOAuthService == null,
        _sessionDb = sessionDb;
 
   final String? _sanadHomePath;
@@ -52,6 +54,8 @@ class LocalWorkspaceRuntimeService {
   final SkillLoadService _skillLoadService;
   final McpRuntimeManager _mcpRuntimeManager;
   final McpOAuthService _mcpOAuthService;
+  final bool _ownsMcpRuntimeManager;
+  final bool _ownsMcpOAuthService;
   final SessionDB? _sessionDb;
   SessionDB? _localDb;
   AgentStateDatabase? _localStateDb;
@@ -1696,6 +1700,20 @@ class LocalWorkspaceRuntimeService {
       return (count: count, truncated: false);
     }
     return (count: count, truncated: false);
+  }
+
+  Future<void> dispose() async {
+    await _mutationTail;
+    if (_ownsMcpRuntimeManager) {
+      await _mcpRuntimeManager.dispose();
+    }
+    if (_ownsMcpOAuthService) {
+      await _mcpOAuthService.dispose();
+    }
+    _localDb?.dispose();
+    _localStateDb?.dispose();
+    _localDb = null;
+    _localStateDb = null;
   }
 
   Future<T> _serialized<T>(Future<T> Function() operation) async {

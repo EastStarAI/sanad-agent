@@ -1,6 +1,9 @@
+import 'dart:io';
+
 import 'package:test/test.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/capabilities/runtime/web_search/web_search_service.dart';
 import 'package:sanad_agent/capabilities/runtime/web_search/web_fetch_service.dart';
 import 'package:sanad_agent/capabilities/runtime/web_search/duckduckgo_provider.dart';
@@ -8,6 +11,28 @@ import 'package:sanad_agent/capabilities/runtime/web_search/serper_provider.dart
 import 'package:http/http.dart' as http;
 
 void main() {
+  late Directory sanadHome;
+  late Directory sanadStateHome;
+
+  setUp(() async {
+    sanadHome = await Directory.systemTemp.createTemp('manual-search-home-');
+    sanadStateHome = await Directory.systemTemp.createTemp(
+      'manual-search-state-',
+    );
+    setSanadHomeOverride(sanadHome.path);
+    setSanadStateHomeOverride(sanadStateHome.path);
+  });
+
+  tearDown(() async {
+    await getIt.reset();
+    setSanadHomeOverride(null);
+    setSanadStateHomeOverride(null);
+    if (await sanadHome.exists()) await sanadHome.delete(recursive: true);
+    if (await sanadStateHome.exists()) {
+      await sanadStateHome.delete(recursive: true);
+    }
+  });
+
   test(
     'manual search and fetch e2e verification',
     () async {

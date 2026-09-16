@@ -58,6 +58,8 @@ class E2eFixtureAdapter
   static const viewImagePixelResponseText = 'PIXELS_MAGENTA';
   static const viewImageTextFallbackResponseText = 'IMAGE_TEXT_ONLY_FALLBACK';
   static const viewImageInvalidResponseText = 'INVALID_IMAGE_RESULT';
+  static const delayedResponsePromptPrefix = '__SANAD_E2E_DELAY__';
+  static const runtimeFailurePrompt = '__SANAD_E2E_RUNTIME_FAILURE__';
 
   @override
   final ToolResultMediaCapability toolResultMediaCapability;
@@ -590,13 +592,44 @@ class E2eFixtureAdapter
         : viewImageInvalidResponseText;
   }
 
+  Future<void> _waitForDelayedFixture(
+    List<Message> history,
+    LLMRequestOptions options,
+  ) async {
+    String? prompt;
+    for (final message in history.reversed) {
+      if (message.role == MessageRole.user) {
+        prompt = message.content;
+        break;
+      }
+    }
+    if (prompt == runtimeFailurePrompt) {
+      throw StateError('deterministic E2E provider failure');
+    }
+    if (prompt == null || !prompt.startsWith(delayedResponsePromptPrefix)) {
+      return;
+    }
+    final readyPath = prompt.substring(delayedResponsePromptPrefix.length);
+    if (readyPath.isNotEmpty) File(readyPath).writeAsStringSync('ready');
+    final delay = Future<void>.delayed(const Duration(seconds: 30));
+    final cancellation = options.cancellationScope?.whenCancelled;
+    if (cancellation == null) {
+      await delay;
+    } else {
+      await Future.any<void>([delay, cancellation]);
+    }
+  }
+
   @override
   Future<AgentResponse> generateResponse(
     List<Message> history, {
     List<ToolSchema>? tools,
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
-  }) async => _response(history, tools);
+  }) async {
+    await _waitForDelayedFixture(history, options);
+    return _response(history, tools);
+  }
 
   @override
   Future<WireInputMeasurement?> measureInput(
@@ -629,6 +662,7 @@ class E2eFixtureAdapter
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async* {
+    await _waitForDelayedFixture(history, options);
     yield await _response(history, tools);
   }
 

@@ -38,11 +38,10 @@ that fails before streaming is excluded from the remainder of that invocation,
 so multi-provider routing advances without revisiting an exhausted route and
 falls back to controllable recovery when no qualified candidate remains. Stop
 invalidates the active owner before awaiting cancellation, clears runtime
-recovery and durable work, then allows later input to enter a new generation. Interrupted tools resume automatically only when their persisted checkpoint marks
-every executing operation replay-safe. An explicit user Retry or Change Provider
-may instead close each ambiguous non-idempotent tool with a neutral
-unknown-outcome result and continue the model loop; it never re-executes the
-side effect.
+recovery and durable work, then allows later input to enter a new generation. Owned interrupted work resumes automatically from a recognized checkpoint. Every
+started tool without a durable result is closed with a neutral unknown-outcome
+result and returned to the model; recovery never re-executes that tool. Only
+ownerless, malformed, or unrecognized checkpoints remain blocked.
 
 A restart may repair a missing continuation checkpoint only for the narrow
 pre-provider window: the exact owned user message is already durable and there
@@ -66,17 +65,13 @@ owns admission. Provider admission atomically checks the drain and commits the
 durable plus in-memory in-flight markers without an asynchronous gap, so the
 restart safety scan cannot accept a checkpoint that the same run immediately
 invalidates. Only `force=true` may revalidate the
-exact work-item, run, and generation owner, cancel that stream, record blocked
-recovery, and proceed with restart. A stale timeout snapshot cannot cancel a
-request that already completed. Startup never replays an
-interrupted request automatically. The durable `model_request_in_flight` marker
-makes an unexpected crash or forced exit fail closed rather than silently
-replaying an unknown provider outcome; a definitive live failure such as rate
-limit restores the preceding safe checkpoint and retains its normal recovery
-policy. Retry or Change Provider is explicit and atomically restores the
-recognized `checkpoint_before_model_request` while claiming the work as
-`resuming`; an absent or unknown predecessor remains blocked without invoking
-the provider.
+exact work-item, run, and generation owner, cancel that stream, and proceed with
+restart. A stale timeout snapshot cannot cancel a request that already
+completed. On startup, an interrupted provider request automatically restores
+its recognized `checkpoint_before_model_request` and resumes under the same
+owned work item; an absent or unknown predecessor remains blocked without
+invoking the provider. A definitive live failure such as rate limit restores
+the same preceding safe checkpoint and retains its normal recovery policy.
 The default safety timeout is 60 seconds and callers may provide
 `timeout_seconds` between 1 and 3600. Each provider-only timeout repeats the
 ordinary wait described above. Any other timeout fails without exiting unless
@@ -102,6 +97,15 @@ without waiting for the user, cancelling the tool, or requiring force. Startup
 then changes the preserved running owner to `waiting` and republishes the same
 Ask User or permission request identity. Partial coverage never hides another
 unresolved tool in the same batch; that batch remains a restart blocker.
+
+Accepting interactive input writes the resolved decision and transitions the
+exact waiting/blocked work owner to `resuming` in one SQLite transaction. The
+continuation adopts a normal `ActiveRun`, so Stop cancels execution and blocks
+late publication while concurrent message input follows Steer. If the process
+exits before consuming the decision, startup reclaims `decision_ready` once.
+Before an approved permission can execute its external tool, the checkpoint is
+marked `executing_tool`; a later crash therefore records unknown outcome rather
+than replaying the approved side effect.
 
 A forced timeout deliberately preserves ambiguous durable tool state for
 startup recovery. Automatic startup remains fail-closed. Any later manual

@@ -17,6 +17,7 @@ This contract applies to `agent/lib/capabilities/mcp/`.
 - Cache tool specifications by a fast fingerprint of merged effective configuration.
 - Invalidate cache and rebuild connections when effective configuration changes.
 - Recover dropped connections through managed reconnect and bounded retry without duplicating tool execution.
+- Runtime teardown closes every managed MCP connection and every internally owned OAuth callback/client resource.
 
 ## Tool Catalog
 - Namespace MCP tools to avoid collision with built-ins and other servers.
