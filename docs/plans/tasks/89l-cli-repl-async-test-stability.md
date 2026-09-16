@@ -1,9 +1,9 @@
 ---
 title: "Task 89l: CLI Async Test Stability"
 description: "إزالة الانتظار الزمني السباقي من اختبارات REPL وLocal Gateway واستبداله بانتظار أحداث WebSocket الحتمية بعد ظهور إخفاقات متقطعة في CI والقياس المحلي."
-status: "completed"
-current_gate: "Complete"
-remaining_estimate: "0%"
+status: "in_progress"
+current_gate: "G2 — CLI integration event-wait verification"
+remaining_estimate: "5%"
 priority: "high"
 depends_on: "Task 89j; merged CLI implementation"
 ---
@@ -32,6 +32,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] قياس suite قبل/بعد CLI واكتشاف flake أقدم في cleanup لعضوية Local Gateway ظهر في النسختين.
 - [x] تدقيق Windows AOT log وإثبات أن cleanup فشل مرتين بينما سجل `fvm` الخطوة ناجحة لغياب marker مستقل.
 - [x] أثبت marker أنه يمنع النجاح الكاذب، ثم كشف التشخيص المحسّن السبب الأصلي: `SignalException` عند مراقبة `SIGTERM` غير المدعومة على Windows.
+- [x] كشف CI النهائي sleep قديمًا في clarification ضمن `cli_integration_e2e_test.dart` بعد نجاح Windows.
 
 ### G1 — التنفيذ
 
@@ -43,6 +44,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] جعل مهلة AOT cold-start مستقلة ومحدودة بـ60 ثانية، وقتل child process عند تجاوزها مع stdout/stderr تشخيصيين.
 - [x] احتواء `SignalException` المتزامنة أو الواردة عبر signal stream للإشارات غير المدعومة مع regression test، وتمرير الأخطاء الأخرى إلى Zone.
 - [x] إضافة success marker وفحص shell مستقل لكل من Windows وUnix.
+- [x] إزالة waits الزمنية التسعة من CLI integration واستبدالها بأحداث outbound/state حتمية.
 
 ### G2 — التحقق والتسليم
 
@@ -52,8 +54,10 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] نجاح اختباري AOT cleanup للخطأ المؤقت والدائم.
 - [x] نجاح AOT smoke المحلي الحقيقي وظهور marker بعد cleanup.
 - [x] نجاح حزمة CLI وحزمة Agent الكاملة بعد regression test: 1764 passed، 13 skipped.
+- [x] نجاح CLI integration: 19 passed، وضغط clarification: 30/30 عبر 5 عمليات.
 - [x] تحديث Graphify وفتح PR مستقل.
 - [x] نجاح Windows AOT cleanup وsuccess marker في Public CI من attempt 1 دون rerun.
+- [ ] نجاح Public CI النهائي على commit إزالة waits دون rerun.
 
 ## معايير القبول
 
@@ -61,7 +65,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] كل listener ينتظر الحدث يُثبت قبل بدء الفعل المولد له، فلا يفقد broadcast event.
 - [x] timeout النهائي يفشل بتشخيص مباشر إذا لم تصل الرسالة، بدل assertion زمني مضلل.
 - [x] cleanup العضوية المحلية ينتظر callback الإزالة الفعلي بعد إغلاق socket.
-- [x] تنجح الاختبارات محليًا وفي Public CI دون rerun، بما فيها marker المستقل على Windows.
+- [ ] تنجح الاختبارات محليًا وفي Public CI دون rerun، بما فيها marker المستقل على Windows.
 
 ## Definition of Done
 

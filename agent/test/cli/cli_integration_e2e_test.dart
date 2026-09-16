@@ -13,7 +13,15 @@ import '../support/isolated_sanad_test_home.dart';
 /// In-memory mock WebSocket implementing the Gateway contract for E2E testing.
 class MockGatewaySocket implements WebSocket {
   final _incomingController = StreamController<dynamic>();
+  final _outgoingController = StreamController<String>.broadcast(sync: true);
   final List<String> sentMessages = [];
+
+  Future<String> nextSentMessageWhere(bool Function(String) predicate) {
+    return _outgoingController.stream
+        .firstWhere(predicate)
+        .timeout(const Duration(seconds: 5));
+  }
+
   bool _closed = false;
   final Completer<void> _doneCompleter = Completer<void>();
   String currentPolicyMode = 'default';
@@ -27,7 +35,8 @@ class MockGatewaySocket implements WebSocket {
   void simulateClose([int? closeCode, String? closeReason]) {
     if (!_closed) {
       _closed = true;
-      _incomingController.close();
+      unawaited(_incomingController.close());
+      unawaited(_outgoingController.close());
       if (!_doneCompleter.isCompleted) {
         _doneCompleter.complete();
       }
@@ -37,10 +46,12 @@ class MockGatewaySocket implements WebSocket {
   @override
   void add(dynamic data) {
     if (_closed) throw const SocketException('Socket is closed');
-    sentMessages.add(data.toString());
+    final message = data.toString();
+    sentMessages.add(message);
+    _outgoingController.add(message);
 
     try {
-      final json = jsonDecode(data.toString());
+      final json = jsonDecode(message);
       if (json is Map) {
         final reqId = json['request_id'];
         final command = json['command'];
@@ -258,13 +269,12 @@ void main() {
             stdinReader: () async => null,
           );
 
+          final sentFuture = mockSocket.nextSentMessageWhere(
+            (message) => message.contains('"think"'),
+          );
           final runFuture = runner.run(['-p', 'Calculate 40 + 2']);
 
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-          expect(mockSocket.sentMessages.length, 1);
-          final sent =
-              jsonDecode(mockSocket.sentMessages.single)
-                  as Map<String, dynamic>;
+          final sent = jsonDecode(await sentFuture) as Map<String, dynamic>;
           expect(sent['command'], 'think');
           expect(sent['payload']['message'], 'Calculate 40 + 2');
           final sessionId = sent['payload']['session_id'] as String;
@@ -311,13 +321,12 @@ void main() {
             stdinReader: () async => 'PANIC: NullPointerException at index 4',
           );
 
+          final sentFuture = mockSocket.nextSentMessageWhere(
+            (message) => message.contains('"think"'),
+          );
           final runFuture = runner.run(['run', 'Analyze stacktrace:']);
 
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-          expect(mockSocket.sentMessages.length, 1);
-          final sent =
-              jsonDecode(mockSocket.sentMessages.single)
-                  as Map<String, dynamic>;
+          final sent = jsonDecode(await sentFuture) as Map<String, dynamic>;
           expect(
             sent['payload']['message'],
             'Analyze stacktrace:\n\nPANIC: NullPointerException at index 4',
@@ -356,12 +365,12 @@ void main() {
             stdinReader: () async => null,
           );
 
+          final sentFuture = mockSocket.nextSentMessageWhere(
+            (message) => message.contains('"think"'),
+          );
           final runFuture = runner.run(['run', 'Inspect project', '--json']);
 
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-          final sent =
-              jsonDecode(mockSocket.sentMessages.single)
-                  as Map<String, dynamic>;
+          final sent = jsonDecode(await sentFuture) as Map<String, dynamic>;
           final sessionId = sent['payload']['session_id'] as String;
 
           // Tool call
@@ -442,12 +451,12 @@ void main() {
             stdinReader: () async => null,
           );
 
+          final sentFuture = mockSocket.nextSentMessageWhere(
+            (message) => message.contains('"think"'),
+          );
           final runFuture = runner.run(['run', 'Quick ping', '--quiet']);
 
-          await Future<void>.delayed(const Duration(milliseconds: 20));
-          final sent =
-              jsonDecode(mockSocket.sentMessages.single)
-                  as Map<String, dynamic>;
+          final sent = jsonDecode(await sentFuture) as Map<String, dynamic>;
           final sessionId = sent['payload']['session_id'] as String;
 
           mockSocket.emit(
@@ -491,14 +500,15 @@ void main() {
             enableAnsi: false,
           );
 
-          final runFuture = session.run();
-
-          await Future<void>.delayed(const Duration(milliseconds: 30));
-          expect(
-            mockSocket.sentMessages.any((m) => m.contains('"think"')),
-            isTrue,
+          final thinkFuture = mockSocket.nextSentMessageWhere(
+            (message) => message.contains('"think"'),
           );
+          final runFuture = session.run();
+          await thinkFuture;
 
+          final permissionResponseFuture = mockSocket.nextSentMessageWhere(
+            (message) => message.contains('tool_permission_response'),
+          );
           // Server requests sensitive tool permission
           mockSocket.emit(
             jsonEncode({
@@ -515,18 +525,8 @@ void main() {
             }),
           );
 
-          await Future<void>.delayed(const Duration(milliseconds: 40));
-
-          // Verify response sent back to server
-          expect(
-            mockSocket.sentMessages.any(
-              (m) => m.contains('tool_permission_response'),
-            ),
-            isTrue,
-          );
-          final permMsg = mockSocket.sentMessages.lastWhere(
-            (m) => m.contains('tool_permission_response'),
-          );
+          // Verify response sent back to server.
+          final permMsg = await permissionResponseFuture;
           final permJson = jsonDecode(permMsg) as Map<String, dynamic>;
           expect(permJson['payload']['request_id'], 'perm-req-e2e');
           expect(permJson['payload']['allowed'], isTrue);
@@ -578,14 +578,15 @@ void main() {
             enableAnsi: false,
           );
 
-          final runFuture = session.run();
-
-          await Future<void>.delayed(const Duration(milliseconds: 30));
-          expect(
-            mockSocket.sentMessages.any((m) => m.contains('"think"')),
-            isTrue,
+          final thinkFuture = mockSocket.nextSentMessageWhere(
+            (message) => message.contains('"think"'),
           );
+          final runFuture = session.run();
+          await thinkFuture;
 
+          final answerFuture = mockSocket.nextSentMessageWhere(
+            (message) => message.contains('tool_permission_response'),
+          );
           mockSocket.emit(
             jsonEncode({
               'type': 'device_event',
@@ -610,11 +611,7 @@ void main() {
             }),
           );
 
-          await Future<void>.delayed(const Duration(milliseconds: 40));
-
-          final answerMsg = mockSocket.sentMessages.lastWhere(
-            (m) => m.contains('tool_permission_response'),
-          );
+          final answerMsg = await answerFuture;
           final answerJson = jsonDecode(answerMsg) as Map<String, dynamic>;
           expect(answerJson['payload']['request_id'], 'ask-req-e2e');
           expect(answerJson['payload']['answer'], 'Testify suite');
@@ -1043,9 +1040,12 @@ void main() {
         () async {
           expect(client.isConnected, isTrue);
 
-          // Simulate abrupt server termination
+          final closedFuture = client.stateStream
+              .firstWhere((state) => state == CliConnectionState.closed)
+              .timeout(const Duration(seconds: 5));
+          // Simulate abrupt server termination.
           mockSocket.simulateClose(1006, 'Connection dropped abnormally');
-          await Future<void>.delayed(const Duration(milliseconds: 20));
+          await closedFuture;
 
           expect(client.isConnected, isFalse);
           expect(client.state, CliConnectionState.closed);
