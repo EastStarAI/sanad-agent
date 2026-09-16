@@ -31,6 +31,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] تحديد sleeps المماثلة في مجموعة REPL E2E ومراجعة fixture المالكة.
 - [x] قياس suite قبل/بعد CLI واكتشاف flake أقدم في cleanup لعضوية Local Gateway ظهر في النسختين.
 - [x] تدقيق Windows AOT log وإثبات أن cleanup فشل مرتين بينما سجل `fvm` الخطوة ناجحة لغياب marker مستقل.
+- [x] أثبت marker في أول run له أنه يمنع النجاح الكاذب: كشف تجاوز cold-start لمهلة AOT ذات 30 ثانية على Windows.
 
 ### G1 — التنفيذ
 
@@ -39,6 +40,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] إزالة انتظار queue البالغ 20ms من اختبار `flush()` باستخدام controller متزامن داخل الاختبار.
 - [x] إضافة observer اختبارية تنتظر إزالة عضو Local Gateway الفعلية بعد إغلاق socket.
 - [x] إضافة bounded retry لتنظيف AOT واختبارات transient/persistent failure.
+- [x] جعل مهلة AOT cold-start مستقلة ومحدودة بـ60 ثانية، وقتل child process عند تجاوزها مع stdout/stderr تشخيصيين.
 - [x] إضافة success marker وفحص shell مستقل لكل من Windows وUnix.
 
 ### G2 — التحقق والتسليم
