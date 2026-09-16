@@ -1047,6 +1047,35 @@ void main() {
       }
     });
 
+    test('ignores unsupported platform signal watchers', () async {
+      final client = FakeInProcessTurnClient();
+      final watchedSignals = <ProcessSignal>[];
+      try {
+        final exitCode = await OneshotRunner(stdinReader: () async => null).run(
+          prompt: 'complete normally',
+          client: client,
+          quiet: true,
+          timeout: const Duration(seconds: 5),
+          signalWatcher: (signal) {
+            watchedSignals.add(signal);
+            if (signal == ProcessSignal.sigterm) {
+              return Stream<ProcessSignal>.error(
+                SignalException('SIGTERM is unsupported'),
+              );
+            }
+            return const Stream<ProcessSignal>.empty();
+          },
+          stdoutSink: StringBuffer(),
+          stderrSink: StringBuffer(),
+        );
+
+        expect(exitCode, 0);
+        expect(watchedSignals, [ProcessSignal.sigint, ProcessSignal.sigterm]);
+      } finally {
+        await client.dispose();
+      }
+    });
+
     for (final signalCase in <(ProcessSignal, int)>[
       (ProcessSignal.sigint, 130),
       (ProcessSignal.sigterm, 143),

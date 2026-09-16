@@ -68,6 +68,27 @@ class _ExchangeAuthManager extends AuthManager {
   Future<void> close() => _controller.close();
 }
 
+class _ObservedDeliveryPresenceController extends DeliveryPresenceController {
+  Completer<void>? _nextLocalRemoval;
+
+  Future<void> expectNextLocalRemoval() {
+    final completer = Completer<void>();
+    _nextLocalRemoval = completer;
+    return completer.future.timeout(const Duration(seconds: 5));
+  }
+
+  @override
+  bool removeLocalMember(Object connectionKey) {
+    final removed = super.removeLocalMember(connectionKey);
+    final completer = _nextLocalRemoval;
+    if (removed && completer != null && !completer.isCompleted) {
+      completer.complete();
+      _nextLocalRemoval = null;
+    }
+    return removed;
+  }
+}
+
 Future<int> _reserveFreePort() async {
   final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
   final port = socket.port;
@@ -78,7 +99,7 @@ Future<int> _reserveFreePort() async {
 void main() {
   const token = LocalGatewayCredential('transport-test-token');
   late LocalDaemonServerPlatform platform;
-  late DeliveryPresenceController deliveryPresence;
+  late _ObservedDeliveryPresenceController deliveryPresence;
   late _ExchangeAuthManager authManager;
   late int port;
   Future<void> Function()? upgradeHook;
@@ -96,7 +117,7 @@ void main() {
     );
     getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
     getIt.registerSingleton<PlatformRuntimeBridge>(PlatformRuntimeBridge());
-    deliveryPresence = DeliveryPresenceController();
+    deliveryPresence = _ObservedDeliveryPresenceController();
     platform = LocalDaemonServerPlatform(
       deliveryPresence: deliveryPresence,
       authCoupling: ColocatedAuthCoupling(
@@ -571,9 +592,10 @@ void main() {
     final rejected = jsonDecode(frames.current as String);
     expect(rejected['code'], 'INVALID_CLIENT_INSTANCE');
 
+    final localRemoval = deliveryPresence.expectNextLocalRemoval();
     await frames.cancel();
     await socket.close();
-    await Future<void>.delayed(Duration.zero);
+    await localRemoval;
     expect(deliveryPresence.localInstanceIds, isEmpty);
   });
 

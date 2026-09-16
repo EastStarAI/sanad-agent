@@ -10,9 +10,16 @@ import '../support/isolated_sanad_test_home.dart';
 /// In-memory mock WebSocket implementing the minimal interface required by LocalGatewayCliClient.
 class MockWebSocket implements WebSocket {
   final _incomingController = StreamController<dynamic>();
+  final _outgoingController = StreamController<String>.broadcast(sync: true);
   final List<String> sentMessages = [];
   bool _closed = false;
   final Completer<void> _doneCompleter = Completer<void>();
+
+  Future<String> nextSentMessageWhere(bool Function(String) predicate) {
+    return _outgoingController.stream
+        .firstWhere(predicate)
+        .timeout(const Duration(seconds: 5));
+  }
 
   void emitFromServer(dynamic data) {
     if (!_closed) {
@@ -23,7 +30,8 @@ class MockWebSocket implements WebSocket {
   void simulateClose([int? closeCode, String? closeReason]) {
     if (!_closed) {
       _closed = true;
-      _incomingController.close();
+      unawaited(_incomingController.close());
+      unawaited(_outgoingController.close());
       if (!_doneCompleter.isCompleted) {
         _doneCompleter.complete();
       }
@@ -33,9 +41,11 @@ class MockWebSocket implements WebSocket {
   @override
   void add(dynamic data) {
     if (_closed) throw const SocketException('Socket closed');
-    sentMessages.add(data.toString());
+    final message = data.toString();
+    sentMessages.add(message);
+    _outgoingController.add(message);
     try {
-      final json = jsonDecode(data.toString());
+      final json = jsonDecode(message);
       if (json is Map && json['command'] == 'list_workspaces') {
         final reqId = json['request_id'];
         scheduleMicrotask(() {
@@ -406,7 +416,7 @@ void main() {
     );
 
     test('flush() clears any queued keystrokes before next readLine', () async {
-      final inputController = StreamController<List<int>>();
+      final inputController = StreamController<List<int>>(sync: true);
       final outBuffer = StringBuffer();
       final reader = TerminalReplLineReader(
         inputByteStream: inputController.stream,
@@ -417,7 +427,6 @@ void main() {
 
       // Queue some keystrokes while no readLine is active (e.g. during turn execution)
       inputController.add(utf8.encode('stray input\r\n'));
-      await Future.delayed(const Duration(milliseconds: 20));
 
       // Flush reader
       reader.flush();
@@ -660,15 +669,11 @@ void main() {
         enableAnsi: false,
       );
 
-      final runFuture = session.run();
-
-      // Wait for think request to be sent
-      await Future.delayed(const Duration(milliseconds: 50));
-      expect(mockSocket.sentMessages.any((m) => m.contains('"think"')), isTrue);
-
-      final thinkMsg = mockSocket.sentMessages.firstWhere(
-        (m) => m.contains('"think"'),
+      final thinkMessage = mockSocket.nextSentMessageWhere(
+        (message) => message.contains('"think"'),
       );
+      final runFuture = session.run();
+      final thinkMsg = await thinkMessage;
       final sentPayload = jsonDecode(thinkMsg) as Map<String, dynamic>;
       expect(sentPayload['command'], 'think');
       expect(sentPayload['payload']['message'], 'Explain quantum computing');
@@ -723,11 +728,15 @@ void main() {
         enableAnsi: false,
       );
 
+      final thinkMessage = mockSocket.nextSentMessageWhere(
+        (message) => message.contains('"think"'),
+      );
       final runFuture = session.run();
+      await thinkMessage;
 
-      await Future.delayed(const Duration(milliseconds: 50));
-      expect(mockSocket.sentMessages.any((m) => m.contains('"think"')), isTrue);
-
+      final permissionResponse = mockSocket.nextSentMessageWhere(
+        (message) => message.contains('tool_permission_response'),
+      );
       // Server emits system_ask_user
       mockSocket.emitFromServer(
         jsonEncode({
@@ -749,18 +758,7 @@ void main() {
         }),
       );
 
-      // Give event loop time to process prompt and send response
-      await Future.delayed(const Duration(milliseconds: 50));
-
-      expect(
-        mockSocket.sentMessages.any(
-          (m) => m.contains('tool_permission_response'),
-        ),
-        isTrue,
-      );
-      final permMsg = mockSocket.sentMessages.lastWhere(
-        (m) => m.contains('tool_permission_response'),
-      );
+      final permMsg = await permissionResponse;
       final responseMsg = jsonDecode(permMsg) as Map<String, dynamic>;
       expect(responseMsg['command'], 'tool_permission_response');
       expect(responseMsg['payload']['request_id'], 'ask-req-10');
@@ -801,14 +799,15 @@ void main() {
           enableAnsi: false,
         );
 
-        final runFuture = session.run();
-
-        await Future.delayed(const Duration(milliseconds: 50));
-        expect(
-          mockSocket.sentMessages.any((m) => m.contains('"think"')),
-          isTrue,
+        final thinkMessage = mockSocket.nextSentMessageWhere(
+          (message) => message.contains('"think"'),
         );
+        final runFuture = session.run();
+        await thinkMessage;
 
+        final permissionResponse = mockSocket.nextSentMessageWhere(
+          (message) => message.contains('tool_permission_response'),
+        );
         // Server requests tool permission
         mockSocket.emitFromServer(
           jsonEncode({
@@ -825,17 +824,7 @@ void main() {
           }),
         );
 
-        await Future.delayed(const Duration(milliseconds: 50));
-
-        expect(
-          mockSocket.sentMessages.any(
-            (m) => m.contains('tool_permission_response'),
-          ),
-          isTrue,
-        );
-        final permMsg = mockSocket.sentMessages.lastWhere(
-          (m) => m.contains('tool_permission_response'),
-        );
+        final permMsg = await permissionResponse;
         final permResponse = jsonDecode(permMsg) as Map<String, dynamic>;
         expect(permResponse['command'], 'tool_permission_response');
         expect(permResponse['payload']['request_id'], 'perm-req-20');
