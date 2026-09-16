@@ -1,9 +1,9 @@
 ---
 title: "Task 89l: CLI Async Test Stability"
 description: "إزالة الانتظار الزمني السباقي من اختبارات REPL وLocal Gateway واستبداله بانتظار أحداث WebSocket الحتمية بعد ظهور إخفاقات متقطعة في CI والقياس المحلي."
-status: "in_progress"
-current_gate: "G2 — CLI integration event-wait verification"
-remaining_estimate: "5%"
+status: "completed"
+current_gate: "Complete"
+remaining_estimate: "0%"
 priority: "high"
 depends_on: "Task 89j; merged CLI implementation"
 ---
@@ -57,7 +57,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] نجاح CLI integration: 19 passed، وضغط clarification: 30/30 عبر 5 عمليات.
 - [x] تحديث Graphify وفتح PR مستقل.
 - [x] نجاح Windows AOT cleanup وsuccess marker في Public CI من attempt 1 دون rerun.
-- [ ] نجاح Public CI النهائي على commit إزالة waits دون rerun.
+- [x] نجاح Public CI النهائي على commit إزالة waits من attempt 1 دون rerun.
 
 ## معايير القبول
 
@@ -65,7 +65,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] كل listener ينتظر الحدث يُثبت قبل بدء الفعل المولد له، فلا يفقد broadcast event.
 - [x] timeout النهائي يفشل بتشخيص مباشر إذا لم تصل الرسالة، بدل assertion زمني مضلل.
 - [x] cleanup العضوية المحلية ينتظر callback الإزالة الفعلي بعد إغلاق socket.
-- [ ] تنجح الاختبارات محليًا وفي Public CI دون rerun، بما فيها marker المستقل على Windows.
+- [x] تنجح الاختبارات محليًا وفي Public CI دون rerun، بما فيها marker المستقل على Windows.
 
 ## Definition of Done
 

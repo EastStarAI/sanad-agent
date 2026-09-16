@@ -2,8 +2,8 @@
 title: "Plan 89: Standalone CLI and Terminal Interface Architecture"
 description: "بناء واجهة سطر أوامر (CLI) متكاملة وقوية لوكيل سند، تدعم النمط الفوري (One-Shot) والأنابيب، والمحادثة التفاعلية (REPL) الغنية، واكتشاف وإدارة مساحات العمل والأجهزة عن بُعد، مع إعادة استخدام كاملة لخادم البوابة المحلي (Zero-Agent Core Mutation)."
 status: "in_progress"
-current_gate: "89k planned follow-up; 89l final CI verification"
-remaining_estimate: "89k tracked separately; 89l remaining 5%"
+current_gate: "89k planned follow-up"
+remaining_estimate: "89k tracked separately"
 priority: "high"
 depends_on: "Task 84 conversation history; Plan 54 terminal tasks; local gateway protocol stability"
 related_to: "Task 79 flutter-vm-cli; Task 81 linux-headless-install; Task 82 remote-device-control"
@@ -55,7 +55,7 @@ evidence_id: "89"
 | **89i** | **الاختبار التفاعلي الحي وسيناريوهات التواصل الثنائي (`Live E2E Verification`)** | `completed` | Superseded in part by 89j | 10 | **على التوالي (Sequential):** أثبت الوضع المتصل، لكن ادعاء Standalone يعاد التحقق منه في 89j. |
 | **89j** | **إكمال Standalone وتقوية عقود الأتمتة والإصدار** | `completed` | Done | 18 | **مكتملة:** أغلقت فجوات R0، وملكية الحالة، ونقاء JSON، والمهلة/الإلغاء، واختبارات Process/AOT وGitHub Actions. |
 | **89k** | **إعداد مزود Database-First لأتمتة CLI** | `planned` | G0 | TBD | **متابعة بعد 89j:** تضيف provisioning غير تفاعلي عبر Provider Instance وSecretStore، ومثال workflow خارجي دون legacy env fallback وقت التشغيل. |
-| **89l** | **تقوية ثبات اختبارات CLI غير المتزامنة** | `in_progress` | G2 | 2 | **تحقق نهائي:** أزيلت waits الزمنية المتبقية من CLI integration بعد نجاح Windows AOT؛ ينتظر Public CI النهائي. |
+| **89l** | **تقوية ثبات اختبارات CLI غير المتزامنة** | `completed` | Done | 2 | **مكتملة:** أزيلت waits الزمنية من REPL وCLI integration، وثُبّت Local Gateway وWindows AOT cleanup/signals، ونجح Public CI من attempt 1. |
 
 ---
 
