@@ -157,7 +157,22 @@ jobs:
         run: fvm dart test test/guards/e2e_state_isolation_contract_test.dart
       - name: Verify AOT one-shot, pipe, and JSON output
         working-directory: agent
+        env:
+          SANAD_CLI_AOT_SUCCESS_FILE: .dart_tool/cli-aot-smoke-success
         run: fvm dart run tool/cli_aot_smoke.dart
+      - name: Require AOT smoke success marker
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        run: test -f .dart_tool/cli-aot-smoke-success
+      - name: Require AOT smoke success marker on Windows
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          if (-not (Test-Path .dart_tool/cli-aot-smoke-success)) {
+            throw 'AOT smoke did not complete successfully.'
+          }
 
   client:
     needs: classify
