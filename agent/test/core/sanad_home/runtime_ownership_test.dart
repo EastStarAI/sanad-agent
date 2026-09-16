@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/runtime_ownership.dart';
@@ -27,12 +28,19 @@ void main() {
   test(
     'rejects a second process and releases ownership deterministically',
     () async {
-      final packageRoot = File('pubspec.yaml').existsSync()
-          ? Directory.current
-          : Directory.fromUri(Directory.current.uri.resolve('agent/'));
+      final packageLibrary = await Isolate.resolvePackageUri(
+        Uri.parse('package:sanad_agent/core/constants.dart'),
+      );
+      if (packageLibrary == null) {
+        fail('Could not resolve the sanad_agent package root.');
+      }
+      final packageRoot = File.fromUri(packageLibrary).parent.parent.parent;
+      final helperPath = packageRoot.uri
+          .resolve('test/core/sanad_home/runtime_lock_holder.dart')
+          .toFilePath();
       final holder = await Process.start(
         Platform.resolvedExecutable,
-        ['test/core/sanad_home/runtime_lock_holder.dart', home.path],
+        [helperPath, home.path],
         workingDirectory: packageRoot.path,
         environment: <String, String>{
           ...Platform.environment,
