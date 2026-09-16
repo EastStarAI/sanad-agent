@@ -55,7 +55,7 @@ evidence_id: "89"
 | **89i** | **الاختبار التفاعلي الحي وسيناريوهات التواصل الثنائي (`Live E2E Verification`)** | `completed` | Superseded in part by 89j | 10 | **على التوالي (Sequential):** أثبت الوضع المتصل، لكن ادعاء Standalone يعاد التحقق منه في 89j. |
 | **89j** | **إكمال Standalone وتقوية عقود الأتمتة والإصدار** | `completed` | Done | 18 | **مكتملة:** أغلقت فجوات R0، وملكية الحالة، ونقاء JSON، والمهلة/الإلغاء، واختبارات Process/AOT وGitHub Actions. |
 | **89k** | **إعداد مزود Database-First لأتمتة CLI** | `planned` | G0 | TBD | **متابعة بعد 89j:** تضيف provisioning غير تفاعلي عبر Provider Instance وSecretStore، ومثال workflow خارجي دون legacy env fallback وقت التشغيل. |
-| **89l** | **تقوية ثبات اختبارات REPL غير المتزامنة** | `in_progress` | G2 | 2 | **صيانة CI:** تستبدل sleeps السباقية بانتظار رسائل WebSocket الحتمية وتثبتها باختبارات ضغط. |
+| **89l** | **تقوية ثبات اختبارات CLI غير المتزامنة** | `in_progress` | G2 | 2 | **صيانة CI:** تستبدل sleeps السباقية في REPL وLocal Gateway بانتظار أحداث WebSocket الحتمية وتثبتها باختبارات ضغط. |
 
 ---
 
