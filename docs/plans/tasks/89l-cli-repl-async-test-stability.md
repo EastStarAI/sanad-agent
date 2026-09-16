@@ -1,9 +1,9 @@
 ---
 title: "Task 89l: CLI Async Test Stability"
 description: "إزالة الانتظار الزمني السباقي من اختبارات REPL وLocal Gateway واستبداله بانتظار أحداث WebSocket الحتمية بعد ظهور إخفاقات متقطعة في CI والقياس المحلي."
-status: "in_progress"
-current_gate: "G2 — Windows AOT cleanup verification"
-remaining_estimate: "10%"
+status: "completed"
+current_gate: "Complete"
+remaining_estimate: "0%"
 priority: "high"
 depends_on: "Task 89j; merged CLI implementation"
 ---
@@ -53,7 +53,7 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] نجاح AOT smoke المحلي الحقيقي وظهور marker بعد cleanup.
 - [x] نجاح حزمة CLI وحزمة Agent الكاملة بعد regression test: 1764 passed، 13 skipped.
 - [x] تحديث Graphify وفتح PR مستقل.
-- [ ] نجاح Windows AOT cleanup وsuccess marker في Public CI دون rerun.
+- [x] نجاح Windows AOT cleanup وsuccess marker في Public CI من attempt 1 دون rerun.
 
 ## معايير القبول
 
@@ -61,11 +61,11 @@ depends_on: "Task 89j; merged CLI implementation"
 - [x] كل listener ينتظر الحدث يُثبت قبل بدء الفعل المولد له، فلا يفقد broadcast event.
 - [x] timeout النهائي يفشل بتشخيص مباشر إذا لم تصل الرسالة، بدل assertion زمني مضلل.
 - [x] cleanup العضوية المحلية ينتظر callback الإزالة الفعلي بعد إغلاق socket.
-- [ ] تنجح الاختبارات محليًا وفي Public CI دون rerun، بما فيها marker المستقل على Windows.
+- [x] تنجح الاختبارات محليًا وفي Public CI دون rerun، بما فيها marker المستقل على Windows.
 
 ## Definition of Done
 
 - [x] `fvm dart analyze` ينجح.
 - [x] الاختبارات المركزة، CLI، وAgent تنجح بخرج bounded.
 - [x] `git diff --check` و`graphify update .` ينجحان.
-- [x] PR مستقل موثق بالأدلة ولا يغير production behavior.
+- [x] PR مستقل موثق بالأدلة؛ تغييره الإنتاجي الوحيد هو احتواء مراقبة الإشارات غير المدعومة على المنصة.
