@@ -9,7 +9,9 @@ description: "Automated and interactive verification for account-scoped Client s
 
 | Scenario | Expected result |
 |---|---|
-| Sessions snapshot loads | Current Client, platform/version, last-active value, and authoritative Online/Offline/Unavailable states render without creating another device store. |
+| Sessions snapshot loads | Current Client, platform/version, privacy-safe short Client reference, last-active value, and authoritative Online/Offline/Unavailable states render without creating another device store. |
+| Client reference parity | The same authenticated `client_instance_id` produces the same bounded reference in Sessions & Devices and Agent Local/Cloud lifecycle logs; two instances differ and raw ids never render or log. |
+| Legacy Client reference | A missing instance id uses the namespaced account-session fallback without inventing platform metadata. |
 | Refresh fails after a snapshot | The last known rows remain visible and the failure is actionable; unavailable presence is never rewritten as Offline. |
 | Current-session confirmation is cancelled | No revoke request is sent and the Client remains signed in. |
 | Remote Client revoke is confirmed | Exactly that opaque session id is submitted once and the authoritative snapshot is fetched again. |

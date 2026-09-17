@@ -159,12 +159,14 @@ class _PrincipalCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final platform = principal.metadata['platform_family'] ?? 'Unknown platform';
+    final reference = principal.displayReference;
+    final clientLabel = reference == null ? platform : '$platform · #$reference';
     final version = principal.metadata['app_version'];
     return Card(
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         leading: const Icon(Icons.devices_outlined),
-        title: Text('$platform${principal.isCurrent ? ' · Current' : ''}'),
+        title: Text('$clientLabel${principal.isCurrent ? ' · Current' : ''}'),
         subtitle: Text(
           [
             if (version != null) 'Sanad $version',

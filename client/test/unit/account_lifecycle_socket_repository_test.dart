@@ -94,6 +94,7 @@ void main() {
         {
           'kind': 'client_session',
           'id': 'public-session',
+          'client_instance_id': '11111111-1111-4111-8111-111111111111',
           'metadata': {'platform_family': 'ios'},
           'status': 'online',
           'is_current': true,
@@ -104,6 +105,11 @@ void main() {
     final snapshot = await future;
     expect(snapshot.presenceAvailable, isTrue);
     expect(snapshot.clientSessions.single.id, 'public-session');
+    expect(
+      snapshot.clientSessions.single.clientInstanceId,
+      '11111111-1111-4111-8111-111111111111',
+    );
+    expect(snapshot.clientSessions.single.displayReference, isNotNull);
     expect(snapshot.clientSessions.single.isCurrent, isTrue);
   });
 

@@ -17,6 +17,8 @@ import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
 import 'package:sanad_agent/engine/adapters/ollama_adapter.dart';
 import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
+import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/engine/llm_request_dumper.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 
 class MockConfig extends Config {
@@ -887,6 +889,100 @@ void main() {
           toolResponse.message.toolCalls!.single.arguments,
           equals({'q': 'hello'}),
         );
+      },
+    );
+
+    test(
+      'should dump partial_message and error when streamed tool arguments are malformed',
+      () async {
+        final tempDir = Directory.systemTemp.createTempSync('sanad_malformed_tool_');
+        setSanadHomeOverride(tempDir.path);
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        try {
+          final dumpPath = await LLMRequestDumper.dumpRequest(
+            sessionId: 'test-malformed-tool-session',
+            history: [],
+            tools: [],
+          );
+          expect(dumpPath, isNotNull);
+
+          final streamEvents = [
+            {
+              'choices': [
+                {
+                  'delta': {
+                    'content': 'Attempting tool: ',
+                    'tool_calls': [
+                      {
+                        'index': 0,
+                        'id': 'call_bad',
+                        'function': {
+                          'name': 'calculator',
+                          'arguments': '{"invalid": unquoted_val}',
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+            {
+              'choices': [
+                {
+                  'delta': {},
+                  'finish_reason': 'tool_calls',
+                },
+              ],
+            },
+          ];
+          final streamedBody = [
+            for (final event in streamEvents) 'data: ${jsonEncode(event)}',
+            'data: [DONE]',
+          ].join('\n');
+
+          final mockClient = StreamingTestClient((request) {
+            return http.StreamedResponse(
+              Stream.value(utf8.encode(streamedBody)),
+              200,
+              headers: {'content-type': 'text/event-stream'},
+            );
+          });
+
+          final adapter = BaseOpenAIAdapter(config, profile, client: mockClient);
+
+          await expectLater(
+            adapter.generateStream([
+              Message(role: MessageRole.user, content: 'calc'),
+            ]).toList(),
+            throwsA(isA<FormatException>()),
+          );
+
+          final file = File(dumpPath!);
+          expect(file.existsSync(), isTrue);
+
+          final fileContent =
+              jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+          expect(fileContent['response'], isNotNull);
+          final responseData = fileContent['response'] as Map<String, dynamic>;
+          expect(responseData['status_code'], 200);
+          expect(responseData['error'], contains('Malformed arguments for streamed tool calculator'));
+          expect(responseData['partial_message'], isNotNull);
+          final partialMsg = responseData['partial_message'] as Map<String, dynamic>;
+          expect(partialMsg['role'], 'assistant');
+          expect(partialMsg['content'], 'Attempting tool: ');
+          expect(partialMsg['partial_tool_calls'], isA<List>());
+          final partialCalls = partialMsg['partial_tool_calls'] as List;
+          expect(partialCalls.length, 1);
+          expect(partialCalls.first['name'], 'calculator');
+          expect(partialCalls.first['arguments'], '{"invalid": unquoted_val}');
+        } finally {
+          setSanadHomeOverride(null);
+          LLMRequestDumper.environmentOverride = null;
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        }
       },
     );
 

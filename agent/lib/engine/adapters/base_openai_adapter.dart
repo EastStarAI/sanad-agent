@@ -578,10 +578,14 @@ class BaseOpenAIAdapter implements LLMAdapter {
       }
 
       final partialToolCalls = <int, _PartialToolCall>{};
+      final completedToolCalls = <ToolCall>[];
       final reasoningDetails = <dynamic>[];
       final tagFallback = TaggedReasoningStreamParser();
-      final List<String> accumulatedStreamLines = [];
       var emittedProviderState = false;
+      final contentBuffer = StringBuffer();
+      final reasoningBuffer = StringBuffer();
+      Map<String, dynamic>? finalUsage;
+      LLMFinishReason streamFinishReason = LLMFinishReason.unknown;
 
       try {
         await for (final line in transport.decodeSseLines(
@@ -589,7 +593,6 @@ class BaseOpenAIAdapter implements LLMAdapter {
           operation: 'generateStream',
         )) {
           transport.throwIfCancelled(operation: 'generateStream');
-          accumulatedStreamLines.add(line);
           if (line.trim().isEmpty) continue;
 
           if (line.startsWith('data:')) {
@@ -625,6 +628,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
             }
 
             final usage = _asStringMap(data['usage']);
+            if (usage != null) finalUsage = usage;
 
             if (data['choices'] == null || (data['choices'] as List).isEmpty) {
               if (usage != null) {
@@ -650,6 +654,14 @@ class BaseOpenAIAdapter implements LLMAdapter {
             final taggedChunk = contentChunk == null
                 ? const TaggedReasoningText()
                 : tagFallback.add(contentChunk);
+            if (taggedChunk.content != null) {
+              contentBuffer.write(taggedChunk.content);
+            }
+            if (taggedChunk.reasoning != null) {
+              reasoningBuffer.write(taggedChunk.reasoning);
+            } else if (structuredReasoning.visibleText != null) {
+              reasoningBuffer.write(structuredReasoning.visibleText);
+            }
 
             if (delta['tool_calls'] != null) {
               final List<dynamic> tcList = delta['tool_calls'];
@@ -678,6 +690,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
               choice?['finish_reason'],
               hasToolCalls: false,
             );
+            if (finishReason != LLMFinishReason.unknown) {
+              streamFinishReason = finishReason;
+            }
             final providerState = finishReason == LLMFinishReason.unknown
                 ? null
                 : _providerStateForReasoningDetails(reasoningDetails, options);
@@ -708,6 +723,12 @@ class BaseOpenAIAdapter implements LLMAdapter {
 
         final pendingTagged = tagFallback.finish();
         if (pendingTagged.content != null || pendingTagged.reasoning != null) {
+          if (pendingTagged.content != null) {
+            contentBuffer.write(pendingTagged.content);
+          }
+          if (pendingTagged.reasoning != null) {
+            reasoningBuffer.write(pendingTagged.reasoning);
+          }
           yield AgentResponse(
             message: Message(
               role: MessageRole.assistant,
@@ -718,76 +739,110 @@ class BaseOpenAIAdapter implements LLMAdapter {
             provider: _providerForModel(resolvedModel),
           );
         }
+
+        for (final entry in partialToolCalls.entries) {
+          final partial = entry.value;
+          final decodedArguments = _tryDecodeToolArguments(
+            partial.argumentsBuffer.toString(),
+          );
+          if (decodedArguments == null) {
+            throw FormatException(
+              'Malformed arguments for streamed tool ${partial.name ?? '<unknown>'}.',
+            );
+          }
+          completedToolCalls.add(
+            ToolCall(
+              id: partial.id ?? '',
+              name: partial.name ?? '',
+              arguments: decodedArguments,
+            ),
+          );
+        }
+
+        if (completedToolCalls.isNotEmpty) {
+          final providerState = _providerStateForReasoningDetails(
+            reasoningDetails,
+            options,
+          );
+          if (providerState != null) emittedProviderState = true;
+          yield AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: '',
+              toolCalls: completedToolCalls,
+              providerState: providerState,
+            ),
+            isToolCall: true,
+            usage: null,
+            model: resolvedModel,
+            provider: _providerForModel(resolvedModel),
+            finishReason: LLMFinishReason.toolCalls,
+          );
+        }
+
+        if (!emittedProviderState && reasoningDetails.isNotEmpty) {
+          yield AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              providerState: _providerStateForReasoningDetails(
+                reasoningDetails,
+                options,
+              ),
+            ),
+            model: resolvedModel,
+            provider: _providerForModel(resolvedModel),
+          );
+        }
+
         if (LLMRequestDumper.isEnabled) {
+          final effectiveFinishReason = completedToolCalls.isNotEmpty
+              ? LLMFinishReason.toolCalls
+              : streamFinishReason;
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
-            'stream_lines': accumulatedStreamLines,
+            'message': {
+              'role': 'assistant',
+              'content': contentBuffer.toString(),
+              if (reasoningBuffer.isNotEmpty)
+                'reasoning': reasoningBuffer.toString(),
+              if (completedToolCalls.isNotEmpty)
+                'tool_calls':
+                    completedToolCalls.map((tc) => tc.toJson()).toList(),
+            },
+            'finish_reason': effectiveFinishReason.name,
+            'usage': ?finalUsage,
           });
         }
       } catch (e) {
         if (LLMRequestDumper.isEnabled) {
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
-            'stream_lines': accumulatedStreamLines,
+            if (contentBuffer.isNotEmpty ||
+                reasoningBuffer.isNotEmpty ||
+                partialToolCalls.isNotEmpty ||
+                completedToolCalls.isNotEmpty)
+              'partial_message': {
+                'role': 'assistant',
+                if (contentBuffer.isNotEmpty)
+                  'content': contentBuffer.toString(),
+                if (reasoningBuffer.isNotEmpty)
+                  'reasoning': reasoningBuffer.toString(),
+                if (completedToolCalls.isNotEmpty)
+                  'tool_calls':
+                      completedToolCalls.map((tc) => tc.toJson()).toList(),
+                if (partialToolCalls.isNotEmpty)
+                  'partial_tool_calls': partialToolCalls.values
+                      .map((p) => {
+                            if (p.id != null) 'id': p.id,
+                            if (p.name != null) 'name': p.name,
+                            'arguments': p.argumentsBuffer.toString(),
+                          })
+                      .toList(),
+              },
             'error': e.toString(),
           });
         }
         rethrow;
-      }
-
-      final completedToolCalls = <ToolCall>[];
-      for (final entry in partialToolCalls.entries) {
-        final partial = entry.value;
-        final decodedArguments = _tryDecodeToolArguments(
-          partial.argumentsBuffer.toString(),
-        );
-        if (decodedArguments == null) {
-          throw FormatException(
-            'Malformed arguments for streamed tool ${partial.name ?? '<unknown>'}.',
-          );
-        }
-        completedToolCalls.add(
-          ToolCall(
-            id: partial.id ?? '',
-            name: partial.name ?? '',
-            arguments: decodedArguments,
-          ),
-        );
-      }
-
-      if (completedToolCalls.isNotEmpty) {
-        final providerState = _providerStateForReasoningDetails(
-          reasoningDetails,
-          options,
-        );
-        if (providerState != null) emittedProviderState = true;
-        yield AgentResponse(
-          message: Message(
-            role: MessageRole.assistant,
-            content: '',
-            toolCalls: completedToolCalls,
-            providerState: providerState,
-          ),
-          isToolCall: true,
-          usage: null,
-          model: resolvedModel,
-          provider: _providerForModel(resolvedModel),
-          finishReason: LLMFinishReason.toolCalls,
-        );
-      }
-
-      if (!emittedProviderState && reasoningDetails.isNotEmpty) {
-        yield AgentResponse(
-          message: Message(
-            role: MessageRole.assistant,
-            providerState: _providerStateForReasoningDetails(
-              reasoningDetails,
-              options,
-            ),
-          ),
-          model: resolvedModel,
-          provider: _providerForModel(resolvedModel),
-        );
       }
     } finally {
       await transport.dispose();

@@ -440,6 +440,13 @@ packages:
       relative: true
     source: path
     version: "1.0.0"
+  sanad_client_identity:
+    dependency: "direct main"
+    description:
+      path: "../shared/client_identity"
+      relative: true
+    source: path
+    version: "1.0.0"
   sanad_release_contract:
     dependency: "direct main"
     description:
