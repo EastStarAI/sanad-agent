@@ -1014,6 +1014,13 @@ packages:
       relative: true
     source: path
     version: "1.0.0"
+  sanad_client_identity:
+    dependency: "direct main"
+    description:
+      path: "../shared/client_identity"
+      relative: true
+    source: path
+    version: "1.0.0"
   sanad_public_service_endpoints:
     dependency: "direct main"
     description:

@@ -163,7 +163,6 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     }
 
     final accumulator = CodexResponsesSseAccumulator();
-    final capturedLines = <String>[];
     try {
       if (response.statusCode != 200) {
         final errorBody = await response.stream.bytesToString();
@@ -180,30 +179,32 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         operation: 'generateResponse',
       )) {
         transport.throwIfCancelled(operation: 'generateResponse');
-        capturedLines.add(line);
         if (line.trim().isEmpty || line.startsWith('event:')) continue;
         if (!line.startsWith('data:')) continue;
         accumulator.addDataLine(line.substring(5));
         if (accumulator.isDone) break;
       }
 
-      if (LLMRequestDumper.isEnabled) {
-        await LLMRequestDumper.dumpResponse({
-          'status_code': response.statusCode,
-          'stream_lines': capturedLines,
-        });
-      }
-
-      return codec.normalize(
+      final normalized = codec.normalize(
         accumulator.buildResponse(fallbackModel: resolvedModel),
         fallbackModel: resolvedModel,
         provider: provider,
       );
+
+      if (LLMRequestDumper.isEnabled) {
+        await LLMRequestDumper.dumpResponse({
+          'status_code': response.statusCode,
+          'message': normalized.message.toJson(),
+          'finish_reason': normalized.finishReason.name,
+          'usage': ?normalized.usage,
+        });
+      }
+
+      return normalized;
     } catch (error) {
       if (LLMRequestDumper.isEnabled) {
         await LLMRequestDumper.dumpResponse({
           'status_code': response.statusCode,
-          'stream_lines': capturedLines,
           'error': error.toString(),
         });
       }
@@ -258,7 +259,6 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
     final emittedContent = StringBuffer();
     final emittedThought = StringBuffer();
     final emittedReasoning = StringBuffer();
-    final capturedLines = <String>[];
     try {
       if (response.statusCode != 200) {
         final errorBody = await response.stream.bytesToString();
@@ -275,7 +275,6 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
         operation: 'generateStream',
       )) {
         transport.throwIfCancelled(operation: 'generateStream');
-        capturedLines.add(line);
         if (line.trim().isEmpty || line.startsWith('event:')) continue;
         if (!line.startsWith('data:')) continue;
         final delta = accumulator.addDataLine(line.substring(5));
@@ -343,14 +342,15 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       if (LLMRequestDumper.isEnabled) {
         await LLMRequestDumper.dumpResponse({
           'status_code': response.statusCode,
-          'stream_lines': capturedLines,
+          'message': normalized.message.toJson(),
+          'finish_reason': normalized.finishReason.name,
+          'usage': ?normalized.usage,
         });
       }
     } catch (error) {
       if (LLMRequestDumper.isEnabled) {
         await LLMRequestDumper.dumpResponse({
           'status_code': response.statusCode,
-          'stream_lines': capturedLines,
           'error': error.toString(),
         });
       }

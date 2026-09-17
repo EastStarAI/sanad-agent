@@ -451,8 +451,11 @@ The same ownership rule applies to a bounded automatic retry on the current rout
 `SANAD_STATE_HOME/request_dumps/`, or the normal Sanad state location when no
 state override exists. Session and timestamp identify files for correlation.
 Dumps include target, history, tools, and error structure while masking API keys
-and credentials. They are mutable diagnostic state and follow worktree state
-isolation rather than identity/configuration storage.
+and credentials. Provider response dumps persist the aggregated normalized
+assistant message, reasoning, tool calls, finish reason, and usage rather than
+raw SSE transport lines; an interrupted stream may retain a bounded partial
+projection with its error. They are mutable diagnostic state and follow worktree
+state isolation rather than identity/configuration storage.
 
 ## File-Backed Memory
 

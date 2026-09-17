@@ -40,7 +40,7 @@ This contract applies to `client/lib/features/settings/`.
 
 ## Account Sessions and Devices
 - Sessions & Devices is account-scoped and consumes the Portal's authoritative account lifecycle projection through one repository/cubit owner.
-- Client-session current status comes from the verified credential family, never instance metadata. Presence renders `Online`, `Offline`, or `Status unavailable`; registry failure must not become false Offline.
+- Client-session current status comes from the verified credential family, never instance metadata. Presence renders `Online`, `Offline`, or `Status unavailable`; registry failure must not become false Offline. Each Client row shows the canonical privacy-safe short reference derived instance-first, with account-session fallback, so users can correlate it with Agent lifecycle logs without exposing raw ids.
 - Connected Agents reuse the existing `DeviceCubit` inventory and navigate to device Overview. Do not create another device store or `/agents` management surface.
 - Revoke is confirmed and per-row single-flight. Unknown outcomes retain the last snapshot and refetch; a confirmed current-session revoke delegates to the normal logout flow.
 
