@@ -217,7 +217,7 @@ jobs:
         working-directory: scripts/sanad_dev
         run: |
           fvm dart pub get
-          fvm dart test test/sanad_dev_bootstrap_test.dart test/sanad_dev_component_journal_test.dart test/sanad_dev_terminal_launcher_test.dart test/sanad_dev_command_options_test.dart test/sanad_dev_cloud_endpoints_test.dart
+          fvm dart test test/cli/sanad_dev_bootstrap_test.dart test/developer/sanad_dev_component_journal_test.dart test/infrastructure/sanad_dev_terminal_launcher_test.dart test/cli/sanad_dev_command_options_test.dart test/infrastructure/sanad_dev_cloud_endpoints_test.dart
       - name: Parse Windows release scripts
         if: runner.os == 'Windows'
         shell: pwsh

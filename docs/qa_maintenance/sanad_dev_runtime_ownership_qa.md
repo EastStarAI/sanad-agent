@@ -11,6 +11,7 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 |---|---|
 | Analyze the standalone package after module decomposition | `fvm dart analyze` reports no issues and no `lib/src/` module imports the composition root or a root compatibility facade. |
 | Run the complete recursive package suite | All domain-organized tests under `test/` are discovered; no test is lost because it moved from the flat root. |
+| Run the cross-platform `sanad-dev bootstrap` CI selection | The bootstrap, component-journal, terminal-launcher, command-options, and cloud-endpoint tests resolve from their domain directories and pass on each supported runner. |
 | Execute the size guard | Every handwritten production and ordinary test file is at most 700 lines, and `lib/src/cli/cli.dart` is at most 250 lines. |
 | Inspect root `lib/` Dart files | Only `sanad_dev_cli.dart` and a thin facade with a tracked external consumer remain; package-owned tests alone cannot justify a facade. |
 | Inspect package-owned test imports | Tests import the narrow `lib/src/` owner directly except when explicitly testing the aggregate CLI composition surface. |

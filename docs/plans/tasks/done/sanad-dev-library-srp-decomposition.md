@@ -308,6 +308,7 @@ The recursive architecture guard proves the root allowlist, rejects package-inte
 - `fvm dart analyze`: no issues.
 - Complete recursive package suite: 151 tests passed with one platform-owned skip and no new failure.
 - Architecture/size guard: five checks passed.
+- The exact five-test cross-platform `sanad-dev bootstrap` selection passed after its CI paths were updated to the domain-organized test locations.
 - Worktree-local wrapper help smoke: passed with the baseline command surface.
 - Default and explicit custom-Home dry runs: passed and selected their expected distinct Homes.
 - Isolated post-refactor Agent/driver-enabled macOS Client cycle: launch, inferred-Home status, bounded Agent/Client logs, UI snapshot, Client reload/restart, safe Agent restart, complete stop, post-stop status, and retained Agent/Client journals all passed without source handoff.
