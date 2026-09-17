@@ -5,6 +5,20 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 
 # sanad-dev Runtime Ownership QA
 
+## Package architecture regression matrix
+
+| Scenario | Expected result |
+|---|---|
+| Analyze the standalone package after module decomposition | `fvm dart analyze` reports no issues and no `lib/src/` module imports the composition root or a root compatibility facade. |
+| Run the complete recursive package suite | All domain-organized tests under `test/` are discovered; no test is lost because it moved from the flat root. |
+| Execute the size guard | Every handwritten production and ordinary test file is at most 700 lines, and `lib/src/cli/cli.dart` is at most 250 lines. |
+| Inspect root `lib/` Dart files | Only `sanad_dev_cli.dart` and a thin facade with a tracked external consumer remain; package-owned tests alone cannot justify a facade. |
+| Inspect package-owned test imports | Tests import the narrow `lib/src/` owner directly except when explicitly testing the aggregate CLI composition surface. |
+| Inspect contracts recursively | Every production domain has the intended nearest `AGENTS.md`, all contracts are indexed by `docs/llms.txt`, and no contract exists under `test/`. |
+| Run wrapper help before runtime discovery | Help remains mutation-free and retains the baseline command and option surface. |
+| Run default and explicit-Home dry runs | Default worktree selection and explicit absolute Home selection match the pre-refactor behavior. |
+| Run an isolated managed Agent/Client pair after refactor | Status, bounded Agent/Client logs, UI snapshot, Client reload/restart, safe Agent restart, complete stop, post-stop status, and retained journals succeed without a live source handoff. |
+
 ## Regression matrix
 
 | Scenario | Expected result |

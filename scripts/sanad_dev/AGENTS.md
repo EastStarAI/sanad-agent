@@ -2,6 +2,8 @@
 
 This contract governs all modifications, additions, and debugging tasks performed within the `scripts/sanad_dev/` directory. All agents and developers must adhere to these policies strictly to prevent configuration drift and environment leakage.
 
+Production code has closer domain contracts under `scripts/sanad_dev/lib/`. This file owns package-wide, wrapper, bootstrap, runtime-safety, and verification laws; the nested contracts specialize source ownership and dependency direction without weakening these cross-domain invariants.
+
 ---
 
 ## 1. Environment, Package & Pathing Laws
