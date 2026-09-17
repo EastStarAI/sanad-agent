@@ -1448,10 +1448,11 @@ Future<void> handleRuntimeStop({
 
 Future<void> handleRuntimeDoctor({
   required bool fix,
+  String? sanadHomePath,
   Future<bool> Function(int? pid) processRunning = isProcessRunning,
 }) async {
-  final runtime = await _currentRuntime();
-  final agents = await discoverAgentInstances();
+  final runtime = await _currentRuntime(sanadHomePath: sanadHomePath);
+  final agents = await discoverAgentInstances(sanadHomeOverride: sanadHomePath);
   final clients = await discoverClientInstances();
   final state = selectRuntimeProcessState(
     activeAgents: agents,
@@ -1596,12 +1597,13 @@ Future<RuntimeLauncherRecord?> _readRuntimeLauncherRecordSafely(
 }
 
 Future<void> handleTargetOrphanCleanup({
+  String? sanadHomePath,
   ProcessTerminator terminateProcess = Process.killPid,
   Future<bool> Function(int? pid) processRunning = isProcessRunning,
 }) async {
-  final runtime = await _currentRuntime();
+  final runtime = await _currentRuntime(sanadHomePath: sanadHomePath);
   final sourcePort = _requestingAgentPort();
-  final agents = await discoverAgentInstances();
+  final agents = await discoverAgentInstances(sanadHomeOverride: sanadHomePath);
   final clients = await discoverClientInstances();
   final targetDirectory =
       '${runtime.repositoryRoot}${Platform.pathSeparator}client';
@@ -1685,6 +1687,7 @@ Future<void> handleTargetOrphanCleanup({
 }
 
 Future<void> handleRuntimeTakeover({
+  String? sanadHomePath,
   ProcessTerminator terminateProcess = Process.killPid,
   Future<bool> Function(int? pid) processRunning = isProcessRunning,
 }) async {
@@ -1698,8 +1701,8 @@ Future<void> handleRuntimeTakeover({
     exitCode = 1;
     return;
   }
-  final runtime = await _currentRuntime();
-  final agents = await discoverAgentInstances();
+  final runtime = await _currentRuntime(sanadHomePath: sanadHomePath);
+  final agents = await discoverAgentInstances(sanadHomeOverride: sanadHomePath);
   final clients = await discoverClientInstances();
   final state = selectRuntimeProcessState(
     activeAgents: agents,

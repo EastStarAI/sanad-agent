@@ -504,17 +504,32 @@ Future<List<AgentInstance>> discoverAgentInstances({
   return instances;
 }
 
+Future<String?> inferPostLaunchSanadHome(SanadDevRuntime runtime) async {
+  try {
+    final activeAttempt = await readLocatedSanadDevStartupAttempt(
+      runtimeDirectory: runtime.runtimeDirectory,
+      workspaceHash: runtime.worktreeId.split('-').last,
+    );
+    final home = activeAttempt?.resolvedHome;
+    return home != null && isAbsoluteFileSystemPath(home) ? home : null;
+  } on Object {
+    return null;
+  }
+}
+
 Future<Set<String>> discoverLocalGatewayCandidateHomes(
   SanadDevRuntime runtime, {
   String? sanadHomeOverride,
 }) async {
+  final explicitHome = sanadHomeOverride?.trim();
+  if (explicitHome != null && explicitHome.isNotEmpty) {
+    return {runtime.sanadHome};
+  }
+
   final primaryHome = resolveDefaultUserSanadHome(Platform.environment);
-  final homes = <String>{
-    runtime.sanadHome,
-    primaryHome,
-    if (sanadHomeOverride != null && sanadHomeOverride.isNotEmpty)
-      sanadHomeOverride,
-  };
+  final homes = <String>{runtime.sanadHome, primaryHome};
+  final inferredHome = await inferPostLaunchSanadHome(runtime);
+  if (inferredHome != null) homes.add(inferredHome);
 
   final linkedHomes = Directory(
     '$primaryHome${Platform.pathSeparator}dev${Platform.pathSeparator}homes',

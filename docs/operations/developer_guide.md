@@ -286,10 +286,12 @@ Each linked worktree run receives:
 
 An independent clone is not a Git linked worktree. If another workspace already
 owns the primary local endpoint, the clone fails closed instead of sharing that
-runtime or the primary Sanad Home. Supply an explicit absolute `--home` to give
-the clone a Home-derived preferences namespace and workspace-hashed agent and
-VM-service ports. The conflict check also applies to dry-run and does not mutate
-process state.
+runtime or the primary Sanad Home. Supply an explicit absolute `--home` on
+`sanad-dev run` to give the clone a Home-derived preferences namespace and
+workspace-hashed agent and VM-service ports. After launch, commands issued from
+the same workspace infer that active Home automatically; an explicit `--home`
+remains available as an authoritative override. The conflict check also applies
+to dry-run and does not mutate process state.
 
 Do not edit tracked environment or Flutter configuration files to allocate
 worktree ports.

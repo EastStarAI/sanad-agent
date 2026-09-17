@@ -9,6 +9,8 @@ description: "Managed launcher leases, workspace/client ownership, clone isolati
 
 For ordinary `run`, `status`, `stop`, logs, attach, restart, reload, and inspect discovery, the invoking Git workspace is the authority. Its canonical path produces the workspace hash used by daemon health discovery. Inherited `LOCAL_GATEWAY_PORT` and `LOCAL_GATEWAY_URL` values are process context, not ownership evidence, and cannot redirect these commands.
 
+`run --home <absolute-path>` records the resolved Home in the owner-only workspace startup locator. Later commands from that workspace can omit `--home`: discovery validates the locator against its Home-resident startup record and uses the resolved Home only as a Local Gateway credential candidate. A supplied `--home` remains authoritative and restricts credential discovery to its resolved Home. `run` without a selector still chooses the normal checkout/worktree default rather than silently reusing the previous custom Home. Locator state never establishes liveness or mutation authority; all existing launcher lease, process identity, Agent health, Client profile, launcher-id, and runtime-nonce checks still apply.
+
 An explicit port remains a diagnostic selector where accepted. Selecting an endpoint explicitly permits inspection; it does not make a foreign endpoint mutable. The requester endpoint remains available only to the separately authorized `switch --runtime current` flow.
 
 ## Runtime identity
@@ -236,7 +238,8 @@ Once managed, POSIX SIGHUP follows the controller's normal complete-pair cleanup
 rather than leaving supervised children behind.
 
 The record preserves both the requested Home selector/path and the resolved
-Home. Therefore a later `status` from the same worktree can explain a failed
+Home. Therefore later workspace-scoped commands can recover the resolved Home
+as an authenticated discovery candidate, and `status` can explain a failed
 explicit-Home launch without presenting the default worktree Home as if it were
 the failed request. The locator is accepted only when its schema, worktree hash,
 attempt id, Home record, and Agent port agree. Invalid or stale locators are

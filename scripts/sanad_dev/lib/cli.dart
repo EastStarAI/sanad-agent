@@ -180,6 +180,10 @@ void main(List<String> args) async {
     return;
   }
 
+  if (command != 'switch' && sanadHomePath == null) {
+    sanadHomePath = await _inferredPostLaunchSanadHome();
+  }
+
   if (command == 'status') {
     await handleRuntimeStatus(
       portOverride: portOverride,
@@ -200,17 +204,17 @@ void main(List<String> args) async {
   }
 
   if (command == 'doctor') {
-    await handleRuntimeDoctor(fix: fix);
+    await handleRuntimeDoctor(fix: fix, sanadHomePath: sanadHomePath);
     return;
   }
 
   if (command == 'takeover') {
-    await handleRuntimeTakeover();
+    await handleRuntimeTakeover(sanadHomePath: sanadHomePath);
     return;
   }
 
   if (command == 'cleanup-target-orphans') {
-    await handleTargetOrphanCleanup();
+    await handleTargetOrphanCleanup(sanadHomePath: sanadHomePath);
     return;
   }
 
@@ -358,7 +362,7 @@ void printUsage() {
   );
   print('  --no-cloud                Disable cloud and run local-only.');
   print(
-    '  --home <user|absolute>    Use the primary user home or an explicit Sanad Home.',
+    '  --home <user|absolute>    Select the run Home or explicitly override inferred discovery.',
   );
   print(
     '  -d, --device <id>         Flutter device for run client/all or stop client.',
@@ -404,8 +408,19 @@ String _defaultDesktopDevice() {
 String get _callerDirectory =>
     Platform.environment['SANAD_DEV_CALLER_DIR'] ?? Directory.current.path;
 
-Future<SanadDevRuntime> _currentRuntime() =>
-    discoverSanadDevRuntime(callerDirectory: _callerDirectory);
+Future<SanadDevRuntime> _currentRuntime({String? sanadHomePath}) =>
+    discoverSanadDevRuntime(
+      callerDirectory: _callerDirectory,
+      sanadHomeOverride: sanadHomePath,
+    );
+
+Future<String?> _inferredPostLaunchSanadHome() async {
+  try {
+    return await inferPostLaunchSanadHome(await _currentRuntime());
+  } on Object {
+    return null;
+  }
+}
 
 Future<int?> _recordedPortForTarget(
   String target, {
