@@ -5,9 +5,45 @@ description: "Managed launcher leases, workspace/client ownership, clone isolati
 
 # sanad-dev Runtime Ownership
 
+## Package module ownership
+
+`scripts/sanad_dev/lib/sanad_dev_cli.dart` is the composition root for the
+standalone Pure-Dart CLI. Its implementation is organized under `lib/src/` by
+responsibility:
+
+- `cli/` parses typed invocations, renders mutation-free help, resolves the
+  selected runtime, and dispatches commands;
+- `discovery/` inspects OS processes, correlates Flutter/DDS instances, probes
+  authenticated Agents, infers the active Home, and performs exact selection;
+- `runtime/ownership/` projects process state and validates managed launcher
+  ownership;
+- `runtime/lifecycle/` owns run, readiness, status, component stop/control,
+  doctor, orphan cleanup, takeover, and bounded wait orchestration;
+- `runtime/switch/` owns source-handoff admission, process waits, transaction
+  control, target launch, rollback, and terminal result persistence;
+- `developer/` owns bounded journals, Client reload/restart/DevTools actions,
+  Agent restart/log actions, and UI-driver forwarding;
+- `infrastructure/` owns secure files, credentials, runtime context, launch
+  profiles, journals, startup records, endpoint configuration, and terminal
+  adapters.
+
+Files in `lib/src/` depend directly on the narrow owning implementation rather
+than importing through root compatibility facades. The `lib/` root contains
+only the composition root and a thin `runtime_context.dart` forwarder retained
+for the tracked Client interactive inspector consumer. Package-owned tests
+import `lib/src/` modules directly; an internal test is not evidence that a new
+public root facade is required.
+
+Tests mirror these domains below `scripts/sanad_dev/test/`, with reusable fakes
+and builders under `test/support/`. A deterministic size guard keeps handwritten
+production and ordinary test files at or below 700 lines and keeps the CLI
+dispatcher at or below 250 lines.
+
 ## Workspace authority
 
 For ordinary `run`, `status`, `stop`, logs, attach, restart, reload, and inspect discovery, the invoking Git workspace is the authority. Its canonical path produces the workspace hash used by daemon health discovery. Inherited `LOCAL_GATEWAY_PORT` and `LOCAL_GATEWAY_URL` values are process context, not ownership evidence, and cannot redirect these commands.
+
+`run --home <absolute-path>` records the resolved Home in the owner-only workspace startup locator. Later commands from that workspace can omit `--home`: discovery validates the locator against its Home-resident startup record and uses the resolved Home only as a Local Gateway credential candidate. A supplied `--home` remains authoritative and restricts credential discovery to its resolved Home. `run` without a selector still chooses the normal checkout/worktree default rather than silently reusing the previous custom Home. Locator state never establishes liveness or mutation authority; all existing launcher lease, process identity, Agent health, Client profile, launcher-id, and runtime-nonce checks still apply.
 
 An explicit port remains a diagnostic selector where accepted. Selecting an endpoint explicitly permits inspection; it does not make a foreign endpoint mutable. The requester endpoint remains available only to the separately authorized `switch --runtime current` flow.
 
@@ -236,7 +272,8 @@ Once managed, POSIX SIGHUP follows the controller's normal complete-pair cleanup
 rather than leaving supervised children behind.
 
 The record preserves both the requested Home selector/path and the resolved
-Home. Therefore a later `status` from the same worktree can explain a failed
+Home. Therefore later workspace-scoped commands can recover the resolved Home
+as an authenticated discovery candidate, and `status` can explain a failed
 explicit-Home launch without presenting the default worktree Home as if it were
 the failed request. The locator is accepted only when its schema, worktree hash,
 attempt id, Home record, and Agent port agree. Invalid or stale locators are

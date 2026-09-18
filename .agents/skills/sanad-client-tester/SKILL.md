@@ -91,13 +91,12 @@ To inspect the application's interface dynamically without rendering heavy exter
     sanad-dev status
     ```
 
-   **Custom Home continuity:** If launch used `--home <absolute>`, pass that exact
-   `--home` value to every later `sanad-dev` command (`status`, bounded `logs`,
-   `ui`, reload/restart, and any authorized stop). Omitting it makes discovery
-   inspect the worktree-default Home and can falsely report a stopped runtime or
-   cross-worktree ownership conflict even while the requested runtime is healthy.
-   Treat `sanad-dev status --home <absolute>` as the authoritative selection
-   check. If a client-specific `logs` or `ui` command still rejects a client that
+   **Custom Home continuity:** If launch used `--home <absolute>`, later commands
+   from the same workspace infer the validated active Home and normally omit the
+   selector. Use `sanad-dev status` as the ownership check; pass the same explicit
+   `--home` only as an authoritative diagnostic override or when intentionally
+   managing multiple custom groups from one workspace. If a client-specific
+   `logs` or `ui` command still rejects a client that
    this status reports as managed, use the status-reported VM endpoint with the
    standalone driver CLI as a diagnostic fallback; do not infer that the Client
    is stopped and do not repair or stop it automatically.

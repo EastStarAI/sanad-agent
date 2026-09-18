@@ -119,7 +119,7 @@ sanad-dev run all --background --driver \
   --client-instance group-b-web
 ```
 
-For every later operation, repeat the same explicit `--home` selector. Setting `SANAD_HOME` alone does not select a runtime for `sanad-dev` discovery or ownership:
+Because this pattern intentionally runs multiple custom groups from one workspace, repeat the matching explicit `--home` selector for each later operation. A single custom group can normally rely on the workspace's validated active-Home locator, but one locator cannot disambiguate concurrent same-workspace groups. Setting `SANAD_HOME` alone does not select a runtime for `sanad-dev` discovery or ownership:
 
 ```bash
 sanad-dev status --home "$sanad_home_a"
@@ -146,7 +146,7 @@ sanad-dev status
 
 Repeat those commands from the other worktree. Do not run one worktree's status, logs, UI, restart, reload, or stop command from another worktree.
 
-A standalone clone can also own an independent group. If it uses a non-primary Home, pass the chosen absolute `--home` value to every command exactly as in Pattern B.
+A standalone clone can also own an independent group. Select its non-primary Home on `run`; later commands from that clone infer the single active group unless multiple custom groups require explicit disambiguation as in Pattern B.
 
 Never hardcode the usual Agent or VM ports for parallel groups. Read each group's live assignments from its own `sanad-dev status` output.
 
@@ -155,8 +155,8 @@ Never hardcode the usual Agent or VM ports for parallel groups. Read each group'
 Before any restart, reload, stop, or UI action:
 
 1. Enter the owning workspace.
-2. Pass the explicit absolute `--home` for every non-primary group.
-3. Run `sanad-dev status` with that same Home.
+2. If multiple custom groups share this workspace, pass the intended group's explicit absolute `--home`; otherwise use the inferred active Home.
+3. Run `sanad-dev status` with the same selection.
 4. Confirm the intended Agent and complete Client inventory.
 5. Confirm zero cross-owned and unverifiable Clients.
 6. For a Client action, select the exact device/slot or status-reported VM port.
@@ -192,4 +192,4 @@ Use `sanad-dev restart agent --timeout 60` for a safe Agent restart. Do not repl
 
 ## Cleanup
 
-Stop each runtime from its owning workspace and with its owning Home selector. Remove a worktree only after its branch is merged or abandoned and its runtime is stopped. Keep the primary runtime and sibling groups running unless the user explicitly asks to stop them.
+Stop each runtime from its owning workspace. Add its explicit Home selector when concurrent custom groups in that workspace require disambiguation. Remove a worktree only after its branch is merged or abandoned and its runtime is stopped. Keep the primary runtime and sibling groups running unless the user explicitly asks to stop them.
