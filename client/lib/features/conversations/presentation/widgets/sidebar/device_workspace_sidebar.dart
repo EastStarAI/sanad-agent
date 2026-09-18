@@ -16,12 +16,15 @@ import '../../../data/repositories/conversation_cache_repository.dart';
 import '../../../domain/models/conversation_resource_state.dart';
 import '../../../domain/models/device_workspace.dart';
 import '../../../domain/models/session.dart';
+import '../../../domain/models/session_search.dart';
 import '../../../domain/models/sidebar_conversation_group.dart';
 import '../../../../../utils/toast_utils.dart';
 import '../../../../../utils/workspace_picker_helper.dart';
 import '../../bloc/session_cubit.dart';
+import '../../bloc/session_messages_cubit.dart';
 import '../../bloc/session_sidebar_cubit.dart';
 import '../../bloc/session_sidebar_state.dart';
+import 'conversation_search_panel.dart';
 import 'sidebar_composition.dart';
 import 'sidebar_device_header_bar.dart';
 import 'sidebar_sections.dart';
@@ -222,6 +225,31 @@ class _SidebarBody extends StatelessWidget {
     final sidebarCubit = context.read<SessionSidebarCubit>();
     final sessionCubit = context.read<SessionCubit>();
     final cacheRepository = context.read<ConversationCacheRepository>();
+    Future<void> selectSearchHit(SessionSearchHit hit) async {
+      final messagesCubit = context.read<SessionMessagesCubit>();
+      final anchor = hit.anchorEventId;
+      if (anchor != null && anchor.isNotEmpty) {
+        messagesCubit.requestHistoryAnchor(
+          deviceId: device.id,
+          sessionId: hit.session.id,
+          anchorEventId: anchor,
+        );
+        cacheRepository.recordSessionViewportAnchor(
+          device.id,
+          hit.session.id,
+          anchor,
+        );
+      }
+      if (sessionCubit.state.selectedSession?.id == hit.session.id && anchor != null && anchor.isNotEmpty) {
+        await messagesCubit.loadAnchoredHistory(anchor, forceReopen: true);
+      } else {
+        await sessionCubit.selectSession(hit.session);
+      }
+      if (!context.mounted) return;
+      context.go(AppRoutes.sessionLocation(device.id, hit.session.id));
+      if (isDrawerMode && onClose != null) onClose!();
+    }
+
     void selectSession(SessionRef ref) {
       final sessions = cacheRepository.sessionsForDevice(device.id);
       Session? found;
@@ -289,6 +317,13 @@ class _SidebarBody extends StatelessWidget {
           ),
         ),
         SliverToBoxAdapter(child: SizedBox(height: 8)),
+        SliverToBoxAdapter(
+          child: ConversationSearchButton(
+            device: device,
+            isDrawerMode: isDrawerMode,
+            onSelected: selectSearchHit,
+          ),
+        ),
         SliverToBoxAdapter(
           child: _NewSessionButton(
             device: device,
