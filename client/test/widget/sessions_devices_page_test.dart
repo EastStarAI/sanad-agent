@@ -57,11 +57,13 @@ AccountPrincipal _principal({
   required String id,
   required AccountPresenceStatus status,
   bool current = false,
+  String? clientInstanceId,
 }) => AccountPrincipal(
   kind: kind,
   id: id,
   status: status,
   isCurrent: current,
+  clientInstanceId: clientInstanceId,
   metadata: const {'platform_family': 'macos', 'app_version': '1.2.3'},
   lastActiveAt: DateTime.utc(2026, 8, 12, 10, 30),
 );
@@ -129,6 +131,34 @@ void main() {
     expect(find.text('Status unavailable'), findsOneWidget);
     expect(find.textContaining('Last active'), findsNWidgets(3));
     expect(repository.fetches, 1);
+  });
+
+  testWidgets('shows the privacy-safe Client reference beside the platform', (tester) async {
+    final principal = _principal(
+      kind: AccountPrincipalKind.clientSession,
+      id: 'session-current',
+      status: AccountPresenceStatus.online,
+      current: true,
+      clientInstanceId: '11111111-1111-4111-8111-111111111111',
+    );
+    final repository = _FakeAccountRepository(
+      AccountLifecycleSnapshot(
+        presenceAvailable: true,
+        items: [principal],
+      ),
+    );
+
+    await pumpPage(tester, repository);
+
+    expect(principal.displayReference, isNotNull);
+    expect(
+      find.text('macos · #${principal.displayReference} · Current'),
+      findsOneWidget,
+    );
+    expect(
+      find.textContaining('11111111-1111-4111-8111-111111111111'),
+      findsNothing,
+    );
   });
 
   testWidgets('keeps stale snapshot visible when compact refresh fails', (tester) async {

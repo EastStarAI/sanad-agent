@@ -30,6 +30,7 @@ This contract applies to `agent/lib/engine/`.
 - Persist terminal classification, including state-only responses, so restart preserves continuation intent.
 - Missing providers degrade to the lazy missing-provider adapter.
 - Automatic failover within one model invocation must exclude every provider instance that already failed before streaming; it must never revisit an exhausted route in the same chain.
+- Opt-in request dumps serialize sanitized JSON-compatible request and normalized response projections; arbitrary typed values may contribute only through `toJson`, and raw streaming transport lines never become the durable response contract.
 - Internal accumulated usage remains separate from the latest immutable context-usage projection exposed to clients.
 
 ## Run Cancellation

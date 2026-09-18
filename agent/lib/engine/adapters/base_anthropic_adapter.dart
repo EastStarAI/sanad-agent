@@ -418,10 +418,12 @@ class BaseAnthropicAdapter implements LLMAdapter {
       }
 
       final partialToolCalls = <int, _PartialClaudeToolCall>{};
+      final completedToolCalls = <ToolCall>[];
       final taggedReasoning = TaggedReasoningStreamParser();
       Map<String, dynamic>? finalUsage;
-      final List<String> accumulatedStreamLines = [];
       LLMFinishReason? streamFinishReason;
+      final contentBuffer = StringBuffer();
+      final reasoningBuffer = StringBuffer();
 
       try {
         await for (final line in transport.decodeSseLines(
@@ -429,7 +431,6 @@ class BaseAnthropicAdapter implements LLMAdapter {
           operation: 'generateStream',
         )) {
           transport.throwIfCancelled(operation: 'generateStream');
-          accumulatedStreamLines.add(line);
           final trimmed = line.trim();
           if (trimmed.isEmpty) continue;
 
@@ -504,6 +505,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
                 } else if (block != null && block['type'] == 'thinking') {
                   final initial = block['thinking']?.toString();
                   if (initial != null && initial.isNotEmpty) {
+                    reasoningBuffer.write(initial);
                     yield AgentResponse(
                       message: Message(
                         role: MessageRole.assistant,
@@ -522,6 +524,12 @@ class BaseAnthropicAdapter implements LLMAdapter {
                   if (deltaType == 'text_delta') {
                     final chunk = delta['text'] as String;
                     final tagged = taggedReasoning.add(chunk);
+                    if (tagged.content != null) {
+                      contentBuffer.write(tagged.content);
+                    }
+                    if (tagged.reasoning != null) {
+                      reasoningBuffer.write(tagged.reasoning);
+                    }
                     yield AgentResponse(
                       message: Message(
                         role: MessageRole.assistant,
@@ -535,6 +543,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
                   } else if (deltaType == 'thinking_delta') {
                     final chunk = delta['thinking']?.toString();
                     if (chunk != null && chunk.isNotEmpty) {
+                      reasoningBuffer.write(chunk);
                       yield AgentResponse(
                         message: Message(
                           role: MessageRole.assistant,
@@ -570,73 +579,112 @@ class BaseAnthropicAdapter implements LLMAdapter {
             } catch (_) {}
           }
         }
+        final pendingTagged = taggedReasoning.finish();
+        if (pendingTagged.content != null || pendingTagged.reasoning != null) {
+          if (pendingTagged.content != null) {
+            contentBuffer.write(pendingTagged.content);
+          }
+          if (pendingTagged.reasoning != null) {
+            reasoningBuffer.write(pendingTagged.reasoning);
+          }
+          yield AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: pendingTagged.content,
+              reasoning: pendingTagged.reasoning,
+            ),
+            model: resolvedModel,
+            provider: 'anthropic',
+          );
+        }
+
+        for (final partial in partialToolCalls.values) {
+          Map<String, dynamic> args = {};
+          try {
+            args = jsonDecode(partial.argumentsBuffer.toString());
+          } catch (_) {}
+          completedToolCalls.add(
+            ToolCall(
+              id: partial.id ?? '',
+              name: partial.name ?? '',
+              arguments: args,
+            ),
+          );
+        }
+
+        if (completedToolCalls.isNotEmpty) {
+          yield AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: '',
+              toolCalls: completedToolCalls,
+            ),
+            isToolCall: true,
+            usage: finalUsage,
+            model: resolvedModel,
+            provider: 'anthropic',
+            finishReason: streamFinishReason ?? LLMFinishReason.toolCalls,
+          );
+        } else if (finalUsage != null) {
+          yield AgentResponse(
+            message: Message(role: MessageRole.assistant, content: ''),
+            isToolCall: false,
+            usage: finalUsage,
+            model: resolvedModel,
+            provider: 'anthropic',
+            finishReason: streamFinishReason ?? LLMFinishReason.stop,
+          );
+        }
+
         if (LLMRequestDumper.isEnabled) {
+          final effectiveFinishReason = completedToolCalls.isNotEmpty
+              ? (streamFinishReason ?? LLMFinishReason.toolCalls)
+              : (streamFinishReason ?? LLMFinishReason.stop);
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
-            'stream_lines': accumulatedStreamLines,
+            'message': {
+              'role': 'assistant',
+              'content': contentBuffer.toString(),
+              if (reasoningBuffer.isNotEmpty)
+                'reasoning': reasoningBuffer.toString(),
+              if (completedToolCalls.isNotEmpty)
+                'tool_calls':
+                    completedToolCalls.map((tc) => tc.toJson()).toList(),
+            },
+            'finish_reason': effectiveFinishReason.name,
+            'usage': ?finalUsage,
           });
         }
       } catch (e) {
         if (LLMRequestDumper.isEnabled) {
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
-            'stream_lines': accumulatedStreamLines,
+            if (contentBuffer.isNotEmpty ||
+                reasoningBuffer.isNotEmpty ||
+                partialToolCalls.isNotEmpty ||
+                completedToolCalls.isNotEmpty)
+              'partial_message': {
+                'role': 'assistant',
+                if (contentBuffer.isNotEmpty)
+                  'content': contentBuffer.toString(),
+                if (reasoningBuffer.isNotEmpty)
+                  'reasoning': reasoningBuffer.toString(),
+                if (completedToolCalls.isNotEmpty)
+                  'tool_calls':
+                      completedToolCalls.map((tc) => tc.toJson()).toList(),
+                if (partialToolCalls.isNotEmpty)
+                  'partial_tool_calls': partialToolCalls.values
+                      .map((p) => {
+                            if (p.id != null) 'id': p.id,
+                            if (p.name != null) 'name': p.name,
+                            'arguments': p.argumentsBuffer.toString(),
+                          })
+                      .toList(),
+              },
             'error': e.toString(),
           });
         }
         rethrow;
-      }
-
-      final pendingTagged = taggedReasoning.finish();
-      if (pendingTagged.content != null || pendingTagged.reasoning != null) {
-        yield AgentResponse(
-          message: Message(
-            role: MessageRole.assistant,
-            content: pendingTagged.content,
-            reasoning: pendingTagged.reasoning,
-          ),
-          model: resolvedModel,
-          provider: 'anthropic',
-        );
-      }
-
-      final completedToolCalls = <ToolCall>[];
-      for (final partial in partialToolCalls.values) {
-        Map<String, dynamic> args = {};
-        try {
-          args = jsonDecode(partial.argumentsBuffer.toString());
-        } catch (_) {}
-        completedToolCalls.add(
-          ToolCall(
-            id: partial.id ?? '',
-            name: partial.name ?? '',
-            arguments: args,
-          ),
-        );
-      }
-
-      if (completedToolCalls.isNotEmpty) {
-        yield AgentResponse(
-          message: Message(
-            role: MessageRole.assistant,
-            content: '',
-            toolCalls: completedToolCalls,
-          ),
-          isToolCall: true,
-          usage: finalUsage,
-          model: resolvedModel,
-          provider: 'anthropic',
-          finishReason: streamFinishReason ?? LLMFinishReason.toolCalls,
-        );
-      } else if (finalUsage != null) {
-        yield AgentResponse(
-          message: Message(role: MessageRole.assistant, content: ''),
-          isToolCall: false,
-          usage: finalUsage,
-          model: resolvedModel,
-          provider: 'anthropic',
-          finishReason: streamFinishReason ?? LLMFinishReason.stop,
-        );
       }
     } finally {
       await transport.dispose();

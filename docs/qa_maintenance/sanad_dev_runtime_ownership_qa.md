@@ -5,6 +5,21 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 
 # sanad-dev Runtime Ownership QA
 
+## Package architecture regression matrix
+
+| Scenario | Expected result |
+|---|---|
+| Analyze the standalone package after module decomposition | `fvm dart analyze` reports no issues and no `lib/src/` module imports the composition root or a root compatibility facade. |
+| Run the complete recursive package suite | All domain-organized tests under `test/` are discovered; no test is lost because it moved from the flat root. |
+| Run the cross-platform `sanad-dev bootstrap` CI selection | The bootstrap, component-journal, terminal-launcher, command-options, and cloud-endpoint tests resolve from their domain directories and pass on each supported runner. |
+| Execute the size guard | Every handwritten production and ordinary test file is at most 700 lines, and `lib/src/cli/cli.dart` is at most 250 lines. |
+| Inspect root `lib/` Dart files | Only `sanad_dev_cli.dart` and a thin facade with a tracked external consumer remain; package-owned tests alone cannot justify a facade. |
+| Inspect package-owned test imports | Tests import the narrow `lib/src/` owner directly except when explicitly testing the aggregate CLI composition surface. |
+| Inspect contracts recursively | Every production domain has the intended nearest `AGENTS.md`, all contracts are indexed by `docs/llms.txt`, and no contract exists under `test/`. |
+| Run wrapper help before runtime discovery | Help remains mutation-free and retains the baseline command and option surface. |
+| Run default and explicit-Home dry runs | Default worktree selection and explicit absolute Home selection match the pre-refactor behavior. |
+| Run an isolated managed Agent/Client pair after refactor | Status, bounded Agent/Client logs, UI snapshot, Client reload/restart, safe Agent restart, complete stop, post-stop status, and retained journals succeed without a live source handoff. |
+
 ## Regression matrix
 
 | Scenario | Expected result |
@@ -78,6 +93,10 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Background mode starts Agent and Client | No terminal sidecar or stdout mirror is opened; both component streams remain available from launcher-owned journals. |
 | `run --background --dry-run` | CLI rejects the contradictory request with usage exit status 64 and performs no runtime mutation. |
 | Startup with a worktree-default, `user`, or explicit absolute Home | The versioned attempt preserves requested and resolved Home separately and advances through named startup stages without becoming ownership evidence. |
+| Managed runtime was launched with an explicit absolute Home; later same-workspace commands omit `--home` | The validated startup locator contributes that resolved Home as a credential candidate, so status, bounded logs, restart/reload, UI, and stop discover the same group; mutation still requires the complete managed lease and live identity checks. |
+| A later command supplies an explicit `--home` | Credential discovery is restricted to the resolved explicit Home; a locator or unrelated candidate cannot override the selector. |
+| Active-Home locator is malformed, stale, unreadable, or belongs to another workspace hash | The candidate is ignored, no ownership is granted, and existing default discovery remains fail-closed. |
+| A new `run` omits `--home` after an earlier custom-Home run | Launch resolution uses the normal checkout/worktree default and does not silently reuse the prior custom Home. |
 | Spawn or readiness fails before managed | Owned process trees are cleaned; the attempt records `failed`, `cleanup`, exit status, and a bounded non-secret reason. A later same-worktree status resolves it through the validated locator even when the failed request used an explicit Home. |
 | SIGINT, SIGTERM, or SIGHUP arrives after lease creation but before managed | One idempotent abort path terminates every spawned process tree, closes journals, removes the lease, records the interruption, and exits nonzero; no Agent, VM listener, supervisor, or Client remains. |
 | SIGHUP arrives after managed | The controller performs its normal complete-group cleanup and removes the lease rather than orphaning children. |
