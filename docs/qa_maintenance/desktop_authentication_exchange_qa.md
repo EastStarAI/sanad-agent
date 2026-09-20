@@ -24,6 +24,8 @@ description: "Regression matrix for credential-free client-daemon authentication
 | Concurrent login/logout/pairing mutation | The complete read-modify-write transaction is serialized and cannot overwrite a peer rotation. |
 | Lock owner exits or throws | The operating-system lock is released and the next waiter proceeds. |
 | Lock held past acquisition bound | The caller preserves credentials and reports a transient recovery outcome rather than logging out. |
+| Gateway reconnect during lock contention | Registration contains the timeout, keeps the daemon alive, retries only while connected, discards any stale challenge nonce, and requests a fresh challenge. Concurrent registration callbacks coalesce. |
+| External Client reconciliation | Auth-file adoption and persistence complete under `auth.refresh.lock`; profile HTTP retrieval begins only after lock release. |
 | Linux Secret Service round trip | On a real Linux user session with Secret Service available and `secret-tool` absent, the synthetic capability write/read/delete succeeds, selects direct D-Bus, and leaves no process-argument or environment secret. |
 | Linux automatic owner-file fallback | Missing/locked Secret Service or missing session D-Bus selects `linux_owner_file`; concurrent updates retain every key, data/lock files are `0600`, the Home is `0700`, corrupt data and symlink targets fail closed, and metadata contains backend identity only. |
 | Linux sticky backend failure | Once Secret Service is persisted, a temporary failure does not read or create an owner-file credential. Startup remains locally available with no Agent cloud authority. |
