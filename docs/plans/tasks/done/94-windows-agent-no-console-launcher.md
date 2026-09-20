@@ -3,7 +3,7 @@ title: "Windows Agent No-Console Launcher"
 description: "Keep the packaged Client bootstrap unchanged while running the installed Windows Agent without a visible terminal."
 status: completed
 current_gate: complete
-remaining_estimate: "none; clean-snapshot reboot remains a release-candidate gate"
+remaining_estimate: "none; protected clean-snapshot validation remains a release-candidate gate"
 ---
 
 # Windows Agent No-Console Launcher

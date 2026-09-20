@@ -256,11 +256,14 @@ restored the prior `1.0.10` executable, reinstalled its launcher/task, recorded
 `rollback_completed`, and returned authenticated health on the isolated port. A
 subsequent valid packaged `1.0.11` replacement recorded `started`, returned
 authenticated `1.0.11` health, and retained a three-process tree with zero
-visible windows. Final uninstall stopped the launcher-owned job tree before
-unregistering the task; the command returned `Missing`, no matching process or
-listener remained, and the isolated Home was then removable. This focused
-current-machine evidence does not replace the clean-snapshot release gate or
-reboot test.
+visible windows. A real reboot then started the isolated task automatically
+about twelve seconds after boot; authenticated `1.0.13` health returned on port
+`59194` while the primary runtime remained independently available on `58085`,
+and the post-logon three-process tree still owned zero visible windows. Final
+uninstall stopped the launcher-owned job tree before unregistering the task; the
+command returned `Missing`, no matching process or listener remained, and the
+isolated Home was removed. This focused current-machine reboot evidence does not
+replace the protected clean-snapshot release-candidate gate.
 
 ## Acceptance criteria
 
