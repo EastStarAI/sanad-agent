@@ -19,7 +19,7 @@ Maintenance must never delay daemon readiness, reclassify restorable work, delet
 
 ## Automated scenarios
 
-1. Daemon source and daemon-backed startup prove readiness occurs before maintenance scheduling or deletion.
+1. Daemon source and daemon-backed startup prove readiness occurs before maintenance scheduling or deletion. The daemon-backed test must stop and await the daemon before opening its verification database, preserving exclusive state-root ownership and preventing test-only migration lock races.
 2. Restorable-session discovery excludes a legacy orphan without requiring startup cleanup.
 3. `completed` and `cancelled` rows older than the exclusive 14-day cutoff are deleted; active, newer, and exactly-at-cutoff rows remain.
 4. Terminal/orphan identities are deleted in bounded batches; activity appearing after a batch pauses progress until idle.

@@ -857,17 +857,20 @@ void main() {
         await Future<void>.delayed(const Duration(milliseconds: 200));
       }
       expect(ready, isTrue, reason: output.toString());
-
-      final verify = AgentStateDatabase.atPath(stateHome.path);
-      addTearDown(verify.dispose);
-      final repo = SessionWorkItemRepository(verify);
-      expect(repo.findWorkItem('w-old-terminal'), isNotNull);
-      expect(repo.findWorkItem('w-active'), isNotNull);
       expect(output.toString(), isNot(contains('Agent state maintenance:')));
     } finally {
       process.kill();
       await process.exitCode.timeout(const Duration(seconds: 10));
     }
+
+    // Respect the daemon's exclusive state-root ownership. Opening a second
+    // AgentStateDatabase while the process is alive would run schema migrations
+    // and race its shared connection for SQLite's write lock.
+    final verify = AgentStateDatabase.atPath(stateHome.path);
+    addTearDown(verify.dispose);
+    final repo = SessionWorkItemRepository(verify);
+    expect(repo.findWorkItem('w-old-terminal'), isNotNull);
+    expect(repo.findWorkItem('w-active'), isNotNull);
   }, timeout: const Timeout(Duration(seconds: 60)));
 }
 

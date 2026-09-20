@@ -373,7 +373,7 @@ set -o pipefail; fvm dart test --concurrency=1 test/evolution/agent_state_mainte
 
 ---
 
-## Gate E — Startup Performance Redesign (قيد التنفيذ)
+## Gate E — Startup Performance Redesign (مكتملة)
 
 ### E.1 Evidence and superseding decisions
 
@@ -420,6 +420,26 @@ set -o pipefail; fvm dart test --concurrency=1 test/evolution/agent_state_mainte
 - [x] تبقى حالات العمل النشطة والجلسات والرسائل وكاش الموديلات دون حذف.
 - [x] analyzer، الاختبارات المركزة، full Agent suite، daemon-backed، وGraphify
       مرت قبل إعادة المهمة إلى `done`.
+
+---
+
+## Gate F — Post-merge CI lock regression
+
+كشف تشغيل `main` رقم `35489731298` أن اختبار الجاهزية كان يفتح
+`AgentStateDatabase` ثانية بينما daemon ما زال يملك القاعدة، فيشغّل migrations
+كتابية ويتسابق على قفل SQLite. هذا عيب في الاختبار لا في الصيانة.
+
+- [x] إيقاف daemon وانتظار خروجه قبل فتح اتصال التحقق.
+- [x] إبقاء إثبات أن الجاهزية سبقت الصيانة وأن الصف الطرفي لم يُحذف.
+- [x] تحديث QA لتثبيت حد الملكية الحصرية أثناء الاختبار.
+- [x] تمرير الاختبار المركّز خمس مرات، analyzer، وfull Agent suite محلياً.
+- [x] مرّ Public CI رقم `35490486112` بالكامل.
+
+### F Exit / Acceptance
+
+- [x] لا يفتح الاختبار اتصال SQLite ثانياً أثناء امتلاك daemon للقاعدة.
+- [x] لم يظهر `SQLITE_BUSY` في خمسة تشغيلات متتالية للاختبار.
+- [x] جميع required checks مرت قبل الدمج.
 
 ---
 
