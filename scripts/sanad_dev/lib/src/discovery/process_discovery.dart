@@ -208,11 +208,13 @@ bool _isRelevantClientProcess(List<String> arguments) {
       command.contains('flutter run');
 }
 
-Future<List<ClientInstance>> discoverClientInstances() async {
+Future<List<ClientInstance>> discoverClientInstances({
+  SanadDevRuntime? runtime,
+}) async {
   final instances = <ClientInstance>[];
   try {
     final processes = await _discoverProcessSnapshots();
-    final runtime = await _currentRuntime();
+    final activeRuntime = runtime ?? await _currentRuntime();
 
     // First, find all Dart development-service processes. Native Flutter uses
     // the development-service entry point, while Flutter Web launches the DDS
@@ -297,9 +299,9 @@ Future<List<ClientInstance>> discoverClientInstances() async {
             launchProfile = extractClientLaunchProfile(process.arguments);
             matchedPath = resolveClientDirectoryForLaunchProfile(
               profile: launchProfile,
-              runtimeRepositoryRoot: runtime.repositoryRoot,
-              runtimeIsLinkedWorktree: runtime.isLinkedWorktree,
-              runtimeWorktreeName: runtime.worktreeDisplayName,
+              runtimeRepositoryRoot: activeRuntime.repositoryRoot,
+              runtimeIsLinkedWorktree: activeRuntime.isLinkedWorktree,
+              runtimeWorktreeName: activeRuntime.worktreeDisplayName,
               separator: Platform.pathSeparator,
             );
             deviceId = launchProfile.deviceId;

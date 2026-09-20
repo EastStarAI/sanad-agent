@@ -204,32 +204,45 @@ Bootstrap is owned by the platform wrappers because Dart cannot run before FVM
 and the pinned Flutter SDK exist. POSIX and PowerShell expose the same layered
 command contract. No arguments render static help without mutation. `install`
 owns verified FVM, pinned Flutter, and the checkout-owned user shim, then stops.
-`setup` ensures install, resolves the Release Contract followed by Agent and
-Client packages, then stops. `run` ensures only missing or stale install/setup
-stages before entering the runtime CLI. `switch` performs the same idempotent
-target preparation before submitting its handoff transaction, without replacing
-a functional user shim owned by another checkout. Preparation failure occurs
-before runtime mutation, so the source group remains unchanged. Other runtime
-commands never bootstrap implicitly and fail with the exact prerequisite command
-when the Dart CLI is not ready.
+`setup` ensures tooling, resolves the Release Contract, standalone CLI, Agent,
+and Client packages, then compiles the package-owned runtime CLI through FVM
+into a checkout-local native artifact before stopping. `setup`, `run`, and
+`switch` preserve a functional user shim owned by another checkout; changing
+shim ownership remains an explicit `install --force` action. `run` ensures only
+missing or stale install/setup/runtime-artifact stages before entering that CLI.
+`switch` performs the same idempotent target preparation before submitting its
+handoff transaction. Preparation failure occurs before runtime mutation, so the
+source group remains unchanged. Other runtime commands never bootstrap implicitly and
+fail with the exact setup recovery command when the prepared CLI is missing or
+stale.
 
 Missing FVM is installed from pinned official release archives after
 per-platform SHA-256 verification; detecting ready FVM, Flutter, shim, or package
 state is intentionally silent. Work-performing stages stream the child process's
 stdout/stderr without buffering, then report elapsed duration and success or
-failure. The idempotent setup stamp binds `.fvmrc` plus the Release Contract,
-Agent, and Client lockfiles and package configs. Failure is terminal for every
-dependent stage and runtime launch. Explicit install/setup refuse silent shim
-replacement; run accepts an existing functional dispatcher so linked worktrees
-do not contend for the user command.
+failure. The idempotent dependency stamp binds `.fvmrc` plus all package
+lockfiles and package configs. A separate runtime fingerprint binds the
+standalone CLI's `lib/`, `pubspec.yaml`, and lockfile to a fingerprint-named
+native artifact. A changed source builds beside any still-running artifact.
+Windows cleanup removes only stale artifacts that are no longer locked; POSIX
+retains prior cache artifacts because an active launcher may need its executable
+path for a later child spawn. Setup reuses an existing artifact whose filename
+matches the current fingerprint, including after a stamp rollback, so Windows
+never tries to overwrite that still-running executable. This lets warm runtime
+commands bypass repeated FVM SDK resolution while source changes remain
+fail-closed. Failure is terminal for every dependent stage and
+runtime launch. Explicit install/setup refuse silent shim replacement; run
+accepts an existing functional dispatcher so linked worktrees do not contend
+for the user command.
 
-The wrapper resolves the invoking Git worktree before entering Dart. If a
-user-scoped shim or wrapper from another checkout receives the command, it
-redispatches once to the invoking worktree's wrapper. This keeps both bootstrap
-and runtime CLI source on one checkout instead of combining a foreign wrapper
-with the caller's Dart files.
+The wrapper resolves the invoking Git worktree before entering the prepared
+runtime CLI. If a user-scoped shim or wrapper from another checkout receives the
+command, it redispatches once to the invoking worktree's wrapper. This keeps both
+bootstrap and runtime CLI source on one checkout instead of combining a foreign
+wrapper with the caller's artifact.
 
-The Runtime CLI remains `scripts/sanad_dev.dart`. Its client profile default is
+The Runtime CLI source is `scripts/sanad_dev/lib/sanad_dev_cli.dart`;
+`scripts/sanad_dev.dart` remains a compatibility forwarder only. Its client profile default is
 `client/config/prod.json`, with local and Cloud enabled for every checkout type.
 The development profile and endpoint overrides are explicit internal integration
 choices; `--no-cloud` is the explicit hosted-disable boundary. Automated tests

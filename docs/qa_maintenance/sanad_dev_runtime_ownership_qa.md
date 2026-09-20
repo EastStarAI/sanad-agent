@@ -75,15 +75,21 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 
 | Scenario | Expected result |
 |---|---|
-| Fresh POSIX or Windows user environment, `run` | Install ensures verified FVM, pinned Flutter, and the user shim; setup resolves Release Contract, Agent, then Client; runtime begins only after every stage succeeds. |
-| `install`, `setup`, and `run` stage boundaries | Install stops before packages; setup ensures install and stops before runtime; run ensures both layers and enters the runtime CLI. Every work-performing child streams real stdout/stderr and receives a duration/result footer. |
-| Explicit `status`, logs, or another non-run runtime command with missing prerequisites | No bootstrap mutation occurs; the wrapper fails with the exact `install` or `setup` recovery command. |
+| Fresh POSIX or Windows user environment, `run` | Install ensures verified FVM, pinned Flutter, and the user shim; setup resolves Release Contract, standalone CLI, Agent, then Client and compiles the native runtime CLI through FVM; runtime begins only after every stage succeeds. |
+| `install`, `setup`, and `run` stage boundaries | Install stops before packages; setup ensures install, resolves packages, prepares the source-fingerprinted native runtime CLI, and stops before runtime; run ensures every layer and enters the prepared CLI. Every work-performing child streams real stdout/stderr and receives a duration/result footer. |
+| Explicit `status`, logs, or another non-run runtime command with missing prerequisites | No bootstrap mutation occurs. A missing FVM command reports `sanad-dev install`; when FVM exists but package state or the prepared runtime artifact is missing/stale, the wrapper reports `sanad-dev setup`. |
+| Prepared unchanged runtime command | The wrapper validates package configs plus the source fingerprint and executes the checkout-local native CLI without invoking FVM or dependency setup. |
+| Runtime CLI source, pubspec, or lockfile changes after setup | A non-run command fails closed with `sanad-dev setup`; `run` and `switch` rebuild the artifact through FVM before runtime entry. |
+| Runtime source returns to a fingerprint whose Windows executable is still active while the stamp names another build | Setup reuses the content-addressed artifact and repairs the stamp without trying to overwrite the locked executable. |
+| Worktree `setup` finds a functional user shim owned by another checkout | Setup prepares the caller checkout and preserves the foreign shim; only explicit `install --force` changes shim ownership. |
+| Windows warm `sanad-dev status` performance smoke | Repeated status avoids both `fvm spawn --version` and `fvm dart`; measured latency is recorded against the same-host pre-change baseline. |
+| Windows secure-file tests approach the default case timeout | Measure FVM process startup separately from test execution, then measure one secure atomic write. Raise the test-runner case timeout for verification rather than weakening owner-only ACL or atomic-replacement semantics. |
 | Windows bootstrap starts outside a Git checkout but beside its copied project scripts | The non-repository Git probe is handled without a raw PowerShell native-command error, and bootstrap continues from the script-owned project root. |
 | Journal crash fixture exits nonzero on every host | A hermetic platform-native fixture avoids package-runner exit-code differences and captures stdout, stderr, and crash-like stack output after exit. |
 | Windows bootstrap uses an isolated user root in CI | Its fake command surface includes deterministic file hashing, so redirected user paths cannot depend on ambient PowerShell module discovery. |
 | Unchanged second setup | Ready FVM, Flutter, shim, and dependency stages remain silent when SDK, lockfile fingerprint, and package configs agree. |
 | A wrapper from another checkout is invoked inside the target Git worktree | It redispatches to the target worktree wrapper before bootstrap or Dart execution; wrapper and Runtime CLI sources never split across checkouts. |
-| Flutter pin or any of the three lockfiles changes | The appropriate install/setup stage runs before runtime launch. |
+| Flutter pin or any package lockfile changes | The appropriate install/setup stage runs before runtime launch. |
 | Existing shim belongs to another checkout | Explicit install/setup fail without replacement unless `--force`; run accepts the functional dispatcher without replacing it, preserving linked-worktree use. |
 | No arguments or help | Static help is displayed, including `sanad-dev run` as the official source command, with no SDK, package, shim, or runtime mutation. |
 | Default or overridden source profile | Default is Production with Cloud enabled; `--no-cloud` disables hosted routing; `--config config/dev.json` remains explicit. Tests use constants/fakes and perform no hosted request. |

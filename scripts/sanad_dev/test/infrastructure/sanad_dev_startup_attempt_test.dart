@@ -26,6 +26,26 @@ void main() {
     },
   );
 
+  test(
+    'native background child does not pass its executable as an argument',
+    () {
+      expect(
+        sanadDevBackgroundChildArguments('/runtime/sanad-dev-native', const [
+          'run',
+          '--background',
+        ], nativeExecutable: true),
+        const ['run', '--internal-background'],
+      );
+      expect(
+        sanadDevUsesNativeRuntimeExecutable(
+          executablePath: '/runtime/sanad-dev-native',
+          scriptPath: '/runtime/sanad-dev-native',
+        ),
+        isTrue,
+      );
+    },
+  );
+
   test('child exit keeps a bounded result-publication grace', () {
     final exitedAt = DateTime.utc(2026, 9, 1, 10);
     expect(

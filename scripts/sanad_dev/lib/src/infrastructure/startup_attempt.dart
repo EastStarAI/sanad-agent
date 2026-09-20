@@ -7,12 +7,25 @@ const sanadDevStartupAttemptSchemaVersion = 1;
 
 List<String> sanadDevBackgroundChildArguments(
   String scriptPath,
-  Iterable<String> originalArguments,
-) => [
-  scriptPath,
+  Iterable<String> originalArguments, {
+  bool nativeExecutable = false,
+}) => [
+  if (!nativeExecutable) scriptPath,
   ...originalArguments.where((argument) => argument != '--background'),
   '--internal-background',
 ];
+
+bool sanadDevUsesNativeRuntimeExecutable({
+  required String executablePath,
+  required String scriptPath,
+}) {
+  String canonical(String path) => File(path).absolute.path;
+  final executable = canonical(executablePath);
+  final script = canonical(scriptPath);
+  return Platform.isWindows
+      ? executable.toLowerCase() == script.toLowerCase()
+      : executable == script;
+}
 
 enum SanadDevStartupStage {
   preflight,

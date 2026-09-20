@@ -298,10 +298,12 @@ Future<void> handleClientDevTools(int? portOverride) async {
   print('   2. Select "Attach to Running Client" and click play.');
   print('   3. Paste the copied URL and press Enter.\n');
 
-  final process = await Process.start(Platform.resolvedExecutable, [
-    'devtools',
-    vmUrl,
-  ], mode: ProcessStartMode.inheritStdio);
+  final process = await Process.start(
+    'fvm',
+    ['dart', 'devtools', vmUrl],
+    runInShell: Platform.isWindows,
+    mode: ProcessStartMode.inheritStdio,
+  );
 
   final exitCode = await process.exitCode;
   exit(exitCode);
