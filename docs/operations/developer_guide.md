@@ -458,11 +458,17 @@ applies.
 
 Use `sanad-dev doctor` before reconciling a Terminal/IDE launch. A complete
 single manual pair may be converted with `sanad-dev takeover`; it passes through
-the daemon's safe restart boundary and refuses Agent-tool-origin takeover.
-`cleanup-target-orphans` is narrower: it can remove only clients from the
-invoking target source when their recorded launcher and Agent are absent. It
-refuses requester/source-attached, live IDE-owned, cross-owned, or incomplete
-groups. There is no generic replace option.
+the daemon's safe restart boundary and refuses Agent-tool-origin takeover. When
+doctor reports an exact Agent-only orphan behind a dead launcher, run
+`sanad-dev doctor --fix` from a human-owned terminal. It requests permanent
+shutdown through the authenticated Agent boundary and removes the stale lease
+only after the Agent and every matching Client are absent. Do not run that
+recovery through an Agent tool call; mismatch, timeout, or remaining runtime
+evidence preserves the lease. `cleanup-target-orphans` is narrower: it can
+remove only Clients from the invoking target source when their recorded
+launcher and Agent are absent. It refuses requester/source-attached, live
+IDE-owned, cross-owned, or incomplete groups. There is no generic replace
+option.
 
 Use `--driver` when the client must expose its test driver and VM service for
 interactive UI verification:

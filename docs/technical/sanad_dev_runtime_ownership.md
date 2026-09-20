@@ -107,11 +107,16 @@ lease-owned Clients and requires an exact managed device match, optionally
 disambiguated by VM-service port. An unmanaged Client with the same device does
 not make that managed selection ambiguous.
 `doctor` is read-only and prints one concrete next command/action for each
-classification. `doctor --fix` removes only an invalid/stale record when its
-launcher, Agent endpoint, and clients are all absent; a live endpoint alone is
-enough to preserve the lease, preventing a fix from converting a live orphan
-into an uncontrollable manual runtime.
-`cleanup-target-orphans` is the only target cleanup operation. It requires a
+classification. `doctor --fix` removes an invalid/stale record directly only
+when its launcher, Agent endpoint, and Clients are all absent. Its only
+stale-live recovery is an exact Agent-only record: the launcher is dead, the
+record and discovery contain no Clients, and Agent port, workspace, source,
+Home, launcher id, and runtime nonce all match. From a human-owned terminal it
+requests an authenticated permanent Agent restart, waits for endpoint exit,
+rediscovers Agents and Clients, rechecks the launcher, and deletes the record
+only after every matching live surface is absent. Agent-tool origin, identity
+mismatch, rejection, timeout, or post-drain evidence preserves the lease.
+`cleanup-target-orphans` remains the only target Client cleanup operation. It requires a
 dead recorded launcher, no target Agent, exact client nonce/profile identity,
 and a target Agent port different from the requester/source. IDE-owned,
 ambiguous, cross-owned, and source-attached clients are refused.

@@ -53,9 +53,11 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | `stop client -d macos` with zero or multiple managed matches | Selection fails closed and lists diagnostic device/VM selectors without signaling a process. |
 | `stop client --force` | CLI rejects the misleading combination as a usage error. |
 | `doctor` | Reports class and ownership evidence without mutation. |
-| `doctor --fix` with no launcher, Agent, or client | Removes only the stale/invalid record and signals no process. |
-| `doctor --fix` with a dead launcher but a live Agent endpoint or Client | Preserves the lease, signals nothing, returns nonzero, and does not convert the live group into a manual runtime. |
-| Doctor reports manual, orphaned, cross-owned, or unverifiable | Output gives one concrete takeover/target-cleanup/owning-worktree/IDE-close next action; every mutating command still revalidates ownership. |
+| `doctor --fix` with no launcher, Agent, or Client | Removes only the stale/invalid record and signals no process. |
+| `doctor --fix` from a human terminal with a dead launcher and an exact Agent-only lease | Requests authenticated permanent Agent restart, waits for endpoint exit, rediscovers all surfaces, then removes the lease only when no matching Agent or Client remains. |
+| Exact Agent-only recovery has tool-requester context, a recorded/discovered Client, identity mismatch, rejection, timeout, revived launcher, or live post-check | Preserves the lease, returns nonzero, and never uses an OS kill fallback. |
+| `doctor --fix` with any other dead-launcher/live-endpoint combination | Preserves the lease, signals nothing, returns nonzero, and does not convert the live group into a manual runtime. |
+| Doctor reports manual, orphaned, cross-owned, or unverifiable | Output gives one concrete takeover/doctor-fix/target-cleanup/owning-worktree/IDE-close next action; every mutating command still revalidates ownership. |
 | Complete manual pair | `takeover` uses a safe Agent drain followed by permanent supervisor shutdown, relaunches it as one managed group, and attempts restoration on launch failure. |
 | Incomplete/manual pair or Agent-origin takeover | Takeover refuses before client mutation. |
 | Target orphan attached to requester/source port | Cleanup refuses before signaling any PID. |

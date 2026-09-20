@@ -35,6 +35,7 @@ part 'src/runtime/lifecycle/runtime_run.dart';
 part 'src/runtime/lifecycle/runtime_status.dart';
 part 'src/runtime/lifecycle/runtime_stop.dart';
 part 'src/runtime/lifecycle/runtime_doctor.dart';
+part 'src/runtime/lifecycle/runtime_orphan_recovery.dart';
 part 'src/runtime/lifecycle/runtime_orphan_cleanup.dart';
 part 'src/runtime/lifecycle/runtime_takeover.dart';
 part 'src/runtime/switch/switch_admission.dart';
