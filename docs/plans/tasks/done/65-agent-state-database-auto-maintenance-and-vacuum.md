@@ -397,7 +397,7 @@ set -o pipefail; fvm dart test --concurrency=1 test/evolution/agent_state_mainte
 
 - `docs/technical/agent_database_schema.md`
 - `docs/qa_maintenance/agent_state_database_maintenance_qa.md` (جديد)
-- `docs/plans/tasks/65-agent-state-database-auto-maintenance-and-vacuum.md`
+- `docs/plans/tasks/done/65-agent-state-database-auto-maintenance-and-vacuum.md`
 
 لا تُنشأ الملفات الاختيارية إن أمكن تغطية المسؤولية بمالك قائم بوضوح، ويبقى
 إجمالي التغيير ضمن `file_budget` ما لم يوثق المنفذ سبب تجاوزه قبل التوسع.
@@ -453,7 +453,7 @@ Daemon ready
   - `docs/qa_maintenance/agent_state_database_maintenance_qa.md` (new)
   - `docs/qa_maintenance/MOC.md`
   - `docs/llms.txt`
-  - `docs/plans/tasks/65-agent-state-database-auto-maintenance-and-vacuum.md`
+  - `docs/plans/tasks/done/65-agent-state-database-auto-maintenance-and-vacuum.md`
 - **Focused tests:** From `agent/`:
   - `fvm dart test test/evolution/agent_state_maintenance_test.dart` — 27 passed
   - `fvm dart test test/evolution/runtime_state_repositories_test.dart` — 22 passed
