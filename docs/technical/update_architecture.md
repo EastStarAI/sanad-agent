@@ -86,14 +86,21 @@ for runtime stubs. The release workflow supplies the contract version through
 identity. On Windows, verified bytes are staged beside the installed executable. The
 updater writes an owned PowerShell replacement file and waits for its explicit
 acceptance marker before the daemon may stop. The replacement preserves a
-rollback executable, starts the user Scheduled Task after replacement, and, on
-start failure, restores and starts the previous executable. The installed task
-uses a hidden PowerShell host. Windows 11 Gate E proved logon startup remains
-background-only, while immediate first-install task startup can still surface a
-console before Windows minimizes it. A deterministic no-console launcher is
-explicitly deferred rather than expanding this release gate; source/FVM
-terminals remain developer-owned and visible. The updater records a typed local
-result (`started`, `replacement_failed`, `rollback_completed`, or
+rollback executable, reinstalls the user Scheduled Task from the replacement,
+and, on start failure, restores and reinstalls the previous executable. The
+single verified Windows Agent artifact carries a SHA-256-bound native launcher
+in its PE overlay. `service install` extracts that launcher to a hash-versioned
+file beside `sanad.exe`, rejects a missing or non-GUI launcher in packaged
+builds, and registers the Scheduled Task against it directly. The launcher uses
+the Windows GUI subsystem, starts `sanad.exe daemon` with `CREATE_NO_WINDOW`,
+redirects standard streams to Sanad Home logs, and retains process/job ownership
+until the Agent exits. The Client still downloads and verifies one Agent
+artifact and owns no launcher logic. Source/FVM terminals remain developer-owned
+and visible through the established PowerShell fallback. Service-command
+failures propagate as nonzero process exits, so the detached replacement cannot
+mistake a failed launcher registration for a successful start. The updater
+records a typed local result (`started`, `replacement_failed`,
+`rollback_completed`, or
 `rollback_start_failed`) and removes staged scripts/files on terminal paths.
 The Client still decides success only from authenticated target-version health
 and a ready local WebSocket.

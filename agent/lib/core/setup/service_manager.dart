@@ -9,6 +9,7 @@ import 'package:sanad_agent/core/setup/cli_path_manager.dart';
 import 'package:sanad_agent/core/setup/linux_service_manager.dart';
 import 'package:sanad_agent/core/setup/service_health_verifier.dart';
 import 'package:sanad_agent/core/setup/service_models.dart';
+import 'package:sanad_agent/core/setup/windows_launcher_bundle.dart';
 
 export 'service_models.dart';
 
@@ -84,18 +85,34 @@ class ServiceManager {
       }
     }
     if (Platform.isWindows) {
-      final daemonCommand = buildWindowsDaemonCommand(
-        executable: invocation.executable,
-        arguments: invocation.arguments,
-        sanadHome: sanadHome,
-        serviceInstance: _instance,
-      );
-      final registrationCommand = buildWindowsTaskRegistrationCommand(
-        encodedDaemonCommand: encodePowerShellCommand(daemonCommand),
-        sanadHome: sanadHome,
-        taskName: taskName,
-      );
       try {
+        final launcherPath = await WindowsLauncherBundle.install(
+          agentExecutable: invocation.executable,
+          binDirectory: p.dirname(invocation.executable),
+        );
+        if (launcherPath == null && !invocation.isDartVm) {
+          return _failure(
+            await getStatus(),
+            'The packaged Windows Agent does not contain its background launcher.',
+          );
+        }
+        final daemonCommand = launcherPath == null
+            ? buildWindowsDaemonCommand(
+                executable: invocation.executable,
+                arguments: invocation.arguments,
+                sanadHome: sanadHome,
+                serviceInstance: _instance,
+              )
+            : null;
+        final registrationCommand = buildWindowsTaskRegistrationCommand(
+          encodedDaemonCommand: daemonCommand == null
+              ? null
+              : encodePowerShellCommand(daemonCommand),
+          launcherExecutable: launcherPath,
+          sanadHome: sanadHome,
+          taskName: taskName,
+          serviceInstance: _instance,
+        );
         final result = await Process.run('powershell.exe', [
           '-NoProfile',
           '-NonInteractive',
@@ -131,12 +148,14 @@ class ServiceManager {
           '-NoProfile',
           '-NonInteractive',
           '-Command',
-          'Unregister-ScheduledTask -TaskName "${_escapePowerShellLiteral(taskName)}" -Confirm:\$false',
+          buildWindowsTaskUnregistrationCommand(taskName),
         ]);
       } else {
         return _unsupported();
       }
-      final status = await getStatus();
+      final status = Platform.isWindows
+          ? await _waitForWindowsTaskMissing()
+          : await getStatus();
       final success =
           !status.installed &&
           (result.exitCode == 0 || status.state == ServiceState.missing);
@@ -295,6 +314,24 @@ class ServiceManager {
     );
   }
 
+  static Future<ServiceStatus> _waitForWindowsTaskMissing() async {
+    for (var attempt = 0; attempt < 20; attempt++) {
+      final query = await Process.run('schtasks.exe', [
+        '/Query',
+        '/TN',
+        taskName,
+      ]);
+      if (query.exitCode != 0) {
+        return const ServiceStatus.missing(
+          scope: ServiceScope.windowsTask,
+          backend: 'windows-task',
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    return getStatus();
+  }
+
   static LinuxServiceManager _linux(
     _DaemonInvocation invocation, {
     ServiceHealthExpectation? healthExpectation,
@@ -336,6 +373,7 @@ class ServiceManager {
     return _DaemonInvocation(
       executable,
       isDartVm ? [Platform.script.toFilePath(), 'daemon'] : const ['daemon'],
+      isDartVm: isDartVm,
     );
   }
 
@@ -375,17 +413,45 @@ exit \$LASTEXITCODE
   }
 
   static String buildWindowsTaskRegistrationCommand({
-    required String encodedDaemonCommand,
+    String? encodedDaemonCommand,
+    String? launcherExecutable,
     required String sanadHome,
     required String taskName,
-  }) =>
-      '''\$ErrorActionPreference = 'Stop'
-\$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedDaemonCommand' -WorkingDirectory '${_escapePowerShellLiteral(sanadHome)}'
+    String serviceInstance = '',
+  }) {
+    if ((encodedDaemonCommand == null) == (launcherExecutable == null)) {
+      throw ArgumentError('Specify exactly one Windows daemon host.');
+    }
+    final action = launcherExecutable == null
+        ? "New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedDaemonCommand'"
+        : "New-ScheduledTaskAction -Execute '${_escapePowerShellLiteral(launcherExecutable)}' -Argument '${_escapePowerShellLiteral(_windowsLauncherArguments(sanadHome, serviceInstance))}'";
+    return '''\$ErrorActionPreference = 'Stop'
+\$action = $action -WorkingDirectory '${_escapePowerShellLiteral(sanadHome)}'
 \$trigger = New-ScheduledTaskTrigger -AtLogOn -User \$env:USERNAME
 \$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
 Register-ScheduledTask -TaskName '${_escapePowerShellLiteral(taskName)}' -Action \$action -Trigger \$trigger -Settings \$settings -Force | Out-Null
 Start-ScheduledTask -TaskName '${_escapePowerShellLiteral(taskName)}'
 ''';
+  }
+
+  static String buildWindowsTaskUnregistrationCommand(String taskName) {
+    final escaped = _escapePowerShellLiteral(taskName);
+    return '\$task = Get-ScheduledTask -TaskName "$escaped" -ErrorAction SilentlyContinue; '
+        'if (\$null -ne \$task) { '
+        'if (\$task.State -eq "Running") { Stop-ScheduledTask -TaskName "$escaped" }; '
+        'Unregister-ScheduledTask -TaskName "$escaped" -Confirm:\$false }';
+  }
+
+  static String _windowsLauncherArguments(
+    String sanadHome,
+    String serviceInstance,
+  ) {
+    final buffer = StringBuffer('--home "${sanadHome.replaceAll('"', '')}"');
+    if (serviceInstance.isNotEmpty) {
+      buffer.write(' --service-instance "$serviceInstance"');
+    }
+    return buffer.toString();
+  }
 
   static String encodePowerShellCommand(String command) {
     final bytes = BytesBuilder(copy: false);
@@ -431,7 +497,12 @@ Start-ScheduledTask -TaskName '${_escapePowerShellLiteral(taskName)}'
 }
 
 class _DaemonInvocation {
-  const _DaemonInvocation(this.executable, this.arguments);
+  const _DaemonInvocation(
+    this.executable,
+    this.arguments, {
+    required this.isDartVm,
+  });
   final String executable;
   final List<String> arguments;
+  final bool isDartVm;
 }

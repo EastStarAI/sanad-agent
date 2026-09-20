@@ -77,10 +77,7 @@ Future<void> _executeCommand(List<String> arguments) async {
       await daemon.main(args);
       return 0;
     },
-    onService: (args) async {
-      await service_cmd.main(args);
-      return 0;
-    },
+    onService: service_cmd.main,
     onSetup: (args) async {
       await setup.main(args);
       return 0;
@@ -93,10 +90,7 @@ Future<void> _executeCommand(List<String> arguments) async {
       await login_cmd.runLogout();
       return 0;
     },
-    onRestart: () async {
-      await service_cmd.main(['restart']);
-      return 0;
-    },
+    onRestart: () => service_cmd.main(['restart']),
   );
 
   final isDaemon = arguments.contains('daemon');
