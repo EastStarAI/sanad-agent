@@ -30,7 +30,7 @@ Startup maintenance of `state.db` is a contained, once-per-boot pass. It must no
 10. `VACUUM` runs when both thresholds are met and the last success is at least 7 days old, including exact equality.
 11. A successful `VACUUM` writes `last_vacuum_succeeded_at`; a failed `VACUUM` does not.
 12. `VACUUM` is rejected while the database owner has an open transaction.
-13. A throwing maintenance service does not prevent durable restore or gateway start.
+13. Failure while resolving the maintenance service from DI, or while running it, does not prevent durable restore or gateway start.
 14. Maintenance runs once from daemon startup and is not repeated by restore.
 15. `provider_model_cache` is unchanged after maintenance.
 16. `VACUUM` is throttled when the last success is younger than 7 days even if both size thresholds are met.

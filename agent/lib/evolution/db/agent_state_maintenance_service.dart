@@ -187,22 +187,3 @@ class AgentStateMaintenanceService {
     );
   }
 }
-
-/// Daemon-owned containment wrapper: swallows unexpected maintenance errors
-/// so durable restore and platform start continue. `agent/bin/daemon.dart`
-/// must call this once per boot after DI and logging, and before
-/// orchestrator attach, restore, and gateway start.
-void runAgentStateMaintenanceSafely(
-  AgentStateMaintenanceService service, {
-  Logger? logger,
-}) {
-  try {
-    service.run();
-  } catch (error, stack) {
-    (logger ?? Logger('DaemonStartup')).warning(
-      'Agent state maintenance failed; durable restore continues.',
-      error,
-      stack,
-    );
-  }
-}

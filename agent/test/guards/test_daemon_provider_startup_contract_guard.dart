@@ -17,9 +17,9 @@ void main() {
     final source = daemon.readAsStringSync();
     expect(source, isNot(contains('config.isValid')));
     expect(source, isNot(contains('Configuration is not valid')));
-    expect(source.contains('_runAgentStateMaintenanceSafely()'), isTrue);
+    expect(source.contains('runAgentStateMaintenanceSafely()'), isTrue);
     expect(
-      source.indexOf('_runAgentStateMaintenanceSafely()'),
+      source.indexOf('runAgentStateMaintenanceSafely()'),
       lessThan(source.indexOf('gatewayManager.attachOrchestrator()')),
     );
     expect(

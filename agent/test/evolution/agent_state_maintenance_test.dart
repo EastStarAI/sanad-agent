@@ -12,6 +12,8 @@ import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart
 import 'package:sanad_agent/evolution/db/runtime/session_work_item_repository.dart';
 import 'package:test/test.dart';
 
+import '../../bin/daemon.dart' as daemon_entry;
+
 void main() {
   final now = DateTime.utc(2026, 8, 30, 12);
 
@@ -654,31 +656,53 @@ void main() {
     });
   });
 
-  test(
-    'startup wrapper continues restore and start when the service throws',
-    () {
-      final db = AgentStateDatabase.inMemory();
-      addTearDown(db.dispose);
-      final logs = <String>[];
+  group('daemon startup maintenance containment', () {
+    late List<String> logs;
+    late StreamSubscription<LogRecord> logSubscription;
+
+    setUp(() {
+      logs = <String>[];
       Logger.root.level = Level.WARNING;
-      final sub = Logger.root.onRecord.listen((record) {
+      logSubscription = Logger.root.onRecord.listen((record) {
         logs.add(record.message);
       });
-      addTearDown(sub.cancel);
+    });
 
+    tearDown(() => logSubscription.cancel());
+
+    test('continues restore and start when the service run throws', () {
+      final db = AgentStateDatabase.inMemory();
+      addTearDown(db.dispose);
       final steps = <String>[];
+
       expect(() {
-        runAgentStateMaintenanceSafely(
-          _ThrowingMaintenanceService(db),
+        daemon_entry.runAgentStateMaintenanceSafely(
+          resolveService: () => _ThrowingMaintenanceService(db),
           logger: Logger('DaemonStartup'),
         );
         steps.add('restore');
         steps.add('start');
       }, returnsNormally);
+
       expect(logs, contains(contains('Agent state maintenance failed')));
       expect(steps, ['restore', 'start']);
-    },
-  );
+    });
+
+    test('contains a failure while resolving the service from DI', () {
+      var continued = false;
+
+      expect(() {
+        daemon_entry.runAgentStateMaintenanceSafely(
+          resolveService: () => throw StateError('forced DI failure'),
+          logger: Logger('DaemonStartup'),
+        );
+        continued = true;
+      }, returnsNormally);
+
+      expect(continued, isTrue);
+      expect(logs, contains(contains('Agent state maintenance failed')));
+    });
+  });
 
   test(
     'daemon calls maintenance once before restore and platform start',
@@ -697,17 +721,17 @@ void main() {
         ),
       ).readAsStringSync();
 
-      expect('_runAgentStateMaintenanceSafely()'.allMatches(daemon).length, 2);
+      expect('runAgentStateMaintenanceSafely()'.allMatches(daemon).length, 1);
       expect(
-        daemon.indexOf('_runAgentStateMaintenanceSafely()'),
+        daemon.indexOf('runAgentStateMaintenanceSafely()'),
         lessThan(daemon.indexOf('gatewayManager.attachOrchestrator()')),
       );
       expect(
-        daemon.indexOf('_runAgentStateMaintenanceSafely()'),
+        daemon.indexOf('runAgentStateMaintenanceSafely()'),
         lessThan(daemon.indexOf('_restoreDurableStateSafely')),
       );
       expect(
-        daemon.indexOf('_runAgentStateMaintenanceSafely()'),
+        daemon.indexOf('runAgentStateMaintenanceSafely()'),
         lessThan(daemon.indexOf('gatewayManager.start()')),
       );
       expect(restorer.contains('cleanupOrphanedWorkItems'), isFalse);

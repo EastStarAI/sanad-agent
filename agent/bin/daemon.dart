@@ -79,7 +79,7 @@ Future<void> main(List<String> args) async {
   // Task 65 — contained state.db maintenance runs once per boot after DI
   // and logging, and before orchestrator attach, durable restore, or
   // opening platform transports.
-  _runAgentStateMaintenanceSafely();
+  runAgentStateMaintenanceSafely();
 
   // Gate F.1 — wire the gateway manager to the orchestrator's response +
   // notice streams BEFORE calling `restorePersistedState()` so that any
@@ -107,8 +107,23 @@ Future<void> main(List<String> args) async {
   // });
 }
 
-void _runAgentStateMaintenanceSafely() {
-  runAgentStateMaintenanceSafely(getIt<AgentStateMaintenanceService>());
+/// Resolves and runs startup database maintenance without allowing any
+/// maintenance-specific failure to prevent durable restore or platform start.
+/// Resolution stays inside the containment boundary so a DI construction
+/// failure is handled the same way as a failure from the maintenance pass.
+void runAgentStateMaintenanceSafely({
+  AgentStateMaintenanceService Function()? resolveService,
+  Logger? logger,
+}) {
+  try {
+    (resolveService ?? () => getIt<AgentStateMaintenanceService>())().run();
+  } catch (error, stack) {
+    (logger ?? Logger('DaemonStartup')).warning(
+      'Agent state maintenance failed; durable restore continues.',
+      error,
+      stack,
+    );
+  }
 }
 
 Future<void> _recoverPendingTitlesSafely(TitleService titleService) async {

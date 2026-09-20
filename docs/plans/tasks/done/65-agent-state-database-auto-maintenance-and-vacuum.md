@@ -249,6 +249,7 @@ PRAGMA freelist_count;
 - Gate B independently verified: schema, page statistics, vacuum-in-transaction guard, prune SQL, maintenance repository, injected-clock service, orphan cleanup moved off `SessionRecoveryRestorer`, shared-connection DI, contained daemon wrapper, schema/QA/`AGENTS.md` updates. Class comment on `AgentStateDatabase` was stale and is now aligned.
 - Gate C independently verified after adding vacuum 7-day throttle coverage, zero-row prune stamp coverage, and a wrapper test that continues restore/start after a throw. Focused analyzer and tests passed. The documented full-tree `dart format lib test` command still reports 16 pre-existing files outside this task; Task 65 Dart files are formatted.
 - Gate D independently verified: schema §7, QA run/skip/fail matrix, no stale "orphan cleanup is test-only" claim, Graphify updated, handoff evidence recorded.
+- Final review corrected the startup containment boundary: `daemon.dart` now owns the `try/catch` and resolves the maintenance service inside it, so both DI construction failures and maintenance execution failures remain non-fatal.
 
 ## Gate A — Audit and Decisions (مكتملة)
 
@@ -455,10 +456,11 @@ Daemon ready
   - `docs/llms.txt`
   - `docs/plans/tasks/done/65-agent-state-database-auto-maintenance-and-vacuum.md`
 - **Focused tests:** From `agent/`:
-  - `fvm dart test test/evolution/agent_state_maintenance_test.dart` — 27 passed
+  - `fvm dart test test/evolution/agent_state_maintenance_test.dart` — 28 passed
   - `fvm dart test test/evolution/runtime_state_repositories_test.dart` — 22 passed
   - `fvm dart test test/guards/test_daemon_provider_startup_contract_guard.dart` — passed
+  - `fvm dart test` — 1796 passed, 13 skipped
 - **Analyzer:** `fvm dart analyze` in `agent/` — no issues found. Task 65 Dart files pass `fvm dart format --output=none --set-exit-if-changed` on the changed paths. The documented full-tree `lib test` format command still reports 16 pre-existing files unrelated to this task.
 - **Daemon-backed verification:** `fvm dart test --concurrency=1 test/evolution/agent_state_maintenance_test.dart --name "daemon-backed"` — passed. Uses unique temp `SANAD_HOME` / `SANAD_STATE_HOME`, `SANAD_E2E_TEST_MODE=true`, gateways disabled, and proves old terminal work is pruned while queued work remains.
-- **Graphify update:** `graphify update .` — rebuilt; `graphify-out/graph.json` and `GRAPH_REPORT.md` updated (20122 nodes).
+- **Graphify update:** `graphify update .` — rebuilt successfully (25090 nodes); visualization was skipped automatically because the graph exceeds the 5000-node HTML limit.
 - **Known limitations/follow-ups:** provider model cache eviction intentionally excluded. File count exceeded the planned 12 because durable ownership required `AGENTS.md` updates in three owners, plus index updates (`docs/llms.txt`, `docs/qa_maintenance/MOC.md`) and a stale call-site sentence in `docs/technical/agent_runtime.md`. Daemon-backed coverage was added to the planned test file rather than a new file. Independent review added vacuum 7-day throttle and zero-row prune stamp tests.
