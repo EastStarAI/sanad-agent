@@ -6,15 +6,15 @@ import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/setup/service_health_verifier.dart';
 import 'package:sanad_agent/core/setup/service_manager.dart';
 
-Future<void> main(List<String> args) async {
+Future<int> main(List<String> args) async {
   if (args.isEmpty || _isHelp(args)) {
     _printUsage();
-    return;
+    return 0;
   }
   final command = args.first.toLowerCase();
   if (command == 'status' && args.length == 1) {
     _printStatus(await ServiceManager.getStatus());
-    return;
+    return 0;
   }
 
   ServiceHealthExpectation? healthExpectation;
@@ -25,13 +25,13 @@ Future<void> main(List<String> args) async {
       stderr.writeln(error.message);
       _printUsage();
       exitCode = 1;
-      return;
+      return 1;
     }
   } else if (args.length != 1) {
     stderr.writeln('This service action does not accept options.');
     _printUsage();
     exitCode = 1;
-    return;
+    return 1;
   }
 
   final operation = switch (command) {
@@ -48,7 +48,7 @@ Future<void> main(List<String> args) async {
     stderr.writeln('Unknown service command: "$command"');
     _printUsage();
     exitCode = 1;
-    return;
+    return 1;
   }
   stdout.writeln(
     '${_operationVerb(command)} Sanad Agent background service...',
@@ -61,10 +61,11 @@ Future<void> main(List<String> args) async {
     );
     _printStatus(result.status);
     exitCode = 1;
-    return;
+    return 1;
   }
   stdout.writeln('Service operation completed successfully.');
   _printStatus(result.status);
+  return 0;
 }
 
 ServiceHealthExpectation? _parseHealthExpectation(List<String> args) {
