@@ -21,16 +21,19 @@ class AgentInstance {
 
 Future<List<AgentInstance>> discoverAgentInstances({
   String? sanadHomeOverride,
+  SanadDevRuntime? runtime,
 }) async {
   final client = HttpClient();
   client.connectionTimeout = const Duration(milliseconds: 150);
   final instances = <AgentInstance>[];
-  final runtime = await discoverSanadDevRuntime(
-    callerDirectory: _callerDirectory,
-    sanadHomeOverride: sanadHomeOverride,
-  );
+  final activeRuntime =
+      runtime ??
+      await discoverSanadDevRuntime(
+        callerDirectory: _callerDirectory,
+        sanadHomeOverride: sanadHomeOverride,
+      );
   final candidateHomes = await discoverLocalGatewayCandidateHomes(
-    runtime,
+    activeRuntime,
     sanadHomeOverride: sanadHomeOverride,
   );
   final credentials = <({String home, String value})>[];

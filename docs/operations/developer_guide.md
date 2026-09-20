@@ -70,9 +70,10 @@ The command contract is layered and explicit:
   `.fvmrc`, and the checkout-owned user shim, then stops.
 - `sanad-dev setup` ensures the install layer, resolves the shared Release
   Contract, standalone `sanad-dev`, Agent, and Client packages in dependency
-  order, then stops without a runtime.
-- `sanad-dev run` ensures only missing or stale install/setup stages, then starts
-  the requested runtime target.
+  order, compiles a checkout-local native runtime CLI through FVM, then stops
+  without a runtime.
+- `sanad-dev run` ensures only missing or stale install/setup/runtime-CLI stages,
+  then starts the requested runtime target.
 - `sanad-dev switch --runtime current` prepares the invoking target checkout and
   then submits the handoff as one command; preparation failure leaves the source
   runtime unchanged.
@@ -84,10 +85,14 @@ the user command. FVM archives come from the official GitHub Release
 and use pinned per-platform SHA-256 digests. No stage requests `sudo` or
 administrator access. Every stage that performs work streams the child process's
 real stdout/stderr, then prints its elapsed time and final result. Already-valid
-stages remain silent, including the ready FVM check. The setup stamp binds the
-Flutter pin and all three `pubspec.lock` digests; valid package configs allow
-unchanged stages to be skipped. A failed stage blocks every dependent stage and
-runtime launch.
+stages remain silent, including the ready FVM check. The dependency setup stamp
+binds the Flutter pin and all package lock digests; valid package configs allow
+unchanged dependency stages to be skipped. A separate runtime-CLI stamp binds
+`scripts/sanad_dev/lib/`, its `pubspec.yaml`, and its lockfile to the native
+artifact. Warm runtime commands execute that artifact directly instead of
+repeating FVM SDK discovery; non-run commands report `sanad-dev setup` rather
+than rebuilding a missing or stale artifact. A failed stage blocks every
+dependent stage and runtime launch.
 
 The POSIX user bin is `${XDG_BIN_HOME:-$HOME/.local/bin}` and the Windows user
 bin is `%LOCALAPPDATA%\SanadDev\bin`. PATH changes affect new terminals; follow

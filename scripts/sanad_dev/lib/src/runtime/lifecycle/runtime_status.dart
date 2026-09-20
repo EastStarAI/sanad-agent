@@ -8,10 +8,13 @@ Future<void> handleRuntimeStatus({
     callerDirectory: _callerDirectory,
     sanadHomeOverride: sanadHomePath,
   );
-  final activeAgents = await discoverAgentInstances(
+  final agentsFuture = discoverAgentInstances(
     sanadHomeOverride: sanadHomePath,
+    runtime: runtime,
   );
-  final activeClients = await discoverClientInstances();
+  final clientsFuture = discoverClientInstances(runtime: runtime);
+  final activeAgents = await agentsFuture;
+  final activeClients = await clientsFuture;
   final processState = selectRuntimeProcessState(
     activeAgents: activeAgents,
     activeClients: activeClients,

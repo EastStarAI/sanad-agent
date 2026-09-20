@@ -24,9 +24,14 @@ Future<void> handleBackgroundRun({
     // A stale diagnostic cannot block a new launch attempt.
   }
 
+  final scriptPath = Platform.script.toFilePath();
   final childArguments = sanadDevBackgroundChildArguments(
-    Platform.script.toFilePath(),
+    scriptPath,
     originalArguments,
+    nativeExecutable: sanadDevUsesNativeRuntimeExecutable(
+      executablePath: Platform.resolvedExecutable,
+      scriptPath: scriptPath,
+    ),
   );
   final process = await Process.start(
     Platform.resolvedExecutable,
