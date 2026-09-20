@@ -475,12 +475,12 @@ fi
     );
 
     test(
-      'non-run runtime command does not bootstrap missing prerequisites',
+      'non-run runtime command directs missing prepared state to setup',
       () async {
         final result = await runBootstrap(const ['status']);
 
         expect(result.exitCode, isNonZero);
-        expect(result.stderr, contains('sanad-dev install'));
+        expect(result.stderr, contains('sanad-dev setup'));
         expect(await calls.exists(), isFalse);
       },
     );
