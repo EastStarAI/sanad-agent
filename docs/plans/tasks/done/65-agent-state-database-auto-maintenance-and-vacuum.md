@@ -1,9 +1,9 @@
 ---
 title: "Task 65: Agent State Database Auto-Maintenance and Vacuum"
 description: "تنظيف عناصر العمل الطرفية القديمة، وفصل تنظيف الأيتام عن استعادة التشغيل، واسترداد مساحة state.db دورياً وفق عتبات آمنة ومحددة."
-status: "in_progress"
-current_gate: "Gate F — CI verification"
-remaining_estimate: "5%"
+status: "complete"
+current_gate: "Done"
+remaining_estimate: "0%"
 priority: "high"
 depends_on: "Task 64 sanad-dev Bootstrap and Complete Component Logs (completed)"
 file_budget: 12
@@ -433,13 +433,13 @@ set -o pipefail; fvm dart test --concurrency=1 test/evolution/agent_state_mainte
 - [x] إبقاء إثبات أن الجاهزية سبقت الصيانة وأن الصف الطرفي لم يُحذف.
 - [x] تحديث QA لتثبيت حد الملكية الحصرية أثناء الاختبار.
 - [x] تمرير الاختبار المركّز خمس مرات، analyzer، وfull Agent suite محلياً.
-- [ ] تمرير CI.
+- [x] مرّ Public CI رقم `35490486112` بالكامل.
 
 ### F Exit / Acceptance
 
 - [x] لا يفتح الاختبار اتصال SQLite ثانياً أثناء امتلاك daemon للقاعدة.
 - [x] لم يظهر `SQLITE_BUSY` في خمسة تشغيلات متتالية للاختبار.
-- [ ] جميع required checks تمر قبل الدمج.
+- [x] جميع required checks مرت قبل الدمج.
 
 ---
 
