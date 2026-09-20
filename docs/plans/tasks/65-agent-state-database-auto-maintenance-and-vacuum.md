@@ -1,9 +1,9 @@
 ---
 title: "Task 65: Agent State Database Auto-Maintenance and Vacuum"
 description: "تنظيف عناصر العمل الطرفية القديمة، وفصل تنظيف الأيتام عن استعادة التشغيل، واسترداد مساحة state.db دورياً وفق عتبات آمنة ومحددة."
-status: "complete"
-current_gate: "Done"
-remaining_estimate: "0%"
+status: "in_progress"
+current_gate: "Gate F — CI verification"
+remaining_estimate: "5%"
 priority: "high"
 depends_on: "Task 64 sanad-dev Bootstrap and Complete Component Logs (completed)"
 file_budget: 12
@@ -373,7 +373,7 @@ set -o pipefail; fvm dart test --concurrency=1 test/evolution/agent_state_mainte
 
 ---
 
-## Gate E — Startup Performance Redesign (قيد التنفيذ)
+## Gate E — Startup Performance Redesign (مكتملة)
 
 ### E.1 Evidence and superseding decisions
 
@@ -420,6 +420,26 @@ set -o pipefail; fvm dart test --concurrency=1 test/evolution/agent_state_mainte
 - [x] تبقى حالات العمل النشطة والجلسات والرسائل وكاش الموديلات دون حذف.
 - [x] analyzer، الاختبارات المركزة، full Agent suite، daemon-backed، وGraphify
       مرت قبل إعادة المهمة إلى `done`.
+
+---
+
+## Gate F — Post-merge CI lock regression
+
+كشف تشغيل `main` رقم `35489731298` أن اختبار الجاهزية كان يفتح
+`AgentStateDatabase` ثانية بينما daemon ما زال يملك القاعدة، فيشغّل migrations
+كتابية ويتسابق على قفل SQLite. هذا عيب في الاختبار لا في الصيانة.
+
+- [x] إيقاف daemon وانتظار خروجه قبل فتح اتصال التحقق.
+- [x] إبقاء إثبات أن الجاهزية سبقت الصيانة وأن الصف الطرفي لم يُحذف.
+- [x] تحديث QA لتثبيت حد الملكية الحصرية أثناء الاختبار.
+- [x] تمرير الاختبار المركّز خمس مرات، analyzer، وfull Agent suite محلياً.
+- [ ] تمرير CI.
+
+### F Exit / Acceptance
+
+- [x] لا يفتح الاختبار اتصال SQLite ثانياً أثناء امتلاك daemon للقاعدة.
+- [x] لم يظهر `SQLITE_BUSY` في خمسة تشغيلات متتالية للاختبار.
+- [ ] جميع required checks تمر قبل الدمج.
 
 ---
 
