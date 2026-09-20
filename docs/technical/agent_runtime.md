@@ -372,7 +372,7 @@ When the daemon restarts, `SessionRunOrchestrator.restorePersistedState()`:
 
 The durable runtime state is persisted by four focused repositories in `agent/lib/evolution/db/runtime/` sharing the same `AgentStateDatabase` connection:
 
-- `SessionWorkItemRepository` owns `session_work_items` — the single durable source of truth for queued and active work (work-item CRUD, FIFO claim, transition graph, route rewrite for queued and non-terminal items, orphan cleanup, cancel-all).
+- `SessionWorkItemRepository` owns `session_work_items` — the single durable source of truth for queued and active work (work-item CRUD, FIFO claim, transition graph, route rewrite for queued and non-terminal items, orphan-row SQL, terminal-row prune SQL, and cancel-all). Recovery joins live sessions and ignores legacy orphans; after readiness, `AgentStateMaintenanceService` performs idle-gated bounded orphan cleanup and 14-day terminal retention.
 - `RuntimeNoticeRepository` owns `session_runtime_notices` — notice persistence and startup hydration.
 - `LegacyRuntimeStateMigrator` owns the legacy `session_suspended_runs` and `session_pending_runs` tables for migration compatibility only; every public method is `@Deprecated`. Production code paths MUST NOT enqueue work through it.
 - `RuntimeStateCleanup` owns the cross-table `clearAllForSession` path used by `Stop` and session deletion. It delegates to notice deletion + work-item cancellation + legacy purge against the same connection to preserve atomic semantics.

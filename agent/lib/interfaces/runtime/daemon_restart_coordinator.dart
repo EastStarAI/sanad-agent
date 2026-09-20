@@ -52,11 +52,14 @@ class DaemonRestartPreparation {
 class DaemonRestartCoordinator {
   DaemonRestartCoordinator({
     SessionRunOrchestrator? sessionOrchestrator,
+    Future<void> Function()? beforeControlledExit,
     DaemonExit? exitDaemon,
   }) : _sessionOrchestrator = sessionOrchestrator,
+       _beforeControlledExit = beforeControlledExit,
        _exitDaemon = exitDaemon ?? exit;
 
   final SessionRunOrchestrator? _sessionOrchestrator;
+  final Future<void> Function()? _beforeControlledExit;
   final DaemonExit _exitDaemon;
   final Logger _logger = Logger('DaemonRestartCoordinator');
   bool _restartInProgress = false;
@@ -236,6 +239,15 @@ class DaemonRestartCoordinator {
 
       if (!identical(_activePreparation, preparation)) {
         return;
+      }
+      try {
+        await _beforeControlledExit?.call();
+      } on Object catch (error, stackTrace) {
+        _logger.warning(
+          'Controlled-exit maintenance failed; restart will continue.',
+          error,
+          stackTrace,
+        );
       }
       _logger.info(
         preparation.outcome == 'forced'

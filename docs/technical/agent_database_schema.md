@@ -19,7 +19,7 @@ To ensure complete user privacy and offline functionality, all conversation logs
 - **Default Windows:** `%USERPROFILE%\.sanad\state.db`
 - **Isolated `sanad-dev` runtime:** `$SANAD_HOME/state.db`. Each linked Git worktree receives one distinct Sanad Home containing both runtime state and identity/provider configuration; the primary checkout uses the ordinary home. External test harnesses may still redirect only state through `SANAD_STATE_HOME`.
 
-`state.db` is owned by a single [AgentStateDatabase](../../agent/lib/evolution/db/agent_state_database.dart) connection (registered as a lazy singleton in DI). It enables `PRAGMA foreign_keys = ON` and creates **all** schema — sessions, messages, scheduled tasks, suspended checkpoints, **and** the Plan 29 provider tables (`provider_instances`, `provider_model_cache`, `recent_model_selections`). `SessionDB` and `ProviderInstanceRepository` share this one connection and never open `state.db` a second time. There is no `providers.db`.
+`state.db` is owned by a single [AgentStateDatabase](../../agent/lib/evolution/db/agent_state_database.dart) connection (registered as a lazy singleton in DI). It enables `PRAGMA foreign_keys = ON` and creates **all** schema — sessions, messages, scheduled tasks, suspended checkpoints, Plan 29 provider tables (`provider_instances`, `provider_model_cache`, `recent_model_selections`), **and** `agent_maintenance_state`. `SessionDB` and `ProviderInstanceRepository` share this one connection and never open `state.db` a second time. There is no `providers.db`.
 
 When constructed without an injected `SessionManager`, suspended-checkpoint and resume collaborators acquire one only when a persistence or resume operation first needs session state. Constructing an unused standalone collaborator, including a test double that overrides its persistence methods, does not open or migrate `state.db`; production DI continues to inject the shared manager explicitly.
 
@@ -478,6 +478,8 @@ Stores persistent work items (queued, running, waiting, blocked, resuming, compl
   - `completed -> completed`
   - `cancelled -> cancelled`
 
+* **Terminal retention**: `completed` and `cancelled` rows whose `updated_at` is strictly older than 14 days are deleted at daemon startup by `AgentStateMaintenanceService`. The comparison is exclusive (`updated_at < cutoff`). Active states (`queued`, `running`, `waiting`, `blocked`, `resuming`) are never deleted by age. Sessions, messages, snapshots, notices, pending steers, stop-recovery outcomes, route transitions, checkpoints, scheduled tasks, and `provider_model_cache` are out of scope.
+
 ### 5.5. Runtime Repository Ownership (Gate E)
 
 The runtime-state persistence layer lives in `agent/lib/evolution/db/` and is split by aggregate since Gate E. Each table has exactly one owning repository; the legacy `PersistedRuntimeStateRepository` is now a transitional facade that redirects every public method to its owning repository without owning any SQL.
@@ -487,7 +489,9 @@ The runtime-state persistence layer lives in `agent/lib/evolution/db/` and is sp
 | `session_work_items` | `SessionWorkItemRepository` | `agent/lib/evolution/db/runtime/session_work_item_repository.dart` |
 | `session_runtime_notices` | `RuntimeNoticeRepository` | `agent/lib/evolution/db/runtime/runtime_notice_repository.dart` |
 | `session_suspended_runs`, `session_pending_runs` (legacy) | `LegacyRuntimeStateMigrator` (all methods `@Deprecated`) | `agent/lib/evolution/db/runtime/legacy_runtime_state_migrator.dart` |
+| `agent_maintenance_state` | `AgentMaintenanceStateRepository` | `agent/lib/evolution/db/agent_maintenance_state_repository.dart` |
 | — (composition) | `RuntimeStateCleanup` owns `clearAllForSession` | `agent/lib/evolution/db/runtime/runtime_state_cleanup.dart` |
+| — (startup policy) | `AgentStateMaintenanceService` owns orphan cleanup timing, 14-day terminal prune, and thresholded `VACUUM` | `agent/lib/evolution/db/agent_state_maintenance_service.dart` |
 | DTOs + `SessionWorkState` enum + transitional forwarding | `PersistedRuntimeStateRepository` (facade) | `agent/lib/evolution/db/persisted_runtime_state_repository.dart` |
 
 * **Single database handle**: every repository receives the same `AgentStateDatabase.db` handle (the facade constructs each sub-repository with `late final`), so cross-table operations stay atomic and no extra connection is opened.
@@ -718,3 +722,44 @@ Existing sessions become independent roots: `lineage_id = session_id` and
 If deletion is rejected, the parent row and every child parent link roll back
 together. On success, child rows, copied history, `lineage_id`, and fork-point
 identities remain.
+
+---
+
+## 9. Agent State Maintenance (Task 65)
+
+Maintenance is excluded from the daemon readiness path. Startup restores durable work, starts transports, and emits `Daemon is running` before `AgentStateMaintenanceService` is scheduled. The service then waits for a 30-second grace period and for the runtime activity projection to become idle. Failure is contained and cannot affect the ready daemon.
+
+Recovery discovers restorable work with an inner join to `sessions`, so legacy orphan rows cannot affect reconstruction and do not need a startup delete pass. `SessionRecoveryRestorer` never owns retention or database maintenance.
+
+`AgentStateDatabase` creates `agent_maintenance_state` idempotently, exposes typed page statistics (`page_size`, `page_count`, `freelist_count`), and owns `VACUUM`. It rejects `VACUUM` while this owner has an open transaction. Every repository and maintenance phase uses the shared connection.
+
+### 9.1. `agent_maintenance_state`
+
+Stores success timestamps and one pending-work marker. A missing, malformed, or future timestamp is treated as due so a bad stamp cannot block maintenance.
+
+| Column | Type | Constraints | Description |
+|---|---|---|---|
+| `key` | `TEXT` | Primary Key | Known key only |
+| `value` | `TEXT` | Non-null | UTC ISO8601 success timestamp or marker value |
+
+Known keys:
+
+| Key | Written after | Meaning / due rule |
+|---|---|---|
+| `last_terminal_prune_succeeded_at` | Every eligible terminal identity has been processed, including a zero-row pass | Missing/malformed/future, or at least 24 hours since last success |
+| `last_vacuum_succeeded_at` | A pending full `VACUUM` returns successfully at controlled exit | Missing/malformed/future, or at least 7 days since last success |
+| `vacuum_pending` | Post-ready page statistics meet both vacuum thresholds | `true` requests reclamation at the next safe controlled-exit boundary; success changes it to `false` |
+
+Terminal and orphan identities are discovered without decoding payloads and deleted in batches of 25. Each batch is an independent conditional transaction. The service yields and rechecks runtime idleness before the next batch. Partial progress is safe and idempotent; the prune timestamp remains absent when the pass does not complete, so the next idle pass retries the remaining rows.
+
+### 9.2. Post-ready cleanup and controlled-exit vacuum
+
+After readiness:
+
+1. Wait for the grace period and no active, queued, suspended, resuming, compacting, or restart-draining work.
+2. Discover orphan identities and delete bounded batches, pausing whenever activity appears.
+3. When terminal prune is due, delete only `completed`/`cancelled` rows with `updated_at < nowUtc - 14 days` in the same bounded manner, then write the success timestamp.
+4. Check the vacuum success timestamp before reading page statistics. If vacuum is throttled, no page PRAGMA is read. Otherwise set `vacuum_pending=true` only when `reclaimableBytes >= 64 MiB` and `freeRatio >= 0.20`.
+5. Never run full `VACUUM` while transports are serving. After a controlled restart drain is safe and its response has flushed, `DaemonRestartCoordinator` runs the pending vacuum immediately before process exit. Failure leaves the marker pending and does not cancel restart.
+
+`provider_model_cache` is not pruned. Conversation `messages`, sessions, scheduled tasks, and active work remain complete. Routine skips stay quiet.
