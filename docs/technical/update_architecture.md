@@ -91,8 +91,10 @@ and, on start failure, restores and reinstalls the previous executable. The
 single verified Windows Agent artifact carries a SHA-256-bound native launcher
 in its PE overlay. `service install` extracts that launcher to a hash-versioned
 file beside `sanad.exe`, rejects a missing or non-GUI launcher in packaged
-builds, and registers the Scheduled Task against it directly. The launcher uses
-the Windows GUI subsystem, starts `sanad.exe daemon` with `CREATE_NO_WINDOW`,
+builds, and registers the Scheduled Task against it directly. The launcher
+statically links the MSVC runtime so standalone Agent installs do not depend on
+a separately installed Visual C++ Redistributable. It uses the Windows GUI
+subsystem and starts `sanad.exe daemon` with `CREATE_NO_WINDOW`,
 redirects standard streams to Sanad Home logs, and retains process/job ownership
 until the Agent exits. The Client still downloads and verifies one Agent
 artifact and owns no launcher logic. Source/FVM terminals remain developer-owned
