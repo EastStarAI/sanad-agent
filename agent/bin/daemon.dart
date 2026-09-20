@@ -76,11 +76,6 @@ Future<void> main(List<String> args) async {
 
   // Future: Register more platforms (e.g., SocketPlatform, WebhookPlatform)
 
-  // Task 65 — contained state.db maintenance runs once per boot after DI
-  // and logging, and before orchestrator attach, durable restore, or
-  // opening platform transports.
-  runAgentStateMaintenanceSafely();
-
   // Gate F.1 — wire the gateway manager to the orchestrator's response +
   // notice streams BEFORE calling `restorePersistedState()` so that any
   // queue-only bootstrap drained during restore (which fires responses and
@@ -99,6 +94,11 @@ Future<void> main(List<String> args) async {
     'Daemon is running. Press Ctrl+C to stop (if not in interactive mode).',
   );
 
+  // Task 65 — maintenance starts only after durable restore, transports, and
+  // the readiness signal. It waits for a grace period and runtime idleness,
+  // then yields between bounded delete batches.
+  unawaited(runAgentStateMaintenanceSafely());
+
   // Keep the process alive if needed, though CliPlatform has its own loop.
   // ProcessSignal.sigint.watch().listen((_) async {
   //   print('\nShutting down...');
@@ -107,19 +107,23 @@ Future<void> main(List<String> args) async {
   // });
 }
 
-/// Resolves and runs startup database maintenance without allowing any
-/// maintenance-specific failure to prevent durable restore or platform start.
-/// Resolution stays inside the containment boundary so a DI construction
-/// failure is handled the same way as a failure from the maintenance pass.
-void runAgentStateMaintenanceSafely({
+/// Resolves and runs deferred database maintenance without allowing any
+/// maintenance-specific failure to affect the ready daemon.
+Future<void> runAgentStateMaintenanceSafely({
   AgentStateMaintenanceService Function()? resolveService,
+  bool Function()? hasRuntimeActivity,
   Logger? logger,
-}) {
+}) async {
   try {
-    (resolveService ?? () => getIt<AgentStateMaintenanceService>())().run();
+    final service =
+        (resolveService ?? () => getIt<AgentStateMaintenanceService>())();
+    final activity =
+        hasRuntimeActivity ??
+        () => getIt<SessionRunOrchestrator>().hasMaintenanceBlockingActivity;
+    await service.runAfterReady(hasRuntimeActivity: activity);
   } catch (error, stack) {
     (logger ?? Logger('DaemonStartup')).warning(
-      'Agent state maintenance failed; durable restore continues.',
+      'Deferred agent state maintenance failed; daemon remains available.',
       error,
       stack,
     );

@@ -3,6 +3,7 @@ title: "Task 65: Agent State Database Auto-Maintenance and Vacuum"
 description: "تنظيف عناصر العمل الطرفية القديمة، وفصل تنظيف الأيتام عن استعادة التشغيل، واسترداد مساحة state.db دورياً وفق عتبات آمنة ومحددة."
 status: "complete"
 current_gate: "Done"
+remaining_estimate: "0%"
 priority: "high"
 depends_on: "Task 64 sanad-dev Bootstrap and Complete Component Logs (completed)"
 file_budget: 12
@@ -15,7 +16,8 @@ qa_contract: "docs/qa_maintenance/agent_state_database_maintenance_qa.md"
 ## 1. الهدف
 
 منع النمو غير المحدود لقاعدة بيانات الوكيل المحلية `state.db` عبر صيانة آمنة
-تعمل مرة أثناء إقلاع الـdaemon وقبل استعادة العمل الدائم أو فتح منصات الاتصال:
+لا تؤخر جاهزية الـdaemon: يستعيد الوكيل العمل ويفتح منصات الاتصال أولاً، ثم ينفذ
+التنظيف تدريجياً أثناء الخمول، ويؤجل الضغط الكامل إلى حد إيقاف آمن:
 
 1. الإبقاء على تنظيف عناصر العمل التي لم تعد جلستها موجودة، مع نقله من مسار
    استعادة التشغيل إلى مالك صيانة مستقل.
@@ -66,11 +68,7 @@ qa_contract: "docs/qa_maintenance/agent_state_database_maintenance_qa.md"
 
 - يضاف `AgentStateMaintenanceService` تحت `agent/lib/evolution/db/` ويُسجل في
   `agent/lib/core/di.dart` باستخدام اتصال `AgentStateDatabase` المشترك.
-- يستدعي `agent/bin/daemon.dart` الصيانة **مرة واحدة فقط لكل إقلاع** بعد اكتمال
-  DI وتهيئة logging، وقبل:
-  1. `GatewayManager.attachOrchestrator()`؛
-  2. `SessionRunOrchestrator.restorePersistedState()`؛
-  3. `GatewayManager.start()`.
+- يجدول `agent/bin/daemon.dart` الصيانة مرة واحدة بعد اكتمال DI وlogging وdurable restore و`GatewayManager.start()` وبعد طباعة إشارة الجاهزية. تنتظر الخدمة 30 ثانية والخمول قبل أي SQL للصيانة.
 - `agent/bin/` يملك الاستدعاء واحتواء الخطأ فقط؛ لا يملك SQL أو سياسة الاحتفاظ.
 - تزال دعوة `cleanupOrphanedWorkItems()` من `SessionRecoveryRestorer` بعد نقلها
   إلى خدمة الصيانة، حتى لا توجد صيانة مكررة أو SQL-maintenance ضمن مالك
@@ -79,11 +77,10 @@ qa_contract: "docs/qa_maintenance/agent_state_database_maintenance_qa.md"
 
 ### 3.2 فصل تنظيف الأيتام عن الصيانة المقيدة زمنياً
 
-- تنظيف الأيتام يُنفّذ مرة في كل إقلاع قبل فحص throttle، حفاظاً على السلوك
-  الدفاعي الحالي ولأنه يصحح سلامة مرجعية لا سياسة retention.
-- يظل SQL حذف عناصر العمل داخل `SessionWorkItemRepository`، مع API يعيد عدد
-  الصفوف المتأثرة ويقبل `AgentStateTransaction` عند الحاجة.
-- فشل تنظيف الأيتام يُسجّل ضمن نتيجة الصيانة المحتواة ولا يمنع استعادة العمل.
+- تتجاهل استعلامات الاستعادة orphan rows عبر join مع `sessions` دون حذف مسبق.
+- بعد الجاهزية والخمول تكتشف الخدمة هويات الأيتام وتحذفها في دفعات محدودة، مع إعادة التحقق من غياب الجلسة داخل كل transaction.
+- يظل SQL داخل `SessionWorkItemRepository`، ويعيد كل batch عدد الصفوف المتأثرة.
+- فشل التنظيف يُحتوى ولا يؤثر في الاستعادة أو daemon الجاهز.
 
 ### 3.3 سياسة الاحتفاظ بعناصر العمل الطرفية
 
@@ -121,6 +118,7 @@ CREATE TABLE IF NOT EXISTS agent_maintenance_state (
 
 - `last_terminal_prune_succeeded_at`
 - `last_vacuum_succeeded_at`
+- `vacuum_pending`
 
 القواعد:
 
@@ -129,10 +127,8 @@ CREATE TABLE IF NOT EXISTS agent_maintenance_state (
 - كل الطوابع UTC ISO8601، وتمثل **نجاحاً** لا مجرد محاولة.
 - قيمة مفقودة أو malformed أو مستقبلية تُعامل على أنها مستحقة؛ لا يُسمح لطابع
   مستقبلي بمنع الصيانة إلى أجل غير معلوم.
-- حذف terminal rows وتحديث `last_terminal_prune_succeeded_at` يلتزمان داخل
-  transaction واحدة. عند الفشل يُعمل rollback ولا يتقدم الطابع.
-- عند نجاح prune بلا صفوف محذوفة، يُحدّث طابع النجاح لمنع إعادة المسح المكلف
-  في كل إقلاع.
+- حذف terminal rows يتم في transactions محدودة مستقلة. التقدم الجزئي آمن وidempotent، ولا يتقدم `last_terminal_prune_succeeded_at` حتى تكتمل كل الدفعات.
+- عند نجاح prune بلا صفوف محذوفة، يُحدّث طابع النجاح لمنع إعادة المسح المكلف.
 - `last_vacuum_succeeded_at` لا يُكتب إلا بعد عودة `VACUUM` بنجاح؛ إذ لا يجوز
   تشغيل `VACUUM` داخل transaction.
 - تعتمد الاختبارات clock محقونة؛ لا تستخدم sleeps أو توقيت الجدار الحقيقي.
@@ -158,7 +154,7 @@ PRAGMA freelist_count;
 2. `reclaimableBytes >= 64 * 1024 * 1024`؛
 3. `freeRatio >= 0.20`؛
 4. لا توجد transaction مفتوحة؛
-5. الصيانة في نافذة الإقلاع المحددة قبل الاستعادة وفتح transports.
+5. `vacuum_pending=true` وبعد safe controlled restart drain وflush للاستجابة وقبل خروج العملية القديمة.
 
 لا يشترط أن يكون الفراغ قد نشأ في الإقلاع الحالي؛ يجوز استرداد صفحات حرة
 متراكمة من حذف سابق. لا تُشغّل `VACUUM` لمجرد حذف صف واحد أو عدة صفوف صغيرة.
@@ -176,12 +172,9 @@ PRAGMA freelist_count;
 
 ### 3.7 احتواء الفشل والسجلات
 
-- wrapper الإقلاع يلتقط كل أخطاء الصيانة، يسجل warning موجزاً، ثم يكمل
-  `restorePersistedState()` وبدء الـdaemon.
-- فشل prune لا يسمح بتشغيل `VACUUM` ضمن نفس محاولة الصيانة؛ النتيجة تصبح failed
-  وتُترك الطوابع التي لم تنجح دون تغيير.
-- فشل `VACUUM` بعد prune ناجحة لا يتراجع عن الحذف ولا يغيّر طابع vacuum؛ يعاد
-  التقييم في الإقلاع التالي.
+- wrapper ما بعد الجاهزية يلتقط أخطاء حل الخدمة والتنفيذ ويسجل warning موجزاً دون التأثير في daemon.
+- فشل prune يترك طابع النجاح مستحقاً؛ الدفعات الملتزمة تبقى محذوفة بأمان وتستكمل المحاولة اللاحقة الباقي.
+- فشل `VACUUM` عند controlled exit يترك `vacuum_pending=true` ولا يلغي restart المقبولة.
 - لا تدخل payloads أو `continuation_metadata` أو مسار `SANAD_HOME` في السجلات.
 - عند تنفيذ عمل فعلي، يسجل summary واحد فقط: orphan count، terminal count، قرار
   vacuum، والمساحة القابلة للاسترداد. حالات skip الاعتيادية تكون `fine` أو بلا
@@ -196,9 +189,9 @@ PRAGMA freelist_count;
 - تغيير عقود restart/retry/stop أو state transition graph.
 - تنظيف `provider_model_cache` أو recent model selections.
 - إضافة صفحة إعدادات أو أوامر CLI للصيانة اليدوية.
-- جدولة maintenance أثناء عمل الـdaemon.
-- تغيير SQLite إلى `auto_vacuum=INCREMENTAL` أو إضافة background worker.
-- تشغيل الصيانة على قاعدة المستخدم ضمن الاختبارات أو التحقق اليدوي غير المصرح.
+- فتح اتصال SQLite ثانٍ أو إضافة worker/isolate يلتف على مالك الاتصال المشترك.
+- تغيير SQLite إلى `auto_vacuum=INCREMENTAL`.
+- تشغيل الصيانة على قاعدة المستخدم الحية؛ قياس الأداء يستخدم نسخة متسقة معزولة ومصرحاً بها فقط.
 
 ---
 
@@ -245,11 +238,11 @@ PRAGMA freelist_count;
 
 ## Independent review (worktree)
 
-- Gate A independently verified against locked decisions and current owners: single `AgentStateDatabase` connection, 14-day exclusive terminal retention, model-cache exclusion, 24h/7d stamps, 64MiB+20% vacuum, startup call before attach/restore/start.
+- Gate A independently verified the initial design; its startup call placement was later rejected and superseded by Gate E performance evidence.
 - Gate B independently verified: schema, page statistics, vacuum-in-transaction guard, prune SQL, maintenance repository, injected-clock service, orphan cleanup moved off `SessionRecoveryRestorer`, shared-connection DI, contained daemon wrapper, schema/QA/`AGENTS.md` updates. Class comment on `AgentStateDatabase` was stale and is now aligned.
 - Gate C independently verified after adding vacuum 7-day throttle coverage, zero-row prune stamp coverage, and a wrapper test that continues restore/start after a throw. Focused analyzer and tests passed. The documented full-tree `dart format lib test` command still reports 16 pre-existing files outside this task; Task 65 Dart files are formatted.
 - Gate D independently verified: schema §7, QA run/skip/fail matrix, no stale "orphan cleanup is test-only" claim, Graphify updated, handoff evidence recorded.
-- Final review corrected the startup containment boundary: `daemon.dart` now owns the `try/catch` and resolves the maintenance service inside it, so both DI construction failures and maintenance execution failures remain non-fatal.
+- Gate E performance review on the authorized 1.088GB fixture moved cleanup after readiness, made deletion idle-gated and bounded, and moved full vacuum to controlled exit. First-upgrade readiness stayed within the 5%/25ms gate and steady readiness improved slightly.
 
 ## Gate A — Audit and Decisions (مكتملة)
 
@@ -259,7 +252,7 @@ PRAGMA freelist_count;
 - [x] استبعاد model cache حفاظاً على stale fallback.
 - [x] اعتماد prune كل 24 ساعة و`VACUUM` كل 7 أيام بعتبتي 64MiB و20%.
 - [x] اعتماد جدول metadata داخل `state.db` وطوابع نجاح منفصلة.
-- [x] تثبيت موضع الاستدعاء قبل الاستعادة وفتح transports.
+- [x] ~~تثبيت موضع الاستدعاء قبل الاستعادة وفتح transports.~~ نُسخ بقرار Gate E: الجدولة بعد الجاهزية.
 
 ### A Exit
 
@@ -277,7 +270,7 @@ PRAGMA freelist_count;
 - [x] إضافة `AgentStateMaintenanceService` بساعة محقونة ونتيجة typed.
 - [x] نقل orphan cleanup من `SessionRecoveryRestorer` إلى service دون تكرار.
 - [x] تسجيل service في DI عبر اتصال `AgentStateDatabase` المشترك.
-- [x] إضافة wrapper الإقلاع المحتوي للفشل قبل restore/platform start.
+- [x] ~~إضافة wrapper الإقلاع قبل restore/platform start.~~ أصبح wrapper بعد الجاهزية ويحتوي فشل الحل والتنفيذ.
 - [x] تحديث `docs/technical/agent_database_schema.md` بجدول وسياسة الصيانة.
 - [x] إضافة `docs/qa_maintenance/agent_state_database_maintenance_qa.md`.
 - [x] تحديث أقرب `AGENTS.md` فقط إذا غيّر التنفيذ قانوناً دائماً أو جعل نصاً
@@ -370,13 +363,63 @@ set -o pipefail; fvm dart test --concurrency=1 test/evolution/agent_state_mainte
 
 ### D Exit / Definition of Done
 
-- [x] ينفذ daemon صيانة واحدة محتواة قبل restore وفتح transports.
+- [x] ~~ينفذ daemon صيانة واحدة محتواة قبل restore وفتح transports.~~ نُسخ هذا القرار بقياس Gate E؛ الصيانة الثقيلة لا يجوز أن تكون في مسار الجاهزية.
 - [x] تحذف فقط عناصر العمل الطرفية الأقدم من 14 يوماً.
 - [x] تبقى عناصر العمل النشطة والجلسات والرسائل وكاش الموديلات دون حذف.
 - [x] لا تعمل prune أكثر من مرة كل 24 ساعة بعد نجاحها.
 - [x] لا تعمل `VACUUM` أكثر من مرة كل 7 أيام ولا دون 64MiB و20% صفحات حرة.
 - [x] فشل أي مرحلة لا يمنع daemon من الاستعادة والإقلاع.
 - [x] الوثائق والاختبارات وGraphify متزامنة مع التنفيذ.
+
+---
+
+## Gate E — Startup Performance Redesign (قيد التنفيذ)
+
+### E.1 Evidence and superseding decisions
+
+قياس AOT على نسخة SQLite متسقة من قاعدة مستخدم بحجم `1,088,159,744` بايت أثبت
+أن التصميم الأول غير صالح للأداء: `main` وصل إلى الجاهزية خلال `483ms`، بينما
+التنفيذ الأول استغرق `9.89s`. حذف 1,872 صفاً طرفياً وحده استغرق `3.51s` وحرر
+نحو `380MB`، ثم نفذت `VACUUM` في المسار الحرج. لذلك تنسخ القرارات التالية أي
+نص سابق يضع orphan cleanup أو terminal prune أو page statistics أو `VACUUM`
+قبل جاهزية المنصات:
+
+- startup restore يتجاهل orphan work items عبر join مع `sessions` ولا يحتاج
+  حذفها مسبقاً.
+- بعد `GatewayManager.start()` وإعلان الجاهزية، تنتظر الصيانة فترة سماح ثم تعمل
+  فقط عندما لا توجد جولات أو queue أو recovery نشطة.
+- orphan cleanup وterminal prune تنفذان على دفعات صغيرة محدودة، مع yield وإعادة
+  فحص الخمول بين الدفعات. التقدم الجزئي آمن وidempotent؛ طابع النجاح لا يكتب
+  إلا عند اكتمال المسح.
+- فحص page statistics لا يحدث عندما يكون vacuum throttle غير مستحق.
+- `VACUUM` الكاملة لا تعمل أثناء startup ولا أثناء خدمة المستخدم. عند تحقق
+  العتبات يسجل `vacuum_pending`، وتنفذ فقط بعد controlled restart drain وبعد
+  flush لاستجابة restart وقبل خروج العملية القديمة.
+- إذا لم يحدث إيقاف آمن تبقى الصيانة pending؛ استرداد المساحة لا يعلو على
+  جاهزية الوكيل أو سلامة العمل.
+
+### E.2 Execution checklist
+
+- [x] جعل recovery queries تتجاهل orphan work items دون حذف startup.
+- [x] إزالة الصيانة المتزامنة من المسار السابق لـrestore/start.
+- [x] إضافة post-ready idle/grace scheduler محتوى للفشل وقابل للإلغاء.
+- [x] تحويل orphan/terminal deletion إلى bounded batches مع pause عند النشاط.
+- [x] تسجيل vacuum pending بعد thresholds دون تنفيذها أثناء الخدمة.
+- [x] تنفيذ pending vacuum عند حد controlled restart الآمن فقط.
+- [x] تحديث عقود schema/runtime وQA بما يزيل قرارات startup القديمة.
+- [x] إضافة اختبارات ترتيب الجاهزية، الخمول، batching، pause/resume، وvacuum
+      shutdown boundary.
+
+### E Exit / Acceptance
+
+- [x] على fixture قاعدة 1.088GB، median readiness للفرع لا يتجاوز `main`؛ تحقق first-upgrade عند `+8.435ms / +2.04%` ضمن الهامش، وsteady-state أسرع `0.826ms / 0.24%`.
+- [x] لا تنفذ `DELETE`, page statistics، أو `VACUUM` قبل إعلان الجاهزية.
+- [x] بدء عمل مستخدم يوقف دفعات الصيانة قبل الدفعة التالية.
+- [x] لا تعمل `VACUUM` أثناء خدمة transports؛ تعمل فقط بعد drain آمن، وتبقى
+      pending عند غياب هذا الحد.
+- [x] تبقى حالات العمل النشطة والجلسات والرسائل وكاش الموديلات دون حذف.
+- [x] analyzer، الاختبارات المركزة، full Agent suite، daemon-backed، وGraphify
+      مرت قبل إعادة المهمة إلى `done`.
 
 ---
 
@@ -409,27 +452,27 @@ set -o pipefail; fvm dart test --concurrency=1 test/evolution/agent_state_mainte
 
 ```text
 Daemon startup
-  Agent state maintenance
-    orphan cleanup: 0 deleted
-    terminal prune: due, 142 deleted, success timestamp committed
-    free pages: 96 MiB / 31%
-    vacuum: due and above both thresholds, executed successfully
-  Durable state restore
-    active/queued/waiting work restored without reclassification by maintenance
+  Durable state restore (orphan rows ignored by live-session join)
   Gateway platforms start
 Daemon ready
+  30-second grace + idle
+  Bounded orphan/terminal batches with yields
+  free pages: 96 MiB / 31% -> vacuum_pending=true
+Controlled restart
+  safe drain + response flush
+  pending VACUUM executes
+  old process exits; new daemon reaches readiness without maintenance delay
 ```
 
 وسيناريو الاحتواء الإلزامي:
 
 ```text
-Daemon startup
-  Agent state maintenance
-    terminal prune failed; transaction rolled back; warning emitted
-    vacuum skipped; success timestamps unchanged
-  Durable state restore continues
-  Gateway platforms start
-Daemon ready
+Daemon ready and serving
+  deferred prune batch fails; warning emitted; success stamp remains due
+Controlled restart
+  pending VACUUM fails; marker remains pending; restart still exits
+Next daemon startup
+  restore/start/readiness remain independent from maintenance failure
 ```
 
 ---
@@ -456,11 +499,13 @@ Daemon ready
   - `docs/llms.txt`
   - `docs/plans/tasks/done/65-agent-state-database-auto-maintenance-and-vacuum.md`
 - **Focused tests:** From `agent/`:
-  - `fvm dart test test/evolution/agent_state_maintenance_test.dart` — 28 passed
+  - `fvm dart test test/evolution/agent_state_maintenance_test.dart` — 30 passed
   - `fvm dart test test/evolution/runtime_state_repositories_test.dart` — 22 passed
+  - `fvm dart test test/interfaces/runtime/daemon_restart_coordinator_test.dart` — 14 passed
   - `fvm dart test test/guards/test_daemon_provider_startup_contract_guard.dart` — passed
-  - `fvm dart test` — 1796 passed, 13 skipped
-- **Analyzer:** `fvm dart analyze` in `agent/` — no issues found. Task 65 Dart files pass `fvm dart format --output=none --set-exit-if-changed` on the changed paths. The documented full-tree `lib test` format command still reports 16 pre-existing files unrelated to this task.
-- **Daemon-backed verification:** `fvm dart test --concurrency=1 test/evolution/agent_state_maintenance_test.dart --name "daemon-backed"` — passed. Uses unique temp `SANAD_HOME` / `SANAD_STATE_HOME`, `SANAD_E2E_TEST_MODE=true`, gateways disabled, and proves old terminal work is pruned while queued work remains.
-- **Graphify update:** `graphify update .` — rebuilt successfully (25090 nodes); visualization was skipped automatically because the graph exceeds the 5000-node HTML limit.
+  - `fvm dart test` — 1800 passed, 13 skipped
+- **Analyzer/format:** `fvm dart analyze` — no issues. Focused Dart format check passed.
+- **Daemon-backed verification:** sequential named test passed and proves `Daemon is running` precedes deferred deletion while queued work remains intact.
+- **Large-fixture performance:** authorized read-only backup, 1,088,159,744 bytes, AOT, 25 alternating samples per side. First-upgrade median: `main=414.049ms`, branch=`422.484ms` (`+8.435ms`, `+2.04%`, within gate). Steady median: `main=346.422ms`, branch=`345.596ms` (`-0.826ms`, `-0.24%`). Deferred pass completed 1,872 terminal deletes after readiness, marked 380,420,096 reclaimable bytes pending, and did not shrink the serving file.
+- **Graphify update:** `graphify update .` — rebuilt successfully (25113 nodes); HTML visualization skipped automatically above the 5000-node limit.
 - **Known limitations/follow-ups:** provider model cache eviction intentionally excluded. File count exceeded the planned 12 because durable ownership required `AGENTS.md` updates in three owners, plus index updates (`docs/llms.txt`, `docs/qa_maintenance/MOC.md`) and a stale call-site sentence in `docs/technical/agent_runtime.md`. Daemon-backed coverage was added to the planned test file rather than a new file. Independent review added vacuum 7-day throttle and zero-row prune stamp tests.

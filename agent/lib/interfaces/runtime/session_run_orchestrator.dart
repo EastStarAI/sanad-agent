@@ -229,6 +229,17 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         persistedState?.findActiveWorkItem(sessionId) != null;
   }
 
+  /// Whether deferred database maintenance must pause before its next batch.
+  /// This projection is checked only after durable startup restoration.
+  bool get hasMaintenanceBlockingActivity =>
+      _controlledRestartDraining ||
+      _busySessions.isNotEmpty ||
+      _suspendedEvents.isNotEmpty ||
+      _compactingSessions.isNotEmpty ||
+      _resumingSessions.isNotEmpty ||
+      _queueCoordinator.sessionIds.isNotEmpty ||
+      _turnExecutor.activeSessionIds.isNotEmpty;
+
   bool isSessionCompacting(String sessionId) =>
       _compactingSessions.contains(sessionId);
 

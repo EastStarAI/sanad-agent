@@ -8,10 +8,12 @@ class AgentMaintenanceStateRepository {
   static const lastTerminalPruneSucceededAtKey =
       'last_terminal_prune_succeeded_at';
   static const lastVacuumSucceededAtKey = 'last_vacuum_succeeded_at';
+  static const vacuumPendingKey = 'vacuum_pending';
 
   static const Set<String> knownKeys = {
     lastTerminalPruneSucceededAtKey,
     lastVacuumSucceededAtKey,
+    vacuumPendingKey,
   };
 
   final AgentStateDatabase _state;
@@ -58,13 +60,32 @@ class AgentMaintenanceStateRepository {
     );
   }
 
+  bool isVacuumPending() {
+    final rows = _state.db.select(
+      'SELECT value FROM agent_maintenance_state WHERE key = ?',
+      [vacuumPendingKey],
+    );
+    return rows.isNotEmpty && rows.first['value'] == 'true';
+  }
+
+  void writeVacuumPending(bool pending, {AgentStateTransaction? transaction}) {
+    _writeValue(vacuumPendingKey, pending ? 'true' : 'false', transaction);
+  }
+
   void writeSucceededAt(
     String key,
     DateTime succeededAt, {
     AgentStateTransaction? transaction,
   }) {
+    _writeValue(key, succeededAt.toUtc().toIso8601String(), transaction);
+  }
+
+  void _writeValue(
+    String key,
+    String value,
+    AgentStateTransaction? transaction,
+  ) {
     _assertKnownKey(key);
-    final value = succeededAt.toUtc().toIso8601String();
     void write(AgentStateTransaction tx) {
       tx.db.execute(
         '''

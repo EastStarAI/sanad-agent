@@ -285,6 +285,9 @@ void setupDI() {
   getIt.registerLazySingleton<DaemonRestartCoordinator>(
     () => DaemonRestartCoordinator(
       sessionOrchestrator: getIt<SessionRunOrchestrator>(),
+      beforeControlledExit: () async {
+        getIt<AgentStateMaintenanceService>().runPendingVacuum();
+      },
     ),
   );
   getIt.registerLazySingleton<DeviceSettingsService>(

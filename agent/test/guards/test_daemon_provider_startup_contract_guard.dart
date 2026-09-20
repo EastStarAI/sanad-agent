@@ -18,13 +18,18 @@ void main() {
     expect(source, isNot(contains('config.isValid')));
     expect(source, isNot(contains('Configuration is not valid')));
     expect(source.contains('runAgentStateMaintenanceSafely()'), isTrue);
-    expect(
-      source.indexOf('runAgentStateMaintenanceSafely()'),
-      lessThan(source.indexOf('gatewayManager.attachOrchestrator()')),
-    );
+    final maintenanceCall = source.indexOf('runAgentStateMaintenanceSafely()');
     expect(
       source.indexOf('_restoreDurableStateSafely'),
       lessThan(source.indexOf('gatewayManager.start()')),
+    );
+    expect(
+      maintenanceCall,
+      greaterThan(source.indexOf('gatewayManager.start()')),
+    );
+    expect(
+      maintenanceCall,
+      greaterThan(source.indexOf('Daemon is running. Press Ctrl+C')),
     );
   });
 }

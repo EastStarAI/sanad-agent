@@ -267,13 +267,14 @@ void main() {
       );
       db.db.execute('PRAGMA foreign_keys = ON');
 
+      expect(workItems.findSessionIdsWithRestorableWorkItems(), ['s-live']);
       expect(workItems.cleanupOrphanedWorkItems(), 1);
       expect(workItems.findWorkItem('w-orphan'), isNull);
       expect(workItems.findWorkItem('w-live'), isNotNull);
     });
   });
 
-  group('AgentStateMaintenanceService policy', () {
+  group('AgentStateMaintenanceService deferred policy', () {
     late AgentStateDatabase db;
     late SessionWorkItemRepository workItems;
     late AgentMaintenanceStateRepository stamps;
@@ -291,22 +292,33 @@ void main() {
       AgentStatePageStatistics Function()? stats,
       void Function()? vacuum,
       AgentMaintenanceStateRepository? maintenanceState,
+      Future<void> Function(Duration)? delay,
+      int batchSize = 25,
       int vacuumMinReclaimableBytes = 64 * 1024 * 1024,
       double vacuumMinFreeRatio = 0.20,
-    }) {
-      return AgentStateMaintenanceService(
-        db,
-        workItems: workItems,
-        maintenanceState: maintenanceState ?? stamps,
-        clock: () => clock,
-        vacuumMinReclaimableBytes: vacuumMinReclaimableBytes,
-        vacuumMinFreeRatio: vacuumMinFreeRatio,
-        readPageStatistics: stats,
-        runVacuum: vacuum,
-      );
-    }
+    }) => AgentStateMaintenanceService(
+      db,
+      workItems: workItems,
+      maintenanceState: maintenanceState ?? stamps,
+      clock: () => clock,
+      delay: delay ?? (_) async {},
+      initialDelay: Duration.zero,
+      idlePollInterval: const Duration(milliseconds: 1),
+      batchSize: batchSize,
+      vacuumMinReclaimableBytes: vacuumMinReclaimableBytes,
+      vacuumMinFreeRatio: vacuumMinFreeRatio,
+      readPageStatistics: stats,
+      runVacuum: vacuum,
+    );
 
-    test('first run prunes; a run inside 24 hours skips prune', () {
+    Future<AgentStateMaintenanceResult> run(
+      AgentStateMaintenanceService value, {
+      bool Function()? hasRuntimeActivity,
+    }) => value.runAfterReady(
+      hasRuntimeActivity: hasRuntimeActivity ?? () => false,
+    );
+
+    test('first deferred run prunes; a run inside 24 hours skips', () async {
       _seedSession(db, 's-prune');
       _insertWorkItem(
         workItems,
@@ -316,14 +328,15 @@ void main() {
         state: SessionWorkState.completed,
         updatedAt: now.subtract(const Duration(days: 20)),
       );
-
-      final first = service(
-        stats: () => const AgentStatePageStatistics(
-          pageSize: 4096,
-          pageCount: 10,
-          freelistCount: 0,
+      final first = await run(
+        service(
+          stats: () => const AgentStatePageStatistics(
+            pageSize: 4096,
+            pageCount: 10,
+            freelistCount: 0,
+          ),
         ),
-      ).run();
+      );
       expect(first.terminalPruneRan, isTrue);
       expect(first.terminalWorkItemsDeleted, 1);
 
@@ -336,19 +349,13 @@ void main() {
         state: SessionWorkState.completed,
         updatedAt: now.subtract(const Duration(days: 20)),
       );
-      final second = service(
-        stats: () => const AgentStatePageStatistics(
-          pageSize: 4096,
-          pageCount: 10,
-          freelistCount: 0,
-        ),
-      ).run();
+      final second = await run(service());
       expect(second.terminalPruneRan, isFalse);
       expect(second.terminalWorkItemsDeleted, 0);
       expect(workItems.findWorkItem('w-old-2'), isNotNull);
     });
 
-    test('prune becomes due at exactly 24 hours', () {
+    test('prune becomes due at exactly 24 hours', () async {
       stamps.writeTerminalPruneSucceededAt(now);
       clock = now.add(const Duration(hours: 24));
       _seedSession(db, 's-due');
@@ -360,39 +367,22 @@ void main() {
         state: SessionWorkState.cancelled,
         updatedAt: now.subtract(const Duration(days: 20)),
       );
-
-      final result = service(
-        stats: () => const AgentStatePageStatistics(
-          pageSize: 4096,
-          pageCount: 10,
-          freelistCount: 0,
-        ),
-      ).run();
+      final result = await run(service());
       expect(result.terminalPruneRan, isTrue);
       expect(result.terminalWorkItemsDeleted, 1);
     });
 
-    test(
-      'successful prune with zero deletes still writes the success stamp',
-      () {
-        _seedSession(db, 's-empty');
-        final result = service(
-          stats: () => const AgentStatePageStatistics(
-            pageSize: 4096,
-            pageCount: 10,
-            freelistCount: 0,
-          ),
-        ).run();
-        expect(result.terminalPruneRan, isTrue);
-        expect(result.terminalWorkItemsDeleted, 0);
-        expect(
-          stamps.readTerminalPruneSucceededAt(clock).status,
-          MaintenanceTimestampStatus.valid,
-        );
-      },
-    );
+    test('successful zero-row prune writes its success stamp', () async {
+      final result = await run(service());
+      expect(result.terminalPruneRan, isTrue);
+      expect(result.terminalWorkItemsDeleted, 0);
+      expect(
+        stamps.readTerminalPruneSucceededAt(clock).status,
+        MaintenanceTimestampStatus.valid,
+      );
+    });
 
-    test('malformed or future prune stamps do not block a run', () {
+    test('malformed or future prune stamps do not block a run', () async {
       _seedSession(db, 's-stamp');
       _insertWorkItem(
         workItems,
@@ -409,16 +399,7 @@ void main() {
           'not-a-date',
         ],
       );
-
-      final malformed = service(
-        stats: () => const AgentStatePageStatistics(
-          pageSize: 4096,
-          pageCount: 10,
-          freelistCount: 0,
-        ),
-      ).run();
-      expect(malformed.terminalPruneRan, isTrue);
-
+      expect((await run(service())).terminalPruneRan, isTrue);
       db.db.execute(
         'UPDATE agent_maintenance_state SET value = ? WHERE key = ?',
         [
@@ -434,41 +415,61 @@ void main() {
         state: SessionWorkState.completed,
         updatedAt: now.subtract(const Duration(days: 20)),
       );
-      final future = service(
-        stats: () => const AgentStatePageStatistics(
-          pageSize: 4096,
-          pageCount: 10,
-          freelistCount: 0,
-        ),
-      ).run();
-      expect(future.terminalPruneRan, isTrue);
+      expect((await run(service())).terminalPruneRan, isTrue);
       expect(workItems.findWorkItem('w-old-2'), isNull);
     });
 
-    test('failed prune rolls back deletes and the success stamp', () {
-      _seedSession(db, 's-rollback');
+    test('deletes bounded batches and pauses when activity appears', () async {
+      _seedSession(db, 's-batches');
+      for (var i = 0; i < 3; i++) {
+        _insertWorkItem(
+          workItems,
+          id: 'w-$i',
+          sessionId: 's-batches',
+          requestId: 'req-$i',
+          sequence: i,
+          state: SessionWorkState.completed,
+          updatedAt: now.subtract(const Duration(days: 20)),
+        );
+      }
+      var active = false;
+      var zeroYields = 0;
+      var idleWaits = 0;
+      Future<void> controlledDelay(Duration duration) async {
+        if (duration == Duration.zero) {
+          zeroYields++;
+          if (zeroYields == 2) active = true;
+        } else {
+          idleWaits++;
+          active = false;
+        }
+      }
+
+      final result = await run(
+        service(delay: controlledDelay, batchSize: 1),
+        hasRuntimeActivity: () => active,
+      );
+      expect(result.terminalWorkItemsDeleted, 3);
+      expect(zeroYields, 4);
+      expect(idleWaits, 1);
+    });
+
+    test('stamp failure leaves partial-safe deletes due for retry', () async {
+      _seedSession(db, 's-retry');
       _insertWorkItem(
         workItems,
         id: 'w-old',
-        sessionId: 's-rollback',
+        sessionId: 's-retry',
         requestId: 'req-old',
         state: SessionWorkState.completed,
         updatedAt: now.subtract(const Duration(days: 20)),
       );
-
-      final result = service(
-        maintenanceState: _FailingStampRepository(db),
-        stats: () => const AgentStatePageStatistics(
-          pageSize: 4096,
-          pageCount: 10,
-          freelistCount: 1,
-        ),
-      ).run();
-
+      final result = await run(
+        service(maintenanceState: _FailingStampRepository(db)),
+      );
       expect(result.failed, isTrue);
       expect(result.terminalPruneRan, isFalse);
-      expect(result.vacuumDecision, AgentStateVacuumDecision.failed);
-      expect(workItems.findWorkItem('w-old'), isNotNull);
+      expect(workItems.findWorkItem('w-old'), isNull);
       expect(
         db.db.select(
           'SELECT value FROM agent_maintenance_state WHERE key = ?',
@@ -478,137 +479,117 @@ void main() {
       );
     });
 
-    test(
-      'vacuum stays skipped below 64MiB or below 20% even if the other holds',
-      () {
-        stamps.writeVacuumSucceededAt(now.subtract(const Duration(days: 8)));
+    test('vacuum thresholds only create a pending marker', () async {
+      var vacuumed = false;
+      final result = await run(
+        service(
+          stats: () => const AgentStatePageStatistics(
+            pageSize: 4096,
+            pageCount: 81920,
+            freelistCount: 16384,
+          ),
+          vacuum: () => vacuumed = true,
+        ),
+      );
+      expect(result.vacuumDecision, AgentStateVacuumDecision.pending);
+      expect(result.reclaimableBytesBeforeVacuum, 64 * 1024 * 1024);
+      expect(stamps.isVacuumPending(), isTrue);
+      expect(vacuumed, isFalse);
+    });
 
-        final belowBytes = service(
+    test('below either vacuum threshold clears pending', () async {
+      stamps.writeVacuumPending(true);
+      final belowBytes = await run(
+        service(
           stats: () => const AgentStatePageStatistics(
             pageSize: 4096,
             pageCount: 100,
             freelistCount: 30,
           ),
-        ).run();
-        expect(
-          belowBytes.vacuumDecision,
-          AgentStateVacuumDecision.belowThreshold,
-        );
-        expect(
-          belowBytes.reclaimableBytesBeforeVacuum <
-              AgentStateMaintenanceService.vacuumMinReclaimableBytes,
-          isTrue,
-        );
-        expect(
-          belowBytes.reclaimableBytesBeforeVacuum / (4096 * 100) >= 0.20,
-          isTrue,
-        );
-
-        var vacuumed = false;
-        final belowRatio = service(
+        ),
+      );
+      expect(
+        belowBytes.vacuumDecision,
+        AgentStateVacuumDecision.belowThreshold,
+      );
+      expect(stamps.isVacuumPending(), isFalse);
+      stamps.writeVacuumPending(true);
+      final belowRatio = await run(
+        service(
           stats: () => const AgentStatePageStatistics(
             pageSize: 64 * 1024 * 1024,
             pageCount: 10,
             freelistCount: 1,
           ),
-          vacuum: () => vacuumed = true,
-        ).run();
-        expect(
-          belowRatio.vacuumDecision,
-          AgentStateVacuumDecision.belowThreshold,
-        );
-        expect(
-          belowRatio.reclaimableBytesBeforeVacuum >=
-              AgentStateMaintenanceService.vacuumMinReclaimableBytes,
-          isTrue,
-        );
-        expect(
-          belowRatio.reclaimableBytesBeforeVacuum / (64 * 1024 * 1024 * 10) <
-              0.20,
-          isTrue,
-        );
-        expect(vacuumed, isFalse);
-      },
-    );
-
-    test('vacuum executes at exact 64MiB and 20% after 7 days', () {
-      stamps.writeVacuumSucceededAt(now.subtract(const Duration(days: 7)));
-      var vacuumed = false;
-      // 16384 * 4096 = 64MiB; 16384 / 81920 = 0.20
-      final result = service(
-        stats: () => const AgentStatePageStatistics(
-          pageSize: 4096,
-          pageCount: 81920,
-          freelistCount: 16384,
         ),
-        vacuum: () => vacuumed = true,
-      ).run();
-      expect(result.vacuumDecision, AgentStateVacuumDecision.executed);
-      expect(vacuumed, isTrue);
-      expect(
-        result.reclaimableBytesBeforeVacuum,
-        AgentStateMaintenanceService.vacuumMinReclaimableBytes,
       );
       expect(
-        stamps.readVacuumSucceededAt(clock).status,
-        MaintenanceTimestampStatus.valid,
+        belowRatio.vacuumDecision,
+        AgentStateVacuumDecision.belowThreshold,
       );
+      expect(stamps.isVacuumPending(), isFalse);
     });
 
-    test('vacuum is throttled when last success is younger than 7 days', () {
+    test('vacuum throttle skips page statistics entirely', () async {
       stamps.writeVacuumSucceededAt(
         now.subtract(const Duration(days: 6, hours: 23)),
       );
-      var vacuumed = false;
-      final result = service(
-        stats: () => const AgentStatePageStatistics(
-          pageSize: 4096,
-          pageCount: 81920,
-          freelistCount: 16384,
+      var statsRead = false;
+      final result = await run(
+        service(
+          stats: () {
+            statsRead = true;
+            return const AgentStatePageStatistics(
+              pageSize: 4096,
+              pageCount: 81920,
+              freelistCount: 16384,
+            );
+          },
         ),
-        vacuum: () => vacuumed = true,
-      ).run();
-      expect(result.vacuumDecision, AgentStateVacuumDecision.throttled);
-      expect(vacuumed, isFalse);
-      expect(
-        stamps.readVacuumSucceededAt(clock).value,
-        now.subtract(const Duration(days: 6, hours: 23)).toUtc(),
       );
+      expect(result.vacuumDecision, AgentStateVacuumDecision.throttled);
+      expect(statsRead, isFalse);
     });
 
-    test('successful VACUUM writes its stamp; failure does not', () {
+    test('controlled-exit vacuum writes stamp and clears pending', () async {
       var vacuumed = false;
-      service(
+      final maintenance = service(
         stats: () => const AgentStatePageStatistics(
           pageSize: 4096,
           pageCount: 81920,
           freelistCount: 16384,
         ),
         vacuum: () => vacuumed = true,
-      ).run();
+      );
+      await run(maintenance);
+      expect(maintenance.runPendingVacuum(), AgentStateVacuumDecision.executed);
       expect(vacuumed, isTrue);
+      expect(stamps.isVacuumPending(), isFalse);
       expect(
         stamps.readVacuumSucceededAt(clock).status,
         MaintenanceTimestampStatus.valid,
       );
+    });
 
-      clock = now.add(const Duration(days: 8));
-      final failed = service(
+    test('failed controlled-exit vacuum remains pending', () async {
+      final maintenance = service(
         stats: () => const AgentStatePageStatistics(
           pageSize: 4096,
           pageCount: 81920,
           freelistCount: 16384,
         ),
         vacuum: () => throw StateError('vacuum failed'),
-      ).run();
-      expect(failed.vacuumDecision, AgentStateVacuumDecision.failed);
-      expect(failed.failed, isTrue);
-      final stamp = stamps.readVacuumSucceededAt(clock);
-      expect(stamp.status, MaintenanceTimestampStatus.valid);
-      expect(stamp.value, now.toUtc());
+      );
+      await run(maintenance);
+      expect(maintenance.runPendingVacuum(), AgentStateVacuumDecision.failed);
+      expect(stamps.isVacuumPending(), isTrue);
+      expect(
+        stamps.readVacuumSucceededAt(clock).status,
+        MaintenanceTimestampStatus.missing,
+      );
     });
 
-    test('provider_model_cache is unchanged after maintenance', () {
+    test('provider_model_cache is unchanged after maintenance', () async {
       _seedSession(db, 's-cache');
       _insertWorkItem(
         workItems,
@@ -640,19 +621,10 @@ void main() {
           'live', 1, 1
         )
       ''');
-
-      service(
-        stats: () => const AgentStatePageStatistics(
-          pageSize: 4096,
-          pageCount: 10,
-          freelistCount: 0,
-        ),
-      ).run();
-
+      await run(service());
       final cache = db.db.select('SELECT * FROM provider_model_cache');
       expect(cache, hasLength(1));
       expect(cache.first['models_json'], '["kept"]');
-      expect(cache.first['fetched_at'], '2020-01-01T00:00:00.000Z');
     });
   });
 
@@ -670,42 +642,44 @@ void main() {
 
     tearDown(() => logSubscription.cancel());
 
-    test('continues restore and start when the service run throws', () {
+    test('contains a failure from the deferred maintenance pass', () async {
       final db = AgentStateDatabase.inMemory();
       addTearDown(db.dispose);
-      final steps = <String>[];
 
-      expect(() {
+      await expectLater(
         daemon_entry.runAgentStateMaintenanceSafely(
           resolveService: () => _ThrowingMaintenanceService(db),
+          hasRuntimeActivity: () => false,
           logger: Logger('DaemonStartup'),
-        );
-        steps.add('restore');
-        steps.add('start');
-      }, returnsNormally);
+        ),
+        completes,
+      );
 
-      expect(logs, contains(contains('Agent state maintenance failed')));
-      expect(steps, ['restore', 'start']);
+      expect(
+        logs,
+        contains(contains('Deferred agent state maintenance failed')),
+      );
     });
 
-    test('contains a failure while resolving the service from DI', () {
-      var continued = false;
-
-      expect(() {
+    test('contains a failure while resolving the service from DI', () async {
+      await expectLater(
         daemon_entry.runAgentStateMaintenanceSafely(
           resolveService: () => throw StateError('forced DI failure'),
+          hasRuntimeActivity: () => false,
           logger: Logger('DaemonStartup'),
-        );
-        continued = true;
-      }, returnsNormally);
+        ),
+        completes,
+      );
 
-      expect(continued, isTrue);
-      expect(logs, contains(contains('Agent state maintenance failed')));
+      expect(
+        logs,
+        contains(contains('Deferred agent state maintenance failed')),
+      );
     });
   });
 
   test(
-    'daemon calls maintenance once before restore and platform start',
+    'daemon schedules maintenance once after restore, start, and readiness',
     () async {
       final configUri = await Isolate.resolvePackageUri(
         Uri.parse('package:sanad_agent/core/config.dart'),
@@ -722,17 +696,20 @@ void main() {
       ).readAsStringSync();
 
       expect('runAgentStateMaintenanceSafely()'.allMatches(daemon).length, 1);
-      expect(
-        daemon.indexOf('runAgentStateMaintenanceSafely()'),
-        lessThan(daemon.indexOf('gatewayManager.attachOrchestrator()')),
+      final maintenanceCall = daemon.indexOf(
+        'runAgentStateMaintenanceSafely()',
       );
       expect(
-        daemon.indexOf('runAgentStateMaintenanceSafely()'),
-        lessThan(daemon.indexOf('_restoreDurableStateSafely')),
+        maintenanceCall,
+        greaterThan(daemon.indexOf('_restoreDurableStateSafely')),
       );
       expect(
-        daemon.indexOf('runAgentStateMaintenanceSafely()'),
-        lessThan(daemon.indexOf('gatewayManager.start()')),
+        maintenanceCall,
+        greaterThan(daemon.indexOf('gatewayManager.start()')),
+      );
+      expect(
+        maintenanceCall,
+        greaterThan(daemon.indexOf('Daemon is running. Press Ctrl+C')),
       );
       expect(restorer.contains('cleanupOrphanedWorkItems'), isFalse);
     },
@@ -754,46 +731,59 @@ void main() {
       }
     });
 
-    test('prune raises freelist and qualified vacuum shrinks page_count', () {
-      final workItems = SessionWorkItemRepository(db);
-      _seedSession(db, 's-disk');
-      final old = DateTime.utc(2026, 1, 1);
-      final payload = 'x' * 8192;
-      for (var i = 0; i < 40; i++) {
-        _insertWorkItem(
-          workItems,
-          id: 'w-$i',
-          sessionId: 's-disk',
-          requestId: 'req-$i',
-          sequence: i,
-          state: SessionWorkState.completed,
-          updatedAt: old,
-          payload: {'blob': payload},
+    test(
+      'prune marks pending and controlled-exit vacuum shrinks pages',
+      () async {
+        final workItems = SessionWorkItemRepository(db);
+        _seedSession(db, 's-disk');
+        final old = DateTime.utc(2026, 1, 1);
+        final payload = 'x' * 8192;
+        for (var i = 0; i < 40; i++) {
+          _insertWorkItem(
+            workItems,
+            id: 'w-$i',
+            sessionId: 's-disk',
+            requestId: 'req-$i',
+            sequence: i,
+            state: SessionWorkState.completed,
+            updatedAt: old,
+            payload: {'blob': payload},
+          );
+        }
+
+        final before = db.pageStatistics();
+        final deleted = workItems.deleteTerminalWorkItemsOlderThan(
+          DateTime.utc(2026, 8, 1),
         );
-      }
+        expect(deleted, 40);
+        final afterDelete = db.pageStatistics();
+        expect(afterDelete.freelistCount, greaterThan(before.freelistCount));
 
-      final before = db.pageStatistics();
-      final deleted = workItems.deleteTerminalWorkItemsOlderThan(
-        DateTime.utc(2026, 8, 1),
-      );
-      expect(deleted, 40);
-      final afterDelete = db.pageStatistics();
-      expect(afterDelete.freelistCount, greaterThan(before.freelistCount));
+        final maintenance = AgentStateMaintenanceService(
+          db,
+          workItems: workItems,
+          clock: () => DateTime.utc(2026, 8, 30),
+          delay: (_) async {},
+          initialDelay: Duration.zero,
+          vacuumMinReclaimableBytes: 1,
+          vacuumMinFreeRatio: 0.01,
+        );
+        final result = await maintenance.runAfterReady(
+          hasRuntimeActivity: () => false,
+        );
+        expect(result.vacuumDecision, AgentStateVacuumDecision.pending);
+        expect(
+          maintenance.runPendingVacuum(),
+          AgentStateVacuumDecision.executed,
+        );
 
-      AgentStateMaintenanceService(
-        db,
-        workItems: workItems,
-        clock: () => DateTime.utc(2026, 8, 30),
-        vacuumMinReclaimableBytes: 1,
-        vacuumMinFreeRatio: 0.01,
-      ).run();
-
-      final afterVacuum = db.pageStatistics();
-      expect(afterVacuum.pageCount, lessThan(afterDelete.pageCount));
-    });
+        final afterVacuum = db.pageStatistics();
+        expect(afterVacuum.pageCount, lessThan(afterDelete.pageCount));
+      },
+    );
   });
 
-  test('daemon-backed startup prunes terminal work before restore', () async {
+  test('daemon-backed readiness precedes deferred terminal prune', () async {
     final configUri = await Isolate.resolvePackageUri(
       Uri.parse('package:sanad_agent/core/config.dart'),
     );
@@ -857,8 +847,7 @@ void main() {
       var ready = false;
       while (DateTime.now().isBefore(deadline)) {
         final text = output.toString();
-        if (text.contains('Daemon is running') ||
-            text.contains('Durable state restored')) {
+        if (text.contains('Daemon is running')) {
           ready = true;
           break;
         }
@@ -872,8 +861,9 @@ void main() {
       final verify = AgentStateDatabase.atPath(stateHome.path);
       addTearDown(verify.dispose);
       final repo = SessionWorkItemRepository(verify);
-      expect(repo.findWorkItem('w-old-terminal'), isNull);
+      expect(repo.findWorkItem('w-old-terminal'), isNotNull);
       expect(repo.findWorkItem('w-active'), isNotNull);
+      expect(output.toString(), isNot(contains('Agent state maintenance:')));
     } finally {
       process.kill();
       await process.exitCode.timeout(const Duration(seconds: 10));
@@ -935,7 +925,9 @@ class _ThrowingMaintenanceService extends AgentStateMaintenanceService {
   _ThrowingMaintenanceService(super.state);
 
   @override
-  AgentStateMaintenanceResult run() {
+  Future<AgentStateMaintenanceResult> runAfterReady({
+    required bool Function() hasRuntimeActivity,
+  }) async {
     throw StateError('forced maintenance failure');
   }
 }

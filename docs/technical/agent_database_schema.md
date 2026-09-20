@@ -727,34 +727,39 @@ identities remain.
 
 ## 9. Agent State Maintenance (Task 65)
 
-Startup maintenance is a contained, once-per-boot pass owned by `AgentStateMaintenanceService`. `agent/bin/daemon.dart` calls it after DI and logging and before `GatewayManager.attachOrchestrator()`, `SessionRunOrchestrator.restorePersistedState()`, and `GatewayManager.start()`. Failure is logged as a brief warning and must not prevent durable restore or platform start. `SessionRecoveryRestorer` does not run general `state.db` maintenance.
+Maintenance is excluded from the daemon readiness path. Startup restores durable work, starts transports, and emits `Daemon is running` before `AgentStateMaintenanceService` is scheduled. The service then waits for a 30-second grace period and for the runtime activity projection to become idle. Failure is contained and cannot affect the ready daemon.
 
-`AgentStateDatabase` creates `agent_maintenance_state` idempotently, exposes typed page statistics (`page_size`, `page_count`, `freelist_count`), and owns `VACUUM`. It rejects `VACUUM` while this owner has an open transaction. The service never opens a second SQLite connection.
+Recovery discovers restorable work with an inner join to `sessions`, so legacy orphan rows cannot affect reconstruction and do not need a startup delete pass. `SessionRecoveryRestorer` never owns retention or database maintenance.
+
+`AgentStateDatabase` creates `agent_maintenance_state` idempotently, exposes typed page statistics (`page_size`, `page_count`, `freelist_count`), and owns `VACUUM`. It rejects `VACUUM` while this owner has an open transaction. Every repository and maintenance phase uses the shared connection.
 
 ### 9.1. `agent_maintenance_state`
 
-Stores success timestamps only. A missing, malformed, or future value is treated as due so a bad stamp cannot block maintenance.
+Stores success timestamps and one pending-work marker. A missing, malformed, or future timestamp is treated as due so a bad stamp cannot block maintenance.
 
 | Column | Type | Constraints | Description |
 |---|---|---|---|
 | `key` | `TEXT` | Primary Key | Known key only |
-| `value` | `TEXT` | Non-null | UTC ISO8601 success timestamp |
+| `value` | `TEXT` | Non-null | UTC ISO8601 success timestamp or marker value |
 
 Known keys:
 
-| Key | Written after | Due when |
+| Key | Written after | Meaning / due rule |
 |---|---|---|
-| `last_terminal_prune_succeeded_at` | Terminal prune transaction commits, including when zero rows were deleted | Missing/malformed/future, or at least 24 hours since last success |
-| `last_vacuum_succeeded_at` | `VACUUM` returns successfully; never written inside a transaction | Missing/malformed/future, or at least 7 days since last success |
+| `last_terminal_prune_succeeded_at` | Every eligible terminal identity has been processed, including a zero-row pass | Missing/malformed/future, or at least 24 hours since last success |
+| `last_vacuum_succeeded_at` | A pending full `VACUUM` returns successfully at controlled exit | Missing/malformed/future, or at least 7 days since last success |
+| `vacuum_pending` | Post-ready page statistics meet both vacuum thresholds | `true` requests reclamation at the next safe controlled-exit boundary; success changes it to `false` |
 
-Terminal prune and its success timestamp commit in one transaction. A failed prune rolls both back and skips `VACUUM` in that boot. A failed `VACUUM` after a successful prune does not undo deleted rows and does not advance the vacuum stamp.
+Terminal and orphan identities are discovered without decoding payloads and deleted in batches of 25. Each batch is an independent conditional transaction. The service yields and rechecks runtime idleness before the next batch. Partial progress is safe and idempotent; the prune timestamp remains absent when the pass does not complete, so the next idle pass retries the remaining rows.
 
-### 9.2. Startup sequence and vacuum thresholds
+### 9.2. Post-ready cleanup and controlled-exit vacuum
 
-Each boot:
+After readiness:
 
-1. Delete orphan `session_work_items` whose `session_id` is absent from `sessions` (legacy/FK-off defense). This runs before throttle checks.
-2. If terminal prune is due, delete `completed`/`cancelled` rows with `updated_at < nowUtc - 14 days` and commit the prune success timestamp.
-3. Read page statistics and run full `VACUUM` only when every condition holds: vacuum is due, `reclaimableBytes >= 64 MiB`, `freeRatio >= 0.20`, and no open transaction.
+1. Wait for the grace period and no active, queued, suspended, resuming, compacting, or restart-draining work.
+2. Discover orphan identities and delete bounded batches, pausing whenever activity appears.
+3. When terminal prune is due, delete only `completed`/`cancelled` rows with `updated_at < nowUtc - 14 days` in the same bounded manner, then write the success timestamp.
+4. Check the vacuum success timestamp before reading page statistics. If vacuum is throttled, no page PRAGMA is read. Otherwise set `vacuum_pending=true` only when `reclaimableBytes >= 64 MiB` and `freeRatio >= 0.20`.
+5. Never run full `VACUUM` while transports are serving. After a controlled restart drain is safe and its response has flushed, `DaemonRestartCoordinator` runs the pending vacuum immediately before process exit. Failure leaves the marker pending and does not cancel restart.
 
-`provider_model_cache` is not pruned. Conversation `messages` remain complete. Maintenance logs one summary only when orphan/terminal rows were deleted or `VACUUM` executed; routine skips stay quiet.
+`provider_model_cache` is not pruned. Conversation `messages`, sessions, scheduled tasks, and active work remain complete. Routine skips stay quiet.

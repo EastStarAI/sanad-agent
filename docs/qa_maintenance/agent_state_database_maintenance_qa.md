@@ -1,51 +1,57 @@
 ---
 title: "Agent State Database Maintenance QA"
-description: "Run, skip, and failure matrix for startup orphan cleanup, 14-day terminal work-item prune, and thresholded VACUUM of state.db."
+description: "Readiness, idle batching, retention, and controlled-exit VACUUM verification for state.db."
 ---
 
 # Agent State Database Maintenance QA
 
-Startup maintenance of `state.db` is a contained, once-per-boot pass. It must not reclassify restorable work, delete conversation history, or prevent daemon restore and platform start.
+Maintenance must never delay daemon readiness, reclassify restorable work, delete conversation history, or block accepted user work. Cleanup begins only after durable restore, platform start, the readiness signal, a grace period, and runtime idleness.
 
 ## Ownership
 
-- Policy and ordered steps: `agent/lib/evolution/db/agent_state_maintenance_service.dart`
-- Success timestamps: `agent/lib/evolution/db/agent_maintenance_state_repository.dart`
-- Page statistics and `VACUUM`: `agent/lib/evolution/db/agent_state_database.dart`
-- Orphan and terminal SQL: `agent/lib/evolution/db/runtime/session_work_item_repository.dart`
-- Contained call site: `agent/bin/daemon.dart` after DI/logging, before orchestrator attach, durable restore, and `GatewayManager.start()`
-- Not an owner: `SessionRecoveryRestorer` must not run general database maintenance
+- Deferred policy, grace/idle gating, batching, and vacuum qualification: `agent/lib/evolution/db/agent_state_maintenance_service.dart`
+- Success timestamps and pending-vacuum marker: `agent/lib/evolution/db/agent_maintenance_state_repository.dart`
+- Page statistics and full `VACUUM`: `agent/lib/evolution/db/agent_state_database.dart`
+- Orphan/terminal identity discovery and conditional batches: `agent/lib/evolution/db/runtime/session_work_item_repository.dart`
+- Post-ready scheduling: `agent/bin/daemon.dart`
+- Controlled-exit execution: `agent/lib/interfaces/runtime/daemon_restart_coordinator.dart`
+- Not an owner: `SessionRecoveryRestorer`; recovery ignores orphan rows through a live-session join
 
 ## Automated scenarios
 
-1. `completed` and `cancelled` work items older than the 14-day cutoff are deleted; rows at the cutoff exactly are kept.
-2. `queued`, `running`, `waiting`, `blocked`, and `resuming` work items are kept regardless of age.
-3. `sessions` and `messages` rows are unchanged after prune.
-4. A legacy orphan work item (inserted with foreign keys off) is deleted; live session work remains.
-5. The first boot runs terminal prune; a second boot inside 24 hours skips it.
-6. A success timestamp exactly 24 hours old makes prune due.
-7. Missing, malformed, and future success timestamps are treated as due.
-8. A prune transaction failure rolls back both deleted rows and the success timestamp.
-9. `VACUUM` is skipped when reclaimable bytes are below 64 MiB or free pages are below 20%, even if the other threshold is met.
-10. `VACUUM` runs when both thresholds are met and the last success is at least 7 days old, including exact equality.
-11. A successful `VACUUM` writes `last_vacuum_succeeded_at`; a failed `VACUUM` does not.
-12. `VACUUM` is rejected while the database owner has an open transaction.
-13. Failure while resolving the maintenance service from DI, or while running it, does not prevent durable restore or gateway start.
-14. Maintenance runs once from daemon startup and is not repeated by restore.
-15. `provider_model_cache` is unchanged after maintenance.
-16. `VACUUM` is throttled when the last success is younger than 7 days even if both size thresholds are met.
-17. A successful terminal prune with zero deleted rows still writes `last_terminal_prune_succeeded_at`.
+1. Daemon source and daemon-backed startup prove readiness occurs before maintenance scheduling or deletion.
+2. Restorable-session discovery excludes a legacy orphan without requiring startup cleanup.
+3. `completed` and `cancelled` rows older than the exclusive 14-day cutoff are deleted; active, newer, and exactly-at-cutoff rows remain.
+4. Terminal/orphan identities are deleted in bounded batches; activity appearing after a batch pauses progress until idle.
+5. A completed zero-row pass writes `last_terminal_prune_succeeded_at`; a failed/incomplete pass remains due, while already committed batches remain safely deleted.
+6. Missing, malformed, future, exact-24-hour, and throttled timestamps preserve their documented behavior.
+7. A vacuum success younger than seven days prevents page-statistics reads entirely.
+8. Both 64 MiB and 20% thresholds are required. Qualification writes `vacuum_pending=true` but does not run `VACUUM` while serving.
+9. A safe controlled restart invokes pending vacuum after drain and before exit. Success writes the vacuum stamp and clears pending; failure leaves pending and cannot cancel restart.
+10. `VACUUM` remains rejected inside an owner transaction.
+11. Sessions, messages, active work, and `provider_model_cache` remain unchanged by retention cleanup.
+12. Service resolution/execution failure is contained after readiness.
+13. An on-disk fixture proves prune creates reclaimable pages and controlled-exit vacuum reduces page count.
 
-## Run / skip / fail matrix
+## Run / pause / fail matrix
 
-| Step | Runs when | Skips when | Failure behavior |
+| Step | Runs when | Pause/skip | Failure behavior |
 |---|---|---|---|
-| Orphan cleanup | Every boot, before prune throttle | Never skipped by throttle | Warning; prune may still run; restore continues |
-| Terminal prune | Missing/malformed/future stamp, or last success ≥ 24h | Last success < 24h ago | Transaction rollback of deletes and stamp; `VACUUM` skipped this boot; restore continues |
-| `VACUUM` | Due, `reclaimableBytes >= 64 MiB`, `freeRatio >= 0.20`, no open transaction, prune did not fail | Throttled (< 7 days since success), below either threshold, or prune failed | Stamp unchanged; prune results kept; restore continues |
+| Recovery orphan filtering | Every startup query | Never deletes | Orphan work is ignored; valid sessions restore normally |
+| Deferred orphan cleanup | After readiness, grace, and idleness | Pauses before the next batch on activity | Warning; terminal work may continue; daemon remains available |
+| Deferred terminal prune | Due and idle | Throttled under 24h; pauses between batches on activity | Committed batches remain deleted; stamp stays due until a complete pass |
+| Page statistics | Vacuum due and cleanup pass completed | No read when vacuum is throttled | Failure is contained; no pending marker is advanced |
+| Full `VACUUM` | `vacuum_pending=true` after safe controlled drain and response flush | Never during startup or normal serving | Marker remains pending; accepted restart still exits |
+
+## Performance gate
+
+Use AOT executables and isolated copies of the authorized large fixture. Time from process launch to `Daemon is running`; file cloning is outside the timed interval. Alternate baseline/branch order over at least 25 samples.
+
+Acceptance: branch median must not exceed `main` by more than both 5% and 25ms. Report median, mean, p95, min/max, sample count, fixture size, and whether maintenance was due. Never run benchmarks against the live database file.
 
 ## Test ownership
 
-- Timestamp parsing, prune, throttle, vacuum decision, rollback, startup containment, on-disk vacuum, and daemon-backed startup: `agent/test/evolution/agent_state_maintenance_test.dart`
-- Existing orphan-SQL coverage retained: `agent/test/evolution/runtime_state_repositories_test.dart`
+- Deferred policy, batching, throttle, pending marker, on-disk reclaim, and daemon-backed readiness: `agent/test/evolution/agent_state_maintenance_test.dart`
+- Controlled-exit ordering and failure containment: `agent/test/interfaces/runtime/daemon_restart_coordinator_test.dart`
+- Existing repository composition coverage: `agent/test/evolution/runtime_state_repositories_test.dart`
 - Daemon source order: `agent/test/guards/test_daemon_provider_startup_contract_guard.dart`

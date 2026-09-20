@@ -15,8 +15,9 @@ This contract applies to `agent/lib/evolution/db/`.
 - Composition facades may delegate but must not duplicate SQL or maintain parallel state.
 - Keep DTO/enums at a stable export seam only while migration requires it.
 - Legacy tables and methods remain migration-only and cannot accept new production work.
-- `AgentMaintenanceStateRepository` is the sole owner of `agent_maintenance_state` success timestamps.
-- `AgentStateMaintenanceService` owns startup maintenance policy: orphan cleanup timing, 14-day terminal work-item retention, prune/vacuum throttles, and vacuum thresholds. It runs once per daemon boot and must not become a user-facing setting surface.
+- `AgentMaintenanceStateRepository` is the sole owner of `agent_maintenance_state` success timestamps and the pending-vacuum marker.
+- `AgentStateMaintenanceService` owns post-ready maintenance policy: idle/grace gating, bounded orphan and terminal deletion batches, 14-day retention, prune/vacuum throttles, and vacuum thresholds. It must not perform cleanup before daemon readiness or expose user-facing settings.
+- Full `VACUUM` is never a startup or serving-path operation. The service marks qualifying work pending and may execute it only at the controlled-exit boundary after restart drain and response flush.
 
 ## Session Data
 - Workspace identity is an immutable UUID; filesystem path and display name are mutable workspace properties and must never replace it in session or runtime references.
