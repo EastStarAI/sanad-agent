@@ -20,6 +20,7 @@ class DeviceCommandClient {
     required DeviceConfig device,
     required String command,
     required String expectedEvent,
+    Set<String>? acceptedEvents,
     Map<String, dynamic> payload = const {},
     Duration timeout = const Duration(seconds: 10),
     bool Function(Map<String, dynamic> payload)? payloadMatches,
@@ -53,14 +54,15 @@ class DeviceCommandClient {
         }
         return;
       }
-      if (eventName != expectedEvent || (payloadMatches != null && !payloadMatches(responsePayload))) {
+      if ((eventName != expectedEvent && !(acceptedEvents ?? const <String>{}).contains(eventName)) ||
+          (payloadMatches != null && !payloadMatches(responsePayload))) {
         return;
       }
       if (!completer.isCompleted) completer.complete(responsePayload);
     });
 
     endpoint.socketService.sendDeviceCommand(
-      deviceId: device.id,
+      deviceId: endpoint.protocolDeviceId,
       command: command,
       payload: {'request_id': requestId, ...payload},
     );

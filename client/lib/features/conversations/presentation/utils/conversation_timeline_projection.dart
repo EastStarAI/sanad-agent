@@ -61,7 +61,9 @@ class ConversationTimelineItem {
   bool get isToolGroup => toolSummary != null;
   bool get isActivity => activity != null;
   CanonicalEvent get event => events.single;
-  bool containsEventId(String eventId) => events.any((event) => event.id == eventId);
+  bool containsEventId(String eventId) => events.any(
+    (event) => event.id == eventId || event.eventId == eventId,
+  );
 }
 
 List<ConversationTimelineItem> projectConversationTimeline(
@@ -104,6 +106,9 @@ List<ConversationTimelineItem> projectConversationTimeline(
   }
 
   for (final event in events) {
+    if (event.kind == EventKind.reasoning) {
+      continue;
+    }
     final isAskUser = event.kind == EventKind.toolCall && event.toolName == 'system_ask_user';
     if (isAskUser) {
       flushTools();
@@ -119,9 +124,7 @@ List<ConversationTimelineItem> projectConversationTimeline(
     }
 
     flushTools();
-    if (event.kind != EventKind.reasoning) {
-      items.add(reuseOrCreate([event], asGroup: false));
-    }
+    items.add(reuseOrCreate([event], asGroup: false));
   }
 
   flushTools();

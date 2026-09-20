@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:dotenv/dotenv.dart';
+import 'package:yaml/yaml.dart';
 import '../engine/adapters/provider_profile.dart';
 import '../engine/adapters/provider_registry.dart';
 import 'constants.dart';
@@ -12,6 +13,7 @@ class Config {
 
   DotEnv _env;
   final Map<String, String> _environment;
+  late final ModelAwareRuntimePolicy _modelAwarePolicy;
 
   /// Paths of the env files actually loaded, in load order. Tracked so that
   /// [_ensureFreshEnv] can re-stat them and reload when any changes on disk.
@@ -27,6 +29,9 @@ class Config {
     : _environment = environment ?? Platform.environment,
       _env = DotEnv() {
     _loadEnvFiles();
+    _modelAwarePolicy = ModelAwareRuntimePolicy.load(
+      File('${getSanadHome()}/config.yaml'),
+    );
   }
 
   /// Loads (or reloads) the env files from the path resolved by [getEnvPath]
@@ -260,8 +265,14 @@ class Config {
   String get portalUrl =>
       _readString('PORTAL_URL', defaultValue: _defaultPortalUrl);
 
-  /// Fallback context limit if the adapter cannot determine it from the model name.
-  int get contextLimit => _readInt('CONTEXT_LIMIT', defaultValue: 4000);
+  int? contextModelLimit(String modelId) =>
+      _modelAwarePolicy.contextModelLimits[_normalizeModelId(modelId)];
+
+  CompactionPolicy compactionPolicyForModel(String modelId) =>
+      _modelAwarePolicy.compaction.forModel(_normalizeModelId(modelId));
+
+  static String _normalizeModelId(String modelId) =>
+      modelId.trim().toLowerCase();
 
   bool get enableGateway {
     _ensureFreshEnv();
@@ -373,5 +384,166 @@ class Config {
   bool _readBool(String key, {required bool defaultValue}) {
     final rawValue = _readString(key, defaultValue: defaultValue.toString());
     return rawValue.toLowerCase() == 'true';
+  }
+}
+
+class CompactionPolicy {
+  final double threshold;
+  final double targetRatio;
+
+  const CompactionPolicy({required this.threshold, required this.targetRatio});
+}
+
+class ModelAwareCompactionPolicy extends CompactionPolicy {
+  final Map<String, CompactionPolicy> models;
+
+  const ModelAwareCompactionPolicy({
+    required super.threshold,
+    required super.targetRatio,
+    required this.models,
+  });
+
+  CompactionPolicy forModel(String normalizedModelId) {
+    final override = models[normalizedModelId];
+    return override ??
+        CompactionPolicy(threshold: threshold, targetRatio: targetRatio);
+  }
+}
+
+class ModelAwareRuntimePolicy {
+  static const defaults = ModelAwareRuntimePolicy(
+    contextModelLimits: {},
+    compaction: ModelAwareCompactionPolicy(
+      threshold: 0.80,
+      targetRatio: 0.10,
+      models: {},
+    ),
+  );
+
+  final Map<String, int> contextModelLimits;
+  final ModelAwareCompactionPolicy compaction;
+
+  const ModelAwareRuntimePolicy({
+    required this.contextModelLimits,
+    required this.compaction,
+  });
+
+  factory ModelAwareRuntimePolicy.load(File file) {
+    if (!file.existsSync() || file.readAsStringSync().trim().isEmpty) {
+      return defaults;
+    }
+    dynamic decoded;
+    try {
+      decoded = loadYaml(file.readAsStringSync());
+    } catch (error) {
+      throw FormatException('Invalid Sanad config.yaml: ${error.runtimeType}');
+    }
+    if (decoded is! YamlMap) {
+      throw const FormatException(
+        'Invalid Sanad config.yaml: root must be a map',
+      );
+    }
+    final root = _stringMap(decoded, 'root');
+    final context = _optionalMap(root['context'], 'context');
+    _rejectUnknown(context, const {'modelLimits'}, 'context');
+    final rawLimits = _optionalMap(
+      context['modelLimits'],
+      'context.modelLimits',
+    );
+    final limits = <String, int>{};
+    for (final entry in rawLimits.entries) {
+      final value = entry.value;
+      if (value is! num || value.toInt() <= 0 || value != value.toInt()) {
+        throw FormatException(
+          'context.modelLimits.${entry.key} must be a positive integer',
+        );
+      }
+      limits[Config._normalizeModelId(entry.key)] = value.toInt();
+    }
+
+    final rawCompaction = _optionalMap(root['compaction'], 'compaction');
+    _rejectUnknown(rawCompaction, const {
+      'threshold',
+      'targetRatio',
+      'models',
+    }, 'compaction');
+    final threshold = _ratio(
+      rawCompaction['threshold'],
+      0.80,
+      'compaction.threshold',
+    );
+    final targetRatio = _ratio(
+      rawCompaction['targetRatio'],
+      0.10,
+      'compaction.targetRatio',
+    );
+    final rawModels = _optionalMap(
+      rawCompaction['models'],
+      'compaction.models',
+    );
+    final models = <String, CompactionPolicy>{};
+    for (final entry in rawModels.entries) {
+      final model = _optionalMap(entry.value, 'compaction.models.${entry.key}');
+      _rejectUnknown(model, const {
+        'threshold',
+        'targetRatio',
+      }, 'compaction.models.${entry.key}');
+      models[Config._normalizeModelId(entry.key)] = CompactionPolicy(
+        threshold: _ratio(
+          model['threshold'],
+          threshold,
+          'compaction.models.${entry.key}.threshold',
+        ),
+        targetRatio: _ratio(
+          model['targetRatio'],
+          targetRatio,
+          'compaction.models.${entry.key}.targetRatio',
+        ),
+      );
+    }
+    return ModelAwareRuntimePolicy(
+      contextModelLimits: Map.unmodifiable(limits),
+      compaction: ModelAwareCompactionPolicy(
+        threshold: threshold,
+        targetRatio: targetRatio,
+        models: Map.unmodifiable(models),
+      ),
+    );
+  }
+
+  static Map<String, dynamic> _stringMap(dynamic value, String path) {
+    if (value is! Map) {
+      throw FormatException('$path must be a map');
+    }
+    final result = <String, dynamic>{};
+    for (final entry in value.entries) {
+      if (entry.key is! String) {
+        throw FormatException('$path keys must be strings');
+      }
+      result[entry.key as String] = entry.value;
+    }
+    return result;
+  }
+
+  static Map<String, dynamic> _optionalMap(dynamic value, String path) =>
+      value == null ? <String, dynamic>{} : _stringMap(value, path);
+
+  static void _rejectUnknown(
+    Map<String, dynamic> map,
+    Set<String> known,
+    String path,
+  ) {
+    final unknown = map.keys.where((key) => !known.contains(key)).toList();
+    if (unknown.isNotEmpty) {
+      throw FormatException('Unknown $path key: ${unknown.first}');
+    }
+  }
+
+  static double _ratio(dynamic value, double fallback, String path) {
+    if (value == null) return fallback;
+    if (value is! num || value <= 0 || value >= 1) {
+      throw FormatException('$path must be between 0 and 1');
+    }
+    return value.toDouble();
   }
 }

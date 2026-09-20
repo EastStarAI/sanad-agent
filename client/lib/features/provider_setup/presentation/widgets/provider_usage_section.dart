@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_usage_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
@@ -35,8 +34,6 @@ class ProviderUsageSection extends StatelessWidget {
     required this.instanceId,
   });
 
-  String get _deviceId => agent?.id ?? DeviceInventoryIds.localDevice;
-
   String _updatedLabel(DateTime at) {
     final local = at.toLocal();
     final delta = DateTime.now().difference(local);
@@ -50,15 +47,16 @@ class ProviderUsageSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final deviceId = agent?.id ?? context.read<ProviderUsageCubit>().localDeviceId;
 
     return BlocBuilder<ProviderUsageCubit, ProviderUsageState>(
       buildWhen: (prev, next) {
-        final a = prev.entry(_deviceId, instanceId);
-        final b = next.entry(_deviceId, instanceId);
+        final a = prev.entry(deviceId, instanceId);
+        final b = next.entry(deviceId, instanceId);
         return a != b;
       },
       builder: (context, state) {
-        final entry = state.entry(_deviceId, instanceId);
+        final entry = state.entry(deviceId, instanceId);
 
         // No entry yet, or the daemon has explicitly said this instance is
         // unsupported → render nothing. Never an empty placeholder section.

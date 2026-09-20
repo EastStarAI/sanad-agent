@@ -138,7 +138,7 @@ class GeminiRealtimeVoiceProvider extends RealtimeVoiceProvider {
     _logger.info(
       'Sending setup message to Gemini Live API with ${functionDeclarations.length} tools',
     );
-    _logger.info('Setup payload: ${jsonEncode(setupPayload)}');
+    _logger.info('Gemini Live setup payload sent');
     _webSocket?.add(jsonEncode(setupPayload));
   }
 
@@ -350,7 +350,7 @@ class GeminiRealtimeVoiceProvider extends RealtimeVoiceProvider {
 
   @override
   void handleControlEvent(String eventName, Map<String, dynamic> payload) {
-    _logger.info('Received control event: $eventName with payload: $payload');
+    _logger.info('Received Gemini Live control event');
   }
 
   @override

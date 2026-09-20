@@ -275,13 +275,41 @@ class McpRuntimeClient {
     required String expectedEvent,
     Duration timeout = const Duration(seconds: 10),
   }) async {
-    return _commandClient.request(
+    final previewEvent = _previewEventFor(command);
+    final result = await _commandClient.request(
       device: device,
       command: command,
       payload: payload,
       expectedEvent: expectedEvent,
+      acceptedEvents: previewEvent == null ? null : {previewEvent},
       timeout: timeout,
     );
+    final token = result['confirmation_token']?.toString() ?? '';
+    final fingerprint = result['confirmation_fingerprint']?.toString() ?? '';
+    if (previewEvent == null || token.isEmpty || fingerprint.isEmpty) {
+      return result;
+    }
+    return _commandClient.request(
+      device: device,
+      command: command,
+      payload: {
+        ...payload,
+        'confirmation_token': token,
+        'confirmation_fingerprint': fingerprint,
+      },
+      expectedEvent: expectedEvent,
+      timeout: timeout,
+    );
+  }
+
+  String? _previewEventFor(String command) {
+    return switch (command) {
+      'save_mcp_server' || 'save_advanced_mcp_server' => 'mcp.server.save.preview',
+      'delete_mcp_server' => 'mcp.server.delete.preview',
+      'inspect_mcp_server' => 'mcp.server.inspect.preview',
+      'complete_mcp_oauth' => 'mcp.oauth.complete.preview',
+      _ => null,
+    };
   }
 
   DeviceConfig _resolveDevice(DeviceConfig? device) {

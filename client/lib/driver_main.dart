@@ -5,10 +5,45 @@ import 'dart:developer' as developer;
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 
 void main() {
   // Enable integration testing with the Flutter Driver extension.
-  enableFlutterDriverExtension();
+  enableFlutterDriverExtension(enableTextEntryEmulation: false);
+
+  developer.registerExtension('ext.sanad_client.auth_url', (
+    method,
+    parameters,
+  ) async {
+    if (!getIt.isRegistered<AuthService>()) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': 'Authentication service is not ready'}),
+      );
+    }
+
+    final challenge = getIt<AuthService>().loginChallenge;
+    if (challenge == null) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': 'No active authentication challenge'}),
+      );
+    }
+
+    final authUri = Uri.tryParse(challenge.authUrl);
+    if (authUri == null || (authUri.scheme != 'http' && authUri.scheme != 'https') || authUri.host.isEmpty) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': 'Active authentication challenge URL is invalid'}),
+      );
+    }
+
+    return developer.ServiceExtensionResponse.result(
+      json.encode({'status': 'ok', 'auth_url': challenge.authUrl}),
+    );
+  });
 
   const Set<String> ignoredNoiseTypes = {
     'SizedBox',
@@ -487,6 +522,90 @@ void main() {
     }
   });
 
+  // Register text entry without replacing the operating system text channel.
+  developer.registerExtension('ext.sanad_client.enter_text', (method, parameters) async {
+    try {
+      final targetKey = parameters['key']?.trim();
+      final targetText = parameters['text'];
+      final root = WidgetsBinding.instance.rootElement;
+      if (root == null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': 'Root element not found'}),
+        );
+      }
+      if (targetText == null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': 'Text entry requires a text value'}),
+        );
+      }
+
+      Element? keyedElement;
+      if (targetKey != null && targetKey.isNotEmpty) {
+        void findKeyedElement(Element element) {
+          if (keyedElement != null) return;
+          final key = element.widget.key;
+          final keyValue = key is ValueKey ? key.value.toString() : key?.toString();
+          if (keyValue == targetKey) {
+            keyedElement = element;
+            return;
+          }
+          element.visitChildren(findKeyedElement);
+        }
+
+        findKeyedElement(root);
+        if (keyedElement == null) {
+          return developer.ServiceExtensionResponse.error(
+            developer.ServiceExtensionResponse.extensionError,
+            json.encode({'error': 'Text input key not found: $targetKey'}),
+          );
+        }
+      }
+
+      EditableTextState? editableState;
+      void findEditableState(Element element) {
+        if (editableState != null) return;
+        if (element is StatefulElement && element.state is EditableTextState) {
+          final candidate = element.state as EditableTextState;
+          if (keyedElement != null || candidate.widget.focusNode.hasFocus) {
+            editableState = candidate;
+            return;
+          }
+        }
+        element.visitChildren(findEditableState);
+      }
+
+      findEditableState(keyedElement ?? root);
+      if (editableState == null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({
+            'error': targetKey == null || targetKey.isEmpty
+                ? 'No focused editable text field found'
+                : 'No editable text field found for key: $targetKey',
+          }),
+        );
+      }
+
+      editableState!.updateEditingValue(
+        TextEditingValue(
+          text: targetText,
+          selection: TextSelection.collapsed(offset: targetText.length),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      return developer.ServiceExtensionResponse.result(
+        json.encode({'status': 'ok'}),
+      );
+    } catch (error) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': error.toString()}),
+      );
+    }
+  });
+
   // Register scroll extension
   developer.registerExtension('ext.sanad_client.scroll', (method, parameters) async {
     try {
@@ -566,11 +685,25 @@ void main() {
         );
       }
 
+      final emitsUserIntent = (targetOffset - position.pixels).abs() > 0.5;
+      if (emitsUserIntent) {
+        UserScrollNotification(
+          metrics: position,
+          context: scrollableState!.context,
+          direction: targetOffset < position.pixels ? ScrollDirection.forward : ScrollDirection.reverse,
+        ).dispatch(scrollableState!.context);
+      }
       await position.animateTo(
         targetOffset,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
+      if (emitsUserIntent) {
+        ScrollEndNotification(
+          metrics: position,
+          context: scrollableState!.context,
+        ).dispatch(scrollableState!.context);
+      }
 
       return developer.ServiceExtensionResponse.result(
         json.encode({

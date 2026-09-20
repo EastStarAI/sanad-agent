@@ -98,6 +98,39 @@ void main() {
     );
 
     test(
+      'shutdown interruption is not reported as user cancellation',
+      () async {
+        final scope = RunCancellationScope(
+          sessionId: 'session-shutdown',
+          runId: 'run-shutdown',
+          workItemId: 'work-shutdown',
+          generation: 1,
+        );
+        final tool = ShellExecuteTool(workspacePath: workspaceDir.path);
+        final executeFuture = tool.execute(
+          {
+            'command': 'printf "before-shutdown\\n"; sleep 30',
+            'timeout_ms': 60000,
+          },
+          context: ToolContext(
+            sessionId: scope.sessionId,
+            cancellationScope: scope,
+          ),
+        );
+
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        await scope.cancel(reason: RunCancellationReason.shutdown);
+        final result = jsonDecode(await executeFuture) as Map<String, dynamic>;
+
+        expect(result['output'], contains('before-shutdown'));
+        expect(result['output'], contains('agent stopped'));
+        expect(result['output'], isNot(contains('cancelled by user')));
+        expect(result['terminal_reason'], 'agent_interrupted');
+      },
+      skip: Platform.isWindows,
+    );
+
+    test(
       'natural wrapper exit drains output and removes live descendants',
       () async {
         final childPidFile = File('${workspaceDir.path}/child.pid');

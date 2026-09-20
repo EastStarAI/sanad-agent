@@ -1,3 +1,8 @@
+---
+title: "Plan 50 Cancellation Regression Matrix"
+description: "Verified cancellation, cleanup, delivery-order, and restart-hydration regression coverage for Plan 50."
+---
+
 # Plan 50 Cancellation Regression Matrix
 
 Date: 2026-08-29

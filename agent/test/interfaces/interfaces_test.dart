@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'dart:async';
+import 'dart:convert';
 import 'package:test/test.dart';
 import 'package:mockito/mockito.dart';
 import 'package:mockito/annotations.dart';
@@ -14,6 +15,7 @@ import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/runtime/llm_route_snapshot.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
@@ -76,6 +78,25 @@ void main() {
   late LLMAdapter titleRouteAdapter;
   late LLMRouteSnapshot completedTurnRoute;
   late Directory tempDir;
+  FutureOr<void> Function(Message message)? rootMessageCommitted;
+
+  Future<void> commitMockRoot(String content, {String? requestId}) async {
+    final turnId = 'turn-${requestId ?? content}';
+    await rootMessageCommitted?.call(
+      Message(
+        role: MessageRole.user,
+        content: content,
+        metadata: {
+          'request_id': ?requestId,
+          'message_id': 'message-${requestId ?? content}',
+          'turn_id': turnId,
+          'input_kind': 'root_turn',
+          'history_status': 'active',
+          'replay_eligible': requestId != null,
+        },
+      ),
+    );
+  }
 
   setUp(() {
     tempDir = Directory.systemTemp.createTempSync('interfaces-runtime-test');
@@ -155,6 +176,28 @@ Use the review skill.''',
       mockAgentRunner.attachMetadataToLastAssistantMessage(any),
     ).thenReturn(null);
     when(mockAgentRunner.registry).thenReturn(ToolsRegistry());
+    when(mockAgentRunner.history).thenReturn(<Message>[]);
+    when(
+      mockAgentRunner.commitUserMessage(
+        any,
+        requestId: anyNamed('requestId'),
+        receivedAt: anyNamed('receivedAt'),
+      ),
+    ).thenAnswer((invocation) async {
+      final requestId = invocation.namedArguments[#requestId]?.toString();
+      return Message(
+        role: MessageRole.user,
+        content: invocation.positionalArguments.first?.toString(),
+        metadata: {
+          'request_id': ?requestId,
+          'message_id': 'message-${requestId ?? 'legacy'}',
+          'turn_id': 'turn-${requestId ?? 'legacy'}',
+          'input_kind': 'root_turn',
+          'history_status': 'active',
+          'replay_eligible': requestId != null,
+        },
+      );
+    });
 
     // updateTurnRoute is called by resumeSuspended when a route override is
     // supplied. Default to a no-op so individual tests don't need to stub it.
@@ -170,6 +213,14 @@ Use the review skill.''',
       mockAgentRunner.markProviderResponseTerminalCommitted(),
     ).thenReturn(null);
     when(mockAgentRunner.beginAuthoritativeRun(any)).thenReturn(null);
+    rootMessageCommitted = null;
+    when(mockAgentRunner.configureRootMessageCommitted(any)).thenAnswer((
+      invocation,
+    ) {
+      rootMessageCommitted =
+          invocation.positionalArguments.single
+              as FutureOr<void> Function(Message message)?;
+    });
     when(mockAgentRunner.endAuthoritativeRun(any)).thenReturn(null);
     when(
       mockAgentRunner.attachCancellationScope(
@@ -234,6 +285,7 @@ Use the review skill.''',
         updatedAt: DateTime.now(),
       );
     });
+    when(mockSessionManager.getMessages(any)).thenReturn(const []);
 
     when(mockSessionManager.saveSessionMetadata(any, any)).thenReturn(null);
     when(mockSessionManager.getSessionMetadata(any)).thenReturn(null);
@@ -666,10 +718,22 @@ Use the review skill.''',
     'GatewayManager returns authoritative user echoes to opted-in platforms',
     () async {
       final eventController = StreamController<GatewayEvent>();
+      final responses = <GatewayResponse>[];
+      FutureOr<void> Function(Message message)? rootCommitted;
       when(mockPlatform.initialize()).thenAnswer((_) async => {});
       when(mockPlatform.eventStream).thenAnswer((_) => eventController.stream);
       when(mockPlatform.shouldReceiveUserEcho).thenReturn(true);
-      when(mockPlatform.sendResponse(any)).thenAnswer((_) async => {});
+      when(mockPlatform.sendResponse(any)).thenAnswer((invocation) async {
+        responses.add(invocation.positionalArguments.single as GatewayResponse);
+      });
+      when(mockAgentRunner.configureRootMessageCommitted(any)).thenAnswer((
+        invocation,
+      ) {
+        rootCommitted =
+            invocation.positionalArguments.single
+                as FutureOr<void> Function(Message message)?;
+      });
+      when(mockAgentRunner.currentModelStepId).thenReturn('model-step-live');
       when(
         mockAgentRunner.streamMessage(
           any,
@@ -683,7 +747,43 @@ Use the review skill.''',
           onThoughtDelta: anyNamed('onThoughtDelta'),
           onReasoningDelta: anyNamed('onReasoningDelta'),
         ),
-      ).thenAnswer((_) => Stream.fromIterable(['Done']));
+      ).thenAnswer((invocation) async* {
+        await rootCommitted!(
+          Message(
+            role: MessageRole.user,
+            content: 'Hello',
+            metadata: const {
+              'request_id': 'request-echo-1',
+              'message_id': 'message-live',
+              'turn_id': 'turn-live',
+              'input_kind': 'root_turn',
+              'history_status': 'active',
+              'replay_eligible': true,
+            },
+          ),
+        );
+        final thought = invocation.namedArguments[#onThoughtDelta] as dynamic;
+        final reasoning =
+            invocation.namedArguments[#onReasoningDelta] as dynamic;
+        final tool = invocation.namedArguments[#onToolEvent] as dynamic;
+        thought('Inspecting');
+        reasoning('Reasoning');
+        await tool(
+          toolName: 'shell_execute',
+          input: '{}',
+          isError: false,
+          isStart: true,
+          toolRunId: 'tool-live',
+        );
+        await tool(
+          toolName: 'shell_execute',
+          output: 'ok',
+          isError: false,
+          isStart: false,
+          toolRunId: 'tool-live',
+        );
+        yield 'Done';
+      });
 
       gatewayManager.registerPlatform(mockPlatform);
       await gatewayManager.start();
@@ -714,6 +814,27 @@ Use the review skill.''',
           ),
         ),
       ).called(1);
+
+      final liveTurnEvents = responses.where(
+        (response) =>
+            response.message.role == MessageRole.user ||
+            response.message.thought != null ||
+            response.message.reasoning != null ||
+            response.isToolUse ||
+            response.isToolResult ||
+            (response.message.role == MessageRole.assistant &&
+                response.message.content == 'Done'),
+      );
+      expect(liveTurnEvents, isNotEmpty);
+      expect(
+        liveTurnEvents.every((response) => response.turnId == 'turn-live'),
+        isTrue,
+      );
+      final userEcho = responses.singleWhere(
+        (response) => response.message.role == MessageRole.user,
+      );
+      expect(userEcho.message.metadata?['message_id'], 'message-live');
+      expect(userEcho.message.metadata?['turn_id'], 'turn-live');
 
       await eventController.close();
     },
@@ -1019,7 +1140,10 @@ Use the review skill.''',
           onThoughtDelta: anyNamed('onThoughtDelta'),
           onReasoningDelta: anyNamed('onReasoningDelta'),
         ),
-      ).thenAnswer((_) => Stream.fromIterable(['Hello']));
+      ).thenAnswer((_) async* {
+        await commitMockRoot('Hi');
+        yield 'Hello';
+      });
 
       gatewayManager.registerPlatform(mockPlatform);
       gatewayManager.registerPlatform(mirrorPlatform);
@@ -1044,7 +1168,8 @@ Use the review skill.''',
             predicate<GatewayResponse>(
               (r) =>
                   r.message.role == MessageRole.user &&
-                  r.message.content == 'Hi',
+                  r.message.content == 'Hi' &&
+                  r.turnId == 'turn-Hi',
             ),
           ),
         ),
@@ -1052,7 +1177,9 @@ Use the review skill.''',
       verify(
         mirrorPlatform.sendResponse(
           argThat(
-            predicate<GatewayResponse>((r) => r.message.content == 'Hello'),
+            predicate<GatewayResponse>(
+              (r) => r.message.content == 'Hello' && r.turnId == 'turn-Hi',
+            ),
           ),
         ),
       ).called(2);
@@ -1872,6 +1999,59 @@ Use the review skill.''',
   );
 
   test(
+    'SessionRunOrchestrator terminates stale Queue-to-Steer promotion',
+    () async {
+      final orchestrator = getIt<SessionRunOrchestrator>();
+      final responses = <GatewayResponse>[];
+      final responseSubscription = orchestrator.responses.listen(responses.add);
+
+      await orchestrator.handleEvent(
+        GatewayEvent(
+          sessionId: 'session-stale-queue-steer',
+          platformId: 'test-platform',
+          type: 'steer',
+          message: Message(role: MessageRole.user, content: 'Promote me'),
+          metadata: const {
+            'payload': {'command_request_id': 'command-promote-stale'},
+          },
+          turnRequest: AgentTurnRequest(
+            sessionId: 'session-stale-queue-steer',
+            message: 'Promote me',
+            requestId: 'queued-stale-1',
+          ),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final result = responses.firstWhere(
+        (response) =>
+            response.message.metadata?['canonical_event_type'] ==
+            'session.queued_message_steer_result',
+      );
+      expect(
+        result.message.metadata?['canonical_payload'],
+        containsPair('target_request_id', 'queued-stale-1'),
+      );
+      expect(
+        result.message.metadata?['canonical_payload'],
+        containsPair('command_request_id', 'command-promote-stale'),
+      );
+      expect(
+        result.message.metadata?['canonical_payload'],
+        containsPair('outcome', 'stale_owner'),
+      );
+      verifyNever(
+        mockAgentRunner.steerEvent(
+          any,
+          requestId: anyNamed('requestId'),
+          receivedAt: anyNamed('receivedAt'),
+        ),
+      );
+      await responseSubscription.cancel();
+    },
+  );
+
+  test(
     'SessionRunOrchestrator should queue events when busy and process FIFO',
     () async {
       final orchestrator = getIt<SessionRunOrchestrator>();
@@ -1893,7 +2073,14 @@ Use the review skill.''',
           onThoughtDelta: anyNamed('onThoughtDelta'),
           onReasoningDelta: anyNamed('onReasoningDelta'),
         ),
-      ).thenAnswer((_) => Stream.fromFuture(completer.future));
+      ).thenAnswer((invocation) async* {
+        final content = invocation.positionalArguments.first?.toString() ?? '';
+        await commitMockRoot(
+          content,
+          requestId: content == 'Hi 2' ? 'queued-request-2' : null,
+        );
+        yield await completer.future;
+      });
 
       // Send first event
       final event1 = GatewayEvent(
@@ -1979,17 +2166,22 @@ Use the review skill.''',
           onThoughtDelta: anyNamed('onThoughtDelta'),
           onReasoningDelta: anyNamed('onReasoningDelta'),
         ),
-      ).thenAnswer((_) {
+      ).thenAnswer((invocation) async* {
+        final content = invocation.positionalArguments.first?.toString() ?? '';
+        await commitMockRoot(
+          content,
+          requestId: content == 'Hi suspended'
+              ? 'req-suspended-1'
+              : 'req-suspended-2',
+        );
         if (firstAttempt) {
           firstAttempt = false;
-          return Stream<String>.error(
-            const RuntimeRecoveryRequired(
-              'session-suspended-test',
-              RuntimeFailureReason.rateLimit,
-            ),
+          throw const RuntimeRecoveryRequired(
+            'session-suspended-test',
+            RuntimeFailureReason.rateLimit,
           );
         }
-        return Stream.value('Queued response');
+        yield 'Queued response';
       });
       when(
         mockAgentRunner.resumeStream(
@@ -2058,6 +2250,22 @@ Use the review skill.''',
         ),
       );
 
+      when(mockSessionManager.getMessages('session-suspended-test')).thenReturn(
+        [
+          Message(
+            role: MessageRole.user,
+            content: 'Hi suspended',
+            metadata: const {
+              'request_id': 'req-suspended-1',
+              'message_id': 'message-req-suspended-1',
+              'turn_id': 'turn-req-suspended-1',
+              'input_kind': 'root_turn',
+              'history_status': 'active',
+              'replay_eligible': true,
+            },
+          ),
+        ],
+      );
       await orchestrator.resumeSuspended('session-suspended-test');
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
@@ -2066,6 +2274,16 @@ Use the review skill.''',
           (response) => response.message.content == 'Hi suspended',
         ),
         hasLength(1),
+      );
+      final recoveredResponses = responses
+          .where((response) => response.message.content == 'Recovered response')
+          .toList();
+      expect(recoveredResponses, hasLength(2));
+      expect(
+        recoveredResponses.every(
+          (response) => response.turnId == 'turn-req-suspended-1',
+        ),
+        isTrue,
       );
       await responseSubscription.cancel();
     },
@@ -2502,13 +2720,16 @@ Use the review skill.''',
           onThoughtDelta: anyNamed('onThoughtDelta'),
           onReasoningDelta: anyNamed('onReasoningDelta'),
         ),
-      ).thenAnswer((invocation) {
+      ).thenAnswer((invocation) async* {
+        final content = invocation.positionalArguments.first?.toString() ?? '';
+        await commitMockRoot(content);
         if (callCount++ == 0) {
           lateReasoningFromA = invocation.namedArguments[#onReasoningDelta];
           lateToolFromA = invocation.namedArguments[#onToolEvent];
-          return firstController.stream;
+          yield* firstController.stream;
+          return;
         }
-        return Stream.value('Response B');
+        yield 'Response B';
       });
 
       final responses = <GatewayResponse>[];
@@ -2742,7 +2963,7 @@ Use the review skill.''',
 
   group('Gate E: Runtime Restoration and FIFO', () {
     test(
-      'startup blocks an interrupted provider request without replaying it',
+      'startup automatically resumes an interrupted provider request from its safe predecessor',
       () async {
         final stateDb = AgentStateDatabase.inMemory();
         final repo = PersistedRuntimeStateRepository(stateDb.db);
@@ -2788,30 +3009,142 @@ Use the review skill.''',
           ),
         );
 
-        final orchestrator = SessionRunOrchestrator();
-        await orchestrator.restorePersistedState();
-
-        expect(
-          repo.findWorkItem('provider-crash-work')?.state,
-          SessionWorkState.blocked,
-        );
-        expect(
-          recoveryService.activeNotice('provider-crash-session')?.status,
-          RuntimeNoticeStatus.blocked,
-        );
-        expect(
-          orchestrator.hasSuspendedEvent('provider-crash-session'),
-          isTrue,
-        );
-        verifyNever(
+        final resumed = Completer<void>();
+        final resumeStream = StreamController<String>();
+        addTearDown(() async {
+          if (!resumeStream.isClosed) await resumeStream.close();
+        });
+        when(
           mockAgentRunner.resumeStream(
+            requestId: anyNamed('requestId'),
             runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            providerId: anyNamed('providerId'),
+            model: anyNamed('model'),
+            thinkingMode: anyNamed('thinkingMode'),
             onToolEvent: anyNamed('onToolEvent'),
             onSteerContinuation: anyNamed('onSteerContinuation'),
             onThoughtDelta: anyNamed('onThoughtDelta'),
             onReasoningDelta: anyNamed('onReasoningDelta'),
           ),
+        ).thenAnswer((_) {
+          if (!resumed.isCompleted) resumed.complete();
+          return resumeStream.stream;
+        });
+
+        final orchestrator = SessionRunOrchestrator();
+        await orchestrator.restorePersistedState();
+        await resumed.future.timeout(const Duration(seconds: 1));
+
+        final recovered = repo.findWorkItem('provider-crash-work');
+        expect(recovered?.state, SessionWorkState.resuming);
+        expect(
+          recovered?.continuationMetadata['checkpoint_kind'],
+          'initial_model_request',
         );
+        expect(
+          recovered?.continuationMetadata,
+          isNot(contains('checkpoint_before_model_request')),
+        );
+        expect(
+          recoveryService.activeNotice('provider-crash-session')?.status,
+          RuntimeNoticeStatus.resuming,
+        );
+        verify(
+          mockAgentRunner.resumeStream(
+            requestId: anyNamed('requestId'),
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            providerId: anyNamed('providerId'),
+            model: anyNamed('model'),
+            thinkingMode: anyNamed('thinkingMode'),
+            onToolEvent: anyNamed('onToolEvent'),
+            onSteerContinuation: anyNamed('onSteerContinuation'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        ).called(1);
+        await orchestrator.requestStop('provider-crash-session');
+      },
+    );
+
+    test(
+      'startup resumes interrupted tools with automatic unknown-outcome intent',
+      () async {
+        final stateDb = AgentStateDatabase.inMemory();
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        getIt.registerSingleton<AgentStateDatabase>(stateDb);
+        getIt.registerSingleton<PersistedRuntimeStateRepository>(repo);
+        addTearDown(() {
+          getIt.unregister<AgentStateDatabase>();
+          getIt.unregister<PersistedRuntimeStateRepository>();
+          stateDb.dispose();
+        });
+
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('tool-crash-session', 'gpt-4o', '2026-09-16', '2026-09-16')",
+        );
+        final now = DateTime.now();
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'tool-crash-work',
+            sessionId: 'tool-crash-session',
+            requestId: 'tool-crash-request',
+            sequence: 1,
+            state: SessionWorkState.running,
+            attempt: 0,
+            payload: const {
+              'message': 'perform the operation',
+              'eventMetadata': {},
+            },
+            continuationMetadata: const {
+              'owner_run_id': 'tool-crash-run',
+              'owner_generation': 4,
+              'checkpoint_kind': 'initial_model_request',
+              'resume_history_length': 1,
+              'currently_executing_tools': ['tool-call-1'],
+              'tool_replay_safety': {'tool-call-1': true},
+            },
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+
+        final resumed = Completer<void>();
+        final resumeStream = StreamController<String>();
+        addTearDown(() async {
+          if (!resumeStream.isClosed) await resumeStream.close();
+        });
+        when(
+          mockAgentRunner.resumeStream(
+            requestId: anyNamed('requestId'),
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            providerId: anyNamed('providerId'),
+            model: anyNamed('model'),
+            thinkingMode: anyNamed('thinkingMode'),
+            onToolEvent: anyNamed('onToolEvent'),
+            onSteerContinuation: anyNamed('onSteerContinuation'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        ).thenAnswer((_) {
+          expect(
+            repo
+                .findWorkItem('tool-crash-work')
+                ?.continuationMetadata['auto_recover_interrupted_tools_as_unknown'],
+            isTrue,
+          );
+          if (!resumed.isCompleted) resumed.complete();
+          return resumeStream.stream;
+        });
+
+        final orchestrator = SessionRunOrchestrator();
+        await orchestrator.restorePersistedState();
+        await resumed.future.timeout(const Duration(seconds: 1));
+
+        expect(
+          repo.findWorkItem('tool-crash-work')?.state,
+          SessionWorkState.resuming,
+        );
+        await orchestrator.requestStop('tool-crash-session');
       },
     );
 
@@ -2946,6 +3279,45 @@ Use the review skill.''',
           orchestrator.hasSuspendedEvent('session-ask-legacy-blocked'),
           isTrue,
         );
+
+        // A second startup reconciliation without an answer must remain a
+        // pure wait. It must not manufacture a retry, tool result, or final.
+        await orchestrator.restorePersistedState();
+        expect(
+          repo.findWorkItem('work-ask-restart')?.state,
+          SessionWorkState.waiting,
+        );
+        expect(
+          repo.executionSnapshots.getSnapshot('session-ask-restart').state,
+          SessionExecutionState.waiting,
+        );
+        expect(repo.findNotice('session-ask-restart'), isNull);
+        verifyNever(
+          mockAgentRunner.resumeStream(
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            providerId: anyNamed('providerId'),
+            model: anyNamed('model'),
+            thinkingMode: anyNamed('thinkingMode'),
+            onToolEvent: anyNamed('onToolEvent'),
+            onSteerContinuation: anyNamed('onSteerContinuation'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        );
+
+        repo.transitionWorkItemState(
+          workItemId: 'work-ask-restart',
+          fromState: SessionWorkState.waiting,
+          toState: SessionWorkState.resuming,
+        );
+        repo.transitionWorkItemState(
+          workItemId: 'work-ask-restart',
+          fromState: SessionWorkState.resuming,
+          toState: SessionWorkState.completed,
+        );
+        orchestrator.reconcilePersistedSuspendedTerminal('session-ask-restart');
+        expect(orchestrator.hasSuspendedEvent('session-ask-restart'), isFalse);
+        expect(orchestrator.isSessionBusy('session-ask-restart'), isFalse);
       },
     );
 
@@ -3058,11 +3430,32 @@ Use the review skill.''',
             onThoughtDelta: anyNamed('onThoughtDelta'),
             onReasoningDelta: anyNamed('onReasoningDelta'),
           ),
-        ).thenAnswer((_) => Stream.value('continued'));
+        ).thenAnswer((_) async* {
+          final orchestrator = getIt<SessionRunOrchestrator>();
+          expect(orchestrator.isSessionBusy(sessionId), isTrue);
+          await orchestrator.handleEvent(
+            GatewayEvent(
+              sessionId: sessionId,
+              platformId: 'test-platform',
+              type: 'steer',
+              message: Message(
+                role: MessageRole.user,
+                content: 'adjust the resumed work',
+              ),
+              turnRequest: const AgentTurnRequest(
+                sessionId: sessionId,
+                message: 'adjust the resumed work',
+                requestId: 'steer-persisted-answer',
+              ),
+            ),
+          );
+          yield 'continued';
+        });
 
         stateDb.db.execute(
           "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('$sessionId', 'gpt-4o', '2026-07-11', '2026-07-11')",
         );
+        SessionDB.fromState(stateDb).saveSuspendedCheckpoint(checkpoint);
         repo.insertWorkItem(
           SessionWorkItem(
             workItemId: 'work-persisted-answer',
@@ -3101,6 +3494,7 @@ Use the review skill.''',
           platformRuntimeBridge: PlatformRuntimeBridge(),
           checkpointStore: checkpointStore,
         );
+        final terminalCommittedSessions = <String>[];
         final service = SuspendedResumeService(
           checkpointStore: checkpointStore,
           sessionManager: mockSessionManager,
@@ -3112,13 +3506,27 @@ Use the review skill.''',
           permissionManager: permissionManager,
           persistedState: repo,
           runtimeRecovery: runtimeRecovery,
+          onTerminalCommitted: (completedSessionId) {
+            terminalCommittedSessions.add(completedSessionId);
+            getIt<SessionRunOrchestrator>().reconcilePersistedSuspendedTerminal(
+              completedSessionId,
+            );
+          },
         );
         final statesAtDelivery = <SessionWorkState?>[];
         final responses = <GatewayResponse>[];
+        SuspendedCheckpoint? checkpointAtClaim;
+        SessionWorkState? stateAtClaim;
 
         final resumed = await service.resumeFromDecision(
           requestId: checkpoint.requestId,
           decision: const {'answer': 'approved'},
+          onClaimed: () async {
+            checkpointAtClaim = SessionDB.fromState(
+              stateDb,
+            ).getSuspendedCheckpointByRequestId(checkpoint.requestId);
+            stateAtClaim = repo.findWorkItem('work-persisted-answer')?.state;
+          },
           emitResponse: (response) async {
             responses.add(response);
             statesAtDelivery.add(
@@ -3128,6 +3536,11 @@ Use the review skill.''',
         );
 
         expect(resumed, isTrue);
+        expect(stateAtClaim, SessionWorkState.resuming);
+        expect(checkpointAtClaim?.status, 'decision_ready');
+        expect(checkpointAtClaim?.resolvedDecision, const {
+          'answer': 'approved',
+        });
         expect(
           repo.findWorkItem('work-persisted-answer')?.state,
           SessionWorkState.completed,
@@ -3137,9 +3550,377 @@ Use the review skill.''',
         expect(responses.last.message.content, 'continued');
         expect(statesAtDelivery.last, SessionWorkState.completed);
         verify(
+          mockAgentRunner.steerEvent(
+            'adjust the resumed work',
+            requestId: 'steer-persisted-answer',
+            receivedAt: anyNamed('receivedAt'),
+          ),
+        ).called(1);
+        expect(terminalCommittedSessions, [sessionId]);
+        expect(
+          getIt<SessionRunOrchestrator>().isSessionBusy(sessionId),
+          isFalse,
+        );
+        verify(
           mockAgentRunner.endAuthoritativeRun('run-persisted-answer'),
         ).called(1);
         stateDb.dispose();
+      },
+    );
+
+    test(
+      'resolved suspended decision survives restart and is reclaimed once',
+      () {
+        final stateDb = AgentStateDatabase.inMemory();
+        addTearDown(stateDb.dispose);
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        final now = DateTime.now().toUtc();
+        const sessionId = 'session-decision-reclaim';
+        const requestId = 'request-decision-reclaim';
+        const toolCallId = 'tool-decision-reclaim';
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('$sessionId', 'gpt-4o', ?, ?)",
+          [now.toIso8601String(), now.toIso8601String()],
+        );
+        final checkpoint = SuspendedCheckpoint(
+          checkpointId: 'checkpoint-decision-reclaim',
+          sessionId: sessionId,
+          requestId: requestId,
+          toolCallId: toolCallId,
+          toolName: 'system_ask_user',
+          status: 'decision_ready',
+          toolArguments: const {'questions': []},
+          permissionPayload: const {'questions': []},
+          resolvedDecision: const {'answer': 'durable answer'},
+          createdAt: now,
+          updatedAt: now,
+        );
+        SessionDB.fromState(stateDb).saveSuspendedCheckpoint(checkpoint);
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'work-decision-reclaim',
+            sessionId: sessionId,
+            requestId: 'turn-decision-reclaim',
+            sequence: 0,
+            state: SessionWorkState.waiting,
+            attempt: 0,
+            continuationMetadata: const {
+              'owner_run_id': 'run-decision-reclaim',
+              'owner_generation': 4,
+              'currently_executing_tools': [toolCallId],
+            },
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+
+        final first = repo.claimSuspendedDecision(
+          checkpoint: checkpoint,
+          reclaimPersistedDecision: true,
+        );
+        final second = repo.claimSuspendedDecision(
+          checkpoint: checkpoint,
+          reclaimPersistedDecision: true,
+        );
+
+        expect(first, isNotNull);
+        expect(first?.checkpoint.resolvedDecision, const {
+          'answer': 'durable answer',
+        });
+        expect(first?.workItem.state, SessionWorkState.resuming);
+        expect(second, isNull);
+      },
+    );
+
+    test(
+      'startup automatically reclaims a persisted resolved decision',
+      () async {
+        final stateDb = AgentStateDatabase.inMemory();
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        GetIt.I.registerSingleton<AgentStateDatabase>(stateDb);
+        GetIt.I.registerSingleton<PersistedRuntimeStateRepository>(repo);
+        addTearDown(() {
+          GetIt.I.unregister<AgentStateDatabase>();
+          GetIt.I.unregister<PersistedRuntimeStateRepository>();
+          stateDb.dispose();
+        });
+        final now = DateTime.now().toUtc();
+        const sessionId = 'session-startup-decision';
+        const toolCallId = 'tool-startup-decision';
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('$sessionId', 'gpt-4o', ?, ?)",
+          [now.toIso8601String(), now.toIso8601String()],
+        );
+        final checkpoint = SuspendedCheckpoint(
+          checkpointId: 'checkpoint-startup-decision',
+          sessionId: sessionId,
+          requestId: 'request-startup-decision',
+          toolCallId: toolCallId,
+          toolName: 'system_ask_user',
+          status: 'decision_ready',
+          toolArguments: const {},
+          permissionPayload: const {},
+          resolvedDecision: const {'answer': 'resume me'},
+          createdAt: now,
+          updatedAt: now,
+        );
+        SessionDB.fromState(stateDb).saveSuspendedCheckpoint(checkpoint);
+        when(
+          mockSessionManager.listSuspendedCheckpoints(status: null),
+        ).thenReturn([checkpoint]);
+        GetIt.I.registerSingleton<SuspendedCheckpointStore>(
+          SuspendedCheckpointStore(sessionManager: mockSessionManager),
+        );
+        addTearDown(() => GetIt.I.unregister<SuspendedCheckpointStore>());
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'work-startup-decision',
+            sessionId: sessionId,
+            sequence: 0,
+            state: SessionWorkState.resuming,
+            attempt: 0,
+            continuationMetadata: const {
+              'owner_run_id': 'run-startup-decision',
+              'owner_generation': 3,
+              'checkpoint_kind': AgentRunner.checkpointKindAfterToolResult,
+              'currently_executing_tools': [toolCallId],
+            },
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+        final reclaimed = Completer<SuspendedCheckpoint>();
+        final orchestrator = SessionRunOrchestrator(
+          resumePersistedSuspendedDecision:
+              ({required checkpoint, required emitResponse}) async {
+                final claim = repo.claimSuspendedDecision(
+                  checkpoint: checkpoint,
+                  reclaimPersistedDecision: true,
+                );
+                if (claim != null && !reclaimed.isCompleted) {
+                  reclaimed.complete(claim.checkpoint);
+                }
+                return claim != null;
+              },
+        );
+
+        await orchestrator.restorePersistedState();
+        verify(
+          mockSessionManager.listSuspendedCheckpoints(status: null),
+        ).called(2);
+        expect(
+          repo.findWorkItem('work-startup-decision')?.state,
+          SessionWorkState.waiting,
+        );
+        final restored = await reclaimed.future.timeout(
+          const Duration(seconds: 1),
+        );
+
+        expect(restored.resolvedDecision, const {'answer': 'resume me'});
+        expect(
+          repo.findWorkItem('work-startup-decision')?.state,
+          SessionWorkState.resuming,
+        );
+      },
+    );
+
+    test(
+      'failed suspended decision owner validation changes neither aggregate',
+      () {
+        final stateDb = AgentStateDatabase.inMemory();
+        addTearDown(stateDb.dispose);
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        final now = DateTime.now().toUtc();
+        const sessionId = 'session-decision-rollback';
+        const requestId = 'request-decision-rollback';
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('$sessionId', 'gpt-4o', ?, ?)",
+          [now.toIso8601String(), now.toIso8601String()],
+        );
+        final checkpoint = SuspendedCheckpoint(
+          checkpointId: 'checkpoint-decision-rollback',
+          sessionId: sessionId,
+          requestId: requestId,
+          toolCallId: 'tool-decision-rollback',
+          toolName: 'system_ask_user',
+          status: 'awaiting_permission',
+          toolArguments: const {},
+          permissionPayload: const {},
+          createdAt: now,
+          updatedAt: now,
+        );
+        SessionDB.fromState(stateDb).saveSuspendedCheckpoint(checkpoint);
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'work-decision-rollback',
+            sessionId: sessionId,
+            sequence: 0,
+            state: SessionWorkState.waiting,
+            attempt: 0,
+            continuationMetadata: const {
+              'owner_run_id': 'run-decision-rollback',
+              'owner_generation': 2,
+              'currently_executing_tools': ['different-tool'],
+            },
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+
+        final claim = repo.claimSuspendedDecision(
+          checkpoint: checkpoint,
+          decision: const {'answer': 'must not persist'},
+        );
+
+        expect(claim, isNull);
+        expect(
+          repo.findWorkItem('work-decision-rollback')?.state,
+          SessionWorkState.waiting,
+        );
+        final durableCheckpoint = SessionDB.fromState(
+          stateDb,
+        ).getSuspendedCheckpointByRequestId(requestId);
+        expect(durableCheckpoint?.status, 'awaiting_permission');
+        expect(durableCheckpoint?.resolvedDecision, isNull);
+      },
+    );
+
+    test('persisted suspended ActiveRun is cancelled by Stop', () async {
+      final orchestrator = getIt<SessionRunOrchestrator>();
+      const sessionId = 'session-persisted-stop';
+      const runId = 'run-persisted-stop';
+      const workItemId = 'work-persisted-stop';
+      when(
+        mockAgentRunner.beginAuthoritativeRun(
+          runId,
+          workItemId: workItemId,
+          generation: 9,
+        ),
+      ).thenReturn(null);
+      when(mockAgentRunner.requestStop()).thenReturn(null);
+
+      final activeRun = orchestrator.adoptPersistedSuspendedRun(
+        sessionId: sessionId,
+        workItemId: workItemId,
+        runId: runId,
+        generation: 9,
+        agentRunner: mockAgentRunner,
+      );
+      expect(orchestrator.ownsPersistedSuspendedRun(activeRun), isTrue);
+
+      await orchestrator.requestStop(sessionId, forceEmitStopped: true);
+
+      verify(mockAgentRunner.requestStop()).called(1);
+      expect(orchestrator.ownsPersistedSuspendedRun(activeRun), isFalse);
+      expect(orchestrator.isSessionBusy(sessionId), isFalse);
+    });
+
+    test(
+      'Stop during persisted resume cancels execution and suppresses late output',
+      () async {
+        final stateDb = AgentStateDatabase.inMemory();
+        addTearDown(stateDb.dispose);
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        final now = DateTime.now().toUtc();
+        const sessionId = 'session-resume-stop';
+        const requestId = 'request-resume-stop';
+        const toolCallId = 'tool-resume-stop';
+        final checkpoint = SuspendedCheckpoint(
+          checkpointId: 'checkpoint-resume-stop',
+          sessionId: sessionId,
+          requestId: requestId,
+          toolCallId: toolCallId,
+          toolName: 'system_ask_user',
+          status: 'awaiting_permission',
+          toolArguments: const {},
+          permissionPayload: const {},
+          createdAt: now,
+          updatedAt: now,
+        );
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('$sessionId', 'gpt-4o', ?, ?)",
+          [now.toIso8601String(), now.toIso8601String()],
+        );
+        SessionDB.fromState(stateDb).saveSuspendedCheckpoint(checkpoint);
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'work-resume-stop',
+            sessionId: sessionId,
+            sequence: 0,
+            state: SessionWorkState.waiting,
+            attempt: 0,
+            continuationMetadata: const {
+              'owner_run_id': 'run-resume-stop',
+              'owner_generation': 5,
+              'currently_executing_tools': [toolCallId],
+            },
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+        when(
+          mockSessionManager.getSuspendedCheckpointByRequestId(requestId),
+        ).thenReturn(checkpoint);
+        when(
+          mockAgentRunner.beginAuthoritativeRun(
+            'run-resume-stop',
+            workItemId: 'work-resume-stop',
+            generation: 5,
+          ),
+        ).thenReturn(null);
+        when(mockAgentRunner.requestStop()).thenReturn(null);
+        when(
+          mockAgentRunner.resumeAfterToolCall(
+            toolCallId: toolCallId,
+            toolName: 'system_ask_user',
+            arguments: checkpoint.toolArguments,
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            forcedOutput: 'answer',
+            forcedIsError: false,
+            onToolEvent: anyNamed('onToolEvent'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        ).thenAnswer((_) async* {
+          await getIt<SessionRunOrchestrator>().requestStop(
+            sessionId,
+            forceEmitStopped: true,
+          );
+          yield 'late output';
+        });
+        final checkpointStore = SuspendedCheckpointStore(
+          sessionManager: mockSessionManager,
+        );
+        final service = SuspendedResumeService(
+          checkpointStore: checkpointStore,
+          sessionManager: mockSessionManager,
+          runtimeCatalog: getIt<LocalRuntimeCatalog>(),
+          runtimeContextBuilder: const RuntimeContextBuilder(
+            skillRegistry: SkillRegistry(),
+          ),
+          workspaceRuntimeService: getIt<LocalWorkspaceRuntimeService>(),
+          permissionManager: PermissionManager(
+            policyStore: const WorkspacePolicyStore(),
+            platformRuntimeBridge: PlatformRuntimeBridge(),
+            checkpointStore: checkpointStore,
+          ),
+          persistedState: repo,
+        );
+        final responses = <GatewayResponse>[];
+
+        final resumed = await service.resumeFromDecision(
+          requestId: requestId,
+          decision: const {'answer': 'answer'},
+          emitResponse: (response) async => responses.add(response),
+        );
+
+        expect(resumed, isTrue);
+        verify(mockAgentRunner.requestStop()).called(1);
+        expect(responses, isEmpty);
+        expect(
+          getIt<SessionRunOrchestrator>().isSessionBusy(sessionId),
+          isFalse,
+        );
       },
     );
 
@@ -3282,7 +4063,7 @@ Use the review skill.''',
         platformId: 'test-platform',
         message: Message(
           role: MessageRole.user,
-          content: 'token=abc123def456ghi789',
+          content: 'token=fixture-value',
         ),
         metadata: {
           'authorization': 'Bearer secret-token-123456',
@@ -3387,6 +4168,8 @@ Use the review skill.''',
           ],
         },
         continuationMetadata: const {
+          'checkpoint_kind': 'initial_model_request',
+          'resume_history_length': 0,
           'completed_tool_results': {},
           'currently_executing_tools': ['call-view'],
           'tool_replay_safety': {'call-view': true},
@@ -4772,6 +5555,14 @@ Use the review skill.''',
               'message': 'Retry after block',
               'eventMetadata': {},
             },
+            continuationMetadata: const {
+              'checkpoint_kind': 'model_request_in_flight',
+              'checkpoint_before_model_request': 'after_tool_result',
+              'restart_interrupted_provider_request': true,
+              'resume_history_length': 1,
+              'currentTurnStartIndex': 0,
+              'model_step_id': 'interrupted-provider-step',
+            },
             createdAt: DateTime.now(),
             updatedAt: DateTime.now(),
           ),
@@ -4788,7 +5579,23 @@ Use the review skill.''',
             onThoughtDelta: anyNamed('onThoughtDelta'),
             onReasoningDelta: anyNamed('onReasoningDelta'),
           ),
-        ).thenAnswer((_) => Stream.value('retried successfully'));
+        ).thenAnswer((_) {
+          final claimed = repo.findWorkItem('work-blocked-retry');
+          expect(claimed?.state, SessionWorkState.resuming);
+          expect(
+            claimed?.continuationMetadata['checkpoint_kind'],
+            'after_tool_result',
+          );
+          expect(
+            claimed?.continuationMetadata,
+            isNot(contains('checkpoint_before_model_request')),
+          );
+          expect(
+            claimed?.continuationMetadata,
+            isNot(contains('restart_interrupted_provider_request')),
+          );
+          return Stream.value('retried successfully');
+        });
 
         final orchestrator = SessionRunOrchestrator();
         await orchestrator.restorePersistedState();
@@ -4796,7 +5603,10 @@ Use the review skill.''',
         expect(recoveryService.activeNotice(sessionId), isNull);
 
         // Simulate a retry: resume the suspended run
-        final resumed = await orchestrator.resumeSuspended(sessionId);
+        final resumed = await orchestrator.resumeSuspended(
+          sessionId,
+          recoveryReason: 'manual_retry',
+        );
         expect(resumed, equals(ResumeSuspendedResult.claimed));
 
         await Future<void>.delayed(const Duration(milliseconds: 100));
@@ -4816,6 +5626,90 @@ Use the review skill.''',
 
         final item = repo.findWorkItem('work-blocked-retry');
         expect(item?.state, equals(SessionWorkState.completed));
+      },
+    );
+
+    test(
+      'failed resume publishes recovery notice but no final answer',
+      () async {
+        final stateDb = AgentStateDatabase.inMemory();
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        GetIt.I.registerSingleton<AgentStateDatabase>(stateDb);
+        GetIt.I.registerSingleton<PersistedRuntimeStateRepository>(repo);
+        final recoveryService = RuntimeRecoveryService(
+          MockProviderInstanceRepository(),
+          ProviderRateLimiter(),
+        );
+        recoveryService.attachPersistedState(repo);
+        GetIt.I.registerSingleton<RuntimeRecoveryService>(recoveryService);
+        addTearDown(() {
+          GetIt.I.unregister<AgentStateDatabase>();
+          GetIt.I.unregister<PersistedRuntimeStateRepository>();
+          GetIt.I.unregister<RuntimeRecoveryService>();
+          stateDb.dispose();
+        });
+
+        const sessionId = 'session-failed-resume-no-final';
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) "
+          "VALUES ('$sessionId', 'gpt-4o', '2026-08-31', '2026-08-31')",
+        );
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'work-failed-resume-no-final',
+            sessionId: sessionId,
+            requestId: 'req-failed-resume-no-final',
+            sequence: 0,
+            state: SessionWorkState.blocked,
+            attempt: 0,
+            payload: const {'message': 'resume me', 'eventMetadata': {}},
+            continuationMetadata: const {
+              'checkpoint_kind': 'mystery_checkpoint',
+            },
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+        when(
+          mockAgentRunner.resumeStream(
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            providerId: anyNamed('providerId'),
+            model: anyNamed('model'),
+            thinkingMode: anyNamed('thinkingMode'),
+            onToolEvent: anyNamed('onToolEvent'),
+            onSteerContinuation: anyNamed('onSteerContinuation'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        ).thenAnswer(
+          (_) => Stream<String>.error(StateError('unsafe checkpoint')),
+        );
+
+        final orchestrator = SessionRunOrchestrator();
+        final responses = <GatewayResponse>[];
+        final subscription = orchestrator.responses.listen(responses.add);
+        addTearDown(subscription.cancel);
+        await orchestrator.restorePersistedState();
+        expect(
+          await orchestrator.resumeSuspended(
+            sessionId,
+            recoveryReason: 'manual_retry',
+          ),
+          ResumeSuspendedResult.claimed,
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+
+        expect(
+          responses.where(
+            (response) => response.message.role == MessageRole.assistant,
+          ),
+          isEmpty,
+        );
+        expect(
+          repo.findWorkItem('work-failed-resume-no-final')?.state,
+          SessionWorkState.blocked,
+        );
+        expect(repo.findNotice(sessionId)?.status, 'blocked');
       },
     );
 
@@ -5196,6 +6090,126 @@ Use the review skill.''',
             onReasoningDelta: anyNamed('onReasoningDelta'),
           ),
         ).called(1);
+      },
+    );
+
+    test(
+      'E.3: crashed shell is terminalized with durable partial output and resumed without replay',
+      () async {
+        final stateDb = AgentStateDatabase.inMemory();
+        final repo = PersistedRuntimeStateRepository(stateDb.db);
+        GetIt.I.registerSingleton<AgentStateDatabase>(stateDb);
+        GetIt.I.registerSingleton<PersistedRuntimeStateRepository>(repo);
+        addTearDown(() {
+          GetIt.I.unregister<AgentStateDatabase>();
+          GetIt.I.unregister<PersistedRuntimeStateRepository>();
+          stateDb.dispose();
+        });
+
+        const sessionId = 'session-crashed-shell';
+        stateDb.db.execute(
+          "INSERT INTO sessions (session_id, model, created_at, updated_at) "
+          "VALUES ('$sessionId', 'gpt-4o', '2026-08-31', '2026-08-31')",
+        );
+        stateDb.db.execute(
+          'INSERT INTO messages (session_id, data) VALUES (?, ?)',
+          [
+            sessionId,
+            jsonEncode(
+              Message(
+                role: MessageRole.assistant,
+                toolCalls: [
+                  ToolCall(
+                    id: 'shell-call',
+                    name: 'shell_execute',
+                    arguments: const {
+                      'command': 'printf durable-before-crash; sleep 120',
+                      'timeout_ms': 60000,
+                    },
+                  ),
+                ],
+              ).toJson(),
+            ),
+          ],
+        );
+        repo.insertWorkItem(
+          SessionWorkItem(
+            workItemId: 'work-crashed-shell',
+            sessionId: sessionId,
+            requestId: 'req-crashed-shell',
+            sequence: 0,
+            state: SessionWorkState.running,
+            attempt: 0,
+            payload: const {'message': 'run the command', 'eventMetadata': {}},
+            continuationMetadata: const {
+              'owner_run_id': 'run-crashed-shell',
+              'owner_generation': 3,
+              'checkpoint_kind': AgentRunner.checkpointKindInitialModelRequest,
+              'resume_history_length': 1,
+              'currently_executing_tools': ['shell-call'],
+              'tool_replay_safety': {'shell-call': false},
+              'executing_tool_progress': {
+                'shell-call': {
+                  'tool_name': 'shell_execute',
+                  'status': 'running',
+                  'stdout': 'durable-before-crash',
+                  'stderr': '',
+                },
+              },
+            },
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+        when(
+          mockAgentRunner.resumeStream(
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            providerId: anyNamed('providerId'),
+            model: anyNamed('model'),
+            thinkingMode: anyNamed('thinkingMode'),
+            onToolEvent: anyNamed('onToolEvent'),
+            onSteerContinuation: anyNamed('onSteerContinuation'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        ).thenAnswer((_) => Stream.value('continued after interruption'));
+
+        await SessionRunOrchestrator().restorePersistedState();
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+
+        final item = repo.findWorkItem('work-crashed-shell')!;
+        expect(item.state, SessionWorkState.completed);
+        expect(item.continuationMetadata['currently_executing_tools'], isNull);
+        final recoveredOutput =
+            (item.continuationMetadata['completed_tool_outputs']
+                    as Map)['shell-call']
+                as Map;
+        expect(recoveredOutput['arguments'], {
+          'command': 'printf durable-before-crash; sleep 120',
+          'timeout_ms': 60000,
+        });
+        final rows = stateDb.db.select(
+          'SELECT data FROM messages WHERE session_id = ?',
+          [sessionId],
+        );
+        final persisted = rows.map((row) => row['data'].toString()).join('\n');
+        expect(persisted, contains('durable-before-crash'));
+        expect(persisted, contains('interrupted unexpectedly'));
+        expect(persisted, isNot(contains('cancelled by user')));
+        verifyNever(
+          mockAgentRunner.streamMessage(
+            any,
+            runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+            providerId: anyNamed('providerId'),
+            model: anyNamed('model'),
+            thinkingMode: anyNamed('thinkingMode'),
+            receivedAt: anyNamed('receivedAt'),
+            onToolEvent: anyNamed('onToolEvent'),
+            onSteerContinuation: anyNamed('onSteerContinuation'),
+            onThoughtDelta: anyNamed('onThoughtDelta'),
+            onReasoningDelta: anyNamed('onReasoningDelta'),
+          ),
+        );
       },
     );
 
@@ -5589,8 +6603,8 @@ Use the review skill.''',
       );
     });
 
-    test('E.3: interrupted resuming work with an unsafe executing tool is '
-        'blocked and never auto-resumed', () async {
+    test('E.3: ownerless interrupted resuming work remains blocked even with '
+        'an executing tool', () async {
       final stateDb = AgentStateDatabase.inMemory();
       final repo = PersistedRuntimeStateRepository(stateDb.db);
 

@@ -31,6 +31,10 @@ description: "Regression matrix for completed-tool grouping, nested and timeline
 | Diff metrics | Write/edit input and patch output | Added/removed totals match changed lines and animate on update |
 | Ask user | Running and completed states | Running timeline row is absent; completed Q/A has no generic header |
 | History race | Terminal live tool result arrives during stale running history request | Terminal status/output survives and merges with persisted input |
+| History result-first race | Terminal result is retained before hydration returns matching tool-use/result rows | One completed tool keeps the persisted input and renders only the unwrapped terminal output |
+| Older-page tool boundary | Current page starts with a terminal result and the matching tool-use is fetched from the older page | The fragments merge into one completed tool with input and output; neither fragment is discarded as a duplicate |
+| Terminal fallback | A completed `shell_execute` result is temporarily present without input | The terminal renderer unwraps the result envelope; generic `isError`/`output` JSON is never shown |
+| Delivered steer hydration | History contains a durable steer and `pending_steers` contains the same delivered `request_id`; leave the session and reopen it | One user bubble remains at the durable causal position before the post-steer answer; no duplicate is appended at the tail |
 | Group scroll | Open tall group, scroll away, append tools, return to bottom | Offset is preserved while opted out; follow resumes at bottom |
 | Timeline scroll | Send user row, then stream growth and delayed Activity layout; manually scroll away and return | Send restores eligibility; thinking, groups, and post-debounce Activity follow the outer timeline until manual outer-scroll opt-out |
 | Scroll isolation | Scroll inside an expanded tool/group while conversation follow is active | Inner controllers and follow state remain independent and never opt the outer conversation timeline in or out |

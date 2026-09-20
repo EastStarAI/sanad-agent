@@ -201,6 +201,30 @@ class FlutterVmController {
     }
   }
 
+  /// Returns the active browser authentication URL from this exact driver VM.
+  Future<String> authUrl() async {
+    final isolateId = await _discoverIsolateId('ext.sanad_client.auth_url');
+    final result = await _callRpc('ext.sanad_client.auth_url', {
+      'isolateId': isolateId,
+    }) as Map<String, dynamic>?;
+    final value = result?['auth_url'];
+    if (result?['status'] != 'ok' || value is! String) {
+      throw const _DriverException(
+        'The client returned no active authentication URL.',
+      );
+    }
+
+    final uri = Uri.tryParse(value);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      throw const _DriverException(
+        'The client returned an invalid authentication URL.',
+      );
+    }
+    return value;
+  }
+
   /// Find UI elements matching key, text, type, or query.
   Future<List<UiElement>> findElements({
     String? key,
@@ -346,6 +370,33 @@ class FlutterVmController {
       }
     }
 
+    Object? extensionError;
+    try {
+      final isolateId = await _discoverIsolateId('ext.sanad_client.enter_text');
+      final response = await _callRpc('ext.sanad_client.enter_text', {
+        'isolateId': isolateId,
+        'text': text,
+        if (key != null) 'key': key,
+      }) as Map<String, dynamic>?;
+      if (response?['status'] == 'ok') {
+        if (postDelay > Duration.zero) {
+          await Future<void>.delayed(postDelay);
+        }
+        stopwatch.stop();
+        return DriverActionResult(
+          success: true,
+          action: 'enter_text',
+          message: key == null
+              ? 'Successfully entered text into the focused field'
+              : 'Successfully entered text into $key',
+          duration: stopwatch.elapsed,
+        );
+      }
+    } catch (error) {
+      extensionError = error;
+    }
+
+    // Older driver-enabled Clients may not advertise the Sanad text extension.
     await _ensureDriverConnected();
     try {
       await _driver!.runUnsynchronized(() async {
@@ -368,7 +419,9 @@ class FlutterVmController {
       return DriverActionResult(
         success: false,
         action: 'enter_text',
-        message: 'Failed entering text: ${_conciseError(e)}',
+        message:
+            'Failed entering text: ${_conciseError(e)}'
+            '${extensionError == null ? '' : ' (Sanad extension: ${_conciseError(extensionError)})'}',
         duration: stopwatch.elapsed,
       );
     }

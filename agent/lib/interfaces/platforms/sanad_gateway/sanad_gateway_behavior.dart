@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'sanad_protocol_bridge.dart';
+import 'protocol/authenticated_command_origin.dart';
 import 'protocol/canonical_events.dart';
 
 /// A mixin that provides shared behavior for Sanad Gateway platforms
@@ -17,13 +18,19 @@ mixin SanadGatewayBehavior {
   Future<void> handleIncomingProtocolEvent({
     required CanonicalEvent event,
     required PlatformRuntimeBridge runtimeBridge,
-    required Future<void> Function(Map<String, dynamic> responseEnvelope)
-    onResponse,
+    required Future<void> Function(Map<String, dynamic>) onResponse,
     Map<String, dynamic>? envelope,
+    AuthenticatedCommandOrigin? authenticatedOrigin,
   }) async {
-    logger.info('⬇️ [$transportName] Received protocol_event: ${event.type}');
+    final origin =
+        authenticatedOrigin ??
+        (envelope != null
+            ? AuthenticatedCommandOrigin.fromEnvelope(envelope)
+            : null);
+    final tag = origin?.displayTag ?? transportName;
+    logger.info('⬇️ [$tag] Received protocol_event: ${event.type}');
     if (envelope != null) {
-      logger.fine('⬇️ [$transportName] Protocol event payload: $envelope');
+      logFinePayload('⬇️ [$tag] Protocol event payload:', envelope);
     }
     if (runtimeBridge.handleProtocolEvent(event)) {
       return;
@@ -36,12 +43,16 @@ mixin SanadGatewayBehavior {
   Future<bool> handleIncomingCommand({
     required Map<String, dynamic> envelope,
     required PlatformRuntimeBridge runtimeBridge,
-    required Future<void> Function(Map<String, dynamic> responseEnvelope)
-    onResponse,
+    required Future<void> Function(Map<String, dynamic>) onResponse,
+    AuthenticatedCommandOrigin? authenticatedOrigin,
   }) async {
     final commandName = envelope['command']?.toString() ?? 'unknown';
-    logger.info('⬇️ [$transportName] Received execute_command: $commandName');
-    logger.fine('⬇️ [$transportName] Command payload: $envelope');
+    final origin =
+        authenticatedOrigin ??
+        AuthenticatedCommandOrigin.fromEnvelope(envelope);
+    final tag = origin.displayTag;
+    logger.info('⬇️ [$tag] Received execute_command: $commandName');
+    logFinePayload('⬇️ [$tag] Command payload:', envelope);
 
     final rawPayload = envelope['payload'];
     final payload = rawPayload is Map
@@ -58,6 +69,12 @@ mixin SanadGatewayBehavior {
       );
     }
     return protocolBridge.handleCommand(envelope, onResponse);
+  }
+
+  /// Logs only bounded structural metadata;payload values never enter logs.
+  void logFinePayload(String label, Object? payload) {
+    final fieldCount = payload is Map ? payload.length : 0;
+    logger.fine('$label field_count=$fieldCount');
   }
 
   /// Safely converts dynamic map-like data into a structured `Map<String, dynamic>`.

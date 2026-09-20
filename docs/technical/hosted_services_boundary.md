@@ -65,6 +65,13 @@ Local communication uses the daemon's local WebSocket/HTTP boundary. Cloud commu
 
 The public wire specification is authoritative for client compatibility. Hosted implementation details, database schemas, queueing infrastructure, and deployment topology are not part of the public contract.
 
+Command relay must bind the authenticated User to the target device before
+forwarding `device_command`. Relayed command payloads are not a hosted
+persistence surface. Remote Agent update, restart, workspace, and MCP
+management in Task 82 use this relay into daemon-owned handlers; they must
+not write MCP configuration through hosted REST `/api/mcp`. See
+[Remote Device Control Threat Model](remote_device_control_threat_model.md).
+
 ## Compatibility
 
 Hosted services add backward-compatible support before a public client begins depending on new protocol behavior. A public release identifies the behavior it consumes. Breaking removal is a separate, reviewed transition and must not be coupled to an unannounced server deployment.

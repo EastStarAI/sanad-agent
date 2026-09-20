@@ -1,6 +1,6 @@
 ---
 title: "Sanad Client Interface"
-description: "Current user experience for devices, workspaces, conversations, providers, permissions, and active agent interactions."
+description: "Current user experience for devices, workspaces, conversations, attachments, View Image media, providers, permissions, and active agent interactions."
 ---
 
 # Sanad Client Interface
@@ -120,7 +120,18 @@ thinking mode. A first-time user with no thinking preference starts at
 runtime has an authoritative provider/model route, the model selector is never
 left empty merely because only the provider half was restored.
 
+Composer suggestions have distinct interaction types. A no-argument runtime
+action is available only from a leading slash and executes as soon as the user
+chooses it with Enter or the pointer. A skill can be inserted at any slash
+position and remains in the draft until the next submit. These behaviors come
+from the suggestion type rather than a hard-coded command name; inline `@`
+file references can therefore be added later as a separate insertion type.
+
 Dragging and dropping files of any type onto the composer area captures their full local paths and inserts them at the current caret, replacing an active text selection and leaving the caret after the inserted paths. During a drag-over action, the composer card displays a highlighted primary border and a matching subtle background tint for clear visual feedback. A newly presented New Conversation focuses the message field automatically, and clicking any blank non-control area of the composer transfers focus to that field so typing can begin without targeting the text line precisely.
+
+The composer accepts files through image paste, drag-and-drop, and a File Picker opened by the `+` button on the left beside Permission Mode. All three inputs create the same attachment rail above the text field. Image tiles show a thumbnail, safe name, size, status, and remove action; other files use compact icon cards with the same controls. Drag-over keeps the highlighted primary border and subtle tint.
+
+Each file is limited to 5 MiB regardless of type, with at most four files and 20 MiB total per message. Validation or remote transfer shows progress, and Send remains unavailable until every attachment is ready. A failed item preserves the draft and offers Retry or Remove. On a remote device, the client never sends its local path as runtime input: the file must be admitted on the agent first. Missing hosted attachment capability disables remote attachment admission with a clear error rather than embedding bytes in the conversation command.
 
 A workspace created elsewhere in the client appears on the selector's first
 opening; users never need to close and reopen the menu to refresh it.
@@ -132,7 +143,16 @@ Settings deep links: selecting the avatar or display name opens Profile, while
 the dedicated gear opens General.
 
 The conversation timeline renders Markdown, code, reasoning summaries, tool
-activity, permission requests, recovery notices, and final responses. Multiline
+activity, permission requests, recovery notices, and final responses. User
+messages render ordered image thumbnails and file cards above their text;
+activating an image opens an accessible lightbox, while supported files use a
+safe preview and other files use an authenticated download. Internal agent
+paths and media credentials are never displayed.
+
+A `view_image` tool row is titled `View Image` and places its thumbnail directly
+below the title. It loads only near the viewport and opens the full image on
+activation. Local and remote routes present the same row; expired or pruned
+media leaves the row visible with `Image no longer available`. Multiline
 Markdown code blocks keep programming languages and untyped `Code` content LTR,
 opening long lines from the left even when they contain Arabic strings. Fenced
 `text` blocks detect their own content direction and open from the right for
@@ -227,16 +247,21 @@ not silently substitute a different model.
 
 Settings distinguish:
 
+- account Client sessions and connected Agent devices, including current session, authoritative presence, Last active, and confirmed revoke;
 - application preferences, such as appearance;
 - device-level provider, MCP, skill, and runtime configuration;
 - workspace-specific context, capabilities, and permissions.
 
 Workspace configuration can override a user-level capability with the same
 name. Inherited entries remain identifiable so the user can see their origin.
+Workspace Overview offers record-only removal behind a confirmation that
+explicitly preserves the host folder, its files, and existing conversations.
+Remote folder browsing is not exposed there; its constrained runtime remains
+reserved for a future conversation-side file tree.
 
 ## Connection states
 
-The client presents local-agent and hosted-relay state without blocking cached
+The Client presents local Agent and hosted-relay state without blocking cached
 navigation. Depending on the target and platform, available actions include
 sign in, retry, start, repair, and restart.
 
@@ -246,16 +271,47 @@ Mobile and web act as remote controllers for paired agents.
 After a remote device record is created, the installation view keeps both
 platform paths visible at once: macOS/Linux first and Windows PowerShell below
 it. Each compact editor card has a platform label, one generated command,
-horizontal overflow for long tokens, and an independent copy action. Running
-that command installs the agent, prepares the creation-only pairing token, and
-starts the service. The view continues automatically when the authoritative
-inventory reports the new device Online.
+horizontal overflow for long tokens, and an independent copy action. The POSIX
+card follows the conventional `curl -fsSL ... | bash -s -- --pairing-token`
+shape; the Windows card invokes the downloaded PowerShell script block with
+`-PairingToken`. Running either command installs the agent, prepares the
+creation-only pairing token, and starts the service. The view continues
+automatically when the authoritative
+inventory reports the new device Online. If Online status arrives before the
+new row is present in the current inventory snapshot, the Client immediately
+reconciles authoritative inventory; the resulting device row then triggers
+capability loading so model and thinking controls do not require an Agent
+restart. A correlated null capability response received before the device is
+Online is not cached as a valid capability set; the Online transition retries
+the request.
 
 ## Accessibility and responsive behavior
+
+Context compaction appears as one centered timeline separator per logical
+operation. Manual and automatic/overflow labels remain distinct, running state
+uses progress, and terminal success or failure replaces that same tile. The
+centered label alone owns a localized interaction target of at least 44 logical
+pixels and opens the same redacted multiline metrics through desktop hover,
+touch/click, or keyboard focus. Hovering or clicking the divider space does
+nothing; narrow layouts may wrap the label but must not overflow.
+The flat detail card omits lifecycle `Type`, `Trigger`, and `Status` rows. It
+shows before, after, reclaimed context, retained tail, automatic threshold,
+usable input, and full window. Before/after percentages use the daemon-owned
+usable input budget; reclaimed percentage uses the before value. Once provider
+reconciliation arrives, after uses the confirmed value, marks it `Confirmed`,
+suppresses the superseded estimate, and recomputes reclaimed context from it.
+Persistence may retain the provisional estimate for bounded diagnostics.
+The separator dividers consume the full conversation width around the intrinsic
+centered label in both LTR and RTL layouts.
 
 Primary actions provide semantic labels and tooltips. Narrow layouts retain
 touch-friendly targets, and the composer grows for multiline input without
 hiding send, stop, permission, provider, model, or thinking controls.
+
+On desktop, double-clicking a conversation title in the sidebar opens the same
+capability-gated `Rename Session` dialog as choosing `Rename` from its options
+menu. The gesture belongs to the title only; the options control and relative
+timestamp keep their existing interactions.
 
 Realtime voice exists as a separate experimental path and is not part of the
 stable interface described here. See

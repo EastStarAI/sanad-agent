@@ -34,7 +34,7 @@ class SecretsRedactor {
     caseSensitive: false,
   );
   static final RegExp _sensitiveFieldName = RegExp(
-    r'^(authorization|x-api-key|x-amz-security-token|api[_-]?key|apikey|secret|token|password|access[_-]?token|refresh[_-]?token)$',
+    r'^(authorization|x-api-key|x-amz-security-token|api[_-]?key|apikey|secret|secrets|token|password|access[_-]?token|refresh[_-]?token)$',
     caseSensitive: false,
   );
 
@@ -84,4 +84,10 @@ class SecretsRedactor {
 
   Map<String, dynamic> redactMap(Map input) =>
       Map<String, dynamic>.from(redactValue(input) as Map);
+
+  /// Formats [value] for log interpolation without echoing secret fields.
+  String redactForLog(Object? value) {
+    final redacted = redactValue(value);
+    return redacted == null ? 'null' : redacted.toString();
+  }
 }

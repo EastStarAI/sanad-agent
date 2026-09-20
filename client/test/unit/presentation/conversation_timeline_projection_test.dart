@@ -19,6 +19,42 @@ void main() {
       expect(two.single.events, [first, second]);
     });
 
+    test('hidden reasoning does not split one visible tool run across pages', () {
+      final first = _tool('first', 'file_write');
+      final second = _tool('second', 'file_edit');
+      final third = _tool('third', 'shell_execute');
+      final boundaryReasoning = CanonicalEvent(
+        id: 'reasoning-before-page-boundary',
+        kind: EventKind.reasoning,
+        text: 'continue with the next tool',
+        timestamp: DateTime.utc(2026, 9, 1),
+      );
+      final firstPage = projectConversationTimeline([
+        first,
+        boundaryReasoning,
+      ]);
+      final items = projectConversationTimeline(
+        [
+          first,
+          boundaryReasoning,
+          second,
+          CanonicalEvent(
+            id: 'reasoning-after-page-boundary',
+            kind: EventKind.reasoning,
+            text: 'verify with another tool',
+            timestamp: DateTime.utc(2026, 9, 1),
+          ),
+          third,
+        ],
+        previousItems: firstPage,
+      );
+
+      expect(firstPage.single.isToolGroup, isFalse);
+      expect(items, hasLength(1));
+      expect(items.single.isToolGroup, isTrue);
+      expect(items.single.events, [first, second, third]);
+    });
+
     test('ask-user and running tools split completed groups', () {
       final items = projectConversationTimeline([
         _tool('done-1', 'file_read'),

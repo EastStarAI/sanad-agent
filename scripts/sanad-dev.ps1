@@ -193,6 +193,7 @@ function Ensure-Dependencies([string] $FvmPath) {
   New-Item -ItemType Directory -Force -Path $stampRoot | Out-Null
   $lockFiles = @(
     (Join-Path $ProjectDir 'release/contract/pubspec.lock'),
+    (Join-Path $ProjectDir 'scripts/sanad_dev/pubspec.lock'),
     (Join-Path $ProjectDir 'agent/pubspec.lock'),
     (Join-Path $ProjectDir 'client/pubspec.lock')
   )
@@ -205,11 +206,13 @@ function Ensure-Dependencies([string] $FvmPath) {
   }
   $stamp = Join-Path $stampRoot 'setup.stamp'
   $packagesReady = (Test-Path (Join-Path $ProjectDir 'release/contract/.dart_tool/package_config.json')) -and
+    (Test-Path (Join-Path $ProjectDir 'scripts/sanad_dev/.dart_tool/package_config.json')) -and
     (Test-Path (Join-Path $ProjectDir 'agent/.dart_tool/package_config.json')) -and
     (Test-Path (Join-Path $ProjectDir 'client/.dart_tool/package_config.json'))
   if ((Test-Path $stamp) -and (Get-Content -Raw $stamp) -eq $fingerprint -and $packagesReady) { return }
 
   Invoke-LiveProcessStage 'Resolving Release Contract dependencies' $FvmPath @('dart', 'pub', 'get') (Join-Path $ProjectDir 'release/contract')
+  Invoke-LiveProcessStage 'Resolving sanad-dev dependencies' $FvmPath @('dart', 'pub', 'get') (Join-Path $ProjectDir 'scripts/sanad_dev')
   Invoke-LiveProcessStage 'Resolving Agent dependencies' $FvmPath @('dart', 'pub', 'get') (Join-Path $ProjectDir 'agent')
   Invoke-LiveProcessStage 'Resolving Client dependencies' $FvmPath @('flutter', 'pub', 'get') (Join-Path $ProjectDir 'client')
   Set-Content -NoNewline -Path $stamp -Value $fingerprint
@@ -251,7 +254,8 @@ function Require-RuntimeCli {
   if (-not $flutterReady) {
     throw 'Pinned Flutter is not installed. Run: sanad-dev install'
   }
-  if (-not (Test-Path (Join-Path $ProjectDir 'client/.dart_tool/package_config.json'))) {
+  if (-not (Test-Path (Join-Path $ProjectDir 'scripts/sanad_dev/.dart_tool/package_config.json')) -or
+      -not (Test-Path (Join-Path $ProjectDir 'client/.dart_tool/package_config.json'))) {
     throw 'Project packages are not ready. Run: sanad-dev setup'
   }
   return $existing.Source
@@ -282,7 +286,7 @@ try {
   }
   $env:SANAD_DEV_CALLER_DIR = $CallerDir
   Push-Location (Join-Path $ProjectDir 'client')
-  try { & $fvm dart (Join-Path $ProjectDir 'scripts/sanad_dev.dart') @runtimeArgs; exit $LASTEXITCODE }
+  try { & $fvm dart (Join-Path $ProjectDir 'scripts/sanad_dev/lib/sanad_dev_cli.dart') @runtimeArgs; exit $LASTEXITCODE }
   finally { Pop-Location }
 } catch {
   Write-Error "sanad-dev failed: $($_.Exception.Message)"

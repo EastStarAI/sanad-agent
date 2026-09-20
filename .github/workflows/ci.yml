@@ -56,7 +56,7 @@ jobs:
             case "$path" in agent/*|.agents/skills/*|shared/auth_lock/*|release/contract/*|release/release-contract.json) agent=true ;; esac
             case "$path" in client/*|shared/auth_lock/*|release/contract/*|release/release-contract.json) client=true ;; esac
             case "$path" in *.md|docs/*|.vscode/*|.agents/*|.github/ISSUE_TEMPLATE/*|.github/DISCUSSION_TEMPLATE/*|.github/labels.yml|.github/CODEOWNERS|.github/PULL_REQUEST_TEMPLATE.md|scripts/community/*) docs=true ;; esac
-            case "$path" in .github/workflows/*|release/*|client/release/*|agent/tool/release_tool.dart|scripts/install.sh|scripts/install.ps1) release=true ;; esac
+            case "$path" in .github/workflows/*|release/*|client/release/*|agent/tool/release_*.dart|scripts/release/*|scripts/install.sh|scripts/install.ps1) release=true ;; esac
             case "$path" in SECURITY.md|docs/operations/code_signing_policy.md|shared/auth_lock/*|shared/auth_lock/**/*|agent/lib/core/auth/*|agent/lib/core/auth/**/*|agent/lib/capabilities/permissions/*|agent/lib/capabilities/permissions/**/*) security=true ;; esac
           done < "$RUNNER_TEMP/changed"
           if [[ "$EVENT_NAME" != "pull_request" || "$classification_failed" == true ]] ||
@@ -98,6 +98,7 @@ jobs:
         run: |
           fvm dart pub get
           fvm dart run tool/release_tool.dart validate-contract --repo-root ..
+          fvm dart run tool/release_tool.dart check-preparation --repo-root ..
           version="$(jq -r '.version' ../release/release-contract.json)"
           fvm dart run tool/release_tool.dart validate-contract \
             --repo-root .. --tag "v${version}-rc.1" --channel rc
@@ -134,6 +135,44 @@ jobs:
       - name: Test agent
         working-directory: agent
         run: fvm dart test
+
+  cli-automation:
+    name: CLI automation (${{ matrix.os }})
+    needs: classify
+    if: needs.classify.outputs.agent == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      - name: Resolve agent dependencies
+        working-directory: agent
+        run: fvm dart pub get
+      - name: Verify isolated CLI contracts
+        working-directory: agent
+        run: fvm dart test test/guards/e2e_state_isolation_contract_test.dart
+      - name: Verify AOT one-shot, pipe, and JSON output
+        working-directory: agent
+        env:
+          SANAD_CLI_AOT_SUCCESS_FILE: .dart_tool/cli-aot-smoke-success
+        run: fvm dart run tool/cli_aot_smoke.dart
+      - name: Require AOT smoke success marker
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        run: test -f .dart_tool/cli-aot-smoke-success
+      - name: Require AOT smoke success marker on Windows
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          if (-not (Test-Path .dart_tool/cli-aot-smoke-success)) {
+            throw 'AOT smoke did not complete successfully.'
+          }
 
   client:
     needs: classify
@@ -175,14 +214,10 @@ jobs:
           fvm dart pub get
           fvm dart test
       - name: Verify bootstrap, journals, and terminal quoting without hosted traffic
-        working-directory: client
-        run: >-
-          fvm flutter test
-          test/unit/scripts/sanad_dev_bootstrap_test.dart
-          test/unit/scripts/sanad_dev_component_journal_test.dart
-          test/unit/scripts/sanad_dev_terminal_launcher_test.dart
-          test/unit/scripts/sanad_dev_command_options_test.dart
-          test/unit/scripts/sanad_dev_cloud_endpoints_test.dart
+        working-directory: scripts/sanad_dev
+        run: |
+          fvm dart pub get
+          fvm dart test test/cli/sanad_dev_bootstrap_test.dart test/developer/sanad_dev_component_journal_test.dart test/infrastructure/sanad_dev_terminal_launcher_test.dart test/cli/sanad_dev_command_options_test.dart test/infrastructure/sanad_dev_cloud_endpoints_test.dart
       - name: Parse Windows release scripts
         if: runner.os == 'Windows'
         shell: pwsh
@@ -284,6 +319,7 @@ jobs:
           grep -Fq 'upload-client-aliases' scripts/release/deploy_production_asset.sh
           scripts/release/test_generate_client_download_redirects.sh
           scripts/release/test_deploy_production_asset.sh
+          scripts/release/test_verify_metadata_release_diff.sh
           grep -F -- '--draft' .github/workflows/release.yml
           grep -F 'release-manifest-rc.json' release/release-contract.json
           grep -F 'appcast-rc.xml' release/release-contract.json
@@ -341,7 +377,15 @@ jobs:
           }
           require_for_paths maintainer-reviewed '^(\.github/|GOVERNANCE\.md$|CONTRIBUTING\.md$|CODE_OF_CONDUCT\.md$)'
           require_for_paths security-reviewed '^(SECURITY\.md$|shared/auth_lock/|agent/lib/core/auth/|agent/lib/capabilities/permissions/)'
-          require_for_paths release-reviewed '^(CODE_SIGNING_POLICY\.md$|release/|client/release/|scripts/install\.(sh|ps1)$|\.github/workflows/(release|deploy|testflight)\.yml$)'
+          if grep -Eq '^(CODE_SIGNING_POLICY\.md$|release/|client/release/|scripts/install\.(sh|ps1)$|\.github/workflows/(release|deploy|testflight)\.yml$)' "$RUNNER_TEMP/changed" &&
+            ! has_label release-reviewed; then
+            if scripts/release/verify_metadata_release_diff.sh "$BASE_SHA" "$HEAD_SHA"; then
+              echo "Exact metadata-only release preparation does not require release-reviewed."
+            else
+              echo "::error::Changed paths require the protected label release-reviewed"
+              exit 1
+            fi
+          fi
 
   all-required:
     name: All required checks pass

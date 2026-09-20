@@ -21,7 +21,7 @@ The mutation remains account-owned: a cloud device uses its database id, while t
 - [x] The dialog starts with the current name and supports keyboard submission and cancellation.
 - [x] Blank names and names longer than 255 characters cannot be submitted.
 - [x] The mutation waits for a correlated authoritative response and exposes backend failures or timeouts.
-- [x] A merged local device sends its cloud device id, never `local-agent`.
+- [x] A merged local device sends its cloud device id, never its local hardware identity.
 - [x] A local-only device does not offer a misleading rename action.
 - [x] Successful updates refresh Overview, Settings navigation, and active-device projections through the existing inventory stream.
 - [x] Focused Flutter unit/widget tests and backend unit tests pass.

@@ -15,7 +15,9 @@ import 'package:sanad_client/features/conversations/domain/models/slash_command_
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
@@ -42,16 +44,32 @@ class FakeConversationRepository implements ConversationRepository {
 
   final List<String> activatedSessionIds = [];
   final List<String> loadedHistorySessionIds = [];
+  final List<String> loadedOlderHistorySessionIds = [];
+  final List<String> loadedNewerHistorySessionIds = [];
+  final List<(String sessionId, String eventId)> loadedAnchorRequests = [];
+  bool historyHasMoreValue = false;
+  bool historyHasNewerValue = false;
+  Future<List<CanonicalEvent>> Function(DeviceConfig agent, String sessionId)? loadOlderHistoryHandler;
+  Future<List<CanonicalEvent>> Function(
+    DeviceConfig agent,
+    String sessionId,
+    String anchorEventId,
+  )?
+  loadAnchoredHistoryHandler;
   final List<String> sentMessages = [];
   final List<Map<String, String?>> sentMessageRequests = [];
   final List<Map<String, String?>> steerMessageRequests = [];
   final List<String?> stoppedSessionIds = [];
   final List<Map<String, String?>> retriedRuntimeNotices = [];
   final List<Map<String, String?>> continuedRuntimeNotices = [];
+  SessionCompactResult compactSessionResult = const SessionCompactResult(outcome: 'accepted');
+  Future<SessionCompactResult> Function()? compactSessionHandler;
+  int compactSessionCalls = 0;
   final List<Map<String, String?>> updatedSessionPreferences = [];
   final List<Map<String, Object?>> createdSessionRequests = [];
   final List<DeviceWorkspace> workspaces = [];
   final List<Map<String, String?>> createdWorkspaces = [];
+  final List<String> removedWorkspaceIds = [];
   final List<Map<String, String?>> slashCommandSearchRequests = [];
   final List<Map<String, String?>> browseWorkspaceTreeRequests = [];
   final List<Map<String, String?>> permissionResponses = [];
@@ -68,6 +86,15 @@ class FakeConversationRepository implements ConversationRepository {
   int beginNewSessionCalls = 0;
   int stopCalls = 0;
   bool currentConversationProcessing = false;
+  TurnReplayResult replayResult = const TurnReplayResult(
+    outcome: 'accepted',
+    safety: TurnReplaySafety.safe,
+    requiresConfirmation: false,
+  );
+  final List<TurnReplayResult> replayResults = [];
+  final List<Map<String, Object?>> replayRequests = [];
+  SessionForkResult forkResult = const SessionForkResult(outcome: 'accepted');
+  final List<Map<String, String>> forkRequests = [];
 
   void seedSessions(DeviceConfig agent, List<Session> sessions) {
     _sessionsByAgentId[agent.id] = List<Session>.from(sessions);
@@ -324,17 +351,59 @@ class FakeConversationRepository implements ConversationRepository {
     DeviceConfig agent, {
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
-  }) async => const TurnReplayResult(
-    outcome: 'accepted',
-    safety: TurnReplaySafety.safe,
-    requiresConfirmation: false,
-  );
+    bool confirmedDropSteers = false,
+  }) async {
+    replayRequests.add({
+      'session_id': sessionId,
+      'target_request_id': targetRequestId,
+      'target_message_id': targetMessageId,
+      'target_turn_id': targetTurnId,
+      'expected_history_revision': expectedHistoryRevision,
+      'action': action,
+      'message': message,
+      'provider_instance_id': providerInstanceId,
+      'model_id': modelId,
+      'thinking_mode': thinkingMode,
+      'confirmed_replay_unsafe': confirmedReplayUnsafe,
+      'confirmed_drop_steers': confirmedDropSteers,
+    });
+    return replayResults.isEmpty ? replayResult : replayResults.removeAt(0);
+  }
+
+  @override
+  Future<SessionForkResult> forkSession(
+    DeviceConfig agent, {
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async {
+    forkRequests.add({
+      'session_id': sessionId,
+      'target_message_id': targetMessageId,
+      'target_turn_id': targetTurnId,
+    });
+    return forkResult;
+  }
+
+  @override
+  Future<SessionCompactResult> compactSession(
+    DeviceConfig agent, {
+    required String sessionId,
+  }) async {
+    compactSessionCalls += 1;
+    final handler = compactSessionHandler;
+    if (handler != null) return handler();
+    return compactSessionResult;
+  }
 
   @override
   Future<void> retryRuntimeNotice(
@@ -509,15 +578,21 @@ class FakeConversationRepository implements ConversationRepository {
   @override
   Future<DeviceWorkspace> createWorkspace(
     DeviceConfig agent, {
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) async {
     createdWorkspaces.add({
       'device_id': agent.id,
       'path': path,
       'name': name,
+      'description': description,
     });
-    return DeviceWorkspace(id: path, path: path, name: name ?? path);
+    return DeviceWorkspace(
+      id: path ?? name ?? 'workspace',
+      path: path ?? name ?? 'workspace',
+      name: name ?? path ?? 'workspace',
+    );
   }
 
   @override
@@ -527,6 +602,15 @@ class FakeConversationRepository implements ConversationRepository {
     required String displayName,
   }) async {
     return DeviceWorkspace(id: workspaceId, name: displayName, path: workspaceId);
+  }
+
+  @override
+  Future<void> removeWorkspace(
+    DeviceConfig agent, {
+    required String workspaceId,
+  }) async {
+    removedWorkspaceIds.add(workspaceId);
+    workspaces.removeWhere((workspace) => workspace.id == workspaceId);
   }
 
   @override
@@ -563,6 +647,44 @@ class FakeConversationRepository implements ConversationRepository {
     loadedHistorySessionIds.add(sessionId);
     return const [];
   }
+
+  @override
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) async {
+    loadedOlderHistorySessionIds.add(sessionId);
+    final handler = loadOlderHistoryHandler;
+    if (handler != null) return handler(agent, sessionId);
+    return currentMessages(agent);
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+    String anchorEventId,
+  ) async {
+    loadedAnchorRequests.add((sessionId, anchorEventId));
+    final handler = loadAnchoredHistoryHandler;
+    if (handler != null) return handler(agent, sessionId, anchorEventId);
+    return currentMessages(agent);
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) async {
+    loadedNewerHistorySessionIds.add(sessionId);
+    return currentMessages(agent);
+  }
+
+  @override
+  bool historyHasMore(DeviceConfig agent) => historyHasMoreValue;
+
+  @override
+  bool historyHasNewer(DeviceConfig agent) => historyHasNewerValue;
 
   @override
   Future<void> updateSessionTitle(DeviceConfig agent, String sessionId, String title) async {

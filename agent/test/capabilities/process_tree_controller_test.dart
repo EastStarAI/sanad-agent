@@ -99,6 +99,29 @@ void main() {
       await process.exitCode;
     }, skip: Platform.isWindows);
 
+    test('persisted fingerprint reclaims an orphaned process group', () async {
+      final process = await Process.start('setsid', ['sh', '-c', 'sleep 30']);
+      final tree = ProcessTreeController.attach(
+        process,
+        usesProcessGroup: true,
+      );
+      final restored = ProcessFingerprint.tryParse(tree.fingerprint.toJson());
+
+      final report = await ProcessTreeController.terminatePersisted(
+        restored!,
+        gracePeriod: const Duration(milliseconds: 100),
+      );
+
+      expect(
+        report.outcome,
+        anyOf(
+          ToolProcessCleanupOutcome.exited,
+          ToolProcessCleanupOutcome.escalated,
+        ),
+      );
+      await process.exitCode;
+    }, skip: !Platform.isLinux);
+
     test(
       'natural wrapper exit still kills a TERM-resistant descendant',
       () async {

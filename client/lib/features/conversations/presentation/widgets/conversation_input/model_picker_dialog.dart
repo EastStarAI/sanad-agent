@@ -10,7 +10,6 @@ import 'package:sanad_client/features/provider_setup/data/provider_setup_client.
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_runtime_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_state.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:intl/intl.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:go_router/go_router.dart';
@@ -98,7 +97,6 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
 
     return [...existingRecent, ...otherModels];
   }
-
 
   @override
   void initState() {
@@ -327,7 +325,9 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
         }
       }
 
-      final visibleCount = _query.isNotEmpty ? group.models.models.length : (isExpanded ? totalCount : (totalCount < 5 ? totalCount : 5));
+      final visibleCount = _query.isNotEmpty
+          ? group.models.models.length
+          : (isExpanded ? totalCount : (totalCount < 5 ? totalCount : 5));
 
       slivers.add(
         SliverMainAxisGroup(
@@ -446,7 +446,6 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
       ),
     );
   }
-
 
   Widget _buildRecentHeader(BuildContext context) {
     final theme = Theme.of(context);
@@ -592,7 +591,7 @@ class _ProviderHeaderDelegate extends SliverPersistentHeaderDelegate {
           const SizedBox(width: 8),
           BlocBuilder<ProviderUsageCubit, ProviderUsageState>(
             builder: (context, usageState) {
-              final deviceId = agent?.id ?? DeviceInventoryIds.localDevice;
+              final deviceId = agent?.id ?? getIt<ProviderUsageCubit>().localDeviceId;
               final entry = usageState.entry(deviceId, providerId);
               final supports = usageState.support.supports(deviceId, providerId);
 
@@ -771,7 +770,6 @@ String _formatResetRelative(DateTime resetAt) {
   if (delta.inDays <= 6) return 'in ${delta.inDays}d';
   return "on ${DateFormat('MMM d, HH:mm').format(local)}";
 }
-
 
 @visibleForTesting
 int modelPickerVisibleSectionCount({

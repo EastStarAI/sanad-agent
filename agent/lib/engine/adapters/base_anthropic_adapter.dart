@@ -1,6 +1,8 @@
 import 'dart:convert';
+
 import 'package:logging/logging.dart';
 import 'package:http/http.dart' as http;
+
 import '../../core/config.dart';
 import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
@@ -13,6 +15,7 @@ import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
 import 'llm_http_exception.dart';
 import 'llm_request_options.dart';
+import 'opencode_session_affinity.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 import '../llm_request_dumper.dart';
@@ -23,6 +26,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
   final Config config;
   final ProviderProfile profile;
   final http.Client? client;
+  final ModelContextLimitLookup? modelContextLimitLookup;
   final String? baseUrlOverride;
   final String? apiKeyOverride;
   final String? defaultModelOverride;
@@ -33,6 +37,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
     this.config,
     this.profile, {
     this.client,
+    this.modelContextLimitLookup,
     this.baseUrlOverride,
     this.apiKeyOverride,
     this.defaultModelOverride,
@@ -160,16 +165,24 @@ class BaseAnthropicAdapter implements LLMAdapter {
     return [_anthropicHeaders(), _anthropicHeaders(useBearerAuth: true)];
   }
 
-  Map<String, String> _anthropicHeaders({bool useBearerAuth = false}) {
-    return {
-      'Content-Type': 'application/json',
-      if (useBearerAuth)
-        'Authorization': 'Bearer $_apiKey'
-      else
-        'x-api-key': _apiKey,
-      'anthropic-version': _anthropicVersion,
-      ...profile.defaultHeaders,
-    };
+  Map<String, String> _anthropicHeaders({
+    bool useBearerAuth = false,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) {
+    return withOpenCodeSessionAffinity(
+      headers: {
+        'Content-Type': 'application/json',
+        if (useBearerAuth)
+          'Authorization': 'Bearer $_apiKey'
+        else
+          'x-api-key': _apiKey,
+        'anthropic-version': _anthropicVersion,
+        ...profile.defaultHeaders,
+      },
+      providerName: profile.name,
+      baseUrl: _baseUrl,
+      sessionId: options.sessionId,
+    );
   }
 
   List<String> _fallbackModelIds() {
@@ -202,8 +215,11 @@ class BaseAnthropicAdapter implements LLMAdapter {
 
   @override
   Future<int> getContextLimit([String? modelOverride]) async {
-    if (config.contextLimit != 4000) return config.contextLimit;
     final resolvedModel = _resolveModel(modelOverride);
+    final configuredLimit = config.contextModelLimit(resolvedModel);
+    if (configuredLimit != null) return configuredLimit;
+    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
+    if (catalogLimit != null) return catalogLimit;
     return ModelMetadata.getLimitForModel(resolvedModel) ?? 200000;
   }
 
@@ -247,7 +263,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
         url: url,
-        headers: _anthropicHeaders(),
+        headers: _anthropicHeaders(options: options),
         body: body,
       );
     }
@@ -260,7 +276,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
     try {
       response = await transport.post(
         url,
-        headers: _anthropicHeaders(),
+        headers: _anthropicHeaders(options: options),
         body: jsonEncode(body),
         operation: 'generateResponse',
       );
@@ -360,7 +376,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
         url: url,
-        headers: _anthropicHeaders(),
+        headers: _anthropicHeaders(options: options),
         body: body,
       );
     }
@@ -370,7 +386,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
       adapterSharedClient: client,
     );
     final request = http.Request('POST', url);
-    request.headers.addAll(_anthropicHeaders());
+    request.headers.addAll(_anthropicHeaders(options: options));
     request.body = jsonEncode(body);
 
     late http.StreamedResponse response;
@@ -402,10 +418,12 @@ class BaseAnthropicAdapter implements LLMAdapter {
       }
 
       final partialToolCalls = <int, _PartialClaudeToolCall>{};
+      final completedToolCalls = <ToolCall>[];
       final taggedReasoning = TaggedReasoningStreamParser();
       Map<String, dynamic>? finalUsage;
-      final List<String> accumulatedStreamLines = [];
       LLMFinishReason? streamFinishReason;
+      final contentBuffer = StringBuffer();
+      final reasoningBuffer = StringBuffer();
 
       try {
         await for (final line in transport.decodeSseLines(
@@ -413,7 +431,6 @@ class BaseAnthropicAdapter implements LLMAdapter {
           operation: 'generateStream',
         )) {
           transport.throwIfCancelled(operation: 'generateStream');
-          accumulatedStreamLines.add(line);
           final trimmed = line.trim();
           if (trimmed.isEmpty) continue;
 
@@ -488,6 +505,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
                 } else if (block != null && block['type'] == 'thinking') {
                   final initial = block['thinking']?.toString();
                   if (initial != null && initial.isNotEmpty) {
+                    reasoningBuffer.write(initial);
                     yield AgentResponse(
                       message: Message(
                         role: MessageRole.assistant,
@@ -506,6 +524,12 @@ class BaseAnthropicAdapter implements LLMAdapter {
                   if (deltaType == 'text_delta') {
                     final chunk = delta['text'] as String;
                     final tagged = taggedReasoning.add(chunk);
+                    if (tagged.content != null) {
+                      contentBuffer.write(tagged.content);
+                    }
+                    if (tagged.reasoning != null) {
+                      reasoningBuffer.write(tagged.reasoning);
+                    }
                     yield AgentResponse(
                       message: Message(
                         role: MessageRole.assistant,
@@ -519,6 +543,7 @@ class BaseAnthropicAdapter implements LLMAdapter {
                   } else if (deltaType == 'thinking_delta') {
                     final chunk = delta['thinking']?.toString();
                     if (chunk != null && chunk.isNotEmpty) {
+                      reasoningBuffer.write(chunk);
                       yield AgentResponse(
                         message: Message(
                           role: MessageRole.assistant,
@@ -554,73 +579,112 @@ class BaseAnthropicAdapter implements LLMAdapter {
             } catch (_) {}
           }
         }
+        final pendingTagged = taggedReasoning.finish();
+        if (pendingTagged.content != null || pendingTagged.reasoning != null) {
+          if (pendingTagged.content != null) {
+            contentBuffer.write(pendingTagged.content);
+          }
+          if (pendingTagged.reasoning != null) {
+            reasoningBuffer.write(pendingTagged.reasoning);
+          }
+          yield AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: pendingTagged.content,
+              reasoning: pendingTagged.reasoning,
+            ),
+            model: resolvedModel,
+            provider: 'anthropic',
+          );
+        }
+
+        for (final partial in partialToolCalls.values) {
+          Map<String, dynamic> args = {};
+          try {
+            args = jsonDecode(partial.argumentsBuffer.toString());
+          } catch (_) {}
+          completedToolCalls.add(
+            ToolCall(
+              id: partial.id ?? '',
+              name: partial.name ?? '',
+              arguments: args,
+            ),
+          );
+        }
+
+        if (completedToolCalls.isNotEmpty) {
+          yield AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: '',
+              toolCalls: completedToolCalls,
+            ),
+            isToolCall: true,
+            usage: finalUsage,
+            model: resolvedModel,
+            provider: 'anthropic',
+            finishReason: streamFinishReason ?? LLMFinishReason.toolCalls,
+          );
+        } else if (finalUsage != null) {
+          yield AgentResponse(
+            message: Message(role: MessageRole.assistant, content: ''),
+            isToolCall: false,
+            usage: finalUsage,
+            model: resolvedModel,
+            provider: 'anthropic',
+            finishReason: streamFinishReason ?? LLMFinishReason.stop,
+          );
+        }
+
         if (LLMRequestDumper.isEnabled) {
+          final effectiveFinishReason = completedToolCalls.isNotEmpty
+              ? (streamFinishReason ?? LLMFinishReason.toolCalls)
+              : (streamFinishReason ?? LLMFinishReason.stop);
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
-            'stream_lines': accumulatedStreamLines,
+            'message': {
+              'role': 'assistant',
+              'content': contentBuffer.toString(),
+              if (reasoningBuffer.isNotEmpty)
+                'reasoning': reasoningBuffer.toString(),
+              if (completedToolCalls.isNotEmpty)
+                'tool_calls':
+                    completedToolCalls.map((tc) => tc.toJson()).toList(),
+            },
+            'finish_reason': effectiveFinishReason.name,
+            'usage': ?finalUsage,
           });
         }
       } catch (e) {
         if (LLMRequestDumper.isEnabled) {
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
-            'stream_lines': accumulatedStreamLines,
+            if (contentBuffer.isNotEmpty ||
+                reasoningBuffer.isNotEmpty ||
+                partialToolCalls.isNotEmpty ||
+                completedToolCalls.isNotEmpty)
+              'partial_message': {
+                'role': 'assistant',
+                if (contentBuffer.isNotEmpty)
+                  'content': contentBuffer.toString(),
+                if (reasoningBuffer.isNotEmpty)
+                  'reasoning': reasoningBuffer.toString(),
+                if (completedToolCalls.isNotEmpty)
+                  'tool_calls':
+                      completedToolCalls.map((tc) => tc.toJson()).toList(),
+                if (partialToolCalls.isNotEmpty)
+                  'partial_tool_calls': partialToolCalls.values
+                      .map((p) => {
+                            if (p.id != null) 'id': p.id,
+                            if (p.name != null) 'name': p.name,
+                            'arguments': p.argumentsBuffer.toString(),
+                          })
+                      .toList(),
+              },
             'error': e.toString(),
           });
         }
         rethrow;
-      }
-
-      final pendingTagged = taggedReasoning.finish();
-      if (pendingTagged.content != null || pendingTagged.reasoning != null) {
-        yield AgentResponse(
-          message: Message(
-            role: MessageRole.assistant,
-            content: pendingTagged.content,
-            reasoning: pendingTagged.reasoning,
-          ),
-          model: resolvedModel,
-          provider: 'anthropic',
-        );
-      }
-
-      final completedToolCalls = <ToolCall>[];
-      for (final partial in partialToolCalls.values) {
-        Map<String, dynamic> args = {};
-        try {
-          args = jsonDecode(partial.argumentsBuffer.toString());
-        } catch (_) {}
-        completedToolCalls.add(
-          ToolCall(
-            id: partial.id ?? '',
-            name: partial.name ?? '',
-            arguments: args,
-          ),
-        );
-      }
-
-      if (completedToolCalls.isNotEmpty) {
-        yield AgentResponse(
-          message: Message(
-            role: MessageRole.assistant,
-            content: '',
-            toolCalls: completedToolCalls,
-          ),
-          isToolCall: true,
-          usage: finalUsage,
-          model: resolvedModel,
-          provider: 'anthropic',
-          finishReason: streamFinishReason ?? LLMFinishReason.toolCalls,
-        );
-      } else if (finalUsage != null) {
-        yield AgentResponse(
-          message: Message(role: MessageRole.assistant, content: ''),
-          isToolCall: false,
-          usage: finalUsage,
-          model: resolvedModel,
-          provider: 'anthropic',
-          finishReason: streamFinishReason ?? LLMFinishReason.stop,
-        );
       }
     } finally {
       await transport.dispose();
@@ -830,6 +894,8 @@ class BaseAnthropicAdapter implements LLMAdapter {
         return LLMFinishReason.toolCalls;
       case 'max_tokens':
         return LLMFinishReason.length;
+      case 'pause_turn':
+        return LLMFinishReason.incomplete;
       case 'stop_sequence':
         return LLMFinishReason.stop;
       default:

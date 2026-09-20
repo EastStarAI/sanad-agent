@@ -667,6 +667,7 @@ class _MainContent extends StatelessWidget {
                 final visualState = messagesState.visualState;
                 final presentedSession = _resolvePresentedSession(
                   activeSessionId: messagesState.activeSessionId,
+                  requestedSessionId: messagesState.requestedSessionId,
                   selectedSession: sessionState.selectedSession,
                   agentSessions: sessionState.agentSessions,
                 );
@@ -680,14 +681,14 @@ class _MainContent extends StatelessWidget {
                 final conversation = Stack(
                   children: [
                     Positioned.fill(child: mainContent),
-                    if (visualState.showAppBar && presentedSession != null)
+                    if (visualState.showAppBar)
                       Positioned(
                         top: 0,
                         left: 0,
                         right: 0,
                         child: ConversationAppBar(
-                          key: ValueKey('app_bar_${presentedSession.id}'),
-                          sessionTitle: presentedSession.title,
+                          key: ValueKey('app_bar_${presentedSession?.id ?? 'pending'}'),
+                          sessionTitle: presentedSession?.title,
                           workspace: _workspaceFromSession(presentedSession),
                           isMobile: isMobile,
                           onMenuPressed: isMobile ? () => Scaffold.of(context).openDrawer() : null,
@@ -728,16 +729,18 @@ class _MainContent extends StatelessWidget {
 
   Session? _resolvePresentedSession({
     required String? activeSessionId,
+    String? requestedSessionId,
     required Session? selectedSession,
     required Map<String, List<Session>> agentSessions,
   }) {
-    if (activeSessionId == null) return null;
-    if (selectedSession?.id == activeSessionId) return selectedSession;
+    final targetId = activeSessionId ?? requestedSessionId ?? selectedSession?.id;
+    if (targetId == null) return null;
+    if (selectedSession?.id == targetId) return selectedSession;
     for (final sessions in agentSessions.values) {
-      final match = sessions.where((s) => s.id == activeSessionId).firstOrNull;
+      final match = sessions.where((s) => s.id == targetId).firstOrNull;
       if (match != null) return match;
     }
-    return null;
+    return selectedSession;
   }
 
   Widget _buildChat(
@@ -747,6 +750,7 @@ class _MainContent extends StatelessWidget {
     required ConversationVisualState visualState,
   }) {
     final inputCubit = context.read<ConversationInputCubit>();
+    final messagesCubit = context.read<SessionMessagesCubit>();
     final cacheRepository = context.read<ConversationCacheRepository>();
     final sessionId = messagesState.activeSessionId;
     final composerSessionId = messagesState.requestedSessionId ?? sessionId;
@@ -777,6 +781,15 @@ class _MainContent extends StatelessWidget {
             ),
       visualState: visualState,
       pendingSteerCancellationRequestIds: messagesState.pendingSteerCancellationRequestIds,
+      hasOlderHistory: messagesState.hasOlderHistory,
+      isOlderHistoryLoading: messagesState.isOlderHistoryLoading,
+      olderHistoryError: messagesState.olderHistoryError,
+      onLoadOlderHistory: messagesCubit.loadOlderHistory,
+      hasNewerHistory: messagesState.hasNewerHistory,
+      isNewerHistoryLoading: messagesState.isNewerHistoryLoading,
+      newerHistoryError: messagesState.newerHistoryError,
+      onLoadNewerHistory: messagesCubit.loadNewerHistory,
+      onLoadAnchoredHistory: messagesCubit.loadAnchoredHistory,
       onSendMessage: (text, {intent = MessageDeliveryIntent.auto}) async {
         await inputCubit.sendMessage(text, intent: intent);
       },
@@ -796,8 +809,9 @@ class _HistoryTransitionOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final topOffset = MediaQuery.paddingOf(context).top + 64.0;
     return Positioned(
-      top: 12,
+      top: topOffset,
       left: 16,
       right: 16,
       child: Center(

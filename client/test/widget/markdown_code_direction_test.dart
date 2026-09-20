@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/app_markdown_renderer.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/markdown_style_helper.dart';
 import 'package:sanad_client/shared/widgets/copy_button.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 
 void main() {
   const codeColor = Colors.green;
@@ -115,7 +116,7 @@ void main() {
     await tester.pump();
 
     expect(copiedText, code);
-    await tester.pump(const Duration(seconds: 2));
-    await tester.pump(const Duration(milliseconds: 400));
+    await tester.pump(ToastUtils.defaultDuration);
+    await tester.pump(const Duration(milliseconds: 500));
   });
 }

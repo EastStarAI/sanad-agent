@@ -3,6 +3,7 @@ import '../../core/secrets_redactor.dart';
 import '../../core/models/tool_call.dart';
 import '../../evolution/db/persisted_runtime_state_repository.dart';
 import 'deferred_tool_result.dart';
+import 'tool_terminal_record.dart';
 
 /// Builds, persists, and restores per-turn continuation checkpoints so a
 /// daemon crash mid-tool-batch can be safely resumed without replaying
@@ -27,12 +28,42 @@ class ContinuationCheckpointCoordinator {
   static const String checkpointKindInitialModelRequest =
       'initial_model_request';
   static const String checkpointKindAfterToolResult = 'after_tool_result';
+  static const String automaticUnknownToolRecoveryKey =
+      'auto_recover_interrupted_tools_as_unknown';
 
   /// Allowed checkpoint kinds for safe resume (Gate D.1).
   static const Set<String> _allowedKinds = {
     checkpointKindInitialModelRequest,
     checkpointKindAfterToolResult,
   };
+
+  /// Returns metadata that atomically reclaims a provider request explicitly
+  /// interrupted by a forced restart. The caller must persist this metadata in
+  /// the same transition that claims the blocked work item for resume.
+  ///
+  /// A null result means the interruption does not contain enough evidence to
+  /// identify the checkpoint that safely preceded the provider request.
+  static Map<String, dynamic>? metadataForInterruptedProviderRetry(
+    Map<String, dynamic> metadata, {
+    bool requireExplicitRestartMarker = true,
+  }) {
+    if (metadata['checkpoint_kind'] != checkpointKindModelRequestInFlight ||
+        (requireExplicitRestartMarker &&
+            metadata['restart_interrupted_provider_request'] != true) ||
+        List<Object?>.from(
+          metadata['currently_executing_tools'] as List? ?? const [],
+        ).isNotEmpty) {
+      return null;
+    }
+    final previousKind = metadata['checkpoint_before_model_request']
+        ?.toString();
+    if (!_allowedKinds.contains(previousKind)) return null;
+
+    return Map<String, dynamic>.from(metadata)
+      ..['checkpoint_kind'] = previousKind
+      ..remove('checkpoint_before_model_request')
+      ..remove('restart_interrupted_provider_request');
+  }
 
   final String sessionId;
 
@@ -64,6 +95,7 @@ class ContinuationCheckpointCoordinator {
     Map<String, Map<String, dynamic>>? additionalToolOutputs,
     Map<String, Map<String, dynamic>>? additionalDeferredToolResults,
     Iterable<String>? removeDeferredToolCallIds,
+    Iterable<String>? removeRestartTerminalizedToolCallIds,
     Map<String, bool>? toolReplaySafety,
     String? checkpointKind,
     int? resumeHistoryLength,
@@ -115,6 +147,20 @@ class ContinuationCheckpointCoordinator {
       meta['completed_tool_outputs'] = outputs;
     }
 
+    if (removeRestartTerminalizedToolCallIds != null) {
+      final restartTerminalizedToolIds = <String>{
+        ...List<String>.from(
+          meta['restart_terminalized_tool_ids'] as List? ?? const [],
+        ),
+      }..removeAll(removeRestartTerminalizedToolCallIds);
+      if (restartTerminalizedToolIds.isEmpty) {
+        meta.remove('restart_terminalized_tool_ids');
+      } else {
+        meta['restart_terminalized_tool_ids'] = restartTerminalizedToolIds
+            .toList();
+      }
+    }
+
     final deferredResults = Map<String, dynamic>.from(
       meta['deferred_tool_results'] as Map? ?? const {},
     );
@@ -153,6 +199,20 @@ class ContinuationCheckpointCoordinator {
       }
     }
 
+    final progress = Map<String, dynamic>.from(
+      meta['executing_tool_progress'] as Map? ?? const {},
+    );
+    if (currentlyExecutingToolCallIds != null) {
+      progress.removeWhere(
+        (toolCallId, _) => !currentlyExecutingToolCallIds.contains(toolCallId),
+      );
+      if (progress.isEmpty) {
+        meta.remove('executing_tool_progress');
+      } else {
+        meta['executing_tool_progress'] = progress;
+      }
+    }
+
     final replaySafety = Map<String, dynamic>.from(
       meta['tool_replay_safety'] as Map? ?? const {},
     );
@@ -163,6 +223,32 @@ class ContinuationCheckpointCoordinator {
       meta['tool_replay_safety'] = replaySafety;
     }
 
+    repo.transitionWorkItemState(
+      workItemId: activeItem.workItemId,
+      fromState: activeItem.state,
+      toState: activeItem.state,
+      continuationMetadata: meta,
+    );
+  }
+
+  void saveExecutingToolProgress(
+    String toolCallId,
+    Map<String, dynamic> progress,
+  ) {
+    final repo = _repo;
+    if (repo == null) return;
+    final activeItem = repo.findActiveWorkItem(sessionId);
+    if (activeItem == null) return;
+    final meta = Map<String, dynamic>.from(activeItem.continuationMetadata);
+    final executing = List<String>.from(
+      meta['currently_executing_tools'] as List? ?? const [],
+    );
+    if (!executing.contains(toolCallId)) return;
+    final snapshots = Map<String, dynamic>.from(
+      meta['executing_tool_progress'] as Map? ?? const {},
+    );
+    snapshots[toolCallId] = _secretsRedactor.redactMap(progress);
+    meta['executing_tool_progress'] = snapshots;
     repo.transitionWorkItemState(
       workItemId: activeItem.workItemId,
       fromState: activeItem.state,
@@ -204,6 +290,66 @@ class ContinuationCheckpointCoordinator {
     );
   }
 
+  void clearAutomaticUnknownToolRecoveryIntent() {
+    final repo = _repo;
+    if (repo == null) return;
+    final activeItem = repo.findActiveWorkItem(sessionId);
+    if (activeItem == null) return;
+    final meta = Map<String, dynamic>.from(activeItem.continuationMetadata);
+    if (meta.remove(automaticUnknownToolRecoveryKey) == null) return;
+    repo.transitionWorkItemState(
+      workItemId: activeItem.workItemId,
+      fromState: activeItem.state,
+      toState: activeItem.state,
+      continuationMetadata: meta,
+    );
+  }
+
+  /// Repairs only the crash window after the owned user message was saved and
+  /// before the first provider checkpoint was written.
+  bool repairMissingPreProviderCheckpoint({
+    required CheckpointContext ctx,
+    required int resumeHistoryLength,
+    required bool hasOwnedUserMessage,
+    String? requestId,
+  }) {
+    final repo = _repo;
+    if (repo == null || !hasOwnedUserMessage) return false;
+    final activeItem = repo.findActiveWorkItem(sessionId);
+    if (activeItem == null) return false;
+    final meta = Map<String, dynamic>.from(activeItem.continuationMetadata);
+    if (meta['checkpoint_kind'] != null ||
+        (requestId != null && activeItem.requestId != requestId) ||
+        List<Object?>.from(
+          meta['currently_executing_tools'] as List? ?? const [],
+        ).isNotEmpty ||
+        Map<Object?, Object?>.from(
+          meta['completed_tool_results'] as Map? ?? const {},
+        ).isNotEmpty ||
+        Map<Object?, Object?>.from(
+          meta['completed_tool_outputs'] as Map? ?? const {},
+        ).isNotEmpty ||
+        Map<Object?, Object?>.from(
+          meta['deferred_tool_results'] as Map? ?? const {},
+        ).isNotEmpty) {
+      return false;
+    }
+    meta['checkpoint_kind'] = checkpointKindInitialModelRequest;
+    meta['resume_history_length'] = resumeHistoryLength;
+    meta['currentTurnStartIndex'] = ctx.currentTurnStartIndex;
+    if (ctx.currentModelStepId != null) {
+      meta['model_step_id'] = ctx.currentModelStepId;
+    }
+    meta['checkpoint_repaired_after_restart'] = true;
+    repo.transitionWorkItemState(
+      workItemId: activeItem.workItemId,
+      fromState: activeItem.state,
+      toState: activeItem.state,
+      continuationMetadata: meta,
+    );
+    return true;
+  }
+
   /// Restores checkpoint state for a resume operation.
   ///
   /// Validates the persisted checkpoint is safe to resume from (Gate D.1/D.2)
@@ -216,6 +362,7 @@ class ContinuationCheckpointCoordinator {
   ResumeResult restoreCheckpointForResume({
     required int currentHistoryLength,
     bool allowAmbiguousToolInterruption = false,
+    bool neutralizeAllInterruptedTools = false,
   }) {
     final repo = _repo;
     if (repo == null) {
@@ -245,11 +392,15 @@ class ContinuationCheckpointCoordinator {
     final completedResults = Map<String, dynamic>.from(
       meta['completed_tool_results'] as Map? ?? const {},
     );
+    final completedOutputs = Map<String, dynamic>.from(
+      meta['completed_tool_outputs'] as Map? ?? const {},
+    );
     final toolReplaySafety = Map<String, dynamic>.from(
       meta['tool_replay_safety'] as Map? ?? const {},
     );
     final ambiguousToolCallIds = <String>[];
     final deferredToolCallIds = <String>[];
+    final restartTerminalizedToolCallIds = <String>[];
     final deferredResults = Map<String, dynamic>.from(
       meta['deferred_tool_results'] as Map? ?? const {},
     );
@@ -264,6 +415,10 @@ class ContinuationCheckpointCoordinator {
         deferredToolCallIds.add(toolId);
         continue;
       }
+      if (neutralizeAllInterruptedTools) {
+        ambiguousToolCallIds.add(toolId);
+        continue;
+      }
       final isReplaySafe = toolReplaySafety[toolId] == true;
       if (!isReplaySafe) {
         if (allowAmbiguousToolInterruption) {
@@ -274,6 +429,21 @@ class ContinuationCheckpointCoordinator {
           'Cannot safely resume session $sessionId: tool $toolId has ambiguous execution state and is not idempotent.',
         );
       }
+    }
+    for (final toolId in List<String>.from(
+      meta['restart_terminalized_tool_ids'] as List? ?? const [],
+    )) {
+      final output = completedOutputs[toolId];
+      if (!completedResults.containsKey(toolId) ||
+          output is! Map ||
+          output['status'] != ToolTerminalStatus.interrupted.name ||
+          output['reason'] != 'daemon_interrupted') {
+        throw StateError(
+          'Cannot safely resume session $sessionId: restart-terminalized '
+          'tool $toolId has incomplete interruption evidence.',
+        );
+      }
+      restartTerminalizedToolCallIds.add(toolId);
     }
 
     final resumeHistoryLengthRaw = meta['resume_history_length'];
@@ -304,6 +474,7 @@ class ContinuationCheckpointCoordinator {
       resumeHistoryLength: resumeHistoryLength,
       ambiguousToolCallIds: ambiguousToolCallIds,
       deferredToolCallIds: deferredToolCallIds,
+      restartTerminalizedToolCallIds: restartTerminalizedToolCallIds,
       savedTurnStartIndex:
           (savedTurnStart != null &&
               savedTurnStart >= 0 &&
@@ -382,6 +553,7 @@ class ResumeResult {
   final String? savedModelStepId;
   final List<String> ambiguousToolCallIds;
   final List<String> deferredToolCallIds;
+  final List<String> restartTerminalizedToolCallIds;
 
   const ResumeResult({
     required this.resumeHistoryLength,
@@ -389,6 +561,7 @@ class ResumeResult {
     this.savedModelStepId,
     this.ambiguousToolCallIds = const [],
     this.deferredToolCallIds = const [],
+    this.restartTerminalizedToolCallIds = const [],
   });
 
   static const ResumeResult empty = ResumeResult(resumeHistoryLength: -1);

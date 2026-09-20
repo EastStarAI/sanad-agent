@@ -13,6 +13,7 @@ class DeviceCapabilitiesCubit extends Cubit<DeviceCapabilitiesState> {
   final DeviceCubit agentCubit;
   StreamSubscription? _capabilitiesSubscription;
   StreamSubscription? _agentSubscription;
+  final Map<String, bool> _onlineByAgentId = {};
 
   DeviceCapabilitiesCubit({
     required this.capabilities,
@@ -31,8 +32,19 @@ class DeviceCapabilitiesCubit extends Cubit<DeviceCapabilitiesState> {
   }
 
   void _ensureCapabilitiesForDeviceState(DeviceState agentState) {
-    for (final agent in _agentsFrom(agentState)) {
-      unawaited(ensureFreshForAgent(agent, force: agent.isLocalReachable));
+    final agents = _agentsFrom(agentState);
+    final currentIds = agents.map((agent) => agent.id).toSet();
+    _onlineByAgentId.removeWhere((deviceId, _) => !currentIds.contains(deviceId));
+
+    for (final agent in agents) {
+      final becameOnline = agent.isOnline && !(_onlineByAgentId[agent.id] ?? false);
+      _onlineByAgentId[agent.id] = agent.isOnline;
+      unawaited(
+        ensureFreshForAgent(
+          agent,
+          force: agent.isLocalReachable || becameOnline,
+        ),
+      );
     }
   }
 

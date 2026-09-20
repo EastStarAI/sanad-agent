@@ -1,0 +1,12 @@
+# Non-secret daemon policy. Copy to $SANAD_HOME/config.yaml and restart Sanad.
+context:
+  modelLimits:
+    gpt-5.6-sol: 258000
+
+compaction:
+  threshold: 0.80
+  targetRatio: 0.10
+  models:
+    gpt-5.6-sol:
+      threshold: 0.85
+      targetRatio: 0.08

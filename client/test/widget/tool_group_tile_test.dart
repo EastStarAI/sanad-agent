@@ -6,6 +6,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/tools/terminal_tool_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/tool_group_tile.dart';
 
 void main() {
@@ -48,6 +49,31 @@ void main() {
 
     expect(find.textContaining('Ask'), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsNothing);
+  });
+
+  testWidgets('terminal result without input unwraps output in terminal tile', (
+    tester,
+  ) async {
+    final event = _tool(
+      'terminal-result-first',
+      'shell_execute',
+      output: jsonEncode({
+        'isError': false,
+        'output': '153 104.0 180.0\n/tmp/result.jsonl\n',
+      }),
+    );
+
+    await tester.pumpWidget(
+      _app(EventTile(event: event, isExpanded: true)),
+    );
+
+    expect(find.byType(TerminalToolTile), findsOneWidget);
+    expect(
+      find.text('153 104.0 180.0\n/tmp/result.jsonl\n'),
+      findsOneWidget,
+    );
+    expect(find.text('Output Result'), findsNothing);
+    expect(find.textContaining('"isError"'), findsNothing);
   });
 
   testWidgets('group reuses tool styling and caps its independent scroll body', (

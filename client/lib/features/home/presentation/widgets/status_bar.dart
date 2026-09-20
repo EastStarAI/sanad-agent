@@ -12,16 +12,37 @@ import 'package:sanad_client/utils/app_platform.dart';
 
 class DesktopOnlyStatusBar extends StatelessWidget {
   final Widget child;
+  final String worktreeName;
+  final String worktreeBranch;
 
   const DesktopOnlyStatusBar({
     super.key,
     this.child = const StatusBar(),
+    this.worktreeName = AppConfig.sanadDevWorktreeName,
+    this.worktreeBranch = AppConfig.sanadDevWorktreeBranch,
   });
 
   @override
   Widget build(BuildContext context) {
-    if (!AppPlatform.isDesktop) return const SizedBox.shrink();
-    return child;
+    if (AppPlatform.isDesktop) return child;
+    if (worktreeName.isEmpty) return const SizedBox.shrink();
+
+    final theme = Theme.of(context);
+    final foregroundColor = theme.colorScheme.onSurfaceVariant;
+    return ColoredBox(
+      color: theme.colorScheme.surfaceContainerHighest,
+      child: SizedBox(
+        height: 24,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: WorktreeRuntimeBadge(
+            worktreeName: worktreeName,
+            branch: worktreeBranch,
+            foregroundColor: foregroundColor,
+          ),
+        ),
+      ),
+    );
   }
 }
 

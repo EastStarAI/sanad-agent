@@ -5,9 +5,12 @@ import 'package:sqlite3/sqlite3.dart';
 
 import '../../../core/models/message.dart';
 import '../../models/session_execution_snapshot.dart';
+import '../../models/suspended_checkpoint.dart';
 import '../../models/pending_steer_record.dart';
 import '../../models/stop_recovery_outcome.dart';
+import '../session_history_revision_repository.dart';
 import '../agent_state_database.dart';
+import '../message_history_identity.dart';
 import '../persisted_runtime_state_repository.dart';
 import 'pending_input_repository.dart';
 import 'session_execution_snapshot_repository.dart';
@@ -409,6 +412,107 @@ class SessionExecutionStateCoordinator {
     return mutation;
   }
 
+  /// Atomically accepts a suspended Ask User or permission decision together
+  /// with the exact durable work-owner transition. A crash can therefore
+  /// observe either the unresolved wait or a complete recoverable decision,
+  /// never a consumed checkpoint whose work item is still waiting.
+  SuspendedDecisionClaim? claimSuspendedDecision({
+    required SuspendedCheckpoint checkpoint,
+    Map<String, dynamic>? decision,
+    bool reclaimPersistedDecision = false,
+  }) {
+    SessionExecutionSnapshotChange? publishedChange;
+    final claim = _state.transaction((tx) {
+      final rows = tx.db.select(
+        'SELECT * FROM suspended_checkpoints WHERE request_id = ? LIMIT 1',
+        [checkpoint.requestId],
+      );
+      if (rows.isEmpty) return null;
+      final durableCheckpoint = SuspendedCheckpoint.fromRow(
+        Map<String, Object?>.from(rows.first),
+      );
+      if (durableCheckpoint.sessionId != checkpoint.sessionId ||
+          durableCheckpoint.toolCallId != checkpoint.toolCallId) {
+        return null;
+      }
+      final expectedStatus = reclaimPersistedDecision
+          ? 'decision_ready'
+          : 'awaiting_permission';
+      if (durableCheckpoint.status != expectedStatus) return null;
+      final resolvedDecision = reclaimPersistedDecision
+          ? durableCheckpoint.resolvedDecision
+          : decision;
+      if (resolvedDecision == null) return null;
+
+      final active = _workItems.findActiveWorkItem(checkpoint.sessionId);
+      if (active == null ||
+          (active.state != SessionWorkState.waiting &&
+              active.state != SessionWorkState.blocked)) {
+        return null;
+      }
+      final executingTools = List<String>.from(
+        active.continuationMetadata['currently_executing_tools'] as List? ??
+            const [],
+      );
+      final runId = active.continuationMetadata['owner_run_id']?.toString();
+      final generationRaw = active.continuationMetadata['owner_generation'];
+      final generation = switch (generationRaw) {
+        int() => generationRaw,
+        String() => int.tryParse(generationRaw),
+        _ => null,
+      };
+      if (!executingTools.contains(checkpoint.toolCallId) ||
+          runId == null ||
+          runId.isEmpty ||
+          generation == null) {
+        return null;
+      }
+
+      tx.db.execute(
+        '''
+        UPDATE suspended_checkpoints
+        SET status = 'decision_ready', resolved_decision = ?, updated_at = ?
+        WHERE request_id = ? AND status = ?
+        ''',
+        [
+          jsonEncode(resolvedDecision),
+          DateTime.now().toUtc().toIso8601String(),
+          checkpoint.requestId,
+          expectedStatus,
+        ],
+      );
+      if (tx.db.updatedRows != 1) return null;
+      _workItems.transitionWorkItemState(
+        workItemId: active.workItemId,
+        fromState: active.state,
+        toState: SessionWorkState.resuming,
+        transaction: tx,
+      );
+      final claimedWork = _workItems.findWorkItem(active.workItemId);
+      if (claimedWork == null) {
+        throw StateError('Suspended decision claim lost its work item.');
+      }
+      final claimedCheckpointRows = tx.db.select(
+        'SELECT * FROM suspended_checkpoints WHERE request_id = ? LIMIT 1',
+        [checkpoint.requestId],
+      );
+      if (claimedCheckpointRows.isEmpty) {
+        throw StateError('Suspended decision claim lost its checkpoint.');
+      }
+      publishedChange = _recomputeInTransaction(checkpoint.sessionId, tx);
+      return SuspendedDecisionClaim(
+        checkpoint: SuspendedCheckpoint.fromRow(
+          Map<String, Object?>.from(claimedCheckpointRows.first),
+        ),
+        workItem: claimedWork,
+        runId: runId,
+        generation: generation,
+      );
+    });
+    if (publishedChange != null) _publish(publishedChange!);
+    return claim;
+  }
+
   /// Persists the final assistant result and closes the exact owning work item
   /// in one transaction. Transport delivery deliberately happens only after a
   /// [TerminalCommitOutcome.committed] result is returned.
@@ -486,6 +590,22 @@ class SessionExecutionStateCoordinator {
     required int generation,
     required Map<String, Map<String, dynamic>> checkpointOutputs,
     required Map<String, Message> historyMessages,
+  }) => commitToolTerminals(
+    sessionId: sessionId,
+    workItemId: workItemId,
+    runId: runId,
+    generation: generation,
+    checkpointOutputs: checkpointOutputs,
+    historyMessages: historyMessages,
+  );
+
+  ToolTerminalCommitResult commitToolTerminals({
+    required String sessionId,
+    required String workItemId,
+    required String runId,
+    required int generation,
+    required Map<String, Map<String, dynamic>> checkpointOutputs,
+    required Map<String, Message> historyMessages,
   }) {
     return _state.transaction((tx) {
       final active = _workItems.findActiveWorkItem(sessionId);
@@ -513,15 +633,27 @@ class SessionExecutionStateCoordinator {
       final toolStartedAt = Map<String, dynamic>.from(
         metadata['tool_started_at'] as Map? ?? const {},
       );
+      final executingProgress = Map<String, dynamic>.from(
+        metadata['executing_tool_progress'] as Map? ?? const {},
+      );
       final persistedToolIds = <String>{};
+      final persistedToolArguments = <String, Map<String, dynamic>>{};
       final rows = tx.db.select(
-        'SELECT data FROM messages WHERE session_id = ? ORDER BY id ASC',
+        '''
+        SELECT data FROM messages
+        WHERE session_id = ?
+          AND (history_status = 'active' OR history_status IS NULL)
+        ORDER BY id ASC
+        ''',
         [sessionId],
       );
       for (final row in rows) {
         final decoded = jsonDecode(row['data'] as String);
         if (decoded is! Map) continue;
         final message = Message.fromJson(Map<String, dynamic>.from(decoded));
+        for (final toolCall in message.toolCalls ?? const []) {
+          persistedToolArguments[toolCall.id] = toolCall.arguments;
+        }
         if (message.role == MessageRole.tool && message.toolCallId != null) {
           persistedToolIds.add(message.toolCallId!);
         }
@@ -530,7 +662,7 @@ class SessionExecutionStateCoordinator {
       final committedIds = <String>[];
       for (final entry in checkpointOutputs.entries) {
         final toolCallId = entry.key;
-        final output = entry.value;
+        final output = Map<String, dynamic>.from(entry.value);
         if (!executing.contains(toolCallId) ||
             completedResults.containsKey(toolCallId) ||
             completedOutputs.containsKey(toolCallId) ||
@@ -539,7 +671,7 @@ class SessionExecutionStateCoordinator {
             output['tool_call_id'] != toolCallId ||
             output['run_id'] != runId ||
             output['generation'] != generation ||
-            output['status'] != 'cancelled') {
+            output['status'] == 'running') {
           continue;
         }
         final historyMessage = historyMessages[toolCallId];
@@ -549,14 +681,21 @@ class SessionExecutionStateCoordinator {
           continue;
         }
 
+        // Startup recovery constructs the terminal record from the durable
+        // process snapshot. Recover the arguments from the persisted assistant
+        // call so the provider receives one faithful tool-use/result pair.
+        final originalArguments = persistedToolArguments[toolCallId];
+        if (originalArguments != null) {
+          output['arguments'] = originalArguments;
+        }
+
         completedResults[toolCallId] = output['result']?.toString() ?? '';
         completedOutputs[toolCallId] = output;
         executing.remove(toolCallId);
         toolStartedAt.remove(toolCallId);
-        tx.db.execute('INSERT INTO messages (session_id, data) VALUES (?, ?)', [
-          sessionId,
-          jsonEncode(historyMessage.toJson()),
-        ]);
+        executingProgress.remove(toolCallId);
+        MessageHistoryIdentity.persist(tx.db, sessionId, historyMessage);
+        SessionHistoryRevisionRepository.bumpDatabase(tx.db, sessionId);
         tx.db.execute(
           'DELETE FROM suspended_checkpoints WHERE tool_call_id = ?',
           [toolCallId],
@@ -573,12 +712,26 @@ class SessionExecutionStateCoordinator {
       metadata['completed_tool_results'] = completedResults;
       metadata['completed_tool_outputs'] = completedOutputs;
       metadata['checkpoint_kind'] = 'after_tool_result';
+      final restartTerminalizedToolIds = <String>{
+        ...List<String>.from(
+          metadata['restart_terminalized_tool_ids'] as List? ?? const [],
+        ),
+        ...committedIds,
+      };
+      metadata['restart_terminalized_tool_ids'] = restartTerminalizedToolIds
+          .toList();
       if (executing.isEmpty) {
         metadata.remove('currently_executing_tools');
         metadata.remove('tool_started_at');
+        metadata.remove('executing_tool_progress');
       } else {
         metadata['currently_executing_tools'] = executing.toList();
         metadata['tool_started_at'] = toolStartedAt;
+        if (executingProgress.isEmpty) {
+          metadata.remove('executing_tool_progress');
+        } else {
+          metadata['executing_tool_progress'] = executingProgress;
+        }
       }
       _workItems.transitionWorkItemState(
         workItemId: workItemId,
@@ -603,15 +756,20 @@ class SessionExecutionStateCoordinator {
     required Message assistantResult,
   }) {
     final rows = transaction.db.select(
-      'SELECT id, data FROM messages WHERE session_id = ? ORDER BY id DESC',
+      '''
+      SELECT id, data, message_id, turn_id, history_status, input_kind,
+             request_id, run_id, superseded_by_turn_id
+      FROM messages
+      WHERE session_id = ?
+        AND (history_status = 'active' OR history_status IS NULL)
+      ORDER BY id DESC
+      ''',
       [sessionId],
     );
     int? matchingMessageId;
     Message? matchingMessage;
     for (final row in rows) {
-      final decoded = jsonDecode(row['data'] as String);
-      if (decoded is! Map) continue;
-      final message = Message.fromJson(Map<String, dynamic>.from(decoded));
+      final message = MessageHistoryIdentity.fromRow(row);
       if (message.role != MessageRole.assistant) continue;
       final metadata = message.metadata;
       if (metadata?['terminal_work_item_id'] == workItemId ||
@@ -632,17 +790,16 @@ class SessionExecutionStateCoordinator {
         'terminal_generation': generation,
       },
     );
-    final encoded = jsonEncode(durableResult.toJson());
     if (matchingMessageId == null) {
-      transaction.db.execute(
-        'INSERT INTO messages (session_id, data) VALUES (?, ?)',
-        [sessionId, encoded],
-      );
+      MessageHistoryIdentity.persist(transaction.db, sessionId, durableResult);
+      SessionHistoryRevisionRepository.bumpDatabase(transaction.db, sessionId);
     } else {
-      transaction.db.execute('UPDATE messages SET data = ? WHERE id = ?', [
-        encoded,
-        matchingMessageId,
-      ]);
+      MessageHistoryIdentity.persist(
+        transaction.db,
+        sessionId,
+        durableResult,
+        sqliteId: matchingMessageId,
+      );
     }
   }
 
@@ -911,6 +1068,20 @@ class SessionExecutionMutation<T> {
     required this.value,
     required this.execution,
     required this.applied,
+  });
+}
+
+class SuspendedDecisionClaim {
+  final SuspendedCheckpoint checkpoint;
+  final SessionWorkItem workItem;
+  final String runId;
+  final int generation;
+
+  const SuspendedDecisionClaim({
+    required this.checkpoint,
+    required this.workItem,
+    required this.runId,
+    required this.generation,
   });
 }
 

@@ -167,6 +167,7 @@ class _DeviceDropdown extends StatelessWidget {
           ...devices.map((device) {
             final isSelected = device.id == activeDevice?.id;
             return PopupMenuItem<Object?>(
+              key: Key('sidebar_device_item_${device.name}'),
               value: device,
               height: 32,
               padding: const EdgeInsets.symmetric(horizontal: 12),

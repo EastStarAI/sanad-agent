@@ -10,6 +10,7 @@ BIN_DIR="$SANAD_USER_HOME/bin"
 TARGET="$BIN_DIR/sanad"
 BACKUP="$TARGET.rollback"
 PAIRING_TOKEN=""
+PAIRING_TOKEN_STDIN=0
 AUTH_MODE="prompt"
 
 while [ "$#" -gt 0 ]; do
@@ -21,6 +22,10 @@ while [ "$#" -gt 0 ]; do
       }
       PAIRING_TOKEN="$2"
       shift 2
+      ;;
+    --pairing-token-stdin)
+      PAIRING_TOKEN_STDIN=1
+      shift
       ;;
     --login)
       if [ "$AUTH_MODE" = "skip" ]; then
@@ -44,6 +49,18 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$PAIRING_TOKEN_STDIN" -eq 1 ]; then
+  [ -z "$PAIRING_TOKEN" ] || {
+    echo "Choose one pairing-token input method." >&2
+    exit 64
+  }
+  IFS= read -r PAIRING_TOKEN || true
+  [ -n "$PAIRING_TOKEN" ] || {
+    echo "Pairing token stdin was empty." >&2
+    exit 64
+  }
+fi
 
 if [ -n "$PAIRING_TOKEN" ] && [ "$AUTH_MODE" != "prompt" ]; then
   echo "--pairing-token cannot be combined with --login or --no-login." >&2
@@ -70,22 +87,43 @@ case "$OS_NAME" in
     ;;
 esac
 
+if [ "$PLATFORM" = "linux" ]; then
+  [ ! -L "$SANAD_USER_HOME" ] || {
+    echo "Refusing a symlinked SANAD_HOME." >&2
+    exit 73
+  }
+  if [ -d /run/systemd/system ] && command -v systemctl >/dev/null 2>&1; then
+    if systemctl --user show-environment >/dev/null 2>&1 &&
+      [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || true)" = "yes" ]; then
+      :
+    elif [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+      echo "System service fallback requires root or sudo." >&2
+      exit 77
+    fi
+  elif command -v rc-service >/dev/null 2>&1 &&
+    command -v rc-update >/dev/null 2>&1; then
+    if [ "$(id -u)" -ne 0 ] && ! command -v sudo >/dev/null 2>&1; then
+      echo "OpenRC service installation requires root or sudo." >&2
+      exit 77
+    fi
+  else
+    echo "Unsupported Linux init manager; systemd or OpenRC is required." >&2
+    exit 69
+  fi
+fi
+
 SERVICE_WAS_INSTALLED=0
 SERVICE_WAS_RUNNING=0
-if [ "$PLATFORM" = "macos" ]; then
-  [ -f "$HOME/Library/LaunchAgents/com.eaststarai.sanad.agent.plist" ] &&
+PREVIOUS_AUTHENTICATED=0
+if [ -x "$TARGET" ]; then
+  PREVIOUS_SERVICE_STATUS="$("$TARGET" service status 2>/dev/null || true)"
+  printf '%s\n' "$PREVIOUS_SERVICE_STATUS" | grep -Fq 'Installed:  Yes' &&
     SERVICE_WAS_INSTALLED=1
-  if [ "$SERVICE_WAS_INSTALLED" -eq 1 ] &&
-    launchctl list 2>/dev/null | grep -Fq 'com.eaststarai.sanad.agent'; then
+  printf '%s\n' "$PREVIOUS_SERVICE_STATUS" | grep -Fq 'Running:    Yes' &&
     SERVICE_WAS_RUNNING=1
-  fi
-else
-  [ -f "$HOME/.config/systemd/user/sanad-agent.service" ] &&
-    SERVICE_WAS_INSTALLED=1
-  if [ "$SERVICE_WAS_INSTALLED" -eq 1 ] &&
-    systemctl --user is-active --quiet sanad-agent.service 2>/dev/null; then
-    SERVICE_WAS_RUNNING=1
-  fi
+  PREVIOUS_AUTH_STATUS="$("$TARGET" login --status 2>/dev/null || true)"
+  printf '%s\n' "$PREVIOUS_AUTH_STATUS" | grep -Fq 'Status: Authenticated' &&
+    PREVIOUS_AUTHENTICATED=1
 fi
 
 case "$(uname -m)" in
@@ -108,11 +146,20 @@ download() {
   source_url="$1"
   destination="$2"
   if command -v curl >/dev/null 2>&1; then
-    curl --fail --silent --show-error --location \
-      --proto '=https' --tlsv1.2 \
-      --output "$destination" "$source_url"
+    if [ "${SANAD_INSTALL_ALLOW_TEST_URL:-0}" = "1" ]; then
+      curl --fail --silent --show-error --location \
+        --output "$destination" "$source_url"
+    else
+      curl --fail --silent --show-error --location \
+        --proto '=https' --tlsv1.2 \
+        --output "$destination" "$source_url"
+    fi
   elif command -v wget >/dev/null 2>&1; then
-    wget --https-only --quiet --output-document="$destination" "$source_url"
+    if [ "${SANAD_INSTALL_ALLOW_TEST_URL:-0}" = "1" ]; then
+      wget --quiet --output-document="$destination" "$source_url"
+    else
+      wget --https-only --quiet --output-document="$destination" "$source_url"
+    fi
   else
     echo "Install curl or wget, then retry." >&2
     exit 69
@@ -144,6 +191,7 @@ print(item["filename"])
 print(item["url"])
 print(item["sha256"])
 print(item["size"])
+print(manifest["version"])
 PY
 )"
 elif [ "$PLATFORM" = "macos" ] && command -v osascript >/dev/null 2>&1; then
@@ -165,7 +213,7 @@ const matches = manifest.artifacts.filter(
 )
 if (matches.length !== 1) throw new Error('missing matching agent')
 const item = matches[0]
-[item.filename, item.url, item.sha256, item.size].join('\n')
+[item.filename, item.url, item.sha256, item.size, manifest.version].join('\n')
 JXA
 )"
 else
@@ -177,6 +225,11 @@ FILENAME="$(printf '%s\n' "$METADATA" | sed -n '1p')"
 DOWNLOAD_URL="$(printf '%s\n' "$METADATA" | sed -n '2p')"
 EXPECTED_SHA256="$(printf '%s\n' "$METADATA" | sed -n '3p')"
 EXPECTED_SIZE="$(printf '%s\n' "$METADATA" | sed -n '4p')"
+EXPECTED_VERSION="$(printf '%s\n' "$METADATA" | sed -n '5p')"
+[ -n "$EXPECTED_VERSION" ] || {
+  echo "Manifest returned an invalid version." >&2
+  exit 65
+}
 
 case "$FILENAME" in
   sanad-agent-*-"$PLATFORM"-"$ARCHITECTURE") ;;
@@ -220,25 +273,47 @@ if [ "$PLATFORM" = "macos" ]; then
   fi
 fi
 
+PAIRING_PREPARED=0
+restore_previous_installation() {
+  if [ "$PAIRING_PREPARED" -eq 1 ] && [ -x "$TARGET" ]; then
+    "$TARGET" login --cancel-pairing >/dev/null 2>&1 || true
+  fi
+  if [ "$SERVICE_WAS_INSTALLED" -eq 0 ] && [ -x "$TARGET" ]; then
+    "$TARGET" service uninstall >/dev/null 2>&1 || true
+  fi
+  rm -f "$TARGET"
+  [ -f "$BACKUP" ] && mv "$BACKUP" "$TARGET"
+  if [ "$SERVICE_WAS_RUNNING" -eq 1 ] && [ -x "$TARGET" ]; then
+    "$TARGET" service start >/dev/null 2>&1 || true
+  fi
+}
+
+if [ "$SERVICE_WAS_RUNNING" -eq 1 ]; then
+  if ! "$TARGET" service stop; then
+    echo "Unable to stop the existing service; no files were replaced." >&2
+    exit 70
+  fi
+fi
+
 mkdir -p "$BIN_DIR" "$SANAD_USER_HOME/logs"
 chmod 700 "$SANAD_USER_HOME" "$BIN_DIR"
 chmod 700 "$STAGED"
 if [ -f "$BACKUP" ]; then rm -f "$BACKUP"; fi
 if [ -f "$TARGET" ]; then mv "$TARGET" "$BACKUP"; fi
 if ! mv "$STAGED" "$TARGET"; then
-  [ -f "$BACKUP" ] && mv "$BACKUP" "$TARGET"
+  restore_previous_installation
   echo "Unable to install the verified executable; rollback completed." >&2
   exit 74
 fi
 
 PORTAL_LOGIN=0
 if [ -n "$PAIRING_TOKEN" ]; then
-  if ! "$TARGET" login --token "$PAIRING_TOKEN"; then
-    rm -f "$TARGET"
-    [ -f "$BACKUP" ] && mv "$BACKUP" "$TARGET"
+  if ! printf '%s\n' "$PAIRING_TOKEN" | "$TARGET" login --token-stdin; then
+    restore_previous_installation
     echo "Device pairing setup failed; installation rollback completed." >&2
     exit 70
   fi
+  PAIRING_PREPARED=1
 elif [ "$AUTH_MODE" = "login" ]; then
   PORTAL_LOGIN=1
 elif [ "$AUTH_MODE" = "prompt" ] && [ -r /dev/tty ] && [ -w /dev/tty ] &&
@@ -267,32 +342,37 @@ fi
 
 if [ "$PORTAL_LOGIN" -eq 1 ]; then
   if ! "$TARGET" login --portal; then
-    rm -f "$TARGET"
-    [ -f "$BACKUP" ] && mv "$BACKUP" "$TARGET"
+    restore_previous_installation
     echo "Account sign-in failed; installation rollback completed." >&2
     exit 70
   fi
 fi
 
-if ! "$TARGET" service install; then
-  rm -f "$TARGET"
-  [ -f "$BACKUP" ] && mv "$BACKUP" "$TARGET"
-  echo "Service installation failed; rollback completed." >&2
-  exit 70
-fi
-
-if [ "$SERVICE_WAS_RUNNING" -eq 1 ]; then
-  if ! "$TARGET" service restart; then
-    echo "The agent was installed, but the existing service could not be refreshed." >&2
+if [ -n "$PAIRING_TOKEN" ] || [ "$PORTAL_LOGIN" -eq 1 ] ||
+  [ "$PREVIOUS_AUTHENTICATED" -eq 1 ]; then
+  if ! "$TARGET" service install --expected-version "$EXPECTED_VERSION" \
+    --require-cloud --health-timeout 90; then
+    restore_previous_installation
+    echo "Service or cloud health verification failed; rollback completed." >&2
+    exit 70
+  fi
+else
+  if ! "$TARGET" service install --expected-version "$EXPECTED_VERSION" \
+    --health-timeout 60; then
+    restore_previous_installation
+    echo "Service health verification failed; rollback completed." >&2
     exit 70
   fi
 fi
 
+rm -f "$BACKUP"
 echo "Sanad Agent installed successfully."
 if [ -n "$PAIRING_TOKEN" ]; then
-  echo "Device pairing started. Sanad will appear online automatically."
+  echo "Device pairing completed and the Agent is online."
 elif [ "$PORTAL_LOGIN" -eq 1 ]; then
   echo "Account connected. Sanad Agent is running in the background."
+elif [ "$PREVIOUS_AUTHENTICATED" -eq 1 ]; then
+  echo "Existing account connection restored. Sanad Agent is online."
 else
   echo "Sanad Agent is running in local-only mode."
   echo "Connect it later with:"

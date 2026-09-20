@@ -50,3 +50,5 @@ Web Search resolves `WEB_SEARCH_PROVIDER` and `SERPER_API_KEY` when each search 
 `list_skills` returns `skills_list`. With no workspace id it contains device/user scope only. With a workspace id it returns the agent-owned merged inventory including origins and shadowing.
 
 MCP uses the existing command family. A request without workspace id is device-only. A request with workspace id returns device, workspace, and effective sections; the workspace definition wins on canonical-name collision.
+
+Remote update, restart, workspace, and MCP management share the typed contract in [Remote Device Control Protocol](remote_device_control_protocol.md).
