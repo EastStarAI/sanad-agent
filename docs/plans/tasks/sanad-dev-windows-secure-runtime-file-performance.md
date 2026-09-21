@@ -110,7 +110,7 @@ Reference contracts:
   no longer harden or publish outside the selected Home.
 - The focused stale-recovery/component-control/profile/secure-file set passes,
   including real ACL, locked-destination failure, and stale-lease recovery
-  coverage. The complete package passes 148 tests with 18 platform skips on
+  coverage. The complete package passes 149 tests with 18 platform skips on
   Windows.
 - Live `run agent --background` reached daemon health, then the Agent tool's
   enclosing kill-on-close Job terminated the detached launcher after the command

@@ -59,12 +59,11 @@ Future<void> handleRuntimeDoctor({
     staleAgentRecoveryAvailable =
         ownership.classification == RuntimeOwnershipClass.orphaned &&
         staleAgentRecoveryError == null;
-    final endpointLive = agents.any((agent) => agent.port == record.agentPort);
+    final endpointLive = agents.any(
+      (agent) => agentMatchesLauncherRecord(agent, record),
+    );
     final clientLive = clients.any(
-      (client) =>
-          clientAgentPort(client) == record.agentPort ||
-          client.launchProfile?.define('SANAD_DEV_LAUNCHER_ID') ==
-              record.launcherId,
+      (client) => clientMatchesLauncherRecord(client, record),
     );
     staleRecordRemovalAvailable = canRemoveStaleLauncherRecord(
       launcherLive: launcherLive,

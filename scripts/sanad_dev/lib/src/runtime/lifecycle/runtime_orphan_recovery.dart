@@ -1,5 +1,23 @@
 part of '../../../sanad_dev_cli.dart';
 
+bool agentMatchesLauncherRecord(
+  AgentInstance agent,
+  RuntimeLauncherRecord record,
+) =>
+    agent.port == record.agentPort ||
+    agent.launcherId == record.launcherId ||
+    agent.runtimeNonce == record.runtimeNonce;
+
+bool clientMatchesLauncherRecord(
+  ClientInstance client,
+  RuntimeLauncherRecord record,
+) {
+  final profile = client.launchProfile;
+  return clientAgentPort(client) == record.agentPort ||
+      profile?.define('SANAD_DEV_LAUNCHER_ID') == record.launcherId ||
+      profile?.define('SANAD_DEV_RUNTIME_NONCE') == record.runtimeNonce;
+}
+
 String? staleAgentRecoveryBlocker({
   required SanadDevRuntime runtime,
   required RuntimeProcessState state,
@@ -76,20 +94,14 @@ Future<String?> recoverStaleAgentLease({
 
   final remainingAgents = await discoverAgents();
   if (remainingAgents.any(
-    (agent) =>
-        agent.port == record.agentPort ||
-        agent.launcherId == record.launcherId ||
-        agent.runtimeNonce == record.runtimeNonce,
+    (agent) => agentMatchesLauncherRecord(agent, record),
   )) {
     return 'an Agent matching the stale lease is still live';
   }
   final remainingClients = await discoverClients();
-  if (remainingClients.any((client) {
-    final profile = client.launchProfile;
-    return clientAgentPort(client) == record.agentPort ||
-        profile?.define('SANAD_DEV_LAUNCHER_ID') == record.launcherId ||
-        profile?.define('SANAD_DEV_RUNTIME_NONCE') == record.runtimeNonce;
-  })) {
+  if (remainingClients.any(
+    (client) => clientMatchesLauncherRecord(client, record),
+  )) {
     return 'a Client matching the stale lease is still live';
   }
 

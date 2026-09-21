@@ -178,9 +178,11 @@ void main() {
       String sourceRoot = '/repo',
       int agentPort = 58092,
       String sanadHome = '/isolated/home',
+      String launcherId = 'launcher-stale',
+      String runtimeNonce = 'nonce-stale',
     }) => runtime_ownership.RuntimeLauncherRecord(
-      launcherId: 'launcher-stale',
-      runtimeNonce: 'nonce-stale',
+      launcherId: launcherId,
+      runtimeNonce: runtimeNonce,
       launcherPid: 999,
       launcherProcessIdentity: 'process-999',
       workspaceHash: workspaceHash,
@@ -221,6 +223,53 @@ void main() {
       ambiguousClients: const [],
       agentAmbiguous: agentAmbiguous,
     );
+
+    test('live-surface matching includes launcher identity and nonce', () {
+      final lease = record();
+      expect(
+        sanad_dev.agentMatchesLauncherRecord(
+          agent(port: 59999, launcherId: 'launcher-stale', runtimeNonce: 'x'),
+          lease,
+        ),
+        isTrue,
+      );
+      expect(
+        sanad_dev.agentMatchesLauncherRecord(
+          agent(port: 59999, launcherId: 'x', runtimeNonce: 'nonce-stale'),
+          lease,
+        ),
+        isTrue,
+      );
+
+      final client = sanad_dev.ClientInstance(
+        51999,
+        'token',
+        testClientDirectory,
+        'windows',
+        launchProfile: testOwnedProfile(gatewayPort: 59998),
+      );
+      expect(
+        sanad_dev.clientMatchesLauncherRecord(
+          client,
+          record(agentPort: 59999, launcherId: 'launcher-1', runtimeNonce: 'x'),
+        ),
+        isTrue,
+      );
+      expect(
+        sanad_dev.clientMatchesLauncherRecord(
+          client,
+          record(agentPort: 59999, launcherId: 'x', runtimeNonce: 'nonce-1'),
+        ),
+        isTrue,
+      );
+      expect(
+        sanad_dev.clientMatchesLauncherRecord(
+          client,
+          record(agentPort: 59999, launcherId: 'x', runtimeNonce: 'y'),
+        ),
+        isFalse,
+      );
+    });
 
     test('admits only the exact stale Agent-only identity', () {
       expect(
