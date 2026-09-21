@@ -1,7 +1,8 @@
 ---
-status: in_progress
-current_gate: G3-G5 security, cross-platform, and delivery verification
-remaining_estimate: 25-35%
+status: superseded
+closure_reason: remaining-work-transferred-not-certified-complete
+superseded_by: docs/plans/97-windows-first-agent-client-performance.md
+current_gate: closed-transferred
 priority: high
 security_review: required
 platforms: windows-primary, macos-regression, linux-regression
@@ -10,6 +11,33 @@ reference_grounding: official-platform-contracts
 ---
 
 # sanad-dev Windows Secure Runtime-File Performance
+
+## Closure and transfer to Plan 97
+
+**Closed as superseded, not completed.** This file is a historical evidence record,
+not an active execution queue. All previously unchecked items (12 entries)
+are transferred to the successor owners below. Checked items retain their
+historical meaning; no unverified acceptance or security result is marked passed.
+The successor owns the complete original obligations, including negative cases,
+security review, documentation and delivery reconciliation, not only a summary.
+Archived under docs/plans/done with superseded status; references point to this record or its Plan 97 successor. No independent work remains here.
+
+| Original outstanding scope | New execution owner |
+|---|---|
+| G0 — individual operations, subprocess counts, cold/warm median/p95 | [97c](docs/plans/tasks/97c-secure-runtime-verification.md) |
+| G1/G3 — security authorization, races/interruption/replacement/immediate-delete, failure cleanup | [97c](docs/plans/tasks/97c-secure-runtime-verification.md) |
+| G4 + acceptance — Windows analysis/tests and native/backend boundaries | [97c](docs/plans/tasks/97c-secure-runtime-verification.md) |
+| G4 + acceptance — hosted three-OS suites, POSIX modes/rename, architecture/dependency regressions, final security/CI evidence | [97k](docs/plans/tasks/97k-regression-budgets-and-report.md) |
+| Final managed-runtime smoke | [97l](docs/plans/tasks/97l-interactive-final-acceptance.md) |
+
+## Historical plan and evidence (non-executable)
+
+The following goals, gates and acceptance statements describe the original task.
+`Transferred` entries are preserved requirements now owned by the table above;
+they are not open checkboxes in this retired plan. Historical commands and merge
+instructions do not authorize new execution or duplicate delivery.
+
+
 
 ## Goal
 
@@ -164,9 +192,9 @@ Reference contracts:
 ### G0 — Reproducible Profiling
 
 - [x] Measure FVM/test-process startup separately from test-case execution.
-- [ ] Instrument one directory hardening, new-file publication, existing-file
+- **Transferred to Plan 97:** Instrument one directory hardening, new-file publication, existing-file
       replacement, append-file acquisition, and secure read on Windows.
-- [ ] Record subprocess count, median, p95, and cold/warm timing over repeated
+- **Transferred to Plan 97:** Record subprocess count, median, p95, and cold/warm timing over repeated
       runs on the same host.
 - [x] Identify which cost belongs to PowerShell startup, ACL work, atomic move,
       antivirus/filesystem contention, and repeated call-site preparation.
@@ -182,7 +210,7 @@ Reference contracts:
       write-through publication.
 - [x] Document the selected design, rollback boundary, and why rejected options
       are unsafe or unnecessarily complex.
-- [ ] Obtain explicit `security-reviewed` authorization before merge because the
+- **Transferred to Plan 97:** Obtain explicit `security-reviewed` authorization before merge because the
       owner-only runtime-file boundary is modified.
 
 ### G2 — Focused Windows Implementation
@@ -202,21 +230,21 @@ Reference contracts:
 - [x] Seed inherited and explicit foreign ACEs and prove they are removed or the
       operation fails closed.
 - [x] Cover unsafe symlink/junction/reparse-point and outside-root paths.
-- [ ] Cover existing destination replacement, concurrent readers/writers,
+- **Transferred to Plan 97:** Cover existing destination replacement, concurrent readers/writers,
       process interruption, helper nonzero exit, and immediate consumer delete.
-- [ ] Assert no temporary artifacts or permissive destination remain after each
+- **Transferred to Plan 97:** Assert no temporary artifacts or permissive destination remain after each
       failure.
 - [x] Exercise startup attempts, launcher records, component controls, switch
       manifests, runtime metadata, and journals through the centralized API.
 
 ### G4 — Cross-Platform Regression
 
-- [ ] Run package analysis and focused secure-file/startup tests on Windows,
+- **Transferred to Plan 97:** Run package analysis and focused secure-file/startup tests on Windows,
       macOS, and Linux through FVM.
-- [ ] Run the complete `scripts/sanad_dev` suite on all three hosted CI lanes.
-- [ ] Prove POSIX mode bits and atomic rename/immediate-delete tests remain
+- **Transferred to Plan 97:** Run the complete `scripts/sanad_dev` suite on all three hosted CI lanes.
+- **Transferred to Plan 97:** Prove POSIX mode bits and atomic rename/immediate-delete tests remain
       unchanged.
-- [ ] Prove no platform wrapper, artifact, or dependency introduces an
+- **Transferred to Plan 97:** Prove no platform wrapper, artifact, or dependency introduces an
       architecture-specific runtime requirement on macOS/Linux.
 
 ### G5 — Performance Acceptance and Documentation
@@ -235,11 +263,11 @@ Reference contracts:
 - [x] Security invariants are equal or stronger than the current implementation.
 - [x] Windows startup and focused secure-file tests no longer exceed their case
       timeout under normal serial system load.
-- [ ] macOS and Linux package suites pass without behavior, mode-bit, bootstrap,
+- **Transferred to Plan 97:** macOS and Linux package suites pass without behavior, mode-bit, bootstrap,
       or runtime-command regressions.
 - [x] No direct global Dart/Flutter invocation, secret, absolute machine path,
       generated helper, or binary artifact is committed.
-- [ ] Required CI and explicit security review pass before squash merge.
+- **Transferred to Plan 97:** Required CI and explicit security review pass before squash merge.
 
 ## Verification Matrix
 

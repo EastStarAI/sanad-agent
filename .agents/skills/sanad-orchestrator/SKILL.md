@@ -54,4 +54,5 @@ This SOP defines the step-by-step procedure for managing the lifecycle of projec
 To maintain a lightweight context window, load these capabilities only when executing actions:
 
 * **For live or isolated development runtime control:** Load **[sanad-agentic-developer](.agents/skills/sanad-agentic-developer/SKILL.md)**.
+* **For external implementer delegation:** Load **[delegate-task-supervisor](.agents/skills/delegate-task-supervisor/SKILL.md)** when dispatching one long-running task or coordinating multiple OpenCode/Antigravity tasks.
 * **For Visual Verification:** Load and execute instructions in **[sanad-client-tester](.agents/skills/sanad-client-tester/SKILL.md)** when the task requires live UI evidence.

@@ -48,11 +48,11 @@ Use an isolated worktree runtime and a long session representative of the record
 | Long session, clean warm reuse | `20:08:30.354` incoming → `20:08:35.935` thinking | 5.581s | Clean revision-validated reuse path; below baseline |
 | New-session control | `20:10:13.504` matching request event → `20:10:18.478` thinking | 4.974s | Separate control, not a long-session sample; including the creation event at `20:10:13.466` gives 5.012s |
 
-The isolated run used Agent port `58117`, Client VM Service port `51250`, and long-session id `72947eee-dd44-408b-a027-99d019546492`. Its copied test Home had a separate identity and no active execution state. The test also exposed delayed Windows provider readiness; that root Agent startup/list problem and the secondary premature Client setup screen are tracked at high priority in `docs/plans/tasks/agent-windows-intermittent-tool-and-history-latency.md`.
+The isolated run used Agent port `58117`, Client VM Service port `51250`, and long-session id `72947eee-dd44-408b-a027-99d019546492`. Its copied test Home had a separate identity and no active execution state. The test also exposed delayed Windows provider readiness; that root Agent startup/list problem and the secondary premature Client setup screen are now owned by `docs/plans/tasks/97g-readiness-and-loading.md`; historical evidence remains in `docs/plans/done/agent-windows-intermittent-tool-and-history-latency.md`.
 
 ## Failure triage
 
 - If metadata lookup fails on malformed message JSON, inspect for a hidden call to full session hydration.
 - If a retry changes revision or identity, inspect append transaction ownership and raw `request_id` matching.
 - If an external mutation is not observed, compare the persisted revision with the cached revision before inspecting LRU behavior.
-- If latency remains near baseline after history regressions pass, continue in `docs/plans/tasks/agent-windows-intermittent-tool-and-history-latency.md`; do not add workspace instruction, skill, or MCP caches without new measurements.
+- If latency remains near baseline after history regressions pass, continue in `docs/plans/tasks/97f-agent-responsiveness.md`; do not add workspace instruction, skill, or MCP caches without new measurements.

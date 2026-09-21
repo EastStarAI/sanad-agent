@@ -165,6 +165,8 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Web Search Runtime](docs/technical/web_search_runtime.md): Daemon-owned search providers, DuckDuckGo redirect normalization, fallback behavior, and SSRF filtering.
 - [Remote Workspace Folder Mutation Protocol](docs/technical/workspace_folder_mutation_protocol.md): Managed-root remote workspace create, constrained browse, and confirmation-gated folder mutations.
 - [Workspace Identity, Rename, and Change Path Protocol](docs/technical/workspace_identity_protocol.md): Stable workspace UUID, availability projection, rename, path repair, and client routing contract.
+- [Windows-first Performance Plan](docs/plans/97-windows-first-agent-client-performance.md): Reviewed coordinated Windows-first Agent/Client responsiveness, recovery, request ownership, static activity UI, and final platform verification.
+- [Windows-first Performance QA](docs/qa_maintenance/windows_first_performance_qa.md): Before/after metrics, request-count and rendering regressions, test-cost budgets, and final interactive acceptance.
 - [Implementation Plans](docs/plans/): Architectural blueprints, milestones, and step-by-step implementation plans for project development phases.
 
 ## Reference Projects
