@@ -316,6 +316,22 @@ port. They are diagnostics only: lease/process/health/VM evidence remains the
 sole liveness and mutation authority. Four 2 MiB segments are retained per
 component, stale files are removed after 14 days, POSIX permissions are
 `0700/0600`, and Windows ACL inheritance is replaced by an owner-only grant.
+On Windows, the secure-file layer performs this hardening in process: it reads
+and caches only the current process-token SID, builds a protected DACL containing
+one full-control ACE for that SID, and applies it with `SetNamedSecurityInfoW`.
+Atomic publication uses `MoveFileExW` with replace-existing and write-through
+flags. It does not start PowerShell, and native failures retain the existing
+typed ownership, replacement, or atomic-write outcomes.
+
+Before creating or hardening a requested descendant, the layer lexically
+normalizes both root and target and proves exact-root or descendant containment.
+It then walks every segment without following links and rejects symlinks,
+junctions, reparse points, and unsafe file types. A textual prefix such as
+`home/../outside` therefore cannot escape and cannot cause an ancestor outside
+the selected Home to be hardened. Temporary files are restricted before content
+is written; successful replacement is followed by destination hardening on
+Windows, while POSIX rename preserves the already-restricted inode.
+
 Recognized credential-shaped output is redacted and each stored record is
 bounded.
 
@@ -359,6 +375,13 @@ command or terminate an already-running sibling. Completed control files are
 published atomically with owner-only permissions; on POSIX the restricted
 temporary inode's mode survives rename, so an immediate consumer delete cannot
 race a redundant post-publication permission change.
+
+CLI Client reload and restart first validate the exact managed launch profile,
+PID, VM endpoint, Home, and launcher lease, then publish a bounded component-
+control request to that launcher. The launcher revalidates the VM port against
+its lease-owned process map and writes `r` or `R` to the original Flutter
+process it owns. No second Flutter attach process is created, and an unrelated
+or stale Client cannot receive the action.
 
 Every managed Client launch, source switch, rollback, and manual restoration
 uses one bounded five-minute readiness window. This accommodates slow desktop

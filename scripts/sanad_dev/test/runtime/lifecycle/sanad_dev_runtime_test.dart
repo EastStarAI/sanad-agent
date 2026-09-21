@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:path/path.dart' as path;
 import 'package:test/test.dart';
 
 import 'package:sanad_dev/src/infrastructure/runtime_context.dart';
@@ -30,33 +31,36 @@ void main() {
   });
 
   test('linked worktrees receive one worktree-scoped Sanad Home', () {
+    final userHome = _absoluteTestPath('users', 'developer');
     final home = resolveSanadDevHome(
       isLinkedWorktree: true,
-      userHome: '/users/developer',
+      userHome: userHome,
       worktreeId: 'task-1234',
-      configuredSanadHome: '/shared/sanad',
+      configuredSanadHome: _absoluteTestPath('shared', 'sanad'),
     );
 
-    expect(home, '/users/developer/.sanad/dev/homes/task-1234');
+    expect(home, path.join(userHome, '.sanad', 'dev', 'homes', 'task-1234'));
   });
 
   test('primary checkout preserves the configured Sanad Home', () {
+    final userHome = _absoluteTestPath('users', 'developer');
+    final configuredHome = _absoluteTestPath('custom', 'main-home');
     expect(
       resolveSanadDevHome(
         isLinkedWorktree: false,
-        userHome: '/users/developer',
+        userHome: userHome,
         worktreeId: 'main-1234',
-        configuredSanadHome: '/custom/main-home',
+        configuredSanadHome: configuredHome,
       ),
-      '/custom/main-home',
+      configuredHome,
     );
     expect(
       resolveSanadDevHome(
         isLinkedWorktree: false,
-        userHome: '/users/developer',
+        userHome: userHome,
         worktreeId: 'main-1234',
       ),
-      '/users/developer/.sanad',
+      path.join(userHome, '.sanad'),
     );
   });
 
@@ -165,43 +169,46 @@ void main() {
   test(
     'user or absolute home overrides win and relative paths are rejected',
     () {
+      final userHome = _absoluteTestPath('users', 'developer');
+      final configuredHome = _absoluteTestPath('configured', 'user-home');
+      final isolatedHome = _absoluteTestPath('isolated', 'sanad-home');
       expect(isSanadDevHomeSelector('user'), isTrue);
-      expect(isSanadDevHomeSelector('/isolated/sanad-home'), isTrue);
-      expect(isSanadDevHomeSelector('relative/home'), isFalse);
+      expect(isSanadDevHomeSelector(isolatedHome), isTrue);
+      expect(isSanadDevHomeSelector(path.join('relative', 'home')), isFalse);
       expect(
         resolveSanadDevHome(
           isLinkedWorktree: true,
-          userHome: '/users/developer',
+          userHome: userHome,
           worktreeId: 'task-1234',
-          configuredSanadHome: '/configured/user-home',
+          configuredSanadHome: configuredHome,
           sanadHomeOverride: 'user',
         ),
-        '/configured/user-home',
+        configuredHome,
       );
       expect(
         resolveSanadDevHome(
           isLinkedWorktree: true,
-          userHome: '/users/developer',
+          userHome: userHome,
           worktreeId: 'task-1234',
           sanadHomeOverride: 'user',
         ),
-        '/users/developer/.sanad',
+        path.join(userHome, '.sanad'),
       );
       expect(
         resolveSanadDevHome(
           isLinkedWorktree: true,
-          userHome: '/users/developer',
+          userHome: userHome,
           worktreeId: 'task-1234',
-          sanadHomeOverride: '/isolated/sanad-home',
+          sanadHomeOverride: isolatedHome,
         ),
-        '/isolated/sanad-home',
+        isolatedHome,
       );
       expect(
         () => resolveSanadDevHome(
           isLinkedWorktree: true,
-          userHome: '/users/developer',
+          userHome: userHome,
           worktreeId: 'task-1234',
-          sanadHomeOverride: 'relative/home',
+          sanadHomeOverride: path.join('relative', 'home'),
         ),
         throwsA(isA<FormatException>()),
       );
@@ -278,3 +285,6 @@ void main() {
     expect(runtime.worktreeDisplayName, 'ui-status');
   });
 }
+
+String _absoluteTestPath(String first, String second) =>
+    path.joinAll([Platform.isWindows ? r'C:\' : '/', first, second]);

@@ -3,9 +3,9 @@ status: in_progress
 priority: critical
 security_review: required
 platforms: windows-primary, macos-regression, linux-regression
-depends_on: sanad-dev-windows-command-latency
+depends_on: sanad-dev-windows-secure-runtime-file-performance
 current_gate: G3-G4 verification
-remaining: full-suite baseline triage, human-terminal Agent restart cycle, security review, CI, merge
+remaining: human-terminal Agent+Client lifecycle, security review, CI, merge
 ---
 
 # sanad-dev Stale Launcher Recovery
@@ -110,24 +110,28 @@ or changing the primary runtime.
 - [x] Assert no process signal or lease deletion occurs before full admission.
 - [x] Assert a failed recovery leaves the lease and every unproven process
       untouched.
-- [ ] Run format, analyzer, focused lifecycle/ownership tests, and the complete
+- [x] Run format, analyzer, focused lifecycle/ownership tests, and the complete
       standalone package suite through FVM with bounded output.
 
 ### G4 — Isolated Live Lifecycle Verification
 
-- [ ] From this worktree, prepare and launch a local-only managed Agent with
-      `sanad-dev run agent --background --no-cloud` using its automatically
-      isolated Home and port.
-- [ ] Verify `status` reports one managed launcher, the expected Agent, no
+- [x] From a human-owned terminal in this worktree, prepare and launch a
+      local-only managed Agent and Client with
+      `sanad-dev run all --background --driver --no-cloud` using an isolated
+      Home and ports. Agent-origin launch remains blocked by the enclosing
+      kill-on-close Job; no general breakaway policy may be enabled as a
+      workaround.
+- [x] Verify `status` reports one managed launcher, the expected Agent and
       Client, and zero cross-owned/unverifiable Clients.
-- [ ] Run and verify `sanad-dev restart agent --timeout 60`, including exact
+- [x] Run and verify `sanad-dev restart agent --timeout 60`, including exact
       Agent-only stale recovery if the launcher failure reproduces.
-- [ ] Run and verify `sanad-dev stop`; confirm the isolated Agent, lease, startup
-      locator, and port are no longer active.
-- [ ] Cover Client restart and reload through automated tests and hosted CI. A
-      second local Client is optional because this Windows host may not have
-      sufficient resources; lack of a second local Client is not grounds to
-      skip automated or Windows/macOS/Linux CI coverage.
+- [x] Run and verify Client reload and restart against the exact managed VM
+      endpoint, followed by managed status.
+- [x] Run and verify `sanad-dev stop`; confirm the isolated Agent, Client, lease,
+      startup locator, and ports are no longer active.
+- [x] Retain Client restart/reload automated coverage in addition to the local
+      Agent+Client cycle.
+- [ ] Pass Client restart/reload coverage in hosted CI.
 - [x] Confirm the primary runtime remains managed and unchanged before and after
       isolated verification.
 
@@ -156,10 +160,10 @@ or changing the primary runtime.
       processes are never signaled.
 - [ ] A fully admitted recovery either completes and permits a subsequent
       managed `run`, or fails nonzero while preserving recoverable evidence.
-- [ ] The isolated live Agent sequence `run agent → restart agent → stop`
-      succeeds with managed ownership throughout; Client restart/reload pass in
-      automated coverage and hosted CI.
-- [ ] The primary runtime is not switched, stopped, or used as the test target.
+- [x] The isolated live sequence succeeds with managed ownership throughout:
+      `run all → restart agent → reload client → restart client → stop`, with
+      Client control also covered by the local automated suite.
+- [x] The primary runtime is not switched, stopped, or used as the test target.
 - [ ] Windows, macOS, and Linux CI pass without weakening POSIX behavior.
 
 ## Definition of Done

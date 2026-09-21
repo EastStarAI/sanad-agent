@@ -1,10 +1,12 @@
+import 'dart:io';
+
 import 'package:sanad_dev/src/infrastructure/client_launch_profile.dart'
     as launch_profile;
 import 'package:sanad_dev/src/infrastructure/runtime_context.dart'
     as runtime_context;
 
 const testWorkspaceHash = '2b962b17';
-const testClientDirectory = '/repo/client';
+final testClientDirectory = '/repo${Platform.pathSeparator}client';
 
 const testLinkedRuntime = runtime_context.SanadDevRuntime(
   workspaceRoot: '/repo',
