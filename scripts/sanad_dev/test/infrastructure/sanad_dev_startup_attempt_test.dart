@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:test/test.dart';
@@ -43,6 +44,52 @@ void main() {
         ),
         isTrue,
       );
+    },
+  );
+
+  test('Windows background command preserves paths and arguments safely', () {
+    final commandLine = sanadDevWindowsBackgroundCommandLine(
+      executable: r"C:\tools\Sanad Agent\sanad-dev.exe",
+      arguments: const ['run', 'agent', '--home', r"C:\Home O'Brien"],
+      workingDirectory: r"C:\repo O'Brien",
+      callerDirectory: r'C:\repo\caller',
+    );
+    final encoded = commandLine.split(' ').last;
+    final bytes = base64Decode(encoded);
+    final codeUnits = <int>[
+      for (var index = 0; index < bytes.length; index += 2)
+        bytes[index] | (bytes[index + 1] << 8),
+    ];
+    final script = String.fromCharCodes(codeUnits);
+
+    expect(
+      commandLine,
+      startsWith(
+        'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden',
+      ),
+    );
+    expect(script, contains(r"C:\tools\Sanad Agent\sanad-dev.exe"));
+    expect(script, contains(r"C:\Home O''Brien"));
+    expect(script, contains(r"C:\repo O''Brien"));
+    expect(script, contains(r'$env:SANAD_DEV_CALLER_DIR'));
+    expect(script, contains(r'exit $LASTEXITCODE'));
+  });
+
+  test(
+    'Windows WMI launch script configures invisible startup and working directory',
+    () {
+      final launchScript = sanadDevWindowsBackgroundLaunchScript(
+        commandLine: r"powershell.exe -Command Write-Host 'hi'",
+        workingDirectory: r"C:\repo O'Brien",
+      );
+
+      expect(
+        launchScript,
+        contains('New-CimInstance -ClassName Win32_ProcessStartup'),
+      );
+      expect(launchScript, contains('ShowWindow = [uint16]0'));
+      expect(launchScript, contains(r'ProcessStartupInformation = $startup'));
+      expect(launchScript, contains(r"CurrentDirectory = 'C:\repo O''Brien'"));
     },
   );
 

@@ -554,27 +554,16 @@ class AgentRunner {
     sessionManager.saveSessionHistory(sessionId, history);
   }
 
-  void _reloadPersistedHistory() {
-    final session = sessionManager.getSession(sessionId);
-    if (session != null) {
-      history = session.messages.toList();
-    }
-  }
-
-  int _appendOrReuseUserMessage(Message userMessage, String? requestId) {
-    final existingIndex = _persistedUserMessageIndex(requestId);
-    if (existingIndex != -1) return existingIndex;
-    history.add(userMessage);
-    return history.length - 1;
-  }
-
   int _persistedUserMessageIndex(String? requestId) {
     if (requestId == null || requestId.isEmpty || history.isEmpty) return -1;
-    final last = history.last;
-    return last.role == MessageRole.user &&
-            last.metadata?['request_id']?.toString() == requestId
-        ? history.length - 1
-        : -1;
+    for (var index = history.length - 1; index >= 0; index--) {
+      final message = history[index];
+      if (message.role == MessageRole.user &&
+          message.metadata?['request_id']?.toString() == requestId) {
+        return index;
+      }
+    }
+    return -1;
   }
 
   /// Commits one root user input before any live event exposes it to clients.
@@ -585,34 +574,31 @@ class AgentRunner {
     String? requestId,
     DateTime? receivedAt,
   }) async {
-    _reloadPersistedHistory();
+    final candidate = Message(
+      role: MessageRole.user,
+      content: userContent ?? '',
+      metadata: {
+        if (requestId != null && requestId.isNotEmpty) 'request_id': requestId,
+        'received_at': (receivedAt ?? DateTime.now()).toUtc().toIso8601String(),
+      },
+    );
+    final commit = sessionManager.appendRootUserMessage(sessionId, candidate);
     var index = _persistedUserMessageIndex(requestId);
-    if (index == -1) {
-      index = _appendOrReuseUserMessage(
-        Message(
-          role: MessageRole.user,
-          content: userContent ?? '',
-          metadata: {
-            if (requestId != null && requestId.isNotEmpty)
-              'request_id': requestId,
-            'received_at': (receivedAt ?? DateTime.now())
-                .toUtc()
-                .toIso8601String(),
-          },
-        ),
-        requestId,
-      );
-      await pluginManager.notifyMessage(history[index]);
-      _saveHistory();
-      _reloadPersistedHistory();
-      index = requestId == null || requestId.isEmpty
-          ? history.length - 1
-          : _persistedUserMessageIndex(requestId);
-      if (index < 0 || index >= history.length) {
-        throw StateError(
-          'Committed user message is missing from session history.',
-        );
+    if (commit.inserted) {
+      history.add(commit.message);
+      index = history.length - 1;
+      await pluginManager.notifyMessage(commit.message);
+    } else if (index == -1) {
+      final session = sessionManager.getSession(sessionId);
+      if (session != null) {
+        history = session.messages.toList();
+        index = _persistedUserMessageIndex(requestId);
       }
+    }
+    if (index < 0 || index >= history.length) {
+      throw StateError(
+        'Committed user message is missing from session history.',
+      );
     }
     _currentTurnStartIndex = index;
     return history[index];

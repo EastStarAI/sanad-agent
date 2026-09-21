@@ -796,7 +796,7 @@ void main() {
           expect(match, isNotNull);
           expect(match!.workspace['id'], 'ws-parent');
           expect(match.isExact, isFalse);
-          expect(match.relativeSubpath, 'src/features');
+          expect(match.relativeSubpath, p.join('src', 'features'));
         },
       );
 

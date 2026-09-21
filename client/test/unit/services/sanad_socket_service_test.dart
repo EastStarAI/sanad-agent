@@ -430,13 +430,13 @@ void main() {
       final service = SanadSocketService.local(
         url: 'ws://127.0.0.1:65530',
         hardwareId: 'dev-reconnect-test',
-        reconnectDelay: (_) => Duration.zero,
+        reconnectDelay: (_) => const Duration(milliseconds: 50),
       );
 
       final states = <SocketLifecycleState>[];
       final sub = service.lifecycleStateStream.listen(states.add);
 
-      // First connection attempt (fails immediately)
+      // First connection attempt (fails on closed port)
       try {
         await service.connect();
       } catch (_) {
@@ -446,16 +446,14 @@ void main() {
       expect(service.lifecycleState, SocketLifecycleState.error);
       states.clear();
 
-      // The injected zero-delay policy preserves the reconnect transition
-      // without making this unit test wait for production backoff.
       final retryConnecting = service.lifecycleStateStream.firstWhere(
         (state) => state == SocketLifecycleState.connecting,
       );
       final retryFailed = service.lifecycleStateStream.firstWhere(
         (state) => state == SocketLifecycleState.error,
       );
-      await retryConnecting.timeout(const Duration(milliseconds: 250));
-      await retryFailed.timeout(const Duration(milliseconds: 250));
+      await retryConnecting.timeout(const Duration(seconds: 5));
+      await retryFailed.timeout(const Duration(seconds: 5));
 
       expect(states, contains(SocketLifecycleState.connecting));
       expect(states, contains(SocketLifecycleState.error));

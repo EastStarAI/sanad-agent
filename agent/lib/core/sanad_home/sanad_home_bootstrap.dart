@@ -391,32 +391,40 @@ class SanadHomeBootstrap {
         );
       }
       if (destination.existsSync()) {
-        destination.renameSync(backup.path);
+        _renameWithRetrySync(destination, backup.path);
         movedOld = true;
       }
-      staging.renameSync(destination.path);
-      if (backup.existsSync()) _deleteStrictChildDirectorySync(backup);
+      _renameWithRetrySync(staging, destination.path);
+      try {
+        if (backup.existsSync()) _deleteStrictChildDirectorySync(backup);
+      } catch (_) {}
     } on SanadHomeBoundaryViolation {
       if (movedOld && !destination.existsSync() && backup.existsSync()) {
-        backup.renameSync(destination.path);
+        _renameWithRetrySync(backup, destination.path);
       }
       rethrow;
     } catch (_) {
       if (destination.existsSync() && movedOld && backup.existsSync()) {
-        _deleteStrictChildDirectorySync(destination);
+        try {
+          _deleteStrictChildDirectorySync(destination);
+        } catch (_) {}
       }
       if (movedOld && backup.existsSync()) {
-        backup.renameSync(destination.path);
+        _renameWithRetrySync(backup, destination.path);
       }
       throw const SanadHomeWriteFailure(
         'directory_replace_failed',
         'The managed directory replacement failed.',
       );
     } finally {
-      if (staging.existsSync()) _deleteStrictChildDirectorySync(staging);
-      if (backup.existsSync() && destination.existsSync()) {
-        _deleteStrictChildDirectorySync(backup);
-      }
+      try {
+        if (staging.existsSync()) _deleteStrictChildDirectorySync(staging);
+      } catch (_) {}
+      try {
+        if (backup.existsSync() && destination.existsSync()) {
+          _deleteStrictChildDirectorySync(backup);
+        }
+      } catch (_) {}
     }
   }
 
@@ -626,11 +634,16 @@ $source = $env:SANAD_ATOMIC_SOURCE
 $destination = $env:SANAD_ATOMIC_DESTINATION
 $replaceExisting = 0x1
 $writeThrough = 0x8
-if (-not [SanadAtomicMove]::MoveFileExW(
-  $source,
-  $destination,
-  ($replaceExisting -bor $writeThrough)
-)) {
+$flags = ($replaceExisting -bor $writeThrough)
+$success = $false
+for ($i = 0; $i -lt 10; $i++) {
+  if ([SanadAtomicMove]::MoveFileExW($source, $destination, $flags)) {
+    $success = $true
+    break
+  }
+  Start-Sleep -Milliseconds 50
+}
+if (-not $success) {
   throw [ComponentModel.Win32Exception]::new(
     [Runtime.InteropServices.Marshal]::GetLastWin32Error()
   )
@@ -653,6 +666,18 @@ if (-not [SanadAtomicMove]::MoveFileExW(
       return;
     }
     source.renameSync(destination.path);
+  }
+
+  static void _renameWithRetrySync(Directory source, String destinationPath) {
+    for (var i = 0; i < 10; i++) {
+      try {
+        source.renameSync(destinationPath);
+        return;
+      } on FileSystemException {
+        if (!Platform.isWindows || i == 9) rethrow;
+        sleep(const Duration(milliseconds: 50));
+      }
+    }
   }
 
   static void _assertRegularFile(File file) {

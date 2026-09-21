@@ -11,7 +11,9 @@ void main() {
   });
 
   tearDown(() async {
-    await home.delete(recursive: true);
+    try {
+      await home.delete(recursive: true);
+    } catch (_) {}
   });
 
   test('daemon help exits before bootstrap or supervisor startup', () async {

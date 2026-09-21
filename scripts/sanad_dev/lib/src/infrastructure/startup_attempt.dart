@@ -27,6 +27,106 @@ bool sanadDevUsesNativeRuntimeExecutable({
       : executable == script;
 }
 
+String _powerShellLiteral(String value) => "'${value.replaceAll("'", "''")}'";
+
+String _powerShellEncodedCommand(String script) {
+  final bytes = <int>[];
+  for (final codeUnit in script.codeUnits) {
+    bytes
+      ..add(codeUnit & 0xff)
+      ..add(codeUnit >> 8);
+  }
+  return base64Encode(bytes);
+}
+
+/// Builds a child command line that Windows creates through the CIM service.
+/// The service-owned process is not terminated when a short-lived caller is
+/// enclosed in a kill-on-close Job Object (for example an agent tool shell).
+String sanadDevWindowsBackgroundCommandLine({
+  required String executable,
+  required List<String> arguments,
+  required String workingDirectory,
+  required String callerDirectory,
+}) {
+  final argumentList = arguments.map(_powerShellLiteral).join(', ');
+  final script =
+      r'$env:SANAD_DEV_CALLER_DIR = ' +
+      _powerShellLiteral(callerDirectory) +
+      '; Set-Location -LiteralPath ' +
+      _powerShellLiteral(workingDirectory) +
+      '; & ' +
+      _powerShellLiteral(executable) +
+      ' @($argumentList)' +
+      r'; exit $LASTEXITCODE';
+  return 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand '
+      '${_powerShellEncodedCommand(script)}';
+}
+
+String sanadDevWindowsBackgroundLaunchScript({
+  required String commandLine,
+  required String workingDirectory,
+}) {
+  return r'$startup = New-CimInstance -ClassName Win32_ProcessStartup '
+      r'-ClientOnly -Property @{ShowWindow = [uint16]0}; '
+      r'$result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create '
+      '-Arguments @{'
+      'CommandLine = ${_powerShellLiteral(commandLine)}; '
+      'CurrentDirectory = ${_powerShellLiteral(workingDirectory)}; '
+      r'ProcessStartupInformation = $startup'
+      r'}; '
+      r'if ($null -eq $result -or $result.ReturnValue -ne 0) { '
+      r'if ($null -eq $result) { exit 1 }; exit $result.ReturnValue }; '
+      r'[Console]::Out.Write($result.ProcessId)';
+}
+
+Future<int> startSanadDevBackgroundChild({
+  required String executable,
+  required List<String> arguments,
+  required String workingDirectory,
+  required String callerDirectory,
+}) async {
+  if (!Platform.isWindows) {
+    final process = await Process.start(
+      executable,
+      arguments,
+      workingDirectory: workingDirectory,
+      environment: {
+        ...Platform.environment,
+        'SANAD_DEV_CALLER_DIR': callerDirectory,
+      },
+      mode: ProcessStartMode.detached,
+    );
+    return process.pid;
+  }
+
+  final commandLine = sanadDevWindowsBackgroundCommandLine(
+    executable: executable,
+    arguments: arguments,
+    workingDirectory: workingDirectory,
+    callerDirectory: callerDirectory,
+  );
+  final launchScript = sanadDevWindowsBackgroundLaunchScript(
+    commandLine: commandLine,
+    workingDirectory: workingDirectory,
+  );
+  final result = await Process.run('powershell.exe', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    launchScript,
+  ]);
+  final pid = int.tryParse(result.stdout.toString().trim());
+  if (result.exitCode != 0 || pid == null || pid <= 0) {
+    throw ProcessException(
+      'powershell.exe',
+      const ['Invoke-CimMethod', 'Win32_Process.Create'],
+      'Windows detached launch failed: ${result.stderr.toString().trim()}',
+      result.exitCode,
+    );
+  }
+  return pid;
+}
+
 enum SanadDevStartupStage {
   preflight,
   recordCreated,

@@ -63,6 +63,18 @@ the provider-reported input value and the exact active model's context-window
 limit. Cached input remains an independent provider-reported value and is not
 used to rewrite any other field.
 
+### 1.5. Session history startup path
+
+`AgentRunner` remains factory-scoped per run; it is not a daemon-wide singleton.
+`SessionManager` may seed a new runner from one of at most eight recently used
+history snapshots. Each snapshot is keyed by session id and the authoritative
+`history_revision`: a matching revision refreshes its LRU position, while any
+mismatch reloads active history from SQLite. Semantic replacement, aggregate
+transaction writes, and deletion invalidate the local projection. Ordinary root
+input uses the database append operation and updates the runner-owned list with
+the returned canonical message rather than reloading and comparing the full
+prefix before the first provider request.
+
 ---
 
 ## 2. Environment Adaptability (`EnvironmentHints`)

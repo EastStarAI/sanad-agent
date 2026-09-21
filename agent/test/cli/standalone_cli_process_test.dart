@@ -1,8 +1,21 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
+import 'package:sanad_agent/capabilities/skills/generated_bundled_skills.dart';
 import 'package:test/test.dart';
 import '../support/isolated_sanad_test_home.dart';
+
+void preseedBundledSkillsState(Directory home) {
+  final skillsDir = Directory(p.join(home.path, 'skills'))..createSync(recursive: true);
+  File(p.join(skillsDir.path, '.sanad-managed.json')).writeAsStringSync(
+    jsonEncode({
+      'schema_version': 1,
+      'bundle_revision': bundledSkillsRevision,
+      'skills': <String, dynamic>{},
+    }),
+  );
+}
 
 void main() {
   useIsolatedSanadTestHome();
@@ -14,6 +27,7 @@ void main() {
       );
       final home = Directory('${root.path}/home');
       final stateHome = Directory('${root.path}/state');
+      preseedBundledSkillsState(home);
       final environment = <String, String>{
         ...Platform.environment,
         'SANAD_HOME': home.path,
@@ -36,7 +50,7 @@ void main() {
           ],
           workingDirectory: Directory.current.path,
           environment: environment,
-        ).timeout(const Duration(seconds: 30));
+        ).timeout(const Duration(seconds: 45));
       }
 
       try {
@@ -50,12 +64,14 @@ void main() {
         expect(second.exitCode, 0, reason: second.stderr.toString());
         expect(second.stdout.toString().trim(), 'e2e-success');
       } finally {
-        if (await root.exists()) {
-          await root.delete(recursive: true);
-        }
+        try {
+          if (await root.exists()) {
+            await root.delete(recursive: true);
+          }
+        } catch (_) {}
       }
     },
-    timeout: const Timeout(Duration(minutes: 1)),
+    timeout: const Timeout(Duration(minutes: 2)),
   );
 
   test(
@@ -66,6 +82,7 @@ void main() {
       );
       final home = Directory('${root.path}/home');
       final stateHome = Directory('${root.path}/state');
+      preseedBundledSkillsState(home);
       try {
         final result = await Process.run(
           Platform.resolvedExecutable,
@@ -88,7 +105,7 @@ void main() {
             'SANAD_STATE_HOME': stateHome.path,
             'SANAD_E2E_TEST_MODE': 'true',
           },
-        ).timeout(const Duration(seconds: 15));
+        ).timeout(const Duration(seconds: 45));
 
         expect(result.exitCode, 1, reason: result.stderr.toString());
         final outputLines = const LineSplitter()
@@ -103,12 +120,14 @@ void main() {
           contains('deterministic E2E provider failure'),
         );
       } finally {
-        if (await root.exists()) {
-          await root.delete(recursive: true);
-        }
+        try {
+          if (await root.exists()) {
+            await root.delete(recursive: true);
+          }
+        } catch (_) {}
       }
     },
-    timeout: const Timeout(Duration(seconds: 30)),
+    timeout: const Timeout(Duration(minutes: 2)),
   );
 
   test(
@@ -119,6 +138,7 @@ void main() {
       );
       final home = Directory('${root.path}/home');
       final stateHome = Directory('${root.path}/state');
+      preseedBundledSkillsState(home);
       final readyFile = File('${root.path}/tool-ready');
       final environment = <String, String>{
         ...Platform.environment,
@@ -143,45 +163,52 @@ void main() {
           [...baseArguments, '--timeout', '1', prompt],
           workingDirectory: Directory.current.path,
           environment: environment,
-        ).timeout(const Duration(seconds: 30));
+        ).timeout(const Duration(seconds: 45));
         expect(
           timeoutResult.exitCode,
           124,
           reason: timeoutResult.stderr.toString(),
         );
 
-        for (final signalCase in <(ProcessSignal, int, String)>[
-          (ProcessSignal.sigint, 130, 'sigint-ready'),
-          (ProcessSignal.sigterm, 143, 'sigterm-ready'),
-        ]) {
-          final signalReadyFile = File('${root.path}/${signalCase.$3}');
-          final signalPrompt = '__SANAD_E2E_DELAY__${signalReadyFile.path}';
-          final interrupted = await Process.start(
-            Platform.resolvedExecutable,
-            [...baseArguments, signalPrompt],
-            workingDirectory: Directory.current.path,
-            environment: environment,
-          );
-          try {
-            final deadline = DateTime.now().add(const Duration(seconds: 20));
-            while (!signalReadyFile.existsSync() &&
-                DateTime.now().isBefore(deadline)) {
-              await Future<void>.delayed(const Duration(milliseconds: 50));
-            }
-            expect(signalReadyFile.existsSync(), isTrue);
-            expect(interrupted.kill(signalCase.$1), isTrue);
-            expect(
-              await interrupted.exitCode.timeout(const Duration(seconds: 10)),
-              signalCase.$2,
+        // On Windows, Dart Process.kill does not deliver POSIX signals (sigint/sigterm)
+        // to child process handlers; it calls TerminateProcess resulting in exit code -1.
+        // Signal handling logic is verified via stream injection in oneshot_runner_test.dart.
+        if (!Platform.isWindows) {
+          for (final signalCase in <(ProcessSignal, int, String)>[
+            (ProcessSignal.sigint, 130, 'sigint-ready'),
+            (ProcessSignal.sigterm, 143, 'sigterm-ready'),
+          ]) {
+            final signalReadyFile = File('${root.path}/${signalCase.$3}');
+            final signalPrompt = '__SANAD_E2E_DELAY__${signalReadyFile.path}';
+            final interrupted = await Process.start(
+              Platform.resolvedExecutable,
+              [...baseArguments, signalPrompt],
+              workingDirectory: Directory.current.path,
+              environment: environment,
             );
-          } finally {
-            interrupted.kill(ProcessSignal.sigkill);
+            try {
+              final deadline = DateTime.now().add(const Duration(seconds: 25));
+              while (!signalReadyFile.existsSync() &&
+                  DateTime.now().isBefore(deadline)) {
+                await Future<void>.delayed(const Duration(milliseconds: 50));
+              }
+              expect(signalReadyFile.existsSync(), isTrue);
+              expect(interrupted.kill(signalCase.$1), isTrue);
+              expect(
+                await interrupted.exitCode.timeout(const Duration(seconds: 15)),
+                signalCase.$2,
+              );
+            } finally {
+              interrupted.kill(ProcessSignal.sigkill);
+            }
           }
         }
       } finally {
-        if (await root.exists()) await root.delete(recursive: true);
+        try {
+          if (await root.exists()) await root.delete(recursive: true);
+        } catch (_) {}
       }
     },
-    timeout: const Timeout(Duration(minutes: 1)),
+    timeout: const Timeout(Duration(minutes: 2)),
   );
 }

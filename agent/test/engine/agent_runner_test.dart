@@ -921,10 +921,15 @@ void main() {
     late MockTool mockTool;
     late SessionManager sessionManager;
     late Directory tempDir;
+    late AgentStateDatabase stateDb;
 
     setUp(() {
       tempDir = Directory.systemTemp.createTempSync('sanad_test_');
+      Directory('${tempDir.path}${Platform.pathSeparator}memories')
+          .createSync(recursive: true);
       setSanadHomeOverride(tempDir.path);
+      stateDb = AgentStateDatabase.inMemory();
+      GetIt.I.registerSingleton<AgentStateDatabase>(stateDb);
       sessionManager = SessionManager();
       registry = ToolsRegistry();
       mockTool = MockTool();
@@ -934,9 +939,12 @@ void main() {
     tearDown(() {
       GetIt.I.reset();
       SessionManager.resetForTesting();
+      stateDb.dispose();
       setSanadHomeOverride(null);
       if (tempDir.existsSync()) {
-        tempDir.deleteSync(recursive: true);
+        try {
+          tempDir.deleteSync(recursive: true);
+        } catch (_) {}
       }
     });
 
