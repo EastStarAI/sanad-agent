@@ -169,7 +169,7 @@ void main(List<String> args) async {
     }
   } else if (command == 'restart') {
     if (target == 'client') {
-      await handleClientAttachAction(
+      await handleClientDeveloperAction(
         'R',
         portOverride,
         sanadHomePath: sanadHomePath,
@@ -193,7 +193,7 @@ void main(List<String> args) async {
     }
   } else if (command == 'reload') {
     if (target == 'client') {
-      await handleClientAttachAction(
+      await handleClientDeveloperAction(
         'r',
         portOverride,
         sanadHomePath: sanadHomePath,

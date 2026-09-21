@@ -107,11 +107,16 @@ lease-owned Clients and requires an exact managed device match, optionally
 disambiguated by VM-service port. An unmanaged Client with the same device does
 not make that managed selection ambiguous.
 `doctor` is read-only and prints one concrete next command/action for each
-classification. `doctor --fix` removes only an invalid/stale record when its
-launcher, Agent endpoint, and clients are all absent; a live endpoint alone is
-enough to preserve the lease, preventing a fix from converting a live orphan
-into an uncontrollable manual runtime.
-`cleanup-target-orphans` is the only target cleanup operation. It requires a
+classification. `doctor --fix` removes an invalid/stale record directly only
+when its launcher, Agent endpoint, and Clients are all absent. Its only
+stale-live recovery is an exact Agent-only record: the launcher is dead, the
+record and discovery contain no Clients, and Agent port, workspace, source,
+Home, launcher id, and runtime nonce all match. From a human-owned terminal it
+requests an authenticated permanent Agent restart, waits for endpoint exit,
+rediscovers Agents and Clients, rechecks the launcher, and deletes the record
+only after every matching live surface is absent. Agent-tool origin, identity
+mismatch, rejection, timeout, or post-drain evidence preserves the lease.
+`cleanup-target-orphans` remains the only target Client cleanup operation. It requires a
 dead recorded launcher, no target Agent, exact client nonce/profile identity,
 and a target Agent port different from the requester/source. IDE-owned,
 ambiguous, cross-owned, and source-attached clients are refused.
@@ -311,6 +316,22 @@ port. They are diagnostics only: lease/process/health/VM evidence remains the
 sole liveness and mutation authority. Four 2 MiB segments are retained per
 component, stale files are removed after 14 days, POSIX permissions are
 `0700/0600`, and Windows ACL inheritance is replaced by an owner-only grant.
+On Windows, the secure-file layer performs this hardening in process: it reads
+and caches only the current process-token SID, builds a protected DACL containing
+one full-control ACE for that SID, and applies it with `SetNamedSecurityInfoW`.
+Atomic publication uses `MoveFileExW` with replace-existing and write-through
+flags. It does not start PowerShell, and native failures retain the existing
+typed ownership, replacement, or atomic-write outcomes.
+
+Before creating or hardening a requested descendant, the layer lexically
+normalizes both root and target and proves exact-root or descendant containment.
+It then walks every segment without following links and rejects symlinks,
+junctions, reparse points, and unsafe file types. A textual prefix such as
+`home/../outside` therefore cannot escape and cannot cause an ancestor outside
+the selected Home to be hardened. Temporary files are restricted before content
+is written; successful replacement is followed by destination hardening on
+Windows, while POSIX rename preserves the already-restricted inode.
+
 Recognized credential-shaped output is redacted and each stored record is
 bounded.
 
@@ -354,6 +375,13 @@ command or terminate an already-running sibling. Completed control files are
 published atomically with owner-only permissions; on POSIX the restricted
 temporary inode's mode survives rename, so an immediate consumer delete cannot
 race a redundant post-publication permission change.
+
+CLI Client reload and restart first validate the exact managed launch profile,
+PID, VM endpoint, Home, and launcher lease, then publish a bounded component-
+control request to that launcher. The launcher revalidates the VM port against
+its lease-owned process map and writes `r` or `R` to the original Flutter
+process it owns. No second Flutter attach process is created, and an unrelated
+or stale Client cannot receive the action.
 
 Every managed Client launch, source switch, rollback, and manual restoration
 uses one bounded five-minute readiness window. This accommodates slow desktop

@@ -41,11 +41,34 @@ Future<void> handleRuntimeDoctor({
         activeHome,
         state.agent?.port ?? runtime.agentPort,
       );
+  var staleAgentRecoveryAvailable = false;
+  var staleRecordRemovalAvailable = false;
   if (record != null) {
     final launcherLive = await processRunning(record.launcherPid);
     print(
       'Launcher lease: PID ${record.launcherPid} '
       '(${launcherLive ? 'live' : 'stale'})',
+    );
+    final staleAgentRecoveryError = staleAgentRecoveryBlocker(
+      runtime: runtime,
+      state: state,
+      record: record,
+      activeHome: activeHome,
+      launcherLive: launcherLive,
+    );
+    staleAgentRecoveryAvailable =
+        ownership.classification == RuntimeOwnershipClass.orphaned &&
+        staleAgentRecoveryError == null;
+    final endpointLive = agents.any(
+      (agent) => agentMatchesLauncherRecord(agent, record),
+    );
+    final clientLive = clients.any(
+      (client) => clientMatchesLauncherRecord(client, record),
+    );
+    staleRecordRemovalAvailable = canRemoveStaleLauncherRecord(
+      launcherLive: launcherLive,
+      endpointLive: endpointLive,
+      clientLive: clientLive,
     );
     if (fix) {
       final switchPath = runtimeSwitchManifestPath(
@@ -82,28 +105,63 @@ Future<void> handleRuntimeDoctor({
         exitCode = 1;
         return;
       }
-      final endpointLive = agents.any(
-        (agent) => agent.port == record.agentPort,
-      );
-      final clientLive = clients.any(
-        (client) =>
-            clientAgentPort(client) == record.agentPort ||
-            client.launchProfile?.define('SANAD_DEV_LAUNCHER_ID') ==
-                record.launcherId,
-      );
-      if (canRemoveStaleLauncherRecord(
-        launcherLive: launcherLive,
-        endpointLive: endpointLive,
-        clientLive: clientLive,
-      )) {
+      if (staleRecordRemovalAvailable) {
         await deleteRuntimeLauncherRecord(record.sanadHome, record.agentPort);
         print(
           'Fixed: removed one stale launcher record; no process was signaled.',
         );
         return;
       }
+      if (staleAgentRecoveryAvailable) {
+        if (_hasAgentToolRequester) {
+          stderr.writeln(
+            'No fix applied: stale Agent recovery must run from a '
+            'human-owned terminal so the recovering Agent cannot interrupt '
+            'its own tool call. Run "sanad-dev doctor --fix" there.',
+          );
+          exitCode = 1;
+          return;
+        }
+        print(
+          'Draining the exact Agent-only orphan through its authenticated '
+          'restart boundary...',
+        );
+        final recoveryError = await recoverStaleAgentLease(
+          runtime: runtime,
+          state: state,
+          record: record,
+          activeHome: activeHome,
+          launcherLive: launcherLive,
+          requestPermanentRestart: () =>
+              _requestTakeoverRestart(record.agentPort, record.sanadHome),
+          waitForAgentExit: () =>
+              _waitForAgentPortToStop(record.agentPort, record.sanadHome),
+          launcherIsRunning: () => processRunning(record.launcherPid),
+          discoverAgents: () => discoverAgentInstances(
+            sanadHomeOverride: record.sanadHome,
+            runtime: runtime,
+          ),
+          discoverClients: discoverClientInstances,
+          deleteRecord: () =>
+              deleteRuntimeLauncherRecord(record.sanadHome, record.agentPort),
+        );
+        if (recoveryError == null) {
+          print(
+            'Fixed: safely drained the exact Agent-only orphan and removed '
+            'its stale launcher record.',
+          );
+          return;
+        }
+        stderr.writeln(
+          'No fix applied: $recoveryError; the stale launcher record was '
+          'preserved.',
+        );
+        exitCode = 1;
+        return;
+      }
       stderr.writeln(
-        'No fix applied: a launcher or runtime endpoint is still live; '
+        'No fix applied: '
+        '${staleAgentRecoveryError ?? 'a launcher or runtime endpoint is still live'}; '
         'the lease was preserved.',
       );
       exitCode = 1;
@@ -128,22 +186,43 @@ Future<void> handleRuntimeDoctor({
     return;
   }
 
-  final nextAction = switch (ownership.classification) {
-    RuntimeOwnershipClass.managed => 'Use sanad-dev status/stop/switch.',
-    RuntimeOwnershipClass.manual =>
-      'Run "sanad-dev takeover" after confirming the listed manual pair.',
-    RuntimeOwnershipClass.orphaned =>
-      'Run "sanad-dev cleanup-target-orphans"; it will proceed only when '
-          'target-only stale ownership is proven.',
-    RuntimeOwnershipClass.stopped => 'Run "sanad-dev run".',
-    RuntimeOwnershipClass.crossOwned =>
-      'Run "sanad-dev doctor" from the owning worktree shown above.',
-    _ =>
-      'Close the listed IDE/manual Client, then rerun "sanad-dev doctor"; '
-          'automatic mutation is refused.',
-  };
+  final nextAction = doctorNextAction(
+    ownership: ownership,
+    state: state,
+    staleAgentRecoveryAvailable: staleAgentRecoveryAvailable,
+    staleRecordRemovalAvailable: staleRecordRemovalAvailable,
+  );
   print('Next action: $nextAction');
 }
+
+String doctorNextAction({
+  required RuntimeOwnershipAssessment ownership,
+  required RuntimeProcessState state,
+  required bool staleAgentRecoveryAvailable,
+  required bool staleRecordRemovalAvailable,
+}) => staleRecordRemovalAvailable
+    ? 'Run "sanad-dev doctor --fix" to remove the stale record; no process '
+          'will be signaled.'
+    : switch (ownership.classification) {
+        RuntimeOwnershipClass.managed => 'Use sanad-dev status/stop/switch.',
+        RuntimeOwnershipClass.manual =>
+          'Run "sanad-dev takeover" after confirming the listed manual pair.',
+        RuntimeOwnershipClass.orphaned =>
+          staleAgentRecoveryAvailable
+              ? 'Run "sanad-dev doctor --fix" from a human-owned terminal to '
+                    'safely drain this exact Agent-only orphan.'
+              : state.agent != null
+              ? 'Automatic recovery is refused because the live runtime does not '
+                    'match the narrow Agent-only recovery contract.'
+              : 'Run "sanad-dev cleanup-target-orphans"; it will proceed only when '
+                    'target-only stale Client ownership is proven.',
+        RuntimeOwnershipClass.stopped => 'Run "sanad-dev run".',
+        RuntimeOwnershipClass.crossOwned =>
+          'Run "sanad-dev doctor" from the owning worktree shown above.',
+        _ =>
+          'Close the listed IDE/manual Client, then rerun "sanad-dev doctor"; '
+              'automatic mutation is refused.',
+      };
 
 Future<RuntimeLauncherRecord?> _readRuntimeLauncherRecordSafely(
   String sanadHome,

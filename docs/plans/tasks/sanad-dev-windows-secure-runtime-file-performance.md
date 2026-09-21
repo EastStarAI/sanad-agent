@@ -1,8 +1,12 @@
-status: planned
+---
+status: in_progress
+current_gate: G3-G5 security, cross-platform, and delivery verification
+remaining_estimate: 25-35%
 priority: high
 security_review: required
 platforms: windows-primary, macos-regression, linux-regression
 depends_on: sanad-dev-windows-command-latency
+reference_grounding: official-platform-contracts
 ---
 
 # sanad-dev Windows Secure Runtime-File Performance
@@ -26,6 +30,94 @@ POSIX semantics and prove that macOS and Linux behavior does not regress.
   without validation, or cache an authorization decision beyond its safe
   lifetime.
 
+### Current-host evidence
+
+- From a human-owned Windows terminal, ten `git diff --check` samples averaged
+  51 ms and five nested PowerShell starts averaged 131 ms. A fresh temporary
+  Agent Home completed `doctor` bootstrap in 52.36 seconds.
+- Through Agent `shell_execute`, equivalent nested PowerShell starts averaged
+  about 2.01 seconds, and fresh isolated-Home startup exceeded 14 minutes before
+  eventually reaching daemon health. The approximately 15x process-start ratio
+  closely predicts the bootstrap ratio, while memory, disk capacity, and direct
+  `icacls` timing were healthy.
+- One secure atomic write currently starts PowerShell repeatedly for every
+  hardened root/path segment, temporary file, final file, and `MoveFileExW`
+  replacement. The dominant cost is subprocess multiplication under the Agent
+  execution context, not Git, Dart computation, or raw ACL application.
+
+### Reference-grounded design decision
+
+Official Windows process, security, and Dart process contracts establish these
+constraints:
+
+- `GetProcessTimes` returns process creation time from a handle opened with
+  `PROCESS_QUERY_LIMITED_INFORMATION`; process identity therefore needs no
+  PowerShell subprocess.
+- `SetNamedSecurityInfoW` can set a named file or directory DACL, and
+  `PROTECTED_DACL_SECURITY_INFORMATION` prevents inherited ACEs from surviving.
+  A current process-token SID can be obtained through `GetTokenInformation`.
+- `MoveFileExW` with replace-existing and write-through flags remains the native
+  atomic publication primitive already selected by the current implementation.
+- Windows Job membership is inherited by children. Escaping requires both a job
+  that permits breakaway and `CREATE_BREAKAWAY_FROM_JOB`; Dart detached mode does
+  not document or expose that guarantee. Generic shell containment must not be
+  weakened as a side effect of secure-file optimization.
+
+Selected approach:
+
+1. Adopt a focused in-process Win32 FFI backend for current-user SID lookup,
+   protected owner-only DACL replacement, and write-through replacement.
+2. Keep the public secure-runtime API and all path/reparse/atomicity checks
+   unchanged; map native failures to the existing typed errors.
+3. Cache only immutable process-level native bindings and, if proven equivalent,
+   the current process-token SID. Never cache path validation, DACL success, or
+   publication authorization.
+4. Reject per-call and long-lived PowerShell helpers as the final design: one
+   transaction would reduce subprocess count but retains the measured execution-
+   context amplification and creates a second protocol/lifetime boundary.
+5. Reject call-site batching as the primary fix because it couples independent
+   atomic publications and can obscure which path was hardened or failed.
+6. Defer process-tree breakaway/handoff to the runtime-lifecycle owner. This task
+   neither enables `BREAKAWAY_OK` nor permits arbitrary descendants to escape a
+   `shell_execute` Job Object.
+
+Reference contracts:
+
+- <https://learn.microsoft.com/windows/win32/procthread/job-objects>
+- <https://learn.microsoft.com/windows/win32/procthread/nested-jobs>
+- <https://learn.microsoft.com/windows/win32/procthread/process-creation-flags>
+- <https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesstimes>
+- <https://learn.microsoft.com/windows/win32/api/aclapi/nf-aclapi-setnamedsecurityinfow>
+- <https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-movefileexw>
+- <https://learn.microsoft.com/windows/win32/secauthz/security-information>
+- <https://learn.microsoft.com/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation>
+- <https://api.dart.dev/dart-io/Process/start.html>
+
+### Current implementation evidence
+
+- A root-level secure atomic write previously started four PowerShell processes:
+  root DACL, temporary-file DACL, `MoveFileExW`, and destination DACL. Each nested
+  directory added another process. The in-process Windows backend reduces this
+  count to zero while preserving the same public API and typed outcomes.
+- On the same affected Agent execution context, the focused secure-file case fell
+  from about nine seconds to less than one second. A fresh isolated-Home `doctor`
+  fell from 52.36 seconds to 4.29 seconds, approximately a 12x improvement.
+- A real Windows integration test seeds a foreign Users ACE, then proves that the
+  Home, nested directory, and final file each contain only one current-user full-
+  control ACE under a protected DACL. Replacement leaves no temporary artifact.
+- New traversal and junction tests exposed and closed a pre-existing lexical
+  prefix flaw: `home/../outside` is normalized before containment checks and can
+  no longer harden or publish outside the selected Home.
+- The focused stale-recovery/component-control/profile/secure-file set passes,
+  including real ACL, locked-destination failure, and stale-lease recovery
+  coverage. The complete package passes 149 tests with 18 platform skips on
+  Windows.
+- Live `run agent --background` reached daemon health, then the Agent tool's
+  enclosing kill-on-close Job terminated the detached launcher after the command
+  returned. The resulting exact stale lease was detected and removed by
+  `doctor --fix` without signaling a process. Generic Job breakaway remains a
+  separate lifecycle blocker and is not weakened by this task.
+
 ## Scope
 
 - `scripts/sanad_dev/lib/src/infrastructure/secure_runtime_file.dart` and its
@@ -45,7 +137,10 @@ POSIX semantics and prove that macOS and Linux behavior does not regress.
 - Replacing atomic publication with a non-atomic compatibility fallback.
 - Fixing unrelated Windows path fixtures or generic test-runner organization;
   those belong to the cross-platform test-baseline task.
-- Changing runtime ownership, Home selection, or source-switch semantics.
+- Changing runtime ownership, Home selection, source-switch semantics, generic
+  `shell_execute` process identity, or Job Object breakaway policy. Those remain
+  separately measured lifecycle/tooling concerns after secure-file subprocess
+  amplification is removed.
 
 ## Locked Security Invariants
 
@@ -68,50 +163,50 @@ POSIX semantics and prove that macOS and Linux behavior does not regress.
 
 ### G0 — Reproducible Profiling
 
-- [ ] Measure FVM/test-process startup separately from test-case execution.
+- [x] Measure FVM/test-process startup separately from test-case execution.
 - [ ] Instrument one directory hardening, new-file publication, existing-file
       replacement, append-file acquisition, and secure read on Windows.
 - [ ] Record subprocess count, median, p95, and cold/warm timing over repeated
       runs on the same host.
-- [ ] Identify which cost belongs to PowerShell startup, ACL work, atomic move,
+- [x] Identify which cost belongs to PowerShell startup, ACL work, atomic move,
       antivirus/filesystem contention, and repeated call-site preparation.
 
 ### G1 — Threat Model and Design Decision
 
-- [ ] Enumerate threats: foreign explicit ACE, inherited ACE, SID ambiguity,
+- [x] Enumerate threats: foreign explicit ACE, inherited ACE, SID ambiguity,
       link/junction substitution, destination replacement race, temporary-file
       disclosure, partial write, PID/process interruption, and helper failure.
-- [ ] Compare at least: a single bounded PowerShell transaction, direct Windows
+- [x] Compare at least: a single bounded PowerShell transaction, direct Windows
       APIs through a focused helper, and safe call-site batching.
-- [ ] Reject any design that cannot prove exact DACL replacement and atomic
+- [x] Reject any design that cannot prove exact DACL replacement and atomic
       write-through publication.
-- [ ] Document the selected design, rollback boundary, and why rejected options
+- [x] Document the selected design, rollback boundary, and why rejected options
       are unsafe or unnecessarily complex.
 - [ ] Obtain explicit `security-reviewed` authorization before merge because the
       owner-only runtime-file boundary is modified.
 
 ### G2 — Focused Windows Implementation
 
-- [ ] Implement the smallest reusable Windows backend behind the existing pure
+- [x] Implement the smallest reusable Windows backend behind the existing pure
       Dart API; keep callers platform-neutral.
-- [ ] Bound helper lifetime, input size, output, and error mapping.
-- [ ] Avoid shell interpolation of paths, identities, or contents.
-- [ ] Preserve typed `ownership_failed`, `atomic_replace_failed`,
+- [x] Bound helper lifetime, input size, output, and error mapping.
+- [x] Avoid shell interpolation of paths, identities, or contents.
+- [x] Preserve typed `ownership_failed`, `atomic_replace_failed`,
       `atomic_write_failed`, and unsafe-path outcomes.
-- [ ] Leave POSIX code unchanged unless a proven shared refactor preserves exact
+- [x] Leave POSIX code unchanged unless a proven shared refactor preserves exact
       behavior and reduces duplication.
 
 ### G3 — Security and Race Regression Coverage
 
-- [ ] Verify exact owner-only file and directory ACLs after success.
-- [ ] Seed inherited and explicit foreign ACEs and prove they are removed or the
+- [x] Verify exact owner-only file and directory ACLs after success.
+- [x] Seed inherited and explicit foreign ACEs and prove they are removed or the
       operation fails closed.
-- [ ] Cover unsafe symlink/junction/reparse-point and outside-root paths.
+- [x] Cover unsafe symlink/junction/reparse-point and outside-root paths.
 - [ ] Cover existing destination replacement, concurrent readers/writers,
       process interruption, helper nonzero exit, and immediate consumer delete.
 - [ ] Assert no temporary artifacts or permissive destination remain after each
       failure.
-- [ ] Exercise startup attempts, launcher records, component controls, switch
+- [x] Exercise startup attempts, launcher records, component controls, switch
       manifests, runtime metadata, and journals through the centralized API.
 
 ### G4 — Cross-Platform Regression
@@ -126,23 +221,23 @@ POSIX semantics and prove that macOS and Linux behavior does not regress.
 
 ### G5 — Performance Acceptance and Documentation
 
-- [ ] Reduce median Windows secure atomic-write case execution by at least 50%
+- [x] Reduce median Windows secure atomic-write case execution by at least 50%
       or below two seconds on the same host, excluding FVM process startup.
-- [ ] Reduce startup secure-file subprocess count materially and document the
+- [x] Reduce startup secure-file subprocess count materially and document the
       exact before/after count.
-- [ ] Demonstrate no security-test regression and no timing-only assertion that
+- [x] Demonstrate no security-test regression and no timing-only assertion that
       hides a functional failure.
-- [ ] Update technical design, QA matrix, troubleshooting guidance, and this
+- [x] Update technical design, QA matrix, troubleshooting guidance, and this
       plan with bounded evidence.
 
 ## Acceptance Criteria
 
-- [ ] Security invariants are equal or stronger than the current implementation.
-- [ ] Windows startup and focused secure-file tests no longer exceed their case
+- [x] Security invariants are equal or stronger than the current implementation.
+- [x] Windows startup and focused secure-file tests no longer exceed their case
       timeout under normal serial system load.
 - [ ] macOS and Linux package suites pass without behavior, mode-bit, bootstrap,
       or runtime-command regressions.
-- [ ] No direct global Dart/Flutter invocation, secret, absolute machine path,
+- [x] No direct global Dart/Flutter invocation, secret, absolute machine path,
       generated helper, or binary artifact is committed.
 - [ ] Required CI and explicit security review pass before squash merge.
 

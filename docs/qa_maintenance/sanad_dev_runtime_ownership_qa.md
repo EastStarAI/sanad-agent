@@ -36,6 +36,7 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Client/Agent fields agree but no live launcher lease exists | Group remains manual and ordinary mutation is refused. |
 | Healthy launcher lease, available Agent identity, and exact lease-owned Client nonce/PID/VM set agree | Complete, Agent-only, and Client-only runtimes remain managed; repeated component run is idempotent. |
 | Exact managed runtime plus additional manual, IDE-owned, foreign, or incomplete Client processes | Status remains managed; run/stop/reload/restart target only the lease-owned inventory and leave every extra process untouched. |
+| Managed Client reload or restart is requested by the CLI | The CLI validates the exact profile/PID/VM/Home/lease and publishes a component-control request; the owning launcher revalidates the VM port and sends `r` or `R` to its original Flutter process without creating a second attach process. |
 | One driver Client and one regular Client are managed in the same worktree | `sanad-dev ui` selects only the exact owned `lib/driver_main.dart` profile; the regular Client does not create ambiguity. |
 | Managed Flutter Web Client uses direct `dds_aot.dart.snapshot` instead of native `development-service` | Exact DDS VM/bind arguments map to the matching Flutter runner, readiness completes without the five-minute timeout, and the lease records the Web PID/VM port. The latest managed-journal Web auth code may enable VM diagnostics but cannot establish ownership. |
 | `SANAD_DEV_WEB_PORT` configures a stable browser origin | A valid port becomes one `--web-port` argument for direct and additional Chrome Clients, native Clients receive no Web argument, and invalid values fail before spawn. A persistent Chrome profile can therefore resume origin-scoped authentication after a controlled stop. |
@@ -53,9 +54,11 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | `stop client -d macos` with zero or multiple managed matches | Selection fails closed and lists diagnostic device/VM selectors without signaling a process. |
 | `stop client --force` | CLI rejects the misleading combination as a usage error. |
 | `doctor` | Reports class and ownership evidence without mutation. |
-| `doctor --fix` with no launcher, Agent, or client | Removes only the stale/invalid record and signals no process. |
-| `doctor --fix` with a dead launcher but a live Agent endpoint or Client | Preserves the lease, signals nothing, returns nonzero, and does not convert the live group into a manual runtime. |
-| Doctor reports manual, orphaned, cross-owned, or unverifiable | Output gives one concrete takeover/target-cleanup/owning-worktree/IDE-close next action; every mutating command still revalidates ownership. |
+| `doctor --fix` with no launcher, Agent, or Client | Removes only the stale/invalid record and signals no process. |
+| `doctor --fix` from a human terminal with a dead launcher and an exact Agent-only lease | Requests authenticated permanent Agent restart, waits for endpoint exit, rediscovers all surfaces, then removes the lease only when no matching Agent or Client remains. |
+| Exact Agent-only recovery has tool-requester context, a recorded/discovered Client, identity mismatch, rejection, timeout, revived launcher, or live post-check | Preserves the lease, returns nonzero, and never uses an OS kill fallback. |
+| `doctor --fix` with any other dead-launcher/live-endpoint combination | Preserves the lease, signals nothing, returns nonzero, and does not convert the live group into a manual runtime. |
+| Doctor reports manual, orphaned, cross-owned, or unverifiable | Output gives one concrete takeover/doctor-fix/target-cleanup/owning-worktree/IDE-close next action; every mutating command still revalidates ownership. |
 | Complete manual pair | `takeover` uses a safe Agent drain followed by permanent supervisor shutdown, relaunches it as one managed group, and attempts restoration on launch failure. |
 | Incomplete/manual pair or Agent-origin takeover | Takeover refuses before client mutation. |
 | Target orphan attached to requester/source port | Cleanup refuses before signaling any PID. |
@@ -83,7 +86,10 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Runtime source returns to a fingerprint whose Windows executable is still active while the stamp names another build | Setup reuses the content-addressed artifact and repairs the stamp without trying to overwrite the locked executable. |
 | Worktree `setup` finds a functional user shim owned by another checkout | Setup prepares the caller checkout and preserves the foreign shim; only explicit `install --force` changes shim ownership. |
 | Windows warm `sanad-dev status` performance smoke | Repeated status avoids both `fvm spawn --version` and `fvm dart`; measured latency is recorded against the same-host pre-change baseline. |
-| Windows secure-file tests approach the default case timeout | Measure FVM process startup separately from test execution, then measure one secure atomic write. Raise the test-runner case timeout for verification rather than weakening owner-only ACL or atomic-replacement semantics. |
+| Windows secure-file operation | No PowerShell child is started. The in-process backend applies a protected DACL containing only the current process-token SID and publishes with write-through replacement; native failures map to typed fail-closed outcomes. |
+| Windows file or directory begins with inherited or explicit foreign ACEs | Successful hardening leaves exactly one full-control current-user ACE and a protected DACL; no foreign or inherited ACE survives. |
+| Requested runtime path contains `..`, a symlink, junction, reparse point, or unsafe entity | Lexical containment and segment validation reject it before publication; no outside file is created or outside ancestor hardened. |
+| Windows secure atomic-write performance smoke | Measure FVM startup separately. The operation executes below two seconds on the same host, leaves no temporary artifact, and never relaxes ACL or replacement semantics to satisfy timing. |
 | Windows bootstrap starts outside a Git checkout but beside its copied project scripts | The non-repository Git probe is handled without a raw PowerShell native-command error, and bootstrap continues from the script-owned project root. |
 | Journal crash fixture exits nonzero on every host | A hermetic platform-native fixture avoids package-runner exit-code differences and captures stdout, stderr, and crash-like stack output after exit. |
 | Windows bootstrap uses an isolated user root in CI | Its fake command surface includes deterministic file hashing, so redirected user paths cannot depend on ambient PowerShell module discovery. |
