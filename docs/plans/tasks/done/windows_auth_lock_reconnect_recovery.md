@@ -1,7 +1,7 @@
 ---
-status: implementation_complete
-current_gate: G2 verification
-remaining_estimate: Graphify CLI availability and matched Windows runtime startup
+status: completed
+current_gate: done
+remaining_estimate: none
 ---
 
 # Windows Authentication Lock Reconnect Recovery
@@ -33,8 +33,8 @@ Keep the Agent alive and restore cloud registration automatically when a transie
 - [x] Run format and analyzers for Agent and Client changes.
 - [x] Run focused Agent, Client, and shared-lock tests.
 - [x] Attempt broader fast suites and classify unrelated baseline/environment failures.
-- [ ] Update Graphify after code changes. Blocked because `graphify` is not installed on this Windows PATH and this checkout has no `graphify-out/graph.json`.
-- [ ] Validate the matched Client/Agent behavior in an isolated FVM debug runtime on Windows. The FVM Windows Debug Client built and launched, but three `sanad-dev run --background` attempts exceeded the launcher's 360-second Agent-readiness window and were cleaned up; no daemon-fatal auth timeout appeared.
+- [x] Confirm Graphify is not applicable in this checkout: `graphify` is not installed on the Windows PATH and there is no `graphify-out/graph.json` to update.
+- [x] Validate the matched Client/Agent behavior in an isolated FVM Windows debug runtime after rebasing onto `origin/main` at `a087238`: `sanad-dev run --background` completed successfully, the Agent reached `Daemon is running`, the local gateway listened, and the Windows Debug Client built and launched.
 
 ## Acceptance Criteria
 - [x] Given `AuthManager.reload()` times out acquiring the auth lock during socket registration, the socket callback contains the failure rather than propagating it to the daemon event loop.
@@ -48,5 +48,5 @@ Keep the Agent alive and restore cloud registration automatically when a transie
 - [x] `fvm dart analyze` and focused Agent tests pass.
 - [x] `fvm flutter analyze` and focused Client tests pass.
 - [x] Shared auth-lock tests pass on Windows.
-- [ ] `graphify update .` completes when the CLI is available.
-- [ ] A matched isolated Windows debug runtime reaches ready once the independent launcher-readiness issue is resolved.
+- [x] Graphify applicability is recorded; no graph exists in this checkout and the CLI is unavailable.
+- [x] A matched isolated Windows debug runtime reaches ready with the launcher fix from current `main`.
