@@ -1,10 +1,40 @@
-status: planned
+---
+status: superseded
+closure_reason: remaining-work-transferred-not-certified-complete
+superseded_by: docs/plans/97-windows-first-agent-client-performance.md
+current_gate: closed-transferred
 priority: high
 platforms: windows, macos, linux
 depends_on: sanad-dev-windows-command-latency
 ---
 
 # sanad-dev Cross-Platform Test Baseline Reliability
+
+## Closure and transfer to Plan 97
+
+**Closed as superseded, not completed.** This file is a historical evidence record,
+not an active execution queue. All previously unchecked items (46 entries)
+are transferred to the successor owners below. Checked items retain their
+historical meaning; no unverified acceptance or security result is marked passed.
+The successor owns the complete original obligations, including negative cases,
+security review, documentation and delivery reconciliation, not only a summary.
+Archived under docs/plans/done with superseded status; references point to this record or its Plan 97 successor. No independent work remains here.
+
+| Original outstanding scope | New execution owner |
+|---|---|
+| G0 — inventory, startup separation, slowest ten cases | [97a](docs/plans/tasks/97a-baseline-and-ownership.md) |
+| G1–G4 — fixtures, ownership isolation, cleanup, wrappers | [97d](docs/plans/tasks/97d-windows-test-baseline.md) |
+| G5–G6 + acceptance — full hosted suites twice per OS, lane evidence/counts, fork safety, regression budgets, docs | [97k](docs/plans/tasks/97k-regression-budgets-and-report.md) |
+| Runtime smoke + final lifecycle evidence | [97l](docs/plans/tasks/97l-interactive-final-acceptance.md) |
+
+## Historical plan and evidence (non-executable)
+
+The following goals, gates and acceptance statements describe the original task.
+`Transferred` entries are preserved requirements now owned by the table above;
+they are not open checkboxes in this retired plan. Historical commands and merge
+instructions do not authorize new execution or duplicate delivery.
+
+
 
 ## Goal
 
@@ -69,95 +99,95 @@ case timeout when measured OS work justifies it, but must remain narrowly scoped
 
 ### G0 — Baseline Inventory
 
-- [ ] Run the complete standalone package suite on Windows, macOS, and Linux and
+- **Transferred to Plan 97:** Run the complete standalone package suite on Windows, macOS, and Linux and
       capture bounded failure lists plus total/case timing.
-- [ ] Separate FVM/package startup from test-case execution.
-- [ ] Classify every failure by product defect, platform-invalid fixture,
+- **Transferred to Plan 97:** Separate FVM/package startup from test-case execution.
+- **Transferred to Plan 97:** Classify every failure by product defect, platform-invalid fixture,
       timeout budget, resource contention, or leaked subprocess/port.
-- [ ] Record the slowest ten cases per platform and identify shared fixtures.
+- **Transferred to Plan 97:** Record the slowest ten cases per platform and identify shared fixtures.
 
 ### G1 — Platform-Neutral Fixtures
 
-- [ ] Replace hard-coded `/users/...`, slash assumptions, drive assumptions,
+- **Transferred to Plan 97:** Replace hard-coded `/users/...`, slash assumptions, drive assumptions,
       and case-sensitivity assumptions with explicit platform-neutral builders
       where the behavior under test is platform-neutral.
-- [ ] Retain literal POSIX and Windows paths only in parser tests that explicitly
+- **Transferred to Plan 97:** Retain literal POSIX and Windows paths only in parser tests that explicitly
       declare the target syntax and do not consult the host filesystem.
-- [ ] Normalize expected paths through the production-equivalent comparison
+- **Transferred to Plan 97:** Normalize expected paths through the production-equivalent comparison
       boundary rather than ad hoc string replacement.
-- [ ] Add fixture tests for spaces, Unicode, drive roots, UNC syntax where
+- **Transferred to Plan 97:** Add fixture tests for spaces, Unicode, drive roots, UNC syntax where
       supported, POSIX roots, and case behavior.
 
 ### G2 — Ownership and Secure-File Test Isolation
 
-- [ ] Give each test a unique temporary Home/runtime root and ensure teardown is
+- **Transferred to Plan 97:** Give each test a unique temporary Home/runtime root and ensure teardown is
       bounded and observable.
-- [ ] Distinguish mocked ownership-policy unit tests from real OS ACL/mode
+- **Transferred to Plan 97:** Distinguish mocked ownership-policy unit tests from real OS ACL/mode
       integration tests.
-- [ ] Make expected owner/process identity fixtures host-independent while
+- **Transferred to Plan 97:** Make expected owner/process identity fixtures host-independent while
       retaining negative PID-reuse and foreign-owner cases.
-- [ ] Apply measured case timeouts only to real OS integration tests; never hide
+- **Transferred to Plan 97:** Apply measured case timeouts only to real OS integration tests; never hide
       deadlock or unbounded polling with a suite-wide timeout increase.
-- [ ] Keep security assertions unchanged while the separate secure-file task is
+- **Transferred to Plan 97:** Keep security assertions unchanged while the separate secure-file task is
       pending.
 
 ### G3 — Journal, Subprocess, and Port Cleanup
 
-- [ ] Track every spawned fixture process and prove it exits on success, failure,
+- **Transferred to Plan 97:** Track every spawned fixture process and prove it exits on success, failure,
       and timeout.
-- [ ] Ensure component journals flush/close without relying on fixed sleeps.
-- [ ] Reserve real ports deterministically and run only conflicting cases
+- **Transferred to Plan 97:** Ensure component journals flush/close without relying on fixed sleeps.
+- **Transferred to Plan 97:** Reserve real ports deterministically and run only conflicting cases
       sequentially.
-- [ ] Assert no test leaves a launcher record, startup locator, temporary file,
+- **Transferred to Plan 97:** Assert no test leaves a launcher record, startup locator, temporary file,
       child process, or listening port after teardown.
-- [ ] Preserve exit codes and show only bounded diagnostic output in CI.
+- **Transferred to Plan 97:** Preserve exit codes and show only bounded diagnostic output in CI.
 
 ### G4 — Runtime CLI and Wrapper Parity
 
-- [ ] Verify PowerShell and POSIX wrappers share artifact fingerprint inputs,
+- **Transferred to Plan 97:** Verify PowerShell and POSIX wrappers share artifact fingerprint inputs,
       fail-closed stale/missing behavior, and `setup`/`run`/`switch` preparation.
-- [ ] Verify the POSIX artifact remains executable and background AOT relaunch
+- **Transferred to Plan 97:** Verify the POSIX artifact remains executable and background AOT relaunch
       omits its own path while JIT execution retains the script argument.
-- [ ] Verify content-addressed artifact reuse does not delete an executable path
+- **Transferred to Plan 97:** Verify content-addressed artifact reuse does not delete an executable path
       needed by an active POSIX launcher or overwrite a locked Windows artifact.
-- [ ] Verify `setup` preserves a functional foreign-checkout shim on every
+- **Transferred to Plan 97:** Verify `setup` preserves a functional foreign-checkout shim on every
       platform and `install --force` is the explicit ownership change.
-- [ ] Verify warm runtime commands invoke neither `fvm spawn` nor `fvm dart` on
+- **Transferred to Plan 97:** Verify warm runtime commands invoke neither `fvm spawn` nor `fvm dart` on
       Windows, macOS, or Linux.
 
 ### G5 — Hosted Cross-Platform CI Gate
 
-- [ ] Run format/analyzer and the complete standalone package suite on current
+- **Transferred to Plan 97:** Run format/analyzer and the complete standalone package suite on current
       hosted Windows, macOS, and Linux images.
-- [ ] Add focused wrapper smoke for help, setup, stale failure, dry run, stopped
+- **Transferred to Plan 97:** Add focused wrapper smoke for help, setup, stale failure, dry run, stopped
       status, and background child argument construction on each OS.
-- [ ] Keep fork-origin jobs secret-free and independent of signing/deployment.
-- [ ] Fail when any supported platform lane is skipped, cancelled, or missing
+- **Transferred to Plan 97:** Keep fork-origin jobs secret-free and independent of signing/deployment.
+- **Transferred to Plan 97:** Fail when any supported platform lane is skipped, cancelled, or missing
       expected test count/evidence.
-- [ ] Publish bounded per-platform timing summaries that distinguish bootstrap
+- **Transferred to Plan 97:** Publish bounded per-platform timing summaries that distinguish bootstrap
       overhead from case execution.
 
 ### G6 — Documentation and Stable Baseline
 
-- [ ] Update test-performance and runtime-ownership QA docs with classifications,
+- **Transferred to Plan 97:** Update test-performance and runtime-ownership QA docs with classifications,
       timeout ownership, and platform evidence.
-- [ ] Remove stale suppressions, duplicated fixtures, and contradictory comments.
-- [ ] Record the final green test count and timing range for each platform.
-- [ ] Establish a regression threshold for new slow cases without creating flaky
+- **Transferred to Plan 97:** Remove stale suppressions, duplicated fixtures, and contradictory comments.
+- **Transferred to Plan 97:** Record the final green test count and timing range for each platform.
+- **Transferred to Plan 97:** Establish a regression threshold for new slow cases without creating flaky
       wall-clock assertions on shared CI hosts.
 
 ## Acceptance Criteria
 
-- [ ] The complete `scripts/sanad_dev` suite passes on Windows, macOS, and Linux
+- **Transferred to Plan 97:** The complete `scripts/sanad_dev` suite passes on Windows, macOS, and Linux
       in two consecutive hosted runs.
-- [ ] No supported lane is skipped and no failure is hidden by weakening product
+- **Transferred to Plan 97:** No supported lane is skipped and no failure is hidden by weakening product
       assertions or broad timeout increases.
-- [ ] Path and ownership fixtures are deterministic on all three platforms.
-- [ ] Tests leave no process, port, launcher record, journal lock, or temporary
+- **Transferred to Plan 97:** Path and ownership fixtures are deterministic on all three platforms.
+- **Transferred to Plan 97:** Tests leave no process, port, launcher record, journal lock, or temporary
       runtime state behind.
-- [ ] POSIX wrapper/runtime behavior introduced by the Windows latency work is
+- **Transferred to Plan 97:** POSIX wrapper/runtime behavior introduced by the Windows latency work is
       explicitly covered and green on macOS/Linux.
-- [ ] Test commands continue to use FVM and generated artifacts remain untracked.
+- **Transferred to Plan 97:** Test commands continue to use FVM and generated artifacts remain untracked.
 
 ## Verification Matrix
 

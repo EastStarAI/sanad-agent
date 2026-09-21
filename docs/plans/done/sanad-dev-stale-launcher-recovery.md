@@ -1,14 +1,42 @@
 ---
-status: in_progress
+status: superseded
+closure_reason: remaining-work-transferred-not-certified-complete
+superseded_by: docs/plans/97-windows-first-agent-client-performance.md
+current_gate: closed-transferred
 priority: critical
 security_review: required
 platforms: windows-primary, macos-regression, linux-regression
 depends_on: sanad-dev-windows-secure-runtime-file-performance
-current_gate: G3-G4 verification
-remaining: human-terminal Agent+Client lifecycle, security review, CI, merge
 ---
 
 # sanad-dev Stale Launcher Recovery
+
+## Closure and transfer to Plan 97
+
+**Closed as superseded, not completed.** This file is a historical evidence record,
+not an active execution queue. All previously unchecked items (20 entries)
+are transferred to the successor owners below. Checked items retain their
+historical meaning; no unverified acceptance or security result is marked passed.
+The successor owns the complete original obligations, including negative cases,
+security review, documentation and delivery reconciliation, not only a summary.
+Archived under docs/plans/done with superseded status; references point to this record or its Plan 97 successor. No independent work remains here.
+
+| Original outstanding scope | New execution owner |
+|---|---|
+| G3 — outstanding state/admission/failure coverage | [97e](docs/plans/tasks/97e-launcher-lifecycle-verification.md) |
+| G4 — remaining hosted Client restart/reload coverage | [97k](docs/plans/tasks/97k-regression-budgets-and-report.md) |
+| G5 + acceptance + DoD — reconcile merged delivery, protected review/security/CI and outstanding correctness checks | [97e](docs/plans/tasks/97e-launcher-lifecycle-verification.md) |
+| Cross-platform checks and final evidence review | [97k](docs/plans/tasks/97k-regression-budgets-and-report.md) |
+| Any remaining live lifecycle/residue evidence | [97l](docs/plans/tasks/97l-interactive-final-acceptance.md) |
+
+## Historical plan and evidence (non-executable)
+
+The following goals, gates and acceptance statements describe the original task.
+`Transferred` entries are preserved requirements now owned by the table above;
+they are not open checkboxes in this retired plan. Historical commands and merge
+instructions do not authorize new execution or duplicate delivery.
+
+
 
 ## Goal
 
@@ -102,9 +130,9 @@ or changing the primary runtime.
 
 ### G3 — Automated Regression Coverage
 
-- [ ] Cover stale launcher with no endpoints, exact live Agent-only, exact live
+- **Transferred to Plan 97:** Cover stale launcher with no endpoints, exact live Agent-only, exact live
       Client-only, and exact live Agent+Client states.
-- [ ] Cover PID reuse, launcher identity/nonce mismatch, foreign Home/source,
+- **Transferred to Plan 97:** Cover PID reuse, launcher identity/nonce mismatch, foreign Home/source,
       requester/source port, IDE-owned Client, incomplete profile, multiple
       matching Agents, failed daemon response, timeout, and partial exit.
 - [x] Assert no process signal or lease deletion occurs before full admission.
@@ -131,7 +159,7 @@ or changing the primary runtime.
       startup locator, and ports are no longer active.
 - [x] Retain Client restart/reload automated coverage in addition to the local
       Agent+Client cycle.
-- [ ] Pass Client restart/reload coverage in hosted CI.
+- **Transferred to Plan 97:** Pass Client restart/reload coverage in hosted CI.
 - [x] Confirm the primary runtime remains managed and unchanged before and after
       isolated verification.
 
@@ -142,36 +170,36 @@ or changing the primary runtime.
 - [x] Update the closest `AGENTS.md` only if the durable ownership law changes.
 - [x] Run `graphify update .` if a graph exists at implementation time (no
       `graphify-out/graph.json` exists in this worktree).
-- [ ] Review diff, generated output, secrets, machine paths, and protected-label
+- **Transferred to Plan 97:** Review diff, generated output, secrets, machine paths, and protected-label
       requirements.
-- [ ] Rebase on current `origin/main`, obtain required security review, pass the
+- **Transferred to Plan 97:** Rebase on current `origin/main`, obtain required security review, pass the
       Windows/macOS/Linux hosted checks, create a focused PR, and squash merge
       only after `All required checks pass` is green.
 
 ## Acceptance Criteria
 
-- [ ] The originally reported state produces one accurate and executable
+- **Transferred to Plan 97:** The originally reported state produces one accurate and executable
       recovery instruction rather than a cleanup command that necessarily
       refuses or silently fails.
-- [ ] No normal `run` invocation kills or drains an orphaned live component.
-- [ ] No stale record is deleted while its launcher, Agent endpoint, recorded
+- **Transferred to Plan 97:** No normal `run` invocation kills or drains an orphaned live component.
+- **Transferred to Plan 97:** No stale record is deleted while its launcher, Agent endpoint, recorded
       Client, or exact exit evidence remains live.
-- [ ] Mismatched, ambiguous, cross-owned, source-attached, or unverifiable
+- **Transferred to Plan 97:** Mismatched, ambiguous, cross-owned, source-attached, or unverifiable
       processes are never signaled.
-- [ ] A fully admitted recovery either completes and permits a subsequent
+- **Transferred to Plan 97:** A fully admitted recovery either completes and permits a subsequent
       managed `run`, or fails nonzero while preserving recoverable evidence.
 - [x] The isolated live sequence succeeds with managed ownership throughout:
       `run all → restart agent → reload client → restart client → stop`, with
       Client control also covered by the local automated suite.
 - [x] The primary runtime is not switched, stopped, or used as the test target.
-- [ ] Windows, macOS, and Linux CI pass without weakening POSIX behavior.
+- **Transferred to Plan 97:** Windows, macOS, and Linux CI pass without weakening POSIX behavior.
 
 ## Definition of Done
 
-- [ ] Root cause and rejected unsafe diff portions are documented in this plan.
-- [ ] Production code, tests, and owning documentation agree.
-- [ ] FVM analyzer and automated tests pass with bounded output.
-- [ ] Isolated lifecycle evidence satisfies G4 and leaves no runtime residue.
-- [ ] Security review and all required GitHub checks pass.
-- [ ] PR is squash-merged and the primary checkout is updated without losing
+- **Transferred to Plan 97:** Root cause and rejected unsafe diff portions are documented in this plan.
+- **Transferred to Plan 97:** Production code, tests, and owning documentation agree.
+- **Transferred to Plan 97:** FVM analyzer and automated tests pass with bounded output.
+- **Transferred to Plan 97:** Isolated lifecycle evidence satisfies G4 and leaves no runtime residue.
+- **Transferred to Plan 97:** Security review and all required GitHub checks pass.
+- **Transferred to Plan 97:** PR is squash-merged and the primary checkout is updated without losing
       unrelated local work.

@@ -21,6 +21,12 @@ Do not introduce convenience code that weakens these boundaries.
 - Account lifecycle list/revoke uses one application-scoped repository over the authenticated Cloud Socket; Portal HTTP owns OAuth/refresh/logout but no lifecycle inventory routes. Observation is consumer-lazy: opening Sessions & Devices fetches, a closed page never fetches on auth/reconnect, and an open disconnected page retains a stale snapshot until one coalesced reconnect refetch.
 - Device-targeted work carries explicit device identity through repositories/clients and the shared connection coordinator.
 
+### Render and Request Independence
+- Widget builds, builders, layout/theme changes, window resizing, and responsive subtree remounts must not initiate Agent data requests, directly or through build-scheduled post-frame callbacks. Rendering is side-effect-free.
+- Logical resource owners, not widget lifetimes, own fetch admission, in-flight deduplication, freshness, and authoritative invalidation. Mount/rebuild of another consumer of the same unchanged resource is not a new fetch intent.
+- Valid user intent, logical device/resource changes, and authoritative invalidation/reconnect may request data through the owning layer. Deduplication must preserve device/query scope and must not drop necessary events, suppress legitimate refreshes, or present stale data as current.
+- Changes to responsive UI must retain regression coverage proving that resize/rebuild alone emits no extra Agent fetches for unchanged logical resources.
+
 ### Device and Endpoint Ownership
 - `DeviceCubit` is the sole presentation authority for the active conversation device. Settings inspection scope cannot change it implicitly.
 - Desktop local inventory survives cloud logout, refresh failure, and cloud socket failure; web and mobile remain cloud-only.
