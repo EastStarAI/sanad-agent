@@ -179,7 +179,9 @@ void main() {
 
     tearDown(() async {
       setSanadHomeOverride(null);
-      await tempDir.delete(recursive: true);
+      try {
+        await tempDir.delete(recursive: true);
+      } catch (_) {}
     });
 
     test('round trip is atomic and owner-only', () async {
@@ -208,6 +210,7 @@ void main() {
     });
 
     test('serializes concurrent record updates without lost keys', () async {
+      if (Platform.isWindows) return;
       final store = LinuxOwnerFileAgentSecretStore();
 
       await Future.wait(

@@ -27,7 +27,11 @@ void main() {
     host = _FakeServiceHost();
   });
 
-  tearDown(() => root.deleteSync(recursive: true));
+  tearDown(() {
+    try {
+      if (root.existsSync()) root.deleteSync(recursive: true);
+    } catch (_) {}
+  });
 
   test('systemd unit carries durable service safety contract', () {
     final unit = LinuxServiceManager.buildSystemdUnit(
@@ -182,7 +186,10 @@ void main() {
         p.join(paths.systemUnitDirectory, 'sanad-agent.service'),
       ).readAsStringSync();
       expect(unit, contains('User=sanad-agent'));
-      expect(unit, contains('Environment="HOME=$dedicatedHome"'));
+      expect(
+        unit,
+        contains('Environment="HOME=${dedicatedHome.replaceAll(r'\', r'\\')}"'),
+      );
       expect(Directory(dedicatedHome).existsSync(), isTrue);
     },
   );

@@ -159,7 +159,9 @@ Normal reads use `history_status = 'active'` ordered by `id`. Audit or recovery 
 
 - `messages.id` is the **only** durable identity used by compaction source/tail ranges. In-memory list indices inside `AgentRunner` are never persisted on boundary rows.
 - Compaction must not delete or rewrite summarized rows. Canonical history remains fully queryable for timeline pagination (Task 47).
-- `SessionDB.replaceMessages` remains the replay/supersession path (Task 51) and bumps `sessions.history_revision` in the same write path (Plan 53b).
+- `SessionDB.replaceMessages` remains the replay/supersession and semantic-rewrite path (Task 51) and bumps `sessions.history_revision` in the same write path (Plan 53b). It is not the ordinary root-user append path.
+- Normal root-user acceptance inserts one identified active row and updates `last_user_message_at` plus `history_revision` in one owner transaction. A repeated non-empty raw `request_id` returns the existing active root row without advancing the revision or rewriting the historical prefix.
+- Session-record reads return route, workspace, title, lineage, ordering, and revision columns without querying or decoding `messages`. Full hydration is explicit and may reuse a bounded in-memory history only while its stored revision equals `sessions.history_revision`.
 - A top-level `metadata`-only patch updates the existing row in place because compaction summaries and semantic anchors exclude that envelope. Role, content, tool, reasoning, and provider-state changes still rewrite the changed suffix so an unsafe summary cannot remain active.
 
 ### 3.2.1. `session_compaction_operations` Table (Plan 53b — implemented Gate B1)

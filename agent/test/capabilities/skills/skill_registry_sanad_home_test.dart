@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
@@ -11,12 +12,16 @@ void main() {
       'skill-registry-user-',
     );
     addTearDown(() {
-      if (root.existsSync()) root.deleteSync(recursive: true);
-      if (otherHome.existsSync()) otherHome.deleteSync(recursive: true);
+      try {
+        if (root.existsSync()) root.deleteSync(recursive: true);
+      } catch (_) {}
+      try {
+        if (otherHome.existsSync()) otherHome.deleteSync(recursive: true);
+      } catch (_) {}
     });
-    final skill = Directory('${root.path}/skills/product-skill')
+    final skill = Directory(p.join(root.path, 'skills', 'product-skill'))
       ..createSync(recursive: true);
-    File('${skill.path}/SKILL.md').writeAsStringSync(
+    File(p.join(skill.path, 'SKILL.md')).writeAsStringSync(
       '---\nname: product-skill\ndescription: Product skill.\n---\n# Product\n',
     );
 
@@ -26,8 +31,8 @@ void main() {
 
     expect(definition, isNotNull);
     expect(
-      definition!.sourcePath,
-      contains('${root.path}/skills/product-skill'),
+      p.normalize(definition!.sourcePath),
+      contains(p.normalize(p.join(root.path, 'skills', 'product-skill'))),
     );
     expect(definition.origin.rootKind.name, 'sanadSkills');
   });

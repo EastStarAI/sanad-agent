@@ -20,7 +20,9 @@ void main() {
       setSanadHomeOverride(null);
       setSanadStateHomeOverride(null);
       if (tempHome.existsSync()) {
-        tempHome.deleteSync(recursive: true);
+        try {
+          tempHome.deleteSync(recursive: true);
+        } catch (_) {}
       }
     });
 

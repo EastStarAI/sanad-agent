@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
@@ -179,7 +180,9 @@ Use the review skill.''');
     });
 
     tearDown(() async {
-      await tempDir.delete(recursive: true);
+      try {
+        await tempDir.delete(recursive: true);
+      } catch (_) {}
     });
 
     test(
@@ -405,9 +408,9 @@ Use the review skill.''');
     test(
       'asks before each external workspace file capability and exposes only path details',
       () async {
-        final externalDir = Directory('${tempDir.path}/external')
+        final externalDir = Directory(p.join(tempDir.path, 'external'))
           ..createSync(recursive: true);
-        final externalFile = File('${externalDir.path}/notes.txt')
+        final externalFile = File(p.join(externalDir.path, 'notes.txt'))
           ..writeAsStringSync('external hello');
         final tools = await catalog.buildTools(
           registry: registry,
@@ -422,7 +425,7 @@ Use the review skill.''');
         final readResult = await registry.getTool('file_read')!.execute({
           'path': externalFile.path,
         });
-        expect(readResult, contains(externalFile.path));
+        expect(jsonDecode(readResult)['file']['filePath'], equals(externalFile.path));
 
         await registry.getTool('file_edit')!.execute({
           'path': externalFile.path,
@@ -435,15 +438,21 @@ Use the review skill.''');
           'pattern': '**/*.txt',
           'path': externalDir.path,
         });
-        expect(globResult, contains(externalFile.path));
+        expect(
+          globResult.replaceAll(r'\', '/'),
+          contains(externalFile.path.replaceAll(r'\', '/')),
+        );
 
         final grepResult = await registry.getTool('search_grep')!.execute({
           'pattern': 'updated',
           'path': externalDir.path,
         });
-        expect(grepResult, contains(externalFile.path));
+        expect(
+          grepResult.replaceAll(r'\', '/'),
+          contains(externalFile.path.replaceAll(r'\', '/')),
+        );
 
-        final createdFile = '${externalDir.path}/created.txt';
+        final createdFile = p.join(externalDir.path, 'created.txt');
         await registry.getTool('file_write')!.execute({
           'path': createdFile,
           'content': 'private content',
@@ -467,7 +476,7 @@ Use the review skill.''');
     );
 
     test('full_access executes an external path without prompting', () async {
-      final externalFile = File('${tempDir.path}/full-access.txt')
+      final externalFile = File(p.join(tempDir.path, 'full-access.txt'))
         ..writeAsStringSync('allowed');
       await policyStore.savePolicy(
         workspaceDir.path,
@@ -498,7 +507,7 @@ Use the review skill.''');
         'allowed': false,
         'scope': 'once',
       };
-      final externalPath = '${tempDir.path}/denied.txt';
+      final externalPath = p.join(tempDir.path, 'denied.txt');
       final tools = await catalog.buildTools(
         registry: registry,
         request: AgentTurnRequest(
@@ -562,7 +571,7 @@ Use the review skill.''');
 
         expect(payload, startsWith('Skill source: '));
         expect(
-          payload,
+          payload.replaceAll(r'\', '/'),
           contains('/workspace/.sanad/skills/review/SKILL.md\n\n'),
         );
         expect(payload, contains('Use the review skill.'));

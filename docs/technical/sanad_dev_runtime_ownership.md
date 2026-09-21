@@ -256,22 +256,30 @@ inject fakes and never connect to Production.
 ## Detached background launch
 
 `sanad-dev run --background` is the official detached source-runtime command.
-The foreground requester starts the same pinned Dart entry point in
+On POSIX hosts, the foreground requester starts the pinned runtime entry point in
 `ProcessStartMode.detached`, preserving the caller worktree and arguments while
-replacing the public flag with a private child marker. The detached launcher—not
-the requester shell—owns the Agent, Clients, journals, lease, and component
-control files. Background mode suppresses terminal sidecars and stdout mirroring;
-component output remains in the normal managed journals.
+replacing the public flag with a private child marker. On Windows, standard
+detached process creation inherits the caller's Job Object; when invoked from
+short-lived tool shells or subagents subject to `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`,
+closing the tool shell kills the detached launcher. Windows therefore launches the
+background child through the CIM/WMI service (`Win32_Process.Create`), creating a
+service-owned process that survives tool-shell closure without weakening lease,
+ownership, or credential boundaries. The detached launcher—not the requester
+shell—owns the Agent, Clients, journals, lease, and component control files.
+Background mode suppresses terminal sidecars and stdout mirroring; component
+output remains in the normal managed journals.
 
-The requester does not claim success merely because spawn returned. It waits for
-a new worktree-correlated startup attempt to become `managed` or `failed`, and
-also accepts an already-managed requested component set after an idempotent
-component request. After observing launcher death, the requester keeps a bounded
-two-second publication grace so the child's atomic attempt and locator writes
-win over PID polling; it then reports the staged result rather than a generic
-exit. Missing publication and overall handshake timeout are nonzero failures
-with a direct `status` recovery action. `--background` cannot
-be combined with `--dry-run`.
+The requester does not claim success merely because spawn returned or because a
+startup attempt diagnostic file records `managed`. To prevent premature success
+declarations when a launcher is killed or components fail immediately after
+attempt publication, the requester verifies that the child launcher process is
+running and that the requested components are actively managed (with a valid
+launcher lease, matching launcher process identity, and healthy target components).
+After observing launcher death, the requester keeps a bounded two-second publication
+grace so the child's atomic attempt and locator writes win over PID polling; it
+then reports the staged result rather than a generic exit. Missing publication and
+overall handshake timeout are nonzero failures with a direct `status` recovery
+action. `--background` cannot be combined with `--dry-run`.
 
 ## Startup-attempt diagnostics
 

@@ -52,7 +52,7 @@ abstract final class CompactionRequestFactory {
         .read(sessionId);
     if (projectionRevision == null) return null;
 
-    final session = getIt<SessionManager>().getSession(sessionId);
+    final session = getIt<SessionManager>().getSessionRecord(sessionId);
     final runtime = getIt<AgentRuntimeService>();
     final route = runtime.resolveSignature(
       providerId: session?.providerId,

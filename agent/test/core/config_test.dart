@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:test/test.dart';
@@ -26,12 +27,16 @@ void main() {
     Directory.current = originalCurrentDirectory;
     setSanadHomeOverride(null);
     setSanadStateHomeOverride(null);
-    if (tempWorkDir.existsSync()) {
-      await tempWorkDir.delete(recursive: true);
-    }
-    if (tempSanadHome.existsSync()) {
-      await tempSanadHome.delete(recursive: true);
-    }
+    try {
+      if (tempWorkDir.existsSync()) {
+        await tempWorkDir.delete(recursive: true);
+      }
+    } catch (_) {}
+    try {
+      if (tempSanadHome.existsSync()) {
+        await tempSanadHome.delete(recursive: true);
+      }
+    } catch (_) {}
   });
 
   test('reads local gateway configuration from environment', () async {
@@ -73,11 +78,11 @@ LOCAL_GATEWAY_PORT=59123
   test(
     'source worktree always uses global env from SANAD_HOME even if local env exists',
     () {
-      expect(getEnvPath(), '${tempSanadHome.path}/.env');
+      expect(getEnvPath(), p.join(tempSanadHome.path, '.env'));
 
-      File('${tempWorkDir.path}/.env').writeAsStringSync('LLM_MODEL=local');
+      File(p.join(tempWorkDir.path, '.env')).writeAsStringSync('LLM_MODEL=local');
 
-      expect(getEnvPath(), '${tempSanadHome.path}/.env');
+      expect(getEnvPath(), p.join(tempSanadHome.path, '.env'));
     },
   );
 

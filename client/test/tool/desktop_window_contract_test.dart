@@ -142,7 +142,10 @@ void main() {
       'release/macos/build_macos_dmg.sh',
     ).readAsStringSync();
 
-    expect(infoPlist, contains('<key>FLTEnableImpeller</key>\n\t<false/>'));
+    expect(
+      infoPlist.replaceAll('\r\n', '\n'),
+      contains('<key>FLTEnableImpeller</key>\n\t<false/>'),
+    );
     expect(releaseScript, contains("-c 'Print :FLTEnableImpeller'"));
     expect(releaseScript, contains(r'if [ "$IMPELLER_SETTING" != "false" ]'));
   });

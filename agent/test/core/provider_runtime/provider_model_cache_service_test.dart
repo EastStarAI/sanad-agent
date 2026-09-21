@@ -84,8 +84,13 @@ void main() {
         ),
       );
 
+      final baseTime = DateTime.utc(2025, 1, 1);
       for (var i = 1; i <= 105; i++) {
-        recentService.selectModel(instanceId: 'inst-1', modelId: 'model-$i');
+        recentService.selectModel(
+          instanceId: 'inst-1',
+          modelId: 'model-$i',
+          selectedAt: baseTime.add(Duration(seconds: i)),
+        );
       }
 
       final list = recentService.getRecentSelections();

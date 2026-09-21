@@ -69,11 +69,17 @@ Future<void> _replaceRuntimeFile(File source, File destination) async {
     await source.rename(destination.path);
     return;
   }
-  try {
-    _windowsBackend.replaceFile(source.path, destination.path);
-  } catch (_) {
-    throw const SecureRuntimeFileException('atomic_replace_failed');
+  for (var attempt = 0; attempt < 5; attempt++) {
+    try {
+      _windowsBackend.replaceFile(source.path, destination.path);
+      return;
+    } catch (_) {
+      if (attempt < 4) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+    }
   }
+  throw const SecureRuntimeFileException('atomic_replace_failed');
 }
 
 Future<File> secureRuntimeAppendFile(String sanadHome, String path) async {

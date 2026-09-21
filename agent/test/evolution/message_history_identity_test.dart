@@ -253,6 +253,85 @@ void main() {
     expect(db.getSession('s1')!.historyRevision, 4);
   });
 
+  test('session record read never decodes message JSON', () {
+    final state = AgentStateDatabase.inMemory();
+    addTearDown(state.dispose);
+    final db = SessionDB.fromState(state);
+    db.saveSession(session('metadata-only'));
+    db.replaceMessages('metadata-only', [
+      Message(role: MessageRole.user, content: 'valid'),
+    ]);
+    state.db.execute(
+      "UPDATE messages SET data = '{invalid-json' WHERE session_id = ?",
+      ['metadata-only'],
+    );
+
+    final record = db.getSessionRecord('metadata-only');
+
+    expect(record, isNotNull);
+    expect(record!.messages, isEmpty);
+    expect(() => db.getSession('metadata-only'), throwsFormatException);
+  });
+
+  test('root user append is atomic, idempotent, and prefix preserving', () {
+    final state = AgentStateDatabase.inMemory();
+    addTearDown(state.dispose);
+    final db = SessionDB.fromState(state);
+    db.saveSession(session('append-root'));
+    db.replaceMessages('append-root', [
+      Message(
+        role: MessageRole.user,
+        content: 'old root',
+        metadata: const {'request_id': 'old-request'},
+      ),
+      Message(role: MessageRole.assistant, content: 'old answer'),
+    ]);
+    final oldRows = state.db.select(
+      'SELECT id, message_id, data FROM messages WHERE session_id = ? ORDER BY id',
+      ['append-root'],
+    );
+    final revisionBefore = db.getSessionRecord('append-root')!.historyRevision;
+    final input = Message(
+      role: MessageRole.user,
+      content: 'new root',
+      metadata: const {
+        'request_id': 'new-request',
+        'received_at': '2026-09-21T10:00:00.000Z',
+      },
+    );
+
+    final first = db.appendRootUserMessage('append-root', input);
+    final duplicate = db.appendRootUserMessage('append-root', input);
+
+    expect(first.inserted, isTrue);
+    expect(duplicate.inserted, isFalse);
+    expect(
+      duplicate.message.metadata?['message_id'],
+      first.message.metadata?['message_id'],
+    );
+    expect(
+      duplicate.message.metadata?['turn_id'],
+      first.message.metadata?['turn_id'],
+    );
+    expect(first.message.metadata?['input_kind'], 'root_turn');
+    expect(first.historyRevision, revisionBefore + 1);
+    expect(duplicate.historyRevision, first.historyRevision);
+    expect(db.getMessages('append-root'), hasLength(3));
+    expect(
+      db.getSessionRecord('append-root')!.lastUserMessageAt,
+      DateTime.parse('2026-09-21T10:00:00.000Z'),
+    );
+    final preservedRows = state.db.select(
+      'SELECT id, message_id, data FROM messages WHERE session_id = ? ORDER BY id LIMIT 2',
+      ['append-root'],
+    );
+    expect(preservedRows[0]['id'], oldRows[0]['id']);
+    expect(preservedRows[0]['message_id'], oldRows[0]['message_id']);
+    expect(preservedRows[0]['data'], oldRows[0]['data']);
+    expect(preservedRows[1]['id'], oldRows[1]['id']);
+    expect(preservedRows[1]['data'], oldRows[1]['data']);
+  });
+
   test('assignIdentities groups a steer into the open root turn', () {
     final assigned = MessageHistoryIdentity.assignIdentities([
       Message(
