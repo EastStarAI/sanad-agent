@@ -38,7 +38,7 @@ class LocalRuntimeOrchestrator {
         metadata['execution_root'] = normalized;
       }
     }
-    final workspaceId = request.workspaceId;
+    final workspaceId = request.effectiveWorkspaceId;
     if (workspaceId == null || workspaceId.isEmpty) {
       return metadata;
     }
@@ -193,7 +193,7 @@ class LocalRuntimeOrchestrator {
           .validateAndNormalizeExecutionRoot(execRoot);
       workspaceName = p.basename(workspacePath!);
     } else {
-      final workspaceId = request.workspaceId;
+      final workspaceId = request.effectiveWorkspaceId;
       if (workspaceId == null || workspaceId.isEmpty) {
         return _runtimeContextBuilder.buildWithoutWorkspace();
       }

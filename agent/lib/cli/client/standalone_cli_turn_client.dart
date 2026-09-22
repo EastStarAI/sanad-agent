@@ -127,7 +127,7 @@ class StandaloneCliTurnClient implements CliTurnClient {
         ? AgentTurnRequest(
             sessionId: request.sessionId,
             message: request.message,
-            workspaceId: request.workspaceId,
+            workspaceId: request.effectiveWorkspaceId,
             model: request.model,
             providerInstanceId: request.providerInstanceId,
             providerId: request.providerId,
@@ -140,15 +140,15 @@ class StandaloneCliTurnClient implements CliTurnClient {
     final payload = <String, dynamic>{
       'session_id': effectiveRequest.sessionId,
       'message': effectiveRequest.message,
-      'workspace_id': ?effectiveRequest.workspaceId,
+      'workspace_id': ?effectiveRequest.effectiveWorkspaceId,
       'model': ?effectiveRequest.model,
       'provider_instance_id': ?effectiveRequest.providerInstanceId,
       'provider_id': ?effectiveRequest.providerId,
       'thinking_mode': ?effectiveRequest.thinkingMode,
       'request_id': requestId,
       'delivery_intent': effectiveRequest.deliveryIntent.name,
-      if (effectiveRequest.metadata.isNotEmpty)
-        'session_metadata': effectiveRequest.metadata,
+      if (effectiveRequest.effectiveMetadata.isNotEmpty)
+        'session_metadata': effectiveRequest.effectiveMetadata,
       if (effectiveRequest.platformTools.isNotEmpty)
         'platform_tools': effectiveRequest.platformTools,
     };

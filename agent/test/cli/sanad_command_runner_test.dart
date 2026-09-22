@@ -1,4 +1,6 @@
 import 'package:sanad_agent/cli/runner/commands.dart';
+import 'dart:io';
+
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
 import 'package:test/test.dart';
 import '../support/isolated_sanad_test_home.dart';
@@ -442,7 +444,11 @@ void main() {
         stderrSink: stderrBuffer,
       );
 
-      final result = await runner.run(['run']);
+      final result = await runner.run([
+        'run',
+        '--execution-root',
+        Directory.current.path,
+      ]);
       expect(result, 1);
       expect(
         stderrBuffer.toString(),

@@ -70,6 +70,11 @@ class SanadCommandRunner extends CommandRunner<int> {
         help: 'Path or ID of the active workspace',
       )
       ..addOption(
+        'execution-root',
+        help:
+            'Temporary unregistered filesystem context for top-level --prompt',
+      )
+      ..addOption(
         'session',
         abbr: 's',
         help: 'Target session ID to resume or attach',

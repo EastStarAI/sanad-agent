@@ -101,7 +101,8 @@ class LocalRuntimeCatalog {
                 if (workspacePath != null)
                   'workspace': {
                     ...existingWorkspace,
-                    'id': existingWorkspace['id'] ?? request.workspaceId,
+                    'id':
+                        existingWorkspace['id'] ?? request.effectiveWorkspaceId,
                     'path': workspacePath,
                   },
               },
@@ -161,7 +162,7 @@ class LocalRuntimeCatalog {
                   'tool_name': spec.name,
                   'tool_input': args,
                   'tool': spec.toJson(),
-                  'workspace_id': request.workspaceId,
+                  'workspace_id': request.effectiveWorkspaceId,
                   'session_id': request.sessionId,
                 },
               );
@@ -176,7 +177,7 @@ class LocalRuntimeCatalog {
     if (execRoot != null && execRoot.isNotEmpty) {
       return _pathResolver.validateAndNormalizeExecutionRoot(execRoot);
     }
-    return _resolveWorkspacePath(request.workspaceId);
+    return _resolveWorkspacePath(request.effectiveWorkspaceId);
   }
 
   Future<String?> _resolveWorkspacePath(String? workspaceId) async {
@@ -582,7 +583,7 @@ class LocalRuntimeCatalog {
         ...?context?.metadata,
         'workspace': {
           ...existingWorkspace,
-          'id': existingWorkspace['id'] ?? request.workspaceId,
+          'id': existingWorkspace['id'] ?? request.effectiveWorkspaceId,
           'path': workspacePath,
         },
       },

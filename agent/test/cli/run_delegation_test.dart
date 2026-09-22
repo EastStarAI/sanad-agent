@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -288,6 +289,8 @@ void main() {
           'run',
           '--execution-root',
           executionDir.path,
+          '--out-dir',
+          outDir.path,
           'some prompt',
         ]);
 
@@ -296,6 +299,67 @@ void main() {
           fakeClient.dispatchedRequest?.metadata['execution_root'],
           equals(executionDir.path),
         );
+        expect(fakeClient.dispatchedRequest?.workspaceId, isNull);
+        final artifact = RunResultArtifact.fromJson(
+          (jsonDecode(
+                    File(p.join(outDir.path, 'result.json')).readAsStringSync(),
+                  )
+                  as Map)
+              .cast<String, dynamic>(),
+        );
+        expect(artifact.workspaceId, isNull);
+        expect(artifact.executionRoot, equals(executionDir.path));
+      },
+    );
+
+    test('requires either --workspace or --execution-root', () async {
+      final runner = createRunner();
+
+      final exitCode = await runner.run(['run', 'some prompt']);
+
+      expect(exitCode, equals(2));
+      expect(
+        stderrBuf.toString(),
+        contains('One of --workspace or --execution-root is required'),
+      );
+      expect(fakeClient.dispatchedRequest, isNull);
+    });
+
+    test(
+      '--workspace wins and ignores --execution-root when both are supplied',
+      () async {
+        final runner = createRunner();
+        fakeClient.completeTurnImmediately = true;
+
+        final exitCode = await runner.run([
+          'run',
+          '--workspace',
+          'ws-authoritative',
+          '--execution-root',
+          p.join(tempDir.path, 'ignored-missing-root'),
+          '--out-dir',
+          outDir.path,
+          'some prompt',
+        ]);
+
+        expect(exitCode, equals(0));
+        expect(
+          fakeClient.dispatchedRequest?.workspaceId,
+          equals('ws-authoritative'),
+        );
+        expect(
+          fakeClient.dispatchedRequest?.metadata,
+          isNot(contains('execution_root')),
+        );
+        final artifact = RunResultArtifact.fromJson(
+          (jsonDecode(
+                    File(p.join(outDir.path, 'result.json')).readAsStringSync(),
+                  )
+                  as Map)
+              .cast<String, dynamic>(),
+        );
+        expect(artifact.workspaceId, equals('ws-authoritative'));
+        expect(artifact.executionRoot, isNull);
       },
     );
 

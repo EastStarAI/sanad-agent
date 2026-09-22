@@ -438,6 +438,10 @@ void main() {
           reasoningDetails,
         );
         expect(
+          first.message.providerState?.data['reasoning_content'],
+          'Structured thought',
+        );
+        expect(
           first.message.providerState?.issuer,
           'provider-1|openai_compatible|https://api.test.com',
         );
@@ -447,6 +451,10 @@ void main() {
           (requestBody['messages'] as List).single['reasoning_details'],
           reasoningDetails,
         );
+        expect(
+          (requestBody['messages'] as List).single['reasoning_content'],
+          'Structured thought',
+        );
 
         await adapter.generateResponse([
           first.message,
@@ -454,6 +462,10 @@ void main() {
         expect(
           (requestBody['messages'] as List).single,
           isNot(contains('reasoning_details')),
+        );
+        expect(
+          (requestBody['messages'] as List).single,
+          isNot(contains('reasoning_content')),
         );
 
         final endpointChangedAdapter = BaseOpenAIAdapter(
@@ -468,6 +480,10 @@ void main() {
         expect(
           (requestBody['messages'] as List).single,
           isNot(contains('reasoning_details')),
+        );
+        expect(
+          (requestBody['messages'] as List).single,
+          isNot(contains('reasoning_content')),
         );
       },
     );
@@ -561,6 +577,7 @@ void main() {
           'provider-stream|openai_compatible|https://api.test.com',
         );
         expect(state.data['reasoning_details'], hasLength(1));
+        expect(state.data['reasoning_content'], 'Think ');
       },
     );
 
@@ -825,6 +842,7 @@ void main() {
             'choices': [
               {
                 'delta': {
+                  'reasoning_content': 'Plan the search',
                   'tool_calls': [
                     {
                       'index': 0,
@@ -889,13 +907,19 @@ void main() {
           toolResponse.message.toolCalls!.single.arguments,
           equals({'q': 'hello'}),
         );
+        expect(
+          toolResponse.message.providerState?.data['reasoning_content'],
+          'Plan the search',
+        );
       },
     );
 
     test(
       'should dump partial_message and error when streamed tool arguments are malformed',
       () async {
-        final tempDir = Directory.systemTemp.createTempSync('sanad_malformed_tool_');
+        final tempDir = Directory.systemTemp.createTempSync(
+          'sanad_malformed_tool_',
+        );
         setSanadHomeOverride(tempDir.path);
         LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
 
@@ -929,10 +953,7 @@ void main() {
             },
             {
               'choices': [
-                {
-                  'delta': {},
-                  'finish_reason': 'tool_calls',
-                },
+                {'delta': {}, 'finish_reason': 'tool_calls'},
               ],
             },
           ];
@@ -949,7 +970,11 @@ void main() {
             );
           });
 
-          final adapter = BaseOpenAIAdapter(config, profile, client: mockClient);
+          final adapter = BaseOpenAIAdapter(
+            config,
+            profile,
+            client: mockClient,
+          );
 
           await expectLater(
             adapter.generateStream([
@@ -966,9 +991,13 @@ void main() {
           expect(fileContent['response'], isNotNull);
           final responseData = fileContent['response'] as Map<String, dynamic>;
           expect(responseData['status_code'], 200);
-          expect(responseData['error'], contains('Malformed arguments for streamed tool calculator'));
+          expect(
+            responseData['error'],
+            contains('Malformed arguments for streamed tool calculator'),
+          );
           expect(responseData['partial_message'], isNotNull);
-          final partialMsg = responseData['partial_message'] as Map<String, dynamic>;
+          final partialMsg =
+              responseData['partial_message'] as Map<String, dynamic>;
           expect(partialMsg['role'], 'assistant');
           expect(partialMsg['content'], 'Attempting tool: ');
           expect(partialMsg['partial_tool_calls'], isA<List>());

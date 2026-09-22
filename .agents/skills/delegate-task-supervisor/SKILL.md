@@ -40,7 +40,7 @@ The installer adds only missing dependencies. Authentication remains user-owned:
 
 ## 2. Choose workspace and continuity
 
-Every task must declare an absolute `workspace`. This is the filesystem root passed to the delegate relay as `--cd` or `--execution-root`; never rely on the supervisor's current directory.
+Every task must declare an absolute `workspace` for process spawning and supervisor identity. For Sanad, this field does not override the CLI targeting contract: choose either a registered `--workspace` or an unregistered temporary `--execution-root` in the task arguments.
 
 Inspect the remembered identity for that workspace:
 
@@ -50,7 +50,7 @@ node "<skill-dir>/scripts/supervisor.mjs" identity --workspace <absolute-path>
 
 Use identity deliberately:
 
-- **Independent task:** start a fresh session/conversation. OpenCode still associates it with the workspace-derived project. For Antigravity, use the remembered `projectId` with `--project` when the user wants the same logical project but a new conversation. For Sanad, pass an existing logical `--workspace` while using the isolated worktree as `--execution-root`.
+- **Independent task:** start a fresh session/conversation. OpenCode still associates it with the workspace-derived project. For Antigravity, use the remembered `projectId` with `--project` when the user wants the same logical project but a new conversation. For Sanad, use `--workspace` for registered project continuity or `--execution-root` alone for a temporary unregistered filesystem context.
 - **Continuation or repair:** pass the exact remembered `sessionId`/`conversationId` to the owning delegate relay.
 - **Parallel work:** use separate sessions/conversations. Parallel write tasks also require separate worktrees.
 
@@ -93,7 +93,6 @@ Write one self-contained brief per task according to the owning delegate skill. 
         "run",
         "--brief-file", "<brief-file>",
         "--workspace", "<logical-workspace-id>",
-        "--execution-root", "<target-worktree-path>",
         "--out-dir", "<task-result-dir>",
         "--events"
       ],
@@ -104,6 +103,8 @@ Write one self-contained brief per task according to the owning delegate skill. 
   ]
 }
 ```
+
+For a temporary unregistered Sanad context, replace the `--workspace` pair with `"--execution-root", "<target-worktree-path>"`. If both appear, `--workspace` wins and the execution root is ignored. The supervisor requires at least one; execution-root-only mode must match the task's absolute `workspace` field.
 
 *(Source development checkout fallback from the worktree root: `command: "fvm", args: ["dart", "run", "agent/bin/sanad_agent.dart", "run", ...]`)*.
 

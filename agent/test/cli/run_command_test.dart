@@ -149,6 +149,10 @@ class FakeInProcessTurnClient extends CliTurnClientBase {
   }
 }
 
+Future<int> _runTargeted(SanadCommandRunner runner, List<String> arguments) {
+  return runner.run([...arguments, '--execution-root', Directory.current.path]);
+}
+
 void main() {
   useIsolatedSanadTestHome();
   group('Headless One-Shot Execution (sanad run)', () {
@@ -185,7 +189,10 @@ void main() {
         stdinReader: () async => null,
       );
 
-      final runFuture = runner.run(['run', 'Translate "hello" to French']);
+      final runFuture = _runTargeted(runner, [
+        'run',
+        'Translate "hello" to French',
+      ]);
 
       // Wait for think command to be sent over mock socket
       await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -255,7 +262,7 @@ void main() {
         stdinReader: () async => null,
       );
 
-      final runFuture = runner.run(['-p', 'List active tasks']);
+      final runFuture = _runTargeted(runner, ['-p', 'List active tasks']);
 
       await Future<void>.delayed(const Duration(milliseconds: 50));
       expect(mockSocket.sentMessages.length, 1);
@@ -290,7 +297,7 @@ void main() {
         stdinReader: () async => null,
       );
 
-      final runFuture = runner.run([
+      final runFuture = _runTargeted(runner, [
         'run',
         'Continue previous topic',
         '--session',
@@ -355,7 +362,7 @@ void main() {
               'Error 404 at /api/data\nError 500 at /api/auth',
         );
 
-        final runFuture = runner.run([
+        final runFuture = _runTargeted(runner, [
           'run',
           'Find root cause of these errors:',
         ]);
@@ -398,7 +405,7 @@ void main() {
           stdinReader: () async => 'Generate a random UUID in Dart',
         );
 
-        final runFuture = runner.run(['run']);
+        final runFuture = _runTargeted(runner, ['run']);
 
         await Future<void>.delayed(const Duration(milliseconds: 50));
         final sentEnvelope =
@@ -459,7 +466,11 @@ void main() {
           stdinReader: () async => null,
         );
 
-        final runFuture = runner.run(['run', 'Run doctor check', '--quiet']);
+        final runFuture = _runTargeted(runner, [
+          'run',
+          'Run doctor check',
+          '--quiet',
+        ]);
 
         await Future<void>.delayed(const Duration(milliseconds: 50));
         final sentEnvelope =
@@ -542,7 +553,7 @@ void main() {
           stdinReader: () async => null,
         );
 
-        final runFuture = runner.run([
+        final runFuture = _runTargeted(runner, [
           'run',
           'Inspect files',
           '--json',
@@ -681,7 +692,10 @@ void main() {
           stdinReader: () async => null,
         );
 
-        final runFuture = runner.run(['run', 'Execute dangerous shell script']);
+        final runFuture = _runTargeted(runner, [
+          'run',
+          'Execute dangerous shell script',
+        ]);
 
         final firstMsg = await mockSocket.nextSentMessage();
         final sentEnvelope = jsonDecode(firstMsg) as Map<String, dynamic>;
@@ -743,7 +757,7 @@ void main() {
           stdinReader: () async => null,
         );
 
-        final runFuture = runner.run([
+        final runFuture = _runTargeted(runner, [
           'run',
           'Run script with full access',
           '--allow-all-tools',
@@ -804,7 +818,7 @@ void main() {
           stdinReader: () async => null,
         );
 
-        final runFuture = runner.run([
+        final runFuture = _runTargeted(runner, [
           'run',
           'Ask clarifying question',
           '--allow-all-tools',
@@ -895,7 +909,7 @@ void main() {
           stdinReader: () async => null,
         );
 
-        final exitCode = await runner.run(['run']);
+        final exitCode = await _runTargeted(runner, ['run']);
         expect(exitCode, 1);
         expect(
           stderrBuffer.toString(),
@@ -912,7 +926,7 @@ void main() {
         stdinReader: () async => null,
       );
 
-      final runFuture = runner.run(['run', 'Query failed model']);
+      final runFuture = _runTargeted(runner, ['run', 'Query failed model']);
 
       await Future<void>.delayed(const Duration(milliseconds: 50));
       final sentEnvelope =
@@ -952,7 +966,11 @@ void main() {
           stdinReader: () async => null,
         );
 
-        final runFuture = runner.run(['run', 'Failing query', '--json']);
+        final runFuture = _runTargeted(runner, [
+          'run',
+          'Failing query',
+          '--json',
+        ]);
 
         await Future<void>.delayed(const Duration(milliseconds: 50));
         final sentEnvelope =
@@ -993,7 +1011,10 @@ void main() {
           stdinReader: () async => null,
         );
 
-        final runFuture = runner.run(['run', 'Will disconnect mid-flight']);
+        final runFuture = _runTargeted(runner, [
+          'run',
+          'Will disconnect mid-flight',
+        ]);
 
         await Future<void>.delayed(const Duration(milliseconds: 50));
         // Simulate socket closure

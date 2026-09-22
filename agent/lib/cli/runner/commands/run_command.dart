@@ -37,7 +37,7 @@ class RunCommand extends SanadCommand {
       ..addOption(
         'execution-root',
         help:
-            'Execution root directory for tool execution and child process working directory',
+            'Temporary unregistered filesystem context; ignored when --workspace is supplied',
       )
       ..addOption(
         'out-dir',
@@ -107,9 +107,20 @@ class RunCommand extends SanadCommand {
       }
     }
 
+    final timeout = _parseTimeout(timeoutSeconds);
+    final requestedWorkspace = workspace?.trim();
+    final effectiveWorkspace = requestedWorkspace?.isNotEmpty == true
+        ? requestedWorkspace
+        : null;
     final cdPath = getOption('execution-root');
     String? normalizedExecutionRoot;
-    if (cdPath != null && cdPath.trim().isNotEmpty) {
+    if (effectiveWorkspace == null) {
+      if (cdPath == null || cdPath.trim().isEmpty) {
+        stderrSink.writeln(
+          'Error: One of --workspace or --execution-root is required.',
+        );
+        return 2;
+      }
       try {
         normalizedExecutionRoot = const WorkspacePathResolver()
             .validateAndNormalizeExecutionRoot(cdPath);
@@ -120,8 +131,6 @@ class RunCommand extends SanadCommand {
         return 2;
       }
     }
-
-    final effectiveWorkspace = workspace;
     final outDir = getOption('out-dir');
     if (outDir != null && outDir.trim().isNotEmpty) {
       try {
@@ -135,7 +144,6 @@ class RunCommand extends SanadCommand {
     }
 
     final streamEvents = getFlag('events');
-    final timeout = _parseTimeout(timeoutSeconds);
     final runner =
         runnerOverride ??
         OneshotRunner(stdinReader: stdinReader, clientFactory: clientFactory);

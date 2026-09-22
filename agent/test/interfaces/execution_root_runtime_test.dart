@@ -15,6 +15,7 @@ import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/translators/canonical_to_agent.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
@@ -48,7 +49,7 @@ class RecordingRuntimeContextBuilder extends RuntimeContextBuilder {
 }
 
 void main() {
-  group('Execution Root Separation in LocalRuntimeOrchestrator and Catalog', () {
+  group('Workspace and temporary execution targeting', () {
     late Directory tempDir;
     late Directory logicalWorkspaceDir;
     late Directory executionRootDir;
@@ -84,29 +85,77 @@ void main() {
     });
 
     test(
-      'buildSessionMetadata preserves execution_root and retains logical workspaceId',
+      'buildSessionMetadata ignores execution_root when workspace is supplied',
       () async {
         final request = AgentTurnRequest(
           sessionId: 'sess-test-meta',
           message: 'hello',
-          workspaceId: 'opaque-logical-ws-99',
+          workspaceId: logicalWorkspaceDir.path,
           metadata: {'execution_root': executionRootDir.path},
         );
 
         final metadata = await orchestrator.buildSessionMetadata(request);
-        expect(metadata['execution_root'], equals(executionRootDir.path));
-        expect(metadata['workspace_id'], equals('opaque-logical-ws-99'));
+        expect(metadata, isNot(contains('execution_root')));
+        expect(metadata['workspace_id'], isNotNull);
+        expect(metadata['workspace_path'], equals(logicalWorkspaceDir.path));
       },
     );
 
+    test('AgentTurnRequest enforces workspace precedence in metadata', () {
+      final request = AgentTurnRequest(
+        sessionId: 'sess-request-defense',
+        message: 'hello',
+        workspaceId: 'ws-authoritative',
+        metadata: {
+          'workspace_id': 'ws-legacy',
+          'execution_root': executionRootDir.path,
+        },
+      );
+
+      expect(request.effectiveWorkspaceId, equals('ws-authoritative'));
+      expect(request.executionRoot, isNull);
+      expect(
+        request.toMetadata(),
+        containsPair('workspace_id', 'ws-authoritative'),
+      );
+      expect(request.toMetadata(), isNot(contains('execution_root')));
+
+      final rootOnly = AgentTurnRequest(
+        sessionId: 'sess-request-root-only',
+        message: 'hello',
+        metadata: {'execution_root': executionRootDir.path},
+      );
+      expect(rootOnly.effectiveWorkspaceId, isNull);
+      expect(rootOnly.executionRoot, equals(executionRootDir.path));
+      expect(rootOnly.toMetadata(), isNot(contains('workspace_id')));
+      expect(
+        rootOnly.toMetadata(),
+        containsPair('execution_root', executionRootDir.path),
+      );
+    });
+
+    test('gateway flattens session metadata into the turn request', () {
+      final event = CanonicalToAgent.translate({
+        'command': 'think',
+        'payload': {
+          'session_id': 'sess-gateway-root-only',
+          'message': 'hello',
+          'session_metadata': {'execution_root': executionRootDir.path},
+        },
+      }, 'local_gateway');
+
+      expect(event, isNotNull);
+      expect(event!.turnRequest!.executionRoot, equals(executionRootDir.path));
+      expect(event.turnRequest!.metadata, isNot(contains('session_metadata')));
+    });
+
     test(
-      'LocalRuntimeCatalog.buildTools resolves workspace tools to execution_root when provided, even with opaque non-path workspaceId',
+      'LocalRuntimeCatalog.buildTools uses execution_root without registering a workspace',
       () async {
         final registry = ToolsRegistry();
         final requestWithExecRoot = AgentTurnRequest(
           sessionId: 'sess-exec-root',
           message: 'run test',
-          workspaceId: 'opaque-logical-ws-42',
           metadata: {'execution_root': executionRootDir.path},
         );
 
@@ -122,18 +171,19 @@ void main() {
     );
 
     test(
-      'LocalRuntimeCatalog.buildTools falls back to logical workspace when execution_root is absent',
+      'LocalRuntimeCatalog.buildTools prefers workspace over execution_root',
       () async {
         final registry = ToolsRegistry();
-        final requestWithoutExecRoot = AgentTurnRequest(
+        final requestWithBoth = AgentTurnRequest(
           sessionId: 'sess-logical-ws',
           message: 'run test',
           workspaceId: logicalWorkspaceDir.path,
+          metadata: {'execution_root': executionRootDir.path},
         );
 
         final tools = await catalog.buildTools(
           registry: registry,
-          request: requestWithoutExecRoot,
+          request: requestWithBoth,
         );
 
         final shellTools = tools.whereType<ShellExecuteTool>().toList();
@@ -146,21 +196,24 @@ void main() {
     );
 
     test(
-      'LocalRuntimeOrchestrator.buildRuntimeContext uses execution_root and its basename for context and ignores non-path logical workspace ID',
+      'LocalRuntimeOrchestrator.buildRuntimeContext prefers workspace over execution_root',
       () async {
         final request = AgentTurnRequest(
           sessionId: 'sess-ctx-test',
           message: 'test context',
-          workspaceId: 'opaque-logical-ws-77',
+          workspaceId: logicalWorkspaceDir.path,
           metadata: {'execution_root': executionRootDir.path},
         );
 
         final result = await orchestrator.buildRuntimeContext(request);
         expect(result, isNotNull);
-        expect(contextBuilder.lastWorkspacePath, equals(executionRootDir.path));
+        expect(
+          contextBuilder.lastWorkspacePath,
+          equals(logicalWorkspaceDir.path),
+        );
         expect(
           contextBuilder.lastWorkspaceName,
-          equals(p.basename(executionRootDir.path)),
+          equals(p.basename(logicalWorkspaceDir.path)),
         );
       },
     );
@@ -242,7 +295,7 @@ void main() {
   });
 
   group(
-    'SuspendedResumeService reconstruction across restart preserves execution_root',
+    'SuspendedResumeService preserves temporary execution_root across restart',
     () {
       late Directory tempDir;
       late Directory executionRootDir;
@@ -362,7 +415,6 @@ void main() {
             ),
           ).thenReturn(true);
           when(mockSessionManager.getSessionMetadata(sessionId)).thenReturn({
-            'workspace_id': 'opaque-logical-ws-persisted-88',
             'execution_root': executionRootDir.path,
             'model': 'test-model',
           });

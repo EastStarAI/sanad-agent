@@ -36,7 +36,7 @@ The `sanad-delegate` skill teaches external orchestrators (such as `delegate-tas
 - **Separation of Concerns:**
   - `delegate-task-supervisor`: Orchestrates task queues, concurrency limits, supervisor runs, and unified event timelines.
   - `sanad-delegate`: Global instruction skill that guides orchestrators to invoke the native `sanad run` machine contract with proper prompt transport, workspace separation, and artifact tracking.
-  - `sanad run`: Built directly into the Sanad binary. Manages brief ingestion, execution root isolation, serialized artifact emission, timeout handling, and signal termination without requiring any auxiliary scripts or packages.
+  - `sanad run`: Built directly into the Sanad binary. Manages brief ingestion, registered-workspace or temporary-root targeting, serialized artifact emission, timeout handling, and signal termination without requiring auxiliary scripts or packages.
 
 ---
 
@@ -50,7 +50,6 @@ Orchestrators invoke the installed `sanad` binary directly:
 sanad run \
   --brief-file <path-to-brief-file> \
   --workspace <logical-workspace-id> \
-  --execution-root <target-worktree-root> \
   --out-dir <output-directory> \
   --session <preallocated-session-uuid> \
   [--provider <provider-name>] \
@@ -60,6 +59,8 @@ sanad run \
   [--allow-all-tools]
 ```
 
+For a temporary unregistered filesystem context, replace the `--workspace` line with `--execution-root <existing-directory>`. Do not send both unless testing precedence; `--workspace` wins and the execution root is ignored.
+
 ### 2.2. Source Development Fallback (Explicitly Labeled)
 
 When running directly from a source checkout without an installed binary, use `fvm dart run` inside the `agent/` directory:
@@ -68,7 +69,6 @@ When running directly from a source checkout without an installed binary, use `f
 cd agent && fvm dart run bin/sanad_agent.dart run \
   --brief-file <path-to-brief-file> \
   --workspace <logical-workspace-id> \
-  --execution-root <target-worktree-root> \
   --out-dir <output-directory> \
   --session <preallocated-session-uuid> \
   [--provider <provider-name>] \
@@ -85,8 +85,8 @@ cd agent && fvm dart run bin/sanad_agent.dart run \
 | Option / Flag | Short | Type | Description |
 |---|---|---|---|
 | `--brief-file` | `-b` | File Path | Path to brief file containing task prompt instructions. Avoids shell argv text exposure. Mutually exclusive with positional prompt. |
-| `--workspace` | `-w` | String | Logical Sanad conversation workspace ID. Keeps conversation metadata linked to the parent project. |
-| `--execution-root` | | Directory Path | Independent filesystem path for tool execution and child process working directory. Must exist. |
+| `--workspace` | `-w` | String | Registered persistent Sanad workspace. Use for normal project conversation continuity. It is authoritative if both targeting options are supplied. |
+| `--execution-root` | | Directory Path | Existing directory used as a temporary, unregistered filesystem context only when `--workspace` is absent. |
 | `--out-dir` | `-o` | Directory Path | Directory where `result.json` and `events.jsonl` are written. Automatically created if missing. |
 | `--session` | `-s` | String | Pre-allocated session ID (e.g. UUID v4). Allows concurrent observers to attach and monitor the turn. |
 | `--events` | | Flag | Stream real-time newline-delimited JSON (NDJSON) events to standard output. |
@@ -106,11 +106,11 @@ cd agent && fvm dart run bin/sanad_agent.dart run \
    - Task briefs must be passed via `--brief-file <path>` or piped into `stdin`.
    - Never pass large or sensitive prompts as positional argv arguments. Passing both `--brief-file` and a positional prompt immediately exits with code 2.
 
-2. **Decoupled Execution Root vs Logical Workspace:**
-   - `--workspace` specifies the persistent conversation workspace identity.
-   - `--execution-root` specifies the local directory where tools (file reading, writing, shell execution) operate.
-   - The daemon routes tools, MCP servers, and AGENTS discovery to `--execution-root` while preserving the logical conversation in `--workspace`. It never registers, creates, or switches workspaces.
-   - The CLI process never mutates its global working directory (`Directory.current`).
+2. **Choose One Targeting Mode:**
+   - Use `--workspace` for a registered project whose conversation identity, system context, tools, policies, and filesystem root should remain persistent.
+   - Use `--execution-root` alone for a one-run filesystem context that must not be registered as a Sanad workspace.
+   - At least one mode is required. If both are supplied, `--workspace` is authoritative and `--execution-root` is ignored in dispatch and artifacts.
+   - Neither mode creates, selects, or switches a workspace, and the CLI never mutates `Directory.current`.
 
 3. **Pre-allocated Session Tracking & External Intervention:**
    - Allocating a known `session_id` before dispatch allows external supervisors to monitor progress via `sanad session show <session_id>`.

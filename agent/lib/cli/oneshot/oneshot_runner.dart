@@ -154,6 +154,16 @@ class OneshotRunner {
   }) async {
     final out = stdoutSink ?? stdout;
     final err = stderrSink ?? stderr;
+    final normalizedWorkspace = workspace?.trim();
+    final effectiveWorkspace = normalizedWorkspace?.isNotEmpty == true
+        ? normalizedWorkspace
+        : null;
+    final normalizedExecutionRoot = executionRoot?.trim();
+    final effectiveExecutionRoot =
+        effectiveWorkspace == null &&
+            normalizedExecutionRoot?.isNotEmpty == true
+        ? normalizedExecutionRoot
+        : null;
 
     void emitJsonResult(OneshotResult result) {
       if (json) out.writeln(jsonEncode(result.toJson()));
@@ -174,8 +184,8 @@ class OneshotRunner {
       streamEvents: streamEvents,
       outSink: out,
       sessionId: effectiveSessionId,
-      workspaceId: workspace,
-      executionRoot: executionRoot,
+      workspaceId: effectiveWorkspace,
+      executionRoot: effectiveExecutionRoot,
       initialProvider: provider,
       initialModel: model,
       startTime: startTime,
@@ -733,8 +743,8 @@ class OneshotRunner {
       final resolvedProviderId = resolution.resolved!.providerId;
 
       String? resolvedWorkspaceId;
-      if (workspace != null && workspace.trim().isNotEmpty) {
-        final requestedWorkspace = workspace.trim();
+      if (effectiveWorkspace != null) {
+        final requestedWorkspace = effectiveWorkspace;
         if (activeClient is LocalGatewayCliClient) {
           final locator = WorkspaceLocator(
             gatewayClient: activeClient,
@@ -763,10 +773,7 @@ class OneshotRunner {
         providerInstanceId: resolvedProviderId,
         providerId: resolvedProviderId,
         thinkingMode: thinking ? 'deep' : null,
-        metadata: {
-          if (executionRoot != null && executionRoot.trim().isNotEmpty)
-            'execution_root': executionRoot.trim(),
-        },
+        metadata: {'execution_root': ?effectiveExecutionRoot},
       );
 
       if (!json && !quiet) {

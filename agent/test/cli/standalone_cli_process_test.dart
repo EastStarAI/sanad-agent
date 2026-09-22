@@ -7,7 +7,8 @@ import 'package:test/test.dart';
 import '../support/isolated_sanad_test_home.dart';
 
 void preseedBundledSkillsState(Directory home) {
-  final skillsDir = Directory(p.join(home.path, 'skills'))..createSync(recursive: true);
+  final skillsDir = Directory(p.join(home.path, 'skills'))
+    ..createSync(recursive: true);
   File(p.join(skillsDir.path, '.sanad-managed.json')).writeAsStringSync(
     jsonEncode({
       'schema_version': 1,
@@ -45,6 +46,8 @@ void main() {
             '--standalone',
             '--home',
             home.path,
+            '--execution-root',
+            root.path,
             outputFlag,
             'standalone process smoke',
           ],
@@ -93,6 +96,8 @@ void main() {
             '--standalone',
             '--home',
             home.path,
+            '--execution-root',
+            root.path,
             '--json',
             '--timeout',
             '20',
@@ -154,6 +159,8 @@ void main() {
         '--standalone',
         '--home',
         home.path,
+        '--execution-root',
+        root.path,
         '--quiet',
       ];
 

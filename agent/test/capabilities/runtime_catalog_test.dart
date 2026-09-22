@@ -316,7 +316,7 @@ Use the review skill.''');
     });
 
     test(
-      'resolves executionRoot over logical workspace path for tools and MCP',
+      'resolves executionRoot for tools and MCP without a workspace',
       () async {
         final execRootDir = Directory('${tempDir.path}/independent-exec-root')
           ..createSync(recursive: true);
@@ -326,7 +326,6 @@ Use the review skill.''');
           request: AgentTurnRequest(
             sessionId: 'thread-exec-root',
             message: 'Write to independent worktree',
-            workspaceId: workspaceDir.path,
             metadata: {'execution_root': execRootDir.path},
           ),
         );

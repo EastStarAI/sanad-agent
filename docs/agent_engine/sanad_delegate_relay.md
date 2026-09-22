@@ -49,8 +49,8 @@ Deterministic validation ensures invalid or contradictory options fail early wit
 |---|---|---|---|
 | `--brief-file` / `-b` | Path | Conditional | Path to file containing the task prompt. Avoids argv length limits and shell escaping. |
 | Positional prompt / stdin | Text / Pipe | Conditional | One-shot prompt or redirected standard input. Mutually exclusive with `--brief-file`. |
-| `--workspace` / `-w` | String | Yes | Target logical conversation workspace ID. The CLI never creates or switches workspaces. |
-| `--execution-root` | Path | Optional | Independent filesystem directory where tools execute and context is loaded. |
+| `--workspace` / `-w` | String | Alternative | Registered persistent workspace used for conversation identity, context, policies, and tools. It wins if both targeting options are supplied. |
+| `--execution-root` | Path | Alternative | Existing directory used as a temporary unregistered context only when `--workspace` is absent. |
 | `--out-dir` / `-o` | Path | Optional | Output directory where structured artifacts (`result.json`, `events.jsonl`) are written. |
 | `--session` / `-s` | UUID | Optional | Pre-allocated session identifier; generated automatically if omitted. |
 | `--provider` | String | Optional | LLM provider override. |
@@ -61,13 +61,14 @@ Deterministic validation ensures invalid or contradictory options fail early wit
 | `--quiet` / `-q` | Flag | Optional | Suppresses banners and tool output, printing only the final assistant text. |
 | `--json` | Flag | Optional | Emits structured JSON response envelope upon completion. |
 
-### 3.2. Execution Root Decoupling
-To execute safely in isolated Git worktrees without disrupting the active Sanad user workspace:
-1. The logical workspace ID (`--workspace`) attaches the conversation to its proper persistent identity.
-2. The filesystem path (`--execution-root`) travels in `AgentTurnRequest.metadata['execution_root']`.
-3. The daemon's `LocalRuntimeCatalog` uses `execution_root` to construct `ShellExecuteTool`, workspace I/O tools, MCP servers, and skill loaders.
-4. The daemon's `LocalRuntimeOrchestrator` and `SuspendedResumeService` build runtime context and system prompts from `execution_root`, preserving worktree isolation across suspended decision resumes and daemon restarts.
-5. Neither the CLI nor the daemon mutates its global working directory (`Directory.current`).
+### 3.2. Workspace or Temporary Execution Context
+
+Every run must select at least one targeting mode:
+
+1. Use `--workspace` for a registered persistent project. Its identity, path, policy, context, and tools remain aligned.
+2. Use `--execution-root` alone for a one-run filesystem context. The Local Gateway flattens transported session metadata into `AgentTurnRequest.metadata`, where `execution_root` drives tools and context, survives suspended-decision recovery, and is never registered as a workspace.
+3. If both are supplied, `--workspace` is authoritative: the CLI omits `execution_root` from dispatch and artifacts, and the daemon defensively ignores any legacy execution-root metadata.
+4. Neither mode creates, selects, or switches a workspace, and neither the CLI nor daemon mutates `Directory.current`.
 
 ---
 
@@ -76,6 +77,9 @@ To execute safely in isolated Git worktrees without disrupting the active Sanad 
 When `--out-dir <dir>` is supplied, artifacts are managed by `RunArtifactCoordinator` via an internal FIFO write queue. Terminal states (`completed`, `failed`, `timeout`, `interrupted`, `cancelled`) lock the coordinator so that late asynchronous events never overwrite final results.
 
 ### 4.1. `result.json` Schema (v1.0.0)
+
+A result records the effective target only: `workspace_id` for workspace mode or `execution_root` for temporary mode, never both.
+
 Published from a complete temporary file (`result.json.tmp`) through serialized replacement; readers never observe partial JSON, although replacement may briefly remove the target on platforms that cannot rename over it:
 
 ```json
@@ -84,7 +88,6 @@ Published from a complete temporary file (`result.json.tmp`) through serialized 
   "version": "1.0.0",
   "session_id": "8fa27f42-498c-4573-8d07-285698b671a9",
   "workspace_id": "ws-prod-123",
-  "execution_root": "worktrees/feature-branch",
   "status": "completed",
   "exit_code": 0,
   "error": null,
@@ -108,13 +111,16 @@ Published from a complete temporary file (`result.json.tmp`) through serialized 
 Appended newline-delimited event records matching status transitions:
 
 ```json
-{"timestamp":"2026-09-22T04:00:00.000Z","type":"running","session_id":"8fa27f42-498c-4573-8d07-285698b671a9","data":{"workspace_id":"ws-prod-123","execution_root":"worktrees/feature-branch"}}
+{"timestamp":"2026-09-22T04:00:00.000Z","type":"running","session_id":"8fa27f42-498c-4573-8d07-285698b671a9","data":{"workspace_id":"ws-prod-123"}}
 {"timestamp":"2026-09-22T04:01:20.000Z","type":"needs_input","session_id":"8fa27f42-498c-4573-8d07-285698b671a9","data":{"kind":"needs_input","request_id":"req-1","questions":[{"question":"Confirm?"}]}}
 {"timestamp":"2026-09-22T04:01:30.000Z","type":"resumed","session_id":"8fa27f42-498c-4573-8d07-285698b671a9","data":{"status":"running"}}
 {"timestamp":"2026-09-22T04:02:15.120Z","type":"completed","session_id":"8fa27f42-498c-4573-8d07-285698b671a9","data":{"session_id":"8fa27f42-498c-4573-8d07-285698b671a9","status":"completed","exit_code":0}}
 ```
 
 ### 4.3. Exit Codes & Scoped Cancellation
+
+`sanad session stop <session_id>` is session-scoped and transport-confirmed: the daemon-backed CLI keeps its Local Gateway connection open through an ordered history query, then returns success only after the target is authoritatively idle or a matching `stopped` event arrives. A stop event for another session cannot complete the command, and an unconfirmed active stop fails instead of reporting false success.
+
 - **`0`**: Successful turn completion (`status: "completed"`).
 - **`1`**: Execution failure or prompt error (`status: "failed"`).
 - **`2`**: Validation error (invalid arguments or missing paths).
@@ -141,7 +147,6 @@ The `delegate-task-supervisor` skill natively supports `implementer: "sanad"` by
         "run",
         "--brief-file", "<path-to-brief-file>",
         "--workspace", "<logical-workspace-id>",
-        "--execution-root", "<target-worktree-path>",
         "--out-dir", "<task-result-dir>",
         "--events"
       ],
@@ -152,6 +157,8 @@ The `delegate-task-supervisor` skill natively supports `implementer: "sanad"` by
   ]
 }
 ```
+
+For temporary execution, replace the `--workspace` argument pair with `--execution-root <target-worktree-path>`; that path must match the supervisor task's filesystem `workspace`. The supervisor accepts both for compatibility, but the registered `--workspace` remains authoritative.
 
 ### 5.2. Long-Lived Dynamic Run Lifecycle
 1. **`start --spec <tasks.json> --run-dir <dir>`:** Spawns a detached worker process that stays alive across multiple task settlement phases while the run remains open.

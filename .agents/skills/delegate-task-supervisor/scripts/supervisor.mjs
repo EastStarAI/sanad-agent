@@ -254,19 +254,20 @@ function validateTask(item, existingIds = new Set()) {
     }
 
     const logicalWorkspace = getArgValue(item.args, item.id, '--workspace', '-w');
-    if (!logicalWorkspace) {
-      fail(`task ${item.id} sanad task requires --workspace`);
-    }
 
-    const execRoot = getArgValue(item.args, item.id, '--execution-root');
-    if (!execRoot) {
-      fail(`task ${item.id} sanad task requires --execution-root`);
-    }
-    if (!isAbsolute(execRoot)) {
-      fail(`task ${item.id} --execution-root must be an absolute path`);
-    }
-    if (canonicalWorkspace(execRoot) !== workspace) {
-      fail(`task ${item.id} --execution-root must match task workspace`);
+    // A registered workspace is authoritative. execution-root is not parsed
+    // or validated unless it is the task's sole targeting mode.
+    if (!logicalWorkspace) {
+      const execRoot = getArgValue(item.args, item.id, '--execution-root');
+      if (!execRoot) {
+        fail(`task ${item.id} sanad task requires --workspace or --execution-root`);
+      }
+      if (!isAbsolute(execRoot)) {
+        fail(`task ${item.id} --execution-root must be an absolute path`);
+      }
+      if (canonicalWorkspace(execRoot) !== workspace) {
+        fail(`task ${item.id} --execution-root must match task workspace`);
+      }
     }
 
     const briefFile = getArgValue(item.args, item.id, '--brief-file', '-b');

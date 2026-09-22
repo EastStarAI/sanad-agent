@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:sanad_agent/cli/cli.dart';
+import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import '../support/isolated_sanad_test_home.dart';
 
@@ -339,7 +340,39 @@ void main() {
       await client.dispose();
     });
 
-    test('dispatches steer and stop commands', () async {
+    test(
+      'dispatchTurnRequest omits legacy execution root when workspace is authoritative',
+      () async {
+        final client = createClient();
+        await client.connect();
+
+        await client.dispatchTurnRequest(
+          const AgentTurnRequest(
+            sessionId: 'session-workspace-precedence',
+            message: 'Hello',
+            workspaceId: 'ws-authoritative',
+            requestId: 'request-workspace-precedence',
+            metadata: {'execution_root': 'ignored-root'},
+          ),
+        );
+
+        final sent =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        final payload = sent['payload'] as Map<String, dynamic>;
+        final sessionMetadata =
+            payload['session_metadata'] as Map<String, dynamic>;
+        expect(payload['workspace_id'], equals('ws-authoritative'));
+        expect(
+          sessionMetadata,
+          containsPair('workspace_id', 'ws-authoritative'),
+        );
+        expect(sessionMetadata, isNot(contains('execution_root')));
+
+        await client.dispose();
+      },
+    );
+
+    test('dispatches steer and waits for authoritative scoped stop', () async {
       final client = createClient();
       await client.connect();
 
@@ -353,13 +386,79 @@ void main() {
       expect(steerMsg['command'], 'steer');
       expect(steerMsg['payload']['message'], 'Cancel that action');
 
-      await client.stop(sessionId: 'session-42', runId: 'run-1');
-      expect(mockSocket.sentMessages.length, 2);
+      var stopCompleted = false;
+      final stopFuture = client
+          .stop(sessionId: 'session-42', runId: 'run-1')
+          .then((_) => stopCompleted = true);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(mockSocket.sentMessages.length, 3);
       final stopMsg =
           jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
       expect(stopMsg['command'], 'stop');
       expect(stopMsg['payload']['run_id'], 'run-1');
+      expect(stopMsg['payload']['request_id'], stopMsg['request_id']);
 
+      final historyMsg =
+          jsonDecode(mockSocket.sentMessages[2]) as Map<String, dynamic>;
+      expect(historyMsg['command'], 'get_session_history');
+      expect(historyMsg['payload']['session_id'], 'session-42');
+
+      mockSocket.emitFromServer(
+        jsonEncode({
+          'type': 'stopped',
+          'session_id': 'another-session',
+          'payload': {'session_id': 'another-session'},
+        }),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(stopCompleted, isFalse);
+
+      mockSocket.emitFromServer(
+        jsonEncode({
+          'type': 'device_event',
+          'request_id': historyMsg['request_id'],
+          'payload': {
+            'session_id': 'session-42',
+            'in_flight': {'status': 'running'},
+          },
+        }),
+      );
+      mockSocket.emitFromServer(
+        jsonEncode({
+          'type': 'stopped',
+          'session_id': 'session-42',
+          'run_id': 'run-1',
+          'payload': {'session_id': 'session-42'},
+        }),
+      );
+
+      await stopFuture;
+      expect(stopCompleted, isTrue);
+      await client.dispose();
+    });
+
+    test('treats an already-idle scoped stop as idempotent', () async {
+      final client = createClient();
+      await client.connect();
+
+      final stopFuture = client.stop(sessionId: 'session-idle');
+      await Future<void>.delayed(Duration.zero);
+      final historyMsg =
+          jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
+      mockSocket.emitFromServer(
+        jsonEncode({
+          'type': 'device_event',
+          'request_id': historyMsg['request_id'],
+          'payload': {
+            'session_id': 'session-idle',
+            'in_flight': null,
+            'pending_permission_request': null,
+          },
+        }),
+      );
+
+      await stopFuture;
       await client.dispose();
     });
 

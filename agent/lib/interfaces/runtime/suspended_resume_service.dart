@@ -414,7 +414,7 @@ class SuspendedResumeService {
           .validateAndNormalizeExecutionRoot(execRoot);
       workspaceName = p.basename(workspacePath!);
     } else {
-      final workspaceId = request.workspaceId;
+      final workspaceId = request.effectiveWorkspaceId;
       if (workspaceId == null || workspaceId.isEmpty) {
         return _runtimeContextBuilder.buildWithoutWorkspace();
       }

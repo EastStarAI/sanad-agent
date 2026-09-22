@@ -492,7 +492,6 @@ test('Sanad fixture writing G2 events: needs_input and needs_permission wake def
         'run',
         '--brief-file', briefFile,
         '--workspace', 'ws_logical',
-        '--execution-root', workspace,
         '--out-dir', outDir,
         '--events',
       ],
@@ -661,24 +660,30 @@ test('validation rejects malformed Sanad specs without confusing workspace IDs f
   // 3. Credentials in argv
   assert.match(validate({ args: ['run', '--brief-file', brief, '--workspace', 'ws', '--execution-root', workspace, '--out-dir', outDir, '--api-key=secret123'] }), /credentials/);
 
-  // 4. Missing --workspace
-  assert.match(validate({ args: ['run', '--brief-file', brief, '--execution-root', workspace, '--out-dir', outDir] }), /requires --workspace/);
+  // 4. Missing both targeting modes
+  assert.match(validate({ args: ['run', '--brief-file', brief, '--out-dir', outDir] }), /requires --workspace or --execution-root/);
 
-  // 5. Missing --execution-root
-  assert.match(validate({ args: ['run', '--brief-file', brief, '--workspace', 'ws', '--out-dir', outDir] }), /requires --execution-root/);
+  // 5. execution-root-only mode requires an absolute path
+  assert.match(validate({ args: ['run', '--brief-file', brief, '--execution-root', 'relative-root', '--out-dir', outDir] }), /must be an absolute path/);
 
-  // 6. Mismatch between --execution-root and task.workspace
-  assert.match(validate({ args: ['run', '--brief-file', brief, '--workspace', 'ws', '--execution-root', root, '--out-dir', outDir] }), /must match task workspace/);
+  // 6. execution-root-only mode must match task.workspace
+  assert.match(validate({ args: ['run', '--brief-file', brief, '--execution-root', root, '--out-dir', outDir] }), /must match task workspace/);
 
-  // 7. Result path mismatch
+  // 7. Workspace mode does not inspect an otherwise invalid execution root
+  assert.match(validate({
+    args: ['run', '--brief-file', brief, '--workspace', 'ws', '--execution-root', 'relative-ignored-root', '--out-dir', outDir],
+    resultPath: join(root, 'other', 'result.json'),
+  }), /resultPath must match/);
+
+  // 8. Result path mismatch
   assert.match(validate({ resultPath: join(root, 'other', 'result.json') }), /resultPath must match/);
 
-  // 8. Duplicate semantic flags are ambiguous and fail closed
+  // 9. Duplicate semantic flags are ambiguous and fail closed
   assert.match(validate({
     args: ['run', '--brief-file', brief, '--workspace', 'ws-a', '-w', 'ws-b', '--execution-root', workspace, '--out-dir', outDir],
   }), /duplicate --workspace/);
 
-  // 9. A following option is not accepted as a missing semantic value
+  // 10. A following option is not accepted as a missing semantic value
   assert.match(validate({
     args: ['run', '--brief-file', brief, '--workspace', '--execution-root', workspace, '--out-dir', outDir],
   }), /--workspace requires a value/);
