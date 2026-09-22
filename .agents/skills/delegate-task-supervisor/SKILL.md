@@ -4,19 +4,20 @@ description: Bootstrap and orchestrate one or many delegated coding-agent CLI ta
 license: MIT
 compatibility: Requires Node.js 18+ and git. The bootstrap helper can install delegate-skills and supported implementer CLIs with explicit approval. Runtime scripts use Node built-ins only and support macOS, Linux, and Windows.
 metadata:
-  version: 0.1.0
+  version: 0.2.0
 ---
 
 # Delegate Task Supervisor
 
-Coordinate external implementers without duplicating their own delegation contracts. This skill owns bootstrap, workspace identity, concurrency, durable task state, human observability, and event-driven wake-up. The selected `*-delegate` skill continues to own briefs, permissions, relay flags, result semantics, review, and resumption.
+Coordinate external implementers without duplicating their own delegation contracts. This skill owns bootstrap, workspace identity, concurrency, durable task state, human observability, dynamic task queuing, and event-driven wake-up. The selected `*-delegate` skill continues to own briefs, permissions, relay flags, result semantics, review, and resumption.
 
 ## Boundaries
 
-- Load and follow `agy-delegate` for Antigravity and `opencode-delegate` for OpenCode. Do not copy or reinterpret their operational instructions.
+- Supported implementers are `opencode`, `agy`/`antigravity`, and `sanad`.
+- Load and follow `agy-delegate` for Antigravity, `opencode-delegate` for OpenCode, and `sanad-delegate` for Sanad Agent. Do not copy or reinterpret their operational instructions.
 - Use `delegate-setup` only when the user wants reusable fleet lanes. Direct one-off dispatch does not require a lane.
 - For Sanad implementation, also load `Sanad Subagent Developer`; use an isolated worktree for every parallel write task.
-- Never run two tasks concurrently in the same OpenCode session or Antigravity conversation.
+- Never run two tasks concurrently in the same OpenCode session, Antigravity conversation, or Sanad session.
 - Never commit, push, merge, or open a pull request unless the user explicitly authorizes that delivery action.
 
 `<skill-dir>` below means the directory containing this file.
@@ -35,11 +36,11 @@ If anything is missing, show the complete planned changes and obtain explicit ap
 node "<skill-dir>/scripts/bootstrap.mjs" install --yes
 ```
 
-The installer adds only missing dependencies. Authentication remains user-owned: after installation, complete any browser/keyring login requested by the implementer CLI, then rerun `check`.
+The installer adds only missing dependencies. Authentication remains user-owned: after installation, complete any browser/keyring login requested by the implementer CLI, then rerun `check`. When `sanad` is missing, refer users to the `install-sanad` skill; the bootstrap script does not attempt automatic Sanad installation.
 
 ## 2. Choose workspace and continuity
 
-Every task must declare an absolute `workspace`. This is the filesystem root passed to the delegate relay as `--cd`; never rely on the supervisor's current directory.
+Every task must declare an absolute `workspace`. This is the filesystem root passed to the delegate relay as `--cd` or `--execution-root`; never rely on the supervisor's current directory.
 
 Inspect the remembered identity for that workspace:
 
@@ -49,7 +50,7 @@ node "<skill-dir>/scripts/supervisor.mjs" identity --workspace <absolute-path>
 
 Use identity deliberately:
 
-- **Independent task:** start a fresh session/conversation. OpenCode still associates it with the workspace-derived project. For Antigravity, use the remembered `projectId` with `--project` when the user wants the same logical project but a new conversation.
+- **Independent task:** start a fresh session/conversation. OpenCode still associates it with the workspace-derived project. For Antigravity, use the remembered `projectId` with `--project` when the user wants the same logical project but a new conversation. For Sanad, pass an existing logical `--workspace` while using the isolated worktree as `--execution-root`.
 - **Continuation or repair:** pass the exact remembered `sessionId`/`conversationId` to the owning delegate relay.
 - **Parallel work:** use separate sessions/conversations. Parallel write tasks also require separate worktrees.
 
@@ -57,7 +58,9 @@ The supervisor records project/session/conversation identifiers from completed r
 
 ## 3. Prepare tasks
 
-Write one self-contained brief per task according to the owning delegate skill. Prepare a JSON specification:
+Write one self-contained brief per task according to the owning delegate skill. Prepare a JSON specification.
+
+### OpenCode Specification Example:
 
 ```json
 {
@@ -65,34 +68,103 @@ Write one self-contained brief per task according to the owning delegate skill. 
     {
       "id": "task-01",
       "implementer": "opencode",
-      "workspace": "/absolute/path/to/worktree",
+      "workspace": "<target-worktree-path>",
       "command": "node",
-      "args": ["/installed/opencode-delegate/scripts/relay.mjs", "--brief", "/path/brief.txt", "--model", "provider/model", "--cd", "/absolute/path/to/worktree", "--out-dir", "/path/run/task-01/result"],
-      "resultPath": "/path/run/task-01/result/result.json",
-      "timelinePath": "/path/run/task-01/result/events.jsonl",
+      "args": ["<path-to-opencode-relay>", "--brief", "<brief-file>", "--model", "provider/model", "--cd", "<target-worktree-path>", "--out-dir", "<task-result-dir>"],
+      "resultPath": "<task-result-dir>/result.json",
+      "timelinePath": "<task-result-dir>/events.jsonl",
       "timelineFormat": "jsonl"
     }
   ]
 }
 ```
 
-Build relay arguments from the loaded delegate skill; the supervisor treats them as opaque argv and never invokes a shell. Keep secrets out of briefs, arguments, specs, and logs.
+### Sanad Specification Example:
 
-## 4. Start one or many tasks
+```json
+{
+  "tasks": [
+    {
+      "id": "task-02",
+      "implementer": "sanad",
+      "workspace": "<target-worktree-path>",
+      "command": "sanad",
+      "args": [
+        "run",
+        "--brief-file", "<brief-file>",
+        "--workspace", "<logical-workspace-id>",
+        "--execution-root", "<target-worktree-path>",
+        "--out-dir", "<task-result-dir>",
+        "--events"
+      ],
+      "resultPath": "<task-result-dir>/result.json",
+      "timelinePath": "<task-result-dir>/events.jsonl",
+      "timelineFormat": "jsonl"
+    }
+  ]
+}
+```
+
+*(Source development checkout fallback from the worktree root: `command: "fvm", args: ["dart", "run", "agent/bin/sanad_agent.dart", "run", ...]`)*.
+
+Build relay arguments from the loaded delegate skill. The supervisor treats non-Sanad relay arguments as opaque; for Sanad it validates only the required machine-contract flags and workspace boundary. Commands are spawned directly except that Windows `.cmd`/`.bat` wrappers require Node's shell mode after shell metacharacters have been rejected. Keep secrets out of briefs, arguments, specs, and logs.
+
+## 4. Run Topology: Start, Add, Enqueue, and Close
+
+The supervisor maintains one long-lived run per reviewing orchestrator. The worker process remains active even when initial tasks settle, allowing dynamic task registration and queueing.
+
+### 4.1. Start a supervisor run
 
 ```bash
 node "<skill-dir>/scripts/supervisor.mjs" start \
   --spec <tasks.json> \
-  --run-dir <absolute-run-directory>
+  --run-dir <absolute-run-directory> \
+  [--max-concurrency <n>]
 ```
 
-The command returns after a detached supervisor starts. Record its JSON output, especially `runDir`, `supervisorPid`, and `cursor`. Artifacts remain outside the source workspace so relay bookkeeping does not dirty the repository.
+The command returns after the detached supervisor publishes a startup handshake. Record its JSON output (`runDir`, `supervisorPid`, and `cursor`). On Windows, the launcher uses an Explorer broker so the supervisor process outlives the initiating agent tool call.
 
-Default concurrency is the task count. Bound expensive queues with `--max-concurrency <n>`. Run dependent tasks sequentially, landing or verifying each prerequisite before dispatching its dependent.
+### 4.2. Register held tasks dynamically (`add`)
+
+Register tasks in `held` state without immediately launching them:
+
+```bash
+node "<skill-dir>/scripts/supervisor.mjs" add \
+  --run <run-directory> \
+  --spec <additional-tasks.json>
+```
+
+### 4.3. Queue tasks dynamically (`enqueue`)
+
+Move previously held tasks into the execution queue:
+
+```bash
+node "<skill-dir>/scripts/supervisor.mjs" enqueue \
+  --run <run-directory> \
+  --task <task-id>
+```
+
+Or append a new specification and queue its tasks immediately in one operation:
+
+```bash
+node "<skill-dir>/scripts/supervisor.mjs" enqueue \
+  --run <run-directory> \
+  --spec <additional-tasks.json>
+```
+
+### 4.4. Explicit close (`close`)
+
+When all implementation and review tasks are finished, explicitly close the run. Closing stops accepting new tasks and drains running/queued tasks before the worker completes:
+
+```bash
+node "<skill-dir>/scripts/supervisor.mjs" close \
+  --run <run-directory> \
+  [--wait]
+```
 
 ## 5. Wait for intervention without scheduling or polling
 
-Wait for one meaningful transition:
+Wait event-first for one meaningful transition:
 
 ```bash
 node "<skill-dir>/scripts/watch-once.mjs" \
@@ -100,7 +172,9 @@ node "<skill-dir>/scripts/watch-once.mjs" \
   --since <last-sequence>
 ```
 
-This command is event-driven. It blocks until a task enters `completed`, `failed`, `blocked`, `timeout`, or `aborted`, prints one JSON event, and exits. Review that task, update the cursor from the returned `seq`, then invoke `watch-once` again for remaining tasks.
+This command is event-driven. By default, it blocks until a task enters an intervention status (`needs_input`, `needs_permission`) or a terminal status (`completed`, `failed`, `blocked`, `timeout`, `aborted`, `interrupted`, `cancelled`), prints one JSON event, and exits. It does not wake on routine `running` or `resumed` transitions unless `--all` is passed.
+
+It also returns a synthetic `supervisor_stale` intervention event when a manifest says `running` but its supervisor PID is dead, using filesystem events first and a bounded liveness fallback. Review that task or intervention, update the cursor from the returned `seq`, then invoke `watch-once` again.
 
 A watcher can be interrupted and restarted without stopping workers or losing already-journaled events.
 
@@ -124,7 +198,7 @@ When the user asks to watch a particular subagent, open a dedicated terminal win
 node "<skill-dir>/scripts/supervisor.mjs" view --run <run-directory> --task <task-id>
 ```
 
-The terminal follows observable events until interrupted. Closing it does not stop the task. OpenCode normally exposes structured tool events. Antigravity visibility is limited to the lifecycle and log data emitted by its relay; never claim unavailable private reasoning or tool detail.
+The terminal follows observable events until interrupted. Closing it does not stop the task. On Windows, `view` writes a run-local viewer script and asks the Explorer shell to open it, keeping the terminal outside an Agent-owned kill-on-close Job.
 
 Other useful views:
 
@@ -141,6 +215,6 @@ A terminal status means the relay exited; it does not prove correctness. Follow 
 
 ## Included scripts
 
-- `scripts/bootstrap.mjs` — discover and explicitly install missing delegate skills or implementer CLIs.
-- `scripts/supervisor.mjs` — launch tasks, persist state and workspace identity, inspect logs/timelines, and open a human viewer terminal.
-- `scripts/watch-once.mjs` — race-safe event-driven wait for one terminal transition.
+- `scripts/bootstrap.mjs` — discover and check delegate skills or implementer CLIs (`opencode`, `agy`, `sanad`).
+- `scripts/supervisor.mjs` — launch runs, dynamically add/enqueue tasks, explicitly close runs, persist state and workspace identity, inspect logs/timelines, and open a viewer terminal.
+- `scripts/watch-once.mjs` — race-safe event-driven wait for intervention (`needs_input`, `needs_permission`) or terminal transitions.

@@ -9,9 +9,12 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readSync,
+  readdirSync,
   realpathSync,
   renameSync,
   statSync,
+  unlinkSync,
   watch,
   writeFileSync,
 } from 'node:fs';
@@ -20,20 +23,27 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const SUPPORTED_IMPLEMENTERS = new Set(['opencode', 'agy', 'antigravity', 'sanad']);
 const TERMINAL_STATUSES = new Set([
   'completed',
   'failed',
   'blocked',
   'timeout',
   'aborted',
+  'interrupted',
+  'cancelled',
   'agy_unavailable',
   'opencode_unavailable',
 ]);
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
+const SHELL_META = /[|;&<>$`]/;
 const HELP = `delegate-task-supervisor
 
 Usage:
   supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>]
+  supervisor.mjs add --run <dir> --spec <tasks.json> [--json]
+  supervisor.mjs enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>) [--json]
+  supervisor.mjs close --run <dir> [--wait] [--json]
   supervisor.mjs status --run <dir> [--json]
   supervisor.mjs inspect --run <dir> --task <id>
   supervisor.mjs timeline --run <dir> --task <id> [--follow]
@@ -56,7 +66,7 @@ function parseOptions(argv) {
       continue;
     }
     const key = token.slice(2);
-    if (['follow', 'json'].includes(key)) {
+    if (['follow', 'json', 'wait'].includes(key)) {
       options[key] = true;
       continue;
     }
@@ -76,11 +86,26 @@ function readJson(path, label = path) {
   }
 }
 
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
 function writeJsonAtomic(path, value) {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  renameSync(temporary, path);
+  const deadline = Date.now() + 2_000;
+  while (true) {
+    try {
+      renameSync(temporary, path);
+      return;
+    } catch (error) {
+      const transientWindowsContention = process.platform === 'win32'
+        && ['EPERM', 'EACCES', 'EBUSY'].includes(error.code);
+      if (!transientWindowsContention || Date.now() >= deadline) throw error;
+      sleepSync(25);
+    }
+  }
 }
 
 function canonicalWorkspace(path) {
@@ -125,13 +150,14 @@ function identityFor(workspace) {
     path: canonical,
     antigravity: null,
     opencode: null,
+    sanad: null,
   };
 }
 
 function recordIdentity(task, result) {
-  const projectId = result?.projectId ?? null;
-  const conversationId = result?.conversationId ?? null;
-  const sessionId = result?.sessionId ?? null;
+  const projectId = result?.projectId ?? result?.project_id ?? null;
+  const conversationId = result?.conversationId ?? result?.conversation_id ?? null;
+  const sessionId = result?.sessionId ?? result?.session_id ?? null;
   if (!projectId && !conversationId && !sessionId) return;
 
   const registry = loadRegistry();
@@ -140,59 +166,160 @@ function recordIdentity(task, result) {
     path: task.workspace,
     antigravity: null,
     opencode: null,
+    sanad: null,
   };
   const now = new Date().toISOString();
   if (task.implementer === 'antigravity' || task.implementer === 'agy') {
     entry.antigravity = { projectId, conversationId, updatedAt: now };
   } else if (task.implementer === 'opencode') {
     entry.opencode = { sessionId, updatedAt: now };
+  } else if (task.implementer === 'sanad') {
+    entry.sanad = { sessionId, updatedAt: now };
   }
   registry.workspaces[key] = entry;
   writeJsonAtomic(registryPath(), registry);
 }
 
-function validateSpec(raw) {
-  if (!raw || !Array.isArray(raw.tasks) || raw.tasks.length === 0) {
-    fail('spec must contain a non-empty tasks array');
-  }
-  const ids = new Set();
-  return raw.tasks.map((item) => {
-    if (!item || typeof item !== 'object') fail('each task must be an object');
-    if (!TASK_ID.test(item.id || '')) fail(`invalid task id: ${item.id}`);
-    if (ids.has(item.id)) fail(`duplicate task id: ${item.id}`);
-    ids.add(item.id);
-    if (typeof item.command !== 'string' || item.command.length === 0) {
-      fail(`task ${item.id} requires command`);
-    }
-    if (!Array.isArray(item.args) || item.args.some((arg) => typeof arg !== 'string')) {
-      fail(`task ${item.id} args must be an array of strings`);
-    }
-    if (typeof item.implementer !== 'string' || item.implementer.length === 0) {
-      fail(`task ${item.id} requires implementer`);
-    }
-    const workspace = canonicalWorkspace(item.workspace);
-    const normalizeOptionalPath = (value, field) => {
-      if (value == null) return null;
-      if (typeof value !== 'string' || !isAbsolute(value)) {
-        fail(`task ${item.id} ${field} must be an absolute path`);
+function getArgValue(args, taskId, ...flags) {
+  const values = [];
+  for (let i = 0; i < args.length; i += 1) {
+    for (const flag of flags) {
+      if (args[i] === flag) {
+        const value = args[i + 1];
+        if (!value || value.startsWith('-')) {
+          fail(`task ${taskId} ${flag} requires a value`);
+        }
+        values.push(value);
+      } else if (args[i].startsWith(`${flag}=`)) {
+        const value = args[i].slice(flag.length + 1);
+        if (!value) fail(`task ${taskId} ${flag} requires a value`);
+        values.push(value);
       }
-      return resolve(value);
-    };
-    const timelineFormat = item.timelineFormat ?? 'text';
-    if (!['text', 'jsonl'].includes(timelineFormat)) {
-      fail(`task ${item.id} timelineFormat must be text or jsonl`);
     }
-    return {
-      id: item.id,
-      implementer: item.implementer,
-      workspace,
-      command: item.command,
-      args: item.args,
-      resultPath: normalizeOptionalPath(item.resultPath, 'resultPath'),
-      timelinePath: normalizeOptionalPath(item.timelinePath, 'timelinePath'),
-      timelineFormat,
-      knownIdentity: identityFor(workspace),
-    };
+  }
+  if (values.length > 1) {
+    fail(`task ${taskId} contains duplicate ${flags[0]} values`);
+  }
+  return values[0] ?? null;
+}
+
+function validateTask(item, existingIds = new Set()) {
+  if (!item || typeof item !== 'object') fail('each task must be an object');
+  if (!TASK_ID.test(item.id || '')) fail(`invalid task id: ${item.id}`);
+  if (existingIds.has(item.id)) fail(`duplicate task id: ${item.id}`);
+  if (!SUPPORTED_IMPLEMENTERS.has(item.implementer)) {
+    fail(`unsupported implementer: ${item.implementer}`);
+  }
+  if (typeof item.command !== 'string' || item.command.length === 0) {
+    fail(`task ${item.id} requires command`);
+  }
+  if (!Array.isArray(item.args) || item.args.some((arg) => typeof arg !== 'string')) {
+    fail(`task ${item.id} args must be an array of strings`);
+  }
+  if (SHELL_META.test(item.command) || item.args.some((arg) => SHELL_META.test(arg))) {
+    fail(`task ${item.id} command and args must not contain shell metacharacters`);
+  }
+
+  const workspace = canonicalWorkspace(item.workspace);
+  const normalizeOptionalPath = (value, field) => {
+    if (value == null) return null;
+    if (typeof value !== 'string' || !isAbsolute(value)) {
+      fail(`task ${item.id} ${field} must be an absolute path`);
+    }
+    return resolve(value);
+  };
+
+  let resultPath = normalizeOptionalPath(item.resultPath, 'resultPath');
+  let timelinePath = normalizeOptionalPath(item.timelinePath, 'timelinePath');
+  let timelineFormat = item.timelineFormat ?? (item.implementer === 'sanad' ? 'jsonl' : 'text');
+
+  if (!['text', 'jsonl'].includes(timelineFormat)) {
+    fail(`task ${item.id} timelineFormat must be text or jsonl`);
+  }
+
+  if (item.implementer === 'sanad') {
+    const cmdBase = basename(item.command).toLowerCase();
+    const isInstalledSanad = /^(sanad)(\.(exe|cmd|bat))?$/.test(cmdBase) && item.args[0] === 'run';
+    const isFvmSanad = /^(fvm)(\.(exe|cmd|bat))?$/.test(cmdBase)
+      && item.args.slice(0, 4).join(' ') === 'dart run agent/bin/sanad_agent.dart run';
+    if (!isInstalledSanad && !isFvmSanad) {
+      fail(`task ${item.id} sanad invocation must be 'sanad run' or 'fvm dart run agent/bin/sanad_agent.dart run'`);
+    }
+
+    // Requiring `run` as the first Sanad subcommand structurally prevents this
+    // invocation from reaching any `workspace create/add/select/switch` command.
+    // Do not scan flag values for those words: they are valid workspace IDs.
+    if (item.args.some((a) => /^--(api-key|secret|token|password)/i.test(a))) {
+      fail(`task ${item.id} must not pass credentials via command args`);
+    }
+
+    const logicalWorkspace = getArgValue(item.args, item.id, '--workspace', '-w');
+    if (!logicalWorkspace) {
+      fail(`task ${item.id} sanad task requires --workspace`);
+    }
+
+    const execRoot = getArgValue(item.args, item.id, '--execution-root');
+    if (!execRoot) {
+      fail(`task ${item.id} sanad task requires --execution-root`);
+    }
+    if (!isAbsolute(execRoot)) {
+      fail(`task ${item.id} --execution-root must be an absolute path`);
+    }
+    if (canonicalWorkspace(execRoot) !== workspace) {
+      fail(`task ${item.id} --execution-root must match task workspace`);
+    }
+
+    const briefFile = getArgValue(item.args, item.id, '--brief-file', '-b');
+    if (!briefFile) {
+      fail(`task ${item.id} sanad task requires --brief-file`);
+    }
+    if (!isAbsolute(briefFile) || !existsSync(briefFile) || !statSync(briefFile).isFile()) {
+      fail(`task ${item.id} --brief-file must be an existing absolute file path`);
+    }
+
+    const outDir = getArgValue(item.args, item.id, '--out-dir', '-o');
+    if (!outDir) {
+      fail(`task ${item.id} sanad task requires --out-dir`);
+    }
+    if (!isAbsolute(outDir)) {
+      fail(`task ${item.id} --out-dir must be an absolute path`);
+    }
+
+    const expectedResultPath = resolve(outDir, 'result.json');
+    const expectedTimelinePath = resolve(outDir, 'events.jsonl');
+    if (resultPath && resolve(resultPath) !== expectedResultPath) {
+      fail(`task ${item.id} resultPath must match --out-dir result.json`);
+    }
+    if (timelinePath && resolve(timelinePath) !== expectedTimelinePath) {
+      fail(`task ${item.id} timelinePath must match --out-dir events.jsonl`);
+    }
+    resultPath = expectedResultPath;
+    timelinePath = expectedTimelinePath;
+    timelineFormat = 'jsonl';
+  }
+
+  return {
+    id: item.id,
+    implementer: item.implementer,
+    workspace,
+    command: item.command,
+    args: item.args,
+    resultPath,
+    timelinePath,
+    timelineFormat,
+    knownIdentity: identityFor(workspace),
+  };
+}
+
+function validateSpec(raw, existingIds = new Set()) {
+  if (!raw || !Array.isArray(raw.tasks)) {
+    fail('spec must contain a tasks array');
+  }
+  const ids = new Set(existingIds);
+  return raw.tasks.map((item) => {
+    const task = validateTask(item, ids);
+    ids.add(task.id);
+    return task;
   });
 }
 
@@ -201,16 +328,17 @@ function runPaths(runDir) {
     manifest: join(runDir, 'manifest.json'),
     journal: join(runDir, 'events.jsonl'),
     tasks: join(runDir, 'tasks.json'),
+    requests: join(runDir, 'requests'),
     supervisorLog: join(runDir, 'supervisor.log'),
   };
 }
 
-function publicTask(task, runDir) {
+function publicTask(task, runDir, initialStatus = 'queued') {
   return {
     id: task.id,
     implementer: task.implementer,
     workspace: task.workspace,
-    status: 'queued',
+    status: initialStatus,
     pid: null,
     startedAt: null,
     finishedAt: null,
@@ -226,18 +354,78 @@ function publicTask(task, runDir) {
   };
 }
 
+function windowsBatchQuote(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function launchThroughWindowsExplorer(scriptPath) {
+  const result = spawnSync('explorer.exe', [scriptPath], {
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  if (result.error) {
+    throw new Error(`Windows Explorer broker failed: ${result.error.message}`);
+  }
+}
+
+function writeWindowsWorkerBroker(runDir, paths, maxConcurrency) {
+  const workerPath = join(runDir, 'start-supervisor.cmd');
+  const brokerPath = join(runDir, 'start-supervisor.vbs');
+  const command = [
+    process.execPath,
+    SCRIPT_PATH,
+    '__worker',
+    '--run', runDir,
+    '--max-concurrency', String(maxConcurrency),
+  ].map(windowsBatchQuote).join(' ');
+  writeFileSync(
+    workerPath,
+    `@echo off\r\n${command} >> ${windowsBatchQuote(paths.supervisorLog)} 2>&1\r\n`,
+    'utf8',
+  );
+  const escapedWorkerPath = workerPath.replaceAll('"', '""');
+  writeFileSync(
+    brokerPath,
+    `CreateObject("WScript.Shell").Run Chr(34) & "${escapedWorkerPath}" & Chr(34), 0, False\r\n`,
+    'utf8',
+  );
+  return brokerPath;
+}
+
+function waitForWindowsWorkerHandshake(paths, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const manifest = JSON.parse(readFileSync(paths.manifest, 'utf8'));
+      if (manifest.status !== 'starting' && Number.isInteger(manifest.supervisorPid)) {
+        return manifest;
+      }
+    } catch {
+      // Atomic manifest replacement can briefly race this read.
+    }
+    sleepSync(50);
+  }
+  const manifest = JSON.parse(readFileSync(paths.manifest, 'utf8'));
+  manifest.status = 'failed';
+  manifest.finishedAt = new Date().toISOString();
+  manifest.error = 'Windows supervisor broker did not publish its startup handshake.';
+  writeJsonAtomic(paths.manifest, manifest);
+  throw new Error(manifest.error);
+}
+
 function startCommand(options) {
   if (!options.spec || !options['run-dir']) fail('start requires --spec and --run-dir');
   if (!isAbsolute(options['run-dir'])) fail('--run-dir must be absolute');
   const runDir = resolve(options['run-dir']);
   const paths = runPaths(runDir);
   mkdirSync(runDir, { recursive: true });
+  mkdirSync(paths.requests, { recursive: true });
   if (existsSync(paths.manifest) || existsSync(paths.journal)) {
     fail(`run directory already contains supervisor state: ${runDir}`);
   }
   const tasks = validateSpec(readJson(resolve(options.spec), 'task spec'));
   const maxConcurrency = options['max-concurrency'] == null
-    ? tasks.length
+    ? Math.max(1, tasks.length)
     : Number(options['max-concurrency']);
   if (!Number.isInteger(maxConcurrency) || maxConcurrency < 1) {
     fail('--max-concurrency must be a positive integer');
@@ -248,12 +436,29 @@ function startCommand(options) {
     runDir,
     supervisorPid: null,
     status: 'starting',
+    closed: false,
     seq: 0,
     startedAt: new Date().toISOString(),
     finishedAt: null,
     maxConcurrency,
-    tasks: Object.fromEntries(tasks.map((task) => [task.id, publicTask(task, runDir)])),
+    tasks: Object.fromEntries(tasks.map((task) => [task.id, publicTask(task, runDir, 'queued')])),
   });
+
+  if (process.platform === 'win32') {
+    try {
+      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency);
+      launchThroughWindowsExplorer(brokerPath);
+      const running = waitForWindowsWorkerHandshake(paths);
+      process.stdout.write(`${JSON.stringify({
+        runDir,
+        supervisorPid: running.supervisorPid,
+        cursor: 0,
+      })}\n`);
+    } catch (error) {
+      fail(error.message, 1);
+    }
+    return;
+  }
 
   const logFd = openSync(paths.supervisorLog, 'a');
   const child = spawn(process.execPath, [
@@ -278,27 +483,34 @@ function workerCommand(options) {
     fail('invalid internal worker invocation');
   }
   const paths = runPaths(runDir);
-  const tasks = readJson(paths.tasks, 'normalized tasks').tasks;
+  mkdirSync(paths.requests, { recursive: true });
+  const initialTasks = readJson(paths.tasks, 'normalized tasks').tasks;
+  const taskMap = new Map(initialTasks.map((task) => [task.id, task]));
+  const taskList = [...initialTasks];
+
   let seq = 0;
   let active = 0;
-  let nextIndex = 0;
-  let terminalCount = 0;
   const settled = new Set();
+  const timelineWatchers = new Map();
+
   const manifest = {
     version: 'delegate-supervisor.v1',
     runDir,
     supervisorPid: process.pid,
     status: 'running',
+    closed: false,
     seq,
     startedAt: new Date().toISOString(),
     finishedAt: null,
     maxConcurrency,
-    tasks: Object.fromEntries(tasks.map((task) => [task.id, publicTask(task, runDir)])),
+    tasks: Object.fromEntries(initialTasks.map((task) => [task.id, publicTask(task, runDir, 'queued')])),
   };
 
   const persist = () => writeJsonAtomic(paths.manifest, manifest);
+
   const transition = (task, to, extra = {}) => {
     const state = manifest.tasks[task.id];
+    if (!state) return;
     const from = state.status;
     Object.assign(state, extra, { status: to });
     manifest.seq = ++seq;
@@ -320,7 +532,12 @@ function workerCommand(options) {
     if (settled.has(task.id)) return;
     settled.add(task.id);
     active -= 1;
-    terminalCount += 1;
+
+    if (timelineWatchers.has(task.id)) {
+      try { timelineWatchers.get(task.id).close(); } catch {}
+      timelineWatchers.delete(task.id);
+    }
+
     let result = null;
     if (task.resultPath && existsSync(task.resultPath)) {
       try {
@@ -336,13 +553,13 @@ function workerCommand(options) {
         ? 'completed'
         : 'failed';
     const identity = result == null ? null : {
-      projectId: result.projectId ?? null,
-      conversationId: result.conversationId ?? null,
-      sessionId: result.sessionId ?? null,
+      projectId: result.projectId ?? result.project_id ?? null,
+      conversationId: result.conversationId ?? result.conversation_id ?? null,
+      sessionId: result.sessionId ?? result.session_id ?? null,
     };
     if (result) recordIdentity(task, result);
     transition(task, status, {
-      pid: manifest.tasks[task.id].pid,
+      pid: manifest.tasks[task.id]?.pid ?? null,
       finishedAt: new Date().toISOString(),
       exitCode: code,
       signal,
@@ -350,19 +567,120 @@ function workerCommand(options) {
       identity,
       ...(launchError ? { error: launchError.message } : {}),
     });
-    if (terminalCount === tasks.length) {
-      manifest.status = 'completed';
-      manifest.finishedAt = new Date().toISOString();
-      persist();
-      process.exit(0);
-    }
+
+    checkRunCompletion();
     launchAvailable();
+  };
+
+  const observeTimeline = (task, child) => {
+    if (!task.timelinePath) return;
+    const timelinePath = task.timelinePath;
+    const dir = dirname(timelinePath);
+    mkdirSync(dir, { recursive: true });
+
+    let offset = 0;
+    let lastSeenType = null;
+    let lastSeenRequestId = null;
+
+    const readAvailable = () => {
+      if (settled.has(task.id)) return;
+      if (!existsSync(timelinePath)) return;
+      let stat;
+      try {
+        stat = statSync(timelinePath);
+      } catch {
+        return;
+      }
+      if (stat.size <= offset) return;
+
+      let chunk;
+      try {
+        const fd = openSync(timelinePath, 'r');
+        const buffer = Buffer.alloc(stat.size - offset);
+        readSync(fd, buffer, 0, buffer.length, offset);
+        closeSync(fd);
+        chunk = buffer.toString('utf8');
+      } catch {
+        return;
+      }
+
+      const lastNewline = chunk.lastIndexOf('\n');
+      if (lastNewline === -1) return;
+
+      const completeChunk = chunk.slice(0, lastNewline + 1);
+      offset += Buffer.byteLength(completeChunk, 'utf8');
+
+      const lines = completeChunk.split(/\r?\n/);
+      for (const line of lines) {
+        if (!line.trim() || settled.has(task.id)) continue;
+        let event;
+        try {
+          event = JSON.parse(line);
+        } catch {
+          continue;
+        }
+
+        const type = event.type;
+        const data = event.data || {};
+        const sessionId = event.session_id || event.sessionId || data.session_id || data.sessionId || null;
+        const requestId = data.request_id || data.requestId || null;
+
+        if (type === 'needs_input' || type === 'needs_permission') {
+          if (lastSeenType === type && lastSeenRequestId === requestId) continue;
+          lastSeenType = type;
+          lastSeenRequestId = requestId;
+
+          // Forward only the documented G2 intervention fields. Whitelisting
+          // avoids leaking future provider/tool payload fields into the shared
+          // supervisor journal.
+          const intervention = {
+            kind: data.kind || type,
+            ...(requestId ? { request_id: requestId } : {}),
+            ...(typeof data.tool_name === 'string'
+              ? { tool_name: data.tool_name }
+              : {}),
+            ...(Array.isArray(data.questions)
+              ? { questions: data.questions }
+              : {}),
+          };
+
+          transition(task, type, {
+            sessionId,
+            requestId,
+            intervention,
+            kind: type,
+          });
+        } else if (type === 'resumed') {
+          if (manifest.tasks[task.id]?.status === 'running') continue;
+          lastSeenType = 'resumed';
+          transition(task, 'running', {
+            sessionId,
+            requestId: null,
+            intervention: null,
+          });
+        }
+      }
+    };
+
+    try {
+      const watcher = watch(dir, (_eventType, filename) => {
+        if (!filename || String(filename) === basename(timelinePath)) {
+          readAvailable();
+        }
+      });
+      timelineWatchers.set(task.id, watcher);
+    } catch {
+      // If watching fails, fall back
+    }
+
+    readAvailable();
   };
 
   const launchTask = (task) => {
     active += 1;
     const stdoutFd = openSync(manifest.tasks[task.id].stdoutPath, 'a');
     const stderrFd = openSync(manifest.tasks[task.id].stderrPath, 'a');
+    const isBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(task.command);
     let child;
     try {
       child = spawn(task.command, task.args, {
@@ -370,6 +688,7 @@ function workerCommand(options) {
         env: process.env,
         windowsHide: true,
         stdio: ['ignore', stdoutFd, stderrFd],
+        shell: isBatch,
       });
     } catch (error) {
       closeSync(stdoutFd);
@@ -383,20 +702,164 @@ function workerCommand(options) {
       pid: child.pid,
       startedAt: new Date().toISOString(),
     });
+
+    observeTimeline(task, child);
+
     child.once('error', (error) => finishTask(task, 127, null, error));
     child.once('exit', (code, signal) => finishTask(task, code, signal));
   };
 
   function launchAvailable() {
-    while (active < maxConcurrency && nextIndex < tasks.length) {
-      const task = tasks[nextIndex];
-      nextIndex += 1;
-      launchTask(task);
+    for (const task of taskList) {
+      if (active >= maxConcurrency) break;
+      const taskState = manifest.tasks[task.id];
+      if (taskState && taskState.status === 'queued' && !settled.has(task.id)) {
+        launchTask(task);
+      }
     }
   }
 
+  function checkRunCompletion() {
+    if (!manifest.closed) return;
+    const totalTasks = Object.keys(manifest.tasks).length;
+    if (settled.size >= totalTasks) {
+      manifest.status = 'completed';
+      manifest.finishedAt = new Date().toISOString();
+      const event = {
+        seq: ++seq,
+        taskId: null,
+        implementer: null,
+        workspace: null,
+        from: 'running',
+        to: 'completed',
+        at: manifest.finishedAt,
+        kind: 'run_completed',
+      };
+      manifest.seq = seq;
+      appendFileSync(paths.journal, `${JSON.stringify(event)}\n`, 'utf8');
+      persist();
+      clearInterval(keepAliveTimer);
+      try { reqWatcher.close(); } catch {}
+      process.exit(0);
+    }
+  }
+
+  function handleRequest(req) {
+    if (req.type === 'add') {
+      if (manifest.closed) {
+        return { ok: false, error: 'cannot add tasks to closed run' };
+      }
+      const newTasks = req.tasks || [];
+      for (const t of newTasks) {
+        if (manifest.tasks[t.id]) {
+          return { ok: false, error: `duplicate task id: ${t.id}` };
+        }
+      }
+      for (const t of newTasks) {
+        taskMap.set(t.id, t);
+        taskList.push(t);
+        manifest.tasks[t.id] = publicTask(t, runDir, 'held');
+        transition(t, 'held');
+      }
+      persist();
+      return { ok: true, taskIds: newTasks.map((t) => t.id) };
+    }
+
+    if (req.type === 'enqueue') {
+      if (manifest.closed) {
+        return { ok: false, error: 'cannot enqueue tasks to closed run' };
+      }
+      if (req.spec) {
+        const newTasks = req.tasks || [];
+        for (const t of newTasks) {
+          if (manifest.tasks[t.id]) {
+            return { ok: false, error: `duplicate task id: ${t.id}` };
+          }
+        }
+        for (const t of newTasks) {
+          taskMap.set(t.id, t);
+          taskList.push(t);
+          manifest.tasks[t.id] = publicTask(t, runDir, 'queued');
+          transition(t, 'queued');
+        }
+        persist();
+        launchAvailable();
+        return { ok: true, taskIds: newTasks.map((t) => t.id) };
+      }
+
+      const ids = req.taskIds || [];
+      for (const id of ids) {
+        const taskEntry = manifest.tasks[id];
+        if (!taskEntry) {
+          return { ok: false, error: `task not found: ${id}` };
+        }
+        if (taskEntry.status !== 'held') {
+          return { ok: false, error: `task ${id} is not held (status: ${taskEntry.status})` };
+        }
+      }
+      for (const id of ids) {
+        const task = taskMap.get(id);
+        transition(task, 'queued');
+      }
+      persist();
+      launchAvailable();
+      return { ok: true, taskIds: ids };
+    }
+
+    if (req.type === 'close') {
+      if (manifest.closed) {
+        return { ok: true, alreadyClosed: true };
+      }
+      manifest.closed = true;
+      for (const [id, tEntry] of Object.entries(manifest.tasks)) {
+        if (tEntry.status === 'held') {
+          const task = taskMap.get(id);
+          settled.add(id);
+          transition(task, 'aborted', { error: 'run closed while task was held' });
+        }
+      }
+      persist();
+      return { ok: true, closed: true };
+    }
+
+    return { ok: false, error: `unknown request type: ${req.type}` };
+  }
+
+  function processPendingRequests() {
+    if (!existsSync(paths.requests)) return;
+    let entries;
+    try {
+      entries = readdirSync(paths.requests);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.endsWith('.req.json')) continue;
+      const reqFile = join(paths.requests, entry);
+      const ackFile = join(paths.requests, entry.replace(/\.req\.json$/, '.ack.json'));
+      if (existsSync(ackFile)) continue;
+      let req;
+      try {
+        req = JSON.parse(readFileSync(reqFile, 'utf8'));
+      } catch {
+        continue;
+      }
+      const ack = handleRequest(req);
+      writeJsonAtomic(ackFile, ack);
+      try { unlinkSync(reqFile); } catch {}
+      if (req.type === 'close') {
+        checkRunCompletion();
+      }
+    }
+  }
+
+  const reqWatcher = watch(paths.requests, () => processPendingRequests());
+  const keepAliveTimer = setInterval(() => {}, 30_000);
+
   persist();
   launchAvailable();
+  checkRunCompletion();
+  processPendingRequests();
 }
 
 function loadManifest(runDir) {
@@ -411,14 +874,243 @@ function requireTask(manifest, id) {
   return task;
 }
 
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function sendControlRequest(runDir, requestData, timeoutMs = 15_000) {
+  const paths = runPaths(runDir);
+  const manifest = loadManifest(runDir);
+  if (manifest.status === 'stale' || (manifest.status === 'running' && !processIsAlive(manifest.supervisorPid))) {
+    fail('supervisor process is not running');
+  }
+  if (manifest.status === 'completed') {
+    fail('run is already completed');
+  }
+  if (manifest.closed && ['add', 'enqueue'].includes(requestData.type)) {
+    fail(`cannot ${requestData.type} tasks to closed run`);
+  }
+  mkdirSync(paths.requests, { recursive: true });
+
+  const reqId = `req-${Date.now()}-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  const reqFile = join(paths.requests, `${reqId}.req.json`);
+  const ackFile = join(paths.requests, `${reqId}.ack.json`);
+
+  writeJsonAtomic(reqFile, { id: reqId, ...requestData });
+
+  let watcher = null;
+
+  return new Promise((resolvePromise, reject) => {
+    let deadlineTimer = null;
+    const cleanup = () => {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      if (watcher) {
+        try { watcher.close(); } catch {}
+      }
+      try { unlinkSync(ackFile); } catch {}
+      try { unlinkSync(reqFile); } catch {}
+    };
+
+    const check = () => {
+      if (!existsSync(ackFile)) return;
+      let ack;
+      try {
+        ack = JSON.parse(readFileSync(ackFile, 'utf8'));
+      } catch {
+        return;
+      }
+      cleanup();
+      if (ack.ok) {
+        resolvePromise(ack);
+      } else {
+        reject(new Error(ack.error || 'request rejected by supervisor'));
+      }
+    };
+
+    try {
+      watcher = watch(paths.requests, (_eventType, filename) => {
+        if (!filename || String(filename) === basename(ackFile)) check();
+      });
+      watcher.once('error', (error) => {
+        cleanup();
+        reject(new Error(`request acknowledgement watch failed: ${error.message}`));
+      });
+    } catch (error) {
+      cleanup();
+      reject(new Error(`request acknowledgement watch failed: ${error.message}`));
+      return;
+    }
+
+    deadlineTimer = setTimeout(() => {
+      const supervisorAlive = processIsAlive(manifest.supervisorPid);
+      cleanup();
+      reject(new Error(supervisorAlive
+        ? `request timed out after ${timeoutMs}ms`
+        : 'supervisor process died before acknowledging request'));
+    }, timeoutMs);
+
+    // Register first and rescan second so an acknowledgement written during
+    // watcher setup is still consumed without an interval-based polling loop.
+    check();
+  });
+}
+
+async function addCommand(options) {
+  if (!options.run || !options.spec) fail('add requires --run and --spec');
+  const runDir = resolve(options.run);
+  const manifest = loadManifest(runDir);
+  const existingIds = new Set(Object.keys(manifest.tasks || {}));
+  const tasks = validateSpec(readJson(resolve(options.spec), 'task spec'), existingIds);
+  try {
+    const ack = await sendControlRequest(runDir, {
+      type: 'add',
+      tasks,
+    });
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify({ runDir, added: true, taskIds: ack.taskIds }, null, 2)}\n`);
+    } else {
+      process.stdout.write(`Added ${ack.taskIds.length} task(s) to run: ${ack.taskIds.join(', ')}\n`);
+    }
+  } catch (error) {
+    fail(error.message, 1);
+  }
+}
+
+async function enqueueCommand(options) {
+  if (!options.run) fail('enqueue requires --run');
+  const runDir = resolve(options.run);
+  if (options.spec) {
+    const manifest = loadManifest(runDir);
+    const existingIds = new Set(Object.keys(manifest.tasks || {}));
+    const tasks = validateSpec(readJson(resolve(options.spec), 'task spec'), existingIds);
+    try {
+      const ack = await sendControlRequest(runDir, {
+        type: 'enqueue',
+        spec: true,
+        tasks,
+      });
+      if (options.json) {
+        process.stdout.write(`${JSON.stringify({ runDir, enqueued: true, taskIds: ack.taskIds }, null, 2)}\n`);
+      } else {
+        process.stdout.write(`Enqueued ${ack.taskIds.length} task(s) from spec: ${ack.taskIds.join(', ')}\n`);
+      }
+    } catch (error) {
+      fail(error.message, 1);
+    }
+    return;
+  }
+
+  let taskIds = [];
+  if (options.task) {
+    taskIds = [options.task];
+  } else if (options.tasks) {
+    taskIds = options.tasks.split(',').map((s) => s.trim()).filter(Boolean);
+  } else {
+    fail('enqueue requires --spec, --task <id>, or --tasks <id1,id2>');
+  }
+
+  try {
+    const ack = await sendControlRequest(runDir, {
+      type: 'enqueue',
+      spec: false,
+      taskIds,
+    });
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify({ runDir, enqueued: true, taskIds: ack.taskIds }, null, 2)}\n`);
+    } else {
+      process.stdout.write(`Enqueued task(s): ${ack.taskIds.join(', ')}\n`);
+    }
+  } catch (error) {
+    fail(error.message, 1);
+  }
+}
+
+function waitForRunCompletion(runDir, timeoutMs = 60_000) {
+  const manifestPath = runPaths(runDir).manifest;
+  return new Promise((resolvePromise, reject) => {
+    let watcher;
+    let deadlineTimer;
+    const cleanup = () => {
+      if (deadlineTimer) clearTimeout(deadlineTimer);
+      try { watcher?.close(); } catch {}
+    };
+    const check = () => {
+      let manifest;
+      try {
+        manifest = loadManifest(runDir);
+      } catch {
+        return;
+      }
+      if (manifest.status === 'running' && !processIsAlive(manifest.supervisorPid)) {
+        cleanup();
+        reject(new Error('supervisor process died before the run completed'));
+        return;
+      }
+      if (!['completed', 'stale'].includes(manifest.status)) return;
+      cleanup();
+      resolvePromise(manifest);
+    };
+    try {
+      watcher = watch(dirname(manifestPath), (_eventType, filename) => {
+        if (!filename || String(filename) === basename(manifestPath)) check();
+      });
+      watcher.once('error', (error) => {
+        cleanup();
+        reject(new Error(`run completion watch failed: ${error.message}`));
+      });
+    } catch (error) {
+      reject(new Error(`run completion watch failed: ${error.message}`));
+      return;
+    }
+    deadlineTimer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`run did not complete within ${timeoutMs}ms`));
+    }, timeoutMs);
+    // Register first and rescan second to close the read/watch race.
+    check();
+  });
+}
+
+async function closeCommand(options) {
+  if (!options.run) fail('close requires --run');
+  const runDir = resolve(options.run);
+  try {
+    await sendControlRequest(runDir, { type: 'close' });
+    if (options.wait) await waitForRunCompletion(runDir);
+    const finalManifest = loadManifest(runDir);
+    if (options.json) {
+      process.stdout.write(`${JSON.stringify({
+        runDir,
+        closed: true,
+        status: finalManifest.status,
+      }, null, 2)}\n`);
+    } else {
+      process.stdout.write(`Closed run ${runDir} (status: ${finalManifest.status})\n`);
+    }
+  } catch (error) {
+    fail(error.message, 1);
+  }
+}
+
 function statusCommand(options) {
   if (!options.run) fail('status requires --run');
   const manifest = loadManifest(options.run);
+  if (manifest.status === 'running' && !processIsAlive(manifest.supervisorPid)) {
+    manifest.status = 'stale';
+    manifest.staleReason = 'Supervisor process is not running.';
+  }
   if (options.json) {
     process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
     return;
   }
-  process.stdout.write(`RUN ${manifest.status}  seq=${manifest.seq}  supervisor=${manifest.supervisorPid}\n`);
+  const closedIndicator = manifest.closed ? ' (closed)' : '';
+  process.stdout.write(`RUN ${manifest.status}${closedIndicator}  seq=${manifest.seq}  supervisor=${manifest.supervisorPid}\n`);
   process.stdout.write('TASK\tIMPLEMENTER\tSTATUS\tPID\tWORKSPACE\n');
   for (const task of Object.values(manifest.tasks)) {
     process.stdout.write(`${task.id}\t${task.implementer}\t${task.status}\t${task.pid ?? '-'}\t${task.workspace}\n`);
@@ -477,7 +1169,6 @@ function followFiles(entries) {
     });
     watchers.push(watcher);
   }
-  // Register watchers first, then rescan to close the read/watch race.
   for (const entry of entries) drain(entry);
   const close = () => {
     for (const watcher of watchers) watcher.close();
@@ -588,14 +1279,27 @@ function viewCommand(options) {
     const child = spawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' });
     child.unref();
   } else if (process.platform === 'win32') {
-    const quote = (value) => `"${String(value).replaceAll('"', '\\"')}"`;
-    const command = [process.execPath, ...args].map(quote).join(' ');
-    const child = spawn('cmd.exe', ['/d', '/c', 'start', '"Delegate Task Timeline"', 'cmd.exe', '/k', command], {
-      detached: true,
-      windowsHide: false,
-      stdio: 'ignore',
-    });
-    child.unref();
+    const runDir = resolve(options.run);
+    const viewerPath = join(runDir, `view-${options.task}.cmd`);
+    const command = [process.execPath, ...args].map(windowsBatchQuote).join(' ');
+    writeFileSync(
+      viewerPath,
+      [
+        '@echo off',
+        `title Delegate Task Timeline - ${options.task}`,
+        command,
+        'echo.',
+        'echo Timeline viewer exited with code %ERRORLEVEL%.',
+        'pause',
+        '',
+      ].join('\r\n'),
+      'utf8',
+    );
+    try {
+      launchThroughWindowsExplorer(viewerPath);
+    } catch (error) {
+      fail(error.message, 1);
+    }
   } else {
     const candidates = [
       ['x-terminal-emulator', ['-e', process.execPath, ...args]],
@@ -622,7 +1326,7 @@ function identityCommand(options) {
   process.stdout.write(`${JSON.stringify(identityFor(options.workspace), null, 2)}\n`);
 }
 
-function main() {
+async function main() {
   const [command, ...rest] = process.argv.slice(2);
   if (!command || command === '-h' || command === '--help') {
     process.stdout.write(HELP);
@@ -632,6 +1336,9 @@ function main() {
   switch (command) {
     case 'start': startCommand(options); break;
     case '__worker': workerCommand(options); break;
+    case 'add': await addCommand(options); break;
+    case 'enqueue': await enqueueCommand(options); break;
+    case 'close': await closeCommand(options); break;
     case 'status': statusCommand(options); break;
     case 'inspect': inspectCommand(options); break;
     case 'timeline': timelineCommand(options); break;
@@ -642,4 +1349,4 @@ function main() {
   }
 }
 
-main();
+await main().catch((error) => fail(error.message, 1));

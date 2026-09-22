@@ -121,3 +121,47 @@ Appended newline-delimited event records matching status transitions:
 - **`124`**: Execution timeout (`status: "timeout"`). Automatically sends `sanad session stop <session_id>`.
 - **`130` / `143`**: Process interrupted via `SIGINT` or `SIGTERM` (`status: "interrupted"`). Automatically sends `sanad session stop <session_id>`.
 - **`130`**: Execution cancelled externally via daemon stop (`status: "cancelled"`). Triggered by `sanad session stop <session_id>`.
+
+---
+
+## 5. Supervisor Integration (`delegate-task-supervisor`)
+
+The `delegate-task-supervisor` skill natively supports `implementer: "sanad"` by driving the installed `sanad run` machine contract.
+
+### 5.1. Task Specification Shape
+```json
+{
+  "tasks": [
+    {
+      "id": "task-01",
+      "implementer": "sanad",
+      "workspace": "<target-worktree-path>",
+      "command": "sanad",
+      "args": [
+        "run",
+        "--brief-file", "<path-to-brief-file>",
+        "--workspace", "<logical-workspace-id>",
+        "--execution-root", "<target-worktree-path>",
+        "--out-dir", "<task-result-dir>",
+        "--events"
+      ],
+      "resultPath": "<task-result-dir>/result.json",
+      "timelinePath": "<task-result-dir>/events.jsonl",
+      "timelineFormat": "jsonl"
+    }
+  ]
+}
+```
+
+### 5.2. Long-Lived Dynamic Run Lifecycle
+1. **`start --spec <tasks.json> --run-dir <dir>`:** Spawns a detached worker process that stays alive across multiple task settlement phases while the run remains open.
+2. **`add --run <dir> --spec <tasks.json>`:** Registers additional tasks in `held` state without immediate execution.
+3. **`enqueue --run <dir> (--task <id> | --spec <tasks.json>)`:** Transitions held tasks to `queued` or appends and queues a new spec in one operation, launching available tasks up to `--max-concurrency`.
+4. **`close --run <dir>`:** Explicitly closes the run, disallowing further task registrations and draining in-flight/queued tasks before the supervisor process terminates.
+
+### 5.3. Event-First Intervention & Timeline Observation
+- The supervisor monitors child `events.jsonl` files event-first via directory watchers with race-closing rescans.
+- Intervention events (`needs_input`, `needs_permission`) are immediately promoted into the supervisor's `manifest.json` and monotonic `events.jsonl` journal.
+- Resumed turns (`resumed`) transition tasks back to `running`.
+- Terminal child process exit is authoritative and locks the final state (`completed`, `failed`, `timeout`, `interrupted`, `cancelled`).
+- `watch-once` wakes by default on `needs_input`, `needs_permission`, or terminal states, ignoring routine `running`/`resumed` transitions unless `--all` is specified.

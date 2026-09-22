@@ -1,9 +1,9 @@
 ---
 title: "Task 98: OpenCode Go Provider Model Compatibility and Sanad Delegation Architecture"
 description: "OpenCode Go compatibility evidence plus daemon-backed session intervention, native sanad run delegation machine contract, and supervisor integration for safe delegated coding."
-status: "g2-complete-g3-ready"
-current_gate: "G3 — Supervisor Integration (ready)"
-remaining_estimate: "45%"
+status: "g3-complete-g4-ready"
+current_gate: "G4 — agy-Driven Interactive Runtime Dogfooding (ready)"
+remaining_estimate: "25%"
 priority: "high"
 depends_on: "OpenCode Go provider profile; Provider Registry; Sanad CLI and local gateway session runtime; Task 43 reasoning runtime"
 evidence_id: "98"
@@ -238,7 +238,7 @@ Separate development SOP (not part of the delegation call path):
        "args": ["run", "--brief-file", "<brief-file>", "--workspace", "<existing-logical-workspace-id>", "--execution-root", "<target-worktree-path>", "--provider", "OpenCode Go", "--model", "deepseek-v4-flash", "--out-dir", "<run-result-dir>", "--events"]
      }
      ```
-     (Source development checkout fallback: `command: "fvm", args: ["dart", "run", "bin/sanad_agent.dart", "run", ...]`).
+     (Source development checkout fallback from the worktree root: `command: "fvm", args: ["dart", "run", "agent/bin/sanad_agent.dart", "run", ...]`).
      Placeholder tokens (e.g. `<target-worktree-path>`) are substituted at dispatch time; tracked documentation must not embed concrete machine paths or home-directory examples.
   2. Tracks progress by consuming the structured result and event timelines.
   3. Manages parallel worktree isolation and prevents cross-task lock contention.
@@ -296,13 +296,16 @@ Separate development SOP (not part of the delegation call path):
 - [x] Surface pending clarification and permission states without treating them as terminal completion.
 - [x] Independent verification: analyzer clean; focused G2 suite 119/119; full CLI suite 260/260; relevant interface/runtime suite 115/115; full Agent fast suite 1883 passed and 26 skipped; `git diff --check` and secret/path scans clean. `graphify update .` rebuilt 7477 nodes, 9988 edges, and 679 communities; its untracked `.graphify/` cache was removed per repository policy.
 
-### G3 — Supervisor Integration (`delegate-task-supervisor`)
-- [ ] Register `sanad` as an implementer and document the native `sanad run` machine contract.
-- [ ] Implement one run per reviewing orchestrator with dynamic `add/enqueue`, explicit `close`, and event-first `watch-once`.
-- [ ] Emit `needs_input` and `needs_permission` transitions carrying session/request identity.
-- [ ] Verify scheduling across isolated worktrees without creating or switching Sanad workspaces.
+### G3 — Supervisor Integration (`delegate-task-supervisor`) (Completed)
+- [x] Register `sanad` as an implementer and document the native `sanad run` machine contract.
+- [x] Implement one run per reviewing orchestrator with dynamic `add/enqueue`, explicit `close`, and event-first `watch-once`.
+- [x] Emit `needs_input` and `needs_permission` transitions carrying session/request identity.
+- [x] Verify scheduling across isolated worktrees without creating or switching Sanad workspaces.
+- [x] Preserve the proven Windows detached-worker broker, add source-checkout FVM execution, fail-closed Sanad argument validation, snake_case identity handling, intervention-field whitelisting, and Windows-safe bootstrap probing.
+- [x] Independent verification: all modified Node scripts pass `node --check`; supervisor suite passes 7/7 including dynamic lifecycle, intervention, restartable watching, FVM fallback, and isolated-worktree coverage; npm/npx bootstrap probes report real versions on Windows; `git diff --check` and secret/path/stale-contract scans pass. `graphify update .` rebuilt 7541 nodes, 9960 edges, and 665 communities; its untracked `.graphify/` cache was removed, with only the known unavailable PowerShell parser warning.
 
 ### G4 — agy-Driven Interactive Runtime Dogfooding
+- [ ] After the accepted G3 commit, fetch the latest `origin/main` and merge it into both the Task 98 and Task 78 worktree branches, preserving their existing work and resolving/verifying any conflicts before runtime testing.
 - [ ] Select the interactive SOP by tested surface: load and follow `Sanad Agentic Developer` for Agent/daemon/CLI-only interaction; if the scenario interacts with or validates Client UI behavior, also load and follow `Sanad Client Tester`. Merely launching a Client beside the Agent does not require Client UI automation.
 - [ ] Start exactly one managed Agent/Client pair on the dedicated test Home from the owning Task 98 worktree; verify ownership before mutation and stop it cleanly after testing. Never use runtime source handoff.
 - [ ] Have agy drive real Sanad CLI sessions through the daemon using provider `OpenCode Go` and model `deepseek-v4-flash`; the model selection applies to the Sanad sessions under test, while agy remains the external test driver.
@@ -314,7 +317,7 @@ Separate development SOP (not part of the delegation call path):
 - [ ] Record only redacted commands, identities, outcomes, and bounded evidence; never expose the user-configured API key or copy it outside the test Home.
 
 ### G5 — Delegation Tool-Use Proof and Acceptance
-- [ ] Run a real `sanad-delegate` coding task with `deepseek-v4-flash` from an isolated implementation worktree.
+- [ ] Use the synchronized Task 78 worktree as the real isolated implementation target, and have `sanad-delegate` with `deepseek-v4-flash` complete its remaining scoped work rather than a synthetic fixture.
 - [ ] Prove clarification persistence, explicit CLI answering, permission intervention, continuation, and stop through the completed native CLI machine contract and supervisor integration.
 - [ ] Prove default gated-tool containment and explicit broad-approval boundaries.
 - [ ] Run owning analyzers, focused tests, relevant fast suites, and `graphify update .` after code changes.
@@ -336,7 +339,7 @@ Separate development SOP (not part of the delegation call path):
 - [x] A CLI permission decision follows the same identity guarantees through a separate command.
 - [x] `session stop` stops the identified active session without affecting another session or runtime.
 - [x] `sanad run` implements the native delegation machine contract, records its session ID before dispatch, uses the existing logical workspace, and executes only in the supplied isolated worktree.
-- [ ] `watch-once` returns `needs_input` or `needs_permission` promptly instead of waiting for terminal completion.
+- [x] `watch-once` returns `needs_input` or `needs_permission` promptly instead of waiting for terminal completion.
 - [ ] In G4, agy drives the real daemon-backed CLI against OpenCode Go / `deepseek-v4-flash` and proves pending clarification, pending permission, list/show, answer/allow/deny, stop, bounded clean logs, and applicable restart recovery; any discovered defect is fixed and the complete scenario is rerun.
 - [ ] In G5, a real `deepseek-v4-flash` delegation through `sanad-delegate` proves tool use, user-question intervention, permission intervention, continuation, and structured terminal output.
 - [ ] No API keys, authorization tokens, absolute machine paths, workspace mutations, or unauthorized broad-tool approvals appear in tracked artifacts or runtime actions.
@@ -347,7 +350,7 @@ Separate development SOP (not part of the delegation call path):
 
 - [x] G1 lands with owning contracts, technical/QA documentation, analyzer success, focused CLI/gateway/runtime tests, and the full Agent fast suite; `graphify update .` was attempted but unavailable because the Graphify CLI was not installed or discoverable on the review machine.
 - [x] G2 lands as the native Agent-owned `sanad run` delegation machine contract and instruction-only skill with deterministic Windows-safe prompt transport, isolated execution roots, and serialized result artifacts.
-- [ ] G3 proves event-first intervention, dynamic enqueue, explicit close, and isolated-worktree scheduling.
+- [x] G3 proves event-first intervention, dynamic enqueue, explicit close, and isolated-worktree scheduling.
 - [ ] G4 passes agy-driven interactive dogfooding against one managed test runtime using OpenCode Go / `deepseek-v4-flash`, with redacted evidence and clean shutdown.
 - [ ] G5 passes a real `sanad-delegate` / `deepseek-v4-flash` delegation covering question, permission, continuation, stop, and terminal output.
 - [ ] Relevant fast suites pass with bounded output; port-binding integration/E2E tests run sequentially.
