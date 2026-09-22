@@ -5,6 +5,7 @@ import 'package:mcp_client/mcp_client.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/mcp/mcp_server_config.dart';
 import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
+import 'package:sanad_windows_path/windows_path.dart';
 
 class TestableMcpRuntimeManager extends McpRuntimeManager {
   TestableMcpRuntimeManager({required SanadSettingsStore settingsStore})
@@ -176,5 +177,60 @@ void main() {
       // All connections of disabled/removed servers are cleaned up
       expect(manager.disconnectCallCount, equals(2));
     });
+
+    test('MCP stdio environment receives resolved Windows PATH once', () async {
+      var reads = 0;
+      final manager = McpRuntimeManager(
+        settingsStore: settingsStore,
+        windowsSystemPath: WindowsSystemPath(
+          isWindows: true,
+          runPowerShell: () async {
+            reads++;
+            return r'C:\system\bin';
+          },
+        ),
+      );
+
+      final first = await manager.buildSafeEnvironment(
+        const {'TOKEN': 'configured'},
+        platformEnvironment: const {
+          'Path': r'C:\stale',
+          'HOME': r'C:\home',
+          'SECRET': 'excluded',
+        },
+      );
+      final second = await manager.buildSafeEnvironment(
+        null,
+        platformEnvironment: const {'PATH': r'C:\other-stale'},
+      );
+
+      expect(first, {
+        'HOME': r'C:\home',
+        'PATH': r'C:\system\bin',
+        'TOKEN': 'configured',
+      });
+      expect(second, {'PATH': r'C:\system\bin'});
+      expect(reads, 1);
+    });
+
+    test(
+      'explicit MCP server PATH overrides the resolved system PATH',
+      () async {
+        final manager = McpRuntimeManager(
+          settingsStore: settingsStore,
+          windowsSystemPath: WindowsSystemPath(
+            isWindows: true,
+            runPowerShell: () async => r'C:\system\bin',
+          ),
+        );
+
+        final environment = await manager.buildSafeEnvironment(
+          const {'Path': r'C:\server\bin'},
+          platformEnvironment: const {'PATH': r'C:\stale'},
+        );
+
+        expect(environment, {'PATH': r'C:\server\bin'});
+      },
+    );
   });
 }

@@ -101,6 +101,12 @@ failed managed launch attempts to restore the previous manual pair.
 in one healthy managed group. Missing components are started through a
 nonce-bound component request consumed by the existing launcher. `run all`
 spawns Agent and Client concurrently and verifies each identity independently.
+On Windows, environment composition refreshes the Machine+User system PATH
+through the shared cached resolver before Agent or Client spawn. This prevents
+a stale invoking terminal from hiding newly installed OS tools, normalizes
+`Path`/`PATH` casing to one child entry, and falls back to the inherited value
+without blocking launch when registry resolution fails. POSIX environments are
+unchanged.
 `stop [all|agent|client]` uses the same control boundary; the helper CLI never
 independently kills discovered children. Client targeting considers only
 lease-owned Clients and requires an exact managed device match, optionally
