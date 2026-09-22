@@ -1,4 +1,6 @@
 import 'dart:async';
+
+import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
@@ -403,22 +405,34 @@ class SuspendedResumeService {
     AgentTurnRequest request,
     AgentRunner agentRunner,
   ) async {
-    final workspaceId = request.workspaceId;
-    if (workspaceId == null || workspaceId.isEmpty) {
-      return _runtimeContextBuilder.buildWithoutWorkspace();
+    final execRoot = request.executionRoot;
+    String? workspacePath;
+    String? workspaceName;
+
+    if (execRoot != null && execRoot.isNotEmpty) {
+      workspacePath = _runtimeContextBuilder.pathResolver
+          .validateAndNormalizeExecutionRoot(execRoot);
+      workspaceName = p.basename(workspacePath!);
+    } else {
+      final workspaceId = request.workspaceId;
+      if (workspaceId == null || workspaceId.isEmpty) {
+        return _runtimeContextBuilder.buildWithoutWorkspace();
+      }
+
+      final workspace = await _workspaceRuntimeService.describeWorkspace(
+        workspaceId,
+      );
+      workspacePath = workspace?['path'] as String?;
+      workspaceName = workspace?['name'] as String?;
     }
 
-    final workspace = await _workspaceRuntimeService.describeWorkspace(
-      workspaceId,
-    );
-    final workspacePath = workspace?['path'] as String?;
     if (workspacePath == null || workspacePath.isEmpty) {
       return _runtimeContextBuilder.buildWithoutWorkspace();
     }
 
     return _runtimeContextBuilder.build(
       workspacePath: workspacePath,
-      workspaceName: workspace?['name'] as String?,
+      workspaceName: workspaceName,
       registry: agentRunner.registry,
     );
   }

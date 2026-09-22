@@ -57,7 +57,7 @@ class LocalRuntimeCatalog {
     required ToolsRegistry registry,
     required AgentTurnRequest request,
   }) async {
-    final workspacePath = await _resolveWorkspacePath(request.workspaceId);
+    final workspacePath = await _resolveTargetWorkspacePath(request);
     final tools = <BaseTool>[
       // TEMPORARILY DISABLED: tool_search — paused for review.
       // _buildSearchTool(registry),
@@ -169,6 +169,14 @@ class LocalRuntimeCatalog {
           ),
         )
         .toList(growable: false);
+  }
+
+  Future<String?> _resolveTargetWorkspacePath(AgentTurnRequest request) async {
+    final execRoot = request.executionRoot;
+    if (execRoot != null && execRoot.isNotEmpty) {
+      return _pathResolver.validateAndNormalizeExecutionRoot(execRoot);
+    }
+    return _resolveWorkspacePath(request.workspaceId);
   }
 
   Future<String?> _resolveWorkspacePath(String? workspaceId) async {

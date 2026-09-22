@@ -276,6 +276,18 @@ sealed class CliEvent {
           raw: json,
         );
 
+      case 'stopped':
+        return CliTurnCancelledEvent(
+          reason:
+              payload['reason']?.toString() ??
+              payload['message']?.toString() ??
+              'Session execution stopped',
+          sessionId: sessionId,
+          runId: runId,
+          eventId: eventId,
+          raw: json,
+        );
+
       default:
         return CliRawEvent(
           type: eventType,
@@ -470,6 +482,19 @@ class CliErrorEvent extends CliEvent {
     super.eventId,
     super.raw,
   }) : super(type: 'error');
+}
+
+/// Dispatched when an execution turn or session is cancelled or stopped externally.
+class CliTurnCancelledEvent extends CliEvent {
+  final String reason;
+
+  CliTurnCancelledEvent({
+    this.reason = 'Session execution stopped',
+    super.sessionId,
+    super.runId,
+    super.eventId,
+    super.raw,
+  }) : super(type: 'turn_cancelled');
 }
 
 /// Fallback event for unrecognized or domain query events.

@@ -30,6 +30,15 @@ class AgentTurnRequest {
   /// The effective provider instance UUID (prefers [providerInstanceId], falls back to [providerId]).
   String? get effectiveProviderInstanceId => providerInstanceId ?? providerId;
 
+  /// Optional execution root directory overriding the workspace directory for tool and context execution.
+  String? get executionRoot {
+    final raw = metadata['execution_root'];
+    if (raw is String && raw.trim().isNotEmpty) {
+      return raw.trim();
+    }
+    return null;
+  }
+
   List<Map<String, dynamic>> get platformTools {
     final raw = metadata['platform_tools'];
     if (raw is! List) {

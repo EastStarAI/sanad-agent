@@ -5,6 +5,7 @@ import 'package:args/args.dart';
 import 'package:args/command_runner.dart';
 
 import 'commands.dart';
+import '../client/cli_turn_client.dart';
 import '../client/local_gateway_cli_client.dart';
 import '../oneshot/oneshot_runner.dart';
 import '../repl/repl_line_reader.dart';
@@ -28,7 +29,7 @@ class SanadCommandRunner extends CommandRunner<int> {
     Map<String, FutureOr<int> Function(SanadCommand command)>? customHandlers,
     StdinReader? stdinReader,
     ClientFactory? clientFactory,
-    LocalGatewayCliClient? client,
+    CliTurnClient? client,
     WorkspaceCliService? workspaceService,
     ReplLineReader? lineReader,
   }) : stdoutSink = stdoutSink ?? stdout,
@@ -140,7 +141,7 @@ class SanadCommandRunner extends CommandRunner<int> {
     Map<String, FutureOr<int> Function(SanadCommand command)>? handlers,
     StdinReader? stdinReader,
     ClientFactory? clientFactory,
-    LocalGatewayCliClient? client,
+    CliTurnClient? client,
     WorkspaceCliService? workspaceService,
     ReplLineReader? lineReader,
   }) {
@@ -152,7 +153,7 @@ class SanadCommandRunner extends CommandRunner<int> {
         onChat: onChat,
         customAction: handlerFor('chat') ?? handlerFor('cli'),
         clientFactory: clientFactory,
-        clientOverride: client,
+        clientOverride: client is LocalGatewayCliClient ? client : null,
         workspaceService: workspaceService,
         lineReader: lineReader,
       ),
@@ -177,6 +178,7 @@ class SanadCommandRunner extends CommandRunner<int> {
     addCommand(
       RestartCommand(onRestart: onRestart, customAction: handlerFor('restart')),
     );
+    addCommand(DoctorCommand(customAction: handlerFor('doctor')));
     addCommand(
       SetupCommand(onSetup: onSetup, customAction: handlerFor('setup')),
     );
@@ -199,11 +201,10 @@ class SanadCommandRunner extends CommandRunner<int> {
     addCommand(
       SessionCommand(
         clientFactory: clientFactory,
-        clientOverride: client,
+        clientOverride: client is LocalGatewayCliClient ? client : null,
         customAction: handlerFor('session'),
       ),
     );
-    addCommand(DoctorCommand(customAction: handlerFor('doctor')));
     addCommand(ModelsCommand(customAction: handlerFor('models')));
     addCommand(ProvidersCommand(customAction: handlerFor('providers')));
     addCommand(SkillsCommand(customAction: handlerFor('skills')));

@@ -1,9 +1,9 @@
 ---
 title: "Task 98: OpenCode Go Provider Model Compatibility and Sanad Delegation Architecture"
-description: "OpenCode Go compatibility evidence plus daemon-backed session intervention, a Pure-Dart sanad-delegate relay, and supervisor integration for safe delegated coding."
-status: "g1-complete-g2-ready"
-current_gate: "G2 — Pure-Dart Delegation Relay MVP (ready)"
-remaining_estimate: "65%"
+description: "OpenCode Go compatibility evidence plus daemon-backed session intervention, native sanad run delegation machine contract, and supervisor integration for safe delegated coding."
+status: "g2-complete-g3-ready"
+current_gate: "G3 — Supervisor Integration (ready)"
+remaining_estimate: "45%"
 priority: "high"
 depends_on: "OpenCode Go provider profile; Provider Registry; Sanad CLI and local gateway session runtime; Task 43 reasoning runtime"
 evidence_id: "98"
@@ -15,7 +15,7 @@ evidence_date: "2026-09-22"
 
 ## 1. Goal
 
-Establish a verified OpenCode Go compatibility baseline and deliver safe autonomous coding delegation through Sanad: daemon-backed session inspection and intervention, a Pure-Dart `sanad-delegate` relay, and event-first `delegate-task-supervisor` integration, without leaking secrets, changing logical workspace ownership, or mutating unrelated runtimes.
+Establish a verified OpenCode Go compatibility baseline and deliver safe autonomous coding delegation through Sanad: daemon-backed session inspection and intervention, native `sanad run` CLI delegation machine contract, and event-first `delegate-task-supervisor` integration, without leaking secrets, changing logical workspace ownership, or mutating unrelated runtimes.
 
 > **Snapshot scope:** The compatibility matrix proves **one-shot, zero-tool provider/model response compatibility only** (transport success plus exact-instruction compliance). It does **not** prove tool-calling or autonomous coding for any model; that proof is deferred to gate G5. Model availability and behavior are a **dated current snapshot** (initial G0 batch plus the 2026-09-22 Global-regions retest), not a durable guarantee; OpenCode Go can add, remove, or re-route models at any time.
 
@@ -27,14 +27,14 @@ Establish a verified OpenCode Go compatibility baseline and deliver safe autonom
 - **Pure-Dart CLI Routing:** Uses Sanad CLI attached to the active local daemon via WebSocket local gateway (`ws://127.0.0.1:<port>/gateway`). Does not use `--standalone`, does not take over runtime locks, and does not alter stored credentials or provider profiles.
 - **Zero Secrets / Relative Paths:** All documentation, logs, and artifacts strictly avoid hardcoded machine paths, tokens, authorization headers, account identifiers, session UUIDs, or raw network trace headers.
 - **Skill Topology Invariant:**
-  - `sanad-delegate` (new skill) owns task brief intake, provider/model selection, workspace anchoring, execution timeouts, signal trapping, result artifact writing, session continuation, and explicit non-interactive tool approval boundaries.
+  - `sanad-delegate` (new skill) is an instruction-only skill teaching orchestrators how to drive the native `sanad run` machine contract with task brief intake, provider/model selection, workspace anchoring, execution timeouts, signal trapping, result artifact writing, session continuation, and explicit non-interactive tool approval boundaries.
   - `delegate-task-supervisor` is extended only to orchestrate `sanad` as a first-class implementer alongside `opencode` and `antigravity`, consuming its timeline and managing concurrency.
-  - `sanad-agentic-developer` remains dedicated to developer operations: worktree management, `sanad-dev` lifecycle/restart/logs, and test verification; it does not duplicate delegation relay mechanics.
-- **Daemon-Backed Session Control:** Delegation requires real CLI `session list/show/stop` behavior, known session IDs, and daemon-authoritative pending-request state before the relay is built.
+  - `sanad-agentic-developer` remains dedicated to developer operations: worktree management, `sanad-dev` lifecycle/restart/logs, and test verification; it does not duplicate delegation mechanics.
+- **Daemon-Backed Session Control:** Delegation requires real CLI `session list/show/stop` behavior, known session IDs, and daemon-authoritative pending-request state before delegation runs.
 - **Clarification Safety:** `system_ask_user` is distinct from an ordinary gated-tool permission. `--allow-all-tools` must never answer it. A question remains pending until an explicit answer is submitted for the matching session and request.
 - **Typed Intervention:** CLI inspection exposes `pending_permission_request`; separate commands answer a clarification or allow/deny a tool request. Both bind `session_id` and `request_id`, and stale, resolved, or mismatched requests fail closed.
 - **Workspace Separation:** The conversation remains attached to the existing logical `sanad-agent` workspace. The execution worktree is a separate filesystem root. Delegation must not register, create, select, or switch a Sanad workspace.
-- **Pure-Dart Relay:** `sanad-delegate` and its owned relay are implemented in Pure Dart, not Node.js.
+- **Native Sanad CLI Delegation Contract:** Delegation execution is built directly into the native compiled `sanad run` CLI within the Agent, with `sanad-delegate` serving as the instruction-only skill for external orchestrators; it requires no skill-local runtime packages, scripts, or Node.js.
 - **Matrix Proof Scope:** The compatibility matrix proves one-shot zero-tool response compatibility only. Tool-use and autonomous coding proof belong to the final verification gate.
 - **Live Progress:** Full external structured streaming is optional. On-demand session inspection and event-first `needs_input` / `needs_permission` transitions are required. No terminal viewer is required because conversations already appear in the Client.
 - **Terminal Result Contract:** The final `sanad run --json` envelope remains the terminal result contract, but it is insufficient by itself for pending-request discovery and intervention.
@@ -158,8 +158,7 @@ Establish a verified OpenCode Go compatibility baseline and deliver safe autonom
 | **CLI Session Commands** | `agent/lib/cli/runner/commands/session_command.dart` | Daemon-backed list, show, stop, clarification response, and permission decisions. |
 | **CLI One-Shot Runtime** | `agent/lib/cli/oneshot/oneshot_runner.dart` | Preserve clarification requests instead of auto-resolving them without an answer. |
 | **Gateway Session State** | `agent/lib/interfaces/platforms/sanad_gateway/handlers/session_query_handler.dart` | Authoritative in-flight and pending-request projection. |
-| **Suspended Resume Runtime** | `agent/lib/interfaces/runtime/suspended_resume_service.dart` | Resume only after a typed, identity-matched answer or permission decision. |
-| **Delegation Skill** | `.agents/skills/sanad-delegate/SKILL.md` (new) | Pure-Dart delegated execution relay, brief ingestion, session identity, structured results, and timeout management. |
+| **Delegation Skill** | `.agents/skills/sanad-delegate/SKILL.md` (new) | Instruction-only skill guiding orchestrators to drive native `sanad run` machine contract, brief ingestion, session identity, structured results, and timeout management. |
 | **Delegate Supervisor** | `.agents/skills/delegate-task-supervisor/` | Multi-agent coordination, Sanad registration, intervention transitions, and event-first observation. |
 
 ---
@@ -198,13 +197,13 @@ To enable automated delegation of coding tasks to Sanad Agent from external orch
                ▼                               ▼
 ┌──────────────────────────────┐ ┌───────────────────────────┐
 │        sanad-delegate        │ │    opencode / agy-delegate │
-│   (Sanad Relay & Protocol)   │ │    (Other Implementers)   │
+│   (Instruction & Contract)   │ │    (Other Implementers)   │
 └──────────────┬───────────────┘ └───────────────────────────┘
                │
                ▼
 ┌─────────────────────────────────────────────────────────────┐
 │                       Sanad CLI                             │
-│       `fvm dart run bin/sanad_agent.dart run ...`           │
+│       `sanad run --brief-file <f> --out-dir <d> ...`        │
 │        (attached to the active local daemon)                │
 └─────────────────────────────────────────────────────────────┘
 
@@ -215,12 +214,12 @@ Separate development SOP (not part of the delegation call path):
 └─────────────────────────────────────────────────────────────┘
 ```
 
-### 8.1. `sanad-delegate` Skill (New Focused Skill)
-- **Role:** The Pure-Dart implementer-specific execution relay for Sanad Agent.
+### 8.1. `sanad-delegate` Skill (Global Instruction Skill)
+- **Role:** Instruction skill teaching orchestrators to drive the native `sanad run` CLI machine contract.
 - **Responsibilities:**
-  1. Accepts a brief file or stdin, model/provider overrides, the existing logical workspace identity, an independent execution root, and a timeout.
-  2. Never registers, creates, selects, or switches a Sanad workspace; conversation ownership stays with the existing logical workspace while tools execute in the supplied isolated worktree.
-  3. Allocates and records the session ID before dispatch so the orchestrator can inspect, continue, answer, permit, or stop that exact session.
+  1. Guides callers to invoke `sanad run` with `--brief-file` or stdin, model/provider overrides, the existing logical workspace identity (`--workspace`), an independent execution root (`--execution-root`), and a timeout.
+  2. Preserves conversation ownership with the existing logical workspace while tools execute in the supplied isolated worktree; the daemon never creates, selects, or switches workspaces.
+  3. Pre-allocates and persists session ID prior to dispatch for concurrent observation and intervention.
   4. Uses file/stdin brief transfer rather than embedding large prompts in Windows argv.
   5. Enforces tool safety: gated tools are denied by default; explicit broad approval applies only to ordinary tool permissions and never answers `system_ask_user`.
   6. Captures terminal JSON and writes structured outputs (`result.json`, summary, exit code), while surfacing `needs_input` and `needs_permission` as non-terminal intervention states.
@@ -229,26 +228,27 @@ Separate development SOP (not part of the delegation call path):
 ### 8.2. `delegate-task-supervisor` Skill (Orchestrator Extension)
 - **Role:** The multi-agent supervisor.
 - **Responsibilities:**
-  1. Registers `sanad` as a supported implementer in `tasks.json` specifications. Workspace, brief, and output-directory arguments are semantic runtime values supplied by the supervisor (a target worktree path, a brief file, and a run-scoped result directory); the specification shape is:
+  1. Registers `sanad` as a supported implementer in `tasks.json` specifications. Workspace, brief, and output-directory arguments are semantic runtime values supplied by the supervisor (a target worktree path, a brief file, and a run-scoped result directory); the standard specification shape invokes the installed `sanad` binary:
      ```json
      {
        "id": "task-01",
        "implementer": "sanad",
        "workspace": "<target-worktree-path>",
-       "command": "fvm",
-       "args": ["dart", "run", ".agents/skills/sanad-delegate/scripts/relay.dart", "--brief", "<brief-file>", "--workspace-id", "<existing-logical-workspace-id>", "--provider", "OpenCode Go", "--model", "deepseek-v4-flash", "--cd", "<target-worktree-path>", "--out-dir", "<run-result-dir>"]
+       "command": "sanad",
+       "args": ["run", "--brief-file", "<brief-file>", "--workspace", "<existing-logical-workspace-id>", "--execution-root", "<target-worktree-path>", "--provider", "OpenCode Go", "--model", "deepseek-v4-flash", "--out-dir", "<run-result-dir>", "--events"]
      }
      ```
+     (Source development checkout fallback: `command: "fvm", args: ["dart", "run", "bin/sanad_agent.dart", "run", ...]`).
      Placeholder tokens (e.g. `<target-worktree-path>`) are substituted at dispatch time; tracked documentation must not embed concrete machine paths or home-directory examples.
   2. Tracks progress by consuming the structured result and event timelines.
   3. Manages parallel worktree isolation and prevents cross-task lock contention.
   4. Honors the locked run topology: one supervisor run per reviewing orchestrator, known tasks in one shared spec, dynamic add/enqueue for later tasks, explicit close after reviews, and a single `watch-once` stream for all updates.
 
 ### 8.3. `sanad-agentic-developer` (Development SOP, Not a Runtime Component)
-- **Boundary Contract:** `sanad-agentic-developer` is a development SOP skill, not a runtime component and not a layer beneath the Sanad CLI. It remains the developer's guide for local runtimes: controlling `sanad-dev`, hot-reloading the Flutter client, reviewing agent logs (`sanad-dev logs agent -n 100`), running analyzer checks, and preparing PRs. It must *not* contain delegation relay scripts or duplicate task brief processing.
+- **Boundary Contract:** `sanad-agentic-developer` is a development SOP skill, not a runtime component and not a layer beneath the Sanad CLI. It remains the developer's guide for local runtimes: controlling `sanad-dev`, hot-reloading the Flutter client, reviewing agent logs (`sanad-dev logs agent -n 100`), running analyzer checks, and preparing PRs. It must *not* duplicate delegation mechanics or task brief processing.
 
 ### 8.4. Core Sanad Requirement Assessment
-- **Required Foundation:** Core CLI/gateway work is required before the relay: daemon-backed session inspection, stop, clarification response, permission decision, and safe one-shot handling of suspended questions.
+- **Required Foundation:** Core CLI/gateway work is required before delegation: daemon-backed session inspection, stop, clarification response, permission decision, and safe one-shot handling of suspended questions.
 - **Known Cause:** `OneshotRunner` currently sends every permission-stream event through the same auto allow/deny branch. With `--allow-all-tools`, a `system_ask_user` request is approved without an `answer`; suspended resume converts the missing answer to `''`, so the Client prompt disappears and the tool is recorded without a user response.
 - **Required Correction:** `system_ask_user` must remain pending and produce `needs_input`; broad tool approval must not resolve it. Ordinary unresolved permissions produce `needs_permission`.
 - **Terminal Result Contract:** The final JSON envelope (`session_id`, `text`, `tool_executions`, `exit_code`, `usage`, `model`, `provider`, `error`) remains authoritative only after terminal completion.
@@ -261,7 +261,7 @@ Separate development SOP (not part of the delegation call path):
 
 1. **Credential Isolation:** OpenCode API keys and authorization tokens must remain in the `SecretStore` (`provider_secrets.json` inside the resolved Sanad Home). They must never be passed via CLI argv, logged to stdout/stderr, written into delegation briefs, or committed to git.
 2. **Session Affinity:** OpenCode session affinity header (`x-opencode-session`) is generated dynamically from `sessionId` in `opencode_session_affinity.dart`. It must not be hardcoded or written into static configuration files.
-3. **Workspace Boundary:** Logical conversation workspace and filesystem execution root are separate inputs. The relay uses the existing `sanad-agent` workspace and executes tools only in the target isolated worktree; it never registers, creates, selects, or switches a workspace.
+3. **Workspace Boundary:** Logical conversation workspace and filesystem execution root are separate inputs. `sanad run` uses the existing `sanad-agent` workspace and executes tools only in the target isolated worktree; it never registers, creates, selects, or switches a workspace.
 4. **Tool Approval Boundary:** Ordinary gated tools are denied by default. Broad approval requires explicit authorization and applies only to ordinary tool permissions; it never supplies or synthesizes a clarification answer.
 5. **Intervention Identity:** Every answer or permission decision carries both `session_id` and `request_id`. The daemon rejects cross-session, stale, duplicate, resolved, or wrong-kind responses.
 6. **Prompt Transport:** Delegation briefs use files or stdin rather than large Windows command-line arguments.
@@ -288,15 +288,16 @@ Separate development SOP (not part of the delegation call path):
 - [x] Add focused unit and gateway/CLI integration coverage for suspension, inspection, response, resume, and stop.
 - [x] Update the owning CLI/runtime technical and QA documentation.
 
-### G2 — Pure-Dart Delegation Relay MVP (`sanad-delegate`)
-- [ ] Create `.agents/skills/sanad-delegate/SKILL.md` and a reusable Pure-Dart relay package/script with tests.
-- [ ] Accept briefs through a file or stdin and record a known session ID before dispatch.
-- [ ] Attach the conversation to the existing logical workspace while executing tools in the independently supplied worktree root; never mutate workspace registration or selection.
-- [ ] Implement timeout, interrupt, cancellation, and structured terminal `result.json` behavior.
-- [ ] Surface pending clarification and permission states without treating them as terminal completion.
+### G2 — Native Delegation Machine Contract & Instruction Skill (Completed)
+- [x] Create `.agents/skills/sanad-delegate/SKILL.md` instruction skill and integrate the delegation machine contract directly into `sanad run` CLI.
+- [x] Accept briefs through a file (`--brief-file`) or stdin and record a known session ID before dispatch.
+- [x] Decouple execution root (`--execution-root`) from logical workspace (`--workspace`), routing tools, MCP, and context to the worktree while preserving conversation ownership without mutating `Directory.current` or creating/selecting workspaces.
+- [x] Implement timeout, interrupt, cancellation, and structured terminal `result.json` / `events.jsonl` behavior via serialized `RunArtifactCoordinator`.
+- [x] Surface pending clarification and permission states without treating them as terminal completion.
+- [x] Independent verification: analyzer clean; focused G2 suite 119/119; full CLI suite 260/260; relevant interface/runtime suite 115/115; full Agent fast suite 1883 passed and 26 skipped; `git diff --check` and secret/path scans clean. `graphify update .` rebuilt 7477 nodes, 9988 edges, and 679 communities; its untracked `.graphify/` cache was removed per repository policy.
 
 ### G3 — Supervisor Integration (`delegate-task-supervisor`)
-- [ ] Register `sanad` as an implementer and document the Pure-Dart relay contract.
+- [ ] Register `sanad` as an implementer and document the native `sanad run` machine contract.
 - [ ] Implement one run per reviewing orchestrator with dynamic `add/enqueue`, explicit `close`, and event-first `watch-once`.
 - [ ] Emit `needs_input` and `needs_permission` transitions carrying session/request identity.
 - [ ] Verify scheduling across isolated worktrees without creating or switching Sanad workspaces.
@@ -314,7 +315,7 @@ Separate development SOP (not part of the delegation call path):
 
 ### G5 — Delegation Tool-Use Proof and Acceptance
 - [ ] Run a real `sanad-delegate` coding task with `deepseek-v4-flash` from an isolated implementation worktree.
-- [ ] Prove clarification persistence, explicit CLI answering, permission intervention, continuation, and stop through the completed relay and supervisor integration.
+- [ ] Prove clarification persistence, explicit CLI answering, permission intervention, continuation, and stop through the completed native CLI machine contract and supervisor integration.
 - [ ] Prove default gated-tool containment and explicit broad-approval boundaries.
 - [ ] Run owning analyzers, focused tests, relevant fast suites, and `graphify update .` after code changes.
 - [ ] Review all diffs; do not commit, push, merge, or switch a runtime without fresh user authorization.
@@ -334,7 +335,7 @@ Separate development SOP (not part of the delegation call path):
 - [x] A CLI clarification answer resumes only the matching session/request; stale, duplicate, cross-session, and permission-kind misuse fail without consuming the request.
 - [x] A CLI permission decision follows the same identity guarantees through a separate command.
 - [x] `session stop` stops the identified active session without affecting another session or runtime.
-- [ ] `sanad-delegate` is Pure Dart, records its session ID before dispatch, uses the existing logical workspace, and executes only in the supplied isolated worktree.
+- [x] `sanad run` implements the native delegation machine contract, records its session ID before dispatch, uses the existing logical workspace, and executes only in the supplied isolated worktree.
 - [ ] `watch-once` returns `needs_input` or `needs_permission` promptly instead of waiting for terminal completion.
 - [ ] In G4, agy drives the real daemon-backed CLI against OpenCode Go / `deepseek-v4-flash` and proves pending clarification, pending permission, list/show, answer/allow/deny, stop, bounded clean logs, and applicable restart recovery; any discovered defect is fixed and the complete scenario is rerun.
 - [ ] In G5, a real `deepseek-v4-flash` delegation through `sanad-delegate` proves tool use, user-question intervention, permission intervention, continuation, and structured terminal output.
@@ -345,7 +346,7 @@ Separate development SOP (not part of the delegation call path):
 ## 12. Definition of Done
 
 - [x] G1 lands with owning contracts, technical/QA documentation, analyzer success, focused CLI/gateway/runtime tests, and the full Agent fast suite; `graphify update .` was attempted but unavailable because the Graphify CLI was not installed or discoverable on the review machine.
-- [ ] G2 lands as tested Pure Dart with deterministic Windows-safe prompt transport and result artifacts.
+- [x] G2 lands as the native Agent-owned `sanad run` delegation machine contract and instruction-only skill with deterministic Windows-safe prompt transport, isolated execution roots, and serialized result artifacts.
 - [ ] G3 proves event-first intervention, dynamic enqueue, explicit close, and isolated-worktree scheduling.
 - [ ] G4 passes agy-driven interactive dogfooding against one managed test runtime using OpenCode Go / `deepseek-v4-flash`, with redacted evidence and clean shutdown.
 - [ ] G5 passes a real `sanad-delegate` / `deepseek-v4-flash` delegation covering question, permission, continuation, stop, and terminal output.
@@ -359,6 +360,6 @@ Separate development SOP (not part of the delegation call path):
 
 No blocking product or architecture decision remains before G1.
 
-1. **Locked:** The relay is Pure Dart; the existing logical workspace and isolated execution root remain separate; clarifications and permissions use distinct identity-bound commands; `watch-once` exposes non-terminal intervention states.
+1. **Locked:** The delegation execution contract is native to `sanad run`; the existing logical workspace and isolated execution root remain separate; clarifications and permissions use distinct identity-bound commands; `watch-once` exposes non-terminal intervention states.
 2. **Optional Later Decision:** Whether to prune currently unavailable upstream models. This cannot block G1–G5.
 3. **Snapshot Freshness:** Model availability remains dated evidence. Re-verify `deepseek-v4-flash` during G4 and again during G5 before relying on it for acceptance.

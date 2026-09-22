@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/sanad_home/runtime_ownership.dart';
 import '../../interfaces/models/agent_turn_request.dart';
+import '../artifacts/run_artifacts.dart';
 import '../client/cli_turn_client.dart';
 import '../client/local_gateway_cli_client.dart';
 import '../client/standalone_cli_turn_client.dart';
@@ -147,6 +148,9 @@ class OneshotRunner {
     Duration timeout = const Duration(minutes: 5),
     Stream<ProcessSignal>? signalStream,
     Stream<ProcessSignal> Function(ProcessSignal)? signalWatcher,
+    String? outDir,
+    bool streamEvents = false,
+    String? executionRoot,
   }) async {
     final out = stdoutSink ?? stdout;
     final err = stderrSink ?? stderr;
@@ -154,6 +158,30 @@ class OneshotRunner {
     void emitJsonResult(OneshotResult result) {
       if (json) out.writeln(jsonEncode(result.toJson()));
     }
+
+    final effectiveSessionId = (session != null && session.trim().isNotEmpty)
+        ? session.trim()
+        : 'oneshot-${_uuid.v4()}';
+
+    final startTime = DateTime.now().toUtc();
+    final RunArtifactStore? artifactStore =
+        (outDir != null && outDir.trim().isNotEmpty)
+        ? RunArtifactStore(outDir.trim())
+        : null;
+
+    final coordinator = RunArtifactCoordinator(
+      store: artifactStore,
+      streamEvents: streamEvents,
+      outSink: out,
+      sessionId: effectiveSessionId,
+      workspaceId: workspace,
+      executionRoot: executionRoot,
+      initialProvider: provider,
+      initialModel: model,
+      startTime: startTime,
+    );
+
+    await coordinator.recordInitial();
 
     // 1. Resolve prompt and piped input from stdin
     String? pipedContent;
@@ -178,20 +206,22 @@ class OneshotRunner {
       err.writeln(
         'Usage: sanad run "<prompt>" or cat file | sanad run "prompt"',
       );
+      await coordinator.recordTerminal(
+        exitCode: 1,
+        status: 'failed',
+        error: 'No prompt or instruction provided.',
+      );
+      await coordinator.drain();
       emitJsonResult(
-        const OneshotResult(
+        OneshotResult(
           exitCode: 1,
           text: '',
-          sessionId: '',
+          sessionId: effectiveSessionId,
           error: 'No prompt or instruction provided.',
         ),
       );
       return 1;
     }
-
-    final effectiveSessionId = (session != null && session.trim().isNotEmpty)
-        ? session.trim()
-        : 'oneshot-${_uuid.v4()}';
 
     // 2. Resolve client connection or standalone fallback
     CliTurnClient? activeClient = client;
@@ -225,6 +255,12 @@ class OneshotRunner {
               err.writeln(
                 'Hint: omit --standalone to attach to the running daemon.',
               );
+              await coordinator.recordTerminal(
+                exitCode: 78,
+                status: 'failed',
+                error: message,
+              );
+              await coordinator.drain();
               emitJsonResult(
                 OneshotResult(
                   exitCode: 78,
@@ -251,24 +287,38 @@ class OneshotRunner {
           err.writeln(
             'Hint: omit --standalone to attach to the running daemon.',
           );
+          const message =
+              '--standalone cannot use this Sanad Home while another runtime owns it.';
+          await coordinator.recordTerminal(
+            exitCode: 78,
+            status: 'failed',
+            error: message,
+          );
+          await coordinator.drain();
           emitJsonResult(
             OneshotResult(
               exitCode: 78,
               text: '',
               sessionId: effectiveSessionId,
-              error:
-                  '--standalone cannot use this Sanad Home while another runtime owns it.',
+              error: message,
             ),
           );
           return 78;
         } catch (e) {
           err.writeln('Error: Failed to start standalone runtime: $e');
+          final message = 'Failed to start standalone runtime: $e';
+          await coordinator.recordTerminal(
+            exitCode: 1,
+            status: 'failed',
+            error: message,
+          );
+          await coordinator.drain();
           if (json) {
             final res = OneshotResult(
               exitCode: 1,
               text: '',
               sessionId: effectiveSessionId,
-              error: 'Failed to start standalone runtime: $e',
+              error: message,
             );
             emitJsonResult(res);
           }
@@ -290,12 +340,19 @@ class OneshotRunner {
           shouldDisposeClient = true;
         } catch (e) {
           err.writeln('Error: Failed to connect to Sanad daemon: $e');
+          final message = 'Failed to connect to Sanad daemon: $e';
+          await coordinator.recordTerminal(
+            exitCode: 1,
+            status: 'failed',
+            error: message,
+          );
+          await coordinator.drain();
           if (json) {
             final res = OneshotResult(
               exitCode: 1,
               text: '',
               sessionId: effectiveSessionId,
-              error: 'Failed to connect to Sanad daemon: $e',
+              error: message,
             );
             emitJsonResult(res);
           }
@@ -313,6 +370,8 @@ class OneshotRunner {
     String? finalProvider = provider;
     String? errorMessage;
     bool hasError = false;
+    bool wasCancelled = false;
+    bool wasInterrupted = false;
 
     final automaticallyApproveTools = allowAllTools;
 
@@ -341,6 +400,7 @@ class OneshotRunner {
     try {
       Future<void> handleSignal(ProcessSignal signal) async {
         if (completer.isCompleted) return;
+        wasInterrupted = true;
         final signalCode = signal == ProcessSignal.sigterm ? 143 : 130;
         hasError = true;
         errorMessage = signal == ProcessSignal.sigterm
@@ -380,10 +440,15 @@ class OneshotRunner {
         }
       }
 
+      void onTurnActivity() {
+        coordinator.recordResumed();
+      }
+
       subscriptions.add(
         activeClient.assistantStream.listen((event) {
           if (event.sessionId == null ||
               event.sessionId == effectiveSessionId) {
+            onTurnActivity();
             assistantBuffer.write(event.content);
             if (!json && !quiet) {
               out.write(event.content);
@@ -396,6 +461,7 @@ class OneshotRunner {
         activeClient.reasoningStream.listen((event) {
           if (event.sessionId == null ||
               event.sessionId == effectiveSessionId) {
+            onTurnActivity();
             if (thinking && !json && !quiet) {
               out.write(event.content);
             }
@@ -407,6 +473,7 @@ class OneshotRunner {
         activeClient.toolCallStream.listen((event) {
           if (event.sessionId == null ||
               event.sessionId == effectiveSessionId) {
+            onTurnActivity();
             toolExecutions.add({
               'tool_name': event.toolName,
               'tool_call_id': event.toolCallId,
@@ -427,6 +494,7 @@ class OneshotRunner {
         activeClient.toolResultStream.listen((event) {
           if (event.sessionId == null ||
               event.sessionId == effectiveSessionId) {
+            onTurnActivity();
             final match = toolExecutions.lastWhere(
               (t) =>
                   t['tool_call_id'] == event.toolCallId ||
@@ -471,6 +539,12 @@ class OneshotRunner {
           if (event.sessionId == null ||
               event.sessionId == effectiveSessionId) {
             if (event.isUserQuestion) {
+              coordinator.recordPendingIntervention(
+                kind: 'needs_input',
+                requestId: event.requestId,
+                questions: event.questions,
+              );
+
               // User clarification questions (system_ask_user) must NEVER be
               // auto-resolved by --allow-all-tools or given an empty answer.
               // They remain pending until an explicit matching answer arrives.
@@ -489,6 +563,12 @@ class OneshotRunner {
             }
 
             if (!automaticallyApproveTools) {
+              coordinator.recordPendingIntervention(
+                kind: 'needs_permission',
+                requestId: event.requestId,
+                toolName: event.toolName,
+              );
+
               // Unresolved ordinary permissions remain fail-closed and pending for explicit
               // session permission/permit intervention.
               if (!json && !quiet) {
@@ -575,6 +655,27 @@ class OneshotRunner {
       );
 
       subscriptions.add(
+        activeClient.eventStream
+            .where((event) => event is CliTurnCancelledEvent)
+            .cast<CliTurnCancelledEvent>()
+            .listen((event) {
+              if (event.sessionId == null ||
+                  event.sessionId == effectiveSessionId) {
+                if (completer.isCompleted) return;
+                wasCancelled = true;
+                hasError = true;
+                errorMessage = event.reason.isNotEmpty
+                    ? event.reason
+                    : 'Session execution stopped externally.';
+                if (!json) {
+                  err.writeln('Error: $errorMessage');
+                }
+                completer.complete(130);
+              }
+            }),
+      );
+
+      subscriptions.add(
         activeClient.stateStream.listen((state) {
           if (state == CliConnectionState.closed ||
               state == CliConnectionState.disconnected) {
@@ -607,13 +708,21 @@ class OneshotRunner {
         if (resolution.hintMessage != null) {
           err.writeln('Hint: ${resolution.hintMessage}');
         }
+        final resError =
+            '${resolution.errorMessage}\n${resolution.hintMessage ?? ''}'
+                .trim();
+        await coordinator.recordTerminal(
+          exitCode: 1,
+          status: 'failed',
+          error: resError,
+        );
+        await coordinator.drain();
         if (json) {
           final res = OneshotResult(
             exitCode: 1,
             text: '',
             sessionId: effectiveSessionId,
-            error:
-                '${resolution.errorMessage}\n${resolution.hintMessage ?? ''}',
+            error: resError,
           );
           emitJsonResult(res);
         }
@@ -654,6 +763,10 @@ class OneshotRunner {
         providerInstanceId: resolvedProviderId,
         providerId: resolvedProviderId,
         thinkingMode: thinking ? 'deep' : null,
+        metadata: {
+          if (executionRoot != null && executionRoot.trim().isNotEmpty)
+            'execution_root': executionRoot.trim(),
+        },
       );
 
       if (!json && !quiet) {
@@ -679,17 +792,43 @@ class OneshotRunner {
       }
 
       // 6. Handle final output presentation
+      final String terminalStatus;
+      if (exitStatus == 124) {
+        terminalStatus = 'timeout';
+      } else if (wasInterrupted || exitStatus == 143) {
+        terminalStatus = 'interrupted';
+      } else if (wasCancelled && exitStatus == 130) {
+        terminalStatus = 'cancelled';
+      } else if (exitStatus == 130) {
+        terminalStatus = 'interrupted';
+      } else if (exitStatus == 0) {
+        terminalStatus = 'completed';
+      } else {
+        terminalStatus = 'failed';
+      }
+
+      final result = OneshotResult(
+        exitCode: exitStatus,
+        text: assistantBuffer.toString(),
+        toolExecutions: toolExecutions,
+        usage: usageInfo,
+        model: finalModel,
+        provider: finalProvider,
+        sessionId: effectiveSessionId,
+        error: hasError ? errorMessage : null,
+      );
+
+      await coordinator.recordTerminal(
+        exitCode: exitStatus,
+        status: terminalStatus,
+        text: assistantBuffer.toString(),
+        error: hasError ? errorMessage : null,
+        finalModel: finalModel,
+        finalProvider: finalProvider,
+        usage: usageInfo,
+      );
+
       if (json) {
-        final result = OneshotResult(
-          exitCode: exitStatus,
-          text: assistantBuffer.toString(),
-          toolExecutions: toolExecutions,
-          usage: usageInfo,
-          model: finalModel,
-          provider: finalProvider,
-          sessionId: effectiveSessionId,
-          error: hasError ? errorMessage : null,
-        );
         emitJsonResult(result);
       } else if (quiet) {
         final text = assistantBuffer.toString();
@@ -706,6 +845,21 @@ class OneshotRunner {
       return exitStatus;
     } finally {
       cleanup();
+      if (!coordinator.isTerminal) {
+        final fallbackStatus = wasCancelled
+            ? 'cancelled'
+            : (wasInterrupted ? 'interrupted' : 'failed');
+        await coordinator.recordTerminal(
+          exitCode: wasCancelled || wasInterrupted ? 130 : 1,
+          status: fallbackStatus,
+          text: assistantBuffer.toString(),
+          error: hasError ? errorMessage : 'Execution terminated unexpectedly',
+          finalModel: finalModel,
+          finalProvider: finalProvider,
+          usage: usageInfo,
+        );
+      }
+      await coordinator.drain();
       if (shouldDisposeClient) {
         try {
           await activeClient.dispose().timeout(const Duration(seconds: 2));

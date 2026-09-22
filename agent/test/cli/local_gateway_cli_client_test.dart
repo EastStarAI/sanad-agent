@@ -224,6 +224,45 @@ void main() {
       expect(complete.provider, 'openai');
       expect(complete.usage?['total_tokens'], 150);
     });
+
+    test('parses stopped canonical event as CliTurnCancelledEvent', () {
+      final event = CliEvent.fromJson({
+        'type': 'device_event',
+        'event': {
+          'type': 'stopped',
+          'session_id': 'session-stopped-1',
+          'run_id': 'run-123',
+          'payload': {
+            'session_id': 'session-stopped-1',
+            'run_id': 'run-123',
+            'reason': 'Session execution stopped',
+          },
+        },
+      });
+
+      expect(event, isA<CliTurnCancelledEvent>());
+      final cancelled = event as CliTurnCancelledEvent;
+      expect(cancelled.sessionId, 'session-stopped-1');
+      expect(cancelled.runId, 'run-123');
+      expect(cancelled.reason, 'Session execution stopped');
+    });
+
+    test('parses top-level stopped event as CliTurnCancelledEvent', () {
+      final event = CliEvent.fromJson({
+        'type': 'stopped',
+        'session_id': 'session-stopped-2',
+        'run_id': 'run-456',
+        'payload': {
+          'session_id': 'session-stopped-2',
+          'reason': 'Execution stopped by user',
+        },
+      });
+
+      expect(event, isA<CliTurnCancelledEvent>());
+      final cancelled = event as CliTurnCancelledEvent;
+      expect(cancelled.sessionId, 'session-stopped-2');
+      expect(cancelled.reason, 'Execution stopped by user');
+    });
   });
 
   group('LocalGatewayCliClient', () {
