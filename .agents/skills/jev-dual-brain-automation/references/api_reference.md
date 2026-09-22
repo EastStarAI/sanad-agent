@@ -1,104 +1,137 @@
-# TypeSafe Jev API Specification & System 1 Reference
+# TypeSafe System One API Reference
 
-## Overview
-TypeSafe Jev (`jev-latest`, `jev-1.13.0`) is a non-generative, sub-second decision engine designed for autonomous agent micro-loops. Instead of producing free-form tokens, it evaluates semantic candidates and probabilistic assertions directly from state descriptions.
+Source basis: TypeSafe documentation for State, Primitives, Choice, Score, Noul, Confidence, confidence-gated routing, and Jev model jaggedness, reviewed 2026-09-22.
 
-- **Base Endpoint**: `https://api.typesafe.ai/v1/systemone`
-- **Authentication**: `Authorization: Bearer <TYPESAFE_API_KEY>`
-- **Cost**: Approximately **\$0.042 per 1M tokens** (~95% cheaper than typical frontier LLM calls).
-- **Latency Profile**: **600ms – 1100ms** roundtrip per multi-question payload.
+## Endpoint and authentication
 
----
+- Endpoint: `POST https://api.typesafe.ai/v1/systemone`
+- Header: `Authorization: Bearer <TYPESAFE_API_KEY>`
+- Never track, print, or include the key in state, exceptions, eval fixtures, or command output.
 
-## Core Primitives
-
-### 1. `choice`
-Selects the single best option from a dictionary of candidate criteria based on the provided state context.
+## Request
 
 ```json
 {
-  "state": "Goal: Log in to account\nCandidates:\n@e12: button 'Sign In'\n@e15: link 'Forgot Password'",
+  "state": {
+    "goal": "Open Skills settings",
+    "phase": "choose_navigation_target",
+    "screen_mode": "settings_navigation",
+    "candidates": {
+      "nav_tile_skills": "Skills",
+      "nav_tile_mcp": "MCP Servers"
+    }
+  },
   "model": "jev-latest",
   "questions": {
-    "next_click": {
+    "target": {
       "type": "choice",
-      "instructions": "Which element should be clicked to begin logging in?",
+      "instructions": "Which candidate directly opens Skills?",
       "criteria": {
-        "e12": "button 'Sign In'",
-        "e15": "link 'Forgot Password'"
+        "nav_tile_skills": "Directly opens Skills",
+        "nav_tile_mcp": "Opens MCP instead"
       }
-    }
-  }
-}
-```
-
-**Response Format**:
-```json
-{
-  "answers": {
-    "next_click": {
-      "choice": "e12"
-    }
-  }
-}
-```
-
----
-
-### 2. `noul`
-Returns a continuous probability value between `0.0` and `1.0` evaluating a boolean assertion against the state. Used for goal completion verification and modal detection.
-
-```json
-{
-  "state": "Current Screen: Welcome dashboard with user avatar and recent documents list.",
-  "model": "jev-latest",
-  "questions": {
-    "is_logged_in": {
+    },
+    "blocked": {
       "type": "noul",
-      "instructions": "Is the user currently authenticated and viewing their main dashboard?"
+      "instructions": "Is a blocker preventing safe interaction?"
     }
   }
 }
 ```
 
-**Response Format**:
-```json
-{
-  "answers": {
-    "is_logged_in": {
-      "noul": 0.94
-    }
-  }
-}
-```
+`state` may be a string, object, or array of text-bearing JSON values. Prefer an object with named relationships. Every question in one request sees the same state and is evaluated independently.
 
----
+## Primitives and answers
 
-### 3. `score`
-Assigns relative normalized scores across candidate options for ranking priority actions or search results.
+### Choice
+
+Use for one option from an unordered fixed set.
 
 ```json
 {
-  "state": "Search Query: flight from Cairo to Dubai",
-  "model": "jev-latest",
-  "questions": {
-    "rank_destinations": {
-      "type": "score",
-      "instructions": "Score each destination based on relevance to Dubai",
-      "criteria": {
-        "opt1": "Dubai International Airport (DXB)",
-        "opt2": "Doha Hamad International (DOH)",
-        "opt3": "Abu Dhabi International (AUH)"
-      }
-    }
+  "choice": "nav_tile_skills",
+  "probabilities": {
+    "nav_tile_skills": 0.99,
+    "nav_tile_mcp": 0.01
+  },
+  "confidence": 0.98
+}
+```
+
+Retain all three fields. Validate that `choice` belongs to the current candidate map, then gate on a measured confidence threshold. Optionally inspect the selected option's probability or the full distribution.
+
+### Score
+
+Use for an ordered spectrum. Criteria are an ordered array with positions starting at zero. The returned score may fall between levels.
+
+```json
+{
+  "score": 1.4,
+  "legend": ["low", "medium", "high"],
+  "probabilities": [0.1, 0.4, 0.5],
+  "confidence": 0.72
+}
+```
+
+Retain `score`, `legend`, `probabilities`, and `confidence`. Do not reinterpret Score as ranking independent candidates.
+
+### Noul
+
+Use for one yes/no proposition. The value is the probability of yes from 0 to 1. Noul has no separate confidence field.
+
+```json
+{
+  "noul": 0.09
+}
+```
+
+Optional criteria may define the true and false meanings:
+
+```json
+{
+  "type": "noul",
+  "instructions": "Is the workflow blocked?",
+  "criteria": {
+    "true": "A modal, captcha, permission, error, or unknown state blocks progress",
+    "false": "The expected target is visible and safely actionable"
   }
 }
 ```
 
----
+## Independence and hierarchy
 
-## Best Practices for Prompting Jev
+Batched questions reduce round trips only when they are independent judgments over the same state. The model does not evaluate question B conditional on its answer to question A.
 
-1. **Keep Candidate Descriptions Concise**: Truncate candidate labels to ~70 characters to maximize classification accuracy and keep prompt tokens minimal.
-2. **Include Recent Action History**: Passing the last 2-3 executed actions in the `state` prevents Jev from repeating an action that just fired.
-3. **Combine Verification and Choice in a Single Request**: Send both the `choice` question and the `noul` verification question in a single payload to eliminate redundant network roundtrips.
+Bad batch:
+
+- `page_mode`: choose search, calendar, results, or booking summary.
+- `next_action`: choose from actions that are valid only for whichever `page_mode` wins.
+
+Correct sequence:
+
+1. Ask for `page_mode`.
+2. Code validates confidence and selects the candidate set for that mode.
+3. Ask a second request for `next_action` among that set.
+
+Independent `blocked`, `goal_complete`, and `target` judgments may share a request when each can be answered directly from the same state and code resolves conflicts conservatively.
+
+## Confidence routing
+
+Choice and Score confidence summarizes the shape of their probability distribution. Low confidence is useful uncertainty, not permission to act on the top option.
+
+- Establish thresholds with representative evals.
+- Raise thresholds with action consequence.
+- Route medium confidence to confirmation, more evidence, or System 2.
+- Route low confidence to no action.
+- Keep probabilities in diagnostics so threshold failures remain explainable.
+
+## Jev jaggedness
+
+Jev is optimized for fast semantic judgments, not general reasoning. Keep these in deterministic code or System 2:
+
+- phase ordering and state transitions;
+- exact dates, arithmetic, prices, counts, and sorting;
+- selector validity and action mechanics;
+- retry and irreversible-action policy;
+- dependent multi-step planning;
+- unknown or structurally complex UI recovery.
