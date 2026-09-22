@@ -53,7 +53,9 @@ void main() {
       'CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;'.allMatches(xcodeProject),
       hasLength(3),
     );
-    final infoPlist = File('ios/Runner/Info.plist').readAsStringSync();
+    final infoPlist = File(
+      'ios/Runner/Info.plist',
+    ).readAsStringSync().replaceAll('\r\n', '\n');
     expect(infoPlist, contains('<key>FlutterDeepLinkingEnabled</key>'));
     expect(
       infoPlist,
@@ -64,10 +66,29 @@ void main() {
     expect(infoPlist, contains('<string>sanad</string>'));
     expect(infoPlist, isNot(contains('com.googleusercontent.apps.')));
 
-    final productionConfig = jsonDecode(File('config/prod.json').readAsStringSync()) as Map<String, dynamic>;
+    final developmentConfig =
+        jsonDecode(
+              File('config/dev.json').readAsStringSync(),
+            )
+            as Map<String, dynamic>;
+    expect(developmentConfig['ENVIRONMENT'], 'dev');
+    expect(
+      developmentConfig['SANAD_IOS_DEVELOPMENT_AUTH_REDIRECT_URI'],
+      'sanad://oauth/ios-development',
+    );
+
+    final productionConfig =
+        jsonDecode(
+              File('config/prod.json').readAsStringSync(),
+            )
+            as Map<String, dynamic>;
     expect(
       productionConfig['SANAD_IOS_AUTH_REDIRECT_URI'],
       'https://app.sanad.eaststarai.com/oauth/ios',
+    );
+    expect(
+      productionConfig,
+      isNot(contains('SANAD_IOS_DEVELOPMENT_AUTH_REDIRECT_URI')),
     );
     expect(
       productionConfig['SANAD_ANDROID_AUTH_REDIRECT_URI'],

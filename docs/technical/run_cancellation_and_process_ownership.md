@@ -31,6 +31,7 @@ accept Stop
 - سبب الإلغاء وأول وقت لقبوله.
 - registrations للموارد التي بدأت داخل الجولة.
 - عملية إلغاء مشتركة تنضم إليها طلبات Stop المكررة.
+- عملية Stop مشتركة على مستوى الجلسة تمنع طلبين متزامنين من تكرار terminalization أو حدث `stopped`.
 - بوابة نشر تُغلق تزامنيًا عند invalidation.
 
 كل registration تنتقل مرة واحدة:
@@ -44,6 +45,10 @@ registered -> cancelling -> cleanup_failed
 `release` تعني انتقال الملكية أو اكتمال المورد، وليست إلغاءً. لا تنجح إلا بعد
 اكتمال طبيعي أو إثبات مالك جديد. الوصول المتأخر إلى registration محررة أو
 ملغاة عملية idempotent بلا side effect.
+
+أي registration تصل أثناء cancellation تنضم إلى مهلة cleanup الأصلية. وإذا
+اكتمل terminal report قبل وصول registration متسابقة، تُشغّل cleanup الخاصة بها
+مرة واحدة فور التسجيل كي لا يبقى المورد orphan، من دون إعادة فتح التقرير النهائي.
 
 ## 3. الإلغاء المحدود والنتائج
 
@@ -79,10 +84,15 @@ effect، وتعلن إذا كانت لا تدعم الإلغاء التعاون�
 
 - Linux: process group مستقلة يقودها الأمر المملوك عبر `setsid sh -c`، مما
   يفصل جلسة الطفل عن جلسة الـ daemon تمامًا ويمنع وصول `/dev/tty`.
-- macOS: يشغّل الأمر حاليًا عبر `sh -c` من دون ضمان process-group containment؛
-  إنهاء شجرة العمليات الكاملة يحتاج تنفيذًا خاصًا بالمنصة واختبارات مستقلة.
-- Windows: Job Object بإنهاء عند إغلاق المالك، مع fallback صريح عند تعذرها.
-- تحفظ بصمة تضم PID ووقت بدء العملية وهوية containment وowner generation.
+- macOS: wrapper صغيرة تستدعي `setpgrp` قبل `exec sh -c`، فتمنح الأمر process
+  group مستقلة قبل تنفيذ محتوى المستخدم.
+- Windows: Job Object ذات `kill-on-close` هي containment الأساسية، ويستخدم
+  `taskkill /T /F` fallback صريحًا فقط إذا تعذر إنشاء الـJob أو إلحاق العملية.
+- تحفظ بصمة تضم PID وهوية وقت البدء الفعلية وهوية containment. يعاد فحص هوية
+  البدء قبل الإشارة المتأخرة، لا مجرد اختبار أن رقم PID ما زال حيًا.
+- يحفظ shell أثناء التشغيل snapshot دائمًا ومحدودًا ومنقحًا من stdout/stderr
+  والبصمة. بعد crash تتحقق الاستعادة من البصمة أولًا، ثم تنهي containment
+  المملوكة إن بقيت، وتثبت terminal واحدة باسم `interrupted` من دون إعادة الأمر.
 
 قيود إضافية على الأنظمة الشبيهة بـUnix لمنع تعليق الأوامر غير التفاعلية:
 
@@ -90,9 +100,11 @@ effect، وتعلن إذا كانت لا تدعم الإلغاء التعاون�
   إدخال لوحة المفاتيح إلى الأبد (مثل `read` أو `git` قبل تكوين credentials).
 - **تقليل مسارات المطالبات:** `GIT_TERMINAL_PROMPT=0` يمنع مطالبة git عبر
   الطرفية، و`SSH_ASKPASS_REQUIRE=never` يمنع ssh من تشغيل askpass.
-- **إنهاء المجموعة المملوكة:** على Linux تُرسل `TERM` ثم `KILL` إلى PGID
-  السالبة التي أنشأها `setsid`. استقلال هذه المجموعة عن مجموعة الـ daemon هو
-  حد الأمان الذي يمنع وصول الإشارة إلى الوكيل أو المشرف.
+- **إنهاء المجموعة المملوكة:** على Linux وmacOS تُرسل `TERM` ثم `KILL` إلى
+  PGID السالبة التي أنشأها wrapper. استقلال هذه المجموعة عن مجموعة الـdaemon
+  هو حد الأمان الذي يمنع وصول الإشارة إلى الوكيل أو المشرف.
+- **الاكتمال الطبيعي:** خروج wrapper لا يحرر الملكية فورًا؛ يفحص controller
+  containment ويُنهي أي descendants باقية قبل نشر نجاح الأداة وإغلاق pipes.
 
 مسار الإنهاء:
 
@@ -104,6 +116,12 @@ close publication
   -> verify exit and fingerprint
   -> terminalize once
 ```
+
+النتيجة النهائية لا تستنتج أن المستخدم ألغى التنفيذ. وحده Stop الصريح ينتج
+`cancelled_by_user`. انتهاء المهلة ينتج `timed_out` ومعه stdout/stderr المتاحة
+حتى لحظة الإنهاء، وshutdown أو crash ينتج `agent_interrupted` مع
+`cleanup_outcome` و`outcome: unknown`. إذا فُقدت الملكية أو تغيرت هوية PID فلا
+ترسل إشارة، وتسجل `ownership_lost` بدل تخمين نجاح cleanup.
 
 فحص PPID أداة تشخيص أو fallback فقط؛ لا يمثل حد الملكية الأساسي. عدم تطابق
 البصمة يمنع قتل PID ربما أعيد استخدامها.
@@ -146,3 +164,5 @@ cleanup_outcome, started_at, terminal_at
 - exit وStop وtimeout المتزامنة لا تنتج أكثر من terminal.
 - late output لا تعيد tool إلى running ولا تختلف بين live/history.
 - repeated Stop وPID mismatch وcleanup failure لها نتائج ثابتة وقابلة للاستعادة.
+- timeout وshutdown يحتفظان بالمخرجات الجزئية ولا يظهران كإلغاء من المستخدم.
+- SIGKILL ثم startup يغلقان shell المملوكة مرة واحدة، ولا يعيدان تنفيذ الأمر.

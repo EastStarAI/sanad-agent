@@ -15,20 +15,29 @@ This directory owns the specifications of test cases, manual validation flows, t
 
 ## Active Specifications
 
+- [Test Suite Performance and Ownership QA](test_suite_performance_qa.md): Package boundaries, deterministic timer/event testing, hotspot thresholds, and subprocess/port integration classification for Agent, Client, and `sanad-dev` suites.
+- [Agent Turn Startup Performance QA](agent_turn_startup_performance_qa.md): Metadata-only admission, atomic root-message append, revision-validated history reuse, and Windows long-session latency coverage.
+- [Flutter VM Driver CLI QA](flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
 - [Bundled Product Skills QA](bundled_product_skills_qa.md): Deterministic one-file embedding, SANAD_HOME install/update/remove, customization safety, fast startup, and release-artifact coverage.
 - [Local Gateway and Sanad Home Security QA](local_gateway_and_sanad_home_security_qa.md): Authentication, Host/Origin rejection, secure writes, legacy migration, restart, Windows ACL, and worktree isolation coverage.
 - [Memory Tool Reliability QA](memory_tool_reliability.md): Regression coverage for compact results, atomic batches, drift recovery, bounded retries, content safety, and frozen snapshots.
+- [View Image Tool QA](view_image_tool_qa.md): Regression coverage for secure image loading, user attachment admission, composer/timeline/edit UX, local/remote media hydration, multimodal codecs, recovery, pruning, and binary-safe projections.
 - [Runtime Source Switch QA](runtime_source_switch_qa.md): Regression coverage for requester-scoped pair selection, multi-runtime isolation, retained runtime identity, target conflicts, and full-pair rollback.
 - [Release Verification Matrix](release_verification.md): Local and hosted evidence required for release identity, signing, installation, update, rollback, and supply-chain safety.
 - [Community Governance QA](community_governance_qa.md): Static and live verification for labels, templates, skills, protected CI, Discord routing, and repository governance.
 - [Conversation Cache Recovery QA](conversation_cache_recovery_qa.md): Local cache, draft, reconnect, and restart recovery coverage.
+- [Cross-Transport Delivery Presence QA](cross_transport_delivery_presence_qa.md): Assertion-bound Local membership, fail-safe Agent Cloud-egress leases, route transitions, and canonical event-id deduplication.
 - [Mobile Session and Resume Recovery QA](mobile_session_resume_recovery_qa.md): Typed refresh outcomes, foreground resume, stale-cache continuity, and authoritative mobile conversation resynchronization.
 - [Desktop Authentication Exchange QA](desktop_authentication_exchange_qa.md): Bidirectional login, refresh, logout, reconnect, and credential-free Local Gateway exchange coverage.
+- [Account Sessions and Devices QA](account_sessions_devices_qa.md): Account Client-session and Agent inventory presentation, hardware/account identity boundaries, cancellation, revocation, compact layout, and restart coverage.
 - [Device Name Editing QA](device_name_editing_qa.md): Device rename validation, synchronization, and failure coverage.
 - [Provider Account Usage Limits QA](provider_account_usage_limits_qa.md): Regression coverage for instance isolation, capability discovery, freshness, stale responses, and usage-card presentation.
-- [Message Edit and Retry QA](message_edit_retry_qa.md): Coverage for inline editing, idle-boundary ordering, side-effect confirmation, latest-turn identity, navigation cancellation, and current route selection.
-- [Remote Workspace Folder Management QA](workspace_folder_management_qa.md): Coverage for folder create, rename, confirmed recursive delete, validation, request correlation, refresh, and remote-picker error behavior.
-- [Remote MCP Management Boundary QA](remote_mcp_management_qa.md): Coverage for cloud-only configuration rejection, local configuration continuity, and preserved MCP tool use in cloud-origin turns.
+- [OpenRouter App Attribution QA](openrouter_app_attribution_qa.md): Exact app-attribution headers, sync/stream propagation, bearer-auth preservation, and provider-isolation coverage.
+- [Message Edit and Retry QA](message_edit_retry_qa.md): Coverage for inline editing, idle-boundary ordering, side-effect and steer-drop confirmation, root-turn identity, navigation cancellation, and current route selection.
+- [Conversation Fork QA](conversation_fork_qa.md): Coverage for materialized fork, lineage, parent/child independence, and delete behavior.
+- [Remote Device Control QA](remote_device_control_qa.md): Gate-linked pass/fail coverage for remote Agent update, restart, managed workspaces, and redacted MCP management, starting from the current cloud freeze.
+- [Remote Workspace Folder Management QA](workspace_folder_management_qa.md): Coverage for local native picker continuity and managed-remote create/browse.
+- [Remote MCP Management Boundary QA](remote_mcp_management_qa.md): Coverage for cloud MCP configuration admission, redaction, confirmation tickets, local continuity, and preserved MCP tool use in cloud-origin turns.
 - [Workspace Identity and Change Path QA](workspace_identity_relocation_qa.md): Coverage for UUID migration, missing folders, scoped Settings routing, display rename, path repair, and cache reconciliation.
 - [Live Context Usage Indicator QA](live_context_usage_indicator_qa.md): Regression coverage for exact latest-provider values, cached-input visibility, tool-loop updates, session isolation, and history restoration.
 - [Session Title Generation QA](session_title_generation_qa.md): Regression coverage for background first-exchange title generation, atomic placeholder ownership, stale-result rejection, and client synchronization.
@@ -38,5 +47,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Device Workspace Sidebar QA](device_workspace_sidebar_qa.md): Focused validation for the Plan 32c device-scoped sidebar including cache-first rendering, pagination, live ordering, responsive drawer behavior, and accessibility expectations.
 - [Plan 29 Provider Setup Regression Matrix](provider_setup_plan29_regression_matrix.md): Regression coverage for instance-first provider setup, model refresh races, default-instance onboarding, shared cache/recent behavior, and runtime-ready signaling.
 - [Plan 30 Runtime Recovery Matrix](plan30_runtime_recovery_matrix.md): Focused coverage for runtime notice hydration, daemon-authoritative provider/model confirmation, multi-client recovery synchronization, and never-trapped-session flows.
+- [Plan 50 Cancellation Regression Matrix](plan50_cancellation_regression_matrix.md): Provider interruption, shell process-tree cleanup, durable cancelled terminals, and client live/history parity for Stop.
 - [Task 31 Authoritative Session State QA Matrix](task31_authoritative_session_state_matrix.md): Coverage for the seven durable execution states, per-session attention isolation, reconnect ordering, stop/run races, and visible route failover deduplication.
 - [Task 36 Authoritative Steer, Queue, and Stop Recovery QA Matrix](task36_authoritative_steer_queue_stop_recovery_matrix.md): Coverage for daemon-owned delivery classification, raw request-id parity, pending-steer cancellation races, queue mutations, lossless Stop draft recovery, and first-writer restart claims.
+- [Agent State Database Maintenance QA](agent_state_database_maintenance_qa.md): Run/skip/fail matrix for startup orphan cleanup, 14-day terminal work-item prune, and thresholded VACUUM of state.db.

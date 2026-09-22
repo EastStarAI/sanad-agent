@@ -170,6 +170,7 @@ install_shim() {
 }
 
 resolve_contract_dependencies() { cd "$PROJECT_DIR/release/contract" && "$FVM_BIN" dart pub get; }
+resolve_sanad_dev_dependencies() { cd "$PROJECT_DIR/scripts/sanad_dev" && "$FVM_BIN" dart pub get; }
 resolve_agent_dependencies() { cd "$PROJECT_DIR/agent" && "$FVM_BIN" dart pub get; }
 resolve_client_dependencies() { cd "$PROJECT_DIR/client" && "$FVM_BIN" flutter pub get; }
 
@@ -178,13 +179,50 @@ ensure_dependencies() {
   flutter_pin="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PROJECT_DIR/.fvmrc")"
   stamp_root="$PROJECT_DIR/.dart_tool/sanad-dev"
   mkdir -p "$stamp_root"
-  fingerprint="$(printf '%s:%s:%s:%s' "$flutter_pin" "$(sha256_file "$PROJECT_DIR/release/contract/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/agent/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/client/pubspec.lock")" | { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; } | awk '{print $1}')"
+  fingerprint="$(printf '%s:%s:%s:%s:%s' "$flutter_pin" "$(sha256_file "$PROJECT_DIR/release/contract/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/scripts/sanad_dev/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/agent/pubspec.lock")" "$(sha256_file "$PROJECT_DIR/client/pubspec.lock")" | { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; } | awk '{print $1}')"
   stamp="$stamp_root/setup.stamp"
-  [ -f "$PROJECT_DIR/release/contract/.dart_tool/package_config.json" ] && [ -f "$PROJECT_DIR/agent/.dart_tool/package_config.json" ] && [ -f "$PROJECT_DIR/client/.dart_tool/package_config.json" ] && packages_ready=true
+  [ -f "$PROJECT_DIR/release/contract/.dart_tool/package_config.json" ] && [ -f "$PROJECT_DIR/scripts/sanad_dev/.dart_tool/package_config.json" ] && [ -f "$PROJECT_DIR/agent/.dart_tool/package_config.json" ] && [ -f "$PROJECT_DIR/client/.dart_tool/package_config.json" ] && packages_ready=true
   if [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$fingerprint" ] && [ "$packages_ready" = true ]; then return; fi
   run_stage 'Resolving Release Contract dependencies' resolve_contract_dependencies
+  run_stage 'Resolving sanad-dev dependencies' resolve_sanad_dev_dependencies
   run_stage 'Resolving Agent dependencies' resolve_agent_dependencies
   run_stage 'Resolving Client dependencies' resolve_client_dependencies
+  printf '%s' "$fingerprint" > "$stamp"
+}
+
+runtime_cli_fingerprint() {
+  local package_root="$PROJECT_DIR/scripts/sanad_dev"
+  (
+    cd "$package_root"
+    {
+      printf '%s\n' pubspec.yaml pubspec.lock
+      find lib -type f -name '*.dart' -print
+    } | sort | while IFS= read -r file; do
+      printf '%s:%s\n' "$file" "$(sha256_file "$file")"
+    done
+  ) | { if command -v shasum >/dev/null 2>&1; then shasum -a 256; else sha256sum; fi; } | awk '{print $1}'
+}
+
+compile_runtime_cli() {
+  cd "$PROJECT_DIR/scripts/sanad_dev"
+  "$FVM_BIN" dart compile exe lib/sanad_dev_cli.dart -o "$1"
+}
+
+ensure_runtime_cli() {
+  local artifact_root artifact stamp fingerprint
+  artifact_root="$PROJECT_DIR/.dart_tool/sanad-dev"
+  stamp="$artifact_root/runtime-cli.stamp"
+  mkdir -p "$artifact_root"
+  fingerprint="$(runtime_cli_fingerprint)"
+  artifact="$artifact_root/sanad-dev-runtime-$fingerprint"
+  if [ -x "$artifact" ]; then
+    if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" != "$fingerprint" ]; then
+      printf '%s' "$fingerprint" > "$stamp"
+    fi
+    return
+  fi
+  run_stage 'Compiling sanad-dev runtime' compile_runtime_cli "$artifact"
+  chmod +x "$artifact"
   printf '%s' "$fingerprint" > "$stamp"
 }
 
@@ -199,15 +237,32 @@ run_setup() {
   local force="$1" allow_existing_shim="$2"
   run_install "$force" "$allow_existing_shim"
   ensure_dependencies
+  ensure_runtime_cli
 }
 
 require_runtime_cli() {
   command -v fvm >/dev/null 2>&1 || { echo 'FVM is not installed. Run: sanad-dev install' >&2; return 1; }
-  FVM_BIN="$(command -v fvm)"
-  local flutter_pin
-  flutter_pin="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$PROJECT_DIR/.fvmrc")"
-  [ -n "$flutter_pin" ] && _flutter_ready "$flutter_pin" || { echo 'Pinned Flutter is not installed. Run: sanad-dev install' >&2; return 1; }
-  [ -f "$PROJECT_DIR/client/.dart_tool/package_config.json" ] || { echo 'Project packages are not ready. Run: sanad-dev setup' >&2; return 1; }
+  local artifact_root stamp fingerprint
+  artifact_root="$PROJECT_DIR/.dart_tool/sanad-dev"
+  stamp="$artifact_root/runtime-cli.stamp"
+  [ -f "$PROJECT_DIR/release/contract/.dart_tool/package_config.json" ] &&
+    [ -f "$PROJECT_DIR/scripts/sanad_dev/.dart_tool/package_config.json" ] &&
+    [ -f "$PROJECT_DIR/agent/.dart_tool/package_config.json" ] &&
+    [ -f "$PROJECT_DIR/client/.dart_tool/package_config.json" ] &&
+    [ -f "$stamp" ] || {
+      echo 'Project runtime is not ready. Run: sanad-dev setup' >&2
+      return 1
+    }
+  fingerprint="$(runtime_cli_fingerprint)"
+  [ "$(cat "$stamp")" = "$fingerprint" ] || {
+    echo 'Project runtime is stale. Run: sanad-dev setup' >&2
+    return 1
+  }
+  RUNTIME_CLI="$artifact_root/sanad-dev-runtime-$fingerprint"
+  [ -x "$RUNTIME_CLI" ] || {
+    echo 'Project runtime is not ready. Run: sanad-dev setup' >&2
+    return 1
+  }
 }
 
 main() {
@@ -220,7 +275,7 @@ main() {
       return 0
       ;;
     setup)
-      run_setup "$force" false
+      run_setup "$force" true
       return 0
       ;;
     run)
@@ -230,16 +285,16 @@ main() {
       run_setup false true
       ;;
     *)
-      require_runtime_cli
       ;;
   esac
+  require_runtime_cli
   local runtime_args=("$@")
   if [ "$command" = run ] && [ "$force" = true ]; then
     runtime_args=()
     for arg in "$@"; do [ "$arg" != --force ] && runtime_args+=("$arg"); done
   fi
   cd "$PROJECT_DIR/client"
-  SANAD_DEV_CALLER_DIR="$CALLER_DIR" "$FVM_BIN" dart "$SCRIPT_DIR/sanad_dev.dart" "${runtime_args[@]}"
+  SANAD_DEV_CALLER_DIR="$CALLER_DIR" "$RUNTIME_CLI" "${runtime_args[@]}"
 }
 
 main "$@"

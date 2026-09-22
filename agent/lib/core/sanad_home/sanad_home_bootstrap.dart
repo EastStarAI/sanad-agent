@@ -1,5 +1,6 @@
 library;
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
@@ -26,6 +27,7 @@ class SanadHomeBootstrap {
 
   static const int secretFileMode = 0x180; // 0600
   static const int secretDirMode = 0x1c0; // 0700
+  static const String managedWorkspacesDirectoryName = 'workspaces';
   static bool _ownerOnlyUmaskInstalled = false;
 
   static SanadHomeBootstrap identity() =>
@@ -94,6 +96,9 @@ class SanadHomeBootstrap {
     }
     _rejectLink(absolute, code: 'root_symlink');
     await _enforceDirectoryOwnership(root);
+    if (scope == SanadHomeScope.identity) {
+      ensureDirectoryPathSync(managedWorkspacesDirectoryName);
+    }
     return root.resolveSymbolicLinksSync();
   }
 
@@ -194,6 +199,83 @@ class SanadHomeBootstrap {
     final file = File(child(relative));
     return file.existsSync() &&
         file.statSync().type == FileSystemEntityType.file;
+  }
+
+  /// Acquires a stable exclusive lock whose ownership lasts until the returned
+  /// lease is released. Long-lived runtimes use this before opening SQLite.
+  Future<SanadHomeFileLockLease> acquireFileLock(
+    String relative, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final lockFile = _openStableLockFileSync(relative);
+    try {
+      await lockFile.lock(FileLock.exclusive).timeout(timeout);
+      return SanadHomeFileLockLease._(lockFile);
+    } on TimeoutException {
+      await lockFile.close();
+      throw const SanadHomeWriteFailure(
+        'lock_timeout',
+        'Timed out waiting for an exclusive Sanad Home file lock.',
+      );
+    } on FileSystemException catch (error) {
+      await lockFile.close();
+      if (const {11, 33, 35}.contains(error.osError?.errorCode)) {
+        throw const SanadHomeWriteFailure(
+          'lock_unavailable',
+          'The exclusive Sanad Home file lock is already held.',
+        );
+      }
+      rethrow;
+    } catch (_) {
+      await lockFile.close();
+      rethrow;
+    }
+  }
+
+  Future<T> runWithFileLock<T>(
+    String relative,
+    Future<T> Function() operation, {
+    Duration timeout = const Duration(seconds: 10),
+  }) async {
+    final lockFile = _openStableLockFileSync(relative);
+    try {
+      try {
+        await lockFile.lock(FileLock.exclusive).timeout(timeout);
+      } on TimeoutException {
+        throw const SanadHomeWriteFailure(
+          'lock_timeout',
+          'Timed out waiting for an exclusive Sanad Home file lock.',
+        );
+      }
+      return await operation();
+    } finally {
+      try {
+        await lockFile.unlock();
+      } catch (_) {}
+      await lockFile.close();
+    }
+  }
+
+  RandomAccessFile _openStableLockFileSync(String relative) {
+    final file = File(child(relative));
+    _secureParentsSync(file.parent);
+    final type = FileSystemEntity.typeSync(file.path, followLinks: false);
+    if (type == FileSystemEntityType.link) {
+      throw const SanadHomeBoundaryViolation(
+        'symlink_target',
+        'Symbolic links are not allowed at the Sanad runtime boundary.',
+      );
+    }
+    if (type == FileSystemEntityType.notFound) {
+      try {
+        file.createSync(exclusive: true);
+      } on FileSystemException {
+        if (!file.existsSync()) rethrow;
+      }
+    }
+    _assertRegularFile(file);
+    _enforceSecretOwnershipSync(file);
+    return file.openSync(mode: FileMode.append);
   }
 
   Future<void> deleteFile(String relative) async {
@@ -309,32 +391,40 @@ class SanadHomeBootstrap {
         );
       }
       if (destination.existsSync()) {
-        destination.renameSync(backup.path);
+        _renameWithRetrySync(destination, backup.path);
         movedOld = true;
       }
-      staging.renameSync(destination.path);
-      if (backup.existsSync()) _deleteStrictChildDirectorySync(backup);
+      _renameWithRetrySync(staging, destination.path);
+      try {
+        if (backup.existsSync()) _deleteStrictChildDirectorySync(backup);
+      } catch (_) {}
     } on SanadHomeBoundaryViolation {
       if (movedOld && !destination.existsSync() && backup.existsSync()) {
-        backup.renameSync(destination.path);
+        _renameWithRetrySync(backup, destination.path);
       }
       rethrow;
     } catch (_) {
       if (destination.existsSync() && movedOld && backup.existsSync()) {
-        _deleteStrictChildDirectorySync(destination);
+        try {
+          _deleteStrictChildDirectorySync(destination);
+        } catch (_) {}
       }
       if (movedOld && backup.existsSync()) {
-        backup.renameSync(destination.path);
+        _renameWithRetrySync(backup, destination.path);
       }
       throw const SanadHomeWriteFailure(
         'directory_replace_failed',
         'The managed directory replacement failed.',
       );
     } finally {
-      if (staging.existsSync()) _deleteStrictChildDirectorySync(staging);
-      if (backup.existsSync() && destination.existsSync()) {
-        _deleteStrictChildDirectorySync(backup);
-      }
+      try {
+        if (staging.existsSync()) _deleteStrictChildDirectorySync(staging);
+      } catch (_) {}
+      try {
+        if (backup.existsSync() && destination.existsSync()) {
+          _deleteStrictChildDirectorySync(backup);
+        }
+      } catch (_) {}
     }
   }
 
@@ -544,11 +634,16 @@ $source = $env:SANAD_ATOMIC_SOURCE
 $destination = $env:SANAD_ATOMIC_DESTINATION
 $replaceExisting = 0x1
 $writeThrough = 0x8
-if (-not [SanadAtomicMove]::MoveFileExW(
-  $source,
-  $destination,
-  ($replaceExisting -bor $writeThrough)
-)) {
+$flags = ($replaceExisting -bor $writeThrough)
+$success = $false
+for ($i = 0; $i -lt 10; $i++) {
+  if ([SanadAtomicMove]::MoveFileExW($source, $destination, $flags)) {
+    $success = $true
+    break
+  }
+  Start-Sleep -Milliseconds 50
+}
+if (-not $success) {
   throw [ComponentModel.Win32Exception]::new(
     [Runtime.InteropServices.Marshal]::GetLastWin32Error()
   )
@@ -571,6 +666,18 @@ if (-not [SanadAtomicMove]::MoveFileExW(
       return;
     }
     source.renameSync(destination.path);
+  }
+
+  static void _renameWithRetrySync(Directory source, String destinationPath) {
+    for (var i = 0; i < 10; i++) {
+      try {
+        source.renameSync(destinationPath);
+        return;
+      } on FileSystemException {
+        if (!Platform.isWindows || i == 9) rethrow;
+        sleep(const Duration(milliseconds: 50));
+      }
+    }
   }
 
   static void _assertRegularFile(File file) {
@@ -711,4 +818,23 @@ if ($kind -eq 'directory') {
   static List<int> readSecret(String relative) =>
       identity().readSecretBytes(relative);
   static bool exists(String relative) => identity().fileExists(relative);
+}
+
+class SanadHomeFileLockLease {
+  SanadHomeFileLockLease._(this._file);
+
+  RandomAccessFile? _file;
+
+  bool get isReleased => _file == null;
+
+  Future<void> release() async {
+    final file = _file;
+    if (file == null) return;
+    _file = null;
+    try {
+      await file.unlock();
+    } finally {
+      await file.close();
+    }
+  }
 }

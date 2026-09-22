@@ -43,6 +43,7 @@ class HistoryHealer {
     required String sessionId,
     Set<String> suspendedToolCallIds = const {},
     Set<String> deferredToolCallIds = const {},
+    Set<String> activeToolCallIds = const {},
   }) {
     if (history.isEmpty) return;
     bool modified = false;
@@ -71,9 +72,11 @@ class HistoryHealer {
         // before the user decision or launcher transaction resolves.
         pendingToolCallIds
           ..removeAll(suspendedToolCallIds)
-          ..removeAll(deferredToolCallIds);
+          ..removeAll(deferredToolCallIds)
+          ..removeAll(activeToolCallIds);
 
-        // If there are unanswered tool calls, heal the history by appending cancellation tool results
+        // A call without a remaining durable owner was interrupted by a
+        // previous daemon lifetime. Only an explicit Stop is user-cancelled.
         if (pendingToolCallIds.isNotEmpty) {
           _logger.warning(
             'Healing session history: found unanswered tool calls $pendingToolCallIds in session $sessionId.',
@@ -89,8 +92,14 @@ class HistoryHealer {
               .map(
                 (id) => Message(
                   role: MessageRole.tool,
-                  content: 'Tool execution cancelled by user.',
+                  content:
+                      'The tool execution was interrupted because the agent stopped unexpectedly. Its outcome is unknown.',
                   toolCallId: id,
+                  metadata: const {
+                    'status': 'interrupted',
+                    'reason': 'daemon_interrupted',
+                    'is_error': true,
+                  },
                 ),
               )
               .toList();

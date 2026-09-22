@@ -1,0 +1,28 @@
+# Fixture: multi-step research goal with tool output and pending ask
+
+## Goal
+Implement OAuth login for the desktop client using the existing AuthManager flow.
+
+## Constraints
+- Keep Local Gateway loopback-only.
+- Do not store refresh tokens in conversation history.
+
+## Completed
+- Read `agent/lib/core/auth/auth_manager.dart` and confirmed logout path.
+- Verified pairing token is one-use.
+
+## In progress
+- Wiring challenge/response registration for Device Credential enrollment.
+
+## Pending user ask
+User asked whether cloud logout should stop the local daemon.
+
+## Blocker
+Provider usage endpoint returns `unsupported` for the selected instance; compaction must retain that blocker.
+
+## Files
+- `agent/lib/core/auth/auth_manager.dart`
+- `client/lib/features/devices/data/device_auth_service.dart`
+
+## Remaining work
+Finish compact command handler tests, then resume enrollment UI.

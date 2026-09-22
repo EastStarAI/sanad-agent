@@ -35,6 +35,43 @@ void main() {
       expect(result.diagnostic, contains('identical replay'));
     });
 
+    test('refreshes a newer elapsed observation at the same revision', () {
+      final registry = SessionExecutionRegistry();
+      final startedAt = DateTime.utc(2026, 7, 15, 10);
+      final firstReceivedAt = DateTime.utc(2026, 7, 15, 10, 1);
+      final refreshedReceivedAt = DateTime.utc(2026, 7, 15, 10, 3);
+      registry.apply(
+        _snapshot(
+          revision: 2,
+          state: SessionExecutionState.running,
+          turnStartedAt: startedAt,
+          elapsedMs: 60000,
+          baselineReceivedAt: firstReceivedAt,
+        ),
+      );
+
+      final result = registry.apply(
+        _snapshot(
+          revision: 2,
+          state: SessionExecutionState.running,
+          turnStartedAt: startedAt,
+          elapsedMs: 180000,
+          baselineReceivedAt: refreshedReceivedAt,
+        ),
+      );
+
+      expect(
+        result.disposition,
+        SessionExecutionApplyDisposition.refreshedObservation,
+      );
+      expect(result.changed, isTrue);
+      expect(registry.snapshotFor('session-a').elapsedMs, 180000);
+      expect(
+        registry.snapshotFor('session-a').elapsedAt(DateTime.utc(2026, 7, 15, 10, 3, 5)),
+        const Duration(minutes: 3, seconds: 5),
+      );
+    });
+
     test('rejects an equal conflicting payload', () {
       final registry = SessionExecutionRegistry();
       registry.apply(
@@ -133,6 +170,9 @@ SessionExecutionSnapshot _snapshot({
   String sessionId = 'session-a',
   required int revision,
   required SessionExecutionState state,
+  DateTime? turnStartedAt,
+  int? elapsedMs,
+  DateTime? baselineReceivedAt,
 }) {
   return SessionExecutionSnapshot(
     sessionId: sessionId,
@@ -141,5 +181,8 @@ SessionExecutionSnapshot _snapshot({
     requestId: state == SessionExecutionState.idle ? null : 'request-$sessionId',
     revision: revision,
     updatedAt: DateTime.utc(2026, 7, 15, 10, revision),
+    turnStartedAt: turnStartedAt,
+    elapsedMs: elapsedMs,
+    baselineReceivedAt: baselineReceivedAt,
   );
 }

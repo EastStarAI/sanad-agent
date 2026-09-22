@@ -40,6 +40,16 @@ if [ "${SANAD_SKIP_BUILD:-0}" != "1" ]; then
 fi
 test -d "$APP_PATH"
 
+IMPELLER_SETTING="$(
+  /usr/libexec/PlistBuddy \
+    -c 'Print :FLTEnableImpeller' \
+    "$APP_PATH/Contents/Info.plist" 2>/dev/null || true
+)"
+if [ "$IMPELLER_SETTING" != "false" ]; then
+  echo "macOS release must disable Impeller while flutter/flutter#185394 remains unresolved." >&2
+  exit 1
+fi
+
 while IFS= read -r binary; do
   architectures="$(lipo -archs "$binary")"
   if [[ " $architectures " != *" arm64 "* ]] ||

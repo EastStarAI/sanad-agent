@@ -28,7 +28,6 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_state.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
@@ -329,7 +328,12 @@ class _UnifiedComposerContainer extends StatelessWidget {
       ),
     );
 
-    return composerCard;
+    return GestureDetector(
+      key: const Key('composer_focus_surface'),
+      behavior: HitTestBehavior.opaque,
+      onTap: chatFocusNode.requestFocus,
+      child: composerCard,
+    );
   }
 
   Widget _buildBottomRow(BuildContext context) {
@@ -631,6 +635,7 @@ class _ModelChipState extends State<_ModelChip> {
 
     Widget buildChip(BuildContext context, double? progress, Color? progressColor) {
       return InkWell(
+        key: const Key('model_selector_btn'),
         onTap: () => _openModelPicker(context),
         borderRadius: BorderRadius.circular(8),
         child: _buildModelChip(context, currentModel, contextUsage, progress, progressColor),
@@ -653,7 +658,7 @@ class _ModelChipState extends State<_ModelChip> {
                 Color? progressColor;
 
                 if (activeProviderId != null && activeProviderId.isNotEmpty) {
-                  final deviceId = widget.agentSlice.activeAgent?.id ?? DeviceInventoryIds.localDevice;
+                  final deviceId = widget.agentSlice.activeAgent?.id ?? getIt<ProviderUsageCubit>().localDeviceId;
                   final entry = usageState.entry(deviceId, activeProviderId);
                   final supports = usageState.support.supports(deviceId, activeProviderId);
 

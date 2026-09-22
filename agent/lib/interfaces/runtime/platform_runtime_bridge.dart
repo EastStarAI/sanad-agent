@@ -34,6 +34,10 @@ class PlatformRuntimeBridge {
     _responseSink = sink;
   }
 
+  void detachResponseSink() {
+    _responseSink = null;
+  }
+
   void registerSessionOrigin(String sessionId, OriginContext origin) {
     _sessionOrigins[sessionId] = origin;
   }

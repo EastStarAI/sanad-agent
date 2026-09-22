@@ -355,12 +355,13 @@ class SessionWorkItemRepository {
     return rows.map((r) => r['session_id'] as String).toList();
   }
 
-  /// Finds sessions that have queued or active work relevant to restart.
+  /// Finds live sessions that have queued or active work relevant to restart.
+  /// Legacy orphan rows are ignored without requiring a startup delete pass.
   List<String> findSessionIdsWithRestorableWorkItems() {
-    final rows = _db.select(
-      '''SELECT DISTINCT session_id FROM session_work_items
-         WHERE state IN $_restorableStatesSql''',
-    );
+    final rows = _db.select('''SELECT DISTINCT wi.session_id
+         FROM session_work_items wi
+         INNER JOIN sessions s ON s.session_id = wi.session_id
+         WHERE wi.state IN $_restorableStatesSql''');
     return rows.map((row) => row['session_id'] as String).toList();
   }
 
@@ -543,32 +544,111 @@ class SessionWorkItemRepository {
     return db.updatedRows == 1;
   }
 
-  /// Deletes rows whose `session_id` no longer exists in `sessions`.
-  int cleanupOrphanedWorkItems() {
-    _db.execute('BEGIN TRANSACTION');
-    try {
-      final before = _db.select('''
-        SELECT COUNT(*) AS count
-        FROM session_work_items wi
-        WHERE NOT EXISTS (
-          SELECT 1 FROM sessions s WHERE s.session_id = wi.session_id
-        )
-        ''');
-      final count = before.first['count'] as int;
-      if (count > 0) {
-        _db.execute('''
-          DELETE FROM session_work_items
-          WHERE NOT EXISTS (
-            SELECT 1 FROM sessions s WHERE s.session_id = session_work_items.session_id
+  /// Finds legacy/FK-off work-item rows whose owning session is absent.
+  ///
+  /// Discovery is separate from deletion so post-ready maintenance can delete
+  /// bounded batches and yield to user work between them.
+  List<String> findOrphanedWorkItemIds() {
+    final rows = _db.select('''
+      SELECT wi.work_item_id
+      FROM session_work_items wi
+      WHERE NOT EXISTS (
+        SELECT 1 FROM sessions s WHERE s.session_id = wi.session_id
+      )
+      ''');
+    return rows.map((row) => row['work_item_id'] as String).toList();
+  }
+
+  /// Deletes a previously discovered orphan batch, rechecking ownership so a
+  /// newly created matching session cannot be removed accidentally.
+  int deleteOrphanedWorkItemBatch(
+    Iterable<String> workItemIds, {
+    AgentStateTransaction? transaction,
+  }) {
+    final ids = workItemIds.toList(growable: false);
+    if (ids.isEmpty) return 0;
+    int cleanup(AgentStateTransaction tx) {
+      final placeholders = List.filled(ids.length, '?').join(', ');
+      tx.db.execute('''
+        DELETE FROM session_work_items
+        WHERE work_item_id IN ($placeholders)
+          AND NOT EXISTS (
+            SELECT 1 FROM sessions s
+            WHERE s.session_id = session_work_items.session_id
           )
-          ''');
-      }
-      _db.execute('COMMIT');
-      return count;
-    } catch (_) {
-      _db.execute('ROLLBACK');
-      rethrow;
+        ''', ids);
+      return tx.db.updatedRows;
     }
+
+    return transaction == null
+        ? _state.transaction(cleanup)
+        : cleanup(transaction);
+  }
+
+  /// Deletes all currently discovered orphan rows. Production startup does not
+  /// call this unbounded compatibility helper; deferred maintenance uses the
+  /// bounded batch API above.
+  int cleanupOrphanedWorkItems({AgentStateTransaction? transaction}) {
+    final ids = findOrphanedWorkItemIds();
+    return deleteOrphanedWorkItemBatch(ids, transaction: transaction);
+  }
+
+  /// Finds terminal rows strictly older than [cutoffUtc] without decoding
+  /// payloads. The returned identities are safe to process in bounded batches.
+  List<String> findTerminalWorkItemIdsOlderThan(DateTime cutoffUtc) {
+    final rows = _db.select(
+      '''
+      SELECT work_item_id
+      FROM session_work_items
+      WHERE state IN ('completed', 'cancelled')
+        AND updated_at < ?
+      ORDER BY updated_at, work_item_id
+      ''',
+      [cutoffUtc.toUtc().toIso8601String()],
+    );
+    return rows.map((row) => row['work_item_id'] as String).toList();
+  }
+
+  /// Deletes a bounded terminal batch, rechecking state and cutoff so rows that
+  /// changed after discovery cannot be removed.
+  int deleteTerminalWorkItemBatch(
+    Iterable<String> workItemIds,
+    DateTime cutoffUtc, {
+    AgentStateTransaction? transaction,
+  }) {
+    final ids = workItemIds.toList(growable: false);
+    if (ids.isEmpty) return 0;
+    int delete(AgentStateTransaction tx) {
+      final placeholders = List.filled(ids.length, '?').join(', ');
+      tx.db.execute(
+        '''
+        DELETE FROM session_work_items
+        WHERE work_item_id IN ($placeholders)
+          AND state IN ('completed', 'cancelled')
+          AND updated_at < ?
+        ''',
+        [...ids, cutoffUtc.toUtc().toIso8601String()],
+      );
+      return tx.db.updatedRows;
+    }
+
+    return transaction == null
+        ? _state.transaction(delete)
+        : delete(transaction);
+  }
+
+  /// Deletes every currently eligible terminal row. Deferred production
+  /// maintenance uses [deleteTerminalWorkItemBatch] instead.
+  int deleteTerminalWorkItemsOlderThan(
+    DateTime cutoffUtc, {
+    AgentStateTransaction? transaction,
+  }) {
+    final ids = findTerminalWorkItemIdsOlderThan(cutoffUtc);
+    return deleteTerminalWorkItemBatch(
+      ids,
+      cutoffUtc,
+      transaction: transaction,
+    );
   }
 
   int _nextWorkItemSeqInTransaction(

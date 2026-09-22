@@ -8,4 +8,6 @@ paths = [
   '''^agent/test/core/provider_runtime/provider_instance_service_test\.dart$''',
   '''^agent/test/core/secrets_redactor_test\.dart$''',
   '''^agent/test/interfaces/interfaces_test\.dart$''',
+  '''^agent/test/interfaces/remote_device_control_g6_security_test\.dart$''',
+  '''^client/test/unit/services/sanad_socket_service_test\.dart$''',
 ]

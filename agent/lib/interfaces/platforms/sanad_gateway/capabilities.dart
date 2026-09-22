@@ -112,6 +112,7 @@ class AgentCapabilities {
       'supports_tool_permissions': supportsToolPermissions,
       'supports_local_tool_runtime': supportsLocalToolRuntime,
       'supports_slash_commands': supportsSlashCommands,
+      'delivery_presence_v1': true,
       'model_selection_scope': modelSelectionScope,
       'thinking_mode_scope': thinkingModeScope,
       'thinking_stream_mode': thinkingStreamMode,

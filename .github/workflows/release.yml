@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Intended v1.0.1 or v1.0.1-rc.N identity
+        description: Intended vX.Y.Z or vX.Y.Z-rc.N identity
         type: string
         required: true
       validation_only:
@@ -109,7 +109,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15
+          - runner: macos-26
             platform: macos
             architecture: arm64
             extension: ''
@@ -163,13 +163,16 @@ jobs:
           fvm dart run tool/generate_bundled_skills.dart --check
           fvm dart analyze
           fvm dart test test/core/update/release_manifest_test.dart
-      - name: Compile Windows agent
+      - name: Compile Windows agent and no-console launcher
         if: matrix.platform == 'windows'
         working-directory: agent
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path ../dist -Force | Out-Null
+          cmake -S windows/launcher -B build/windows-launcher -A x64
+          cmake --build build/windows-launcher --config Release
           fvm dart compile exe "-DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }}" bin/sanad_agent.dart -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
+          fvm dart run tool/package_windows_launcher.dart --agent "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe" --launcher "build/windows-launcher/out/sanad-launcher.exe"
       - name: Smoke-test embedded skills
         if: matrix.platform != 'windows'
         shell: bash
@@ -400,7 +403,7 @@ jobs:
 
   client-macos:
     needs: validate
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     environment: apple-signing
     steps:
@@ -522,7 +525,7 @@ jobs:
 
   client-ios:
     needs: validate
-    runs-on: macos-15
+    runs-on: macos-26
     timeout-minutes: 60
     environment: apple-testflight
     steps:

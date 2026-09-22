@@ -261,7 +261,7 @@ void main() {
       );
       expect(
         AppRouter.handleRedirect(authState, uri: Uri.parse(AppRoutes.login), matchedLocation: AppRoutes.login),
-        '/?from=%2Flogin',
+        AppRoutes.splash,
       );
 
       // Should not redirect if at any other authenticated route
@@ -303,6 +303,36 @@ void main() {
           uri: Uri.parse(AppRoutes.splash),
           matchedLocation: AppRoutes.splash,
           gatewayStatus: readyStatus,
+        ),
+        AppRoutes.home,
+      );
+    });
+
+    test('post-login bootstrap rejects stale auth-only destinations', () {
+      final authState = _authenticatedState();
+      const staleStatus = GatewayConnectionStatus(
+        localGateway: LocalGatewayStatus.disconnected,
+        sanadGateway: SanadGatewayStatus.disconnected,
+        actions: [],
+        recommendedRoute: AppRoutes.login,
+        isDesktop: false,
+      );
+
+      expect(
+        AppRouter.handleRedirect(
+          authState,
+          uri: Uri.parse('/?from=%2Flogin'),
+          matchedLocation: AppRoutes.splash,
+          gatewayStatus: staleStatus,
+        ),
+        AppRoutes.home,
+      );
+      expect(
+        AppRouter.handleRedirect(
+          authState,
+          uri: Uri.parse('/?from=https%3A%2F%2Fevil.example'),
+          matchedLocation: AppRoutes.splash,
+          gatewayStatus: staleStatus,
         ),
         AppRoutes.home,
       );

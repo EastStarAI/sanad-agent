@@ -17,7 +17,7 @@ void main() {
     expect(find.byKey(const Key('tool_running_progress_indicator')), findsNothing);
   });
 
-  testWidgets('clarifying question replaces the running state with a question icon', (
+  testWidgets('clarifying question running tool row remains hidden', (
     tester,
   ) async {
     await pumpEvent(
@@ -26,8 +26,9 @@ void main() {
       waitingIndicator: ToolWaitingIndicator.question,
     );
 
-    expect(find.byKey(const Key('tool_waiting_question_icon')), findsOneWidget);
+    expect(find.byKey(const Key('tool_waiting_question_icon')), findsNothing);
     expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.textContaining('Ask'), findsNothing);
   });
 
   testWidgets('ordinary running tools retain the progress indicator', (tester) async {

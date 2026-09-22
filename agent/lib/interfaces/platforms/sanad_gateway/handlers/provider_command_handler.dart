@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
@@ -558,46 +559,65 @@ class ProviderCommandHandler {
       ),
     );
 
-    Future.microtask(() async {
-      try {
-        await _cacheService.refresh(instanceId, manual: manual);
+    unawaited(
+      _completeModelRefresh(
+        instanceId: instanceId,
+        manual: manual,
+        requestId: requestId,
+        emitEnvelope: emitEnvelope,
+      ),
+    );
+  }
 
-        final row = _repository.readModelCache(instanceId, 'models');
-        List<dynamic> cachedModels = [];
-        if (row != null && row['models'] != null) {
-          cachedModels = row['models'] as List;
-        }
+  Future<void> _completeModelRefresh({
+    required String instanceId,
+    required bool manual,
+    required String? requestId,
+    required Future<void> Function(Map<String, dynamic> envelope) emitEnvelope,
+  }) async {
+    late final CanonicalEvent terminalEvent;
+    try {
+      await _cacheService.refresh(instanceId, manual: manual);
 
-        final updateEvent = CanonicalEvent(
-          type: CanonicalEventTypes.modelCacheUpdated,
-          payload: {
-            'provider_instance_id': instanceId,
-            'status': 'updated',
-            'models': cachedModels,
-            ...?requestId == null ? null : {'request_id': requestId},
-          },
-          delivery: const DeliveryPolicy.platformFamily(
-            PlatformFamily.sanadClient,
-          ),
-        );
-        await emitEnvelope(_bridge.buildAgentEventEnvelope(updateEvent));
-      } catch (e) {
-        _logger.warning('Model cache refresh failed: $e');
-        final updateEvent = CanonicalEvent(
-          type: CanonicalEventTypes.modelCacheUpdated,
-          payload: {
-            'provider_instance_id': instanceId,
-            'status': 'failed',
-            'error': e.toString(),
-            ...?requestId == null ? null : {'request_id': requestId},
-          },
-          delivery: const DeliveryPolicy.platformFamily(
-            PlatformFamily.sanadClient,
-          ),
-        );
-        await emitEnvelope(_bridge.buildAgentEventEnvelope(updateEvent));
-      }
-    });
+      final row = _repository.readModelCache(instanceId, 'models');
+      final cachedModels = row?['models'] as List<dynamic>? ?? const [];
+      terminalEvent = CanonicalEvent(
+        type: CanonicalEventTypes.modelCacheUpdated,
+        payload: {
+          'provider_instance_id': instanceId,
+          'status': 'updated',
+          'models': cachedModels,
+          ...?requestId == null ? null : {'request_id': requestId},
+        },
+        delivery: const DeliveryPolicy.platformFamily(
+          PlatformFamily.sanadClient,
+        ),
+      );
+    } catch (error, stackTrace) {
+      _logger.warning('Model cache refresh failed: $error', error, stackTrace);
+      terminalEvent = CanonicalEvent(
+        type: CanonicalEventTypes.modelCacheUpdated,
+        payload: {
+          'provider_instance_id': instanceId,
+          'status': 'failed',
+          'error': error.toString(),
+          ...?requestId == null ? null : {'request_id': requestId},
+        },
+        delivery: const DeliveryPolicy.platformFamily(
+          PlatformFamily.sanadClient,
+        ),
+      );
+    }
+
+    try {
+      await emitEnvelope(_bridge.buildAgentEventEnvelope(terminalEvent));
+    } catch (error, stackTrace) {
+      _logger.warning(
+        'Failed to emit terminal model cache refresh event: $error',
+        error,
+        stackTrace,
+      );
+    }
   }
 
   Future<Map<String, dynamic>> buildModelRecentListEnvelope(

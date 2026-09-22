@@ -46,6 +46,15 @@ class SidebarBreakpoints {
   /// Reserved top space on macOS for native traffic-light buttons.
   static const double macOSTrafficLightsHeight = 28;
 
+  /// Extra separation below the traffic lights for a compact drawer.
+  static const double macOSDrawerTopGap = 4;
+
+  /// Leading title-bar space reserved for the native macOS traffic lights.
+  static const double macOSTrafficLightsLeadingInset = 88;
+
+  /// Optical vertical alignment with the native macOS traffic lights.
+  static const double macOSHeaderActionsVerticalOffset = 2;
+
   /// The maximum width of the conversation body (chat list, input composer, and app bar).
   static const double maxConversationWidth = 780;
 

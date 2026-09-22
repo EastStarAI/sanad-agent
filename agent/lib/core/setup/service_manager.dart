@@ -5,6 +5,13 @@ import 'dart:typed_data';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/setup/cli_path_manager.dart';
+import 'package:sanad_agent/core/setup/linux_service_manager.dart';
+import 'package:sanad_agent/core/setup/service_health_verifier.dart';
+import 'package:sanad_agent/core/setup/service_models.dart';
+import 'package:sanad_agent/core/setup/windows_launcher_bundle.dart';
+
+export 'service_models.dart';
 
 class ServiceManager {
   static String get _instance {
@@ -25,154 +32,86 @@ class ServiceManager {
   static String get taskName =>
       _instance.isEmpty ? 'SanadAgent' : 'SanadAgent-$_instance';
 
-  static String getHomeDirectory() {
-    if (Platform.isWindows) {
-      return Platform.environment['USERPROFILE'] ?? '';
-    }
-    return Platform.environment['HOME'] ?? '';
-  }
+  static String getHomeDirectory() => Platform.isWindows
+      ? Platform.environment['USERPROFILE'] ?? ''
+      : Platform.environment['HOME'] ?? '';
 
   static String getServiceConfigPath() {
     final home = getHomeDirectory();
     if (Platform.isMacOS) {
       return p.join(home, 'Library', 'LaunchAgents', '$label.plist');
-    } else if (Platform.isLinux) {
+    }
+    if (Platform.isLinux) {
       return p.join(home, '.config', 'systemd', 'user', serviceName);
     }
     return '';
   }
 
-  static bool isServiceInstalled() {
-    if (Platform.isWindows) {
-      try {
-        final result = Process.runSync('schtasks', ['/Query', '/TN', taskName]);
-        return result.exitCode == 0;
-      } catch (_) {
-        return false;
-      }
-    } else {
-      final path = getServiceConfigPath();
-      if (path.isEmpty) return false;
-      return File(path).existsSync();
-    }
-  }
-
-  static Future<bool> install() async {
+  static Future<ServiceOperationResult> install({
+    ServiceHealthExpectation? healthExpectation,
+  }) async {
     final sanadHome = getSanadHome();
     await SanadHomeBootstrap.identity().ensureDirectoryPath('logs');
-    final execPath = Platform.resolvedExecutable;
-    final isDartVM =
-        execPath.contains('dart-sdk') ||
-        execPath.endsWith('dart') ||
-        execPath.endsWith('dart.exe');
-
-    final String finalExec;
-    final List<String> args;
-
-    if (isDartVM) {
-      finalExec = execPath;
-      args = [Platform.script.toFilePath(), 'daemon'];
-    } else {
-      finalExec = execPath;
-      args = ['daemon'];
+    final invocation = _daemonInvocation();
+    if (Platform.isLinux) {
+      final result = await _linux(
+        invocation,
+        healthExpectation: healthExpectation,
+      ).install();
+      if (result.success) await CliPathManager.ensureOnPath();
+      return result;
     }
-
-    try {
-      if (Platform.isMacOS) {
-        final configPath = getServiceConfigPath();
-        final plistContent =
-            '''<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>$label</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>$finalExec</string>
-        ${args.map((a) => '<string>$a</string>').join('\n        ')}
-    </array>
-    <key>WorkingDirectory</key>
-    <string>$sanadHome</string>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <dict>
-        <key>SuccessfulExit</key>
-        <false/>
-    </dict>
-    <key>Umask</key>
-    <integer>63</integer>
-    <key>StandardOutPath</key>
-    <string>$sanadHome/logs/daemon.log</string>
-    <key>StandardErrorPath</key>
-    <string>$sanadHome/logs/daemon.error.log</string>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-        <key>SANAD_HOME</key>
-        <string>$sanadHome</string>
-        ${_instance.isEmpty ? '' : '<key>SANAD_SERVICE_INSTANCE</key><string>$_instance</string>'}
-    </dict>
-</dict>
-</plist>
-''';
+    if (Platform.isMacOS) {
+      final configPath = getServiceConfigPath();
+      final content = _buildLaunchdPlist(
+        executable: invocation.executable,
+        arguments: invocation.arguments,
+        sanadHome: sanadHome,
+      );
+      try {
         final file = File(configPath);
         await file.parent.create(recursive: true);
-        await file.writeAsString(plistContent);
-
-        // Load service
+        await file.writeAsString(content, flush: true);
         await Process.run('launchctl', ['unload', configPath]);
-        final result = await Process.run('launchctl', ['load', configPath]);
-        return result.exitCode == 0;
-      } else if (Platform.isLinux) {
-        final configPath = getServiceConfigPath();
-        final serviceContent =
-            '''[Unit]
-Description=Sanad Local Agent Daemon
-After=network.target
-StartLimitIntervalSec=300
-StartLimitBurst=5
-
-[Service]
-Type=simple
-ExecStart=$finalExec ${args.join(' ')}
-WorkingDirectory=$sanadHome
-Restart=on-failure
-RestartSec=10
-UMask=0077
-StandardOutput=append:$sanadHome/logs/daemon.log
-StandardError=append:$sanadHome/logs/daemon.error.log
-Environment=SANAD_HOME=$sanadHome
-${_instance.isEmpty ? '' : 'Environment=SANAD_SERVICE_INSTANCE=$_instance'}
-
-[Install]
-WantedBy=default.target
-''';
-        final file = File(configPath);
-        await file.parent.create(recursive: true);
-        await file.writeAsString(serviceContent);
-
-        await Process.run('systemctl', ['--user', 'daemon-reload']);
-        final result = await Process.run('systemctl', [
-          '--user',
-          'enable',
-          '--now',
-          serviceName,
-        ]);
-        return result.exitCode == 0;
-      } else if (Platform.isWindows) {
-        final daemonCommand = buildWindowsDaemonCommand(
-          executable: finalExec,
-          arguments: args,
-          sanadHome: sanadHome,
-          serviceInstance: _instance,
+        final activated = await Process.run('launchctl', ['load', configPath]);
+        final status = await getStatus();
+        if (activated.exitCode == 0 && status.running) {
+          await CliPathManager.ensureOnPath();
+          return ServiceOperationResult(success: true, status: status);
+        }
+        return _failure(status, _processError(activated));
+      } catch (error) {
+        return _failure(await getStatus(), _concise(error));
+      }
+    }
+    if (Platform.isWindows) {
+      try {
+        final launcherPath = await WindowsLauncherBundle.install(
+          agentExecutable: invocation.executable,
+          binDirectory: p.dirname(invocation.executable),
         );
+        if (launcherPath == null && !invocation.isDartVm) {
+          return _failure(
+            await getStatus(),
+            'The packaged Windows Agent does not contain its background launcher.',
+          );
+        }
+        final daemonCommand = launcherPath == null
+            ? buildWindowsDaemonCommand(
+                executable: invocation.executable,
+                arguments: invocation.arguments,
+                sanadHome: sanadHome,
+                serviceInstance: _instance,
+              )
+            : null;
         final registrationCommand = buildWindowsTaskRegistrationCommand(
-          encodedDaemonCommand: encodePowerShellCommand(daemonCommand),
+          encodedDaemonCommand: daemonCommand == null
+              ? null
+              : encodePowerShellCommand(daemonCommand),
+          launcherExecutable: launcherPath,
           sanadHome: sanadHome,
           taskName: taskName,
+          serviceInstance: _instance,
         );
         final result = await Process.run('powershell.exe', [
           '-NoProfile',
@@ -182,13 +121,280 @@ WantedBy=default.target
           '-EncodedCommand',
           encodePowerShellCommand(registrationCommand),
         ]);
-        return result.exitCode == 0;
+        final status = await getStatus();
+        if (result.exitCode == 0 && status.running) {
+          await CliPathManager.ensureOnPath();
+          return ServiceOperationResult(success: true, status: status);
+        }
+        return _failure(status, _processError(result));
+      } catch (error) {
+        return _failure(await getStatus(), _concise(error));
       }
-    } catch (_) {
-      return false;
     }
-    return false;
+    return _unsupported();
   }
+
+  static Future<ServiceOperationResult> uninstall() async {
+    if (Platform.isLinux) return _linux(_daemonInvocation()).uninstall();
+    try {
+      ProcessResult result;
+      if (Platform.isMacOS) {
+        final path = getServiceConfigPath();
+        result = await Process.run('launchctl', ['unload', path]);
+        final file = File(path);
+        if (file.existsSync()) await file.delete();
+      } else if (Platform.isWindows) {
+        result = await Process.run('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          buildWindowsTaskUnregistrationCommand(taskName),
+        ]);
+      } else {
+        return _unsupported();
+      }
+      final status = Platform.isWindows
+          ? await _waitForWindowsTaskMissing()
+          : await getStatus();
+      final success =
+          !status.installed &&
+          (result.exitCode == 0 || status.state == ServiceState.missing);
+      return ServiceOperationResult(
+        success: success,
+        status: status,
+        error: success ? null : _processError(result),
+      );
+    } catch (error) {
+      return _failure(await getStatus(), _concise(error));
+    }
+  }
+
+  static Future<ServiceOperationResult> start() => _lifecycle('start');
+  static Future<ServiceOperationResult> stop() => _lifecycle('stop');
+
+  static Future<ServiceOperationResult> restart() async {
+    if (Platform.isLinux) return _linux(_daemonInvocation()).restart();
+    if (Platform.isMacOS) {
+      await _lifecycle('stop');
+      return _lifecycle('start');
+    }
+    return _lifecycle('restart');
+  }
+
+  static Future<ServiceOperationResult> _lifecycle(String command) async {
+    if (Platform.isLinux) {
+      final manager = _linux(_daemonInvocation());
+      return command == 'start' ? manager.start() : manager.stop();
+    }
+    try {
+      ProcessResult result;
+      if (Platform.isMacOS) {
+        final path = getServiceConfigPath();
+        result = command == 'start'
+            ? await Process.run('launchctl', ['load', path])
+            : await Process.run('launchctl', ['unload', path]);
+        if (result.exitCode != 0) {
+          result = await Process.run('launchctl', [command, label]);
+        }
+      } else if (Platform.isWindows) {
+        final verb = switch (command) {
+          'start' => 'Start',
+          'stop' => 'Stop',
+          _ => 'Start',
+        };
+        if (command == 'restart') {
+          await Process.run('powershell.exe', [
+            '-NoProfile',
+            '-NonInteractive',
+            '-Command',
+            'Stop-ScheduledTask -TaskName "${_escapePowerShellLiteral(taskName)}"',
+          ]);
+        }
+        result = await Process.run('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          '$verb-ScheduledTask -TaskName "${_escapePowerShellLiteral(taskName)}"',
+        ]);
+      } else {
+        return _unsupported();
+      }
+      final status = await getStatus();
+      final expected = command == 'stop' ? !status.running : status.running;
+      return ServiceOperationResult(
+        success: result.exitCode == 0 && expected,
+        status: status,
+        error: result.exitCode == 0 ? status.error : _processError(result),
+      );
+    } catch (error) {
+      return _failure(await getStatus(), _concise(error));
+    }
+  }
+
+  static Future<ServiceStatus> getStatus() async {
+    if (Platform.isLinux) return _linux(_daemonInvocation()).status();
+    if (Platform.isMacOS) {
+      final path = getServiceConfigPath();
+      if (!File(path).existsSync()) {
+        return const ServiceStatus.missing(
+          scope: ServiceScope.launchdUser,
+          backend: 'launchd',
+        );
+      }
+      try {
+        final result = await Process.run('launchctl', ['list', label]);
+        final running = result.exitCode == 0;
+        return ServiceStatus(
+          state: running ? ServiceState.running : ServiceState.installedStopped,
+          scope: ServiceScope.launchdUser,
+          backend: 'launchd',
+          installed: true,
+          enabled: true,
+          running: running,
+          error: running ? null : _processError(result),
+          configPath: path,
+        );
+      } catch (error) {
+        return ServiceStatus(
+          state: ServiceState.managerUnavailable,
+          scope: ServiceScope.launchdUser,
+          backend: 'launchd',
+          installed: true,
+          enabled: false,
+          running: false,
+          error: _concise(error),
+          configPath: path,
+        );
+      }
+    }
+    if (Platform.isWindows) {
+      try {
+        final result = await Process.run('powershell.exe', [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          '(Get-ScheduledTask -TaskName "${_escapePowerShellLiteral(taskName)}").State',
+        ]);
+        if (result.exitCode != 0) {
+          return const ServiceStatus.missing(
+            scope: ServiceScope.windowsTask,
+            backend: 'windows-task',
+          );
+        }
+        final raw = result.stdout.toString().trim().toLowerCase();
+        final running = raw == 'running';
+        return ServiceStatus(
+          state: running ? ServiceState.running : ServiceState.installedStopped,
+          scope: ServiceScope.windowsTask,
+          backend: 'windows-task',
+          installed: true,
+          enabled: raw != 'disabled',
+          running: running,
+        );
+      } catch (error) {
+        return ServiceStatus(
+          state: ServiceState.managerUnavailable,
+          scope: ServiceScope.windowsTask,
+          backend: 'windows-task',
+          installed: false,
+          enabled: false,
+          running: false,
+          error: _concise(error),
+        );
+      }
+    }
+    return const ServiceStatus(
+      state: ServiceState.managerUnavailable,
+      scope: ServiceScope.unavailable,
+      backend: 'none',
+      installed: false,
+      enabled: false,
+      running: false,
+      error: 'Service management is not supported on this platform.',
+    );
+  }
+
+  static Future<ServiceStatus> _waitForWindowsTaskMissing() async {
+    for (var attempt = 0; attempt < 20; attempt++) {
+      final query = await Process.run('schtasks.exe', [
+        '/Query',
+        '/TN',
+        taskName,
+      ]);
+      if (query.exitCode != 0) {
+        return const ServiceStatus.missing(
+          scope: ServiceScope.windowsTask,
+          backend: 'windows-task',
+        );
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    return getStatus();
+  }
+
+  static LinuxServiceManager _linux(
+    _DaemonInvocation invocation, {
+    ServiceHealthExpectation? healthExpectation,
+  }) => LinuxServiceManager(
+    serviceName: serviceName,
+    executable: invocation.executable,
+    arguments: invocation.arguments,
+    sanadHome: getSanadHome(),
+    loginHome: getHomeDirectory(),
+    environment: Platform.environment,
+    runner: (executable, arguments, environment) async {
+      final result = await Process.run(
+        executable,
+        arguments,
+        environment: environment,
+      );
+      return ServiceProcessResult(
+        exitCode: result.exitCode,
+        stdout: result.stdout.toString(),
+        stderr: result.stderr.toString(),
+      );
+    },
+    postActivationVerification: healthExpectation == null
+        ? null
+        : () async {
+            final result = await ServiceHealthVerifier().verify(
+              healthExpectation,
+            );
+            return result.success ? null : result.error;
+          },
+  );
+
+  static _DaemonInvocation _daemonInvocation() {
+    final executable = Platform.resolvedExecutable;
+    final isDartVm =
+        executable.contains('dart-sdk') ||
+        executable.endsWith('dart') ||
+        executable.endsWith('dart.exe');
+    return _DaemonInvocation(
+      executable,
+      isDartVm ? [Platform.script.toFilePath(), 'daemon'] : const ['daemon'],
+      isDartVm: isDartVm,
+    );
+  }
+
+  static String _buildLaunchdPlist({
+    required String executable,
+    required List<String> arguments,
+    required String sanadHome,
+  }) =>
+      '''<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>${_xml(label)}</string>
+<key>ProgramArguments</key><array><string>${_xml(executable)}</string>${arguments.map((value) => '<string>${_xml(value)}</string>').join()}</array>
+<key>WorkingDirectory</key><string>${_xml(sanadHome)}</string>
+<key>RunAtLoad</key><true/><key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+<key>Umask</key><integer>63</integer>
+<key>StandardOutPath</key><string>${_xml(p.join(sanadHome, 'logs', 'daemon.log'))}</string>
+<key>StandardErrorPath</key><string>${_xml(p.join(sanadHome, 'logs', 'daemon.error.log'))}</string>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string><key>SANAD_HOME</key><string>${_xml(sanadHome)}</string>${_instance.isEmpty ? '' : '<key>SANAD_SERVICE_INSTANCE</key><string>${_xml(_instance)}</string>'}</dict>
+</dict></plist>
+''';
 
   static String buildWindowsDaemonCommand({
     required String executable,
@@ -207,17 +413,45 @@ exit \$LASTEXITCODE
   }
 
   static String buildWindowsTaskRegistrationCommand({
-    required String encodedDaemonCommand,
+    String? encodedDaemonCommand,
+    String? launcherExecutable,
     required String sanadHome,
     required String taskName,
-  }) =>
-      '''\$ErrorActionPreference = 'Stop'
-\$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedDaemonCommand' -WorkingDirectory '${_escapePowerShellLiteral(sanadHome)}'
+    String serviceInstance = '',
+  }) {
+    if ((encodedDaemonCommand == null) == (launcherExecutable == null)) {
+      throw ArgumentError('Specify exactly one Windows daemon host.');
+    }
+    final action = launcherExecutable == null
+        ? "New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedDaemonCommand'"
+        : "New-ScheduledTaskAction -Execute '${_escapePowerShellLiteral(launcherExecutable)}' -Argument '${_escapePowerShellLiteral(_windowsLauncherArguments(sanadHome, serviceInstance))}'";
+    return '''\$ErrorActionPreference = 'Stop'
+\$action = $action -WorkingDirectory '${_escapePowerShellLiteral(sanadHome)}'
 \$trigger = New-ScheduledTaskTrigger -AtLogOn -User \$env:USERNAME
 \$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -MultipleInstances IgnoreNew -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit (New-TimeSpan -Seconds 0)
 Register-ScheduledTask -TaskName '${_escapePowerShellLiteral(taskName)}' -Action \$action -Trigger \$trigger -Settings \$settings -Force | Out-Null
 Start-ScheduledTask -TaskName '${_escapePowerShellLiteral(taskName)}'
 ''';
+  }
+
+  static String buildWindowsTaskUnregistrationCommand(String taskName) {
+    final escaped = _escapePowerShellLiteral(taskName);
+    return '\$task = Get-ScheduledTask -TaskName "$escaped" -ErrorAction SilentlyContinue; '
+        'if (\$null -ne \$task) { '
+        'if (\$task.State -eq "Running") { Stop-ScheduledTask -TaskName "$escaped" }; '
+        'Unregister-ScheduledTask -TaskName "$escaped" -Confirm:\$false }';
+  }
+
+  static String _windowsLauncherArguments(
+    String sanadHome,
+    String serviceInstance,
+  ) {
+    final buffer = StringBuffer('--home "${sanadHome.replaceAll('"', '')}"');
+    if (serviceInstance.isNotEmpty) {
+      buffer.write(' --service-instance "$serviceInstance"');
+    }
+    return buffer.toString();
+  }
 
   static String encodePowerShellCommand(String command) {
     final bytes = BytesBuilder(copy: false);
@@ -229,130 +463,46 @@ Start-ScheduledTask -TaskName '${_escapePowerShellLiteral(taskName)}'
 
   static String _escapePowerShellLiteral(String value) =>
       value.replaceAll("'", "''");
-
-  static Future<bool> uninstall() async {
-    try {
-      if (Platform.isMacOS) {
-        final configPath = getServiceConfigPath();
-        await Process.run('launchctl', ['unload', configPath]);
-        final file = File(configPath);
-        if (file.existsSync()) {
-          await file.delete();
-        }
-        return true;
-      } else if (Platform.isLinux) {
-        await Process.run('systemctl', ['--user', 'stop', serviceName]);
-        await Process.run('systemctl', ['--user', 'disable', serviceName]);
-        final configPath = getServiceConfigPath();
-        final file = File(configPath);
-        if (file.existsSync()) {
-          await file.delete();
-        }
-        await Process.run('systemctl', ['--user', 'daemon-reload']);
-        return true;
-      } else if (Platform.isWindows) {
-        final psCommand =
-            'Unregister-ScheduledTask -TaskName "$taskName" -Confirm:\$false';
-        final result = await Process.run('powershell.exe', [
-          '-Command',
-          psCommand,
-        ]);
-        return result.exitCode == 0;
-      }
-    } catch (_) {
-      return false;
-    }
-    return false;
+  static String _xml(String value) => value
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&apos;');
+  static String _processError(ProcessResult result) {
+    final value = result.stderr.toString().trim().isNotEmpty
+        ? result.stderr.toString().trim()
+        : result.stdout.toString().trim();
+    return value.isEmpty
+        ? 'Service manager exited with code ${result.exitCode}.'
+        : value.split('\n').first;
   }
 
-  static Future<bool> start() async {
-    try {
-      if (Platform.isMacOS) {
-        final configPath = getServiceConfigPath();
-        final result = await Process.run('launchctl', ['load', configPath]);
-        if (result.exitCode == 0) return true;
-        final startResult = await Process.run('launchctl', ['start', label]);
-        return startResult.exitCode == 0;
-      } else if (Platform.isLinux) {
-        final result = await Process.run('systemctl', [
-          '--user',
-          'start',
-          serviceName,
-        ]);
-        return result.exitCode == 0;
-      } else if (Platform.isWindows) {
-        final result = await Process.run('powershell.exe', [
-          '-Command',
-          'Start-ScheduledTask -TaskName "$taskName"',
-        ]);
-        return result.exitCode == 0;
-      }
-    } catch (_) {
-      return false;
-    }
-    return false;
-  }
+  static String _concise(Object error) => error.toString().split('\n').first;
+  static ServiceOperationResult _failure(ServiceStatus status, String error) =>
+      ServiceOperationResult(success: false, status: status, error: error);
+  static ServiceOperationResult _unsupported() => const ServiceOperationResult(
+    success: false,
+    status: ServiceStatus(
+      state: ServiceState.managerUnavailable,
+      scope: ServiceScope.unavailable,
+      backend: 'none',
+      installed: false,
+      enabled: false,
+      running: false,
+      error: 'Service management is not supported on this platform.',
+    ),
+    error: 'Service management is not supported on this platform.',
+  );
+}
 
-  static Future<bool> stop() async {
-    try {
-      if (Platform.isMacOS) {
-        final configPath = getServiceConfigPath();
-        final result = await Process.run('launchctl', ['unload', configPath]);
-        if (result.exitCode == 0) return true;
-        final stopResult = await Process.run('launchctl', ['stop', label]);
-        return stopResult.exitCode == 0;
-      } else if (Platform.isLinux) {
-        final result = await Process.run('systemctl', [
-          '--user',
-          'stop',
-          serviceName,
-        ]);
-        return result.exitCode == 0;
-      } else if (Platform.isWindows) {
-        final result = await Process.run('powershell.exe', [
-          '-Command',
-          'Stop-ScheduledTask -TaskName "$taskName"',
-        ]);
-        return result.exitCode == 0;
-      }
-    } catch (_) {
-      return false;
-    }
-    return false;
-  }
-
-  static Future<bool> restart() async {
-    await stop();
-    await Future<void>.delayed(const Duration(seconds: 1));
-    return start();
-  }
-
-  static Future<String> getStatus() async {
-    try {
-      if (Platform.isMacOS) {
-        final result = await Process.run('launchctl', ['list']);
-        if (result.stdout.toString().contains(label)) {
-          return 'Running';
-        }
-        return 'Stopped';
-      } else if (Platform.isLinux) {
-        final result = await Process.run('systemctl', [
-          '--user',
-          'is-active',
-          serviceName,
-        ]);
-        return result.stdout.toString().trim();
-      } else if (Platform.isWindows) {
-        final psCommand = '(Get-ScheduledTask -TaskName "$taskName").State';
-        final result = await Process.run('powershell.exe', [
-          '-Command',
-          psCommand,
-        ]);
-        return result.stdout.toString().trim();
-      }
-    } catch (_) {
-      return 'Unknown';
-    }
-    return 'Unknown';
-  }
+class _DaemonInvocation {
+  const _DaemonInvocation(
+    this.executable,
+    this.arguments, {
+    required this.isDartVm,
+  });
+  final String executable;
+  final List<String> arguments;
+  final bool isDartVm;
 }

@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:logging/logging.dart';
 
 import 'package:sanad_client/core/config/app_config.dart';
+import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 
 class PortalClientTransaction {
   final String transactionId;
@@ -103,6 +104,8 @@ class PortalAuthClient {
     required String redirectUri,
     required String codeChallenge,
     String? enrollmentRequestId,
+    String? clientInstanceId,
+    ClientDisplayMetadata? metadata,
   }) async {
     final data = await _post('/auth/client/transactions', {
       'client_id': clientId,
@@ -110,6 +113,13 @@ class PortalAuthClient {
       'code_challenge': codeChallenge,
       'code_challenge_method': 'S256',
       if (enrollmentRequestId != null) 'enrollment_request_id': enrollmentRequestId,
+      if (clientInstanceId != null) 'client_instance_id': clientInstanceId,
+      if (metadata != null) 'metadata': metadata.toJson(),
+      if (clientInstanceId != null)
+        'capabilities': const [
+          'account_sessions_v1',
+          'delivery_presence_v1',
+        ],
     });
     return PortalClientTransaction.fromJson(data);
   }
@@ -131,9 +141,7 @@ class PortalAuthClient {
   }
 
   Future<PortalAuthRefresh> refresh({required String refreshToken}) async {
-    final data = await _post('/auth/refresh', {
-      'refresh_token': refreshToken,
-    });
+    final data = await _post('/auth/refresh', {'refresh_token': refreshToken});
     return PortalAuthRefresh.fromJson(data);
   }
 

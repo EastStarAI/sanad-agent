@@ -971,6 +971,31 @@ void main() {
       expect(sent, isFalse);
     });
 
+    test(
+      'wire measurement recognizes only strict request extensions',
+      () async {
+        final adapter = CodexResponsesAdapter(config, profile);
+        final baseline = await adapter.measureInput([
+          Message(role: MessageRole.system, content: 'Stable instructions'),
+          Message(role: MessageRole.user, content: 'Measured request'),
+        ]);
+        final extended = await adapter.measureInput([
+          Message(role: MessageRole.system, content: 'Stable instructions'),
+          Message(role: MessageRole.user, content: 'Measured request'),
+          Message(role: MessageRole.user, content: 'Small suffix'),
+        ]);
+        final changedInstructions = await adapter.measureInput([
+          Message(role: MessageRole.system, content: 'Changed instructions'),
+          Message(role: MessageRole.user, content: 'Measured request'),
+          Message(role: MessageRole.user, content: 'Small suffix'),
+        ]);
+
+        expect(extended!.extendsMeasurement(baseline!), isTrue);
+        expect(extended.estimatedTokens, greaterThan(baseline.estimatedTokens));
+        expect(changedInstructions!.extendsMeasurement(baseline), isFalse);
+      },
+    );
+
     test('stream propagates typed stream-level errors', () async {
       final adapter = CodexResponsesAdapter(
         config,

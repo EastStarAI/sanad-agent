@@ -21,11 +21,14 @@ description: "Regression matrix for permission-aware file and search access outs
 | A missing external write target has a symlinked ancestor | Authorization binds to the canonicalized destination before parent creation or write. |
 | An authorized external directory is searched | Results use absolute paths and remain confined to that authorized canonical root. |
 | A write/edit request is displayed for approval | The UI receives action and canonical path only; original content remains only in the durable resume checkpoint. |
+| One parallel tool batch targets multiple external paths | Permission prompts are presented FIFO with at most one unresolved request for the session; resolving or denying one exposes the next and the turn does not retain hidden waiters. |
+| Different sessions request external-path permission concurrently | Each session progresses independently; one session's pending prompt does not block another session. |
 
 ## Focused Automated Verification
 
 - `agent/test/capabilities/workspace_path_resolver_test.dart`
 - `agent/test/capabilities/runtime_catalog_test.dart`
 - `agent/test/capabilities/permission_manager_test.dart`
+- `agent/e2e_test/local_tool_permissions_e2e_test.dart` (authenticated local-daemon sequencing for a parallel external-read batch)
 
 The permission-card copy is verified with focused client tests: known file actions use action-specific prompts and labeled canonical paths, unknown actions retain a generic fallback, and write/edit content remains absent from the display payload.

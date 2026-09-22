@@ -193,6 +193,7 @@ function Ensure-Dependencies([string] $FvmPath) {
   New-Item -ItemType Directory -Force -Path $stampRoot | Out-Null
   $lockFiles = @(
     (Join-Path $ProjectDir 'release/contract/pubspec.lock'),
+    (Join-Path $ProjectDir 'scripts/sanad_dev/pubspec.lock'),
     (Join-Path $ProjectDir 'agent/pubspec.lock'),
     (Join-Path $ProjectDir 'client/pubspec.lock')
   )
@@ -205,14 +206,62 @@ function Ensure-Dependencies([string] $FvmPath) {
   }
   $stamp = Join-Path $stampRoot 'setup.stamp'
   $packagesReady = (Test-Path (Join-Path $ProjectDir 'release/contract/.dart_tool/package_config.json')) -and
+    (Test-Path (Join-Path $ProjectDir 'scripts/sanad_dev/.dart_tool/package_config.json')) -and
     (Test-Path (Join-Path $ProjectDir 'agent/.dart_tool/package_config.json')) -and
     (Test-Path (Join-Path $ProjectDir 'client/.dart_tool/package_config.json'))
   if ((Test-Path $stamp) -and (Get-Content -Raw $stamp) -eq $fingerprint -and $packagesReady) { return }
 
   Invoke-LiveProcessStage 'Resolving Release Contract dependencies' $FvmPath @('dart', 'pub', 'get') (Join-Path $ProjectDir 'release/contract')
+  Invoke-LiveProcessStage 'Resolving sanad-dev dependencies' $FvmPath @('dart', 'pub', 'get') (Join-Path $ProjectDir 'scripts/sanad_dev')
   Invoke-LiveProcessStage 'Resolving Agent dependencies' $FvmPath @('dart', 'pub', 'get') (Join-Path $ProjectDir 'agent')
   Invoke-LiveProcessStage 'Resolving Client dependencies' $FvmPath @('flutter', 'pub', 'get') (Join-Path $ProjectDir 'client')
   Set-Content -NoNewline -Path $stamp -Value $fingerprint
+}
+
+function Get-RuntimeCliFingerprint {
+  $packageRoot = Join-Path $ProjectDir 'scripts/sanad_dev'
+  $inputs = @(
+    (Join-Path $packageRoot 'pubspec.yaml'),
+    (Join-Path $packageRoot 'pubspec.lock')
+  ) + @(Get-ChildItem -File -Recurse (Join-Path $packageRoot 'lib') -Filter '*.dart' | Sort-Object FullName | ForEach-Object { $_.FullName })
+  $fingerprintText = ($inputs | ForEach-Object {
+    $path = [string]$_
+    $relative = $path.Substring($packageRoot.Length).TrimStart([char[]]'\/')
+    "${relative}:$((Get-FileHash -Algorithm SHA256 $path).Hash)"
+  }) -join ':'
+  $sha = [Security.Cryptography.SHA256]::Create()
+  try {
+    return -join ($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($fingerprintText)) | ForEach-Object { $_.ToString('x2') })
+  } finally {
+    $sha.Dispose()
+  }
+}
+
+function Remove-StaleRuntimeCliArtifacts([string] $ArtifactRoot, [string] $ActiveArtifact) {
+  Get-ChildItem -File $ArtifactRoot -Filter 'sanad-dev-runtime*.exe' -ErrorAction SilentlyContinue |
+    Where-Object { -not [string]::Equals($_.FullName, $ActiveArtifact, [StringComparison]::OrdinalIgnoreCase) } |
+    ForEach-Object { Remove-Item -Force $_.FullName -ErrorAction SilentlyContinue }
+}
+
+function Ensure-RuntimeCli([string] $FvmPath) {
+  $artifactRoot = Join-Path $ProjectDir '.dart_tool/sanad-dev'
+  $stamp = Join-Path $artifactRoot 'runtime-cli.stamp'
+  New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
+  $fingerprint = Get-RuntimeCliFingerprint
+  $artifact = Join-Path $artifactRoot "sanad-dev-runtime-$fingerprint.exe"
+  if (Test-Path $artifact) {
+    if (-not (Test-Path $stamp) -or (Get-Content -Raw $stamp) -ne $fingerprint) {
+      Set-Content -NoNewline -Path $stamp -Value $fingerprint
+    }
+    Remove-StaleRuntimeCliArtifacts $artifactRoot $artifact
+    return $artifact
+  }
+  Invoke-LiveProcessStage 'Compiling sanad-dev runtime' $FvmPath @(
+    'dart', 'compile', 'exe', 'lib/sanad_dev_cli.dart', '-o', $artifact
+  ) (Join-Path $ProjectDir 'scripts/sanad_dev')
+  Set-Content -NoNewline -Path $stamp -Value $fingerprint
+  Remove-StaleRuntimeCliArtifacts $artifactRoot $artifact
+  return $artifact
 }
 
 function Invoke-Install([bool] $AllowExistingShim) {
@@ -225,36 +274,32 @@ function Invoke-Install([bool] $AllowExistingShim) {
 function Invoke-Setup([bool] $AllowExistingShim) {
   $fvm = Invoke-Install $AllowExistingShim
   Ensure-Dependencies $fvm
+  Ensure-RuntimeCli $fvm | Out-Null
   return $fvm
 }
 
 function Require-RuntimeCli {
-  $existing = Get-Command fvm -ErrorAction SilentlyContinue
-  if (-not $existing) { throw 'FVM is not installed. Run: sanad-dev install' }
-  $flutterPin = (Get-Content -Raw (Join-Path $ProjectDir '.fvmrc') | ConvertFrom-Json).flutter
-  Push-Location $ProjectDir
-  $flutterReady = $false
-  try {
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-      & $existing.Source spawn $flutterPin --version *> $null
-      $flutterReady = $LASTEXITCODE -eq 0
-    } catch {
-      $flutterReady = $false
-    } finally {
-      $ErrorActionPreference = $prevEap
-    }
-  } finally {
-    Pop-Location
+  if (-not (Get-Command fvm -ErrorAction SilentlyContinue)) {
+    throw 'FVM is not installed. Run: sanad-dev install'
   }
-  if (-not $flutterReady) {
-    throw 'Pinned Flutter is not installed. Run: sanad-dev install'
+  $artifactRoot = Join-Path $ProjectDir '.dart_tool/sanad-dev'
+  $stamp = Join-Path $artifactRoot 'runtime-cli.stamp'
+  $packagesReady = (Test-Path (Join-Path $ProjectDir 'release/contract/.dart_tool/package_config.json')) -and
+    (Test-Path (Join-Path $ProjectDir 'scripts/sanad_dev/.dart_tool/package_config.json')) -and
+    (Test-Path (Join-Path $ProjectDir 'agent/.dart_tool/package_config.json')) -and
+    (Test-Path (Join-Path $ProjectDir 'client/.dart_tool/package_config.json'))
+  if (-not $packagesReady -or -not (Test-Path $stamp)) {
+    throw 'Project runtime is not ready. Run: sanad-dev setup'
   }
-  if (-not (Test-Path (Join-Path $ProjectDir 'client/.dart_tool/package_config.json'))) {
-    throw 'Project packages are not ready. Run: sanad-dev setup'
+  $fingerprint = Get-RuntimeCliFingerprint
+  if ((Get-Content -Raw $stamp) -ne $fingerprint) {
+    throw 'Project runtime is stale. Run: sanad-dev setup'
   }
-  return $existing.Source
+  $artifact = Join-Path $artifactRoot "sanad-dev-runtime-$fingerprint.exe"
+  if (-not (Test-Path $artifact)) {
+    throw 'Project runtime is not ready. Run: sanad-dev setup'
+  }
+  return $artifact
 }
 
 try {
@@ -267,14 +312,13 @@ try {
     exit 0
   }
   if ($command -eq 'setup') {
-    Invoke-Setup $false | Out-Null
+    Invoke-Setup $true | Out-Null
     exit 0
   }
-  $fvm = if ($command -in @('run', 'switch')) {
-    Invoke-Setup $true
-  } else {
-    Require-RuntimeCli
+  if ($command -in @('run', 'switch')) {
+    Invoke-Setup $true | Out-Null
   }
+  $runtimeCli = Require-RuntimeCli
   [string[]] $runtimeArgs = if ($command -eq 'run') {
     [string[]]@($SanadArgs | Where-Object { $_ -ne '--force' })
   } else {
@@ -282,7 +326,7 @@ try {
   }
   $env:SANAD_DEV_CALLER_DIR = $CallerDir
   Push-Location (Join-Path $ProjectDir 'client')
-  try { & $fvm dart (Join-Path $ProjectDir 'scripts/sanad_dev.dart') @runtimeArgs; exit $LASTEXITCODE }
+  try { & $runtimeCli @runtimeArgs; exit $LASTEXITCODE }
   finally { Pop-Location }
 } catch {
   Write-Error "sanad-dev failed: $($_.Exception.Message)"

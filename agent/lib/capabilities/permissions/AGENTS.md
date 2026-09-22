@@ -9,6 +9,7 @@ This contract applies to `agent/lib/capabilities/permissions/`.
 - Persist workspace policy through the dedicated store and keep permission origin/scope explicit.
 - Apply approval grants at once, session, and workspace scope. A denial rejects only the current invocation and never creates a durable or session-wide deny rule; explicit workspace policy deny entries remain authoritative configuration.
 - External workspace-file grants are keyed by tool plus canonical target path. Keep original arguments in the durable checkpoint for resume, but expose only sanitized action/path details in the permission payload.
+- A session has at most one unresolved interactive permission request. Concurrent authorization checks queue FIFO per session and re-evaluate current policy when they reach the front; different sessions remain independent.
 
 ## Durable Suspension
 - Write a durable suspended checkpoint before a sensitive tool call waits for user approval.

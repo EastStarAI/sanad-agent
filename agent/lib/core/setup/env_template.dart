@@ -32,7 +32,6 @@ ENABLE_LOCAL_GATEWAY=true
 LOCAL_GATEWAY_PORT=58085
 # Network interface host to bind the local gateway server to (e.g. 127.0.0.1 for local only, 0.0.0.0 to allow access from local network)
 LOCAL_GATEWAY_HOST=127.0.0.1
-CONTEXT_LIMIT=4000
 
 # --- Logging (Optional) ---
 # LOG_LEVEL options: ALL, FINE, INFO, WARNING, SEVERE

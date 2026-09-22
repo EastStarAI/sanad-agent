@@ -7,7 +7,7 @@ description: "Daemon-owned MCP configuration, secret handling, inspection, OAuth
 
 ## Scope and authority
 
-The local daemon is the only authority for MCP configuration persistence, secret storage, connection inspection, transport detection, OAuth state, and tool discovery. The client sends typed user intent and renders redacted daemon results. Cloud-origin turns may use locally configured MCP tools, but cloud/remote MCP management remains rejected.
+The local daemon is the only authority for MCP configuration persistence, secret storage, connection inspection, transport detection, OAuth state, and tool discovery. The client sends typed user intent and renders redacted daemon results. Cloud and local MCP management share the daemon protocol relay under [Remote Device Control Threat Model](remote_device_control_threat_model.md). Hosted REST `/api/mcp` is forbidden. Root-document `replace_mcp_config` stays rejected on cloud.
 
 Device and Workspace definitions remain independent. A Workspace definition with the same normalized name overrides the Device definition in the effective catalog.
 
@@ -23,7 +23,7 @@ The primary flow is:
 4. Review detected transport, authentication state, discovered tools, and selected tools.
 5. Save through one daemon mutation authority.
 
-Edit uses the same draft and review flow. Stored secrets are represented as `configured`; their values are never returned. Replacement and removal are explicit secret mutations.
+Edit uses the same draft and review flow. Stored secrets are represented as `configured`; their values are never returned. Replacement and removal are explicit secret mutations. Remote confirmation fingerprints bind secret mutations through a process-salted digest, so changing a secret after preview invalidates the ticket without exposing the secret or a reusable unsalted hash.
 
 The management page is card-first. Enabled state, connection health, authentication state, tool count, and scope are separate fields. Raw JSON is not a permanent pane.
 

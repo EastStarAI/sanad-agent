@@ -87,7 +87,17 @@ screenshots beside it.
    operating-system review flow offered by Windows.
 3. Launch the Client, record its displayed version and startup result, then
    reboot and launch it again.
-4. Uninstall through Windows Installed Apps and verify that application entries
+4. While the installed Client is running, launch the next candidate installer.
+   Confirm the Client closes, the upgrade completes, and the new Client starts
+   without Bad Image or DLL-load errors. Verify that no
+   `.sanad-install-staging` or `.sanad-install-backup` directory remains and
+   that the installed EXE, every top-level DLL, and the `data/` tree match the
+   candidate payload hashes.
+5. Repeat with an independent process holding one installed DLL without delete
+   sharing. Confirm the installer aborts without changing the installed
+   payload; release the handle and confirm retry succeeds. Do not use a real
+   user Client or Sanad Home for this fault-injection case.
+6. Uninstall through Windows Installed Apps and verify that application entries
    and installed binaries are removed while the test Sanad Home remains.
 
 Capture machine state after each stage:
@@ -186,6 +196,74 @@ This is real Windows vault and source lifecycle evidence, not a new packaged
 clean-machine pass. The existing release clean-machine procedure remains the
 authority for a future candidate artifact's Defender, SmartScreen, install,
 upgrade, reboot, rollback, and uninstall evidence.
+
+## Isolated running-client installer regression — 2026-08-30
+
+A current-workstation test used two synthetic NSIS payload versions, a dedicated
+installation directory, dedicated HKCU application and Installed Apps keys, no
+shortcuts, and no Sanad Home. It did not replace or stop the normal installed or
+source Client. The isolated lifecycle proved:
+
+- version 1 installed with isolated registry metadata;
+- installing version 2 while the exact version 1 executable was running stopped
+  only that executable and replaced EXE, DLL, and `data/` without staging or
+  backup residue;
+- an exclusive lock on the installed version 1 DLL rejected the upgrade with
+  installer exit code `2` and preserved the complete version 1 payload;
+- releasing the lock allowed a successful retry, removed the stale version 1
+  DLL, and installed the exact version 2 payload;
+- silent uninstall removed the isolated directory and both isolated registry
+  keys; the pre-existing normal Client process remained alive.
+
+This is focused current-machine regression evidence. It does not replace the
+protected clean-snapshot Defender, SmartScreen, signing, reboot, or release
+candidate gate above.
+
+## No-console launcher regression gate
+
+A later Windows candidate replaces the long-running hidden PowerShell task host
+with an Agent-owned native GUI-subsystem launcher embedded in the existing
+single Agent artifact. This does not alter the Client download contract. Before
+that candidate can ship, a clean Windows 11 run must prove:
+
+- immediate first install, manual start/restart, logon, and reboot create no
+  visible console window;
+- the task action targets the extracted hash-versioned launcher directly;
+- the launcher redirects Agent output to Sanad Home logs and keeps the complete
+  supervised process tree owned until task stop;
+- closing the Client leaves authenticated Agent health available;
+- replacement installs the new launcher/task definition, while failed
+  replacement restores and reinstalls the previous Agent;
+- interactive `sanad.exe` CLI and source/FVM terminals remain visible and
+  functional.
+
+The historical Gate E evidence above remains accurate for its older candidate;
+it is not evidence for this new launcher until the clean-machine gate runs.
+
+### Focused local launcher evidence — 2026-09-20
+
+A release-shaped Agent and native launcher were built on Windows 11 Pro build
+26200 and exercised with an isolated Sanad Home, service instance, task, and
+loopback port. The embedded Agent retained normal `--version` output; service
+installation extracted a hash-versioned launcher and registered the task action
+directly against it. Authenticated health returned `ok` at Agent version
+`1.0.10`. The launcher, supervisor, and daemon child formed one three-process
+tree, and Win32 top-level-window enumeration reported zero visible windows after
+install and after stop/start. Stop, start, and restart all returned the expected
+typed task state. A staged Agent with a deliberately corrupted launcher bundle
+then caused `service install` to return nonzero; the detached replacement
+restored the prior `1.0.10` executable, reinstalled its launcher/task, recorded
+`rollback_completed`, and returned authenticated health on the isolated port. A
+subsequent valid packaged `1.0.11` replacement recorded `started`, returned
+authenticated `1.0.11` health, and retained a three-process tree with zero
+visible windows. A real reboot then started the isolated task automatically
+about twelve seconds after boot; authenticated `1.0.13` health returned on port
+`59194` while the primary runtime remained independently available on `58085`,
+and the post-logon three-process tree still owned zero visible windows. Final
+uninstall stopped the launcher-owned job tree before unregistering the task; the
+command returned `Missing`, no matching process or listener remained, and the
+isolated Home was removed. This focused current-machine reboot evidence does not
+replace the protected clean-snapshot release-candidate gate.
 
 ## Acceptance criteria
 

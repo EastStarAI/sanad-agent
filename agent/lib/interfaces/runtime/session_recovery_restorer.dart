@@ -5,9 +5,12 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart'
 import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
-import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
+import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
+import 'package:sanad_agent/engine/runtime/tool_terminal_record.dart';
+import 'package:sanad_agent/capabilities/tools/system/process_tree_controller.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
+import 'package:sanad_agent/evolution/db/runtime/session_execution_state_coordinator.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
@@ -57,15 +60,22 @@ class SessionRecoveryRestorer {
   Future<void> restorePersistedState() async {
     final store = _getPersistedState();
     if (store == null) return;
-    store.cleanupOrphanedWorkItems();
     _deleteOrphanedRuntimeNotices(store);
 
     final awaitingSuspensions = await _listAwaitingSuspensions();
     final suspendedToolCallIdsBySession = <String, Set<String>>{};
+    final decisionReadyToolCallIdsBySession = <String, Set<String>>{};
     for (final checkpoint in awaitingSuspensions) {
-      suspendedToolCallIdsBySession
-          .putIfAbsent(checkpoint.sessionId, () => <String>{})
-          .add(checkpoint.toolCallId);
+      if (checkpoint.status != 'executing_tool') {
+        suspendedToolCallIdsBySession
+            .putIfAbsent(checkpoint.sessionId, () => <String>{})
+            .add(checkpoint.toolCallId);
+      }
+      if (checkpoint.status == 'decision_ready') {
+        decisionReadyToolCallIdsBySession
+            .putIfAbsent(checkpoint.sessionId, () => <String>{})
+            .add(checkpoint.toolCallId);
+      }
     }
 
     // Restore active notices in recovery service first (E.1)
@@ -110,6 +120,16 @@ class SessionRecoveryRestorer {
             executingTools.isNotEmpty &&
             executingTools.every(suspendedToolCallIds.contains);
 
+        if (await _terminalizeInterruptedShellTools(store, running)) {
+          resumableWorkItemIds.add(running.workItemId);
+          store.transitionWorkItemState(
+            workItemId: running.workItemId,
+            fromState: SessionWorkState.running,
+            toState: SessionWorkState.queued,
+          );
+          continue;
+        }
+
         if (isInteractiveWait) {
           _logger.info(
             'Restoring work item ${running.workItemId} as waiting because '
@@ -121,6 +141,53 @@ class SessionRecoveryRestorer {
             fromState: SessionWorkState.running,
             toState: SessionWorkState.waiting,
           );
+          continue;
+        }
+
+        if (checkpointKind ==
+            ContinuationCheckpointCoordinator
+                .checkpointKindModelRequestInFlight) {
+          final recoveredMetadata =
+              ContinuationCheckpointCoordinator.metadataForInterruptedProviderRetry(
+                meta,
+                requireExplicitRestartMarker: false,
+              );
+          if (recoveredMetadata != null) {
+            _logger.info(
+              'Restoring interrupted provider work item '
+              '${running.workItemId} from its safe predecessor checkpoint.',
+            );
+            resumableWorkItemIds.add(running.workItemId);
+            store.transitionWorkItemState(
+              workItemId: running.workItemId,
+              fromState: SessionWorkState.running,
+              toState: SessionWorkState.queued,
+              continuationMetadata: recoveredMetadata,
+            );
+            continue;
+          }
+
+          _logger.warning(
+            'Provider request outcome is unknown and no safe predecessor is '
+            'available for work item ${running.workItemId}; blocking recovery.',
+          );
+          store.transitionWorkItemState(
+            workItemId: running.workItemId,
+            fromState: SessionWorkState.running,
+            toState: SessionWorkState.blocked,
+          );
+          if (getIt.isRegistered<RuntimeRecoveryService>()) {
+            getIt<RuntimeRecoveryService>().reportFailure(
+              sessionId: sessionId,
+              reason: RuntimeFailureReason.unknown,
+              requestId: running.requestId,
+              providerInstanceId: running.providerInstanceId,
+              title: 'Provider request was interrupted',
+              message:
+                  'The provider request outcome is unknown and no safe checkpoint is available. Stop the session or select another recovery action.',
+              forceBlocked: true,
+            );
+          }
           continue;
         }
 
@@ -148,48 +215,33 @@ class SessionRecoveryRestorer {
           continue;
         }
 
-        bool canRequeue = true;
-        if (executingTools.isNotEmpty) {
-          final toolReplaySafety = Map<String, dynamic>.from(
-            meta['tool_replay_safety'] as Map? ?? const {},
-          );
-          final deferredResults = Map<String, dynamic>.from(
-            meta['deferred_tool_results'] as Map? ?? const {},
-          );
-          // If any executing tool is non-idempotent, we cannot re-queue
-          for (final toolId in executingTools) {
-            final deferred = DeferredToolResultDescriptor.tryParseMetadata(
-              deferredResults[toolId],
-            );
-            if (deferred != null &&
-                deferred.requesterSessionId == sessionId &&
-                deferred.requesterToolCallId == toolId) {
-              continue;
-            }
-            if (toolReplaySafety[toolId] != true) {
-              canRequeue = false;
-              break;
-            }
+        final canResumeInterruptedTools =
+            executingTools.isNotEmpty && hasRecognizedCheckpoint;
+        final canRequeueWithoutToolRecovery = executingTools.isEmpty;
+        if (canResumeInterruptedTools || canRequeueWithoutToolRecovery) {
+          final recoveredMetadata = Map<String, dynamic>.from(meta);
+          if (canResumeInterruptedTools) {
+            recoveredMetadata[ContinuationCheckpointCoordinator
+                    .automaticUnknownToolRecoveryKey] =
+                true;
           }
-        }
-
-        if (canRequeue) {
           if (hasRecognizedCheckpoint) {
             resumableWorkItemIds.add(running.workItemId);
           }
           _logger.info(
-            hasRecognizedCheckpoint
-                ? '🔄 [Orchestrator] Queueing checkpointed work item ${running.workItemId} for resume'
-                : '🔄 [Orchestrator] Re-queuing crashed idempotent work item ${running.workItemId}',
+            canResumeInterruptedTools
+                ? 'Restoring interrupted tools for work item ${running.workItemId} as unknown outcomes.'
+                : 'Queueing crashed work item ${running.workItemId} for recovery.',
           );
           store.transitionWorkItemState(
             workItemId: running.workItemId,
             fromState: SessionWorkState.running,
             toState: SessionWorkState.queued,
+            continuationMetadata: recoveredMetadata,
           );
         } else {
           _logger.warning(
-            '⚠️ [Orchestrator] Crashed work item ${running.workItemId} has non-idempotent executing tools. Marking as blocked.',
+            'Crashed work item ${running.workItemId} has executing tools but no recognized checkpoint. Marking it blocked.',
           );
           store.transitionWorkItemState(
             workItemId: running.workItemId,
@@ -203,9 +255,9 @@ class SessionRecoveryRestorer {
               reason: RuntimeFailureReason.unknown,
               requestId: running.requestId,
               providerInstanceId: running.providerInstanceId,
-              title: 'Execution interrupted',
+              title: 'Execution checkpoint is incomplete',
               message:
-                  'The agent crashed or restarted while executing a non-idempotent tool. Execution has been blocked to prevent duplicate actions. Please review session history and select retry or stop.',
+                  'The interrupted tool cannot be reconstructed because its checkpoint is incomplete. Stop the session or select another recovery action.',
               forceBlocked: true,
             );
           }
@@ -253,16 +305,38 @@ class SessionRecoveryRestorer {
       for (final item in updatedItems.where(
         (candidate) => candidate.state == SessionWorkState.resuming,
       )) {
-        if (_isSafeInterruptedResume(item)) {
+        final executingTools = List<String>.from(
+          item.continuationMetadata['currently_executing_tools'] as List? ??
+              const [],
+        );
+        final decisionReadyToolCallIds =
+            decisionReadyToolCallIdsBySession[sessionId] ?? const <String>{};
+        final hasRecoverableDecision =
+            executingTools.isNotEmpty &&
+            executingTools.every(decisionReadyToolCallIds.contains);
+        if (hasRecoverableDecision) {
           _logger.info(
-            '🔁 [Orchestrator] Reclassifying safely owned interrupted '
-            'resuming work item ${item.workItemId} to waiting for an atomic '
-            'resume claim',
+            'Reclassifying interrupted resolved input for work item '
+            '${item.workItemId} to waiting before reclaim.',
           );
           store.transitionWorkItemState(
             workItemId: item.workItemId,
             fromState: SessionWorkState.resuming,
             toState: SessionWorkState.waiting,
+          );
+          continue;
+        }
+        final recoveredMetadata = _metadataForAutomaticInterruptedResume(item);
+        if (recoveredMetadata != null) {
+          _logger.info(
+            'Reclassifying owned interrupted resuming work item '
+            '${item.workItemId} to waiting for an automatic resume claim.',
+          );
+          store.transitionWorkItemState(
+            workItemId: item.workItemId,
+            fromState: SessionWorkState.resuming,
+            toState: SessionWorkState.waiting,
+            continuationMetadata: recoveredMetadata,
           );
           autoResumeWorkItemIds.add(item.workItemId);
           if (getIt.isRegistered<RuntimeRecoveryService>()) {
@@ -626,34 +700,123 @@ class SessionRecoveryRestorer {
     );
   }
 
-  bool _isSafeInterruptedResume(SessionWorkItem item) {
+  Map<String, dynamic>? _metadataForAutomaticInterruptedResume(
+    SessionWorkItem item,
+  ) {
     final metadata = item.continuationMetadata;
     final ownerRunId = metadata['owner_run_id']?.toString();
     final ownerGeneration = metadata['owner_generation'];
     if (ownerRunId == null ||
         ownerRunId.isEmpty ||
         (ownerGeneration is! int && int.tryParse('$ownerGeneration') == null)) {
-      return false;
+      return null;
     }
 
     final checkpointKind = metadata['checkpoint_kind']?.toString();
+    if (checkpointKind ==
+        ContinuationCheckpointCoordinator.checkpointKindModelRequestInFlight) {
+      return ContinuationCheckpointCoordinator.metadataForInterruptedProviderRetry(
+        metadata,
+        requireExplicitRestartMarker: false,
+      );
+    }
     final hasRecognizedCheckpoint =
         checkpointKind == AgentRunner.checkpointKindInitialModelRequest ||
         checkpointKind == AgentRunner.checkpointKindAfterToolResult;
-    if (!hasRecognizedCheckpoint) {
-      return false;
-    }
+    if (!hasRecognizedCheckpoint) return null;
 
+    final recovered = Map<String, dynamic>.from(metadata);
     final executingTools = List<String>.from(
       metadata['currently_executing_tools'] as List? ?? const [],
     );
-    if (executingTools.isEmpty) {
-      return true;
+    if (executingTools.isNotEmpty) {
+      recovered[ContinuationCheckpointCoordinator
+              .automaticUnknownToolRecoveryKey] =
+          true;
     }
-    final replaySafety = Map<String, dynamic>.from(
-      metadata['tool_replay_safety'] as Map? ?? const {},
+    return recovered;
+  }
+
+  Future<bool> _terminalizeInterruptedShellTools(
+    PersistedRuntimeStateRepository store,
+    SessionWorkItem item,
+  ) async {
+    final metadata = item.continuationMetadata;
+    final executing = List<String>.from(
+      metadata['currently_executing_tools'] as List? ?? const [],
     );
-    return executingTools.every((toolId) => replaySafety[toolId] == true);
+    final progressByTool = Map<String, dynamic>.from(
+      metadata['executing_tool_progress'] as Map? ?? const {},
+    );
+    if (executing.isEmpty ||
+        !executing.every((toolCallId) {
+          final progress = progressByTool[toolCallId];
+          return progress is Map && progress['tool_name'] == 'shell_execute';
+        })) {
+      return false;
+    }
+    final runId = metadata['owner_run_id']?.toString();
+    final generationRaw = metadata['owner_generation'];
+    final generation = generationRaw is int
+        ? generationRaw
+        : int.tryParse('$generationRaw');
+    if (runId == null || runId.isEmpty || generation == null) return false;
+
+    final outputs = <String, Map<String, dynamic>>{};
+    final messages = <String, Message>{};
+    final startedAt = Map<String, dynamic>.from(
+      metadata['tool_started_at'] as Map? ?? const {},
+    );
+    for (final toolCallId in executing) {
+      final progress = Map<String, dynamic>.from(
+        progressByTool[toolCallId] as Map,
+      );
+      final stdout = progress['stdout']?.toString().trimRight() ?? '';
+      final stderr = progress['stderr']?.toString().trimRight() ?? '';
+      final partial = [
+        if (stdout.isNotEmpty) stdout,
+        if (stderr.isNotEmpty) 'STDERR:\n$stderr',
+      ].join('\n');
+      final fingerprint = ProcessFingerprint.tryParse(progress['process']);
+      final cleanup = fingerprint == null
+          ? null
+          : await ProcessTreeController.terminatePersisted(fingerprint);
+      final interruption =
+          'The execution was interrupted unexpectedly because the agent '
+          'stopped. Its outcome is unknown. Review the partial result before '
+          'proceeding, and check the current system state before re-running '
+          'the same execution.';
+      final message = partial.isEmpty
+          ? interruption
+          : '$partial\n$interruption';
+      final record = ToolTerminalRecord.interrupted(
+        sessionId: item.sessionId,
+        toolCallId: toolCallId,
+        toolName: 'shell_execute',
+        runId: runId,
+        modelStepId: metadata['model_step_id']?.toString(),
+        generation: generation,
+        message: message,
+        cleanupOutcome: cleanup?.outcome.name ?? 'unknown_after_crash',
+        startedAt: DateTime.tryParse(startedAt[toolCallId]?.toString() ?? ''),
+      );
+      outputs[toolCallId] = record.toCheckpointOutput(arguments: const {});
+      messages[toolCallId] = Message(
+        role: MessageRole.tool,
+        content: record.message,
+        toolCallId: toolCallId,
+        metadata: record.toHistoryMetadata(),
+      );
+    }
+    final commit = store.executionState.commitToolTerminals(
+      sessionId: item.sessionId,
+      workItemId: item.workItemId,
+      runId: runId,
+      generation: generation,
+      checkpointOutputs: outputs,
+      historyMessages: messages,
+    );
+    return commit.outcome == ToolTerminalCommitOutcome.committed;
   }
 
   void _scheduleAtomicResume(String sessionId) {

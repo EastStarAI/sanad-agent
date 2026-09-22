@@ -199,9 +199,12 @@ void main() {
         requestId: 'request-contract',
         revision: 7,
         updatedAt: DateTime.utc(2026, 7, 15, 12),
+        turnStartedAt: DateTime.utc(2026, 7, 15, 11, 30),
       );
 
-      final parsed = SessionExecutionSnapshot.fromPayload(snapshot.toPayload());
+      final parsed = SessionExecutionSnapshot.fromPayload(
+        snapshot.toPayload(observedAt: DateTime.utc(2026, 7, 15, 12)),
+      );
 
       expect(parsed.sessionId, snapshot.sessionId);
       expect(parsed.state, snapshot.state);
@@ -209,6 +212,13 @@ void main() {
       expect(parsed.requestId, snapshot.requestId);
       expect(parsed.revision, snapshot.revision);
       expect(parsed.updatedAt, snapshot.updatedAt);
+      expect(parsed.turnStartedAt, snapshot.turnStartedAt);
+      expect(
+        snapshot.toPayload(
+          observedAt: DateTime.utc(2026, 7, 15, 12),
+        )['elapsed_ms'],
+        const Duration(minutes: 30).inMilliseconds,
+      );
       expect(
         () => SessionExecutionSnapshot.fromPayload({
           ...snapshot.toPayload(),
@@ -346,8 +356,41 @@ void main() {
         expect(emitted.single.state, SessionExecutionState.queued);
         expect(emitted.single.workItemId, 'work-head');
         expect(emitted.single.revision, 1);
+        expect(
+          emitted.single.turnStartedAt,
+          workItems.findWorkItem('work-head')!.createdAt.toUtc(),
+        );
       },
     );
+
+    test('can defer a committed Stop snapshot until terminal delivery', () {
+      seedSession('session-deferred-stop-publication');
+      final emitted = <SessionExecutionSnapshot>[];
+      executionState.changes.listen(emitted.add);
+      executionState.enqueueWorkItem(
+        workItemId: 'work-deferred-stop-publication',
+        sessionId: 'session-deferred-stop-publication',
+        state: SessionWorkState.running,
+      );
+      executionState.markStopping('session-deferred-stop-publication');
+
+      final committed = executionState.cancelAll(
+        'session-deferred-stop-publication',
+        publish: false,
+      );
+
+      expect(committed.snapshot.state, SessionExecutionState.idle);
+      expect(
+        snapshots.getSnapshot('session-deferred-stop-publication').state,
+        SessionExecutionState.idle,
+        reason: 'durable cleanup must commit before stopped is delivered',
+      );
+      expect(emitted.last.state, SessionExecutionState.stopping);
+
+      executionState.publishCommittedChange(committed);
+
+      expect(emitted.last.state, SessionExecutionState.idle);
+    });
 
     test('restart normalization derives stale stopping from durable work', () {
       seedSession('session-restart-stopping');

@@ -1,31 +1,39 @@
 ---
 title: "Remote Workspace Folder Management QA"
-description: "Regression matrix for the temporary cloud workspace-management shutdown and preserved local picker behavior."
+description: "Regression matrix for managed-remote workspace create/browse and preserved local native picker behavior."
 ---
 
 # Remote Workspace Folder Management QA
+
+Remote cloud restoration is owned by
+[Remote Device Control QA](remote_device_control_qa.md) G3. This page keeps the
+local picker matrix and the client projection checks.
 
 ## Current Product Boundary
 
 - Same-device desktop workspace selection continues to use the operating
   system native folder picker.
 - Remote users may select existing registered workspaces for conversations.
-- Remote workspace creation, relocation, host-path browsing, folder creation,
-  folder rename, and folder deletion are temporarily disabled.
-- The cloud adapter is the enforcement boundary; hiding the Flutter browser is
-  presentation feedback, not the security control.
+- Remote workspace creation is name-based under `SANAD_HOME/workspaces`.
+- Remote browse and folder mutations stay inside managed/registered roots and
+  require daemon preview tokens for recursive delete and relocate.
+- Workspace Overview does not expose the retained remote folder browser.
+- Remove workspace deletes the database record only; folders, files, sessions,
+  and messages remain untouched.
+- Change Path remains same-desktop local only.
 
 ## Automated Coverage Matrix
 
 | Area | Required behavior |
 |---|---|
-| Cloud `execute_command` | Each of the six suspended commands returns `remote_workspace_management_disabled`. |
-| Cloud `protocol_event` | Each equivalent canonical event returns the same structured error. |
-| Correlation | Every rejection preserves the original `request_id` and `session_id`. |
-| No side effects | Rejected commands do not register a session channel, invoke workspace runtime methods, or touch the filesystem. |
+| Cloud managed create | `create_workspace` with a name dispatches as `managed_remote` without session registration. A client path is rejected. |
+| Cloud browse | Empty `browse_workspace_tree` lists allowed roots only, not `/` or Home. |
+| Cloud folder ops | create/rename/delete stay inside allowed roots; delete/relocate need a preview token. |
+| Wrong device | Mismatched `device_id` returns `wrong_device` with no mutation. |
 | Allowed queries | `list_workspaces` remains allowed so remote users can choose an existing workspace. |
-| Client warning | A remote picker attempt displays the temporary security message. |
-| No remote browser | Conversation, Sidebar, and Settings use the shared helper, which returns no path remotely and never opens `WorkspaceBrowserDialog`. |
+| Remote create UX | Conversation and Sidebar use a name dialog, not the native picker. |
+| Remote browser | Workspace Settings has no Browse folders action; the constrained dialog and daemon commands remain covered for future File Tree use. |
+| Record removal | `workspace.remove` returns the correlated workspace id, removes the list/cache projection, and preserves the directory plus session rows. |
 | Local picker | A confirmed same-desktop local device still opens the native picker and can create or relocate a workspace using the selected path. |
 | Client projection | A workspace created from the sidebar/cache appears in the composer selector on its first opening without a close/reopen cycle. |
 
@@ -35,34 +43,14 @@ description: "Regression matrix for the temporary cloud workspace-management shu
 
 1. Connect to a remote device and open the workspace selector.
 2. Verify existing registered workspaces remain selectable.
-3. Choose the action to add a workspace and verify the security notice appears.
-4. Verify no remote browser opens and no workspace is created.
-5. Open Workspace Settings for the remote device and choose Change Path.
-6. Verify the same notice appears and the stored path is unchanged.
-7. Send each suspended command through a protocol test client and verify a
-   correlated `remote_workspace_management_disabled` error is returned without
-   a timeout.
+3. Choose Add New Workspace, enter a name, and verify a managed workspace is created without typing a path.
+4. Open Workspace Settings and verify Browse folders is absent.
+5. Choose Remove workspace, verify the confirmation explains record-only
+   removal, then confirm that the folder/files and conversation records remain.
+6. Change Path remains unavailable as a native host picker on the remote device.
 
-### Local same-device connection
+### Local connection
 
-1. Open workspace selection for the confirmed local desktop device.
-2. Verify the operating system native folder picker opens.
-3. Select a directory and verify local workspace creation still completes.
-4. From Workspace Settings, choose Change Path and verify the native picker and
-   local relocation flow still work.
-
-## Suspended Runtime Coverage
-
-Keep the existing local unit tests for `LocalWorkspaceRuntimeService` and the
-shared workspace handlers. They validate path normalization, name validation,
-collision handling, symlink and root protection, request correlation, and
-recursive deletion. These are local defense-in-depth tests for dormant shared
-runtime behavior; they do not indicate that cloud filesystem management is
-enabled.
-
-## Release Gate
-
-Do not restore the remote browser or remove the cloud rejection guard until a
-new authorization design has been documented, reviewed, and covered by tests
-for allowed roots, request origin, destructive confirmation, and filesystem
-escape attempts.
+1. On a confirmed same-desktop local device, add a workspace.
+2. Verify the native folder picker opens.
+3. Select a folder and verify the workspace is created and selectable.

@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:test/test.dart';
@@ -26,12 +27,16 @@ void main() {
     Directory.current = originalCurrentDirectory;
     setSanadHomeOverride(null);
     setSanadStateHomeOverride(null);
-    if (tempWorkDir.existsSync()) {
-      await tempWorkDir.delete(recursive: true);
-    }
-    if (tempSanadHome.existsSync()) {
-      await tempSanadHome.delete(recursive: true);
-    }
+    try {
+      if (tempWorkDir.existsSync()) {
+        await tempWorkDir.delete(recursive: true);
+      }
+    } catch (_) {}
+    try {
+      if (tempSanadHome.existsSync()) {
+        await tempSanadHome.delete(recursive: true);
+      }
+    } catch (_) {}
   });
 
   test('reads local gateway configuration from environment', () async {
@@ -73,11 +78,11 @@ LOCAL_GATEWAY_PORT=59123
   test(
     'source worktree always uses global env from SANAD_HOME even if local env exists',
     () {
-      expect(getEnvPath(), '${tempSanadHome.path}/.env');
+      expect(getEnvPath(), p.join(tempSanadHome.path, '.env'));
 
-      File('${tempWorkDir.path}/.env').writeAsStringSync('LLM_MODEL=local');
+      File(p.join(tempWorkDir.path, '.env')).writeAsStringSync('LLM_MODEL=local');
 
-      expect(getEnvPath(), '${tempSanadHome.path}/.env');
+      expect(getEnvPath(), p.join(tempSanadHome.path, '.env'));
     },
   );
 
@@ -116,6 +121,58 @@ LLM_MODEL=gemma:2b
     expect(config.localGatewayPort, equals(59234));
     expect(config.llmBaseUrl, equals('http://127.0.0.1:2244'));
     expect(config.llmModel, equals('override-model'));
+  });
+
+  group('model-aware context compaction YAML', () {
+    test('loads defaults and exact per-model overrides from config.yaml', () {
+      File('${tempSanadHome.path}/config.yaml').writeAsStringSync('''
+context:
+  modelLimits:
+    gpt-5.6-sol: 258000
+    gpt-4o: 128000
+compaction:
+  threshold: 0.90
+  targetRatio: 0.10
+  models:
+    gpt-5.6-sol:
+      threshold: 0.85
+      targetRatio: 0.08
+    gpt-4o:
+      threshold: 0.75
+''');
+
+      final config = Config(environment: const {});
+
+      expect(config.contextModelLimit(' GPT-5.6-SOL '), 258000);
+      expect(config.contextModelLimit('gpt-4o'), 128000);
+      expect(config.contextModelLimit('unlisted'), isNull);
+      expect(config.compactionPolicyForModel('gpt-5.6-sol').threshold, 0.85);
+      expect(config.compactionPolicyForModel('gpt-5.6-sol').targetRatio, 0.08);
+      expect(config.compactionPolicyForModel('gpt-4o').threshold, 0.75);
+      expect(config.compactionPolicyForModel('gpt-4o').targetRatio, 0.10);
+      expect(config.compactionPolicyForModel('unlisted').threshold, 0.90);
+      expect(config.compactionPolicyForModel('unlisted').targetRatio, 0.10);
+    });
+
+    test('ignores legacy CONTEXT_LIMIT and rejects conflicting YAML keys', () {
+      File(
+        '${tempSanadHome.path}/.env',
+      ).writeAsStringSync('CONTEXT_LIMIT=999999\n');
+      expect(Config(environment: const {}).contextModelLimit('gpt-4o'), isNull);
+
+      for (final yaml in [
+        'compaction:\n  thresholdTokens: 1000\n',
+        'compaction:\n  modelThresholds: {}\n',
+        'compaction:\n  threshold: 1.0\n',
+        'context:\n  modelLimits:\n    gpt-4o: 0\n',
+      ]) {
+        File('${tempSanadHome.path}/config.yaml').writeAsStringSync(yaml);
+        expect(
+          () => Config(environment: const {}),
+          throwsA(isA<FormatException>()),
+        );
+      }
+    });
   });
 
   test('reads logging configuration from environment', () async {

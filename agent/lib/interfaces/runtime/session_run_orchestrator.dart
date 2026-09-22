@@ -1,5 +1,7 @@
 import 'dart:async';
+
 import 'package:logging/logging.dart';
+import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/provider_runtime/session_queue_provider_override.dart';
@@ -9,6 +11,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
+import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
@@ -30,6 +33,13 @@ import 'session_recovery_restorer.dart';
 import 'session_turn_request_helpers.dart';
 import 'suspended_checkpoint_store.dart';
 
+import 'package:sanad_agent/engine/compaction/compaction.dart';
+import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
+import 'package:sanad_agent/engine/runtime/compaction_request_factory.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
+import 'package:sanad_agent/engine/runtime/tool_terminalization_service.dart';
+import 'package:uuid/uuid.dart';
+
 class SuspendedRun {
   final GatewayEvent event;
   final AgentTurnRequest request;
@@ -44,17 +54,27 @@ class SuspendedRun {
   });
 }
 
+typedef PersistedSuspendedDecisionResumer = Future<bool> Function({
+  required SuspendedCheckpoint checkpoint,
+  required Future<void> Function(GatewayResponse response) emitResponse,
+});
+
 class SessionRunOrchestrator implements SessionQueueProviderOverride {
   static const controlledRestartCheckpointTimeout = Duration(minutes: 1);
+  static const providerRestartCancellationTimeout = Duration(seconds: 5);
+  static const runStopCleanupTimeout = Duration(seconds: 5);
   static const controlledRestartCheckpointPollInterval = Duration(
     milliseconds: 25,
   );
   final _logger = Logger('SessionRunOrchestrator');
 
   final Map<String, SuspendedRun> _suspendedEvents = {};
+  final Map<String, Future<void>> _stopRequests = {};
   final Set<String> _busySessions = {};
+  final Set<String> _compactingSessions = {};
   final Set<String> _resumingSessions = {};
   bool _controlledRestartDraining = false;
+  final PersistedSuspendedDecisionResumer? _resumePersistedSuspendedDecision;
 
   final _responseController = StreamController<GatewayResponse>.broadcast();
   Stream<GatewayResponse> get responses => _responseController.stream;
@@ -74,7 +94,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     return _persistedState;
   }
 
-  SessionRunOrchestrator() {
+  SessionRunOrchestrator({
+    PersistedSuspendedDecisionResumer? resumePersistedSuspendedDecision,
+  }) : _resumePersistedSuspendedDecision = resumePersistedSuspendedDecision {
     _queueCoordinator = SessionQueueCoordinator(
       getPersistedState: () => persistedState,
       defaultModelForProvider: _defaultModelForProvider,
@@ -146,6 +168,45 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     );
   }
 
+  ActiveRun adoptPersistedSuspendedRun({
+    required String sessionId,
+    required String workItemId,
+    required String runId,
+    required int generation,
+    required AgentRunner agentRunner,
+  }) {
+    _busySessions.add(sessionId);
+    return _turnExecutor.adoptPersistedRun(
+      sessionId: sessionId,
+      workItemId: workItemId,
+      runId: runId,
+      generation: generation,
+      agentRunner: agentRunner,
+    );
+  }
+
+  bool ownsPersistedSuspendedRun(ActiveRun activeRun) =>
+      _turnExecutor.ownsRun(activeRun) &&
+      activeRun.cancellationScope.isPublicationOpen;
+
+  void releasePersistedSuspendedRun(ActiveRun activeRun) {
+    _turnExecutor.releasePersistedRun(activeRun);
+  }
+
+  /// Reconciles the in-memory projection after a restart-restored suspended
+  /// decision commits its original durable work item as terminal.
+  ///
+  /// [SuspendedResumeService] owns reconstructing the lost interactive tool
+  /// continuation, but the orchestrator remains the admission and queue-drain
+  /// authority. The durable terminal commit must already have removed active
+  /// work before this method is called.
+  void reconcilePersistedSuspendedTerminal(String sessionId) {
+    if (persistedState?.findActiveWorkItem(sessionId) != null) return;
+    _suspendedEvents.remove(sessionId);
+    _busySessions.remove(sessionId);
+    _drainNextQueuedEvent(sessionId);
+  }
+
   bool acknowledgeStopRecovery(
     String sessionId,
     String stopRequestId, {
@@ -165,6 +226,31 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     return _busySessions.contains(sessionId) ||
         _suspendedEvents.containsKey(sessionId) ||
         persistedState?.findActiveWorkItem(sessionId) != null;
+  }
+
+  /// Whether deferred database maintenance must pause before its next batch.
+  /// This projection is checked only after durable startup restoration.
+  bool get hasMaintenanceBlockingActivity =>
+      _controlledRestartDraining ||
+      _busySessions.isNotEmpty ||
+      _suspendedEvents.isNotEmpty ||
+      _compactingSessions.isNotEmpty ||
+      _resumingSessions.isNotEmpty ||
+      _queueCoordinator.sessionIds.isNotEmpty ||
+      _turnExecutor.activeSessionIds.isNotEmpty;
+
+  bool isSessionCompacting(String sessionId) =>
+      _compactingSessions.contains(sessionId);
+
+  @visibleForTesting
+  void debugEnterCompactionBarrier(String sessionId) {
+    _compactingSessions.add(sessionId);
+  }
+
+  @visibleForTesting
+  void debugExitCompactionBarrier(String sessionId) {
+    _compactingSessions.remove(sessionId);
+    _drainNextQueuedEvent(sessionId);
   }
 
   bool hasSuspendedEvent(String sessionId) =>
@@ -210,6 +296,25 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         (providerInstanceId != null && providerInstanceId.isNotEmpty) ||
         (modelId != null && modelId.isNotEmpty);
     try {
+      final activeItem = persistedState?.findActiveWorkItem(sessionId);
+      Map<String, dynamic>? claimedContinuationMetadata;
+      if (activeItem != null &&
+          (recoveryReason == 'manual_retry' ||
+              recoveryReason == 'provider_changed') &&
+          activeItem.continuationMetadata['checkpoint_kind'] ==
+              ContinuationCheckpointCoordinator
+                  .checkpointKindModelRequestInFlight &&
+          activeItem
+                  .continuationMetadata['restart_interrupted_provider_request'] ==
+              true) {
+        claimedContinuationMetadata =
+            ContinuationCheckpointCoordinator.metadataForInterruptedProviderRetry(
+              activeItem.continuationMetadata,
+            );
+        if (claimedContinuationMetadata == null) {
+          return ResumeSuspendedResult.unsafeCheckpoint;
+        }
+      }
       final resumedRequest = overrideTurnRoute(
         suspended.request,
         providerInstanceId: providerInstanceId,
@@ -228,7 +333,6 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           modelId: modelId,
         );
       }
-      final activeItem = persistedState?.findActiveWorkItem(sessionId);
       if (activeItem != null) {
         if (activeItem.state == SessionWorkState.resuming) {
           return ResumeSuspendedResult.alreadyResuming;
@@ -237,6 +341,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           workItemId: activeItem.workItemId,
           fromState: activeItem.state,
           toState: SessionWorkState.resuming,
+          continuationMetadata: claimedContinuationMetadata,
         );
       }
       _busySessions.add(sessionId);
@@ -364,9 +469,42 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     bool forceEmitStopped = false,
     String? stopRequestId,
     String? recoveryOwnerToken,
+  }) {
+    final existing = _stopRequests[sessionId];
+    if (existing != null) {
+      return existing;
+    }
+    final future = _requestStop(
+      sessionId,
+      forceEmitStopped: forceEmitStopped,
+      stopRequestId: stopRequestId,
+      recoveryOwnerToken: recoveryOwnerToken,
+    );
+    _stopRequests[sessionId] = future;
+    void clearCompletedStop() {
+      if (identical(_stopRequests[sessionId], future)) {
+        _stopRequests.remove(sessionId);
+      }
+    }
+
+    unawaited(
+      future.then<void>(
+        (_) => clearCompletedStop(),
+        onError: (Object _, StackTrace _) => clearCompletedStop(),
+      ),
+    );
+    return future;
+  }
+
+  Future<void> _requestStop(
+    String sessionId, {
+    required bool forceEmitStopped,
+    required String? stopRequestId,
+    required String? recoveryOwnerToken,
   }) async {
     final activeRun = _turnExecutor.getActiveRun(sessionId);
     final stoppedRunId = activeRun?.runId;
+    final stoppedTurnId = activeRun?.turnId;
     final stoppedModelStepId = activeRun?.agentRunner.currentModelStepId;
     final hadWork =
         forceEmitStopped ||
@@ -440,7 +578,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     }
     if (stopFuture != null) {
       try {
-        await stopFuture;
+        await stopFuture.timeout(runStopCleanupTimeout);
+      } on TimeoutException {
+        _logger.warning(
+          'Run stop cleanup exceeded the bounded deadline for session '
+          '$sessionId; publication remains invalidated.',
+        );
       } on RuntimeRecoveryCancelled catch (error) {
         // Stop intentionally aborts an active recovery wait. The stream
         // cancellation can surface that expected lifecycle transition through
@@ -458,6 +601,45 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         );
       }
     }
+    if (activeRun != null && activeRun.workItemId != null) {
+      final cleanupReport = activeRun.cancellationScope.report;
+      final terminalRecords =
+          ToolTerminalizationService(repository: persistedState)
+              .terminalizeExecutingTools(
+                sessionId: sessionId,
+                agentRunner: activeRun.agentRunner,
+                workItemId: activeRun.workItemId!,
+                runId: activeRun.runId,
+                generation: activeRun.generation,
+                modelStepId: stoppedModelStepId,
+                cleanupOutcome:
+                    cleanupReport?.finalState.name ??
+                    activeRun.cancellationScope.state.name,
+              );
+      for (final record in terminalRecords) {
+        _emitResponse(
+          GatewayResponse(
+            sessionId: sessionId,
+            message: Message(
+              role: MessageRole.tool,
+              content: record.message,
+              metadata: record.toHistoryMetadata(
+                modelStepId: stoppedModelStepId,
+              ),
+            ),
+            isComplete: true,
+            runId: record.runId,
+            turnId: stoppedTurnId,
+            modelStepId: stoppedModelStepId,
+            toolCallId: record.toolCallId,
+            toolName: record.toolName,
+            isToolResult: true,
+            isToolError: record.isError,
+            isToolCancelled: record.isTerminalCancelled,
+          ),
+        );
+      }
+    }
     final hasNewerDurableWork =
         persistedState
             ?.findAllWorkItems(sessionId)
@@ -468,11 +650,16 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
                   !capturedWorkItemIds.contains(item.workItemId),
             ) ??
         false;
-    if (hasNewerDurableWork) {
-      persistedState?.cancelWorkItems(sessionId, capturedWorkItemIds);
-    } else {
-      persistedState?.clearAllForSession(sessionId);
-    }
+    final deferredExecutionChange = hasNewerDurableWork
+        ? persistedState?.cancelWorkItems(
+            sessionId,
+            capturedWorkItemIds,
+            publishExecutionChange: false,
+          )
+        : persistedState?.clearAllForSession(
+            sessionId,
+            publishExecutionChange: false,
+          );
     if (hadWork) {
       _emitResponse(
         GatewayResponse(
@@ -485,14 +672,26 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               'canonical_payload': {
                 'session_id': sessionId,
                 'run_id': ?stoppedRunId,
+                'turn_id': ?stoppedTurnId,
                 'model_step_id': ?stoppedModelStepId,
               },
             },
           ),
           isComplete: true,
           runId: stoppedRunId,
+          turnId: stoppedTurnId,
           modelStepId: stoppedModelStepId,
         ),
+      );
+      // Durable cleanup is already committed, but response delivery is
+      // asynchronous while execution-snapshot publication is synchronous.
+      // Let the cancelled tool terminal and stopped acknowledgement reach
+      // clients before publishing the final idle/queued snapshot.
+      await Future<void>.delayed(Duration.zero);
+    }
+    if (deferredExecutionChange != null) {
+      persistedState?.executionState.publishCommittedChange(
+        deferredExecutionChange,
       );
     }
     if (recoveryOutcome != null) {
@@ -517,6 +716,77 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       _busySessions.remove(sessionId);
       _drainNextQueuedEvent(sessionId);
     }
+  }
+
+  /// Cancels provider streams that exhausted the controlled-restart timeout
+  /// without terminally stopping or replaying their durable work.
+  Future<void> interruptProviderRequestsForRestart(
+    Iterable<ControlledRestartBlocker> blockers,
+  ) async {
+    final providerBlockers = blockers.where(
+      (blocker) => blocker.providerRequestInFlight,
+    );
+    await Future.wait(
+      providerBlockers.map((blocker) async {
+        final activeRun = _turnExecutor.getActiveRun(blocker.sessionId);
+        if (activeRun == null ||
+            !_turnExecutor.ownsRun(activeRun) ||
+            activeRun.workItemId != blocker.workItemId ||
+            activeRun.runId != blocker.runId ||
+            activeRun.generation != blocker.generation ||
+            !activeRun.agentRunner.providerRequestInFlight) {
+          return;
+        }
+
+        final item = blocker.workItemId == null
+            ? null
+            : persistedState?.findWorkItem(blocker.workItemId!);
+        if (item == null ||
+            (item.state != SessionWorkState.running &&
+                item.state != SessionWorkState.resuming) ||
+            item.continuationMetadata['owner_run_id'] != blocker.runId ||
+            item.continuationMetadata['owner_generation'] !=
+                blocker.generation ||
+            item.continuationMetadata['checkpoint_kind'] !=
+                ContinuationCheckpointCoordinator
+                    .checkpointKindModelRequestInFlight) {
+          return;
+        }
+
+        final metadata = Map<String, dynamic>.from(item.continuationMetadata)
+          ..['restart_interrupted_provider_request'] = true;
+        persistedState?.transitionWorkItemState(
+          workItemId: item.workItemId,
+          fromState: item.state,
+          toState: SessionWorkState.blocked,
+          continuationMetadata: metadata,
+        );
+
+        if (getIt.isRegistered<RuntimeRecoveryService>()) {
+          getIt<RuntimeRecoveryService>().reportFailure(
+            sessionId: blocker.sessionId,
+            reason: RuntimeFailureReason.unknown,
+            requestId: item.requestId,
+            providerInstanceId: item.providerInstanceId,
+            title: 'Provider request interrupted for restart',
+            message: 'The provider did not finish before the restart timeout. The request was cancelled and will not be sent again automatically. Retry, change provider, or stop the session.',
+            forceBlocked: true,
+            runId: activeRun.runId,
+          );
+        }
+
+        try {
+          await activeRun.requestStop().timeout(
+            providerRestartCancellationTimeout,
+          );
+        } on TimeoutException {
+          _logger.warning(
+            'Provider stream cancellation exceeded the restart cleanup timeout '
+            'for session ${blocker.sessionId}; publication remains invalidated.',
+          );
+        }
+      }),
+    );
   }
 
   /// Stops all daemon-owned work before a controlled restart.
@@ -573,6 +843,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     if (store == null) return ControlledRestartCheckpointResult.safe;
     final elapsed = Stopwatch()..start();
     while (true) {
+      final awaitingInteractiveTools = <String, Set<String>>{};
+      for (final checkpoint in await _listAwaitingSuspensions()) {
+        awaitingInteractiveTools
+            .putIfAbsent(checkpoint.sessionId, () => <String>{})
+            .add(checkpoint.toolCallId);
+      }
       final blockers = <ControlledRestartBlocker>[];
       for (final sessionId in store.findAllSessionIdsWithWorkItems()) {
         final item = store.findActiveWorkItem(sessionId);
@@ -582,9 +858,17 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           continue;
         }
         final metadata = item.continuationMetadata;
+        final activeRun = _turnExecutor.getActiveRun(sessionId);
+        final providerRequestInFlight =
+            activeRun != null &&
+            _turnExecutor.ownsRun(activeRun) &&
+            activeRun.agentRunner.providerRequestInFlight;
         final checkpointKind = metadata['checkpoint_kind']?.toString();
         final recognizedCheckpoint =
             checkpointKind == AgentRunner.checkpointKindInitialModelRequest ||
+            checkpointKind ==
+                ContinuationCheckpointCoordinator
+                    .checkpointKindModelRequestInFlight ||
             checkpointKind == AgentRunner.checkpointKindAfterToolResult;
         final completedResults = Map<String, dynamic>.from(
           metadata['completed_tool_results'] as Map? ?? const {},
@@ -613,6 +897,20 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
                       toolCallId == requesterToolCallId);
                 })
                 .toList(growable: false);
+        final awaitingForSession =
+            awaitingInteractiveTools[sessionId] ?? const <String>{};
+        final isDurableInteractiveWait =
+            (item.state == SessionWorkState.running ||
+                item.state == SessionWorkState.waiting) &&
+            !providerRequestInFlight &&
+            executingTools.isNotEmpty &&
+            executingTools.every(awaitingForSession.contains);
+        if (isDurableInteractiveWait) {
+          // The unresolved checkpoint owns every unfinished tool call. The
+          // replacement daemon will restore this exact work as `waiting` and
+          // publish no interruption result until the user answers or denies.
+          continue;
+        }
         final requesterCompletionSafe =
             !requireRequesterCompletion ||
             sessionId != requesterSessionId ||
@@ -622,6 +920,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
             (requesterToolCallId != null &&
                 hasValidDeferredResult(requesterToolCallId));
         if (!recognizedCheckpoint ||
+            providerRequestInFlight ||
             executingTools.isNotEmpty ||
             !requesterCompletionSafe) {
           blockers.add(
@@ -629,6 +928,10 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               sessionId: sessionId,
               toolCallIds: executingTools,
               checkpointRecognized: recognizedCheckpoint,
+              providerRequestInFlight: providerRequestInFlight,
+              workItemId: item.workItemId,
+              runId: activeRun?.runId,
+              generation: activeRun?.generation,
             ),
           );
         }
@@ -733,9 +1036,100 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     );
   }
 
+  /// Plan 53d — manual `/compact` admission when the session is idle.
+  Future<Map<String, dynamic>> handleCompactCommand({
+    required String sessionId,
+    required String requestId,
+  }) async {
+    if (isSessionBusy(sessionId)) {
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': CompactionFailureReason.sessionBusy.wireValue,
+      };
+    }
+    if (isSessionCompacting(sessionId)) {
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': CompactionFailureReason.compactionInProgress.wireValue,
+      };
+    }
+    if (getIt.isRegistered<CompactionBoundaryRepository>()) {
+      final started = getIt<CompactionBoundaryRepository>()
+          .findStartedForSession(sessionId);
+      if (started != null) {
+        return {
+          'session_id': sessionId,
+          'request_id': requestId,
+          'outcome': CompactionFailureReason.compactionInProgress.wireValue,
+        };
+      }
+    }
+    if (!getIt.isRegistered<CompactionCoordinator>() ||
+        !getIt.isRegistered<CompactionBoundaryRepository>()) {
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': 'unavailable',
+      };
+    }
+
+    final compactionId = const Uuid().v4();
+    final compactionRunner = getIt<AgentRunner>(param1: sessionId);
+    final providerSeed = await compactionRunner.prepareCompactionProviderSeed();
+    final engineRequest = await CompactionRequestFactory.forSession(
+      sessionId: sessionId,
+      trigger: CompactionTrigger.manual,
+      compactionId: compactionId,
+      providerProjection: providerSeed.projection,
+      providerTools: providerSeed.tools,
+      providerRequestOptions: providerSeed.options,
+    );
+    if (engineRequest == null) {
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': 'invalid_request',
+      };
+    }
+
+    _compactingSessions.add(sessionId);
+    try {
+      final outcome = await getIt<CompactionCoordinator>().runCompaction(
+        request: engineRequest,
+        force: true,
+      );
+      if (outcome == null) {
+        return {
+          'session_id': sessionId,
+          'request_id': requestId,
+          'outcome': 'no_op',
+        };
+      }
+      if (outcome.status == CompactionStatus.completed) {
+        return {
+          'session_id': sessionId,
+          'request_id': requestId,
+          'outcome': 'accepted',
+          'compaction_id': outcome.compactionId,
+        };
+      }
+      return {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': 'failed',
+        'failure_reason': outcome.failureReason?.wireValue,
+        'compaction_id': outcome.compactionId,
+      };
+    } finally {
+      _compactingSessions.remove(sessionId);
+      _drainNextQueuedEvent(sessionId);
+    }
+  }
+
   Future<void> handleEvent(GatewayEvent event) async {
-    _logger.info('Incoming event for session: ${event.sessionId}');
-    _logger.fine('Content: ${event.message.content}');
+    _logger.info('Incoming session event');
 
     if (event.type == 'stop') {
       _logger.info('Received STOP command for session: ${event.sessionId}');
@@ -755,9 +1149,13 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       return;
     }
 
+    final sessionManager = getIt<SessionManager>();
+    final existingSessionRecord = sessionManager.getSessionRecord(
+      event.sessionId,
+    );
+
     if (event.type != 'create_session') {
-      final sessionManager = getIt<SessionManager>();
-      final existingSession = sessionManager.getSession(event.sessionId);
+      final existingSession = existingSessionRecord;
       final requestedWorkspaceId = _resolveWorkspaceId(
         event,
         fallback: existingSession?.workspaceId,
@@ -766,6 +1164,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         event,
         requestedWorkspaceId: requestedWorkspaceId,
       );
+      final rawCommandRequestId =
+          (event.metadata['payload'] as Map?)?['command_request_id']
+              ?.toString()
+              .trim();
+      final isQueuePromotionCommand =
+          rawCommandRequestId != null && rawCommandRequestId.isNotEmpty;
       final activeRun = _turnExecutor.getActiveRun(event.sessionId);
       final durableActiveWork = persistedState?.findActiveWorkItem(
         event.sessionId,
@@ -784,6 +1188,23 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               durableActiveWork.state == SessionWorkState.resuming) &&
           (activeRecoveryNotice == null ||
               activeRecoveryNotice.status == RuntimeNoticeStatus.resuming);
+      if (!canSteer && isQueuePromotionCommand) {
+        final targetRequestId =
+            turnRequest.requestId ?? requestIdForEvent(event) ?? '';
+        _emitCommandOutcome(
+          sessionId: event.sessionId,
+          type: 'session.queued_message_steer_result',
+          targetRequestId: targetRequestId,
+          commandRequestId: rawCommandRequestId,
+          outcome: 'stale_owner',
+        );
+        _emitMessageClassification(
+          event,
+          requestId: targetRequestId,
+          classification: 'queue',
+        );
+        return;
+      }
       if (canSteer) {
         final requestId = turnRequest.requestId ?? requestIdForEvent(event);
         final text = event.message.content?.trim() ?? '';
@@ -795,7 +1216,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
             event.sessionId,
             requestId,
           );
-          if (existingWork?.state == SessionWorkState.queued) {
+          final commandRequestId = rawCommandRequestId ?? requestId;
+          final isQueuePromotion = isQueuePromotionCommand;
+          if (isQueuePromotion) {
             final promoted = store!.executionState.promoteQueuedToPendingSteer(
               sessionId: event.sessionId,
               requestId: requestId,
@@ -805,6 +1228,13 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               receivedAt: receivedAt,
             );
             if (promoted.outcome != QueueMutationOutcome.promoted) {
+              _emitCommandOutcome(
+                sessionId: event.sessionId,
+                type: 'session.queued_message_steer_result',
+                targetRequestId: requestId,
+                commandRequestId: commandRequestId,
+                outcome: _wireName(promoted.outcome.name),
+              );
               _emitMessageClassification(
                 event,
                 requestId: requestId,
@@ -861,6 +1291,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
               runId: activeRun.runId,
               generation: activeRun.generation,
               onChanged: (record) => _emitPendingSteerChanged(null, record),
+              onCommitDelivery: (history, placements) =>
+                  _turnExecutor.commitPendingSteerDelivery(
+                    owner: activeRun,
+                    history: history,
+                    placements: placements,
+                  ),
             );
           }
           activeRun.agentRunner.steerEvent(
@@ -873,6 +1309,15 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
             receivedAt,
           );
           _emitPendingSteerChanged(event.platformId, pending);
+          if (isQueuePromotion) {
+            _emitCommandOutcome(
+              sessionId: event.sessionId,
+              type: 'session.queued_message_steer_result',
+              targetRequestId: requestId,
+              commandRequestId: commandRequestId,
+              outcome: 'promoted',
+            );
+          }
           _emitMessageClassification(
             event,
             requestId: requestId,
@@ -885,6 +1330,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       final hasOlderWork =
           _controlledRestartDraining ||
           isSessionBusy(event.sessionId) ||
+          isSessionCompacting(event.sessionId) ||
           _queueCoordinator.hasQueuedEvents(event.sessionId);
       if (hasOlderWork) {
         _logger.info('Session ${event.sessionId} is busy. Queuing message.');
@@ -988,7 +1434,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           );
 
           // 3. Update session preferences
-          final currentSession = sessionManager.getSession(event.sessionId);
+          final currentSession = sessionManager.getSessionRecord(
+            event.sessionId,
+          );
           final resolvedProvider = newProvider ?? currentSession?.providerId;
           final resolvedModel = newModel ?? currentSession?.model;
           if (resolvedProvider != null &&
@@ -1055,8 +1503,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       }
     }
 
-    final sessionManager = getIt<SessionManager>();
-    final existingSession = sessionManager.getSession(event.sessionId);
+    final existingSession = existingSessionRecord;
     var titleOwnerSession = existingSession;
     final isNewSession = existingSession == null;
     final requestedWorkspaceId = _resolveWorkspaceId(
@@ -1168,6 +1615,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           lastUserMessageAt: existingSession.lastUserMessageAt,
           routeRevision: existingSession.routeRevision,
           routeUpdatedAt: existingSession.routeUpdatedAt,
+          historyRevision: existingSession.historyRevision,
           messages: existingSession.messages,
         ),
       );
@@ -1187,11 +1635,11 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       liveTurnRequest,
       SessionWorkState.running,
     );
-    sessionManager.recordCanonicalUserMessageAccepted(
-      event.sessionId,
-      receivedAt,
-    );
     if (liveWorkItem?.state == SessionWorkState.queued) {
+      sessionManager.recordCanonicalUserMessageAccepted(
+        event.sessionId,
+        receivedAt,
+      );
       final requestId = liveTurnRequest.requestId ?? requestIdForEvent(event);
       _emitResponse(
         GatewayResponse(
@@ -1300,7 +1748,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     if (_controlledRestartDraining) {
       return;
     }
-    if (isSessionBusy(sessionId)) {
+    if (isSessionBusy(sessionId) || isSessionCompacting(sessionId)) {
       return;
     }
     final nextRun = _queueCoordinator.claimNext(sessionId);
@@ -1521,7 +1969,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       queueCoordinator: _queueCoordinator,
       suspendedEvents: _suspendedEvents,
       busySessions: _busySessions,
-      listAwaitingSuspensions: _listAwaitingSuspensions,
+      listAwaitingSuspensions: _resumePersistedSuspendedDecision == null
+          ? _listAwaitingSuspensions
+          : _listRecoverableSuspensions,
       runTurnCallback:
           ({
             required GatewayEvent event,
@@ -1537,6 +1987,39 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       resumeSuspendedCallback: _resumeRestoredSuspended,
     );
     await restorer.restorePersistedState();
+    final decisionResumer = _resumePersistedSuspendedDecision;
+    if (decisionResumer != null) {
+      final checkpoints = await _listRecoverableSuspensions();
+      for (final checkpoint in checkpoints.where(
+        (candidate) =>
+            candidate.status == 'decision_ready' &&
+            candidate.resolvedDecision != null,
+      )) {
+        final active = persistedState?.findActiveWorkItem(checkpoint.sessionId);
+        final executingTools = List<String>.from(
+          active?.continuationMetadata['currently_executing_tools'] as List? ??
+              const [],
+        );
+        if (active?.state != SessionWorkState.waiting ||
+            !executingTools.contains(checkpoint.toolCallId)) {
+          continue;
+        }
+        Future.microtask(() async {
+          try {
+            await decisionResumer(
+              checkpoint: checkpoint,
+              emitResponse: (response) async => _emitResponse(response),
+            );
+          } catch (error, stackTrace) {
+            _logger.severe(
+              'Failed to reclaim a persisted suspended decision.',
+              error,
+              stackTrace,
+            );
+          }
+        });
+      }
+    }
   }
 
   /// Gate F.1 fallback: when startup restore fails partway, do not leave
@@ -1549,7 +2032,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       queueCoordinator: _queueCoordinator,
       suspendedEvents: _suspendedEvents,
       busySessions: _busySessions,
-      listAwaitingSuspensions: _listAwaitingSuspensions,
+      listAwaitingSuspensions: _resumePersistedSuspendedDecision == null
+          ? _listAwaitingSuspensions
+          : _listRecoverableSuspensions,
       runTurnCallback:
           ({
             required GatewayEvent event,
@@ -1572,6 +2057,13 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       return Future.value(const <SuspendedCheckpoint>[]);
     }
     return getIt<SuspendedCheckpointStore>().listAwaitingPermission();
+  }
+
+  Future<List<SuspendedCheckpoint>> _listRecoverableSuspensions() {
+    if (!getIt.isRegistered<SuspendedCheckpointStore>()) {
+      return Future.value(const <SuspendedCheckpoint>[]);
+    }
+    return getIt<SuspendedCheckpointStore>().listRecoverable();
   }
 
   Future<void> _runRestoredTurn({
@@ -1626,8 +2118,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         sessionId: sessionId,
         reason: RuntimeFailureReason.unknown,
         title: 'Saved recovery work is unavailable',
-        message:
-            'The daemon could not claim the restored request. Retry, change provider, or stop the session.',
+        message: 'The daemon could not claim the restored request. Retry, change provider, or stop the session.',
         forceBlocked: true,
       );
     }
@@ -1645,16 +2136,26 @@ class ControlledRestartBlocker {
     required this.sessionId,
     required this.toolCallIds,
     required this.checkpointRecognized,
+    this.providerRequestInFlight = false,
+    this.workItemId,
+    this.runId,
+    this.generation,
   });
 
   final String sessionId;
   final List<String> toolCallIds;
   final bool checkpointRecognized;
+  final bool providerRequestInFlight;
+  final String? workItemId;
+  final String? runId;
+  final int? generation;
 
   Map<String, dynamic> toJson() => {
     'session_id': sessionId,
     'tool_call_ids': toolCallIds,
-    'reason': checkpointRecognized
+    'reason': providerRequestInFlight
+        ? 'active_provider_request'
+        : checkpointRecognized
         ? 'active_tool_execution'
         : 'unrecognized_checkpoint',
   };
@@ -1677,4 +2178,5 @@ enum ResumeSuspendedResult {
   alreadyResuming,
   missing,
   restartDraining,
+  unsafeCheckpoint,
 }

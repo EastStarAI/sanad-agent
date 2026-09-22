@@ -10,7 +10,9 @@ import '../../evolution/session_manager.dart';
 import '../../plugins/plugin_manager.dart';
 import 'continuation_checkpoint_coordinator.dart';
 import 'deferred_tool_result.dart';
+import 'run_cancellation_scope.dart';
 import 'tool_output_guard.dart';
+import 'tool_terminal_record.dart';
 
 /// Executes tool-call batches (sequential or parallel), persists per-tool
 /// completion checkpoints, and replays completed/interrupted tools safely on
@@ -55,6 +57,7 @@ class ToolExecutionCoordinator {
     required bool parallel,
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
+    RunCancellationScope? cancellationScope,
     Future<void> Function({
       required String toolName,
       String? input,
@@ -65,6 +68,7 @@ class ToolExecutionCoordinator {
     })?
     onToolEvent,
   }) async {
+    if (!_canPublishToolEvents(cancellationScope)) return;
     final repo = getIt.isRegistered<PersistedRuntimeStateRepository>()
         ? getIt<PersistedRuntimeStateRepository>()
         : null;
@@ -160,16 +164,22 @@ class ToolExecutionCoordinator {
               toolCallsToRun,
               callbacks: callbacks,
               ctx: ctx,
+              cancellationScope: cancellationScope,
               onToolEvent: onToolEvent,
             )
           : await _executeSequential(
               toolCallsToRun,
               callbacks: callbacks,
               ctx: ctx,
+              cancellationScope: cancellationScope,
               onToolEvent: onToolEvent,
             );
       finalResults.addAll(executedResults);
     }
+
+    // Stop owns terminalization once publication closes. Late tool futures are
+    // allowed to settle internally, but must not mutate checkpoints or history.
+    if (!_canPublishToolEvents(cancellationScope)) return;
 
     // After execution, collect results from checkpoint to build finalResults
     // in original order for the history-merge step.
@@ -196,30 +206,84 @@ class ToolExecutionCoordinator {
     // Add all guarded results to history in the original tool-call order.
     // Presence checks preserve idempotency for resumed single-tool paths.
     for (final toolCall in toolCalls) {
+      if (!_canPublishToolEvents(cancellationScope)) return;
       final result = finalResults[toolCall.id]!;
       final alreadyAdded = callbacks.isToolMessagePresent(toolCall.id);
       if (!alreadyAdded) {
         final outputRecord = allOutputs[toolCall.id];
         final isError =
+            _lockedCancelledResult(toolCall.id) != null ||
             (outputRecord is Map && outputRecord['is_error'] == true) ||
-            result.startsWith('Error');
+            _resultIndicatesError(result);
         await callbacks.addToolMessage(toolCall, result, isError: isError);
       }
     }
+    if (!_canPublishToolEvents(cancellationScope)) return;
     callbacks.saveHistory();
     checkpointCoordinator.saveCheckpoint(
       ctx: ctx,
       checkpointKind:
           ContinuationCheckpointCoordinator.checkpointKindAfterToolResult,
       resumeHistoryLength: callbacks.currentHistoryLength(),
+      removeRestartTerminalizedToolCallIds: toolCalls.map((call) => call.id),
     );
     callbacks.applyPendingSteerToToolResults(toolCalls.length);
+  }
+
+  ToolContext _toolContextFor(
+    ToolCall toolCall, {
+    RunCancellationScope? cancellationScope,
+  }) {
+    return ToolContext(
+      sessionId: sessionId,
+      metadata: sessionManager.getSessionMetadata(sessionId) ?? const {},
+      toolCallId: toolCall.id,
+      runId: cancellationScope?.runId,
+      generation: cancellationScope?.generation,
+      cancellationScope: cancellationScope,
+      onExecutionProgress: (progress) => checkpointCoordinator
+          .saveExecutingToolProgress(toolCall.id, progress),
+    );
+  }
+
+  bool _canPublishToolEvents(RunCancellationScope? cancellationScope) =>
+      cancellationScope?.isPublicationOpen ?? true;
+
+  String? _lockedCancelledResult(String toolCallId) {
+    final repo = getIt.isRegistered<PersistedRuntimeStateRepository>()
+        ? getIt<PersistedRuntimeStateRepository>()
+        : null;
+    final meta = repo?.findActiveWorkItem(sessionId)?.continuationMetadata;
+    if (meta == null) return null;
+    final outputs = meta['completed_tool_outputs'];
+    if (outputs is! Map) return null;
+    final raw = outputs[toolCallId];
+    if (raw is! Map) return null;
+    final record = ToolTerminalRecord.fromCheckpointOutput(
+      Map<String, dynamic>.from(raw),
+    );
+    return record?.isTerminalCancelled == true ? record!.message : null;
+  }
+
+  String _applyLateResultIsolation(String toolCallId, String result) {
+    return _lockedCancelledResult(toolCallId) ?? result;
+  }
+
+  Future<void> _maybeEmitToolEvent(
+    RunCancellationScope? cancellationScope, {
+    required Future<void> Function()? emit,
+  }) async {
+    if (emit == null || !_canPublishToolEvents(cancellationScope)) {
+      return;
+    }
+    await emit();
   }
 
   Future<Map<String, String>> _executeSequential(
     List<ToolCall> toolCallsToRun, {
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
+    RunCancellationScope? cancellationScope,
     required Future<void> Function({
       required String toolName,
       String? input,
@@ -232,19 +296,24 @@ class ToolExecutionCoordinator {
   }) async {
     final results = <String, String>{};
     for (final toolCall in toolCallsToRun) {
+      if (!_canPublishToolEvents(cancellationScope)) return results;
       final argumentsString = jsonEncode(toolCall.arguments);
       _logger.info(
         '🛠️ [Agent] Requesting tool call: ${toolCall.name} (arguments: $argumentsString)',
       );
       if (onToolEvent != null) {
-        await onToolEvent(
-          toolName: toolCall.name,
-          input: argumentsString,
-          isError: false,
-          isStart: true,
-          toolRunId: toolCall.id,
+        await _maybeEmitToolEvent(
+          cancellationScope,
+          emit: () => onToolEvent(
+            toolName: toolCall.name,
+            input: argumentsString,
+            isError: false,
+            isStart: true,
+            toolRunId: toolCall.id,
+          ),
         );
       }
+      if (!_canPublishToolEvents(cancellationScope)) return results;
 
       // Mark as currently executing
       checkpointCoordinator.saveCheckpoint(
@@ -252,19 +321,22 @@ class ToolExecutionCoordinator {
         currentlyExecutingToolCallIds: [toolCall.id],
       );
 
-      var result = await _executeSingleToolCall(
+      final execution = await _executeSingleToolCall(
         toolCall,
         callbacks: callbacks,
+        cancellationScope: cancellationScope,
         onToolEvent: onToolEvent,
         emitStartEvent: false,
         appendToHistory: false,
       );
+      var result = execution.result;
+      if (!_canPublishToolEvents(cancellationScope)) return results;
       final deferred = DeferredToolResultDescriptor.tryParseToolResult(
         result,
         sessionId: sessionId,
         toolCallId: toolCall.id,
       );
-      var isError = result.startsWith('Error');
+      var isError = execution.isError;
       if (deferred != null) {
         checkpointCoordinator.saveCheckpoint(
           ctx: ctx,
@@ -272,15 +344,19 @@ class ToolExecutionCoordinator {
           currentlyExecutingToolCallIds: [toolCall.id],
         );
         final resolution = await deferredToolResultResolver.resolve(deferred);
+        if (!_canPublishToolEvents(cancellationScope)) return results;
         result = resolution.output;
         isError = resolution.isError;
         if (onToolEvent != null) {
-          await onToolEvent(
-            toolName: toolCall.name,
-            output: result,
-            isError: isError,
-            isStart: false,
-            toolRunId: toolCall.id,
+          await _maybeEmitToolEvent(
+            cancellationScope,
+            emit: () => onToolEvent(
+              toolName: toolCall.name,
+              output: result,
+              isError: isError,
+              isStart: false,
+              toolRunId: toolCall.id,
+            ),
           );
         }
       }
@@ -309,6 +385,7 @@ class ToolExecutionCoordinator {
     List<ToolCall> toolCallsToRun, {
     required ToolExecutionCallbacks callbacks,
     required CheckpointContext ctx,
+    RunCancellationScope? cancellationScope,
     required Future<void> Function({
       required String toolName,
       String? input,
@@ -326,16 +403,20 @@ class ToolExecutionCoordinator {
     if (onToolEvent != null) {
       await Future.wait(
         toolCallsToRun.map((toolCall) {
-          return onToolEvent(
-            toolName: toolCall.name,
-            input: jsonEncode(toolCall.arguments),
-            isError: false,
-            isStart: true,
-            toolRunId: toolCall.id,
+          return _maybeEmitToolEvent(
+            cancellationScope,
+            emit: () => onToolEvent(
+              toolName: toolCall.name,
+              input: jsonEncode(toolCall.arguments),
+              isError: false,
+              isStart: true,
+              toolRunId: toolCall.id,
+            ),
           );
         }),
       );
     }
+    if (!_canPublishToolEvents(cancellationScope)) return const {};
 
     // Mark all as currently executing
     final idsToRun = toolCallsToRun.map((tc) => tc.id).toList();
@@ -374,14 +455,18 @@ class ToolExecutionCoordinator {
         try {
           final rawResult = await tool.execute(
             toolCall.arguments,
-            context: ToolContext(
-              sessionId: sessionId,
-              metadata:
-                  sessionManager.getSessionMetadata(sessionId) ?? const {},
-              toolCallId: toolCall.id,
+            context: _toolContextFor(
+              toolCall,
+              cancellationScope: cancellationScope,
             ),
           );
-          final result = ToolOutputGuard.guardResult(rawResult);
+          final isolatedResult = _applyLateResultIsolation(
+            toolCall.id,
+            rawResult,
+          );
+          final isError = _resultIndicatesError(isolatedResult);
+          final result = ToolOutputGuard.guardResult(isolatedResult);
+          if (!_canPublishToolEvents(cancellationScope)) return;
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
           checkpointCoordinator.saveCheckpoint(
@@ -391,13 +476,14 @@ class ToolExecutionCoordinator {
               toolCall.id: checkpointCoordinator.toolOutputRecord(
                 toolCall,
                 result,
-                isError: false,
+                isError: isError,
                 sentToProvider: false,
               ),
             },
             currentlyExecutingToolCallIds: remainingExecuting.toList(),
           );
         } catch (e) {
+          if (!_canPublishToolEvents(cancellationScope)) return;
           final result = 'Error executing tool: $e';
           executionResults[toolCall.id] = result;
           remainingExecuting.remove(toolCall.id);
@@ -417,6 +503,7 @@ class ToolExecutionCoordinator {
         }
       }),
     );
+    if (!_canPublishToolEvents(cancellationScope)) return executionResults;
 
     // Emit completion events in order.
     final repoMeta = getIt.isRegistered<PersistedRuntimeStateRepository>()
@@ -428,19 +515,28 @@ class ToolExecutionCoordinator {
     final allResults = Map<String, dynamic>.from(
       updatedMeta['completed_tool_results'] as Map? ?? const {},
     );
+    final allOutputs = Map<String, dynamic>.from(
+      updatedMeta['completed_tool_outputs'] as Map? ?? const {},
+    );
     for (final toolCall in toolCallsToRun) {
       final result =
           allResults[toolCall.id]?.toString() ??
           executionResults[toolCall.id] ??
           '';
-      final isError = result.startsWith('Error');
+      final outputRecord = allOutputs[toolCall.id];
+      final isError =
+          (outputRecord is Map && outputRecord['is_error'] == true) ||
+          _resultIndicatesError(result);
       if (onToolEvent != null) {
-        await onToolEvent(
-          toolName: toolCall.name,
-          output: result,
-          isError: isError,
-          isStart: false,
-          toolRunId: toolCall.id,
+        await _maybeEmitToolEvent(
+          cancellationScope,
+          emit: () => onToolEvent(
+            toolName: toolCall.name,
+            output: result,
+            isError: isError,
+            isStart: false,
+            toolRunId: toolCall.id,
+          ),
         );
       }
       if (isError) {
@@ -462,6 +558,7 @@ class ToolExecutionCoordinator {
   Future<String> executeSingleToolCall(
     ToolCall toolCall, {
     required ToolExecutionCallbacks callbacks,
+    RunCancellationScope? cancellationScope,
     Future<void> Function({
       required String toolName,
       String? input,
@@ -474,21 +571,24 @@ class ToolExecutionCoordinator {
     bool emitStartEvent = true,
     String? forcedOutput,
     bool forcedIsError = false,
-  }) {
-    return _executeSingleToolCall(
+  }) async {
+    final execution = await _executeSingleToolCall(
       toolCall,
       callbacks: callbacks,
+      cancellationScope: cancellationScope,
       onToolEvent: onToolEvent,
       emitStartEvent: emitStartEvent,
       forcedOutput: forcedOutput,
       forcedIsError: forcedIsError,
       appendToHistory: true,
     );
+    return execution.result;
   }
 
-  Future<String> _executeSingleToolCall(
+  Future<({String result, bool isError})> _executeSingleToolCall(
     ToolCall toolCall, {
     required ToolExecutionCallbacks callbacks,
+    RunCancellationScope? cancellationScope,
     Future<void> Function({
       required String toolName,
       String? input,
@@ -505,13 +605,19 @@ class ToolExecutionCoordinator {
   }) async {
     final argumentsString = jsonEncode(toolCall.arguments);
     if (emitStartEvent && onToolEvent != null) {
-      await onToolEvent(
-        toolName: toolCall.name,
-        input: argumentsString,
-        isError: false,
-        isStart: true,
-        toolRunId: toolCall.id,
+      await _maybeEmitToolEvent(
+        cancellationScope,
+        emit: () => onToolEvent(
+          toolName: toolCall.name,
+          input: argumentsString,
+          isError: false,
+          isStart: true,
+          toolRunId: toolCall.id,
+        ),
       );
+    }
+    if (!_canPublishToolEvents(cancellationScope)) {
+      return (result: 'Error: Tool execution cancelled.', isError: true);
     }
 
     String result;
@@ -525,22 +631,30 @@ class ToolExecutionCoordinator {
         isError = true;
       } else {
         try {
-          result = await tool.execute(
-            toolCall.arguments,
-            context: ToolContext(
-              sessionId: sessionId,
-              metadata:
-                  sessionManager.getSessionMetadata(sessionId) ?? const {},
-              toolCallId: toolCall.id,
+          result = _applyLateResultIsolation(
+            toolCall.id,
+            await tool.execute(
+              toolCall.arguments,
+              context: _toolContextFor(
+                toolCall,
+                cancellationScope: cancellationScope,
+              ),
             ),
           );
+          if (_lockedCancelledResult(toolCall.id) != null) {
+            isError = true;
+          }
         } catch (e) {
           result = 'Error executing tool: $e';
           isError = true;
         }
       }
     }
+    isError = isError || _resultIndicatesError(result);
     result = ToolOutputGuard.guardResult(result);
+    if (!_canPublishToolEvents(cancellationScope)) {
+      return (result: result, isError: isError);
+    }
 
     final isDeferredResult =
         DeferredToolResultDescriptor.tryParseToolResult(
@@ -550,19 +664,33 @@ class ToolExecutionCoordinator {
         ) !=
         null;
     if (onToolEvent != null && !isDeferredResult) {
-      await onToolEvent(
-        toolName: toolCall.name,
-        output: result,
-        isError: isError,
-        isStart: false,
-        toolRunId: toolCall.id,
+      await _maybeEmitToolEvent(
+        cancellationScope,
+        emit: () => onToolEvent(
+          toolName: toolCall.name,
+          output: result,
+          isError: isError,
+          isStart: false,
+          toolRunId: toolCall.id,
+        ),
       );
     }
 
     if (appendToHistory) {
       await callbacks.addToolMessage(toolCall, result, isError: isError);
     }
-    return result;
+    return (result: result, isError: isError);
+  }
+
+  static bool _resultIndicatesError(String result) {
+    if (result.startsWith('Error')) return true;
+    try {
+      final decoded = jsonDecode(result);
+      return decoded is Map &&
+          (decoded['isError'] == true || decoded['is_error'] == true);
+    } on FormatException {
+      return false;
+    }
   }
 }
 

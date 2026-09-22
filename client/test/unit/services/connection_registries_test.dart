@@ -40,6 +40,48 @@ void main() {
     localSocket.dispose();
   });
 
+  test('conversation registry refreshes aliases on the existing managed client', () async {
+    final cloudSocket = FakeSanadSocketService(hardwareId: 'device-1')..setConnected(true);
+    final localSocket = FakeSanadSocketService(hardwareId: 'device-1')..setConnected(true);
+    final resolver = DeviceConnectionCoordinator(
+      cloudSocketService: cloudSocket,
+      localSocketService: localSocket,
+      currentDeviceId: 'device-1',
+    );
+    final capabilitiesStore = DeviceCapabilitiesStore(resolver);
+    final registry = ConversationClientRegistryImpl(resolver, capabilitiesStore);
+    final localAgent = DeviceConfig(
+      id: 'device-1',
+      name: 'SanadAgent',
+      hardwareId: 'device-1',
+      isOnline: true,
+    );
+    final client = registry.getOrCreateConversationClientForAgent(localAgent);
+    client.activateSession('session-1');
+
+    registry.retainClientsFor([
+      localAgent.copyWith(metadata: const {'cloud_device_id': 'cloud-1'}),
+    ]);
+    registry.retainClientsFor([localAgent]);
+    localSocket.debugEmitEvent({
+      'type': 'device_event',
+      'event': 'final_answer',
+      'device_id': 'cloud-1',
+      'session_id': 'session-1',
+      'payload': {'session_id': 'session-1', 'content': 'Cloud reply'},
+    }, route: true);
+    await Future<void>.delayed(Duration.zero);
+
+    expect(client.config.cloudDeviceId, 'cloud-1');
+    expect(client.currentMessages.single.text, 'Cloud reply');
+
+    registry.dispose();
+    capabilitiesStore.dispose();
+    resolver.dispose();
+    cloudSocket.dispose();
+    localSocket.dispose();
+  });
+
   test(
     'conversation registry keeps the same client and visible messages when the same agent switches from local to cloud',
     () async {

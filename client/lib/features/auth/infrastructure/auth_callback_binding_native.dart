@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:app_links/app_links.dart';
+import 'package:flutter/foundation.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 import 'auth_callback_contract.dart';
@@ -94,8 +95,7 @@ Future<AuthCallbackBinding> createPlatformAuthCallbackBinding() async {
   throw UnsupportedError('Interactive authentication is unsupported here.');
 }
 
-Future<AuthCallbackBinding> createDesktopLoopbackAuthCallbackBinding() =>
-    _DesktopLoopbackBinding.create();
+Future<AuthCallbackBinding> createDesktopLoopbackAuthCallbackBinding() => _DesktopLoopbackBinding.create();
 
 class _DesktopLoopbackBinding implements AuthCallbackBinding {
   _DesktopLoopbackBinding._(this._server);
@@ -150,8 +150,7 @@ class _DesktopLoopbackBinding implements AuthCallbackBinding {
   }
 
   @override
-  Future<AuthCallbackResult> waitForResult(Duration timeout) =>
-      _result.future.timeout(timeout);
+  Future<AuthCallbackResult> waitForResult(Duration timeout) => _result.future.timeout(timeout);
 
   @override
   Future<void> cancel() async {
@@ -168,7 +167,6 @@ class _DesktopLoopbackBinding implements AuthCallbackBinding {
 }
 
 bool isExpectedMobileAuthCallback(Uri candidate, Uri expected) =>
-    candidate.scheme == 'https' &&
     candidate.scheme == expected.scheme &&
     candidate.host == expected.host &&
     candidate.port == expected.port &&
@@ -176,11 +174,45 @@ bool isExpectedMobileAuthCallback(Uri candidate, Uri expected) =>
     candidate.userInfo.isEmpty &&
     candidate.fragment.isEmpty;
 
+bool shouldUseDevelopmentIosAuth({
+  required bool isIos,
+  required bool isDebug,
+  required String environment,
+  required String redirect,
+}) => isIos && isDebug && environment == 'dev' && redirect.isNotEmpty;
+
+bool isValidMobileAuthRedirect(
+  Uri redirect, {
+  required bool allowDevelopmentCustomScheme,
+}) {
+  if (redirect.userInfo.isNotEmpty || redirect.hasQuery || redirect.hasFragment || redirect.path.isEmpty) {
+    return false;
+  }
+  if (redirect.scheme == 'https') {
+    return redirect.host.isNotEmpty;
+  }
+  return allowDevelopmentCustomScheme &&
+      redirect.scheme == 'sanad' &&
+      redirect.host == 'oauth' &&
+      redirect.path == '/ios-development';
+}
+
 class _MobileClaimedLinkBinding implements AuthCallbackBinding {
-  _MobileClaimedLinkBinding._(this._expectedRedirect, this._links);
+  _MobileClaimedLinkBinding._(
+    this._expectedRedirect,
+    this._links,
+    this._usesDevelopmentCustomScheme,
+  );
 
   static const _iosRedirect = String.fromEnvironment(
     'SANAD_IOS_AUTH_REDIRECT_URI',
+  );
+  static const _iosDevelopmentRedirect = String.fromEnvironment(
+    'SANAD_IOS_DEVELOPMENT_AUTH_REDIRECT_URI',
+  );
+  static const _environment = String.fromEnvironment(
+    'ENVIRONMENT',
+    defaultValue: 'prod',
   );
   static const _androidRedirect = String.fromEnvironment(
     'SANAD_ANDROID_AUTH_REDIRECT_URI',
@@ -188,28 +220,42 @@ class _MobileClaimedLinkBinding implements AuthCallbackBinding {
 
   final Uri _expectedRedirect;
   final AppLinks _links;
+  final bool _usesDevelopmentCustomScheme;
   final Completer<AuthCallbackResult> _result = Completer<AuthCallbackResult>();
   StreamSubscription<Uri>? _subscription;
 
   static Future<_MobileClaimedLinkBinding> create() async {
-    final configured = AppPlatform.isAndroid ? _androidRedirect : _iosRedirect;
+    final useDevelopmentCustomScheme = shouldUseDevelopmentIosAuth(
+      isIos: AppPlatform.isIOS,
+      isDebug: kDebugMode,
+      environment: _environment,
+      redirect: _iosDevelopmentRedirect,
+    );
+    final configured = AppPlatform.isAndroid
+        ? _androidRedirect
+        : useDevelopmentCustomScheme
+        ? _iosDevelopmentRedirect
+        : _iosRedirect;
     if (configured.isEmpty) {
-      throw StateError(
-        'Claimed HTTPS authentication redirect is not configured.',
-      );
+      throw StateError('Mobile authentication redirect is not configured.');
     }
     final expected = Uri.parse(configured);
-    if (expected.scheme != 'https' ||
-        expected.host.isEmpty ||
-        expected.userInfo.isNotEmpty ||
-        expected.hasQuery ||
-        expected.hasFragment) {
+    if (!isValidMobileAuthRedirect(
+      expected,
+      allowDevelopmentCustomScheme: useDevelopmentCustomScheme,
+    )) {
       throw StateError(
-        'Mobile authentication redirect must be an exact HTTPS origin path.',
+        useDevelopmentCustomScheme
+            ? 'Development iOS authentication redirect is invalid.'
+            : 'Mobile authentication redirect must be an exact HTTPS origin path.',
       );
     }
 
-    final binding = _MobileClaimedLinkBinding._(expected, AppLinks());
+    final binding = _MobileClaimedLinkBinding._(
+      expected,
+      AppLinks(),
+      useDevelopmentCustomScheme,
+    );
     // Subscribe before opening the browser. app_links emits both the initial
     // cold-start URI and later warm-link events through this stream.
     binding._subscription = binding._links.uriLinkStream.listen(
@@ -226,15 +272,17 @@ class _MobileClaimedLinkBinding implements AuthCallbackBinding {
   }
 
   @override
-  String get clientId =>
-      AppPlatform.isAndroid ? 'sanad_flutter_android' : 'sanad_flutter_ios';
+  String get clientId => AppPlatform.isAndroid
+      ? 'sanad_flutter_android'
+      : _usesDevelopmentCustomScheme
+      ? 'sanad_flutter_ios_development'
+      : 'sanad_flutter_ios';
 
   @override
   String get redirectUri => _expectedRedirect.toString();
 
   void _handle(Uri candidate) {
-    if (_result.isCompleted ||
-        !isExpectedMobileAuthCallback(candidate, _expectedRedirect)) {
+    if (_result.isCompleted || !isExpectedMobileAuthCallback(candidate, _expectedRedirect)) {
       return;
     }
     final code = candidate.queryParameters['code'];
@@ -246,8 +294,7 @@ class _MobileClaimedLinkBinding implements AuthCallbackBinding {
   }
 
   @override
-  Future<AuthCallbackResult> waitForResult(Duration timeout) =>
-      _result.future.timeout(timeout);
+  Future<AuthCallbackResult> waitForResult(Duration timeout) => _result.future.timeout(timeout);
 
   @override
   Future<void> cancel() async {

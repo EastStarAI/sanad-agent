@@ -5,6 +5,12 @@ include: package:lints/recommended.yaml
 analyzer:
   exclude:
     - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
   errors:
     constant_identifier_names: ignore
     no_wildcard_variable_uses: ignore

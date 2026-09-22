@@ -9,6 +9,7 @@ import 'package:sanad_agent/capabilities/tools/system/shell_execute_tool.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
+import 'package:sanad_windows_path/windows_path.dart';
 import 'package:test/test.dart';
 
 String get _readTestFileCommand =>
@@ -125,6 +126,46 @@ void main() {
         bridge.requestCount,
         equals(1),
       ); // Prompts because it is sensitive and not yet cached/pre-approved
+    });
+
+    test('Windows shell child receives the resolved system PATH', () async {
+      var reads = 0;
+      final tool = ShellExecuteTool(
+        workspacePath: workspaceDir.path,
+        windowsSystemPath: WindowsSystemPath(
+          isWindows: true,
+          runPowerShell: () async {
+            reads++;
+            return r'C:\resolved\bin';
+          },
+        ),
+      );
+
+      final first =
+          jsonDecode(await tool.execute({'command': 'echo %PATH%'}))
+              as Map<String, dynamic>;
+      final second =
+          jsonDecode(await tool.execute({'command': 'echo %PATH%'}))
+              as Map<String, dynamic>;
+
+      expect(first['isError'], isFalse);
+      expect(first['output']?.toString().trim(), r'C:\resolved\bin');
+      expect(second['output']?.toString().trim(), r'C:\resolved\bin');
+      expect(reads, 1);
+    }, skip: !Platform.isWindows);
+
+    test('malformed process output cannot crash shell execution', () async {
+      final tool = ShellExecuteTool(workspacePath: workspaceDir.path);
+      final command = Platform.isWindows
+          ? r'''powershell.exe -NoProfile -NonInteractive -Command "$bytes=[byte[]](0xFF,0xFE,0x41); [Console]::OpenStandardOutput().Write($bytes,0,$bytes.Length)"'''
+          : r"printf '\377\376A'";
+
+      final resultString = await tool.execute({'command': command});
+      final result = jsonDecode(resultString) as Map<String, dynamic>;
+
+      expect(result['isError'], isFalse);
+      expect(result['output'], contains('\uFFFD'));
+      expect(result['output'], contains('A'));
     });
 
     test(
@@ -253,6 +294,37 @@ void main() {
       final result = jsonDecode(resultString);
       expect(result['isError'], isTrue);
       expect(result['output']?.toString(), contains('Command timed out'));
+    });
+
+    test('timeout preserves output produced before termination', () async {
+      final tool = ShellExecuteTool(workspacePath: workspaceDir.path);
+      final progress = <Map<String, dynamic>>[];
+      final command = Platform.isWindows
+          ? 'echo before-timeout & ping -n 6 127.0.0.1 > nul'
+          : 'printf "before-timeout\\n"; sleep 5';
+
+      final resultString = await tool.execute(
+        {'command': command, 'timeout_ms': 150},
+        context: ToolContext(
+          sessionId: 'timeout-progress',
+          toolCallId: 'shell-timeout-progress',
+          onExecutionProgress: progress.add,
+        ),
+      );
+      final result = jsonDecode(resultString) as Map<String, dynamic>;
+
+      expect(result['isError'], isTrue);
+      expect(result['output'], contains('before-timeout'));
+      expect(result['output'], contains('Command timed out'));
+      expect(result['terminal_reason'], 'timed_out');
+      expect(
+        progress.any(
+          (snapshot) =>
+              snapshot['stdout']?.toString().contains('before-timeout') == true,
+        ),
+        isTrue,
+      );
+      expect(progress.first['process'], isA<Map>());
     });
 
     test(

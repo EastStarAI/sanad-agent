@@ -4,20 +4,43 @@
 This contract applies to `agent/lib/evolution/db/`.
 
 ## Connection Ownership
-- Use one shared `AgentStateDatabase` connection for sessions, provider metadata, runtime work, notices, pending input, and route transitions.
+- Use one shared `AgentStateDatabase` connection for sessions, provider metadata, runtime work, notices, pending input, route transitions, and maintenance timestamps.
 - Repositories receive the shared connection; they must not open independent handles to the same state database.
 - Cross-table aggregate mutations execute transactionally through one owning coordinator.
+- Default on-disk connection construction fails closed under `dart test` unless state has been explicitly redirected; tests use in-memory or temporary state and never inherit the user's database.
+- `AgentStateDatabase` owns page-layout statistics and `VACUUM`, and must reject `VACUUM` while it holds an open transaction.
+
+## Concurrency Policy
+- On-disk connections run in WAL journal mode with a 5000ms `busy_timeout`. In-memory connections keep the 5000ms `busy_timeout` only (SQLite cannot enable WAL for `:memory:`).
+- Outer transactions, schema initialization, migrations, and database-wide `VACUUM` wrap their work in a bounded busy-retry loop: up to 3 retries with progressive backoff (50/100/200ms) and a `WARNING` log per retry, rethrowing the underlying `SqliteException` on exhaustion.
+- Nested transactions use SQLite savepoints inside the retry boundary and must never retry independently.
 
 ## Repository Ownership
 - Each table has one repository responsible for schema-facing CRUD and query semantics.
 - Composition facades may delegate but must not duplicate SQL or maintain parallel state.
 - Keep DTO/enums at a stable export seam only while migration requires it.
 - Legacy tables and methods remain migration-only and cannot accept new production work.
+- `AgentMaintenanceStateRepository` is the sole owner of `agent_maintenance_state` success timestamps and the pending-vacuum marker.
+- `AgentStateMaintenanceService` owns post-ready maintenance policy: idle/grace gating, bounded orphan and terminal deletion batches, 14-day retention, prune/vacuum throttles, and vacuum thresholds. It must not perform cleanup before daemon readiness or expose user-facing settings.
+- Full `VACUUM` is never a startup or serving-path operation. The service marks qualifying work pending and may execute it only at the controlled-exit boundary after restart drain and response flush.
 
 ## Session Data
 - Workspace identity is an immutable UUID; filesystem path and display name are mutable workspace properties and must never replace it in session or runtime references.
 - Persist workspace id and provider/model route as recoverable session state.
+- Replacing canonical history preserves `messages.id` for the longest semantically identical prefix: top-level metadata-only patches update rows in place, while role/content/tool/reasoning/provider-state changes rewrite only the changed suffix. Appending a turn or attaching response metadata must not invalidate durable compaction ranges.
+- Anchored history hydration begins at the anchor's active persistence row and reads newer rows in chronological order. Older `has_more`/`next_cursor` and newer `has_newer`/`next_newer_cursor` are independent, opaque, fingerprinted keyset directions; an oldest-row anchor must retain following context and remain forward-pageable to the authoritative tail.
+- Compaction claims persist only a redacted semantic fingerprint and occurrence for the retained-tail end; history hydration uses it to relocate the same logical anchor after suffix row ids are rewritten.
+- Removing a workspace record must not cascade into sessions or messages;
+  their stable workspace reference remains historical conversation metadata.
 - Preserve raw request identity on accepted user messages and route transitions.
+- Persist `message_id`, `turn_id`, `history_status`, `input_kind`, and
+  `origin_message_id` as first-class message columns. Normal reads return
+  `active` rows only; superseded rows stay stored.
+- `sessions.history_revision` is independent from execution and route revisions. Soft rewind revalidates the latest active root and accepts the replacement user record in one transaction with that compare-and-swap.
+- Session lineage (`lineage_id`, `parent_session_id`, fork target identities,
+  `fork_sequence`) is independent of session lifetime. Deleting a parent
+  nulls `parent_session_id` on children and never cascades to child rows.
+- A materialized fork copies every terminal compaction lifecycle event ordered inside its selected active prefix. Each child operation owns a new compaction id and ranges remapped to child message rows in the same transaction; started or post-target operations are never copied.
 - Canonical user acceptance alone advances session-list user-message ordering.
 - Title compare-and-set, deletion, and route transitions remain atomic with their owning session data.
 

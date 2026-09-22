@@ -69,9 +69,11 @@ The command contract is layered and explicit:
 - `sanad-dev install` installs or verifies FVM `4.1.2`, the Flutter version from
   `.fvmrc`, and the checkout-owned user shim, then stops.
 - `sanad-dev setup` ensures the install layer, resolves the shared Release
-  Contract before Agent and Client packages, then stops without a runtime.
-- `sanad-dev run` ensures only missing or stale install/setup stages, then starts
-  the requested runtime target.
+  Contract, standalone `sanad-dev`, Agent, and Client packages in dependency
+  order, compiles a checkout-local native runtime CLI through FVM, then stops
+  without a runtime.
+- `sanad-dev run` ensures only missing or stale install/setup/runtime-CLI stages,
+  then starts the requested runtime target.
 - `sanad-dev switch --runtime current` prepares the invoking target checkout and
   then submits the handoff as one command; preparation failure leaves the source
   runtime unchanged.
@@ -83,10 +85,14 @@ the user command. FVM archives come from the official GitHub Release
 and use pinned per-platform SHA-256 digests. No stage requests `sudo` or
 administrator access. Every stage that performs work streams the child process's
 real stdout/stderr, then prints its elapsed time and final result. Already-valid
-stages remain silent, including the ready FVM check. The setup stamp binds the
-Flutter pin and all three `pubspec.lock` digests; valid package configs allow
-unchanged stages to be skipped. A failed stage blocks every dependent stage and
-runtime launch.
+stages remain silent, including the ready FVM check. The dependency setup stamp
+binds the Flutter pin and all package lock digests; valid package configs allow
+unchanged dependency stages to be skipped. A separate runtime-CLI stamp binds
+`scripts/sanad_dev/lib/`, its `pubspec.yaml`, and its lockfile to the native
+artifact. Warm runtime commands execute that artifact directly instead of
+repeating FVM SDK discovery; non-run commands report `sanad-dev setup` rather
+than rebuilding a missing or stale artifact. A failed stage blocks every
+dependent stage and runtime launch.
 
 The POSIX user bin is `${XDG_BIN_HOME:-$HOME/.local/bin}` and the Windows user
 bin is `%LOCALAPPDATA%\SanadDev\bin`. PATH changes affect new terminals; follow
@@ -251,9 +257,13 @@ Restore it after the source run:
 sanad service start
 ```
 
-The service command owns the platform-specific launchd, systemd, or Windows
-Scheduled Task integration. Direct operating-system commands are useful only
-when diagnosing a broken service registration.
+The service command owns the platform-specific launchd, systemd, OpenRC, or
+Windows Scheduled Task integration. Direct operating-system commands are useful
+only when diagnosing a broken service registration. Linux status is typed and
+reports the selected manager and scope; a unit file by itself is not considered
+a successful installation. Service registration writes non-secret ownership
+metadata so uninstall cannot remove an unrelated definition, while activation
+failure restores the previous owned definition.
 
 ## Source-build authentication
 
@@ -281,10 +291,12 @@ Each linked worktree run receives:
 
 An independent clone is not a Git linked worktree. If another workspace already
 owns the primary local endpoint, the clone fails closed instead of sharing that
-runtime or the primary Sanad Home. Supply an explicit absolute `--home` to give
-the clone a Home-derived preferences namespace and workspace-hashed agent and
-VM-service ports. The conflict check also applies to dry-run and does not mutate
-process state.
+runtime or the primary Sanad Home. Supply an explicit absolute `--home` on
+`sanad-dev run` to give the clone a Home-derived preferences namespace and
+workspace-hashed agent and VM-service ports. After launch, commands issued from
+the same workspace infer that active Home automatically; an explicit `--home`
+remains available as an authoritative override. The conflict check also applies
+to dry-run and does not mutate process state.
 
 Do not edit tracked environment or Flutter configuration files to allocate
 worktree ports.
@@ -446,11 +458,17 @@ applies.
 
 Use `sanad-dev doctor` before reconciling a Terminal/IDE launch. A complete
 single manual pair may be converted with `sanad-dev takeover`; it passes through
-the daemon's safe restart boundary and refuses Agent-tool-origin takeover.
-`cleanup-target-orphans` is narrower: it can remove only clients from the
-invoking target source when their recorded launcher and Agent are absent. It
-refuses requester/source-attached, live IDE-owned, cross-owned, or incomplete
-groups. There is no generic replace option.
+the daemon's safe restart boundary and refuses Agent-tool-origin takeover. When
+doctor reports an exact Agent-only orphan behind a dead launcher, run
+`sanad-dev doctor --fix` from a human-owned terminal. It requests permanent
+shutdown through the authenticated Agent boundary and removes the stale lease
+only after the Agent and every matching Client are absent. Do not run that
+recovery through an Agent tool call; mismatch, timeout, or remaining runtime
+evidence preserves the lease. `cleanup-target-orphans` is narrower: it can
+remove only Clients from the invoking target source when their recorded
+launcher and Agent are absent. It refuses requester/source-attached, live
+IDE-owned, cross-owned, or incomplete groups. There is no generic replace
+option.
 
 Use `--driver` when the client must expose its test driver and VM service for
 interactive UI verification:
@@ -560,6 +578,19 @@ cd client
 fvm flutter analyze
 fvm flutter test
 ```
+
+`sanad-dev` tooling:
+
+```bash
+cd scripts/sanad_dev
+fvm dart analyze
+fvm dart test
+```
+
+The `sanad-dev` package owns its Pure-Dart implementation and tests; they are
+not part of the Client Flutter suite. The shared public endpoint selector under
+`shared/public_service_endpoints/` is also a standalone Pure-Dart package and
+is verified from its own package root.
 
 Run focused tests for the changed behavior before broad suites. E2E or
 integration tests that bind shared ports run sequentially; normal unit and

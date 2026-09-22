@@ -63,6 +63,18 @@ the provider-reported input value and the exact active model's context-window
 limit. Cached input remains an independent provider-reported value and is not
 used to rewrite any other field.
 
+### 1.5. Session history startup path
+
+`AgentRunner` remains factory-scoped per run; it is not a daemon-wide singleton.
+`SessionManager` may seed a new runner from one of at most eight recently used
+history snapshots. Each snapshot is keyed by session id and the authoritative
+`history_revision`: a matching revision refreshes its LRU position, while any
+mismatch reloads active history from SQLite. Semantic replacement, aggregate
+transaction writes, and deletion invalidate the local projection. Ordinary root
+input uses the database append operation and updates the runner-owned list with
+the returned canonical message rather than reloading and comparing the full
+prefix before the first provider request.
+
 ---
 
 ## 2. Environment Adaptability (`EnvironmentHints`)
@@ -76,6 +88,7 @@ The daemon runs natively across Windows, macOS, Linux, and WSL (Windows Subsyste
 ### 2.2. Windows Native Shell Guidance
 - **Shell Rule:** On native Windows, terminal tool executions route through the native Command Prompt interpreter (`cmd.exe`). Unix-like hosts continue to use `sh`.
 - **Command Resolution:** Windows commands use normal `PATHEXT` lookup, so globally installed batch launchers such as `fvm.bat` can be invoked as `fvm`. Commands execute from a temporary batch wrapper so nested quotes reach `cmd.exe` unchanged.
+- **System PATH Refresh:** Before a Windows `shell_execute` or STDIO MCP child starts, the daemon resolves the current Machine and User `Path` registry values through the shared Pure-Dart `sanad_windows_path` package. One process-wide resolver caches both success and fallback for five minutes and coalesces concurrent asynchronous reads. Environment-key matching is case-insensitive, the child receives one canonical `PATH` entry, explicit MCP-server PATH configuration remains authoritative, and the value is never logged or sent over a gateway. Non-Windows launch environments pass through unchanged.
 - **Syntax Adjustments:** The runtime prompt tells the model to use cmd syntax and native Windows paths. It does not advertise PowerShell cmdlets or POSIX-only shell syntax on native Windows.
 
 ---
@@ -372,7 +385,7 @@ When the daemon restarts, `SessionRunOrchestrator.restorePersistedState()`:
 
 The durable runtime state is persisted by four focused repositories in `agent/lib/evolution/db/runtime/` sharing the same `AgentStateDatabase` connection:
 
-- `SessionWorkItemRepository` owns `session_work_items` — the single durable source of truth for queued and active work (work-item CRUD, FIFO claim, transition graph, route rewrite for queued and non-terminal items, orphan cleanup, cancel-all).
+- `SessionWorkItemRepository` owns `session_work_items` — the single durable source of truth for queued and active work (work-item CRUD, FIFO claim, transition graph, route rewrite for queued and non-terminal items, orphan-row SQL, terminal-row prune SQL, and cancel-all). Recovery joins live sessions and ignores legacy orphans; after readiness, `AgentStateMaintenanceService` performs idle-gated bounded orphan cleanup and 14-day terminal retention.
 - `RuntimeNoticeRepository` owns `session_runtime_notices` — notice persistence and startup hydration.
 - `LegacyRuntimeStateMigrator` owns the legacy `session_suspended_runs` and `session_pending_runs` tables for migration compatibility only; every public method is `@Deprecated`. Production code paths MUST NOT enqueue work through it.
 - `RuntimeStateCleanup` owns the cross-table `clearAllForSession` path used by `Stop` and session deletion. It delegates to notice deletion + work-item cancellation + legacy purge against the same connection to preserve atomic semantics.
@@ -451,8 +464,11 @@ The same ownership rule applies to a bounded automatic retry on the current rout
 `SANAD_STATE_HOME/request_dumps/`, or the normal Sanad state location when no
 state override exists. Session and timestamp identify files for correlation.
 Dumps include target, history, tools, and error structure while masking API keys
-and credentials. They are mutable diagnostic state and follow worktree state
-isolation rather than identity/configuration storage.
+and credentials. Provider response dumps persist the aggregated normalized
+assistant message, reasoning, tool calls, finish reason, and usage rather than
+raw SSE transport lines; an interrupted stream may retain a bounded partial
+projection with its error. They are mutable diagnostic state and follow worktree
+state isolation rather than identity/configuration storage.
 
 ## File-Backed Memory
 
@@ -480,10 +496,91 @@ The same memory-owned content scanner protects writes and startup prompt
 snapshots. Unsafe source entries remain inspectable and removable on disk but
 are replaced with a blocked marker in the frozen prompt snapshot.
 
-## Context Compression
+## Context Compaction
 
-`ContextEngine` estimates approximately four characters per token and compresses
-older history when the configured context threshold is exceeded. System messages
-and recent conversation remain intact. Compression runs before plugin hooks so
-plugins observe the final effective history, while `AgentRunner` remains the
-only mutable history owner.
+The experimental in-memory `ContextEngine` was removed in Plan 53a. Durable
+goal-preserving compaction (Plan 53b+) keeps canonical `messages` rows intact and
+stores lifecycle rows in `session_compaction_operations`. `ModelProjectionBuilder`
+builds the ephemeral provider conversation from the latest eligible completed
+boundary (projected summary anchor + retained tail + post-boundary messages).
+`AgentRunner` must not mutate canonical history for compression; it attaches the
+projection before each provider call. `AgentContextAssembler` still prepends one
+ephemeral system message per call outside the summary.
+
+The coordinator freezes source/tail ranges, persists the started claim, and
+publishes the session compacting barrier before awaiting summarization. Inputs
+accepted during that await therefore remain durable FIFO work and cannot enter
+the frozen summary snapshot; every post-claim error closes a terminal failed
+row before the barrier is released.
+
+See `docs/technical/context_compaction.md` for ownership, CAS, and wire-safety
+rules. Auto/overflow orchestration and `/compact` UX land in tasks 53d–53e.
+
+## Run Cancellation Core (Plan 50a)
+
+Each active turn owns one `RunCancellationScope` keyed by immutable `runId`.
+`ActiveRun` creates the scope, `AgentRunner` attaches to it for the turn, and
+`SessionRunOrchestrator.requestStop` awaits bounded cleanup through the same
+primitive.
+
+Publication rules:
+
+1. `invalidate()` closes the publication gate synchronously before any await.
+2. Live assistant, reasoning, and tool events must check `isPublicationOpen`.
+3. Late provider or tool output from a cancelled run is consumed internally only.
+
+Cleanup rules:
+
+1. Resources register a cleanup callback and receive a `release()` handle.
+2. `cancel()` is idempotent and joins one bounded cleanup operation.
+3. The default cleanup deadline is five seconds (`RunCancellationScope.defaultCleanupDeadline`), shared with `SessionRunOrchestrator.runStopCleanupTimeout`.
+4. Deadline or cleanup failure becomes `cleanup_failed`; the session must not remain in `stopping` indefinitely.
+
+See also `docs/technical/run_cancellation_and_process_ownership.md`.
+
+## Tool and Shell Cancellation (Plan 50c)
+
+`ToolContext` carries `runId`, `generation`, and the active `RunCancellationScope`.
+`ToolExecutionCoordinator` builds that context for every sequential and parallel
+tool call. Once publication closes it consumes late futures internally without
+writing their results to checkpoints/history or starting the next sequential
+tool, leaving Stop-owned terminalization authoritative.
+
+`ShellExecuteTool` is cooperatively cancellable:
+
+1. Spawns owned containment (`setsid` on Linux, `perl setpgrp` on macOS, and a
+   kill-on-close Job Object on Windows; `taskkill /T /F` is fallback only).
+2. Registers `ProcessTreeHandle` cleanup on the run scope before awaiting output.
+3. Races natural exit, `timeout_ms`, and `whenCancelled` with one terminal compare-and-set.
+4. Returns `Command cancelled by user.` for Stop and keeps timeout messaging separate.
+
+`ProcessTreeController` performs `TERM → bounded grace → KILL → verify` and
+records typed cleanup outcomes (`exited`, `escalated`, `ownershipLost`, `failed`).
+The controller captures and rechecks an OS process-start identity before late
+cleanup. Natural wrapper completion first removes surviving descendants, then
+calls `release()` so a later Stop cannot target a reused PID.
+
+## Durable Terminal Tool Events (Plan 50d)
+
+Stop terminalizes every `currently_executing_tools` entry into one
+`ToolTerminalRecord` with `status: cancelled` before emitting `stopped`.
+`ToolTerminalizationService` submits the canonical checkpoint output and tool
+history message to `SessionExecutionStateCoordinator`, which validates the
+exact work item, run, generation, and non-terminal tool state and commits both
+records in one SQLite transaction. Only records returned as newly committed
+are appended to live runner history and published by `SessionRunOrchestrator`.
+Repeated calls, a stale owner, or a tool that already has a terminal result are
+no-ops and do not mint another revision.
+
+Stop commits captured work cancellation before acknowledging completion, but
+defers publication of the resulting execution snapshot. Clients therefore
+observe each newly committed cancelled tool terminal first, then `stopped`,
+then the final `idle` or newer-work `queued` snapshot. A client reconnecting
+during bounded cleanup joins this same ordered terminal stream.
+
+The execution checkpoint records each tool's start time when its executing
+marker is created. Cancellation persists that time together with terminal
+time, revision, reason, and cleanup outcome. Late tool completions are consumed
+behind the synchronously closed publication gate and cannot reach checkpoint or
+history writes. Live translation and history hydration expose the same durable
+terminal identity fields.

@@ -116,5 +116,35 @@ void main() {
       expect(out['items'][1], equals('api_key: ***'));
       expect(out['ok'], isTrue);
     });
+
+    test('redacts a nested secrets map without echoing values', () {
+      final out =
+          redactor.redactValue({
+                'command': 'save_mcp_server',
+                'payload': {
+                  'config': {'name': 'docs', 'url': 'https://example.test/mcp'},
+                  'secrets': {'bearer_token': 'super-secret-value'},
+                },
+              })
+              as Map<String, dynamic>;
+
+      expect(out['payload']['secrets'], equals('***'));
+      expect(out.toString(), isNot(contains('super-secret-value')));
+      expect(out['payload']['config']['name'], 'docs');
+    });
+
+    test('redactForLog never interpolates nested secret values', () {
+      const canary = 'g6-canary-bearer-9f3a7c2e1b88';
+      final logged = redactor.redactForLog({
+        'command': 'save_mcp_server',
+        'payload': {
+          'secrets': {'bearer_token': canary},
+          'config': {'name': 'docs'},
+        },
+      });
+      expect(logged, isNot(contains(canary)));
+      expect(logged, contains('***'));
+      expect(logged, contains('docs'));
+    });
   });
 }

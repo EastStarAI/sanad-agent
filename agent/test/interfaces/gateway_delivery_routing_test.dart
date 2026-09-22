@@ -12,6 +12,7 @@ import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
+import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
@@ -25,6 +26,7 @@ import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
@@ -44,11 +46,13 @@ class _FakePlatform implements BasePlatform {
 
   final delivered = <GatewayResponse>[];
   final _controller = StreamController<GatewayEvent>.broadcast();
+  final FutureOr<void> Function(GatewayResponse)? onSend;
 
   _FakePlatform({
     required this.platformId,
     required this.descriptor,
     this.shouldReceiveUserEcho = false,
+    this.onSend,
   });
 
   @override
@@ -61,6 +65,7 @@ class _FakePlatform implements BasePlatform {
 
   @override
   Future<void> sendResponse(GatewayResponse response) async {
+    await onSend?.call(response);
     delivered.add(response);
   }
 
@@ -107,6 +112,17 @@ void main() {
     when(mockAgentRunner.requestStop()).thenReturn(null);
     when(mockAgentRunner.beginAuthoritativeRun(any)).thenReturn(null);
     when(mockAgentRunner.endAuthoritativeRun(any)).thenReturn(null);
+    when(
+      mockAgentRunner.attachCancellationScope(
+        argThat(isA<RunCancellationScope>()),
+      ),
+    ).thenReturn(null);
+    when(
+      mockAgentRunner.detachCancellationScope(
+        argThat(isA<RunCancellationScope>()),
+      ),
+    ).thenReturn(null);
+    when(mockAgentRunner.canPublishRunEvents).thenReturn(true);
 
     final mockSessionDb = MockSessionDB();
     when(mockSessionManager.db).thenReturn(mockSessionDb);
@@ -121,6 +137,16 @@ void main() {
         updatedAt: DateTime.now(),
       );
     });
+    when(mockSessionManager.getSessionRecord(any)).thenAnswer((inv) {
+      final id = inv.positionalArguments[0] as String;
+      return SessionState(
+        sessionId: id,
+        model: 'sanad-agent',
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+    });
+    when(mockSessionManager.getMessages(any)).thenReturn(const []);
     when(mockSessionManager.saveSessionMetadata(any, any)).thenReturn(null);
     when(mockSessionManager.getSessionMetadata(any)).thenReturn(null);
     when(mockSessionManager.getInFlightSnapshot(any)).thenReturn(null);
@@ -179,7 +205,8 @@ void main() {
     );
   });
 
-  Future<void> pump() => Future.delayed(const Duration(milliseconds: 300));
+  Future<void> pump([int ms = 50]) =>
+      Future<void>.delayed(Duration(milliseconds: ms));
 
   test(
     'execution state change keeps one event id across sanad_client fan-out',
@@ -328,12 +355,14 @@ void main() {
   test(
     'platform_family=sanad_client from local origin reaches local AND cloud',
     () async {
+      final deliveryOrder = <String>[];
       final local = _FakePlatform(
         platformId: 'local_gateway',
         descriptor: const PlatformDescriptor.sanadClient(
           transport: PlatformTransport.local,
         ),
         shouldReceiveUserEcho: true,
+        onSend: (response) => deliveryOrder.add('local:${response.eventId}'),
       );
       final cloud = _FakePlatform(
         platformId: 'sanad_gateway',
@@ -341,6 +370,7 @@ void main() {
           transport: PlatformTransport.cloud,
         ),
         shouldReceiveUserEcho: true,
+        onSend: (response) => deliveryOrder.add('cloud:${response.eventId}'),
       );
       when(
         mockAgentRunner.streamMessage(
@@ -357,8 +387,9 @@ void main() {
         ),
       ).thenAnswer((_) => Stream.fromIterable(['answer']));
 
-      gatewayManager.registerPlatform(local);
+      // Prove transport ordering is independent of registration order.
       gatewayManager.registerPlatform(cloud);
+      gatewayManager.registerPlatform(local);
       await gatewayManager.start();
 
       local.emit(
@@ -369,7 +400,6 @@ void main() {
         ),
       );
       await pump();
-
       final localFinals = local.delivered.where(
         (r) =>
             r.message.role != MessageRole.user && r.message.content == 'answer',
@@ -384,6 +414,11 @@ void main() {
         reason: 'local must receive its own final',
       );
       expect(cloudFinals, isNotEmpty, reason: 'cloud must mirror the final');
+      final finalEventId = localFinals.first.eventId;
+      expect(
+        deliveryOrder.indexOf('local:$finalEventId'),
+        lessThan(deliveryOrder.indexOf('cloud:$finalEventId')),
+      );
       await gatewayManager.stop();
     },
   );
@@ -443,6 +478,102 @@ void main() {
         isTrue,
         reason: 'cloud must receive its own final',
       );
+      await gatewayManager.stop();
+    },
+  );
+
+  test(
+    'active turn survives Cloud-only to Local to Cloud transition',
+    () async {
+      const instanceId = '11111111-1111-4111-8111-111111111111';
+      final presence = DeliveryPresenceController();
+      addTearDown(presence.dispose);
+      presence.acceptInterest({
+        'protocol': deliveryPresenceProtocol,
+        'version': deliveryPresenceVersion,
+        'type': 'cloud.delivery_interest',
+        'revision': 1,
+        'cloud_recipient_instances_complete': true,
+        'cloud_recipient_instance_ids': [instanceId],
+        'lease_ms': 30000,
+      });
+      var localConnected = false;
+      final local = _FakePlatform(
+        platformId: 'local_gateway',
+        descriptor: const PlatformDescriptor.sanadClient(
+          transport: PlatformTransport.local,
+        ),
+        shouldReceiveUserEcho: true,
+        onSend: (response) {
+          if (!localConnected) throw StateError('no local recipient');
+          presence.recordLocalDelivery(response.eventId, [instanceId]);
+        },
+      );
+      final cloud = _FakePlatform(
+        platformId: 'sanad_gateway',
+        descriptor: const PlatformDescriptor.sanadClient(
+          transport: PlatformTransport.cloud,
+        ),
+        shouldReceiveUserEcho: true,
+        onSend: (response) {
+          presence.takeLocalDelivery(response.eventId);
+          if (!presence.claimCloudEgress()) {
+            throw StateError('cloud suppressed');
+          }
+        },
+      );
+      final stream = StreamController<String>();
+      addTearDown(stream.close);
+      when(
+        mockAgentRunner.streamMessage(
+          any,
+          runtimeSystemPrompt: anyNamed('runtimeSystemPrompt'),
+          providerId: anyNamed('providerId'),
+          model: anyNamed('model'),
+          receivedAt: anyNamed('receivedAt'),
+          thinkingMode: anyNamed('thinkingMode'),
+          onToolEvent: anyNamed('onToolEvent'),
+          onSteerContinuation: anyNamed('onSteerContinuation'),
+          onThoughtDelta: anyNamed('onThoughtDelta'),
+          onReasoningDelta: anyNamed('onReasoningDelta'),
+        ),
+      ).thenAnswer((_) => stream.stream);
+
+      gatewayManager.registerPlatform(cloud);
+      gatewayManager.registerPlatform(local);
+      await gatewayManager.start();
+      local.emit(
+        GatewayEvent(
+          sessionId: 'transition-session',
+          platformId: 'local_gateway',
+          message: Message(role: MessageRole.user, content: 'transition'),
+        ),
+      );
+      await pump();
+
+      stream.add('cloud-phase');
+      await pump();
+      final cloudOnlyCount = cloud.delivered.length;
+      expect(cloudOnlyCount, greaterThan(0));
+      expect(local.delivered, isEmpty);
+
+      localConnected = true;
+      presence.updateLocalMember('local-socket', clientInstanceId: instanceId);
+      stream.add('local-phase');
+      await pump();
+      expect(local.delivered, isNotEmpty);
+      expect(cloud.delivered, hasLength(cloudOnlyCount));
+
+      localConnected = false;
+      presence.removeLocalMember('local-socket');
+      final localCount = local.delivered.length;
+      stream.add('cloud-fallback-phase');
+      await pump();
+      expect(cloud.delivered.length, greaterThan(cloudOnlyCount));
+      expect(local.delivered, hasLength(localCount));
+
+      await stream.close();
+      await pump();
       await gatewayManager.stop();
     },
   );

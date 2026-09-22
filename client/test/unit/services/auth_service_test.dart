@@ -2,6 +2,7 @@ import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'dart:async';
 
 import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
+import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_callback_contract.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 import 'package:sanad_client/features/auth/infrastructure/colocated_auth_coupling_client.dart';
@@ -16,6 +17,7 @@ class MockSanadSettingsStore extends Fake implements SanadSettingsStore {
   Map<String, dynamic> authDocument = {};
   Future<void> Function()? beforeNextLock;
   Object? nextLockError;
+  bool lockHeld = false;
 
   @override
   Future<T> withAuthFileLock<T>(Future<T> Function() operation) async {
@@ -25,7 +27,12 @@ class MockSanadSettingsStore extends Fake implements SanadSettingsStore {
     final beforeLock = beforeNextLock;
     beforeNextLock = null;
     await beforeLock?.call();
-    return operation();
+    lockHeld = true;
+    try {
+      return await operation();
+    } finally {
+      lockHeld = false;
+    }
   }
 
   @override
@@ -43,10 +50,26 @@ class MockSanadSettingsStore extends Fake implements SanadSettingsStore {
 }
 
 class MockDio extends Fake implements Dio {
+  void Function()? onGet;
+
   @override
   BaseOptions options = BaseOptions();
   @override
   final interceptors = Interceptors();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    if (invocation.memberName == #get) {
+      onGet?.call();
+      return Future<Response<dynamic>>.value(
+        Response<dynamic>(
+          requestOptions: RequestOptions(path: '/profile'),
+          data: <String, dynamic>{'user': <String, dynamic>{}},
+        ),
+      );
+    }
+    return super.noSuchMethod(invocation);
+  }
 }
 
 class StubPortalAuthClient extends PortalAuthClient {
@@ -68,6 +91,8 @@ class StubPortalAuthClient extends PortalAuthClient {
     required String redirectUri,
     required String codeChallenge,
     String? enrollmentRequestId,
+    String? clientInstanceId,
+    ClientDisplayMetadata? metadata,
   }) async {
     transactionCalls += 1;
     enrollmentRequestIds.add(enrollmentRequestId);
@@ -198,6 +223,7 @@ void main() {
 
   late AuthService authService;
   late MockSanadSettingsStore mockStore;
+  late MockDio dio;
   late SharedPreferences prefs;
   late StubColocatedAuthCouplingClient colocatedCoupling;
 
@@ -206,9 +232,10 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     prefs = await SharedPreferences.getInstance();
     mockStore = MockSanadSettingsStore();
+    dio = MockDio();
     colocatedCoupling = StubColocatedAuthCouplingClient();
     authService = AuthService(
-      dio: MockDio(),
+      dio: dio,
       prefs: prefs,
       settingsStore: mockStore,
       colocatedCoupling: colocatedCoupling,
@@ -252,7 +279,10 @@ void main() {
         await authService.synchronizeDesktopAuthFile();
         expect(authService.accessToken, 'external-access');
 
-        mockStore.authDocument = {'hardware_id': 'device-1'};
+        mockStore.authDocument = {
+          'hardware_id': 'device-1',
+          'agent_logout_pending': true,
+        };
         await authService.synchronizeDesktopAuthFile();
         expect(authService.accessToken, isNull);
         expect(exchangeCount, 0);
@@ -260,6 +290,26 @@ void main() {
         await subscription.cancel();
       },
     );
+
+    test('external profile retrieval starts after auth lock release', () async {
+      mockStore.authDocument = {'hardware_id': 'device-1'};
+      await authService.init();
+      var profileRequested = false;
+      dio.onGet = () {
+        profileRequested = true;
+        expect(mockStore.lockHeld, isFalse);
+      };
+
+      mockStore.authDocument = {
+        'access_token': 'external-access',
+        'refresh_token': 'external-refresh',
+        'hardware_id': 'device-1',
+      };
+      await authService.synchronizeDesktopAuthFile();
+
+      expect(profileRequested, isTrue);
+      expect(authService.accessToken, 'external-access');
+    });
 
     test(
       'atomic auth session value overrides legacy credential mirrors',
@@ -274,8 +324,8 @@ void main() {
         await authService.init(fallbackDeviceId: 'device-1');
 
         expect(authService.accessToken, 'atomic-access');
-        expect(mockStore.authDocument['access_token'], 'atomic-access');
-        expect(mockStore.authDocument['refresh_token'], 'atomic-refresh');
+        expect(mockStore.authDocument['access_token'], isNull);
+        expect(mockStore.authDocument['refresh_token'], isNull);
       },
     );
 
@@ -291,7 +341,7 @@ void main() {
         expect(authService.accessToken, equals('prefs_token'));
         expect(authService.hardwareId, equals('canonical_device'));
 
-        expect(mockStore.authDocument['access_token'], equals('prefs_token'));
+        expect(mockStore.authDocument['access_token'], isNull);
         expect(
           mockStore.authDocument['hardware_id'],
           equals('canonical_device'),
@@ -415,6 +465,29 @@ void main() {
       },
     );
 
+    test('concurrent logout triggers share one cleanup operation', () async {
+      final portal = StubPortalAuthClient();
+      authService.dispose();
+      authService = AuthService(
+        dio: MockDio(),
+        prefs: prefs,
+        settingsStore: mockStore,
+        portalAuth: portal,
+        colocatedCoupling: colocatedCoupling,
+      );
+      mockStore.authDocument = {
+        'access_token': 'test_token',
+        'refresh_token': 'test_refresh',
+        'hardware_id': 'test_hardware',
+      };
+
+      await Future.wait([authService.logout(), authService.logout()]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(colocatedCoupling.logoutCalls, 1);
+      expect(portal.logoutCalls, 1);
+    });
+
     test('unreachable Agent does not delay or fail Client logout', () async {
       colocatedCoupling.logoutResult = Completer<void>().future;
       mockStore.authDocument = {
@@ -461,9 +534,8 @@ void main() {
         expect(result.outcome, AuthRefreshOutcome.success);
         expect(result.accessToken, 'rotated-access');
         expect(prefs.getString('backend_access_token'), 'rotated-access');
-        expect(prefs.getString('backend_refresh_token'), 'rotated-refresh');
-        expect(mockStore.authDocument['access_token'], 'rotated-access');
-        expect(mockStore.authDocument['refresh_token'], 'rotated-refresh');
+        expect(mockStore.authDocument['access_token'], isNull);
+        expect(mockStore.authDocument['refresh_token'], isNull);
       },
     );
 
@@ -521,7 +593,7 @@ void main() {
 
         expect(result.outcome, AuthRefreshOutcome.transientUnavailable);
         expect(authService.accessToken, 'old-access');
-        expect(mockStore.authDocument['refresh_token'], 'old-refresh');
+        expect(prefs.getString('backend_refresh_token'), 'old-refresh');
       },
     );
 

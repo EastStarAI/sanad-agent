@@ -10,8 +10,7 @@ class ToolPresentationHelper {
   static String getEventTitle(CanonicalEvent event) {
     switch (event.kind) {
       case EventKind.toolCall:
-        final rawName = event.toolName ?? 'Using Tool';
-        final cleanTitle = cleanToolTitle(rawName);
+        final cleanTitle = displayToolTitle(event);
 
         final input = event.toolInput;
         final output = event.toolOutput;
@@ -162,6 +161,7 @@ class ToolPresentationHelper {
 
     final rawName = event.toolName ?? 'Using Tool';
     final cleanTitle = cleanToolTitle(rawName);
+    final displayTitle = displayToolTitle(event);
 
     // Parse input and output
     final input = event.toolInput;
@@ -192,7 +192,7 @@ class ToolPresentationHelper {
     // Category prefix (e.g. "Read: " or "Write: ")
     listSpans.add(
       TextSpan(
-        text: '$cleanTitle: ',
+        text: '$displayTitle: ',
         style: TextStyle(
           color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
           fontWeight: FontWeight.w500,
@@ -543,6 +543,17 @@ class ToolPresentationHelper {
     return '';
   }
 
+  static String displayToolTitle(CanonicalEvent event) {
+    final cleanTitle = cleanToolTitle(event.toolName ?? 'Using Tool');
+    if (event.status == EventStatus.cancelled) {
+      return 'Cancelled';
+    }
+    if (cleanTitle == 'Ran' && event.status == EventStatus.running) {
+      return 'Running';
+    }
+    return cleanTitle;
+  }
+
   static String cleanToolTitle(String rawName) {
     // 1. Remove MCP prefixes
     String name = rawName;
@@ -588,6 +599,9 @@ class ToolPresentationHelper {
   }
 
   static (IconData, Color) getEventIconData(BuildContext context, CanonicalEvent event) {
+    if (event.status == EventStatus.cancelled) {
+      return (Icons.cancel_outlined, Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6));
+    }
     if (event.status == EventStatus.error) {
       return (Icons.error_outline, Theme.of(context).colorScheme.error);
     }

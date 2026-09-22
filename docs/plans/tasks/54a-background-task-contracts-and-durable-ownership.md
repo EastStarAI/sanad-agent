@@ -2,7 +2,7 @@
 title: "Task 54a: Background Task Contracts and Durable Ownership"
 description: "تثبيت نموذج task/owner/revision وجداول SQLite والمعاملات التي تمنع فجوة الملكية أو حذف session ذات عملية نشطة."
 status: "pending"
-current_gate: "Waiting for Plan 50"
+current_gate: "Ready for R0"
 priority: "critical"
 depends_on: "Plan 50 complete; Task 31; Task 36"
 file_budget: 14

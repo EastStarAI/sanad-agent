@@ -308,13 +308,13 @@ class RuntimeRecoveryService {
     );
     _active[sessionId] = notice;
     _ensureCancelToken(sessionId, runId: runId);
-    _emit(notice);
     // Gate F.2 — promote the durable work item from `running` to `waiting`
     // so a daemon crash inside `waitForRetry` leaves a correct durable
     // snapshot for `restorePersistedState()` to rehydrate. Without this,
     // restore would re-queue the item as a "crashed" turn and re-run the
     // exact request that triggered the 429.
     _transitionActiveWorkItemToWaiting(sessionId, requestId: requestId);
+    _emit(notice);
     _logger.info(
       'Rate-limit wait for session $sessionId on $name: ${retryAfter.inSeconds}s',
     );
@@ -451,7 +451,6 @@ class RuntimeRecoveryService {
     );
     _active[sessionId] = notice;
     _ensureCancelToken(sessionId, runId: runId);
-    _emit(notice);
     // Gate F.2 — promote the durable work item to the same `effectiveStatus`
     // so a daemon crash after `reportFailure` leaves a correct durable
     // snapshot for `restorePersistedState()` to rehydrate.
@@ -460,6 +459,7 @@ class RuntimeRecoveryService {
       target: effectiveStatus,
       requestId: requestId,
     );
+    _emit(notice);
     return effectiveDecision;
   }
 
@@ -645,6 +645,12 @@ class RuntimeRecoveryService {
       "title='${notice.title}'",
     );
     final payload = notice.toPayload();
+    final executionRevision = _persistedState?.executionSnapshots
+        .getSnapshot(notice.sessionId)
+        .revision;
+    if (executionRevision != null) {
+      payload['execution_revision'] = executionRevision;
+    }
     if (reasonOverride != null && reasonOverride.isNotEmpty) {
       payload['reason'] = reasonOverride;
     }

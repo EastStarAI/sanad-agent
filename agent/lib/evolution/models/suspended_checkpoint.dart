@@ -9,6 +9,7 @@ class SuspendedCheckpoint {
   final String status;
   final Map<String, dynamic> toolArguments;
   final Map<String, dynamic> permissionPayload;
+  final Map<String, dynamic>? resolvedDecision;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -21,6 +22,7 @@ class SuspendedCheckpoint {
     required this.status,
     required this.toolArguments,
     required this.permissionPayload,
+    this.resolvedDecision,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -34,6 +36,7 @@ class SuspendedCheckpoint {
     String? status,
     Map<String, dynamic>? toolArguments,
     Map<String, dynamic>? permissionPayload,
+    Map<String, dynamic>? resolvedDecision,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -46,6 +49,7 @@ class SuspendedCheckpoint {
       status: status ?? this.status,
       toolArguments: toolArguments ?? this.toolArguments,
       permissionPayload: permissionPayload ?? this.permissionPayload,
+      resolvedDecision: resolvedDecision ?? this.resolvedDecision,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -61,6 +65,9 @@ class SuspendedCheckpoint {
       'status': status,
       'tool_arguments': jsonEncode(toolArguments),
       'permission_payload': jsonEncode(permissionPayload),
+      'resolved_decision': resolvedDecision == null
+          ? null
+          : jsonEncode(resolvedDecision),
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -93,6 +100,9 @@ class SuspendedCheckpoint {
       status: row['status'] as String,
       toolArguments: decodeJson('tool_arguments'),
       permissionPayload: decodeJson('permission_payload'),
+      resolvedDecision: row['resolved_decision'] == null
+          ? null
+          : decodeJson('resolved_decision'),
       createdAt: DateTime.parse(row['created_at'] as String),
       updatedAt: DateTime.parse(row['updated_at'] as String),
     );

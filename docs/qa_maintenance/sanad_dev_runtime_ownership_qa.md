@@ -5,6 +5,21 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 
 # sanad-dev Runtime Ownership QA
 
+## Package architecture regression matrix
+
+| Scenario | Expected result |
+|---|---|
+| Analyze the standalone package after module decomposition | `fvm dart analyze` reports no issues and no `lib/src/` module imports the composition root or a root compatibility facade. |
+| Run the complete recursive package suite | All domain-organized tests under `test/` are discovered; no test is lost because it moved from the flat root. |
+| Run the cross-platform `sanad-dev bootstrap` CI selection | The bootstrap, component-journal, terminal-launcher, command-options, and cloud-endpoint tests resolve from their domain directories and pass on each supported runner. |
+| Execute the size guard | Every handwritten production and ordinary test file is at most 700 lines, and `lib/src/cli/cli.dart` is at most 250 lines. |
+| Inspect root `lib/` Dart files | Only `sanad_dev_cli.dart` and a thin facade with a tracked external consumer remain; package-owned tests alone cannot justify a facade. |
+| Inspect package-owned test imports | Tests import the narrow `lib/src/` owner directly except when explicitly testing the aggregate CLI composition surface. |
+| Inspect contracts recursively | Every production domain has the intended nearest `AGENTS.md`, all contracts are indexed by `docs/llms.txt`, and no contract exists under `test/`. |
+| Run wrapper help before runtime discovery | Help remains mutation-free and retains the baseline command and option surface. |
+| Run default and explicit-Home dry runs | Default worktree selection and explicit absolute Home selection match the pre-refactor behavior. |
+| Run an isolated managed Agent/Client pair after refactor | Status, bounded Agent/Client logs, UI snapshot, Client reload/restart, safe Agent restart, complete stop, post-stop status, and retained journals succeed without a live source handoff. |
+
 ## Regression matrix
 
 | Scenario | Expected result |
@@ -21,7 +36,14 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Client/Agent fields agree but no live launcher lease exists | Group remains manual and ordinary mutation is refused. |
 | Healthy launcher lease, available Agent identity, and exact lease-owned Client nonce/PID/VM set agree | Complete, Agent-only, and Client-only runtimes remain managed; repeated component run is idempotent. |
 | Exact managed runtime plus additional manual, IDE-owned, foreign, or incomplete Client processes | Status remains managed; run/stop/reload/restart target only the lease-owned inventory and leave every extra process untouched. |
+| Managed Client reload or restart is requested by the CLI | The CLI validates the exact profile/PID/VM/Home/lease and publishes a component-control request; the owning launcher revalidates the VM port and sends `r` or `R` to its original Flutter process without creating a second attach process. |
+| One driver Client and one regular Client are managed in the same worktree | `sanad-dev ui` selects only the exact owned `lib/driver_main.dart` profile; the regular Client does not create ambiguity. |
+| Managed Flutter Web Client uses direct `dds_aot.dart.snapshot` instead of native `development-service` | Exact DDS VM/bind arguments map to the matching Flutter runner, readiness completes without the five-minute timeout, and the lease records the Web PID/VM port. The latest managed-journal Web auth code may enable VM diagnostics but cannot establish ownership. |
+| `SANAD_DEV_WEB_PORT` configures a stable browser origin | A valid port becomes one `--web-port` argument for direct and additional Chrome Clients, native Clients receive no Web argument, and invalid values fail before spawn. A persistent Chrome profile can therefore resume origin-scoped authentication after a controlled stop. |
+| Driver Clients run in two worktrees | Each caller filters through its own validated lease and source/workspace identity; neither latest process nor a global singleton can redirect the other caller. |
 | `run all -d macos` from a stopped runtime | Agent and Client spawns begin without readiness ordering; both identities must verify before the lease reports running. |
+| Windows run starts from a terminal whose inherited `Path` lacks a newly installed OS tool | Agent and Client launch environments contain one canonical `PATH` built from current Machine+User values; repeated environment composition reuses the cached read, and a failed read uses the inherited value. |
+| POSIX run composes Agent/Client environments | The inherited PATH remains unchanged and no PowerShell resolver runs. |
 | Client exits while Agent remains active | Launcher removes only that Client from the lease and continues supervising the Agent. |
 | Agent exits or is paused while Clients remain active | Launcher keeps Clients and the lease alive; status reports Client-only and a later `run agent` rejoins the same group. |
 | Launcher PID is absent or its process-start/command identity changed | Runtime is orphaned; mutation fails closed. |
@@ -34,7 +56,11 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | `stop client -d macos` with zero or multiple managed matches | Selection fails closed and lists diagnostic device/VM selectors without signaling a process. |
 | `stop client --force` | CLI rejects the misleading combination as a usage error. |
 | `doctor` | Reports class and ownership evidence without mutation. |
-| `doctor --fix` with no launcher, Agent, or client | Removes only the stale/invalid record and signals no process. |
+| `doctor --fix` with no launcher, Agent, or Client | Removes only the stale/invalid record and signals no process. |
+| `doctor --fix` from a human terminal with a dead launcher and an exact Agent-only lease | Requests authenticated permanent Agent restart, waits for endpoint exit, rediscovers all surfaces, then removes the lease only when no matching Agent or Client remains. |
+| Exact Agent-only recovery has tool-requester context, a recorded/discovered Client, identity mismatch, rejection, timeout, revived launcher, or live post-check | Preserves the lease, returns nonzero, and never uses an OS kill fallback. |
+| `doctor --fix` with any other dead-launcher/live-endpoint combination | Preserves the lease, signals nothing, returns nonzero, and does not convert the live group into a manual runtime. |
+| Doctor reports manual, orphaned, cross-owned, or unverifiable | Output gives one concrete takeover/doctor-fix/target-cleanup/owning-worktree/IDE-close next action; every mutating command still revalidates ownership. |
 | Complete manual pair | `takeover` uses a safe Agent drain followed by permanent supervisor shutdown, relaunches it as one managed group, and attempts restoration on launch failure. |
 | Incomplete/manual pair or Agent-origin takeover | Takeover refuses before client mutation. |
 | Target orphan attached to requester/source port | Cleanup refuses before signaling any PID. |
@@ -54,18 +80,43 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 
 | Scenario | Expected result |
 |---|---|
-| Fresh POSIX or Windows user environment, `run` | Install ensures verified FVM, pinned Flutter, and the user shim; setup resolves Release Contract, Agent, then Client; runtime begins only after every stage succeeds. |
-| `install`, `setup`, and `run` stage boundaries | Install stops before packages; setup ensures install and stops before runtime; run ensures both layers and enters the runtime CLI. Every work-performing child streams real stdout/stderr and receives a duration/result footer. |
-| Explicit `status`, logs, or another non-run runtime command with missing prerequisites | No bootstrap mutation occurs; the wrapper fails with the exact `install` or `setup` recovery command. |
+| Fresh POSIX or Windows user environment, `run` | Install ensures verified FVM, pinned Flutter, and the user shim; setup resolves Release Contract, standalone CLI, Agent, then Client and compiles the native runtime CLI through FVM; runtime begins only after every stage succeeds. |
+| `install`, `setup`, and `run` stage boundaries | Install stops before packages; setup ensures install, resolves packages, prepares the source-fingerprinted native runtime CLI, and stops before runtime; run ensures every layer and enters the prepared CLI. Every work-performing child streams real stdout/stderr and receives a duration/result footer. |
+| Explicit `status`, logs, or another non-run runtime command with missing prerequisites | No bootstrap mutation occurs. A missing FVM command reports `sanad-dev install`; when FVM exists but package state or the prepared runtime artifact is missing/stale, the wrapper reports `sanad-dev setup`. |
+| Prepared unchanged runtime command | The wrapper validates package configs plus the source fingerprint and executes the checkout-local native CLI without invoking FVM or dependency setup. |
+| Runtime CLI source, pubspec, or lockfile changes after setup | A non-run command fails closed with `sanad-dev setup`; `run` and `switch` rebuild the artifact through FVM before runtime entry. |
+| Runtime source returns to a fingerprint whose Windows executable is still active while the stamp names another build | Setup reuses the content-addressed artifact and repairs the stamp without trying to overwrite the locked executable. |
+| Worktree `setup` finds a functional user shim owned by another checkout | Setup prepares the caller checkout and preserves the foreign shim; only explicit `install --force` changes shim ownership. |
+| Windows warm `sanad-dev status` performance smoke | Repeated status avoids both `fvm spawn --version` and `fvm dart`; measured latency is recorded against the same-host pre-change baseline. |
+| Windows secure-file operation | No PowerShell child is started. The in-process backend applies a protected DACL containing only the current process-token SID and publishes with write-through replacement; native failures map to typed fail-closed outcomes. |
+| Windows file or directory begins with inherited or explicit foreign ACEs | Successful hardening leaves exactly one full-control current-user ACE and a protected DACL; no foreign or inherited ACE survives. |
+| Requested runtime path contains `..`, a symlink, junction, reparse point, or unsafe entity | Lexical containment and segment validation reject it before publication; no outside file is created or outside ancestor hardened. |
+| Windows secure atomic-write performance smoke | Measure FVM startup separately. The operation executes below two seconds on the same host, leaves no temporary artifact, and never relaxes ACL or replacement semantics to satisfy timing. |
 | Windows bootstrap starts outside a Git checkout but beside its copied project scripts | The non-repository Git probe is handled without a raw PowerShell native-command error, and bootstrap continues from the script-owned project root. |
 | Journal crash fixture exits nonzero on every host | A hermetic platform-native fixture avoids package-runner exit-code differences and captures stdout, stderr, and crash-like stack output after exit. |
 | Windows bootstrap uses an isolated user root in CI | Its fake command surface includes deterministic file hashing, so redirected user paths cannot depend on ambient PowerShell module discovery. |
 | Unchanged second setup | Ready FVM, Flutter, shim, and dependency stages remain silent when SDK, lockfile fingerprint, and package configs agree. |
 | A wrapper from another checkout is invoked inside the target Git worktree | It redispatches to the target worktree wrapper before bootstrap or Dart execution; wrapper and Runtime CLI sources never split across checkouts. |
-| Flutter pin or any of the three lockfiles changes | The appropriate install/setup stage runs before runtime launch. |
+| Flutter pin or any package lockfile changes | The appropriate install/setup stage runs before runtime launch. |
 | Existing shim belongs to another checkout | Explicit install/setup fail without replacement unless `--force`; run accepts the functional dispatcher without replacing it, preserving linked-worktree use. |
 | No arguments or help | Static help is displayed, including `sanad-dev run` as the official source command, with no SDK, package, shim, or runtime mutation. |
 | Default or overridden source profile | Default is Production with Cloud enabled; `--no-cloud` disables hosted routing; `--config config/dev.json` remains explicit. Tests use constants/fakes and perform no hosted request. |
+| `run --background` from a temporary non-TTY shell or Windows tool shell subject to a kill-on-close Job Object | On POSIX, a detached launcher retains the complete managed process group after requester shell exit. On Windows, CIM `Win32_Process.Create` breaks out of the enclosing kill-on-close Job Object; launcher, lease, and components remain alive after shell termination. |
+| Background requester observes a new managed/failed attempt | It returns zero only after proving the launcher process is alive and requested components are actively managed; diagnostic attempt `managed` alone never causes premature completion. Staged failure or bounded timeout returns nonzero with a status recovery hint. |
+| Detached child publishes failure or crashes while exiting | A two-second post-exit publication grace lets the atomic attempt/locator win over PID polling, and the requester prints the exact stage, bounded reason, and exit status without declaring premature success. |
+| Background mode starts Agent and Client | No terminal sidecar or stdout mirror is opened; both component streams remain available from launcher-owned journals. |
+| `run --background --dry-run` | CLI rejects the contradictory request with usage exit status 64 and performs no runtime mutation. |
+| Startup with a worktree-default, `user`, or explicit absolute Home | The versioned attempt preserves requested and resolved Home separately and advances through named startup stages without becoming ownership evidence. |
+| Managed runtime was launched with an explicit absolute Home; later same-workspace commands omit `--home` | The validated startup locator contributes that resolved Home as a credential candidate, so status, bounded logs, restart/reload, UI, and stop discover the same group; mutation still requires the complete managed lease and live identity checks. |
+| A later command supplies an explicit `--home` | Credential discovery is restricted to the resolved explicit Home; a locator or unrelated candidate cannot override the selector. |
+| Active-Home locator is malformed, stale, unreadable, or belongs to another workspace hash | The candidate is ignored, no ownership is granted, and existing default discovery remains fail-closed. |
+| A new `run` omits `--home` after an earlier custom-Home run | Launch resolution uses the normal checkout/worktree default and does not silently reuse the prior custom Home. |
+| Spawn or readiness fails before managed | Owned process trees are cleaned; the attempt records `failed`, `cleanup`, exit status, and a bounded non-secret reason. A later same-worktree status resolves it through the validated locator even when the failed request used an explicit Home. |
+| SIGINT, SIGTERM, or SIGHUP arrives after lease creation but before managed | One idempotent abort path terminates every spawned process tree, closes journals, removes the lease, records the interruption, and exits nonzero; no Agent, VM listener, supervisor, or Client remains. |
+| SIGHUP arrives after managed | The controller performs its normal complete-group cleanup and removes the lease rather than orphaning children. |
+| Startup-attempt locator is stale, malformed, or belongs to another workspace hash | Status reports invalid diagnostics; the record cannot select or mutate a runtime. |
+| Fresh attempt remains `starting` while Agent/Client identity is appearing | Status projects `starting` plus the exact stage for at most six minutes and does not transiently claim manual/orphaned/unverifiable; mutation still requires a complete managed lease. |
+| Starting attempt expires or becomes terminal | Status returns to current process/lease classification and never treats the diagnostic attempt as liveness. |
 | Agent emits logger, print, stderr, or an uncaught stack before health | All bytes remain in bounded history after process exit and are available to follow readers. |
 | Client emits Flutter build output, logger/debug output, print, stderr, or uncaught stack before VM readiness | One Client journal preserves the output in arrival order and its watcher can start before VM discovery. |
 | History transitions to follow while output is written | Snapshot offsets prevent gaps and duplicate replay. |

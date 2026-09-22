@@ -117,172 +117,180 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                         ),
                         color: theme.colorScheme.surface,
                         child: Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Form(
-                    key: _formKey,
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Center(
-                          child: Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primary.withValues(alpha: 0.1),
-                              shape: BoxShape.circle,
-                            ),
-                            child: Icon(
-                              Icons.smart_toy_outlined,
-                              size: 48,
-                              color: theme.colorScheme.primary,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 20),
-                        Text(
-                          _generatedToken == null ? 'Create a remote host device' : 'Install and connect your device',
-                          textAlign: TextAlign.center,
-                          style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          _generatedToken == null
-                              ? 'Create a device record, then run the generated install command on your computer or server.'
-                              : 'Run one of these commands on the target machine. Sanad will continue automatically when it connects.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: theme.colorScheme.onSurfaceVariant, height: 1.4),
-                        ),
-                        const SizedBox(height: 28),
-                        if (_generatedToken == null) ...[
-                          TextFormField(
-                            controller: _nameController,
-                            style: TextStyle(color: theme.colorScheme.onSurface),
-                            decoration: InputDecoration(
-                              labelText: 'Device Name',
-                              labelStyle: TextStyle(color: theme.colorScheme.onSurfaceVariant),
-                              border: const OutlineInputBorder(),
-                              enabledBorder: OutlineInputBorder(
-                                borderSide: BorderSide(color: theme.colorScheme.outline.withValues(alpha: 0.24)),
-                              ),
-                              prefixIcon: Icon(Icons.label_outline, color: theme.colorScheme.onSurfaceVariant),
-                            ),
-                            validator: (value) {
-                              if (value == null || value.trim().isEmpty) {
-                                return 'Please enter a name';
-                              }
-                              return null;
-                            },
-                          ),
-                          const SizedBox(height: 20),
-                          if (_error != null) _ErrorMessage(message: _error!),
-                          BlocBuilder<GatewayConnectionCubit, GatewayConnectionStatus>(
-                            builder: (context, gatewayStatus) {
-                              return ElevatedButton(
-                                onPressed: _isCreating ? null : () => _createDevice(gatewayStatus),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: theme.colorScheme.primary,
-                                  foregroundColor: theme.colorScheme.onPrimary,
-                                  padding: const EdgeInsets.symmetric(vertical: 16),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                ),
-                                child: _isCreating
-                                    ? const SizedBox(
-                                        width: 20,
-                                        height: 20,
-                                        child: CircularProgressIndicator(
-                                          strokeWidth: 2,
-                                          valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                                        ),
-                                      )
-                                    : Text(
-                                        'Create Host Device',
-                                        style: TextStyle(
-                                          color: theme.colorScheme.onPrimary,
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                              );
-                            },
-                          ),
-                        ] else ...[
-                          Container(
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primary.withValues(alpha: 0.06),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.2)),
-                            ),
+                          padding: const EdgeInsets.all(32),
+                          child: Form(
+                            key: _formKey,
                             child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
                               children: [
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(Icons.check_circle_outline, color: theme.colorScheme.primary, size: 24),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      'Device Created Successfully',
-                                      style: TextStyle(
-                                        color: theme.colorScheme.primary,
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                      ),
+                                Center(
+                                  child: Container(
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: theme.colorScheme.primary.withValues(alpha: 0.1),
+                                      shape: BoxShape.circle,
                                     ),
-                                  ],
-                                ),
-                                const SizedBox(height: 16),
-                                DeviceInstallGuide(token: _generatedToken!),
-                                const SizedBox(height: 16),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    SizedBox(
-                                      width: 14,
-                                      height: 14,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                        color: theme.colorScheme.primary,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    Text(
-                                      'Waiting for the device to come online...',
-                                      style: TextStyle(color: theme.colorScheme.onSurfaceVariant, fontSize: 13),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 16),
-                                OutlinedButton.icon(
-                                  onPressed: () => context.go(AppRoutes.home),
-                                  icon: const Icon(Icons.arrow_forward_rounded, size: 18),
-                                  label: const Text('Continue to Home'),
-                                  style: OutlinedButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(8),
+                                    child: Icon(
+                                      Icons.smart_toy_outlined,
+                                      size: 48,
+                                      color: theme.colorScheme.primary,
                                     ),
                                   ),
                                 ),
+                                const SizedBox(height: 20),
+                                Text(
+                                  _generatedToken == null
+                                      ? 'Create a remote host device'
+                                      : 'Install and connect your device',
+                                  textAlign: TextAlign.center,
+                                  style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  _generatedToken == null
+                                      ? 'Create a device record, then run the generated install command on your computer or server.'
+                                      : 'Run one of these commands on the target machine. Sanad will continue automatically when it connects.',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(color: theme.colorScheme.onSurfaceVariant, height: 1.4),
+                                ),
+                                const SizedBox(height: 28),
+                                if (_generatedToken == null) ...[
+                                  TextFormField(
+                                    controller: _nameController,
+                                    style: TextStyle(color: theme.colorScheme.onSurface),
+                                    decoration: InputDecoration(
+                                      labelText: 'Device Name',
+                                      labelStyle: TextStyle(color: theme.colorScheme.onSurfaceVariant),
+                                      border: const OutlineInputBorder(),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderSide: BorderSide(
+                                          color: theme.colorScheme.outline.withValues(alpha: 0.24),
+                                        ),
+                                      ),
+                                      prefixIcon: Icon(Icons.label_outline, color: theme.colorScheme.onSurfaceVariant),
+                                    ),
+                                    validator: (value) {
+                                      if (value == null || value.trim().isEmpty) {
+                                        return 'Please enter a name';
+                                      }
+                                      return null;
+                                    },
+                                  ),
+                                  const SizedBox(height: 20),
+                                  if (_error != null) _ErrorMessage(message: _error!),
+                                  BlocBuilder<GatewayConnectionCubit, GatewayConnectionStatus>(
+                                    builder: (context, gatewayStatus) {
+                                      return ElevatedButton(
+                                        onPressed: _isCreating ? null : () => _createDevice(gatewayStatus),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: theme.colorScheme.primary,
+                                          foregroundColor: theme.colorScheme.onPrimary,
+                                          padding: const EdgeInsets.symmetric(vertical: 16),
+                                          shape: RoundedRectangleBorder(
+                                            borderRadius: BorderRadius.circular(10),
+                                          ),
+                                        ),
+                                        child: _isCreating
+                                            ? const SizedBox(
+                                                width: 20,
+                                                height: 20,
+                                                child: CircularProgressIndicator(
+                                                  strokeWidth: 2,
+                                                  valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                                ),
+                                              )
+                                            : Text(
+                                                'Create Host Device',
+                                                style: TextStyle(
+                                                  color: theme.colorScheme.onPrimary,
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                      );
+                                    },
+                                  ),
+                                ] else ...[
+                                  Container(
+                                    padding: const EdgeInsets.all(20),
+                                    decoration: BoxDecoration(
+                                      color: theme.colorScheme.primary.withValues(alpha: 0.06),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: theme.colorScheme.primary.withValues(alpha: 0.2)),
+                                    ),
+                                    child: Column(
+                                      children: [
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            Icon(
+                                              Icons.check_circle_outline,
+                                              color: theme.colorScheme.primary,
+                                              size: 24,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              'Device Created Successfully',
+                                              style: TextStyle(
+                                                color: theme.colorScheme.primary,
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.bold,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 16),
+                                        DeviceInstallGuide(token: _generatedToken!),
+                                        const SizedBox(height: 16),
+                                        Row(
+                                          mainAxisAlignment: MainAxisAlignment.center,
+                                          children: [
+                                            SizedBox(
+                                              width: 14,
+                                              height: 14,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 2,
+                                                color: theme.colorScheme.primary,
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Text(
+                                              'Waiting for the device to come online...',
+                                              style: TextStyle(color: theme.colorScheme.onSurfaceVariant, fontSize: 13),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 16),
+                                        OutlinedButton.icon(
+                                          onPressed: () => context.go(AppRoutes.home),
+                                          icon: const Icon(Icons.arrow_forward_rounded, size: 18),
+                                          label: const Text('Continue to Home'),
+                                          style: OutlinedButton.styleFrom(
+                                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                                            shape: RoundedRectangleBorder(
+                                              borderRadius: BorderRadius.circular(8),
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
-                        ],
-                      ],
+                        ),
+                      ),
                     ),
                   ),
                 ),
               ),
-            ),
+            ],
           ),
         ),
       ),
-    ],
-  ),
-),
-),
-);
-}
+    );
+  }
 
   void _handleDeviceStateChange(BuildContext context, DeviceState state) {
     final devices = state is DeviceActive ? state.agents : (state is DeviceNoActive ? state.agents : const []);

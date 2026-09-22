@@ -9,6 +9,7 @@ import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_attention_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_visual_state.dart';
@@ -35,7 +36,9 @@ import 'package:sanad_client/features/provider_setup/data/models/provider_readin
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_flow.dart';
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_tool_runtime_context.dart';
+import 'package:sanad_client/infrastructure/platform/window_manager_service.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 
 import 'package:sanad_client/features/home/presentation/widgets/status_bar.dart';
 
@@ -176,6 +179,11 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
   String? _lastCheckedDeviceId;
   String? _skippedDeviceId;
   StreamSubscription<DeletedSessionIdentity>? _deletedSessionSubscription;
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  Timer? _hoverDrawerCloseTimer;
+  bool _isMenuButtonHovered = false;
+  bool _isDrawerHovered = false;
+  bool _drawerOpenedByHover = false;
 
   @override
   void initState() {
@@ -198,8 +206,53 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
 
   @override
   void dispose() {
+    _hoverDrawerCloseTimer?.cancel();
     unawaited(_deletedSessionSubscription?.cancel());
     super.dispose();
+  }
+
+  void _onCompactMenuButtonEnter() {
+    _hoverDrawerCloseTimer?.cancel();
+    _isMenuButtonHovered = true;
+    final scaffold = _scaffoldKey.currentState;
+    if (scaffold == null || scaffold.isDrawerOpen) return;
+    _drawerOpenedByHover = true;
+    scaffold.openDrawer();
+  }
+
+  void _onCompactMenuButtonExit() {
+    _isMenuButtonHovered = false;
+    _scheduleHoverDrawerClose();
+  }
+
+  void _onCompactDrawerEnter() {
+    _hoverDrawerCloseTimer?.cancel();
+    _isDrawerHovered = true;
+  }
+
+  void _onCompactDrawerExit() {
+    _isDrawerHovered = false;
+    _scheduleHoverDrawerClose();
+  }
+
+  void _scheduleHoverDrawerClose() {
+    _hoverDrawerCloseTimer?.cancel();
+    if (!_drawerOpenedByHover) return;
+    _hoverDrawerCloseTimer = Timer(const Duration(milliseconds: 150), () {
+      if (!mounted || _isMenuButtonHovered || _isDrawerHovered) return;
+      final scaffold = _scaffoldKey.currentState;
+      if (scaffold?.isDrawerOpen ?? false) {
+        scaffold!.closeDrawer();
+      }
+    });
+  }
+
+  void _onDrawerChanged(bool isOpened) {
+    if (isOpened) return;
+    _hoverDrawerCloseTimer?.cancel();
+    _isMenuButtonHovered = false;
+    _isDrawerHovered = false;
+    _drawerOpenedByHover = false;
   }
 
   @override
@@ -448,39 +501,57 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
           builder: (context, constraints) {
             final isDesktop = constraints.maxWidth > _tabletBreakpoint;
 
-            return Scaffold(
-              drawer: isDesktop ? null : const _SidebarDrawer(),
-              body: Column(
-                children: [
-                  Expanded(
-                    child: Stack(
-                      children: [
-                        if (isDesktop)
-                          ConversationWorkspaceLayout(
-                            child: Container(
-                              color: theme.scaffoldBackgroundColor,
-                              child: const _MainContent(isMobile: false),
-                            ),
-                          )
-                        else
-                          Container(
-                            color: theme.scaffoldBackgroundColor,
-                            child: const _MainContent(isMobile: true),
-                          ),
-                        if (_providerSetupDevice != null)
-                          _ProviderSetupGate(
-                            device: _providerSetupDevice!,
-                            onReady: (readiness) => _dismissProviderSetupGate(
-                              readiness: readiness,
-                            ),
-                            onSkip: () => _dismissProviderSetupGate(skipped: true),
-                          ),
-                      ],
-                    ),
+            return ValueListenableBuilder<bool>(
+              valueListenable: WindowManagerService.compactModeListenable,
+              builder: (context, isCompactWindow, _) {
+                final enableHoverDrawer = AppPlatform.isDesktop && !isDesktop && isCompactWindow;
+                return Scaffold(
+                  key: _scaffoldKey,
+                  drawer: isDesktop
+                      ? null
+                      : _SidebarDrawer(
+                          enableHover: enableHoverDrawer,
+                          onHoverEnter: _onCompactDrawerEnter,
+                          onHoverExit: _onCompactDrawerExit,
+                        ),
+                  onDrawerChanged: _onDrawerChanged,
+                  body: Column(
+                    children: [
+                      Expanded(
+                        child: Stack(
+                          children: [
+                            if (isDesktop)
+                              ConversationWorkspaceLayout(
+                                child: Container(
+                                  color: theme.scaffoldBackgroundColor,
+                                  child: const _MainContent(isMobile: false),
+                                ),
+                              )
+                            else
+                              Container(
+                                color: theme.scaffoldBackgroundColor,
+                                child: _MainContent(
+                                  isMobile: true,
+                                  onMenuHoverEnter: enableHoverDrawer ? _onCompactMenuButtonEnter : null,
+                                  onMenuHoverExit: enableHoverDrawer ? _onCompactMenuButtonExit : null,
+                                ),
+                              ),
+                            if (_providerSetupDevice != null)
+                              _ProviderSetupGate(
+                                device: _providerSetupDevice!,
+                                onReady: (readiness) => _dismissProviderSetupGate(
+                                  readiness: readiness,
+                                ),
+                                onSkip: () => _dismissProviderSetupGate(skipped: true),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const DesktopOnlyStatusBar(),
+                    ],
                   ),
-                  const DesktopOnlyStatusBar(),
-                ],
-              ),
+                );
+              },
             );
           },
         ),
@@ -576,7 +647,14 @@ class _ProviderSetupGate extends StatelessWidget {
 
 class _MainContent extends StatelessWidget {
   final bool isMobile;
-  const _MainContent({required this.isMobile});
+  final VoidCallback? onMenuHoverEnter;
+  final VoidCallback? onMenuHoverExit;
+
+  const _MainContent({
+    required this.isMobile,
+    this.onMenuHoverEnter,
+    this.onMenuHoverExit,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -589,6 +667,7 @@ class _MainContent extends StatelessWidget {
                 final visualState = messagesState.visualState;
                 final presentedSession = _resolvePresentedSession(
                   activeSessionId: messagesState.activeSessionId,
+                  requestedSessionId: messagesState.requestedSessionId,
                   selectedSession: sessionState.selectedSession,
                   agentSessions: sessionState.agentSessions,
                 );
@@ -602,17 +681,19 @@ class _MainContent extends StatelessWidget {
                 final conversation = Stack(
                   children: [
                     Positioned.fill(child: mainContent),
-                    if (visualState.showAppBar && presentedSession != null)
+                    if (visualState.showAppBar)
                       Positioned(
                         top: 0,
                         left: 0,
                         right: 0,
                         child: ConversationAppBar(
-                          key: ValueKey('app_bar_${presentedSession.id}'),
-                          sessionTitle: presentedSession.title,
+                          key: ValueKey('app_bar_${presentedSession?.id ?? 'pending'}'),
+                          sessionTitle: presentedSession?.title,
                           workspace: _workspaceFromSession(presentedSession),
                           isMobile: isMobile,
                           onMenuPressed: isMobile ? () => Scaffold.of(context).openDrawer() : null,
+                          onMenuHoverEnter: onMenuHoverEnter,
+                          onMenuHoverExit: onMenuHoverExit,
                         ),
                       ),
                   ],
@@ -648,16 +729,18 @@ class _MainContent extends StatelessWidget {
 
   Session? _resolvePresentedSession({
     required String? activeSessionId,
+    String? requestedSessionId,
     required Session? selectedSession,
     required Map<String, List<Session>> agentSessions,
   }) {
-    if (activeSessionId == null) return null;
-    if (selectedSession?.id == activeSessionId) return selectedSession;
+    final targetId = activeSessionId ?? requestedSessionId ?? selectedSession?.id;
+    if (targetId == null) return null;
+    if (selectedSession?.id == targetId) return selectedSession;
     for (final sessions in agentSessions.values) {
-      final match = sessions.where((s) => s.id == activeSessionId).firstOrNull;
+      final match = sessions.where((s) => s.id == targetId).firstOrNull;
       if (match != null) return match;
     }
-    return null;
+    return selectedSession;
   }
 
   Widget _buildChat(
@@ -667,13 +750,17 @@ class _MainContent extends StatelessWidget {
     required ConversationVisualState visualState,
   }) {
     final inputCubit = context.read<ConversationInputCubit>();
+    final messagesCubit = context.read<SessionMessagesCubit>();
     final cacheRepository = context.read<ConversationCacheRepository>();
     final sessionId = messagesState.activeSessionId;
     final composerSessionId = messagesState.requestedSessionId ?? sessionId;
     final viewportAnchorEventId = presentedDeviceId == null || sessionId == null
         ? null
         : cacheRepository.sessionViewportAnchor(presentedDeviceId, sessionId);
-    final followLatestOnOpen = messagesState.executionSnapshot?.hasActiveWork ?? messagesState.isProcessing;
+    final hasActiveWork = messagesState.executionSnapshot?.hasActiveWork ?? messagesState.isProcessing;
+    final activityEligible =
+        messagesState.error == null &&
+        messagesState.attentionState?.visualState == SessionAttentionVisualState.runningOrResuming;
 
     return BrainActivityView(
       key: ValueKey(sessionId),
@@ -682,7 +769,9 @@ class _MainContent extends StatelessWidget {
       sessionId: sessionId,
       composerSessionId: composerSessionId,
       initialViewportAnchorEventId: viewportAnchorEventId,
-      followLatestOnOpen: followLatestOnOpen,
+      followLatestOnOpen: hasActiveWork,
+      activityEligible: activityEligible,
+      executionSnapshot: messagesState.executionSnapshot,
       onViewportAnchorChanged: presentedDeviceId == null || sessionId == null
           ? null
           : (eventId) => cacheRepository.recordSessionViewportAnchor(
@@ -692,6 +781,15 @@ class _MainContent extends StatelessWidget {
             ),
       visualState: visualState,
       pendingSteerCancellationRequestIds: messagesState.pendingSteerCancellationRequestIds,
+      hasOlderHistory: messagesState.hasOlderHistory,
+      isOlderHistoryLoading: messagesState.isOlderHistoryLoading,
+      olderHistoryError: messagesState.olderHistoryError,
+      onLoadOlderHistory: messagesCubit.loadOlderHistory,
+      hasNewerHistory: messagesState.hasNewerHistory,
+      isNewerHistoryLoading: messagesState.isNewerHistoryLoading,
+      newerHistoryError: messagesState.newerHistoryError,
+      onLoadNewerHistory: messagesCubit.loadNewerHistory,
+      onLoadAnchoredHistory: messagesCubit.loadAnchoredHistory,
       onSendMessage: (text, {intent = MessageDeliveryIntent.auto}) async {
         await inputCubit.sendMessage(text, intent: intent);
       },
@@ -711,8 +809,9 @@ class _HistoryTransitionOverlay extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final topOffset = MediaQuery.paddingOf(context).top + 64.0;
     return Positioned(
-      top: 12,
+      top: topOffset,
       left: 16,
       right: 16,
       child: Center(
@@ -759,20 +858,38 @@ class _HistoryTransitionOverlay extends StatelessWidget {
 // ─── Sidebar drawer (mobile) ───────────────────────────────────────────────
 
 class _SidebarDrawer extends StatelessWidget {
-  const _SidebarDrawer();
+  final bool enableHover;
+  final VoidCallback? onHoverEnter;
+  final VoidCallback? onHoverExit;
+
+  const _SidebarDrawer({
+    this.enableHover = false,
+    this.onHoverEnter,
+    this.onHoverExit,
+  });
 
   @override
   Widget build(BuildContext context) {
+    Widget content = SessionSidebar(
+      isDrawerMode: true,
+      onClose: () => Navigator.pop(context),
+    );
+    if (enableHover) {
+      content = MouseRegion(
+        key: const Key('compact_sidebar_hover_region'),
+        onEnter: (_) => onHoverEnter?.call(),
+        onExit: (_) => onHoverExit?.call(),
+        child: content,
+      );
+    }
+
     return Drawer(
       backgroundColor: Theme.of(context).colorScheme.surface,
       width: (MediaQuery.of(context).size.width * SidebarBreakpoints.drawerWidthFactor).clamp(
         SidebarBreakpoints.minWidth,
         MediaQuery.of(context).size.width,
       ),
-      child: SessionSidebar(
-        isDrawerMode: true,
-        onClose: () => Navigator.pop(context),
-      ),
+      child: content,
     );
   }
 }

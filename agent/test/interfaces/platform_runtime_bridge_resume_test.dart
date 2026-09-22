@@ -8,6 +8,7 @@ import 'package:sanad_agent/capabilities/skills/skill_load_service.dart';
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
@@ -78,18 +79,26 @@ class FakeSuspendedResumeService extends SuspendedResumeService {
 
 void main() {
   group('PlatformRuntimeBridge resume fallback', () {
+    late AgentStateDatabase state;
+
     setUp(() async {
       await getIt.reset();
+      SessionManager.resetForTesting();
+      state = AgentStateDatabase.inMemory();
+      getIt.registerSingleton<AgentStateDatabase>(state);
     });
 
     tearDown(() async {
+      SessionManager.resetForTesting();
       await getIt.reset();
+      state.dispose();
     });
 
     test(
       'routes permission replies to resume service when no in-memory waiter exists',
       () async {
         final bridge = PlatformRuntimeBridge();
+        addTearDown(() => bridge.unregisterSession('thread-resume'));
         final resumeService = FakeSuspendedResumeService();
         final deliveredResponses = <GatewayResponse>[];
         final delivered = Completer<void>();
@@ -99,7 +108,7 @@ void main() {
           'thread-resume',
           responseEmitter: (response) async {
             deliveredResponses.add(response);
-            if (!delivered.isCompleted) {
+            if (deliveredResponses.length == 2 && !delivered.isCompleted) {
               delivered.complete();
             }
           },
@@ -118,10 +127,13 @@ void main() {
         );
 
         expect(handled, isTrue);
-        await delivered.future.timeout(const Duration(seconds: 2));
-        while (deliveredResponses.length < 2) {
-          await Future<void>.delayed(Duration.zero);
-        }
+        await delivered.future.timeout(
+          const Duration(seconds: 2),
+          onTimeout: () => throw StateError(
+            'Expected two responses, received ${deliveredResponses.length}: '
+            '${deliveredResponses.map((response) => response.message.metadata?['canonical_event_type']).toList()}',
+          ),
+        );
 
         expect(resumeService.callCount, equals(1));
         expect(resumeService.lastRequestId, equals('permission-123'));

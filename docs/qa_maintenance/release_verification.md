@@ -51,12 +51,52 @@ then installs, launches, and purges it on the clean runner. The Stable Linux
 convenience link selects this `.deb`; the `tar.gz` remains a public portable
 alternative.
 
+## Automated preparation gate
+
+`prepare-release` must reject malformed, equal, or decreasing Stable versions
+and non-increasing build numbers before writing any file. A successful run must
+update all package, lockfile, native Windows, release-contract, artifact-name,
+release-note identity, changelog-slot, and current-release documentation
+surfaces. `check-preparation` must then reject any stale surface or unfinished
+`TODO`. Focused tests copy the current 11-file release surface into an isolated
+temporary fixture, derive the next patch and build from its current contract,
+and prove successful transformation, no mutation after prevalidation failure,
+and stale native/prose rejection. Tests must not pin the release identity that
+they are designed to advance.
+
+The protected-review exception is valid only for an exact metadata release PR.
+`scripts/release/verify_metadata_release_diff.sh` compares the PR merge range
+against the fixed 11-file set and inspects every changed line outside release
+notes and changelog. Only semantic version/build declarations, the Stable tag,
+canonical `sanad-agent`/`sanad-client` filenames, and the single current-release
+documentation sentence are accepted. Tests must prove the expected diff passes
+while an unrelated path or installer metadata line fails. CI must also run the
+normal release contract, Agent/Client analyzer, tests, secret scan, and release
+security lanes; the exception replaces only the early `release-reviewed` label,
+not technical validation or final publication approval.
+
+Before creating the immutable tag, automation must prove that the squash-merged
+release commit is current public `main`, that every selected included change is
+an ancestor, and specifically that PR #129 merge commit
+`872a5b75aec8303bf59ea39e25826d017d0ad714` is present in the next and later
+release lines. The candidate monitor is bounded and identifies its run by tag
+plus source SHA. It may request the final decision only after every prerequisite
+job and private Draft succeeds and the sole pending deployment is
+`release-publication`; any failed, cancelled, missing, stale, duplicate, timed
+out, or ambiguous state blocks approval.
+
 ## Platform matrix
+
+Until `flutter/flutter#185394` is fixed in a stable Flutter engine and passes a
+macOS foreground/resize soak, the macOS Client release must set
+`FLTEnableImpeller` to `false` in its resolved application `Info.plist`. Release
+verification must inspect the built `.app`, not only the source plist, so a
+build-setting override cannot silently re-enable the affected Metal path.
 
 | Target | Local evidence | Hosted or clean-machine evidence still required |
 |---|---|---|
 | Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification, accepted notary log with exact architecture/`cdhash` ticket match | both hosted runners, clean install, real upgrade and rollback |
-| Agent Linux x64 | contract and workflow path | hosted build, provenance, clean install, service/update/rollback |
+| Agent Linux x64 | analyzer, installer transaction/failure injection, candidate-manifest hook, version/cloud health verification, and service backend tests | hosted build, provenance, clean user/system systemd and OpenRC install, logout/reboot reconnect, request, uninstall/reinstall/update/rollback |
 | Agent Windows x64 | contract and workflow path | Unsigned Windows build disclosure, SHA-256/manifest/provenance, Defender/SmartScreen and lifecycle on Windows 11, service/update/rollback |
 | Client macOS universal | universal Mach-O inspection, Developer ID-signed and notarized DMG, staple, Gatekeeper, Sparkle signature | clean update and rollback |
 | Client Linux x64 | Web/Linux workflow definition, compatibility-runner contract, `.deb` metadata/layout audit, portable-bundle smoke, and forbidden-symbol audit | hosted `.deb` install/launch/purge, provenance, clean update |
@@ -64,6 +104,21 @@ alternative.
 | Client Android APK/AAB | signed local APK/AAB, package identity and keystore fingerprint | signed hosted build, clean install/upgrade |
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
 | Client Web | analyzer, startup contract test, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
+
+Linux candidate installer testing may override manifest and artifact URLs only
+with `SANAD_INSTALL_ALLOW_TEST_URL=1`. This explicit harness switch is forbidden
+from the generated Add Device command and Production verification. Candidate
+manifests still require the canonical repository identity, exactly one matching
+public signed artifact, filename, size, SHA-256, and version. The clean-host gate
+must use a fresh one-time pairing command and prove expected-version Local
+Gateway health plus authoritative cloud registration before accepting success.
+
+For raw macOS Agent installation, runtime verification must accept the exact
+Apple-anchored NanoSoft Developer ID requirement (Team ID `UC2824B99G`) after
+size and SHA-256 verification, reject any signature or publisher mismatch, and
+must not depend on `spctl --type execute` or the local `=notarized` ticket cache.
+Release CI remains the authority for accepted notarization and exact ticket
+architecture/`cdhash` matching.
 
 Windows 11 evidence follows the dedicated
 [Windows Release Clean-Machine Validation](windows_release_clean_machine.md)
@@ -261,7 +316,11 @@ Task 67B native gates even when shared tests pass on macOS.
 
 The canonical installer sources accept a creation-time pairing token, Portal
 sign-in, or local-only installation; they never accept or expose the durable
-device credential. Interactive tokenless installs offer sign-in, while
+device credential. Public manual commands use the conventional
+`curl -fsSL ... | bash` and `irm ... | iex` forms. The Client POSIX Add Device
+command appends the shell-quoted creation token to `bash -s -- --pairing-token`;
+the installer then feeds it to Agent login through stdin rather than Agent
+process arguments. Interactive tokenless installs offer sign-in, while
 unattended tokenless installs must not block and default to local-only mode.
 The installers select the release through the manifest, validate repository
 URLs, architecture, size, and SHA-256, preserve Sanad Home, authenticate before

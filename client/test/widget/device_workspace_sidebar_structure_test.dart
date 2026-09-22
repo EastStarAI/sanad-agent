@@ -10,6 +10,7 @@ import 'package:sanad_client/features/conversations/data/repositories/conversati
 import 'package:sanad_client/features/conversations/domain/stores/conversation_cache_store.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/device_workspace_sidebar.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_composition.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_conversation_row.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
@@ -24,6 +25,7 @@ import 'package:sanad_client/features/devices/presentation/bloc/device_capabilit
 import 'package:sanad_client/features/devices/presentation/bloc/device_capabilities_state.dart';
 import 'package:sanad_client/features/home/presentation/widgets/conversation_workspace_layout.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 
 import '../helpers/fake_device_repository.dart';
 import '../helpers/fake_conversation_repository.dart';
@@ -465,6 +467,27 @@ void main() {
     expect(draft.workspaceId, isNull, reason: 'the New Conversation draft must be unscoped (no workspace)');
   });
 
+  testWidgets('macOS drawer reserves traffic-light height plus visual gap', (
+    tester,
+  ) async {
+    await setSurfaceSize(tester, const Size(500, 874));
+    await pumpSidebar(tester, isDrawerMode: true);
+    await tester.pump();
+
+    final spacer = find.byKey(
+      const Key('macos_drawer_traffic_lights_spacer'),
+    );
+    if (AppPlatform.isMacOS) {
+      expect(spacer, findsOneWidget);
+      expect(
+        tester.getSize(spacer).height,
+        SidebarBreakpoints.macOSTrafficLightsHeight + SidebarBreakpoints.macOSDrawerTopGap,
+      );
+    } else {
+      expect(spacer, findsNothing);
+    }
+  });
+
   testWidgets('desktop and drawer layouts keep the sidebar interactive without overflow', (tester) async {
     for (final scenario in [
       (size: const Size(1280, 900), isDrawerMode: false),
@@ -526,7 +549,7 @@ void main() {
     expect(find.text('Retry'), findsWidgets);
   });
 
-  testWidgets('desktop header exposes Back and Forward controls', (tester) async {
+  testWidgets('desktop header exposes Back, Forward, and compact window controls', (tester) async {
     final history = ConversationHistoryController();
     final d1 = ConversationDestination.session(deviceId: 'device-1', sessionId: 's-1');
     final d2 = ConversationDestination.session(deviceId: 'device-1', sessionId: 's-2');
@@ -569,6 +592,12 @@ void main() {
 
     await pumpSidebar(tester, router: router);
     await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('desktop_compact_window_btn')), findsOneWidget);
+    expect(
+      tester.getSize(find.byKey(const Key('desktop_compact_window_btn'))),
+      tester.getSize(find.byKey(const Key('sidebar_toggle_btn'))),
+    );
 
     await tester.tap(find.byKey(const Key('sidebar_back_btn')));
     await tester.pumpAndSettle();
@@ -644,6 +673,41 @@ void main() {
     await tester.pumpAndSettle();
 
     await gesture.removePointer();
+    await capsCubit.close();
+  });
+
+  testWidgets('double-clicking a session title opens the rename dialog', (tester) async {
+    final capsCubit = _FakeDeviceCapabilitiesCubit(
+      DeviceCapabilitiesState(
+        capabilitiesByAgentId: {
+          device.id: const Capability(supportsUpdateSessionName: true),
+        },
+      ),
+    );
+
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionSidebarCubit: sessionSidebarCubit,
+      deviceCapabilitiesCubit: capsCubit,
+      conversationCacheRepository: cacheRepository,
+      conversationRepository: conversationRepository,
+      child: const DeviceWorkspaceSidebar(showChrome: false, key: Key('sidebar')),
+    );
+    await tester.pumpAndSettle();
+
+    final title = find.byKey(const ValueKey('sidebar_session_title:s-scoped'));
+    await tester.tap(title);
+    await tester.pump(kDoubleTapMinTime);
+    await tester.tap(title);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Rename Session'), findsOneWidget);
+    expect(find.text('Scoped chat'), findsWidgets);
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
     await capsCubit.close();
   });
 }

@@ -5,7 +5,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/devices/presentation/utils/device_ui_mapper.dart';
 
-enum SettingsDestination { profile, general, overview, providers, mcp, skills, workspace }
+enum SettingsDestination { profile, general, sessionsDevices, overview, providers, mcp, skills, workspace }
 
 class SettingsNavigation extends StatelessWidget {
   const SettingsNavigation({
@@ -50,15 +50,10 @@ class SettingsNavigation extends StatelessWidget {
             child: Row(
               children: [
                 IconButton(
+                  key: const Key('settings_back_to_conversations_btn'),
                   icon: const Icon(Icons.arrow_back_rounded),
                   tooltip: 'Back to conversations',
-                  onPressed: () {
-                    if (context.canPop()) {
-                      context.pop();
-                    } else {
-                      context.go(AppRoutes.home);
-                    }
-                  },
+                  onPressed: () => context.go(AppRoutes.home),
                 ),
                 Text(
                   'Settings',
@@ -79,6 +74,12 @@ class SettingsNavigation extends StatelessWidget {
             label: 'General',
             selected: selectedDestination == SettingsDestination.general,
             onTap: () => onSelectPersonal(SettingsDestination.general),
+          ),
+          NavigationTile(
+            icon: Icons.devices_other_outlined,
+            label: 'Sessions & Devices',
+            selected: selectedDestination == SettingsDestination.sessionsDevices,
+            onTap: () => onSelectPersonal(SettingsDestination.sessionsDevices),
           ),
           Row(
             children: [
@@ -128,6 +129,7 @@ class SettingsNavigation extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 18),
                 child: NavigationTile(
+                  key: Key('nav_workspace_${workspace.name}'),
                   icon: Icons.folder_outlined,
                   label: workspace.name,
                   selected: selectedDestination == SettingsDestination.workspace && workspace.id == selectedWorkspaceId,
@@ -138,6 +140,7 @@ class SettingsNavigation extends StatelessWidget {
               Padding(
                 padding: const EdgeInsets.only(left: 30),
                 child: TextButton(
+                  key: const Key('settings_show_all_workspaces_btn'),
                   onPressed: onToggleWorkspaces,
                   child: Text(showAllWorkspaces ? 'Show less' : 'Show all (${workspaces.length})'),
                 ),
@@ -187,6 +190,7 @@ class NavigationTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => ListTile(
+    key: Key('nav_tile_${label.toLowerCase().replaceAll(' ', '_')}'),
     dense: true,
     selected: selected,
     selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.15),
@@ -219,6 +223,7 @@ class DeviceNavigationTile extends StatelessWidget {
         : TextStyle(color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.6));
 
     return ListTile(
+      key: Key('nav_device_${device.name}'),
       dense: true,
       selected: selected,
       selectedTileColor: theme.colorScheme.secondaryContainer.withValues(alpha: 0.15),

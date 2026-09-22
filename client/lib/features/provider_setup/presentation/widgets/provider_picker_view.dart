@@ -60,6 +60,7 @@ class ProviderPickerView extends StatelessWidget {
               itemBuilder: (context, index) {
                 final provider = state.providers[index];
                 return _ProviderCard(
+                  key: Key('provider_card_item_${provider.id}'),
                   provider: provider,
                   onTap: () {
                     final template = state.templates.where((t) => t.name == provider.id).firstOrNull;
@@ -91,7 +92,11 @@ class _ProviderCard extends StatelessWidget {
   final ProviderDto provider;
   final VoidCallback onTap;
 
-  const _ProviderCard({required this.provider, required this.onTap});
+  const _ProviderCard({
+    super.key,
+    required this.provider,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -99,6 +104,7 @@ class _ProviderCard extends StatelessWidget {
     return Material(
       color: Colors.transparent,
       child: InkWell(
+        key: Key('provider_card_${provider.id}'),
         onTap: onTap,
         borderRadius: BorderRadius.circular(14),
         child: Container(
@@ -138,6 +144,7 @@ class _ProviderCard extends StatelessWidget {
                         Flexible(
                           child: Text(
                             provider.displayName,
+                            key: Key('provider_name_${provider.id}'),
                             style: const TextStyle(
                               fontSize: 15,
                               fontWeight: FontWeight.bold,

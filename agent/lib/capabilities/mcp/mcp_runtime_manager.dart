@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:mcp_client/mcp_client.dart';
+import 'package:sanad_windows_path/windows_path.dart';
 
 import '../models/local_tool_spec.dart';
 import 'mcp_oauth_service.dart';
@@ -13,11 +14,17 @@ class McpRuntimeManager {
   McpRuntimeManager({
     SanadSettingsStore? settingsStore,
     McpOAuthService? oauthService,
+    WindowsSystemPath? windowsSystemPath,
   }) : _settingsStore = settingsStore ?? const SanadSettingsStore(),
-       _oauthService = oauthService ?? McpOAuthService();
+       _oauthService = oauthService ?? McpOAuthService(),
+       _windowsSystemPath =
+           windowsSystemPath ?? sharedWindowsSystemPathResolver,
+       _ownsOAuthService = oauthService == null;
 
   final SanadSettingsStore _settingsStore;
   final McpOAuthService _oauthService;
+  final WindowsSystemPath _windowsSystemPath;
+  final bool _ownsOAuthService;
   final Map<String, DateTime> _refreshedOAuthExpiry = {};
 
   // Active persistent connection instances map: serverName -> client
@@ -291,6 +298,19 @@ class McpRuntimeManager {
     for (final entry in values.entries) entry.key.toString(): entry.value,
   };
 
+  Future<void> dispose() async {
+    final serverNames = _activeClients.keys.toList(growable: false);
+    for (final serverName in serverNames) {
+      await _closeConnection(serverName);
+    }
+    _specsCache.clear();
+    _specsCacheFingerprints.clear();
+    _refreshedOAuthExpiry.clear();
+    if (_ownsOAuthService) {
+      await _oauthService.dispose();
+    }
+  }
+
   Future<void> _closeConnection(String serverName) async {
     final client = _activeClients.remove(serverName);
     _connectedConfigs.remove(serverName);
@@ -348,20 +368,29 @@ class McpRuntimeManager {
       if (config.command == null || config.command!.trim().isEmpty) {
         return (client: null, error: 'STDIO server missing command.');
       }
-      final result = await McpClient.createAndConnect(
-        config: clientConfig,
-        transportConfig: TransportConfig.stdio(
-          command: config.command!,
-          arguments: _settingsStore.resolveArguments(config),
-          environment: _buildSafeEnvironment(
-            resolvedEnvironment ?? _settingsStore.resolveEnvironment(config),
+      try {
+        final result = await McpClient.createAndConnect(
+          config: clientConfig,
+          transportConfig: TransportConfig.stdio(
+            command: config.command!,
+            arguments: _settingsStore.resolveArguments(config),
+            environment: await buildSafeEnvironment(
+              resolvedEnvironment ?? _settingsStore.resolveEnvironment(config),
+            ),
           ),
-        ),
-      ).timeout(const Duration(seconds: 20));
-      return result.fold((client) {
-        _lastConnectedTransport = McpTransportType.stdio;
-        return (client: client, error: null);
-      }, (error) => (client: null, error: error.toString()));
+        ).timeout(const Duration(seconds: 20));
+        final connection = result.fold<({dynamic client, String? error})>((
+          client,
+        ) {
+          _lastConnectedTransport = McpTransportType.stdio;
+          return (client: client, error: null);
+        }, (error) => (client: null, error: error.toString()));
+        return connection;
+      } on TimeoutException {
+        return (client: null, error: 'Connection timed out.');
+      } catch (error) {
+        return (client: null, error: error.toString());
+      }
     }
 
     if (config.serverUrl.trim().isEmpty) {
@@ -398,6 +427,8 @@ class McpRuntimeManager {
         }
       } on TimeoutException {
         lastError = 'Connection timed out.';
+      } catch (error) {
+        lastError = error.toString();
       }
     }
     return (client: null, error: lastError ?? 'MCP connection failed.');
@@ -478,24 +509,36 @@ class McpRuntimeManager {
     return 'error';
   }
 
-  Map<String, String> _buildSafeEnvironment(Map<String, String>? userEnv) {
-    const safeKeys = {
-      'PATH',
-      'HOME',
-      'USER',
-      'LANG',
-      'TERM',
-      'SHELL',
-      'TMPDIR',
-    };
-    final env = <String, String>{};
-    for (final key in Platform.environment.keys) {
-      if (safeKeys.contains(key) || key.startsWith('XDG_')) {
-        env[key] = Platform.environment[key]!;
+  /// Builds the allowlisted environment used by MCP stdio children.
+  ///
+  /// Public for focused boundary tests; callers should normally connect through
+  /// [connectToClient]. Explicit server PATH configuration remains authoritative.
+  Future<Map<String, String>> buildSafeEnvironment(
+    Map<String, String>? userEnv, {
+    Map<String, String>? platformEnvironment,
+  }) async {
+    const safeKeys = {'HOME', 'USER', 'LANG', 'TERM', 'SHELL', 'TMPDIR'};
+    final source = platformEnvironment ?? Platform.environment;
+    var env = <String, String>{};
+    for (final entry in source.entries) {
+      if (safeKeys.contains(entry.key) ||
+          entry.key.startsWith('XDG_') ||
+          entry.key.toLowerCase() == 'path') {
+        env[entry.key] = entry.value;
       }
     }
+    if (_windowsSystemPath.isWindows) {
+      final path = await _windowsSystemPath.resolve(
+        inheritedPathFromEnvironment(source),
+      );
+      env = replaceEnvironmentPath(env, path);
+    }
     if (userEnv != null) {
+      final configuredPath = inheritedPathFromEnvironment(userEnv);
       env.addAll(userEnv);
+      if (configuredPath.isNotEmpty) {
+        env = replaceEnvironmentPath(env, configuredPath);
+      }
     }
     return env;
   }

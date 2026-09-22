@@ -14,6 +14,8 @@ import 'package:sanad_client/features/conversations/presentation/bloc/composer_s
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/composer_text_editing.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/skill_composer_utils.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
@@ -74,6 +76,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
   bool _isSettingDraftText = false;
   bool _hasUnsavedDraftChanges = false;
   bool _isRestoringDraftContext = false;
+  final Set<String> _runtimeActionsInFlight = <String>{};
   String? _boundDeviceId;
   String? _observedPendingRequestId;
   bool _isDragging = false;
@@ -95,6 +98,16 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     );
     _chatController.addListener(_handleComposerChanged);
     _initDraftBinding();
+    _focusNewConversationComposer();
+  }
+
+  void _focusNewConversationComposer() {
+    if (widget.sessionId?.isNotEmpty == true) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && !_chatFocusNode.hasFocus) {
+        _chatFocusNode.requestFocus();
+      }
+    });
   }
 
   @override
@@ -109,6 +122,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
         );
       }
       _initDraftBinding();
+      _focusNewConversationComposer();
     }
   }
 
@@ -230,6 +244,29 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     final text = dispatchExport.plainText.trim();
     if (text.isEmpty) return;
 
+    unawaited(_dispatchComposerText(text, intent: intent));
+  }
+
+  Future<void> _dispatchComposerText(
+    String text, {
+    required MessageDeliveryIntent intent,
+  }) async {
+    final invocation = SkillComposerUtils.parseLeadingRuntimeInvocation(text);
+    if (invocation != null) {
+      final entry = await _resolveRuntimeAction(invocation.command);
+      if (!mounted) return;
+      if (entry != null) {
+        if (invocation.arguments.isNotEmpty) {
+          _showValidationError(
+            '${entry.invocationText} does not accept arguments.',
+          );
+          return;
+        }
+        await _dispatchRuntimeAction(entry);
+        return;
+      }
+    }
+
     _draftSaveDebouncer?.cancel();
     _saveDraftNow();
     _setPendingAcceptance('dispatching');
@@ -237,9 +274,88 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     _slashCommandsCubit.clear();
   }
 
+  Future<SlashCommandEntry?> _resolveRuntimeAction(String command) async {
+    bool matches(SlashCommandEntry entry) =>
+        entry.type == SlashCommandType.runtimeAction &&
+        entry.command.trim().replaceFirst(RegExp(r'^/+'), '').toLowerCase() == command;
+
+    for (final entry in _slashCommandsCubit.state.availableEntries) {
+      if (matches(entry)) return entry;
+    }
+    final entries = await _inputCubit.searchSlashCommands(query: command);
+    for (final entry in entries) {
+      if (matches(entry)) return entry;
+    }
+    return null;
+  }
+
+  Future<void> _dispatchRuntimeAction(SlashCommandEntry entry) async {
+    final command = entry.command.trim().replaceFirst(RegExp(r'^/+'), '').toLowerCase();
+    if (!_runtimeActionsInFlight.add(command)) return;
+    try {
+      final handler = <String, Future<void> Function()>{
+        'compact': _dispatchCompactCommand,
+      }[command];
+      if (handler == null) {
+        _showValidationError(
+          '${entry.invocationText} is not supported by this client.',
+        );
+        return;
+      }
+      await handler();
+    } finally {
+      _runtimeActionsInFlight.remove(command);
+    }
+  }
+
+  Future<void> _dispatchCompactCommand() async {
+    final sessionId = widget.sessionId?.trim();
+    if (sessionId == null || sessionId.isEmpty) {
+      _showValidationError('Create or select a session before running /compact.');
+      return;
+    }
+    _draftSaveDebouncer?.cancel();
+    _chatController.clear();
+    _slashCommandsCubit.clear();
+    _hasUnsavedDraftChanges = false;
+    _saveDraftNow();
+
+    final result = await _inputCubit.compactSession();
+    if (!mounted) return;
+    if (result.accepted) {
+      return;
+    }
+    if (result.sessionBusy) {
+      _showValidationError('Session is busy. Try /compact again when idle.');
+      return;
+    }
+    if (result.compactionInProgress) {
+      _showValidationError('Context compaction is already in progress.');
+      return;
+    }
+    _showValidationError(
+      result.failureReason == null
+          ? 'Context compaction could not start.'
+          : 'Context compaction failed: ${result.failureReason}',
+    );
+  }
+
   void _selectSlashSuggestion(SlashCommandEntry entry) {
     final query = _slashCommandsCubit.state.activeQuery;
     if (query == null) {
+      return;
+    }
+
+    if (entry.type.selectionAction == SlashCommandSelectionAction.executeImmediately) {
+      _chatController.value = _slashCommandsCubit.applySelection(
+        SkillComposerUtils.applySlashSelectionText(
+          _chatController.value,
+          query: query,
+          replacement: entry.invocationText,
+        ),
+      );
+      _chatFocusNode.requestFocus();
+      unawaited(_dispatchRuntimeAction(entry));
       return;
     }
 
@@ -460,6 +576,13 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     _isSettingDraftText = false;
   }
 
+  void _insertDroppedPaths(Iterable<String> paths) {
+    final next = insertDroppedPathsAtSelection(_chatController.value, paths);
+    if (next == _chatController.value) return;
+    _chatController.value = next;
+    _chatFocusNode.requestFocus();
+  }
+
   String? _deviceIdFromState(DeviceState deviceState) {
     if (deviceState is DeviceActive) return deviceState.activeAgent.id;
     return null;
@@ -588,9 +711,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
           : (isBlurEnabled ? theme.colorScheme.surface.withValues(alpha: 0.35) : theme.colorScheme.surface),
       borderRadius: BorderRadius.circular(12),
       border: Border.all(
-        color: _isDragging
-            ? theme.colorScheme.primary
-            : theme.colorScheme.outline.withValues(alpha: 0.30),
+        color: _isDragging ? theme.colorScheme.primary : theme.colorScheme.outline.withValues(alpha: 0.30),
         width: 1.0,
       ),
     );
@@ -610,16 +731,7 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
         setState(() {
           _isDragging = false;
         });
-        if (details.files.isNotEmpty) {
-          final droppedPaths = details.files.map((file) => file.path).join(' ');
-          final currentText = _chatController.text;
-          if (currentText.isEmpty) {
-            _chatController.text = '$droppedPaths ';
-          } else {
-            final separator = currentText.endsWith(' ') ? '' : ' ';
-            _chatController.text = '$currentText$separator$droppedPaths ';
-          }
-        }
+        _insertDroppedPaths(details.files.map((file) => file.path));
       },
       child: Container(
         margin: const EdgeInsets.only(left: 8, right: 8, bottom: 8),
@@ -695,16 +807,20 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
   }
 
   Future<void> _pickAndCreateWorkspace(DeviceConfig? activeAgent) async {
-    final selectedPath = await WorkspacePickerHelper.pickWorkspacePath(
+    final selected = await WorkspacePickerHelper.promptCreateWorkspace(
       context: context,
       device: activeAgent,
-      debugOverride: ConversationInputPanel.debugPickDirectoryPath,
+      debugLocalPath: ConversationInputPanel.debugPickDirectoryPath,
     );
-    if (!mounted || selectedPath == null || selectedPath.trim().isEmpty) {
+    if (!mounted || selected == null) {
       return;
     }
 
-    final workspace = await context.read<ConversationInputCubit>().createWorkspace(path: selectedPath);
+    final workspace = await context.read<ConversationInputCubit>().createWorkspace(
+      path: selected.path,
+      name: selected.name,
+      description: selected.description,
+    );
     if (!mounted || workspace == null) {
       return;
     }

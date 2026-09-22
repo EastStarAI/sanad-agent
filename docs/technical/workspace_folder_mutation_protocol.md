@@ -1,66 +1,81 @@
 ---
 title: "Remote Workspace Folder Mutation Protocol"
-description: "Current cloud rejection boundary and suspended design for remote workspace filesystem management."
+description: "Managed-root remote workspace create, constrained browse, and confirmation-gated folder mutations."
 ---
 
 # Remote Workspace Folder Mutation Protocol
 
-## Current Security Boundary
+Owning task: `docs/plans/tasks/82-secure-remote-device-control-workspaces-and-mcp.md`.
+Threat model: [Remote Device Control Threat Model](remote_device_control_threat_model.md).
 
-Remote workspace selection and filesystem management are temporarily disabled
-on the cloud Sanad Gateway. The cloud adapter rejects these six commands before
-registering a session channel or forwarding work to the shared protocol bridge:
+G3 replaces the cloud freeze. Local same-device native picker and path-based
+create remain available. Cloud-admitted workspace commands run as
+**managed remote**: the Agent injects `managed_remote=true` and does not
+register a conversation session.
 
-- `create_workspace`
-- `workspace.relocate`
-- `browse_workspace_tree`
-- `workspace.create_folder`
-- `workspace.rename_folder`
-- `workspace.delete_folder`
+## Managed root
 
-Both `execute_command` and `protocol_event` envelopes receive an `error` event
-with the original `request_id`, the code
-`remote_workspace_management_disabled`, and a user-presentable message. A
-rejected request must not reach `LocalWorkspaceRuntimeService` or mutate the
-host filesystem.
+The identity Sanad Home prepare step creates `SANAD_HOME/workspaces` through
+`SanadHomeBootstrap`. That directory must not be a symlink. Remote
+`create_workspace` accepts a **name** and optional **description** only. A
+client-supplied absolute path is rejected; the Agent creates
+`SANAD_HOME/workspaces/<name>`.
 
-The boundary belongs to the cloud adapter because the same canonical protocol
-and runtime handlers serve trusted same-device flows. The shared
-`SanadProtocolBridge`, workspace handlers, local runtime service, and operating
-system native picker remain unchanged.
+## Browse
 
-## Client Behavior
+Empty-path `browse_workspace_tree` on a managed-remote call lists:
 
-The conversation composer, device workspace sidebar, and Workspace Settings
-share one picker decision helper:
+- the managed workspaces root
+- registered workspace roots that are not already inside that managed root
 
-- A confirmed same-desktop local device opens the operating system native
-  folder picker.
-- Every other connection shows an English security notice and returns no path.
-- The remote browser dialog is not opened and no remote workspace mutation is
-  sent.
+A non-empty `workspace_id` is resolved strictly as a stored UUID. Host paths
+are never accepted as workspace identifiers and cannot implicitly register a
+new allowed root.
 
-Existing registered workspaces remain available for remote conversation use.
-Only creating a workspace, changing its path, browsing host paths, and mutating
-folders through the remote picker are suspended.
+It does not list `/`, the user Home, or `SANAD_HOME` internals (credentials,
+provider/MCP secrets, databases). Breadcrumb `parent_path` is null at an
+allowed root so the client cannot climb above it. Paths with NUL bytes,
+traversal, or symlink targets fail closed as `path_not_allowed`.
 
-## Suspended Historical Design
+## Folder mutations
 
-The codebase still contains transport-neutral workspace handlers and runtime
-validation that previously supported a daemon-backed remote browser. That
-design allowed the client to browse host roots and request folder creation,
-rename, or recursive deletion before selecting a workspace. It is retained for
-local runtime compatibility and future security redesign, but it is not an
-active cloud product capability.
+`workspace.create_folder`, `workspace.rename_folder`, and
+`workspace.delete_folder` operate only inside an allowed root after
+canonicalization. They reject filesystem roots, the managed root itself,
+registered workspace roots, symbolic links, traversal names, and occupied
+rename targets.
 
-If this design is restored, it requires a separately reviewed authorization
-model that constrains visible roots and filesystem mutations. Removing only the
-client warning or only the cloud adapter guard is not sufficient to restore the
-feature safely.
+Recursive delete and `workspace.relocate` require a daemon preview:
 
-## Historical Runtime Validation
+| Command | Preview event | Confirm |
+|---|---|---|
+| `workspace.delete_folder` | `workspace.delete_folder.preview` | same command with `confirmation_token` and `confirmation_fingerprint` |
+| `workspace.relocate` | `workspace.relocate.preview` | same command with those ticket fields |
 
-The suspended handlers reject invalid names, symbolic links, filesystem roots,
-missing paths, and conflicting rename targets. Those checks remain useful as
-defense in depth and are covered by local runtime tests, but they do not replace
-the current cloud admission boundary.
+The ticket is one-time, short-lived, and bound to device, operation, and
+fingerprint. Stale, consumed, or cross-device tokens return
+`stale_confirmation` without mutation. Lost-success recovery re-reads the
+tree; it does not replay the same destructive `request_id`.
+
+## Workspace record removal
+
+`workspace.remove` deletes only the registered workspace row and returns
+`workspace.removed` with the same `request_id` and `workspace_id`. The command
+does not call filesystem deletion and does not delete or rewrite sessions or
+messages that retain the historical workspace UUID. Cloud calls use the same
+wrong-device and duplicate-request admission boundary as other managed
+workspace commands. The Client requires an explicit confirmation explaining
+the record-only behavior before sending it.
+
+## Client
+
+Remote create uses a name dialog, not the operating-system picker. The
+constrained `WorkspaceBrowserDialog` and daemon tree/mutation APIs remain
+implemented for a future conversation-side file tree, but Workspace Overview
+does not expose a Browse folders action. Change Path remains same-desktop local
+only; arbitrary host-directory selection stays out of scope.
+
+## Local continuity
+
+Local handlers still accept a host path for create/relocate and may browse
+host roots. Those behaviors are not used for cloud-admitted calls.

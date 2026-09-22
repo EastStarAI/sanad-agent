@@ -20,8 +20,9 @@ ProviderInstance _instance({
   String? defaultModel,
   String status = InstanceStatus.ready,
   bool isDefault = false,
+  DateTime? createdAt,
 }) {
-  final now = DateTime.utc(2025, 1, 1);
+  final now = createdAt ?? DateTime.utc(2025, 1, 1);
   return ProviderInstance(
     id: id,
     templateId: templateId,
@@ -50,10 +51,10 @@ void main() {
     state.dispose();
   });
 
-  group('create + read', () {
-    test('created instance is retrievable by id and preserves UUID', () {
-      final instance = _instance(id: 'inst-1', displayName: 'OpenAI Work');
-      repo.createInstance(instance);
+  group('ProviderInstanceRepository', () {
+    test('createInstance and findById round-trip successfully', () {
+      final inst = _instance(id: 'inst-1', displayName: 'OpenAI Work');
+      repo.createInstance(inst);
 
       final found = repo.findById('inst-1');
       expect(found, isNotNull);
@@ -63,13 +64,18 @@ void main() {
       expect(found.protocol, equals(ProviderProtocol.openaiCompatible));
     });
 
-    test('findAll returns all instances in creation order', () {
-      repo.createInstance(_instance(id: 'a', displayName: 'A'));
-      repo.createInstance(_instance(id: 'b', displayName: 'B'));
+    test('findAll returns all instances ordered by newest first', () {
+      repo.createInstance(
+        _instance(id: 'a', displayName: 'A', createdAt: DateTime.utc(2025, 1, 1)),
+      );
+      repo.createInstance(
+        _instance(id: 'b', displayName: 'B', createdAt: DateTime.utc(2025, 1, 2)),
+      );
 
       final all = repo.findAll();
       expect(all.length, equals(2));
-      expect(all.first.id, equals('a'));
+      expect(all.first.id, equals('b'));
+      expect(all.last.id, equals('a'));
     });
 
     test('findByTemplate returns only matching template instances', () {

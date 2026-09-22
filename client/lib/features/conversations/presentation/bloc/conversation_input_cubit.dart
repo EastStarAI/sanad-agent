@@ -8,7 +8,9 @@ import 'package:sanad_client/features/conversations/domain/models/workspace_tree
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 
 import 'conversation_input_state.dart';
 import 'session_messages_cubit.dart';
@@ -104,16 +106,24 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
 
   Future<TurnReplayResult> replayTurn({
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) async {
     try {
       return await messagesCubit.replayTurn(
         targetRequestId: targetRequestId,
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+        expectedHistoryRevision: expectedHistoryRevision,
         action: action,
         message: message,
         confirmedReplayUnsafe: confirmedReplayUnsafe,
+        confirmedDropSteers: confirmedDropSteers,
       );
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
@@ -122,6 +132,30 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
         safety: TurnReplaySafety.unknown,
         requiresConfirmation: false,
       );
+    }
+  }
+
+  Future<SessionCompactResult> compactSession() async {
+    try {
+      return await messagesCubit.compactSession();
+    } catch (e) {
+      emit(state.copyWith(error: e.toString()));
+      return const SessionCompactResult(outcome: 'failed');
+    }
+  }
+
+  Future<SessionForkResult> forkSession({
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async {
+    try {
+      return await messagesCubit.forkSession(
+        targetMessageId: targetMessageId,
+        targetTurnId: targetTurnId,
+      );
+    } catch (e) {
+      emit(state.copyWith(error: e.toString()));
+      return const SessionForkResult(outcome: 'failed');
     }
   }
 
@@ -312,11 +346,16 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
   }
 
   Future<DeviceWorkspace?> createWorkspace({
-    required String path,
+    String? path,
     String? name,
+    String? description,
   }) async {
     try {
-      return await messagesCubit.createWorkspace(path: path, name: name);
+      return await messagesCubit.createWorkspace(
+        path: path,
+        name: name,
+        description: description,
+      );
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
       return null;

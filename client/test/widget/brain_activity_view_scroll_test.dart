@@ -97,6 +97,389 @@ void main() {
     expect(find.text('old answer 0'), findsNothing);
   });
 
+  testWidgets('prepending an older page preserves the visible anchor pixel', (tester) async {
+    final tail = [
+      _event('current-user', EventKind.userMessage, 'current prompt'),
+      _event('current-answer', EventKind.finalAnswer, _lines(30)),
+    ];
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: tail,
+      initialViewportAnchorEventId: 'current-user',
+    );
+    await tester.pump();
+    final before = tester.getTopLeft(find.text('current prompt')).dy;
+
+    messagesController.add([
+      _event('older-user', EventKind.userMessage, 'older prompt'),
+      _event('older-answer', EventKind.finalAnswer, _lines(20)),
+      ...tail,
+    ]);
+    await tester.pump();
+    await tester.pump();
+
+    final after = tester.getTopLeft(find.text('current prompt')).dy;
+    expect(after, moreOrLessEquals(before, epsilon: 1));
+  });
+
+  testWidgets('older page arriving during upward scroll preserves the visible event', (tester) async {
+    final tail = [
+      for (var i = 0; i < 30; i += 1) _event('tail-$i', EventKind.finalAnswer, _lines(4)),
+    ];
+    final older = [
+      for (var i = 0; i < 30; i += 1) _event('older-$i', EventKind.finalAnswer, _lines(4)),
+    ];
+    final notifier = ValueNotifier<List<CanonicalEvent>>(tail);
+    final releasePage = Completer<void>();
+    var calls = 0;
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: notifier.value,
+      messagesNotifier: notifier,
+      followLatestOnOpen: true,
+      hasOlderHistory: true,
+      onLoadOlderHistory: () async {
+        calls += 1;
+        await releasePage.future;
+        notifier.value = [...older, ...tail];
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+
+    for (var attempt = 0; attempt < 10 && calls == 0; attempt += 1) {
+      await tester.drag(
+        find.byType(CustomScrollView),
+        const Offset(0, 500),
+      );
+      await tester.pump();
+    }
+    expect(calls, 1);
+    final visible = _topVisibleKnownEvent(tester, tail.map((event) => event.id));
+    final before = tester.getTopLeft(find.byKey(ValueKey(visible))).dy;
+
+    releasePage.complete();
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byKey(ValueKey(visible)), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(ValueKey(visible))).dy,
+      moreOrLessEquals(before, epsilon: 1),
+    );
+    expect(
+      _timelineController(tester).offset,
+      isNot(
+        moreOrLessEquals(
+          _timelineController(tester).position.maxScrollExtent,
+          epsilon: 1,
+        ),
+      ),
+    );
+    notifier.dispose();
+  });
+
+  testWidgets('an anchored response reopens the saved event at the visible top', (tester) async {
+    const anchorId = 'history:session-1:42:user_message:0';
+    final notifier = ValueNotifier<List<CanonicalEvent>>([
+      _event('tail-user', EventKind.userMessage, 'tail prompt'),
+    ]);
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: notifier.value,
+      messagesNotifier: notifier,
+      initialViewportAnchorEventId: anchorId,
+      onLoadAnchoredHistory: (_) async {
+        notifier.value = [
+          _event('history:session-1:41:final_answer:0', EventKind.finalAnswer, _lines(20)),
+          _event(
+            'restored-user-display-id',
+            EventKind.userMessage,
+            'restored prompt',
+            eventId: anchorId,
+          ),
+          _event('history:session-1:43:final_answer:0', EventKind.finalAnswer, _lines(10)),
+        ];
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('restored prompt'), findsOneWidget);
+    expect(tester.getTopLeft(find.text('restored prompt')).dy, lessThan(160));
+  });
+
+  testWidgets('requests a missing saved anchor once before falling back', (tester) async {
+    final requestedAnchors = <String>[];
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [
+        _event('tail-user', EventKind.userMessage, 'tail prompt'),
+      ],
+      initialViewportAnchorEventId: 'history:session-1:42:user_message:0',
+      onLoadAnchoredHistory: (eventId) async {
+        requestedAnchors.add(eventId);
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(requestedAnchors, ['history:session-1:42:user_message:0']);
+  });
+
+  testWidgets('transient steer anchors migrate to nearby durable history', (
+    tester,
+  ) async {
+    final requestedAnchors = <String>[];
+    final recordedAnchors = <String>[];
+    const durableAnchor = 'history:session-1:41:final_answer:0';
+    const transientAnchor = 'user_req_transient-steer';
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [
+        _event(
+          'answer_model_step_before-steer',
+          EventKind.finalAnswer,
+          'durable history before steer',
+          eventId: durableAnchor,
+        ),
+        CanonicalEvent(
+          id: transientAnchor,
+          kind: EventKind.userMessage,
+          text: 'steer sent during active work',
+          timestamp: DateTime(2026, 1, 1),
+          metadata: const {
+            'request_id': 'req_transient-steer',
+            'pending_steer_state': 'delivered',
+          },
+        ),
+      ],
+      initialViewportAnchorEventId: transientAnchor,
+      followLatestOnOpen: true,
+      onViewportAnchorChanged: recordedAnchors.add,
+      onLoadAnchoredHistory: (eventId) async {
+        requestedAnchors.add(eventId);
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(requestedAnchors, isEmpty);
+    expect(recordedAnchors, [durableAnchor]);
+    expect(find.text('durable history before steer'), findsOneWidget);
+  });
+
+  testWidgets('a short first page auto-fills once without a request loop', (tester) async {
+    var calls = 0;
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [
+        _event('short-user', EventKind.userMessage, 'short prompt'),
+      ],
+      hasOlderHistory: true,
+      onLoadOlderHistory: () async {
+        calls += 1;
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    expect(calls, 1);
+  });
+
+  testWidgets('upward overscroll prefetches older history without a visible control', (tester) async {
+    var calls = 0;
+    final messages = [
+      _event('user-1', EventKind.userMessage, 'current prompt'),
+      _event('answer-1', EventKind.finalAnswer, _lines(100)),
+    ];
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: messages,
+      initialViewportAnchorEventId: 'user-1',
+      hasOlderHistory: true,
+      onLoadOlderHistory: () async {
+        calls += 1;
+      },
+    );
+    await tester.pump();
+
+    expect(find.text('Show earlier'), findsNothing);
+    expect(find.text('Retry earlier messages'), findsNothing);
+    await tester.drag(find.byType(CustomScrollView), const Offset(0, 500));
+    await tester.pump();
+    expect(calls, 1);
+  });
+
+  testWidgets('offline overscroll retries stop after three consecutive failures', (tester) async {
+    final status = ValueNotifier<(bool, String?)>((false, 'offline'));
+    var calls = 0;
+
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: SizedBox(
+        width: 800,
+        height: 600,
+        child: ValueListenableBuilder<(bool, String?)>(
+          valueListenable: status,
+          builder: (_, pagination, _) => BrainActivityView(
+            messagesStream: null,
+            initialMessages: [
+              _event('offline-anchor', EventKind.userMessage, 'offline prompt'),
+              _event('offline-answer', EventKind.finalAnswer, _lines(100)),
+            ],
+            onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+            sessionId: 'offline-session',
+            initialViewportAnchorEventId: 'offline-anchor',
+            hasOlderHistory: true,
+            isOlderHistoryLoading: pagination.$1,
+            olderHistoryError: pagination.$2,
+            onLoadOlderHistory: () async {
+              calls += 1;
+              status.value = (true, null);
+            },
+            visualState: ConversationVisualState.activeSession,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    for (var attempt = 0; attempt < 4; attempt += 1) {
+      await tester.drag(
+        find.byType(CustomScrollView),
+        const Offset(0, 500),
+      );
+      await tester.pump();
+      if (status.value.$1) {
+        status.value = (false, 'offline');
+        await tester.pump();
+      }
+    }
+
+    expect(calls, 3);
+    expect(find.text('Retry earlier messages'), findsNothing);
+
+    status.value = (false, null);
+    await tester.pump();
+    await tester.drag(
+      find.byType(CustomScrollView),
+      const Offset(0, 500),
+    );
+    await tester.pump();
+    expect(calls, 4, reason: 'authoritative recovery resets the retry budget');
+    status.dispose();
+  });
+
+  testWidgets('short anchored page auto-fills newer history before any control is visible', (tester) async {
+    var calls = 0;
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [
+        _event('anchor', EventKind.userMessage, 'restored prompt'),
+      ],
+      initialViewportAnchorEventId: 'anchor',
+      hasNewerHistory: true,
+      onLoadNewerHistory: () async {
+        calls += 1;
+      },
+    );
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Show later'), findsNothing);
+    expect(find.text('Retry later messages'), findsNothing);
+    expect(calls, 1);
+  });
+
+  testWidgets('forked session opens at the trailing fork marker', (tester) async {
+    final messages = [
+      for (var i = 0; i < 1000; i += 1) _event('fork-old-$i', EventKind.finalAnswer, 'fork old answer $i'),
+      CanonicalEvent(
+        id: 'fork_child-1',
+        kind: EventKind.informational,
+        text: 'Conversation forked',
+        timestamp: DateTime.utc(2026, 8, 31),
+        metadata: const {
+          'informational_kind': 'session_fork',
+          'fork_sequence': 1,
+        },
+      ),
+    ];
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: messages,
+      initialViewportAnchorEventId: 'fork-old-0',
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.text('Conversation forked'), findsOneWidget);
+    expect(find.text('fork old answer 0'), findsNothing);
+    expect(
+      _eventBottom(tester, 'fork_child-1'),
+      lessThanOrEqualTo(_visibleTimelineBottom(tester)),
+    );
+  });
+
   testWidgets('restores a saved event for an idle session', (tester) async {
     final messages = [
       for (var i = 0; i < 1000; i += 1) _event('old-$i', EventKind.finalAnswer, 'old answer $i'),
@@ -368,7 +751,7 @@ void main() {
     expect(_timelineController(tester).position.isScrollingNotifier.value, isFalse);
   });
 
-  testWidgets('a user message below the viewport is revealed without following later events', (tester) async {
+  testWidgets('a user message is minimally revealed then grants follow for streamed growth', (tester) async {
     final messages = [
       _event('anchor-user', EventKind.userMessage, 'reading starts here'),
       for (var i = 0; i < 18; i += 1)
@@ -407,7 +790,11 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(controller.offset, moreOrLessEquals(revealOffset, epsilon: 1));
+    expect(controller.offset, greaterThan(revealOffset));
+    expect(
+      controller.offset,
+      moreOrLessEquals(controller.position.maxScrollExtent, epsilon: 1),
+    );
     expect(controller.position.isScrollingNotifier.value, isFalse);
   });
 
@@ -415,8 +802,18 @@ void main() {
     final recordedAnchors = <String>[];
     final messages = [
       for (var i = 0; i < 30; i += 1)
-        _event('event-$i', EventKind.finalAnswer, 'message ${List.filled(8, i).join(' ')}'),
-      _event('last-user', EventKind.userMessage, 'latest user prompt'),
+        _event(
+          'event-$i',
+          EventKind.finalAnswer,
+          'message ${List.filled(8, i).join(' ')}',
+          eventId: 'history:session-1:${i + 1}:final_answer:0',
+        ),
+      _event(
+        'last-user',
+        EventKind.userMessage,
+        'latest user prompt',
+        eventId: 'history:session-1:31:user_message:0',
+      ),
     ];
 
     await _pumpBrainActivityView(
@@ -440,7 +837,92 @@ void main() {
     await tester.pump(const Duration(milliseconds: 500));
 
     expect(recordedAnchors, isNotEmpty);
-    expect(messages.map((event) => event.id), contains(recordedAnchors.last));
+    expect(recordedAnchors.last, startsWith('history:session-1:'));
+    expect(
+      messages.map((event) => event.eventId),
+      contains(recordedAnchors.last),
+    );
+  });
+
+  testWidgets('switching idle sessions restores each saved visible event independently', (tester) async {
+    final sessionOne = [
+      for (var i = 0; i < 40; i += 1)
+        _event(
+          'session-one-$i',
+          EventKind.finalAnswer,
+          _lines(4),
+          eventId: 'history:session-one:${i + 1}:final_answer:0',
+        ),
+    ];
+    final sessionTwo = [
+      for (var i = 0; i < 40; i += 1)
+        _event(
+          'session-two-$i',
+          EventKind.finalAnswer,
+          _lines(4),
+          eventId: 'history:session-two:${i + 1}:final_answer:0',
+        ),
+    ];
+    final anchors = <String, String>{
+      'session-one': 'history:session-one:21:final_answer:0',
+      'session-two': 'history:session-two:11:final_answer:0',
+    };
+    final selected = ValueNotifier<(String, List<CanonicalEvent>)>(
+      ('session-one', sessionOne),
+    );
+
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      child: SizedBox(
+        width: 800,
+        height: 600,
+        child: ValueListenableBuilder<(String, List<CanonicalEvent>)>(
+          valueListenable: selected,
+          builder: (_, fixture, _) => BrainActivityView(
+            messagesStream: null,
+            initialMessages: fixture.$2,
+            onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+            sessionId: fixture.$1,
+            initialViewportAnchorEventId: anchors[fixture.$1],
+            onViewportAnchorChanged: (eventId) {
+              anchors[fixture.$1] = eventId;
+            },
+            visualState: ConversationVisualState.activeSession,
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.drag(
+      find.byKey(const Key('chat_messages_list')),
+      const Offset(0, 300),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
+    final savedSessionOne = anchors['session-one']!;
+
+    selected.value = ('session-two', sessionTwo);
+    await tester.pump();
+    await tester.pump();
+    await tester.pump();
+    final sessionTwoDisplayId = sessionTwo.firstWhere((event) => event.eventId == anchors['session-two']).id;
+    expect(find.byKey(ValueKey(sessionTwoDisplayId)), findsOneWidget);
+
+    selected.value = ('session-one', sessionOne);
+    await tester.pump();
+    await tester.pump();
+
+    final sessionOneDisplayId = sessionOne.firstWhere((event) => event.eventId == savedSessionOne).id;
+    expect(find.byKey(ValueKey(sessionOneDisplayId)), findsOneWidget);
+    expect(
+      tester.getTopLeft(find.byKey(ValueKey(sessionOneDisplayId))).dy,
+      lessThan(180),
+    );
+    selected.dispose();
   });
 
   testWidgets('manual opt-out survives reasoning tool final and informational events until manual return', (
@@ -519,7 +1001,13 @@ void main() {
         kind: EventKind.userMessage,
         text: 'editable prompt',
         timestamp: DateTime.utc(2026, 7, 18),
-        metadata: const {'request_id': 'request-editable'},
+        metadata: const {
+          'request_id': 'request-editable',
+          'message_id': 'message-editable',
+          'turn_id': 'turn-editable',
+          'input_kind': 'root_turn',
+          'replay_eligible': true,
+        },
       ),
     ];
 
@@ -552,6 +1040,152 @@ void main() {
 
     expect(find.byKey(const Key('inline_message_editor')), findsNothing);
     expect(find.text('editable prompt'), findsOneWidget);
+  });
+
+  testWidgets('live committed root shows replay actions without navigation', (
+    tester,
+  ) async {
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: const [],
+    );
+
+    messagesController.add([
+      CanonicalEvent(
+        id: 'live-root',
+        kind: EventKind.userMessage,
+        text: 'live durable prompt',
+        timestamp: DateTime.utc(2026, 9, 1),
+        metadata: const {
+          'request_id': 'request-live-root',
+          'message_id': 'message-live-root',
+          'turn_id': 'turn-live-root',
+          'input_kind': 'root_turn',
+          'replay_eligible': true,
+        },
+      ),
+    ]);
+    await tester.pump();
+
+    expect(find.byKey(const Key('edit_message_button')), findsOneWidget);
+    expect(find.byKey(const Key('retry_message_button')), findsOneWidget);
+  });
+
+  testWidgets('partial anchored history hides replay actions until tail', (
+    tester,
+  ) async {
+    final root = CanonicalEvent(
+      id: 'anchored-root',
+      kind: EventKind.userMessage,
+      text: 'not globally latest',
+      timestamp: DateTime.utc(2026, 9, 1),
+      metadata: const {
+        'request_id': 'request-anchored-root',
+        'message_id': 'message-anchored-root',
+        'turn_id': 'turn-anchored-root',
+        'input_kind': 'root_turn',
+        'replay_eligible': true,
+      },
+    );
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [root],
+      hasNewerHistory: true,
+      onLoadNewerHistory: () async {},
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('edit_message_button')), findsNothing);
+    expect(find.byKey(const Key('retry_message_button')), findsNothing);
+  });
+
+  testWidgets('completed compaction hides replay actions for earlier messages', (
+    tester,
+  ) async {
+    CanonicalEvent replayableUser(String id, DateTime timestamp) => CanonicalEvent(
+      id: id,
+      kind: EventKind.userMessage,
+      text: id,
+      timestamp: timestamp,
+      metadata: {
+        'request_id': 'request-$id',
+        'message_id': 'message-$id',
+        'turn_id': 'turn-$id',
+        'input_kind': 'root_turn',
+        'replay_eligible': true,
+      },
+    );
+    final failedCompaction = CanonicalEvent(
+      id: 'failed-compaction',
+      kind: EventKind.informational,
+      status: EventStatus.error,
+      text: 'Context compaction failed',
+      timestamp: DateTime.utc(2026, 7, 18, 0, 1),
+      metadata: const {
+        'compaction_event': true,
+        'compaction_status': 'failed',
+      },
+    );
+    final compaction = CanonicalEvent(
+      id: 'compaction',
+      kind: EventKind.informational,
+      status: EventStatus.done,
+      text: 'Context compacted',
+      timestamp: DateTime.utc(2026, 7, 18, 0, 1),
+      metadata: const {
+        'compaction_event': true,
+        'compaction_status': 'completed',
+      },
+    );
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [
+        replayableUser('before-compaction', DateTime.utc(2026, 7, 18)),
+        failedCompaction,
+      ],
+    );
+    await tester.pump();
+
+    expect(find.byTooltip('Edit message'), findsOneWidget);
+    expect(find.byTooltip('Retry message'), findsOneWidget);
+
+    messagesController.add([
+      replayableUser('before-compaction', DateTime.utc(2026, 7, 18)),
+      failedCompaction,
+      compaction,
+    ]);
+    await tester.pump();
+    await tester.pump();
+    expect(find.byTooltip('Edit message'), findsNothing);
+    expect(find.byTooltip('Retry message'), findsNothing);
+
+    messagesController.add([
+      replayableUser('before-compaction', DateTime.utc(2026, 7, 18)),
+      failedCompaction,
+      compaction,
+      replayableUser('after-compaction', DateTime.utc(2026, 7, 18, 0, 2)),
+    ]);
+    await tester.pump();
+    await tester.pump();
+
+    expect(find.byTooltip('Edit message'), findsOneWidget);
+    expect(find.byTooltip('Retry message'), findsOneWidget);
   });
 
   testWidgets('followed thinking and final answer growth minimally clears the composer', (tester) async {
@@ -739,7 +1373,29 @@ Future<void> _pumpBrainActivityView(
   String? initialViewportAnchorEventId,
   bool followLatestOnOpen = false,
   ValueChanged<String>? onViewportAnchorChanged,
+  bool hasOlderHistory = false,
+  Future<void> Function()? onLoadOlderHistory,
+  bool hasNewerHistory = false,
+  Future<void> Function()? onLoadNewerHistory,
+  Future<void> Function(String eventId)? onLoadAnchoredHistory,
+  ValueNotifier<List<CanonicalEvent>>? messagesNotifier,
 }) {
+  Widget buildView(List<CanonicalEvent> messages) => BrainActivityView(
+    messagesStream: messagesController.stream,
+    initialMessages: messages,
+    onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
+    sessionId: sessionId,
+    initialViewportAnchorEventId: initialViewportAnchorEventId,
+    followLatestOnOpen: followLatestOnOpen,
+    onViewportAnchorChanged: onViewportAnchorChanged,
+    hasOlderHistory: hasOlderHistory,
+    onLoadOlderHistory: onLoadOlderHistory,
+    hasNewerHistory: hasNewerHistory,
+    onLoadNewerHistory: onLoadNewerHistory,
+    onLoadAnchoredHistory: onLoadAnchoredHistory,
+    visualState: ConversationVisualState.activeSession,
+  );
+
   return pumpTestApp(
     tester,
     agentCubit: agentCubit,
@@ -749,26 +1405,51 @@ Future<void> _pumpBrainActivityView(
     child: SizedBox(
       width: 800,
       height: 600,
-      child: BrainActivityView(
-        messagesStream: messagesController.stream,
-        initialMessages: initialMessages,
-        onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
-        sessionId: sessionId,
-        initialViewportAnchorEventId: initialViewportAnchorEventId,
-        followLatestOnOpen: followLatestOnOpen,
-        onViewportAnchorChanged: onViewportAnchorChanged,
-        visualState: ConversationVisualState.activeSession,
-      ),
+      child: messagesNotifier == null
+          ? buildView(initialMessages)
+          : ValueListenableBuilder<List<CanonicalEvent>>(
+              valueListenable: messagesNotifier,
+              builder: (_, messages, _) => buildView(messages),
+            ),
     ),
   );
 }
 
-CanonicalEvent _event(String id, EventKind kind, String text) {
-  return CanonicalEvent(id: id, kind: kind, text: text, timestamp: DateTime(2026, 1, 1));
+CanonicalEvent _event(
+  String id,
+  EventKind kind,
+  String text, {
+  String? eventId,
+}) {
+  return CanonicalEvent(
+    id: id,
+    kind: kind,
+    text: text,
+    timestamp: DateTime(2026, 1, 1),
+    eventId: eventId,
+  );
 }
 
 ScrollController _timelineController(WidgetTester tester) {
   return tester.widget<CustomScrollView>(find.byType(CustomScrollView)).controller!;
+}
+
+String _topVisibleKnownEvent(
+  WidgetTester tester,
+  Iterable<String> eventIds,
+) {
+  final visibleTop = tester.getTopLeft(find.byKey(const Key('chat_messages_list'))).dy + 48;
+  final visibleBottom = _visibleTimelineBottom(tester);
+  final candidates = <(String, double)>[];
+  for (final eventId in eventIds) {
+    final finder = find.byKey(ValueKey(eventId));
+    if (finder.evaluate().isEmpty) continue;
+    final rect = tester.getRect(finder);
+    if (rect.bottom <= visibleTop || rect.top >= visibleBottom) continue;
+    candidates.add((eventId, rect.top));
+  }
+  candidates.sort((left, right) => left.$2.compareTo(right.$2));
+  return candidates.first.$1;
 }
 
 double _eventBottom(WidgetTester tester, String eventId) {

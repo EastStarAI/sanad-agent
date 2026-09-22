@@ -1,6 +1,7 @@
 import 'legacy_runtime_state_migrator.dart';
 import 'runtime_notice_repository.dart';
 import 'session_execution_state_coordinator.dart';
+import '../../models/session_execution_snapshot.dart';
 
 /// Central runtime-state cleanup for a session and orphaned work items.
 ///
@@ -31,9 +32,15 @@ class RuntimeStateCleanup {
   /// cleanup path stays free of internal `@Deprecated` calls. In production
   /// those tables are empty because `session_work_items` is the single
   /// source of truth (Gate C.1).
-  void clearAllForSession(String sessionId) {
+  SessionExecutionSnapshotChange clearAllForSession(
+    String sessionId, {
+    bool publishExecutionChange = true,
+  }) {
     _noticeRepository.deleteNotice(sessionId);
-    _executionStateCoordinator.cancelAll(sessionId);
+    final executionChange = _executionStateCoordinator.cancelAll(
+      sessionId,
+      publish: publishExecutionChange,
+    );
 
     // Legacy tables (Gate C.1) — empty in production but may still hold
     // stale rows in databases that predate the Gate C migration. Purge them
@@ -42,5 +49,6 @@ class RuntimeStateCleanup {
     // prevent the authoritative notice/work-item cleanup required by Stop.
     _legacyMigrator.purgeLegacySuspendedRunsForSession(sessionId);
     _legacyMigrator.purgeLegacyPendingRunsForSession(sessionId);
+    return executionChange;
   }
 }

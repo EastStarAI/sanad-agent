@@ -56,6 +56,9 @@ refrence_projects/
 # Graphify files
 graphify-out/
 
+# Interactive driver evidence
+client/test/interactive/screenshots/
+
 # Local Sanad agent permissions
 /.sanad/settings.json
 
@@ -77,3 +80,8 @@ sanad-12-windows-evidence/
 *.mobileprovision
 *.provisionprofile
 key.properties
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/

@@ -68,9 +68,6 @@ class _FailingCallbacks implements SteerCallbacks {
   );
 
   @override
-  void markPendingSteerDelivered(PendingSteer steer) {}
-
-  @override
   String? messageContentAt(int index) => history[index].content;
 
   @override
@@ -93,7 +90,8 @@ class _FailingCallbacks implements SteerCallbacks {
   }
 
   @override
-  void saveHistory() => throw StateError('persistence failed');
+  void commitPendingSteerDelivery(List<PendingSteerPlacement> placements) =>
+      throw StateError('persistence failed');
 
   @override
   void updateMessage(
