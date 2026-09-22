@@ -1131,7 +1131,7 @@ class AgentRunner {
           final contextWindow = await getContextTokens() ?? 128_000;
           final policy = getIt.isRegistered<Config>()
               ? getIt<Config>().compactionPolicyForModel(modelId ?? '')
-              : const CompactionPolicy(threshold: 0.80, targetRatio: 0.10);
+              : const CompactionPolicy(threshold: 0.90, targetRatio: 0.10);
           final targetRequestTokens =
               (_effectiveInputWindow(contextWindow) * policy.targetRatio)
                   .round();
@@ -2303,7 +2303,7 @@ class AgentRunner {
     final contextWindow = await getContextTokens() ?? 128_000;
     final policy = getIt.isRegistered<Config>()
         ? getIt<Config>().compactionPolicyForModel(routing.model ?? '')
-        : const CompactionPolicy(threshold: 0.80, targetRatio: 0.10);
+        : const CompactionPolicy(threshold: 0.90, targetRatio: 0.10);
     final turnAdapter = _wireMeasurementAdapter(_turnRoute.adapterForTurn());
     final wireMeasurement = turnAdapter is WireInputUsageMeasurer
         ? await (turnAdapter as WireInputUsageMeasurer).measureInput(

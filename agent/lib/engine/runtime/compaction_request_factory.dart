@@ -132,7 +132,7 @@ abstract final class CompactionRequestFactory {
       targetRequestTokens:
           (effectiveWindow * (targetRatio ?? policy?.targetRatio ?? 0.10))
               .round(),
-      thresholdRatio: policy?.threshold ?? 0.80,
+      thresholdRatio: policy?.threshold ?? 0.90,
     );
   }
 
