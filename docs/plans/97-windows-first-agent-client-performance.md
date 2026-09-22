@@ -1,8 +1,8 @@
 ---
 title: "Plan 97: Windows-first Agent and Client Performance"
 status: ready-for-windows-execution
-current_gate: 97b
-remaining_estimate: "97a completed; implementation and final acceptance remain across 97b–97l"
+current_gate: 97c
+remaining_estimate: "97a–97b completed; implementation and final acceptance remain across 97c–97l"
 platforms: windows-first, macos-linux-mobile-final-verification
 implementation_authorized: windows-handoff
 commit_push_authorized: planning-delivery-only
@@ -58,7 +58,7 @@ commit_push_authorized: planning-delivery-only
 | المهمة | الاعتماديات | الحالة |
 |---|---|---|
 | [97a — خط الأساس وتوفيق الأعمال السابقة](docs/plans/tasks/97a-baseline-and-ownership.md) | none | completed |
-| [97b — حلقة الاستئناف وهوية نتائج الأدوات](docs/plans/tasks/97b-recovery-loop-integration.md) | 97a | planned |
+| [97b — حلقة الاستئناف وهوية نتائج الأدوات](docs/plans/tasks/97b-recovery-loop-integration.md) | 97a | completed |
 | [97c — استكمال التحقق من الكتابة الآمنة](docs/plans/tasks/97c-secure-runtime-verification.md) | 97a | planned |
 | [97d — موثوقية اختبارات أدوات التشغيل](docs/plans/tasks/97d-windows-test-baseline.md) | 97a | planned |
 | [97e — الملكية والاسترداد ودورة الحياة](docs/plans/tasks/97e-launcher-lifecycle-verification.md) | 97c, 97d | planned |
