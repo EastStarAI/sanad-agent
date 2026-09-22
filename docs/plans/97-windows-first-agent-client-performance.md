@@ -1,8 +1,8 @@
 ---
 title: "Plan 97: Windows-first Agent and Client Performance"
 status: ready-for-windows-execution
-current_gate: 97a
-remaining_estimate: "100% of new plan acceptance; existing implementations are not counted twice"
+current_gate: 97b
+remaining_estimate: "97a completed; implementation and final acceptance remain across 97b–97l"
 platforms: windows-first, macos-linux-mobile-final-verification
 implementation_authorized: windows-handoff
 commit_push_authorized: planning-delivery-only
@@ -57,7 +57,7 @@ commit_push_authorized: planning-delivery-only
 
 | المهمة | الاعتماديات | الحالة |
 |---|---|---|
-| [97a — خط الأساس وتوفيق الأعمال السابقة](docs/plans/tasks/97a-baseline-and-ownership.md) | none | in-progress |
+| [97a — خط الأساس وتوفيق الأعمال السابقة](docs/plans/tasks/97a-baseline-and-ownership.md) | none | completed |
 | [97b — حلقة الاستئناف وهوية نتائج الأدوات](docs/plans/tasks/97b-recovery-loop-integration.md) | 97a | planned |
 | [97c — استكمال التحقق من الكتابة الآمنة](docs/plans/tasks/97c-secure-runtime-verification.md) | 97a | planned |
 | [97d — موثوقية اختبارات أدوات التشغيل](docs/plans/tasks/97d-windows-test-baseline.md) | 97a | planned |
@@ -80,8 +80,8 @@ commit_push_authorized: planning-delivery-only
 ## 7. بوابات قبول الخطة
 
 - [x] المستخدم راجع النطاق وطلب تسليم الخطة لبدء Windows.
-- [ ] تحديد واعتماد الميزانيات الرقمية من baseline في 97a قبل الإصلاحات.
-- [ ] 97a مكتمل مع baseline وميزانيات واضحة وملاك الأعمال المتداخلة.
+- [x] تحديد واعتماد الميزانيات الرقمية من baseline في 97a قبل الإصلاحات.
+- [x] 97a مكتمل مع baseline وميزانيات واضحة وملاك الأعمال المتداخلة.
 - [ ] الاستئناف يتقدم؛ الأداة البطيئة لا تجمد استقبال الأوامر؛ readiness/loading صحيحان.
 - [ ] resize/rebuild/remount لنفس المورد يسبب صفر طلبات جلب إضافية، دون تعطيل تحديثات مشروعة.
 - [ ] مؤشرات Windows الثابتة تزيل الحمل المستمر المستهدف وتحتفظ بكل حالات التنفيذ.

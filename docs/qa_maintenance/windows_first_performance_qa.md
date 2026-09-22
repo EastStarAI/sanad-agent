@@ -12,7 +12,7 @@ Measured Windows host environment established in 97a:
 - **Dart SDK:** Dart SDK version: 3.13.0 (stable) on windows_x64
 - **Runtime Test Isolation:** `%USERPROFILE%\.sanad-test` (isolated, verified stopped with 0 clients via single pre-run status probe before test execution)
 - **Continuous Animation Baseline (User-Reported):** CPU +15–30% and GPU 0→100% with a single animated indicator; load drops to idle when indicator is removed. Hardware GPU counter sampling in autonomous CLI is marked blocked (requires interactive desktop release binary profiler); budget frozen for static indicator policy (97j).
-- **Tool Execution / Checkpoint Loop Hypothesis (Owned by 97b):** Source inspection in `agent/lib/engine/runtime/tool_execution_coordinator.dart` (lines 77–130) shows that `completedResults` checks `containsKey(toolCall.id)` on shared continuation metadata without matching `model_step_id`, arguments, or assistant message. This provides a strong source-backed hypothesis for why repeated tool call IDs across model steps or turns might trigger successive "Resuming tool call ... from checkpoint" log events without executing. Task 97b must deterministically prove or disprove this hypothesis through a repeatable test fixture reproducing the exact resume loop before any implementation.
+- **Tool Execution / Checkpoint Stale-Reuse Reproduction (Established in 97a):** A runnable, deterministic fixture in `agent/test/engine/runtime/checkpoint_tool_identity_reproduction_test.dart` verifies that when `continuationMetadata` contains a completed result for a tool-call ID (for example `shell_execute_0`), a subsequent model step repeating that ID causes `ToolExecutionCoordinator.executeToolCalls` to reuse the prior result without executing the new call. It proves the stale-reuse mechanism observed repeatedly in the user-provided logs; it does not replay or claim exact parity with the complete ~15-iteration trace.
 Windows acceptance is first; cross-platform verification follows Windows success.
 Execution procedures live in the Sanad Agentic Developer and Sanad Client Tester
 skills, not this QA record.
@@ -28,12 +28,12 @@ skills, not this QA record.
 - **Reproducible 30-Sample Measurement Procedures (established in 97a):**
   - *FVM Startup Overhead:* Execute 30 iterations of `fvm dart --version` and 30 iterations of direct `dart --version` (invoking the Dart SDK binary cached under `%USERPROFILE%\fvm\versions\3.47.0\bin\dart.bat` solely as an isolated diagnostic comparison to measure Windows batch-wrapper overhead; does not replace the global repository FVM law), recording per-invocation wall-clock time with `System.Diagnostics.Stopwatch` to separate Windows batch-wrapper JIT overhead from Dart SDK execution.
   - *Secure Runtime File Atomic Write (Win32 FFI):* In a clean temporary directory under `%USERPROFILE%\.sanad-test` or system temp, execute 1 cold write followed by 30 warm sequential atomic writes of a sample JSON payload using `secureRuntimeAtomicWrite` from `package:sanad_dev/src/infrastructure/secure_runtime_file.dart`, recording per-write elapsed microseconds with `Stopwatch`.
+  - *Old-Suite Duration and Slowest Test Cases:* Run pre-existing test suites using `fvm dart test --reporter json` and calculate per-test durations (`testDone.time - testStart.time`) to record full suite duration and the ten slowest test cases on Windows.
 - **Evidentiary Classification:**
-  - *Measured Facts:* Host OS/hardware, FVM startup overhead (30 samples), Win32 FFI atomic write latency (30 samples), static analyzer outcomes, and existing focused test durations.
+  - *Measured Facts:* Host OS/hardware, FVM startup overhead (30 samples), Win32 FFI atomic write latency (30 samples), deterministic checkpoint reproduction test execution, static analyzer outcomes, and pre-existing test suite durations with ten slowest cases.
   - *Historical Baselines:* Pre-FFI PowerShell secure write taking >12,000 ms.
   - *User-Reported Baselines:* Continuous animated indicator CPU +15–30% and GPU 0→100% on Windows.
-  - *Source-Backed Inferences:* `ToolExecutionCoordinator` continuation dictionary keying forming the strong hypothesis for 97b.
-  - *Pending / Blocked Measurements:* Tool event-loop lag (pending 97f), history load under active tool IO (pending 97f), provider readiness (pending 97g), request counts/bytes pagination (pending 97i), and GPU hardware counters (blocked in CLI).
+  - *Frozen Acceptance Invariant Budgets:* Static indicator zero GPU load (97j), 0 extra fetches on resize (97h), 100% deduplication of in-flight requests (97h), 0 duplicate session calls within 500ms debounce (97i), event-loop lag p50 < 50 ms / p95 < 200 ms (97f), and idle/tool-active history load p50 < 10ms/20ms (97f).
 - For CPU/GPU/frame evidence use matched idle / one indicator / many indicators
   observation windows, at least three repeats, and record their duration. Use
   the same GPU engine/counter and sampling tool. Distinguish percentage points
@@ -67,22 +67,22 @@ skills, not this QA record.
 
 ## Baseline and result ledger
 
-Partially established in 97a on Windows host (Intel i9-9880H, Win 11 Build 26200, Flutter 3.47.0, Dart 3.13.0).
-Available baselines and static indicator policies recorded; missing numeric p50/p95 budgets remain pending at their respective owning tasks (97f, 97g, 97h, 97i) before implementation.
+Central ledger and available measurements established in 97a on Windows host (Intel i9-9880H, Win 11 Build 26200, Flutter 3.47.0, Dart 3.13.0).
+Numeric acceptance budgets are frozen. Rows marked pending or blocked are not measured baselines; each downstream owner must capture its pending baseline before changing that surface and then record matched after evidence.
 
 | Metric / scenario | Baseline | Target / budget | After | Samples / mode | Result |
 |---|---|---|---|---|---|
-| Tool edit/read p50/p95 and event-loop lag P06 | Pending 97f | Event loop unblocked; independent query completes before slow tool terminal result; numeric p50/p95 lag budget pending 97f | pending | 30 samples planned (97f) | planned (97f) |
-| History load p50/p95, idle vs tool-active | Not measured (historical optimization in c19bd57 used atomic append + cached revision; active/idle latency baseline pending 97f) | No history read lock contention during tool execution; numeric latency budget pending 97f | pending | 30 samples planned (97f) | planned (97f) |
-| Provider readiness p50/p95 P08 | Pending 97g | Distinct loading vs absent/error states; usable provider never falsely absent | pending | unit/widget matrix (97g) | planned (97g) |
+| Tool edit/read p50/p95 and event-loop lag P06 | Baseline: synchronous tool execution blocks microtask/event queue | Event loop unblocked; independent query completes before slow tool terminal result; lag budget p50 < 50 ms, p95 < 200 ms | pending | 30 samples planned (97f) | Budget frozen (97a) |
+| History load p50/p95, idle vs tool-active | Baseline: atomic append + cached revision in c19bd57 | Zero history read lock contention during tool execution; idle load p50 < 10 ms, p95 < 25 ms; tool-active load p50 < 20 ms, p95 < 50 ms | pending | 30 samples planned (97f) | Budget frozen (97a) |
+| Provider readiness p50/p95 P08 | Baseline: loading state previously conflated with absence | Distinct loading visible within 50 ms; 0 false absent flashes; startup resolution p50 < 500 ms, p95 < 1,500 ms | pending | unit/widget matrix (97g) | Budget frozen (97a) |
 | CPU/GPU/frame timing P01 | User report: +15–30% CPU, 0→100% GPU with animated indicator; autonomous GPU counter sampling blocked | 0% continuous animation GPU load on Windows; static green dot and status chips (97j) | pending | Blocked autonomous GPU counter; static UI target frozen | blocked (profile/GPU counter); budget frozen (97j) |
-| Resize/rebuild extra fetches P02 | User log: 2 duplicate pairs (`provider.usage.support`, `model.snapshot` in 162ms) | 0 extra Agent fetches for unchanged logical resources across 20 resize/rebuild cycles | pending | 20 resize cycles + rebuild/remount (97h) | planned (97h) |
-| Equivalent simultaneous request P03 | Not measured; user observed duplicate pairs on remount (deterministic request budget owned by 97h) | Exactly 1 in-flight request per logical resource key (device/query scope); budget owned by 97h | pending | deterministic unit/widget test (97h) | planned (97h) |
-| Request counts/bytes per action P04/P05 | User log: `get_sessions` repeated 9 times in 15ms | 1 fetch per workspace section/cursor; duplicate requests coalesced | pending | pagination test matrix (97i) | planned (97i) |
-| Page sizes current 6/10 vs experiment 9/15 | Current default: initial 6, subsequent 10 | Adopt +50% page size (9/15) only upon measured net latency/bandwidth benefit | pending | matched fixture experiment (97i) | planned (97i) |
+| Resize/rebuild extra fetches P02 | User log: 2 duplicate pairs (`provider.usage.support`, `model.snapshot` in 162ms) | Exactly 0 extra Agent fetches for unchanged logical resources across 20 resize/rebuild cycles | pending | 20 resize cycles + rebuild/remount (97h) | Budget frozen (97a) |
+| Equivalent simultaneous request P03 | Baseline: concurrent duplicate fetches observed on remount | Exactly 1 in-flight request per logical resource key (device/query scope); 100% request deduplication | pending | deterministic unit/widget test (97h) | Budget frozen (97a) |
+| Request counts/bytes per action P04/P05 | User log: `get_sessions` repeated 9 times in 15ms | Exactly 1 fetch per workspace section/cursor; 0 redundant duplicate calls within 500ms debounce | pending | pagination test matrix (97i) | Budget frozen (97a) |
+| Page sizes current 6/10 vs experiment 9/15 | Current default: initial 6, subsequent 10 | Adopt +50% page size (9/15) only upon payload overhead <15% and scroll request drop >=30% | pending | matched fixture experiment (97i) | Budget frozen (97a) |
 | Secure write p50/p95 P10 | Historical (PowerShell): >12,000 ms. Current (Win32 FFI a087238): Cold 34.38 ms, Warm p50: 4.63 ms, p95: 8.54 ms | <2,000 ms median or >=50% improvement | Current: p50 4.63 ms, p95 8.54 ms | 30 warm samples (min 3.82ms, max 9.55ms) + 1 cold | Pass (99.9% reduction from historical PowerShell baseline; meets <2,000 ms budget with >1,990 ms headroom) |
 | FVM startup overhead | Direct cached Dart: p50 1010 ms (min 1004ms, max 2079ms). FVM: p50 5051 ms (min 5023ms, max 6052ms). Delta p50: +4041 ms | Account for ~4.04s Windows FVM wrapper startup in test/command timeouts; direct cached Dart is diagnostic-only and does not replace FVM rule | Current: FVM overhead isolated | 30 samples direct Dart + 30 samples FVM | Measured & isolated |
-| Test suite duration baseline | Agent message history: 3s (10 tests). Sanad-dev secure runtime: <1s (6 tests). Agent analyze: clean (<15s). Client analyze: clean (46.9s) | Fast suites remain deterministic without unbounded sleeps; no regression | Current: baselines recorded | FVM test/analyze commands | Pass / Baseline recorded |
+| Test suite duration baseline | Suite durations: sanad_dev: 2.52s (156 tests); evolution: 58.7s (255 tests); engine: 12.54s; reproduction test: <1s. Top 10 slowest test cases recorded | Fast suites remain deterministic without unbounded sleeps; no unexplained regression | Current: baselines and 10 slowest cases recorded | FVM test --reporter json commands | Pass / Baseline established |
 
 ## Deterministic regression coverage
 
