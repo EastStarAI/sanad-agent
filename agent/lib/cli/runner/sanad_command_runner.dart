@@ -196,7 +196,13 @@ class SanadCommandRunner extends CommandRunner<int> {
         customAction: handlerFor('workspace') ?? handlerFor('ws'),
       ),
     );
-    addCommand(SessionCommand(customAction: handlerFor('session')));
+    addCommand(
+      SessionCommand(
+        clientFactory: clientFactory,
+        clientOverride: client,
+        customAction: handlerFor('session'),
+      ),
+    );
     addCommand(DoctorCommand(customAction: handlerFor('doctor')));
     addCommand(ModelsCommand(customAction: handlerFor('models')));
     addCommand(ProvidersCommand(customAction: handlerFor('providers')));

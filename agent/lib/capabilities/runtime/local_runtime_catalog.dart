@@ -802,6 +802,7 @@ class LocalRuntimeCatalog {
           'request_id': requestId,
           'tool_name': 'system_ask_user',
           'session_id': toolContext.sessionId,
+          'tool_call_id': toolCallId,
           'questions': questionsList,
           'workspace_id': toolContext.metadata['workspace_id'],
         };
@@ -828,7 +829,13 @@ class LocalRuntimeCatalog {
             payload: permissionPayload,
             timeout: const Duration(hours: 24),
           );
-          return decision['answer']?.toString() ?? '';
+          final answer = decision['answer']?.toString().trim();
+          if (answer == null || answer.isEmpty) {
+            throw Exception(
+              'User clarification question was resolved without an answer.',
+            );
+          }
+          return answer;
         } finally {
           await checkpointStore.deleteByRequestId(requestId);
         }

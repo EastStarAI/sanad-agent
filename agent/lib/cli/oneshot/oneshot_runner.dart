@@ -470,18 +470,42 @@ class OneshotRunner {
         activeClient.permissionStream.listen((event) async {
           if (event.sessionId == null ||
               event.sessionId == effectiveSessionId) {
-            if (!automaticallyApproveTools) {
+            if (event.isUserQuestion) {
+              // User clarification questions (system_ask_user) must NEVER be
+              // auto-resolved by --allow-all-tools or given an empty answer.
+              // They remain pending until an explicit matching answer arrives.
               if (!json && !quiet) {
+                final questionText = event.questions.isNotEmpty
+                    ? event.questions
+                          .map((q) => q['question']?.toString() ?? '')
+                          .where((q) => q.isNotEmpty)
+                          .join('; ')
+                    : 'Clarification required';
                 err.writeln(
-                  'Notice: Gated tool "${event.toolName}" was rejected in non-interactive execution.',
+                  'Notice: Clarification question pending for session $effectiveSessionId (request ${event.requestId}): $questionText',
                 );
               }
+              return;
             }
+
+            if (!automaticallyApproveTools) {
+              // Unresolved ordinary permissions remain fail-closed and pending for explicit
+              // session permission/permit intervention.
+              if (!json && !quiet) {
+                err.writeln(
+                  'Notice: Gated tool "${event.toolName}" requires permission for session $effectiveSessionId (request ${event.requestId}). Intervene via: sanad session permission $effectiveSessionId -r ${event.requestId} --allow / --deny',
+                );
+              }
+              return;
+            }
+
+            // Broad approval (--allow-all-tools) auto-approves ordinary tool permissions only.
             try {
               await activeClient!.respondPermission(
                 requestId: event.requestId,
-                allowed: automaticallyApproveTools,
-                decision: automaticallyApproveTools ? 'allow' : 'deny',
+                allowed: true,
+                decision: 'allow',
+                sessionId: effectiveSessionId,
               );
             } catch (e) {
               _logger.warning('Failed to respond to permission request: $e');

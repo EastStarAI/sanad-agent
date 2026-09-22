@@ -332,15 +332,25 @@ void main() {
     });
 
     test('routes to session command and subcommands', () async {
+      final subcommandsCalled = <String>[];
       final runner = SanadCommandRunner(
         stdoutSink: stdoutBuffer,
         stderrSink: stderrBuffer,
+        customHandlers: {
+          'session': (cmd) {
+            subcommandsCalled.add(cmd.name);
+            stdoutBuffer.writeln('Active sessions:');
+            return 0;
+          },
+        },
       );
 
       expect(await runner.run(['session', 'list']), 0);
+      expect(subcommandsCalled, contains('list'));
       expect(stdoutBuffer.toString(), contains('Active sessions:'));
 
       expect(await runner.run(['session', 'new']), 0);
+      expect(subcommandsCalled, contains('new'));
     });
 
     test('routes to doctor command and prints diagnostics checklist', () async {

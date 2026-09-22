@@ -346,6 +346,95 @@ void main() {
       await client.dispose();
     });
 
+    test(
+      'dispatches respondAnswer query with session and request correlation',
+      () async {
+        final client = createClient();
+        await client.connect();
+
+        final answerFuture = client.respondAnswer(
+          sessionId: 'sess-ask-1',
+          requestId: 'req-ask-1',
+          answer: 'Target PostgreSQL',
+        );
+
+        expect(mockSocket.sentMessages.length, 1);
+        final sent =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        expect(sent['command'], equals('tool_permission_response'));
+        expect(sent['payload']['session_id'], equals('sess-ask-1'));
+        expect(sent['payload']['request_id'], equals('req-ask-1'));
+        expect(sent['payload']['answer'], equals('Target PostgreSQL'));
+        expect(sent['payload']['allowed'], isTrue);
+
+        final rpcReqId = sent['request_id'] as String;
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'tool_permission_resolved',
+            'request_id': rpcReqId,
+            'payload': {
+              'session_id': 'sess-ask-1',
+              'outcome': 'resolved',
+              'success': true,
+            },
+          }),
+        );
+
+        final result = await answerFuture;
+        expect(result['payload']['outcome'], equals('resolved'));
+
+        await client.dispose();
+      },
+    );
+
+    test(
+      'dispatches respondToolPermission query with decision and scope',
+      () async {
+        final client = createClient();
+        await client.connect();
+
+        final permFuture = client.respondToolPermission(
+          sessionId: 'sess-perm-1',
+          requestId: 'req-perm-1',
+          allowed: false,
+          scope: 'session',
+          decision: 'deny',
+          comment: 'Denied by user',
+        );
+
+        expect(mockSocket.sentMessages.length, 1);
+        final sent =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        expect(sent['command'], equals('tool_permission_response'));
+        expect(sent['payload']['session_id'], equals('sess-perm-1'));
+        expect(sent['payload']['request_id'], equals('req-perm-1'));
+        expect(sent['payload']['allowed'], isFalse);
+        expect(sent['payload']['decision'], equals('deny'));
+        expect(sent['payload']['scope'], equals('session'));
+        expect(sent['payload']['comment'], equals('Denied by user'));
+
+        final rpcReqId = sent['request_id'] as String;
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'tool_permission_resolved',
+            'request_id': rpcReqId,
+            'payload': {
+              'session_id': 'sess-perm-1',
+              'outcome': 'resolved',
+              'success': true,
+            },
+          }),
+        );
+
+        final result = await permFuture;
+        expect(result['payload']['outcome'], equals('resolved'));
+
+        await client.dispose();
+      },
+    );
+
     test('query correlates responses by request_id', () async {
       final client = createClient();
       await client.connect();

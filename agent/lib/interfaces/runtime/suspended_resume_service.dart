@@ -102,7 +102,33 @@ class SuspendedResumeService {
     if (foundCheckpoint == null) return false;
     var checkpoint = foundCheckpoint;
 
+    final decisionSessionId = decision['session_id']?.toString();
+    if (decisionSessionId != null &&
+        decisionSessionId.isNotEmpty &&
+        decisionSessionId != checkpoint.sessionId) {
+      return false;
+    }
+
+    final expectedStatus = reclaimPersistedDecision
+        ? 'decision_ready'
+        : 'awaiting_permission';
+    if (checkpoint.status != expectedStatus) {
+      return false;
+    }
+
     final isAskUser = checkpoint.toolName == 'system_ask_user';
+    if (isAskUser) {
+      final answer = decision['answer']?.toString().trim();
+      if (answer == null || answer.isEmpty) {
+        return false;
+      }
+    } else {
+      final hasAllowed =
+          decision.containsKey('allowed') || decision.containsKey('decision');
+      if (!hasAllowed) {
+        return false;
+      }
+    }
 
     final persistedState = _persistedState;
     SuspendedDecisionClaim? durableClaim;
@@ -191,7 +217,7 @@ class SuspendedResumeService {
 
     final denyComment = decision['comment']?.toString().trim();
     final forcedOutput = isAskUser
-        ? (decision['answer']?.toString() ?? '')
+        ? decision['answer']!.toString()
         : (decision['allowed'] == true
               ? null
               : [

@@ -13,6 +13,8 @@ import '../support/isolated_sanad_test_home.dart';
 class MockWebSocket implements WebSocket {
   final _incomingController = StreamController<dynamic>();
   final List<String> sentMessages = [];
+  final List<Completer<String>> _pendingWaiters = [];
+  int _consumedCount = 0;
   bool _closed = false;
   final Completer<void> _doneCompleter = Completer<void>();
 
@@ -41,7 +43,23 @@ class MockWebSocket implements WebSocket {
   @override
   void add(dynamic data) {
     if (_closed) throw const SocketException('Socket closed');
-    sentMessages.add(data.toString());
+    final message = data.toString();
+    sentMessages.add(message);
+    if (_pendingWaiters.isNotEmpty) {
+      _pendingWaiters.removeAt(0).complete(message);
+    }
+  }
+
+  Future<String> nextSentMessage({
+    Duration timeout = const Duration(seconds: 5),
+  }) {
+    if (_consumedCount < sentMessages.length) {
+      return Future.value(sentMessages[_consumedCount++]);
+    }
+    final completer = Completer<String>();
+    _pendingWaiters.add(completer);
+    _consumedCount++;
+    return completer.future.timeout(timeout);
   }
 
   @override
@@ -121,6 +139,7 @@ class FakeInProcessTurnClient extends CliTurnClientBase {
     String? decision,
     String? answer,
     String? comment,
+    String? sessionId,
   }) async {}
 
   @override
@@ -653,7 +672,7 @@ void main() {
     });
 
     test(
-      'rejects gated tool permission request under default restricted policy without blocking',
+      'leaves tool permission request pending under default restricted policy without auto-denying',
       () async {
         final runner = SanadCommandRunner(
           stdoutSink: stdoutBuffer,
@@ -664,9 +683,8 @@ void main() {
 
         final runFuture = runner.run(['run', 'Execute dangerous shell script']);
 
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        final sentEnvelope =
-            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        final firstMsg = await mockSocket.nextSentMessage();
+        final sentEnvelope = jsonDecode(firstMsg) as Map<String, dynamic>;
         final sessionId = sentEnvelope['payload']['session_id'] as String;
 
         // Simulate gated permission request
@@ -685,36 +703,33 @@ void main() {
           }),
         );
 
-        // Give event loop tick to respond
-        await Future<void>.delayed(const Duration(milliseconds: 20));
+        await pumpEventQueue();
 
-        expect(mockSocket.sentMessages.length, 2);
-        final responseMsg =
-            jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
-        expect(responseMsg['command'], 'tool_permission_response');
-        final respPayload = responseMsg['payload'] as Map<String, dynamic>;
-        expect(respPayload['request_id'], 'perm-req-42');
-        expect(respPayload['allowed'], isFalse);
-        expect(respPayload['decision'], 'deny');
+        // Must NOT auto-deny; sentMessages must still only contain the initial think command
+        expect(mockSocket.sentMessages.length, 1);
+        expect(
+          stderrBuffer.toString(),
+          contains(
+            'Notice: Gated tool "run_terminal_command" requires permission for session $sessionId (request perm-req-42)',
+          ),
+        );
 
-        // Complete turn
+        // Complete turn subsequently
         mockSocket.emitFromServer(
           jsonEncode({
             'type': 'device_event',
             'session_id': sessionId,
             'event': {
               'type': 'turn_complete',
-              'payload': {'text': 'Permission was denied; execution aborted.'},
+              'payload': {
+                'text': 'Permission pending; awaiting external resolution.',
+              },
             },
           }),
         );
 
         final exitCode = await runFuture;
         expect(exitCode, 0);
-        expect(
-          stderrBuffer.toString(),
-          contains('rejected in non-interactive execution'),
-        );
       },
     );
 
@@ -734,9 +749,8 @@ void main() {
           '--allow-all-tools',
         ]);
 
-        await Future<void>.delayed(const Duration(milliseconds: 50));
-        final sentEnvelope =
-            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        final firstMsg = await mockSocket.nextSentMessage();
+        final sentEnvelope = jsonDecode(firstMsg) as Map<String, dynamic>;
         final sessionId = sentEnvelope['payload']['session_id'] as String;
 
         // Simulate tool permission request
@@ -755,11 +769,9 @@ void main() {
           }),
         );
 
-        await Future<void>.delayed(const Duration(milliseconds: 20));
-
-        expect(mockSocket.sentMessages.length, 2);
         final responseMsg =
-            jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
+            jsonDecode(await mockSocket.nextSentMessage())
+                as Map<String, dynamic>;
         expect(responseMsg['command'], 'tool_permission_response');
         final respPayload = responseMsg['payload'] as Map<String, dynamic>;
         expect(respPayload['request_id'], 'perm-req-99');
@@ -773,6 +785,73 @@ void main() {
             'event': {
               'type': 'turn_complete',
               'payload': {'text': 'Command executed.'},
+            },
+          }),
+        );
+
+        final exitCode = await runFuture;
+        expect(exitCode, 0);
+      },
+    );
+
+    test(
+      'leaves system_ask_user clarification pending without auto-approving even with allow-all-tools',
+      () async {
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+          client: client,
+          stdinReader: () async => null,
+        );
+
+        final runFuture = runner.run([
+          'run',
+          'Ask clarifying question',
+          '--allow-all-tools',
+        ]);
+
+        final firstMsg = await mockSocket.nextSentMessage();
+        final sentEnvelope = jsonDecode(firstMsg) as Map<String, dynamic>;
+        final sessionId = sentEnvelope['payload']['session_id'] as String;
+
+        // Simulate clarification request (system_ask_user)
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': sessionId,
+            'event': {
+              'type': 'tool_permission_request',
+              'payload': {
+                'request_id': 'ask-req-1',
+                'tool_name': 'system_ask_user',
+                'questions': [
+                  {'question': 'Which dialect?'},
+                ],
+              },
+            },
+          }),
+        );
+
+        await pumpEventQueue();
+
+        // OneshotRunner must NOT have sent a tool_permission_response for system_ask_user!
+        // Only the initial think command should be in sentMessages.
+        expect(mockSocket.sentMessages.length, 1);
+        expect(
+          stderrBuffer.toString(),
+          contains(
+            'Clarification question pending for session $sessionId (request ask-req-1): Which dialect?',
+          ),
+        );
+
+        // Turn completes subsequently
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': sessionId,
+            'event': {
+              'type': 'turn_complete',
+              'payload': {'text': 'Awaiting clarification.'},
             },
           }),
         );

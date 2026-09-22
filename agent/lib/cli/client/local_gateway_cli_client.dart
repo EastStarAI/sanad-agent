@@ -316,6 +316,7 @@ class LocalGatewayCliClient implements CliTurnClient {
     String? decision,
     String? answer,
     String? comment,
+    String? sessionId,
   }) async {
     final payload = <String, dynamic>{
       'request_id': requestId,
@@ -324,6 +325,7 @@ class LocalGatewayCliClient implements CliTurnClient {
       'decision': ?decision,
       'answer': ?answer,
       'comment': ?comment,
+      'session_id': ?sessionId,
     };
 
     await sendCommand(
@@ -331,6 +333,58 @@ class LocalGatewayCliClient implements CliTurnClient {
       payload: payload,
       requestId: requestId,
     );
+  }
+
+  /// Submits an answer to a clarification question (`system_ask_user`) and awaits gateway confirmation.
+  Future<Map<String, dynamic>> respondAnswer({
+    required String sessionId,
+    required String requestId,
+    required String answer,
+    Duration? timeout,
+  }) async {
+    final payload = <String, dynamic>{
+      'session_id': sessionId,
+      'request_id': requestId,
+      'answer': answer,
+      'allowed': true,
+      'decision': 'allow',
+    };
+
+    final result = await query(
+      command: 'tool_permission_response',
+      payload: payload,
+      timeout: timeout,
+    );
+    _throwIfError(result);
+    return result;
+  }
+
+  /// Submits a tool permission decision and awaits gateway confirmation.
+  Future<Map<String, dynamic>> respondToolPermission({
+    required String sessionId,
+    required String requestId,
+    required bool allowed,
+    String scope = 'once',
+    String? decision,
+    String? comment,
+    Duration? timeout,
+  }) async {
+    final payload = <String, dynamic>{
+      'session_id': sessionId,
+      'request_id': requestId,
+      'allowed': allowed,
+      'scope': scope,
+      'decision': decision ?? (allowed ? 'allow' : 'deny'),
+      'comment': ?comment,
+    };
+
+    final result = await query(
+      command: 'tool_permission_response',
+      payload: payload,
+      timeout: timeout,
+    );
+    _throwIfError(result);
+    return result;
   }
 
   /// Sends a request-response query to the gateway and awaits the matching response.
@@ -629,7 +683,8 @@ class LocalGatewayCliClient implements CliTurnClient {
   }
 
   static void _throwIfError(Map<String, dynamic> result) {
-    final type = result['type'] ?? result['event']?['type'];
+    final type =
+        result['message_type'] ?? result['type'] ?? result['event']?['type'];
     if (type == 'error') {
       final payload = result['payload'] ?? result['event']?['payload'];
       final message = payload is Map ? payload['message']?.toString() : null;

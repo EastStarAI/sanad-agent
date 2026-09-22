@@ -213,12 +213,14 @@ class StandaloneCliTurnClient implements CliTurnClient {
     String? decision,
     String? answer,
     String? comment,
+    String? sessionId,
   }) async {
-    final sessionId = _permissionSessions.remove(requestId);
+    final mappedSessionId = _permissionSessions.remove(requestId);
+    final effectiveSessionId = sessionId ?? mappedSessionId;
     getIt<PlatformRuntimeBridge>().handleProtocolEvent(
       CanonicalEvent(
         type: CanonicalEventTypes.toolPermissionResponse,
-        sessionId: sessionId,
+        sessionId: effectiveSessionId,
         payload: {
           'request_id': requestId,
           'allowed': allowed,
@@ -226,6 +228,7 @@ class StandaloneCliTurnClient implements CliTurnClient {
           'decision': ?decision,
           'answer': ?answer,
           'comment': ?comment,
+          'session_id': ?effectiveSessionId,
         },
       ),
     );

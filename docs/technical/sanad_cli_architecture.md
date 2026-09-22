@@ -204,3 +204,40 @@ The REPL intercepts interactive slash commands locally or via gateway commands r
 E2E tests that initialize DI, open the on-disk SQLite owner, or launch an agent process use temporary roots for both `SANAD_HOME` and `SANAD_STATE_HOME`. Dart child processes receive both variables explicitly rather than inheriting the developer's environment. In-process tests set and clear both root overrides around each test.
 
 `AgentStateDatabase` additionally fails closed under the Dart test runner when no explicit state isolation is detectable. `test/guards/e2e_state_isolation_contract_test.dart` scans E2E persistent-runtime entry points and Dart child-process tests so newly added coverage cannot silently fall back to the user's normal Sanad database.
+
+---
+
+## 9. Session Observability & Safe Intervention (`sanad session`)
+
+The CLI provides daemon-backed session inspection and safe intervention paths across both interactive chat and non-interactive script runs.
+
+### 9.1. Subcommands Reference
+
+| Subcommand | Invocations | Description |
+|---|---|---|
+| `list` | `sanad session list [--json]` | Lists active sessions discovered via the gateway. Appends `[Pending intervention]` when a session is suspended awaiting tool approval or user input. |
+| `show` | `sanad session show <session-id> [--json]` | Authoritative session inspection. Exposes status (`needs_input`, `needs_permission`, `running`, `idle`), in-flight execution details, pending request payloads, and the exact intervention syntax. |
+| `stop` | `sanad session stop <session-id> [--json]` | Halts execution strictly for the specified session, leaving other active sessions untouched. |
+| `answer` | `sanad session answer <session-id> -r <req-id> --answer <text> [--file <path>] [--json]` | Explicit resolution path for pending `system_ask_user` questions. Accepts direct text or JSON/text file payload. |
+| `permission` | `sanad session permission <session-id> -r <req-id> (--allow \| --deny) [--decision allow\|deny] [--scope once\|session\|workspace] [--comment <text>] [--file <path>] [--json]` | Explicit decision path for gated tool approvals. Accepts boolean flags or a structured JSON file payload. Aliases: `permit`, `decide`. |
+| `new` | `sanad session new` | Generates and outputs a fresh UUID session identifier. |
+| `delete` | `sanad session delete <session-id> [--json]` | Deletes a session and its cached turns from the daemon. |
+
+### 9.2. Safe Intervention Protocol
+
+1. **Strict Identity & Kind Validation:**
+   - Every intervention binds to both `session_id` and `request_id`.
+   - The daemon gateway enforces cross-session boundaries: attempting to answer a request under a different session returns `CROSS_SESSION_MISMATCH` without consuming the request.
+   - Distinct failure codes prevent kind confusion: answers sent to ordinary tool permission requests return `INVALID_INTERVENTION_KIND`, while permission approvals sent to clarification questions return `INVALID_ANSWER` / `INVALID_INTERVENTION_KIND`.
+   - Empty or whitespace-only clarification answers are rejected with `INVALID_ANSWER`.
+   - Conflicting fields (e.g. `allowed: true, decision: deny`) are rejected with `CONTRADICTORY_DECISION`.
+
+2. **Durable Checkpoints & First-Writer-Wins:**
+   - Pending suspensions are backed by `suspended_checkpoints` rows in SQLite.
+   - Multi-client or racing intervention attempts are reconciled using atomic DB claim semantics (`claimSuspendedCheckpointDecision`).
+   - The winning writer claims the checkpoint and resumes execution; subsequent or duplicate responses receive `ALREADY_RESOLVED` and do not resume a second turn.
+
+3. **One-Shot Non-Interactive Policy (`sanad run`):**
+   - Headless execution (`sanad run "<prompt>"`) leaves gated tool permissions pending and emits a diagnostic notice to `stderr` specifying the exact intervention command syntax (`sanad session permission <session-id> -r <req-id> --allow / --deny`).
+   - Permissions are never auto-denied, enabling external supervisors and developers to inspect via `session show` and resolve via `session permission`.
+   - The `--allow-all-tools` option automatically approves ordinary tool execution only. Clarification questions (`system_ask_user`) always remain pending and require explicit user input.
