@@ -7,7 +7,8 @@ import 'package:test/test.dart';
 import '../support/isolated_sanad_test_home.dart';
 
 void preseedBundledSkillsState(Directory home) {
-  final skillsDir = Directory(p.join(home.path, 'skills'))..createSync(recursive: true);
+  final skillsDir = Directory(p.join(home.path, 'skills'))
+    ..createSync(recursive: true);
   File(p.join(skillsDir.path, '.sanad-managed.json')).writeAsStringSync(
     jsonEncode({
       'schema_version': 1,
@@ -45,6 +46,8 @@ void main() {
             '--standalone',
             '--home',
             home.path,
+            '--execution-root',
+            root.path,
             outputFlag,
             'standalone process smoke',
           ],
@@ -75,7 +78,7 @@ void main() {
   );
 
   test(
-    'standalone entry point surfaces runtime recovery notices as terminal JSON errors',
+    'standalone entry point keeps an unrecoverable runtime failure non-terminal until its own timeout',
     () async {
       final root = await Directory.systemTemp.createTemp(
         'sanad-standalone-runtime-failure-',
@@ -93,9 +96,11 @@ void main() {
             '--standalone',
             '--home',
             home.path,
+            '--execution-root',
+            root.path,
             '--json',
             '--timeout',
-            '20',
+            '5',
             '__SANAD_E2E_RUNTIME_FAILURE__',
           ],
           workingDirectory: Directory.current.path,
@@ -107,18 +112,21 @@ void main() {
           },
         ).timeout(const Duration(seconds: 45));
 
-        expect(result.exitCode, 1, reason: result.stderr.toString());
+        // The deterministic provider failure suspends the session in a
+        // blocked recovery state (advisory, awaiting intervention), so the
+        // attached run must NOT terminate early as a success or a generic
+        // failure. Without intervention, the run's own --timeout ends it with
+        // the stable timeout contract (exit 124 / terminal JSON).
+        expect(result.exitCode, 124, reason: result.stderr.toString());
         final outputLines = const LineSplitter()
             .convert(result.stdout.toString())
             .where((line) => line.trim().isNotEmpty)
             .toList();
         expect(outputLines, hasLength(1));
         final jsonResult = jsonDecode(outputLines.single);
-        expect(jsonResult['exit_code'], 1);
-        expect(
-          jsonResult['error'],
-          contains('deterministic E2E provider failure'),
-        );
+        expect(jsonResult['exit_code'], 124);
+        expect(jsonResult['text'], isEmpty);
+        expect(jsonResult['error'], contains('timed out'));
       } finally {
         try {
           if (await root.exists()) {
@@ -154,6 +162,8 @@ void main() {
         '--standalone',
         '--home',
         home.path,
+        '--execution-root',
+        root.path,
         '--quiet',
       ];
 

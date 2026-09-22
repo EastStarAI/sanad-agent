@@ -127,7 +127,7 @@ class StandaloneCliTurnClient implements CliTurnClient {
         ? AgentTurnRequest(
             sessionId: request.sessionId,
             message: request.message,
-            workspaceId: request.workspaceId,
+            workspaceId: request.effectiveWorkspaceId,
             model: request.model,
             providerInstanceId: request.providerInstanceId,
             providerId: request.providerId,
@@ -140,15 +140,15 @@ class StandaloneCliTurnClient implements CliTurnClient {
     final payload = <String, dynamic>{
       'session_id': effectiveRequest.sessionId,
       'message': effectiveRequest.message,
-      'workspace_id': ?effectiveRequest.workspaceId,
+      'workspace_id': ?effectiveRequest.effectiveWorkspaceId,
       'model': ?effectiveRequest.model,
       'provider_instance_id': ?effectiveRequest.providerInstanceId,
       'provider_id': ?effectiveRequest.providerId,
       'thinking_mode': ?effectiveRequest.thinkingMode,
       'request_id': requestId,
       'delivery_intent': effectiveRequest.deliveryIntent.name,
-      if (effectiveRequest.metadata.isNotEmpty)
-        'session_metadata': effectiveRequest.metadata,
+      if (effectiveRequest.effectiveMetadata.isNotEmpty)
+        'session_metadata': effectiveRequest.effectiveMetadata,
       if (effectiveRequest.platformTools.isNotEmpty)
         'platform_tools': effectiveRequest.platformTools,
     };
@@ -213,12 +213,14 @@ class StandaloneCliTurnClient implements CliTurnClient {
     String? decision,
     String? answer,
     String? comment,
+    String? sessionId,
   }) async {
-    final sessionId = _permissionSessions.remove(requestId);
+    final mappedSessionId = _permissionSessions.remove(requestId);
+    final effectiveSessionId = sessionId ?? mappedSessionId;
     getIt<PlatformRuntimeBridge>().handleProtocolEvent(
       CanonicalEvent(
         type: CanonicalEventTypes.toolPermissionResponse,
-        sessionId: sessionId,
+        sessionId: effectiveSessionId,
         payload: {
           'request_id': requestId,
           'allowed': allowed,
@@ -226,6 +228,7 @@ class StandaloneCliTurnClient implements CliTurnClient {
           'decision': ?decision,
           'answer': ?answer,
           'comment': ?comment,
+          'session_id': ?effectiveSessionId,
         },
       ),
     );

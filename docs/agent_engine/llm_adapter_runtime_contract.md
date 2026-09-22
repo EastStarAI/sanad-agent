@@ -67,11 +67,17 @@ reasoning، تتحول أوضاع Sanad `fast`, `balanced`, `deep` إلى قيم
 الجزء المفتوح reasoning ولا يتحول إلى جواب. يجب فصل الناتج عن `content` في
 sync وstream وألا تتسرب الوسوم إلى الجواب النهائي.
 
-إذا أعاد endpoint `reasoning_details` اللازمة لاستمرار tool loop، تُحفظ داخل
-`LLMProviderState` بالـnamespace `openai_chat_completions`. لا يعيد builder هذه
-التفاصيل إلا إذا تطابق issuer المكوّن من provider instance والبروتوكول وbase
-URL المطبّع مع الاتصال الحالي. تغيير endpoint لنفس instance يبطل replay. لا تُستخدم
-`Message.reasoning` لإعادة بناء wire state.
+إذا أعاد endpoint `reasoning_details` أو `reasoning_content` اللازمة لاستمرار
+tool loop، تُحفظ القيمة الخام داخل `LLMProviderState` بالـnamespace
+`openai_chat_completions`. في streaming تُجمع أجزاء `reasoning_content` الخام
+وتُلحق بحالة assistant tool-call النهائية، ولا يُعاد بناء الحقل من النص المرئي.
+وجود الحقل مستقل عن طول قيمته: إذا أعاد المزود `reasoning_content: ""` تُحفظ
+القيمة الفارغة وتُعاد كما هي، لأن بعض endpoints ترفض tool-loop continuation عند
+حذف المفتاح. تبقى هذه الحالة محفوظة كذلك عبر permission أو clarification
+suspension ثم `resumeAfterToolCall`.
+لا يعيد builder أيًا من الحقلين إلا إذا تطابق issuer المكوّن من provider
+instance والبروتوكول وbase URL المطبّع مع الاتصال الحالي. تغيير endpoint لنفس
+instance يبطل replay. لا تُستخدم `Message.reasoning` لإعادة بناء wire state.
 
 يحوّل adapter أسباب نهاية Chat Completions إلى `LLMFinishReason`: `stop`،
 `tool_calls`/`function_call`، `length`، حالات الفشل، والإلغاء. معاملات الأدوات

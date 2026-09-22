@@ -315,6 +315,33 @@ Use the review skill.''');
       );
     });
 
+    test(
+      'resolves executionRoot for tools and MCP without a workspace',
+      () async {
+        final execRootDir = Directory('${tempDir.path}/independent-exec-root')
+          ..createSync(recursive: true);
+
+        final tools = await catalog.buildTools(
+          registry: registry,
+          request: AgentTurnRequest(
+            sessionId: 'thread-exec-root',
+            message: 'Write to independent worktree',
+            metadata: {'execution_root': execRootDir.path},
+          ),
+        );
+        registry.registerTools(tools);
+
+        final writeResult = await registry.getTool('file_write')!.execute({
+          'path': 'sub_task.txt',
+          'content': 'written to independent exec root',
+        });
+        expect(writeResult, contains('"type": "create"'));
+
+        expect(File('${execRootDir.path}/sub_task.txt').existsSync(), isTrue);
+        expect(File('${workspaceDir.path}/sub_task.txt').existsSync(), isFalse);
+      },
+    );
+
     test('MCP denial prevents execution', () async {
       fakePlatformBridge.nextDecision = const {
         'allowed': false,
@@ -425,7 +452,10 @@ Use the review skill.''');
         final readResult = await registry.getTool('file_read')!.execute({
           'path': externalFile.path,
         });
-        expect(jsonDecode(readResult)['file']['filePath'], equals(externalFile.path));
+        expect(
+          jsonDecode(readResult)['file']['filePath'],
+          equals(externalFile.path),
+        );
 
         await registry.getTool('file_edit')!.execute({
           'path': externalFile.path,

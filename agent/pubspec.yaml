@@ -31,6 +31,8 @@ dependencies:
     path: ../shared/auth_lock
   sanad_client_identity:
     path: ../shared/client_identity
+  sanad_windows_path:
+    path: ../shared/windows_path
   pointycastle: ^4.0.0
   dbus: ^0.7.14
   yaml: ^3.1.3

@@ -216,6 +216,13 @@ packages:
       relative: true
     source: path
     version: "1.0.0"
+  sanad_windows_path:
+    dependency: "direct main"
+    description:
+      path: "../../shared/windows_path"
+      relative: true
+    source: path
+    version: "1.0.0"
   shelf:
     dependency: transitive
     description:

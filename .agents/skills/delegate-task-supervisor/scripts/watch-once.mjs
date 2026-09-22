@@ -3,14 +3,18 @@
 import { existsSync, readFileSync, watch } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 
-const TERMINAL_STATUSES = new Set([
+const WATCH_STATUSES = new Set([
   'completed',
   'failed',
   'blocked',
   'timeout',
   'aborted',
+  'interrupted',
+  'cancelled',
   'agy_unavailable',
   'opencode_unavailable',
+  'needs_input',
+  'needs_permission',
 ]);
 const HELP = `watch-once
 
@@ -67,7 +71,7 @@ function nextEvent(journal, since, includeAll) {
       continue;
     }
     if (event.seq <= since) continue;
-    if (includeAll || TERMINAL_STATUSES.has(event.to)) return event;
+    if (includeAll || WATCH_STATUSES.has(event.to)) return event;
   }
   return null;
 }

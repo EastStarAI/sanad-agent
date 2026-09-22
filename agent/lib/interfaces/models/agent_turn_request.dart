@@ -30,6 +30,34 @@ class AgentTurnRequest {
   /// The effective provider instance UUID (prefers [providerInstanceId], falls back to [providerId]).
   String? get effectiveProviderInstanceId => providerInstanceId ?? providerId;
 
+  /// Optional filesystem context for tool and prompt execution.
+  ///
+  /// This is independent from [effectiveWorkspaceId]: a registered workspace
+  /// may own the conversation while an explicit execution root targets an
+  /// isolated worktree for the current turn.
+  String? get executionRoot {
+    final raw = metadata['execution_root'];
+    if (raw is String && raw.trim().isNotEmpty) {
+      return raw.trim();
+    }
+    return null;
+  }
+
+  String? get effectiveWorkspaceId {
+    final raw = workspaceId ?? metadata['workspace_id'];
+    if (raw is String && raw.trim().isNotEmpty) return raw.trim();
+    return null;
+  }
+
+  Map<String, dynamic> get effectiveMetadata {
+    final result = Map<String, dynamic>.from(metadata);
+    final authoritativeWorkspaceId = effectiveWorkspaceId;
+    if (authoritativeWorkspaceId != null) {
+      result['workspace_id'] = authoritativeWorkspaceId;
+    }
+    return result;
+  }
+
   List<Map<String, dynamic>> get platformTools {
     final raw = metadata['platform_tools'];
     if (raw is! List) {
@@ -41,16 +69,20 @@ class AgentTurnRequest {
         .toList(growable: false);
   }
 
-  Map<String, dynamic> toMetadata() => {
-    if (workspaceId != null) 'workspace_id': workspaceId,
-    if (providerInstanceId != null) 'provider_instance_id': providerInstanceId,
-    if (providerId != null) 'provider_id': providerId,
-    if (model != null) 'model': model,
-    if (thinkingMode != null) 'thinking_mode': thinkingMode,
-    if (requestId != null) 'request_id': requestId,
-    'delivery_intent': deliveryIntent.name,
-    ...metadata,
-  };
+  Map<String, dynamic> toMetadata() {
+    final result = <String, dynamic>{
+      if (effectiveWorkspaceId != null) 'workspace_id': effectiveWorkspaceId,
+      if (providerInstanceId != null)
+        'provider_instance_id': providerInstanceId,
+      if (providerId != null) 'provider_id': providerId,
+      if (model != null) 'model': model,
+      if (thinkingMode != null) 'thinking_mode': thinkingMode,
+      if (requestId != null) 'request_id': requestId,
+      'delivery_intent': deliveryIntent.name,
+      ...effectiveMetadata,
+    };
+    return result;
+  }
 
   AgentTurnRequest copyWith({
     String? sessionId,

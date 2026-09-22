@@ -46,12 +46,7 @@ class CanonicalToAgent {
         thinkingMode: payload['thinking_mode'] as String?,
         requestId: payload['request_id'] as String?,
         deliveryIntent: deliveryIntent,
-        metadata: {
-          if (payload['session_metadata'] is Map<String, dynamic>)
-            'session_metadata': payload['session_metadata'],
-          if (payload['platform_tools'] != null)
-            'platform_tools': payload['platform_tools'],
-        },
+        metadata: _turnMetadata(payload),
       );
       return GatewayEvent(
         sessionId: sessionId,
@@ -76,12 +71,7 @@ class CanonicalToAgent {
         thinkingMode: payload['thinking_mode'] as String?,
         requestId: payload['request_id'] as String?,
         deliveryIntent: deliveryIntent,
-        metadata: {
-          if (payload['session_metadata'] is Map<String, dynamic>)
-            'session_metadata': payload['session_metadata'],
-          if (payload['platform_tools'] != null)
-            'platform_tools': payload['platform_tools'],
-        },
+        metadata: _turnMetadata(payload),
       );
       return GatewayEvent(
         sessionId: sessionId,
@@ -128,5 +118,15 @@ class CanonicalToAgent {
 
     // Reject unknown commands instead of translating them to a fallback message
     return null;
+  }
+
+  static Map<String, dynamic> _turnMetadata(Map<String, dynamic> payload) {
+    final rawSessionMetadata = payload['session_metadata'];
+    return {
+      if (rawSessionMetadata is Map)
+        ...Map<String, dynamic>.from(rawSessionMetadata),
+      if (payload['platform_tools'] != null)
+        'platform_tools': payload['platform_tools'],
+    };
   }
 }
