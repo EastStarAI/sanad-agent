@@ -88,6 +88,7 @@ The daemon runs natively across Windows, macOS, Linux, and WSL (Windows Subsyste
 ### 2.2. Windows Native Shell Guidance
 - **Shell Rule:** On native Windows, terminal tool executions route through the native Command Prompt interpreter (`cmd.exe`). Unix-like hosts continue to use `sh`.
 - **Command Resolution:** Windows commands use normal `PATHEXT` lookup, so globally installed batch launchers such as `fvm.bat` can be invoked as `fvm`. Commands execute from a temporary batch wrapper so nested quotes reach `cmd.exe` unchanged.
+- **System PATH Refresh:** Before a Windows `shell_execute` or STDIO MCP child starts, the daemon resolves the current Machine and User `Path` registry values through the shared Pure-Dart `sanad_windows_path` package. One process-wide resolver caches both success and fallback for five minutes and coalesces concurrent asynchronous reads. Environment-key matching is case-insensitive, the child receives one canonical `PATH` entry, explicit MCP-server PATH configuration remains authoritative, and the value is never logged or sent over a gateway. Non-Windows launch environments pass through unchanged.
 - **Syntax Adjustments:** The runtime prompt tells the model to use cmd syntax and native Windows paths. It does not advertise PowerShell cmdlets or POSIX-only shell syntax on native Windows.
 
 ---

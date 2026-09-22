@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:path/path.dart' as path;
+import 'package:sanad_windows_path/windows_path.dart';
 import 'package:test/test.dart';
 
 import 'package:sanad_dev/src/infrastructure/runtime_context.dart';
@@ -154,17 +155,53 @@ void main() {
     );
   });
 
-  test('unified home environment removes inherited state-home overrides', () {
-    final environment = buildUnifiedSanadHomeEnvironment({
-      'SANAD_HOME': '/shared/home',
-      'SANAD_STATE_HOME': '/legacy/state',
-      'PATH': '/bin',
-    }, sanadHome: '/isolated/home');
+  test('unified home environment preserves POSIX PATH', () {
+    final environment = buildUnifiedSanadHomeEnvironment(
+      {
+        'SANAD_HOME': '/shared/home',
+        'SANAD_STATE_HOME': '/legacy/state',
+        'PATH': '/bin',
+      },
+      sanadHome: '/isolated/home',
+      isWindows: false,
+    );
 
     expect(environment['SANAD_HOME'], '/isolated/home');
     expect(environment.containsKey('SANAD_STATE_HOME'), isFalse);
     expect(environment['PATH'], '/bin');
   });
+
+  test(
+    'unified home environment injects deterministic Windows system PATH',
+    () {
+      var reads = 0;
+      final resolver = WindowsSystemPath(
+        isWindows: true,
+        runPowerShellSync: () {
+          reads++;
+          return r'C:\Program Files\nodejs;C:\Users\test\AppData\Roaming\npm';
+        },
+      );
+
+      final first = buildUnifiedSanadHomeEnvironment(
+        {'Path': r'C:\stale'},
+        sanadHome: r'C:\isolated',
+        windowsSystemPath: resolver,
+        isWindows: true,
+      );
+      final second = buildUnifiedSanadHomeEnvironment(
+        {'PATH': r'C:\other-stale'},
+        sanadHome: r'C:\isolated',
+        windowsSystemPath: resolver,
+        isWindows: true,
+      );
+
+      expect(first.keys.where((key) => key.toLowerCase() == 'path'), ['PATH']);
+      expect(first['PATH'], contains(r'C:\Program Files\nodejs'));
+      expect(second['PATH'], first['PATH']);
+      expect(reads, 1);
+    },
+  );
 
   test(
     'user or absolute home overrides win and relative paths are rejected',

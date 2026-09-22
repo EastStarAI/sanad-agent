@@ -131,7 +131,7 @@ context:
     gpt-5.6-sol: 258000
     gpt-4o: 128000
 compaction:
-  threshold: 0.80
+  threshold: 0.90
   targetRatio: 0.10
   models:
     gpt-5.6-sol:
@@ -150,7 +150,7 @@ compaction:
       expect(config.compactionPolicyForModel('gpt-5.6-sol').targetRatio, 0.08);
       expect(config.compactionPolicyForModel('gpt-4o').threshold, 0.75);
       expect(config.compactionPolicyForModel('gpt-4o').targetRatio, 0.10);
-      expect(config.compactionPolicyForModel('unlisted').threshold, 0.80);
+      expect(config.compactionPolicyForModel('unlisted').threshold, 0.90);
       expect(config.compactionPolicyForModel('unlisted').targetRatio, 0.10);
     });
 

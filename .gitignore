@@ -80,3 +80,8 @@ sanad-12-windows-evidence/
 *.mobileprovision
 *.provisionprofile
 key.properties
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/

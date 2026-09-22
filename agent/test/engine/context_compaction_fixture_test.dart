@@ -71,6 +71,7 @@ CompactionEngineRequest _request({
   required List<IndexedConversationMessage> timeline,
   CompactionInternalSummary? previousSummary,
   RouteSignature? routeSignature,
+  double thresholdRatio = 0.80,
 }) {
   return CompactionEngineRequest(
     compactionId: 'cmp-fixture',
@@ -78,6 +79,7 @@ CompactionEngineRequest _request({
     trigger: CompactionTrigger.auto,
     sourceRevision: const CompactionHistoryRevision(1),
     routeSignature: routeSignature ?? _route(),
+    thresholdRatio: thresholdRatio,
     contextWindowTokens: 4_000,
     timeline: timeline,
     systemPrompt: 'system prompt',

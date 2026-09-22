@@ -10,6 +10,8 @@ dependencies:
   path: ^1.9.0
   sanad_public_service_endpoints:
     path: ../../shared/public_service_endpoints
+  sanad_windows_path:
+    path: ../../shared/windows_path
 
 dev_dependencies:
   test: ^1.25.0

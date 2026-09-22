@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:sanad_windows_path/windows_path.dart';
+
 import 'secure_runtime_file.dart';
 
 class SanadDevRuntime {
@@ -250,10 +252,20 @@ String deriveSanadDevPreferencesPrefix(String sanadHome) {
 Map<String, String> buildUnifiedSanadHomeEnvironment(
   Map<String, String> baseEnvironment, {
   required String sanadHome,
+  WindowsSystemPath? windowsSystemPath,
+  bool? isWindows,
 }) {
-  return Map<String, String>.from(baseEnvironment)
+  var env = Map<String, String>.from(baseEnvironment)
     ..remove('SANAD_STATE_HOME')
     ..['SANAD_HOME'] = sanadHome;
+  if (isWindows ?? Platform.isWindows) {
+    final resolver = windowsSystemPath ?? sharedWindowsSystemPathResolver;
+    final resolvedPath = resolver.resolveSync(
+      inheritedPathFromEnvironment(env),
+    );
+    env = replaceEnvironmentPath(env, resolvedPath);
+  }
+  return env;
 }
 
 String resolveSanadDevHome({
