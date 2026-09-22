@@ -46,7 +46,7 @@ row as typed failed and never mutates canonical history.
 - Declared `media_bytes`, `data:*;base64,...` payloads, and long base64 blobs with
   alphabet markers use byte-based media accounting; homogeneous filler text stays
   on the chars/4 estimator.
-- Automatic compaction triggers above `80%` of the effective input window by
+- Automatic compaction triggers above `90%` of the effective input window by
   default. The retained-history suffix has a separate `10%` target. Both ratios
   may be overridden per exact normalized model id in `SANAD_HOME/config.yaml`.
 - Output reservation and safety headroom remain internal safeguards. On tiny
@@ -171,7 +171,7 @@ context:
   modelLimits:
     gpt-5.6-sol: 258000
 compaction:
-  threshold: 0.80
+  threshold: 0.90
   targetRatio: 0.10
   models:
     gpt-5.6-sol:
@@ -179,7 +179,7 @@ compaction:
       targetRatio: 0.08
 ```
 
-Absent sections use `{}`, `0.80`, and `0.10`. Per-model keys inherit global
+Absent sections use `{}`, `0.90`, and `0.10`. Per-model keys inherit global
 values independently. Unknown keys, non-positive model limits, and ratios outside
 `(0, 1)` fail startup safely. `thresholdTokens`, `modelThresholds`, wildcards,
 and legacy `.env` `CONTEXT_LIMIT` are not supported.
