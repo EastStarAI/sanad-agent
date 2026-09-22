@@ -42,6 +42,8 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | `SANAD_DEV_WEB_PORT` configures a stable browser origin | A valid port becomes one `--web-port` argument for direct and additional Chrome Clients, native Clients receive no Web argument, and invalid values fail before spawn. A persistent Chrome profile can therefore resume origin-scoped authentication after a controlled stop. |
 | Driver Clients run in two worktrees | Each caller filters through its own validated lease and source/workspace identity; neither latest process nor a global singleton can redirect the other caller. |
 | `run all -d macos` from a stopped runtime | Agent and Client spawns begin without readiness ordering; both identities must verify before the lease reports running. |
+| Windows run starts from a terminal whose inherited `Path` lacks a newly installed OS tool | Agent and Client launch environments contain one canonical `PATH` built from current Machine+User values; repeated environment composition reuses the cached read, and a failed read uses the inherited value. |
+| POSIX run composes Agent/Client environments | The inherited PATH remains unchanged and no PowerShell resolver runs. |
 | Client exits while Agent remains active | Launcher removes only that Client from the lease and continues supervising the Agent. |
 | Agent exits or is paused while Clients remain active | Launcher keeps Clients and the lease alive; status reports Client-only and a later `run agent` rejoins the same group. |
 | Launcher PID is absent or its process-start/command identity changed | Runtime is orphaned; mutation fails closed. |

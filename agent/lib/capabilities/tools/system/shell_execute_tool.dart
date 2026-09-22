@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
+import 'package:sanad_windows_path/windows_path.dart';
 
 import '../../models/local_tool_spec.dart';
 import '../../permissions/permission_manager.dart';
@@ -18,11 +19,15 @@ class ShellExecuteTool extends SpecBackedTool {
 
   final String workspacePath;
   final PermissionManager? _permissionManager;
+  final WindowsSystemPath _windowsSystemPath;
 
   ShellExecuteTool({
     required this.workspacePath,
     PermissionManager? permissionManager,
-  }) : _permissionManager = permissionManager;
+    WindowsSystemPath? windowsSystemPath,
+  }) : _permissionManager = permissionManager,
+       _windowsSystemPath =
+           windowsSystemPath ?? sharedWindowsSystemPathResolver;
 
   @override
   bool get isCooperativelyCancellable => true;
@@ -233,21 +238,28 @@ class ShellExecuteTool extends SpecBackedTool {
     }
 
     try {
+      var childEnvironment = Map<String, String>.from(Platform.environment);
+      if (_windowsSystemPath.isWindows) {
+        final path = await _windowsSystemPath.resolve(
+          inheritedPathFromEnvironment(childEnvironment),
+        );
+        childEnvironment = replaceEnvironmentPath(childEnvironment, path);
+      }
+      childEnvironment.addAll({
+        'GIT_TERMINAL_PROMPT': '0',
+        'GCM_INTERACTIVE': 'false',
+        'SSH_ASKPASS_REQUIRE': 'never',
+        if (context?.sessionId.isNotEmpty == true)
+          'SANAD_REQUESTER_SESSION_ID': context!.sessionId,
+        if (context?.toolCallId?.isNotEmpty == true)
+          'SANAD_REQUESTER_TOOL_CALL_ID': context!.toolCallId!,
+      });
       process = await Process.start(
         shell.executable,
         shell.arguments,
         workingDirectory: workingDir,
         runInShell: false,
-        environment: {
-          ...Platform.environment,
-          'GIT_TERMINAL_PROMPT': '0',
-          'GCM_INTERACTIVE': 'false',
-          'SSH_ASKPASS_REQUIRE': 'never',
-          if (context?.sessionId.isNotEmpty == true)
-            'SANAD_REQUESTER_SESSION_ID': context!.sessionId,
-          if (context?.toolCallId?.isNotEmpty == true)
-            'SANAD_REQUESTER_TOOL_CALL_ID': context!.toolCallId!,
-        },
+        environment: childEnvironment,
       );
       tree = ProcessTreeController.attach(
         process,
