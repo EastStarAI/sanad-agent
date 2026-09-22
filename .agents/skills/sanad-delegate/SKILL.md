@@ -54,12 +54,13 @@ sanad run \
   --session <preallocated-session-uuid> \
   [--provider <provider-name>] \
   [--model <model-name>] \
+  [--thinking-mode <effort>] \
   [--timeout <seconds>] \
   [--events] \
   [--allow-all-tools]
 ```
 
-For a temporary unregistered filesystem context, replace the `--workspace` line with `--execution-root <existing-directory>`. Do not send both unless testing precedence; `--workspace` wins and the execution root is ignored.
+For a temporary unregistered filesystem context, replace the `--workspace` line with `--execution-root <existing-directory>`. For delegated work that must retain an existing logical workspace while targeting an isolated worktree, send both: `--workspace` owns conversation continuity and `--execution-root` owns filesystem tools/context.
 
 ### 2.2. Source Development Fallback (Explicitly Labeled)
 
@@ -73,10 +74,13 @@ cd agent && fvm dart run bin/sanad_agent.dart run \
   --session <preallocated-session-uuid> \
   [--provider <provider-name>] \
   [--model <model-name>] \
+  [--thinking-mode <effort>] \
   [--timeout <seconds>] \
   [--events] \
   [--allow-all-tools]
 ```
+
+For CLI-only delegation, the managed runtime needs the Agent daemon only. Do not launch a Flutter Client unless the delegated scenario explicitly exercises Client UI behavior.
 
 ---
 
@@ -86,7 +90,7 @@ cd agent && fvm dart run bin/sanad_agent.dart run \
 |---|---|---|---|
 | `--brief-file` | `-b` | File Path | Path to brief file containing task prompt instructions. Avoids shell argv text exposure. Mutually exclusive with positional prompt. |
 | `--workspace` | `-w` | String | Registered persistent Sanad workspace. Use for normal project conversation continuity. It is authoritative if both targeting options are supplied. |
-| `--execution-root` | | Directory Path | Existing directory used as a temporary, unregistered filesystem context only when `--workspace` is absent. |
+| `--execution-root` | | Directory Path | Existing directory used as the filesystem tool/context boundary; it may accompany `--workspace` without registering another workspace. |
 | `--out-dir` | `-o` | Directory Path | Directory where `result.json` and `events.jsonl` are written. Automatically created if missing. |
 | `--session` | `-s` | String | Pre-allocated session ID (e.g. UUID v4). Allows concurrent observers to attach and monitor the turn. |
 | `--events` | | Flag | Stream real-time newline-delimited JSON (NDJSON) events to standard output. |
@@ -94,7 +98,8 @@ cd agent && fvm dart run bin/sanad_agent.dart run \
 | `--allow-all-tools` | | Flag | Auto-approves ordinary tool execution permissions. Questions (`system_ask_user`) ALWAYS remain pending. |
 | `--provider` | | String | Target LLM provider override. |
 | `--model` | `-m` | String | Target LLM model override. |
-| `--thinking` | | Flag | Enable deep reasoning / thinking mode. |
+| `--thinking-mode` | | Enum | Select explicit reasoning effort, including `medium`; the value is forwarded to the daemon. |
+| `--thinking` | | Flag | Backward-compatible shorthand for deep reasoning. |
 | `--quiet` | `-q` | Flag | Suppress banners, headers, and tool output, printing only the final assistant text. |
 | `--json` | | Flag | Output structured JSON response envelope to stdout upon completion. |
 
@@ -109,7 +114,7 @@ cd agent && fvm dart run bin/sanad_agent.dart run \
 2. **Choose One Targeting Mode:**
    - Use `--workspace` for a registered project whose conversation identity, system context, tools, policies, and filesystem root should remain persistent.
    - Use `--execution-root` alone for a one-run filesystem context that must not be registered as a Sanad workspace.
-   - At least one mode is required. If both are supplied, `--workspace` is authoritative and `--execution-root` is ignored in dispatch and artifacts.
+   - At least one mode is required. Supply both when an existing logical workspace should own the conversation while the explicit execution root independently targets an isolated worktree; both identities are dispatched and recorded.
    - Neither mode creates, selects, or switches a workspace, and the CLI never mutates `Directory.current`.
 
 3. **Pre-allocated Session Tracking & External Intervention:**

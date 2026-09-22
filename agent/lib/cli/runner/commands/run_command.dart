@@ -37,7 +37,12 @@ class RunCommand extends SanadCommand {
       ..addOption(
         'execution-root',
         help:
-            'Temporary unregistered filesystem context; ignored when --workspace is supplied',
+            'Filesystem execution context; may accompany --workspace to target an isolated worktree',
+      )
+      ..addOption(
+        'thinking-mode',
+        help: 'Explicit reasoning effort (for example: medium)',
+        allowed: cliThinkingModes,
       )
       ..addOption(
         'out-dir',
@@ -113,17 +118,18 @@ class RunCommand extends SanadCommand {
         ? requestedWorkspace
         : null;
     final cdPath = getOption('execution-root');
+    final hasExecutionRoot = cdPath?.trim().isNotEmpty == true;
+    if (effectiveWorkspace == null && !hasExecutionRoot) {
+      stderrSink.writeln(
+        'Error: One of --workspace or --execution-root is required.',
+      );
+      return 2;
+    }
     String? normalizedExecutionRoot;
-    if (effectiveWorkspace == null) {
-      if (cdPath == null || cdPath.trim().isEmpty) {
-        stderrSink.writeln(
-          'Error: One of --workspace or --execution-root is required.',
-        );
-        return 2;
-      }
+    if (hasExecutionRoot) {
       try {
         normalizedExecutionRoot = const WorkspacePathResolver()
-            .validateAndNormalizeExecutionRoot(cdPath);
+            .validateAndNormalizeExecutionRoot(cdPath!);
       } on FileSystemException catch (e) {
         stderrSink.writeln(
           'Error: Invalid execution root: ${e.message} (${e.path})',
@@ -155,6 +161,7 @@ class RunCommand extends SanadCommand {
       model: model,
       provider: provider,
       thinking: thinking,
+      thinkingMode: thinkingMode,
       quiet: quiet,
       json: json,
       standalone: standalone,

@@ -85,7 +85,7 @@ void main() {
     });
 
     test(
-      'buildSessionMetadata ignores execution_root when workspace is supplied',
+      'buildSessionMetadata preserves workspace identity and execution_root',
       () async {
         final request = AgentTurnRequest(
           sessionId: 'sess-test-meta',
@@ -95,44 +95,50 @@ void main() {
         );
 
         final metadata = await orchestrator.buildSessionMetadata(request);
-        expect(metadata, isNot(contains('execution_root')));
+        expect(metadata, containsPair('execution_root', executionRootDir.path));
         expect(metadata['workspace_id'], isNotNull);
         expect(metadata['workspace_path'], equals(logicalWorkspaceDir.path));
       },
     );
 
-    test('AgentTurnRequest enforces workspace precedence in metadata', () {
-      final request = AgentTurnRequest(
-        sessionId: 'sess-request-defense',
-        message: 'hello',
-        workspaceId: 'ws-authoritative',
-        metadata: {
-          'workspace_id': 'ws-legacy',
-          'execution_root': executionRootDir.path,
-        },
-      );
+    test(
+      'AgentTurnRequest keeps workspace identity and execution root distinct',
+      () {
+        final request = AgentTurnRequest(
+          sessionId: 'sess-request-defense',
+          message: 'hello',
+          workspaceId: 'ws-authoritative',
+          metadata: {
+            'workspace_id': 'ws-legacy',
+            'execution_root': executionRootDir.path,
+          },
+        );
 
-      expect(request.effectiveWorkspaceId, equals('ws-authoritative'));
-      expect(request.executionRoot, isNull);
-      expect(
-        request.toMetadata(),
-        containsPair('workspace_id', 'ws-authoritative'),
-      );
-      expect(request.toMetadata(), isNot(contains('execution_root')));
+        expect(request.effectiveWorkspaceId, equals('ws-authoritative'));
+        expect(request.executionRoot, equals(executionRootDir.path));
+        expect(
+          request.toMetadata(),
+          containsPair('workspace_id', 'ws-authoritative'),
+        );
+        expect(
+          request.toMetadata(),
+          containsPair('execution_root', executionRootDir.path),
+        );
 
-      final rootOnly = AgentTurnRequest(
-        sessionId: 'sess-request-root-only',
-        message: 'hello',
-        metadata: {'execution_root': executionRootDir.path},
-      );
-      expect(rootOnly.effectiveWorkspaceId, isNull);
-      expect(rootOnly.executionRoot, equals(executionRootDir.path));
-      expect(rootOnly.toMetadata(), isNot(contains('workspace_id')));
-      expect(
-        rootOnly.toMetadata(),
-        containsPair('execution_root', executionRootDir.path),
-      );
-    });
+        final rootOnly = AgentTurnRequest(
+          sessionId: 'sess-request-root-only',
+          message: 'hello',
+          metadata: {'execution_root': executionRootDir.path},
+        );
+        expect(rootOnly.effectiveWorkspaceId, isNull);
+        expect(rootOnly.executionRoot, equals(executionRootDir.path));
+        expect(rootOnly.toMetadata(), isNot(contains('workspace_id')));
+        expect(
+          rootOnly.toMetadata(),
+          containsPair('execution_root', executionRootDir.path),
+        );
+      },
+    );
 
     test('gateway flattens session metadata into the turn request', () {
       final event = CanonicalToAgent.translate({
@@ -171,7 +177,7 @@ void main() {
     );
 
     test(
-      'LocalRuntimeCatalog.buildTools prefers workspace over execution_root',
+      'LocalRuntimeCatalog.buildTools targets execution_root while retaining workspace identity',
       () async {
         final registry = ToolsRegistry();
         final requestWithBoth = AgentTurnRequest(
@@ -188,15 +194,12 @@ void main() {
 
         final shellTools = tools.whereType<ShellExecuteTool>().toList();
         expect(shellTools, isNotEmpty);
-        expect(
-          shellTools.first.workspacePath,
-          equals(logicalWorkspaceDir.path),
-        );
+        expect(shellTools.first.workspacePath, equals(executionRootDir.path));
       },
     );
 
     test(
-      'LocalRuntimeOrchestrator.buildRuntimeContext prefers workspace over execution_root',
+      'LocalRuntimeOrchestrator.buildRuntimeContext targets execution_root with workspace identity',
       () async {
         final request = AgentTurnRequest(
           sessionId: 'sess-ctx-test',
@@ -207,13 +210,10 @@ void main() {
 
         final result = await orchestrator.buildRuntimeContext(request);
         expect(result, isNotNull);
-        expect(
-          contextBuilder.lastWorkspacePath,
-          equals(logicalWorkspaceDir.path),
-        );
+        expect(contextBuilder.lastWorkspacePath, equals(executionRootDir.path));
         expect(
           contextBuilder.lastWorkspaceName,
-          equals(p.basename(logicalWorkspaceDir.path)),
+          equals(p.basename(executionRootDir.path)),
         );
       },
     );

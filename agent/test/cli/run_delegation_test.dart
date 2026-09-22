@@ -326,7 +326,7 @@ void main() {
     });
 
     test(
-      '--workspace wins and ignores --execution-root when both are supplied',
+      '--workspace owns conversation while --execution-root targets the worktree',
       () async {
         final runner = createRunner();
         fakeClient.completeTurnImmediately = true;
@@ -336,7 +336,7 @@ void main() {
           '--workspace',
           'ws-authoritative',
           '--execution-root',
-          p.join(tempDir.path, 'ignored-missing-root'),
+          executionDir.path,
           '--out-dir',
           outDir.path,
           'some prompt',
@@ -348,8 +348,8 @@ void main() {
           equals('ws-authoritative'),
         );
         expect(
-          fakeClient.dispatchedRequest?.metadata,
-          isNot(contains('execution_root')),
+          fakeClient.dispatchedRequest?.metadata['execution_root'],
+          equals(executionDir.path),
         );
         final artifact = RunResultArtifact.fromJson(
           (jsonDecode(
@@ -359,7 +359,7 @@ void main() {
               .cast<String, dynamic>(),
         );
         expect(artifact.workspaceId, equals('ws-authoritative'));
-        expect(artifact.executionRoot, isNull);
+        expect(artifact.executionRoot, equals(executionDir.path));
       },
     );
 

@@ -586,6 +586,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
       final contentBuffer = StringBuffer();
       final reasoningBuffer = StringBuffer();
       final providerReasoningContentBuffer = StringBuffer();
+      var hasProviderReasoningContent = false;
       Map<String, dynamic>? finalUsage;
       LLMFinishReason streamFinishReason = LLMFinishReason.unknown;
 
@@ -655,6 +656,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
             final providerReasoningContent =
                 structuredReasoning.providerContent;
             if (providerReasoningContent is String) {
+              hasProviderReasoningContent = true;
               providerReasoningContentBuffer.write(providerReasoningContent);
             }
             final contentChunk = delta['content']?.toString();
@@ -704,9 +706,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
                 ? null
                 : _providerStateForReasoning(
                     details: reasoningDetails,
-                    reasoningContent: providerReasoningContentBuffer.isEmpty
-                        ? null
-                        : providerReasoningContentBuffer.toString(),
+                    reasoningContent: hasProviderReasoningContent
+                        ? providerReasoningContentBuffer.toString()
+                        : null,
                     options: options,
                   );
             if (providerState != null) emittedProviderState = true;
@@ -775,9 +777,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
         if (completedToolCalls.isNotEmpty) {
           final providerState = _providerStateForReasoning(
             details: reasoningDetails,
-            reasoningContent: providerReasoningContentBuffer.isEmpty
-                ? null
-                : providerReasoningContentBuffer.toString(),
+            reasoningContent: hasProviderReasoningContent
+                ? providerReasoningContentBuffer.toString()
+                : null,
             options: options,
           );
           if (providerState != null) emittedProviderState = true;
@@ -797,16 +799,15 @@ class BaseOpenAIAdapter implements LLMAdapter {
         }
 
         if (!emittedProviderState &&
-            (reasoningDetails.isNotEmpty ||
-                providerReasoningContentBuffer.isNotEmpty)) {
+            (reasoningDetails.isNotEmpty || hasProviderReasoningContent)) {
           yield AgentResponse(
             message: Message(
               role: MessageRole.assistant,
               providerState: _providerStateForReasoning(
                 details: reasoningDetails,
-                reasoningContent: providerReasoningContentBuffer.isEmpty
-                    ? null
-                    : providerReasoningContentBuffer.toString(),
+                reasoningContent: hasProviderReasoningContent
+                    ? providerReasoningContentBuffer.toString()
+                    : null,
                 options: options,
               ),
             ),

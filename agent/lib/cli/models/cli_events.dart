@@ -253,6 +253,7 @@ sealed class CliEvent {
               payload['code']?.toString() ??
               'runtime_notice',
           message: effMsg,
+          status: payload['status']?.toString(),
           sessionId: sessionId,
           runId: runId,
           eventId: eventId,
@@ -456,15 +457,26 @@ class CliTurnCompleteEvent extends CliEvent {
 class CliRuntimeNoticeEvent extends CliEvent {
   final String code;
   final String message;
+  final String? status;
 
   CliRuntimeNoticeEvent({
     required this.code,
     required this.message,
+    this.status,
     super.sessionId,
     super.runId,
     super.eventId,
     super.raw,
   }) : super(type: 'runtime_notice');
+
+  /// Runtime states that can still continue under daemon ownership are
+  /// advisory for an attached CLI, not terminal failures. `blocked` may await
+  /// an explicit retry/route intervention before later emitting `resuming`.
+  bool get isRecovering =>
+      status == 'waiting' ||
+      status == 'blocked' ||
+      status == 'resuming' ||
+      status == 'cleared';
 }
 
 /// Error received from gateway.

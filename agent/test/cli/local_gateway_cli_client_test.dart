@@ -341,7 +341,7 @@ void main() {
     });
 
     test(
-      'dispatchTurnRequest omits legacy execution root when workspace is authoritative',
+      'dispatchTurnRequest preserves independent workspace and execution root',
       () async {
         final client = createClient();
         await client.connect();
@@ -352,7 +352,7 @@ void main() {
             message: 'Hello',
             workspaceId: 'ws-authoritative',
             requestId: 'request-workspace-precedence',
-            metadata: {'execution_root': 'ignored-root'},
+            metadata: {'execution_root': 'isolated-worktree'},
           ),
         );
 
@@ -366,7 +366,10 @@ void main() {
           sessionMetadata,
           containsPair('workspace_id', 'ws-authoritative'),
         );
-        expect(sessionMetadata, isNot(contains('execution_root')));
+        expect(
+          sessionMetadata,
+          containsPair('execution_root', 'isolated-worktree'),
+        );
 
         await client.dispose();
       },

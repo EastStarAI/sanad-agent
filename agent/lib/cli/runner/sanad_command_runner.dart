@@ -94,6 +94,11 @@ class SanadCommandRunner extends CommandRunner<int> {
         negatable: true,
         defaultsTo: false,
       )
+      ..addOption(
+        'thinking-mode',
+        help: 'Explicit reasoning effort (for example: medium)',
+        allowed: cliThinkingModes,
+      )
       ..addFlag(
         'quiet',
         abbr: 'q',

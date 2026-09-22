@@ -30,12 +30,12 @@ class AgentTurnRequest {
   /// The effective provider instance UUID (prefers [providerInstanceId], falls back to [providerId]).
   String? get effectiveProviderInstanceId => providerInstanceId ?? providerId;
 
-  /// Optional temporary filesystem context for tool and prompt execution.
+  /// Optional filesystem context for tool and prompt execution.
   ///
-  /// A registered workspace is authoritative. The execution root is used only
-  /// when the request has no workspace association.
+  /// This is independent from [effectiveWorkspaceId]: a registered workspace
+  /// may own the conversation while an explicit execution root targets an
+  /// isolated worktree for the current turn.
   String? get executionRoot {
-    if (effectiveWorkspaceId != null) return null;
     final raw = metadata['execution_root'];
     if (raw is String && raw.trim().isNotEmpty) {
       return raw.trim();
@@ -54,7 +54,6 @@ class AgentTurnRequest {
     final authoritativeWorkspaceId = effectiveWorkspaceId;
     if (authoritativeWorkspaceId != null) {
       result['workspace_id'] = authoritativeWorkspaceId;
-      result.remove('execution_root');
     }
     return result;
   }

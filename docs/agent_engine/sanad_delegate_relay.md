@@ -49,12 +49,13 @@ Deterministic validation ensures invalid or contradictory options fail early wit
 |---|---|---|---|
 | `--brief-file` / `-b` | Path | Conditional | Path to file containing the task prompt. Avoids argv length limits and shell escaping. |
 | Positional prompt / stdin | Text / Pipe | Conditional | One-shot prompt or redirected standard input. Mutually exclusive with `--brief-file`. |
-| `--workspace` / `-w` | String | Alternative | Registered persistent workspace used for conversation identity, context, policies, and tools. It wins if both targeting options are supplied. |
-| `--execution-root` | Path | Alternative | Existing directory used as a temporary unregistered context only when `--workspace` is absent. |
+| `--workspace` / `-w` | String | Alternative | Registered persistent workspace used for conversation identity and continuity. It may accompany `--execution-root`. |
+| `--execution-root` | Path | Alternative | Existing directory used as the filesystem/tool context. When combined with `--workspace`, it targets an isolated worktree without registering another logical workspace. |
 | `--out-dir` / `-o` | Path | Optional | Output directory where structured artifacts (`result.json`, `events.jsonl`) are written. |
 | `--session` / `-s` | UUID | Optional | Pre-allocated session identifier; generated automatically if omitted. |
 | `--provider` | String | Optional | LLM provider override. |
 | `--model` / `-m` | String | Optional | Model name override. |
+| `--thinking-mode` | Enum | Optional | Explicit reasoning effort such as `medium`; forwarded unchanged to the daemon. Legacy `--thinking` remains a shorthand for `deep`. |
 | `--timeout` | Seconds | Optional | Whole number of seconds (1–86400). Scoped session stop is triggered upon expiry. |
 | `--events` | Flag | Optional | Streams real-time NDJSON events to standard output. |
 | `--allow-all-tools` | Flag | Optional | Auto-approves ordinary tool execution requests. Questions (`system_ask_user`) remain pending. |
@@ -67,7 +68,7 @@ Every run must select at least one targeting mode:
 
 1. Use `--workspace` for a registered persistent project. Its identity, path, policy, context, and tools remain aligned.
 2. Use `--execution-root` alone for a one-run filesystem context. The Local Gateway flattens transported session metadata into `AgentTurnRequest.metadata`, where `execution_root` drives tools and context, survives suspended-decision recovery, and is never registered as a workspace.
-3. If both are supplied, `--workspace` is authoritative: the CLI omits `execution_root` from dispatch and artifacts, and the daemon defensively ignores any legacy execution-root metadata.
+3. Use both for delegated development: `--workspace` retains the existing logical conversation owner while `--execution-root` independently drives tools and runtime context in the target worktree. The CLI validates and records both; the daemon preserves both identities.
 4. Neither mode creates, selects, or switches a workspace, and neither the CLI nor daemon mutates `Directory.current`.
 
 ---
@@ -147,6 +148,7 @@ The `delegate-task-supervisor` skill natively supports `implementer: "sanad"` by
         "run",
         "--brief-file", "<path-to-brief-file>",
         "--workspace", "<logical-workspace-id>",
+        "--thinking-mode", "medium",
         "--out-dir", "<task-result-dir>",
         "--events"
       ],
@@ -158,7 +160,7 @@ The `delegate-task-supervisor` skill natively supports `implementer: "sanad"` by
 }
 ```
 
-For temporary execution, replace the `--workspace` argument pair with `--execution-root <target-worktree-path>`; that path must match the supervisor task's filesystem `workspace`. The supervisor accepts both for compatibility, but the registered `--workspace` remains authoritative.
+For temporary execution without logical continuity, use `--execution-root <target-worktree-path>` alone. For delegated work tied to an existing logical workspace, supply both `--workspace <logical-workspace-id>` and `--execution-root <target-worktree-path>`; the latter must match the supervisor task's filesystem `workspace` and remains the tool/context boundary.
 
 ### 5.2. Long-Lived Dynamic Run Lifecycle
 1. **`start --spec <tasks.json> --run-dir <dir>`:** Spawns a detached worker process that stays alive across multiple task settlement phases while the run remains open.

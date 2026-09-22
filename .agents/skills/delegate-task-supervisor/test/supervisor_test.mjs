@@ -559,6 +559,14 @@ test('isolated workspaces do not collide across concurrent Sanad tasks', async (
   mkdirSync(outB, { recursive: true });
   writeFileSync(briefA, 'Brief A', 'utf8');
   writeFileSync(briefB, 'Brief B', 'utf8');
+  // The same-root fvm source-development task validates its source entry
+  // point relative to the spawn working directory (task workspace here).
+  mkdirSync(join(worktreeA, 'agent', 'bin'), { recursive: true });
+  writeFileSync(
+    join(worktreeA, 'agent', 'bin', 'sanad_agent.dart'),
+    '// fixture entry point\n',
+    'utf8',
+  );
 
   const mockScript = join(root, 'mock_fast.mjs');
   writeFileSync(mockScript, `
@@ -578,6 +586,7 @@ test('isolated workspaces do not collide across concurrent Sanad tasks', async (
       status: 'completed',
       exit_code: 0,
       execution_root: execRoot,
+      spawned_cwd: process.cwd(),
     }));
     appendFileSync(evPath, JSON.stringify({type: 'completed', status: 'completed'}) + '\\n');
     process.exit(0);
@@ -617,6 +626,9 @@ test('isolated workspaces do not collide across concurrent Sanad tasks', async (
   const resB = JSON.parse(readFileSync(join(outB, 'result.json'), 'utf8'));
   assert.equal(resA.execution_root, worktreeA);
   assert.equal(resB.execution_root, worktreeB);
+  // Normal same-root compatibility: without sourceRoot the fvm task spawns
+  // from its task workspace, which is also where its source entry lives.
+  assert.equal(resolve(resA.spawned_cwd), resolve(worktreeA));
 
   runNode(SUPERVISOR, ['close', '--run', runDir]);
 });
@@ -669,11 +681,11 @@ test('validation rejects malformed Sanad specs without confusing workspace IDs f
   // 6. execution-root-only mode must match task.workspace
   assert.match(validate({ args: ['run', '--brief-file', brief, '--execution-root', root, '--out-dir', outDir] }), /must match task workspace/);
 
-  // 7. Workspace mode does not inspect an otherwise invalid execution root
+  // 7. Workspace identity does not weaken the execution-root boundary
   assert.match(validate({
-    args: ['run', '--brief-file', brief, '--workspace', 'ws', '--execution-root', 'relative-ignored-root', '--out-dir', outDir],
+    args: ['run', '--brief-file', brief, '--workspace', 'ws', '--execution-root', 'relative-root', '--out-dir', outDir],
     resultPath: join(root, 'other', 'result.json'),
-  }), /resultPath must match/);
+  }), /--execution-root must be an absolute path/);
 
   // 8. Result path mismatch
   assert.match(validate({ resultPath: join(root, 'other', 'result.json') }), /resultPath must match/);
@@ -687,4 +699,277 @@ test('validation rejects malformed Sanad specs without confusing workspace IDs f
   assert.match(validate({
     args: ['run', '--brief-file', brief, '--workspace', '--execution-root', workspace, '--out-dir', outDir],
   }), /--workspace requires a value/);
+});
+
+test('sanad sourceRoot separates the source checkout from the delegated execution root', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-sourceroot-test-'));
+  const sourceCheckout = join(root, 'source-checkout');
+  const worktree = join(root, 'target-worktree');
+  const outDir = join(root, 'task-out');
+  const briefFile = join(root, 'brief.txt');
+  const runDir = join(root, 'run');
+  mkdirSync(join(sourceCheckout, 'agent', 'bin'), { recursive: true });
+  mkdirSync(worktree, { recursive: true });
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(briefFile, 'Brief', 'utf8');
+  writeFileSync(
+    join(sourceCheckout, 'agent', 'bin', 'sanad_agent.dart'),
+    '// fixture entry point\n',
+    'utf8',
+  );
+
+  const mockScript = join(root, 'mock_fvm.mjs');
+  writeFileSync(mockScript, `
+    import {mkdirSync, writeFileSync} from 'node:fs';
+    import {dirname, resolve} from 'node:path';
+    const args = process.argv.slice(2);
+    let outDir = '';
+    let execRoot = '';
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--out-dir') outDir = args[i + 1];
+      if (args[i] === '--execution-root') execRoot = args[i + 1];
+    }
+    const resPath = resolve(outDir, 'result.json');
+    mkdirSync(dirname(resPath), {recursive:true});
+    writeFileSync(resPath, JSON.stringify({
+      status: 'completed',
+      exit_code: 0,
+      execution_root: execRoot,
+      spawned_cwd: process.cwd(),
+    }));
+    process.exit(0);
+  `, 'utf8');
+  const fvmBin = createFvmWrapper(root, mockScript);
+
+  const spec = join(root, 'tasks.json');
+  writeFileSync(spec, JSON.stringify({
+    tasks: [{
+      id: 'source-root-task',
+      implementer: 'sanad',
+      workspace: worktree,
+      sourceRoot: sourceCheckout,
+      command: fvmBin,
+      args: [
+        'dart', 'run', 'agent/bin/sanad_agent.dart', 'run',
+        '--brief-file', briefFile,
+        '--workspace', 'ws-logical',
+        '--execution-root', worktree,
+        '--out-dir', outDir,
+        '--events',
+      ],
+      resultPath: join(outDir, 'result.json'),
+      timelinePath: join(outDir, 'events.jsonl'),
+      timelineFormat: 'jsonl',
+    }],
+  }), 'utf8');
+
+  runNode(SUPERVISOR, ['start', '--spec', spec, '--run-dir', runDir, '--max-concurrency', '1']);
+
+  const event = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', '0']));
+  assert.equal(event.to, 'completed');
+
+  const result = JSON.parse(readFileSync(join(outDir, 'result.json'), 'utf8'));
+  assert.equal(result.execution_root, worktree);
+  // The CLI process is spawned from the source checkout, not the execution root.
+  assert.equal(resolve(result.spawned_cwd), resolve(sourceCheckout));
+
+  const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+  // The logical workspace and execution root stay untouched while the spawn
+  // root is decoupled and observable.
+  assert.equal(manifest.tasks['source-root-task'].workspace, worktree);
+  assert.equal(resolve(manifest.tasks['source-root-task'].spawnCwd), resolve(sourceCheckout));
+  assert.equal(manifest.tasks['source-root-task'].sourceRoot, sourceCheckout);
+
+  runNode(SUPERVISOR, ['close', '--run', runDir]);
+});
+
+test('sanad root-only targeting with a separate sourceRoot validates the execution root', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-rootonly-test-'));
+  const sourceCheckout = join(root, 'source-checkout');
+  const worktree = join(root, 'target-worktree');
+  const outDir = join(root, 'task-out');
+  const briefFile = join(root, 'brief.txt');
+  const runDir = join(root, 'run');
+  mkdirSync(join(sourceCheckout, 'agent', 'bin'), { recursive: true });
+  mkdirSync(worktree, { recursive: true });
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(briefFile, 'Brief', 'utf8');
+  writeFileSync(
+    join(sourceCheckout, 'agent', 'bin', 'sanad_agent.dart'),
+    '// fixture entry point\n',
+    'utf8',
+  );
+
+  const mockScript = join(root, 'mock_root_only.mjs');
+  writeFileSync(mockScript, `
+    import {mkdirSync, writeFileSync} from 'node:fs';
+    import {dirname, resolve} from 'node:path';
+    const args = process.argv.slice(2);
+    let outDir = '';
+    let execRoot = '';
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--out-dir') outDir = args[i + 1];
+      if (args[i] === '--execution-root') execRoot = args[i + 1];
+    }
+    const resPath = resolve(outDir, 'result.json');
+    mkdirSync(dirname(resPath), {recursive:true});
+    writeFileSync(resPath, JSON.stringify({
+      status: 'completed',
+      exit_code: 0,
+      execution_root: execRoot,
+      spawned_cwd: process.cwd(),
+    }));
+    process.exit(0);
+  `, 'utf8');
+  const fvmBin = createFvmWrapper(root, mockScript);
+
+  const spec = join(root, 'tasks.json');
+  writeFileSync(spec, JSON.stringify({
+    tasks: [{
+      id: 'root-only-task',
+      implementer: 'sanad',
+      workspace: worktree,
+      sourceRoot: sourceCheckout,
+      command: fvmBin,
+      args: [
+        'dart', 'run', 'agent/bin/sanad_agent.dart', 'run',
+        '--brief-file', briefFile,
+        '--execution-root', worktree,
+        '--out-dir', outDir,
+        '--events',
+      ],
+      resultPath: join(outDir, 'result.json'),
+      timelinePath: join(outDir, 'events.jsonl'),
+      timelineFormat: 'jsonl',
+    }],
+  }), 'utf8');
+
+  runNode(SUPERVISOR, ['start', '--spec', spec, '--run-dir', runDir, '--max-concurrency', '1']);
+
+  const event = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', '0']));
+  assert.equal(event.to, 'completed');
+
+  const result = JSON.parse(readFileSync(join(outDir, 'result.json'), 'utf8'));
+  assert.equal(result.execution_root, worktree);
+  assert.equal(resolve(result.spawned_cwd), resolve(sourceCheckout));
+
+  runNode(SUPERVISOR, ['close', '--run', runDir]);
+});
+
+test('sanad sourceRoot validation fails closed on missing roots, entries, and wrong invocation forms', () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-sourceval-test-'));
+  const worktree = join(root, 'workspace');
+  const outDir = join(root, 'out');
+  const brief = join(root, 'brief.txt');
+  const emptySource = join(root, 'empty-source');
+  mkdirSync(worktree, { recursive: true });
+  mkdirSync(outDir, { recursive: true });
+  mkdirSync(emptySource, { recursive: true });
+  writeFileSync(brief, 'Brief', 'utf8');
+
+  const sanadBin = createSanadWrapper(root, join(root, 'mock.mjs'));
+  const fvmBin = createFvmWrapper(root, join(root, 'mock.mjs'));
+
+  const validate = (taskOverrides) => {
+    const spec = join(root, `spec_${Math.random().toString(36).slice(2)}.json`);
+    const runDir = join(root, `run_${Math.random().toString(36).slice(2)}`);
+    writeFileSync(spec, JSON.stringify({
+      tasks: [{
+        id: 'src-val-task',
+        implementer: 'sanad',
+        workspace: worktree,
+        command: sanadBin,
+        args: ['run', '--brief-file', brief, '--workspace', 'ws-valid', '--execution-root', worktree, '--out-dir', outDir, '--events'],
+        resultPath: join(outDir, 'result.json'),
+        timelinePath: join(outDir, 'events.jsonl'),
+        timelineFormat: 'jsonl',
+        ...taskOverrides,
+      }],
+    }), 'utf8');
+    return runNodeThrows(SUPERVISOR, ['start', '--spec', spec, '--run-dir', runDir]);
+  };
+
+  // 1. sourceRoot must be an existing directory
+  assert.match(validate({
+    sourceRoot: join(root, 'missing-source'),
+    command: fvmBin,
+    args: ['dart', 'run', 'agent/bin/sanad_agent.dart', 'run', '--brief-file', brief, '--execution-root', worktree, '--out-dir', outDir],
+  }), /sourceRoot must be an existing directory/);
+
+  // 2. sourceRoot must contain the requested source entry point
+  assert.match(validate({
+    sourceRoot: emptySource,
+    command: fvmBin,
+    args: ['dart', 'run', 'agent/bin/sanad_agent.dart', 'run', '--brief-file', brief, '--execution-root', worktree, '--out-dir', outDir],
+  }), /source entry point not found/);
+
+  // 3. Same-root fvm invocation fails closed when the workspace lacks the entry point
+  assert.match(validate({
+    command: fvmBin,
+    args: ['dart', 'run', 'agent/bin/sanad_agent.dart', 'run', '--brief-file', brief, '--execution-root', worktree, '--out-dir', outDir],
+  }), /source entry point not found/);
+
+  // 4. sourceRoot is rejected for the installed sanad binary
+  assert.match(validate({ sourceRoot: emptySource }), /sourceRoot is only valid for the fvm/);
+
+  // 5. sourceRoot is rejected for non-sanad implementers
+  assert.match(validate({
+    implementer: 'opencode',
+    sourceRoot: emptySource,
+    workspace: worktree,
+    command: process.execPath,
+    args: ['-e', 'process.exit(0)'],
+    resultPath: join(outDir, 'result.json'),
+    timelinePath: join(outDir, 'events.jsonl'),
+    timelineFormat: 'jsonl',
+  }), /sourceRoot is only valid for sanad/);
+
+  // 6. Nested consumer entry layout resolves relative to the sourceRoot
+  const nestedSource = join(root, 'vendor', 'sanad-agent');
+  mkdirSync(join(nestedSource, 'agent', 'bin'), { recursive: true });
+  writeFileSync(
+    join(nestedSource, 'agent', 'bin', 'sanad_agent.dart'),
+    '// fixture entry point\n',
+    'utf8',
+  );
+  const nestedMock = join(root, 'nested_ok.mjs');
+  writeFileSync(nestedMock, `
+    import {mkdirSync, writeFileSync} from 'node:fs';
+    import {dirname, resolve} from 'node:path';
+    const args = process.argv.slice(2);
+    let outDir = '';
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--out-dir') outDir = args[i + 1];
+    }
+    const resPath = resolve(outDir, 'result.json');
+    mkdirSync(dirname(resPath), {recursive:true});
+    writeFileSync(resPath, JSON.stringify({status: 'completed', exit_code: 0}));
+    process.exit(0);
+  `, 'utf8');
+  const nestedFvm = createFvmWrapper(root, nestedMock);
+  const nestedSpec = join(root, 'nested_ok_spec.json');
+  const nestedRun = join(root, 'nested_run');
+  writeFileSync(
+    nestedSpec,
+    JSON.stringify({
+      tasks: [{
+        id: 'nested-ok',
+        implementer: 'sanad',
+        workspace: worktree,
+        sourceRoot: nestedSource,
+        command: nestedFvm,
+        args: ['dart', 'run', 'agent/bin/sanad_agent.dart', 'run', '--brief-file', brief, '--execution-root', worktree, '--out-dir', outDir, '--events'],
+        resultPath: join(outDir, 'result.json'),
+        timelinePath: join(outDir, 'events.jsonl'),
+        timelineFormat: 'jsonl',
+      }],
+    }),
+    'utf8',
+  );
+  runNode(SUPERVISOR, ['start', '--spec', nestedSpec, '--run-dir', nestedRun, '--max-concurrency', '1']);
+  const nestedEvent = JSON.parse(runNode(WATCH_ONCE, ['--run', nestedRun, '--since', '0']));
+  assert.equal(nestedEvent.to, 'completed');
+  const nestedResult = JSON.parse(readFileSync(join(outDir, 'result.json'), 'utf8'));
+  assert.equal(nestedResult.status, 'completed');
+  runNode(SUPERVISOR, ['close', '--run', nestedRun]);
 });

@@ -254,6 +254,42 @@ void main() {
       );
     });
 
+    test('passes an explicit medium thinking mode to the daemon', () async {
+      final runner = SanadCommandRunner(
+        stdoutSink: stdoutBuffer,
+        stderrSink: stderrBuffer,
+        client: client,
+        stdinReader: () async => null,
+      );
+
+      final runFuture = _runTargeted(runner, [
+        'run',
+        'Use medium reasoning',
+        '--thinking-mode',
+        'medium',
+      ]);
+
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final sentEnvelope =
+          jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+      final payload = sentEnvelope['payload'] as Map<String, dynamic>;
+      expect(payload['thinking_mode'], 'medium');
+      final sessionId = payload['session_id'] as String;
+      mockSocket.emitFromServer(
+        jsonEncode({
+          'type': 'device_event',
+          'session_id': sessionId,
+          'event': {
+            'type': 'turn_complete',
+            'session_id': sessionId,
+            'payload': {'text': 'Done'},
+          },
+        }),
+      );
+
+      expect(await runFuture, 0);
+    });
+
     test('supports one-shot execution via top-level -p flag', () async {
       final runner = SanadCommandRunner(
         stdoutSink: stdoutBuffer,
@@ -917,6 +953,116 @@ void main() {
         );
       },
     );
+
+    test(
+      'stays attached through waiting, blocked, and resuming runtime notices',
+      () async {
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+          client: client,
+          stdinReader: () async => null,
+        );
+
+        var completed = false;
+        final runFuture = _runTargeted(runner, [
+          'run',
+          'Continue after provider recovery',
+        ]).whenComplete(() => completed = true);
+
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+        final sentEnvelope =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        final sessionId = sentEnvelope['payload']['session_id'] as String;
+
+        void emitNotice(String status, String message) {
+          mockSocket.emitFromServer(
+            jsonEncode({
+              'type': 'device_event',
+              'session_id': sessionId,
+              'event': {
+                'type': 'session.runtime_notice',
+                'session_id': sessionId,
+                'payload': {
+                  'status': status,
+                  'reason': 'timeout',
+                  'title': status == 'waiting'
+                      ? 'Provider timeout'
+                      : 'Resuming…',
+                  'message': message,
+                },
+              },
+            }),
+          );
+        }
+
+        emitNotice('waiting', 'Retrying automatically.');
+        await Future<void>.delayed(Duration.zero);
+        expect(completed, isFalse);
+
+        emitNotice('blocked', 'Waiting for retry or route intervention.');
+        await Future<void>.delayed(Duration.zero);
+        expect(completed, isFalse);
+
+        emitNotice('resuming', 'Resuming last request with the new route.');
+        await Future<void>.delayed(Duration.zero);
+        expect(completed, isFalse);
+
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': sessionId,
+            'event': {
+              'type': 'turn_complete',
+              'session_id': sessionId,
+              'payload': {'text': 'Recovered successfully.'},
+            },
+          }),
+        );
+
+        expect(await runFuture, 0);
+        expect(stderrBuffer.toString(), contains('Retrying automatically.'));
+        expect(
+          stderrBuffer.toString(),
+          contains('Resuming last request with the new route.'),
+        );
+      },
+    );
+
+    test('returns exit code 1 for a terminal fatal runtime notice', () async {
+      final runner = SanadCommandRunner(
+        stdoutSink: stdoutBuffer,
+        stderrSink: stderrBuffer,
+        client: client,
+        stdinReader: () async => null,
+      );
+
+      final runFuture = _runTargeted(runner, ['run', 'Blocked provider turn']);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      final sentEnvelope =
+          jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+      final sessionId = sentEnvelope['payload']['session_id'] as String;
+
+      mockSocket.emitFromServer(
+        jsonEncode({
+          'type': 'device_event',
+          'session_id': sessionId,
+          'event': {
+            'type': 'session.runtime_notice',
+            'session_id': sessionId,
+            'payload': {
+              'status': 'fatal',
+              'reason': 'auth',
+              'title': 'Authentication required',
+              'message': 'Change provider or credentials.',
+            },
+          },
+        }),
+      );
+
+      expect(await runFuture, 1);
+      expect(stderrBuffer.toString(), contains('Authentication required'));
+    });
 
     test('returns exit code 1 when server emits CliErrorEvent', () async {
       final runner = SanadCommandRunner(

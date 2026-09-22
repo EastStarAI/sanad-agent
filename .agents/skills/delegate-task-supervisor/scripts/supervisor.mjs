@@ -228,6 +228,16 @@ function validateTask(item, existingIds = new Set()) {
     }
     return resolve(value);
   };
+  let spawnCwd = workspace;
+
+  // `sourceRoot` is the Sanad source/spawn-root contract: it separates the
+  // source checkout that provides the development CLI from the delegated
+  // execution root (task.workspace / --execution-root). It is valid only for
+  // the fvm source-development invocation and never changes the logical task
+  // workspace or CLI targeting mode.
+  if (item.sourceRoot != null && item.implementer !== 'sanad') {
+    fail(`task ${item.id} sourceRoot is only valid for sanad source-development invocations`);
+  }
 
   let resultPath = normalizeOptionalPath(item.resultPath, 'resultPath');
   let timelinePath = normalizeOptionalPath(item.timelinePath, 'timelinePath');
@@ -240,10 +250,41 @@ function validateTask(item, existingIds = new Set()) {
   if (item.implementer === 'sanad') {
     const cmdBase = basename(item.command).toLowerCase();
     const isInstalledSanad = /^(sanad)(\.(exe|cmd|bat))?$/.test(cmdBase) && item.args[0] === 'run';
+    // The source-development entry may live under nested/private-consumer
+    // layouts (e.g. `sanad-agent/agent/bin/sanad_agent.dart`), so match the
+    // entry suffix rather than a fixed relative path while still requiring
+    // `dart run <entry> run` and the fvm executable.
     const isFvmSanad = /^(fvm)(\.(exe|cmd|bat))?$/.test(cmdBase)
-      && item.args.slice(0, 4).join(' ') === 'dart run agent/bin/sanad_agent.dart run';
+      && item.args[0] === 'dart'
+      && item.args[1] === 'run'
+      && item.args[3] === 'run'
+      && typeof item.args[2] === 'string'
+      && /sanad_agent\.dart$/.test(item.args[2]);
     if (!isInstalledSanad && !isFvmSanad) {
-      fail(`task ${item.id} sanad invocation must be 'sanad run' or 'fvm dart run agent/bin/sanad_agent.dart run'`);
+      fail(`task ${item.id} sanad invocation must be 'sanad run' or 'fvm dart run <entry>/sanad_agent.dart run'`);
+    }
+
+    if (item.sourceRoot != null) {
+      if (!isFvmSanad) {
+        fail(`task ${item.id} sourceRoot is only valid for the fvm source-development invocation`);
+      }
+      if (typeof item.sourceRoot !== 'string' || !isAbsolute(item.sourceRoot)) {
+        fail(`task ${item.id} sourceRoot must be an absolute path`);
+      }
+      if (!existsSync(item.sourceRoot) || !statSync(item.sourceRoot).isDirectory()) {
+        fail(`task ${item.id} sourceRoot must be an existing directory: ${item.sourceRoot}`);
+      }
+      spawnCwd = resolve(item.sourceRoot);
+    }
+
+    if (isFvmSanad) {
+      // Fail closed when the spawn root does not contain the requested source
+      // entry point; this replaces the external batch-wrapper workaround that
+      // previously hid which checkout provided the CLI.
+      const entryPath = resolve(spawnCwd, item.args[2]);
+      if (!existsSync(entryPath) || !statSync(entryPath).isFile()) {
+        fail(`task ${item.id} source entry point not found: ${item.args[2]} (relative to ${spawnCwd})`);
+      }
     }
 
     // Requiring `run` as the first Sanad subcommand structurally prevents this
@@ -255,13 +296,14 @@ function validateTask(item, existingIds = new Set()) {
 
     const logicalWorkspace = getArgValue(item.args, item.id, '--workspace', '-w');
 
-    // A registered workspace is authoritative. execution-root is not parsed
-    // or validated unless it is the task's sole targeting mode.
-    if (!logicalWorkspace) {
-      const execRoot = getArgValue(item.args, item.id, '--execution-root');
-      if (!execRoot) {
-        fail(`task ${item.id} sanad task requires --workspace or --execution-root`);
-      }
+    const execRoot = getArgValue(item.args, item.id, '--execution-root');
+    if (!logicalWorkspace && !execRoot) {
+      fail(`task ${item.id} sanad task requires --workspace or --execution-root`);
+    }
+    // A logical workspace may own the conversation while an explicit
+    // execution root targets this task's isolated worktree. Whenever present,
+    // validate that filesystem boundary even when --workspace is also present.
+    if (execRoot) {
       if (!isAbsolute(execRoot)) {
         fail(`task ${item.id} --execution-root must be an absolute path`);
       }
@@ -303,6 +345,8 @@ function validateTask(item, existingIds = new Set()) {
     id: item.id,
     implementer: item.implementer,
     workspace,
+    sourceRoot: item.sourceRoot != null ? resolve(item.sourceRoot) : null,
+    spawnCwd,
     command: item.command,
     args: item.args,
     resultPath,
@@ -339,6 +383,8 @@ function publicTask(task, runDir, initialStatus = 'queued') {
     id: task.id,
     implementer: task.implementer,
     workspace: task.workspace,
+    sourceRoot: task.sourceRoot ?? null,
+    spawnCwd: task.spawnCwd ?? task.workspace,
     status: initialStatus,
     pid: null,
     startedAt: null,
@@ -685,7 +731,7 @@ function workerCommand(options) {
     let child;
     try {
       child = spawn(task.command, task.args, {
-        cwd: task.workspace,
+        cwd: task.spawnCwd || task.workspace,
         env: process.env,
         windowsHide: true,
         stdio: ['ignore', stdoutFd, stderrFd],

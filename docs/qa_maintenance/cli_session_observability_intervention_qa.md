@@ -15,7 +15,8 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 | Show session pending tool permission | `sanad session show <session-id>` | Authoritative status `needs_permission`, displays tool name, formatted tool input arguments, request ID, and the permission decision command syntax. | 0 |
 | Show session running | `sanad session show <session-id>` | Authoritative status `running`, displays `in_flight` execution snapshot including `type` and `run_id`. | 0 |
 | Show session idle | `sanad session show <session-id>` | Authoritative status `idle`, zero pending intervention requests, displays message count and session metadata. | 0 |
-| Show session in JSON mode | `sanad session show <session-id> --json` | Single JSON envelope containing `session_id`, `status` (`needs_input` / `needs_permission` / `running` / `idle`), `in_flight`, `pending_permission_request`, `message_count`, and `messages`. | 0 |
+| Show session in JSON mode | `sanad session show <session-id> --json` | Single JSON envelope containing `session_id`, `status` (`needs_input` / `needs_permission` / `running` / `idle`), owner `identities`, `in_flight`, `pending_permission_request`, effective route (`model`, `provider_instance_id`, `route_revision`, `thinking_mode`), timestamps, `message_count`, and a bounded `summary` of user/reply/tool/reasoning counts. The full `messages` payload is **omitted** by default. | 0 |
+| Show session in JSON mode with full history opt-in | `sanad session show <session-id> --json --include-messages` | Same bounded envelope plus the complete `messages` (full conversation/history) payload embedded explicitly. | 0 |
 | Show session missing argument | `sanad session show` | Error message `Error: Session ID is required.` and usage instructions. | 1 |
 
 ---

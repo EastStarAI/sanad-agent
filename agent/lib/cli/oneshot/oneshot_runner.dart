@@ -136,6 +136,7 @@ class OneshotRunner {
     String? model,
     String? provider,
     bool thinking = false,
+    String? thinkingMode,
     bool quiet = false,
     bool json = false,
     bool standalone = false,
@@ -154,14 +155,20 @@ class OneshotRunner {
   }) async {
     final out = stdoutSink ?? stdout;
     final err = stderrSink ?? stderr;
+    final normalizedThinkingMode = thinkingMode?.trim().toLowerCase();
+    final effectiveThinkingMode = normalizedThinkingMode?.isNotEmpty == true
+        ? normalizedThinkingMode
+        : thinking
+        ? 'deep'
+        : null;
+    final showReasoning =
+        effectiveThinkingMode != null && effectiveThinkingMode != 'none';
     final normalizedWorkspace = workspace?.trim();
     final effectiveWorkspace = normalizedWorkspace?.isNotEmpty == true
         ? normalizedWorkspace
         : null;
     final normalizedExecutionRoot = executionRoot?.trim();
-    final effectiveExecutionRoot =
-        effectiveWorkspace == null &&
-            normalizedExecutionRoot?.isNotEmpty == true
+    final effectiveExecutionRoot = normalizedExecutionRoot?.isNotEmpty == true
         ? normalizedExecutionRoot
         : null;
 
@@ -472,7 +479,7 @@ class OneshotRunner {
           if (event.sessionId == null ||
               event.sessionId == effectiveSessionId) {
             onTurnActivity();
-            if (thinking && !json && !quiet) {
+            if (showReasoning && !json && !quiet) {
               out.write(event.content);
             }
           }
@@ -652,6 +659,13 @@ class OneshotRunner {
             .listen((event) {
               if (event.sessionId == null ||
                   event.sessionId == effectiveSessionId) {
+                if (event.isRecovering) {
+                  onTurnActivity();
+                  if (!json && !quiet && event.status != 'cleared') {
+                    err.writeln('Notice: ${event.message}');
+                  }
+                  return;
+                }
                 hasError = true;
                 errorMessage = event.message;
                 if (!json) {
@@ -772,7 +786,7 @@ class OneshotRunner {
         model: resolvedModel,
         providerInstanceId: resolvedProviderId,
         providerId: resolvedProviderId,
-        thinkingMode: thinking ? 'deep' : null,
+        thinkingMode: effectiveThinkingMode,
         metadata: {'execution_root': ?effectiveExecutionRoot},
       );
 

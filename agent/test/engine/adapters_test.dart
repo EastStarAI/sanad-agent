@@ -581,6 +581,90 @@ void main() {
       },
     );
 
+    test(
+      'preserves empty streamed reasoning content for tool-call replay',
+      () async {
+        final streamEvent = {
+          'choices': [
+            {
+              'delta': {
+                'reasoning_content': '',
+                'tool_calls': [
+                  {
+                    'index': 0,
+                    'id': 'call-1',
+                    'function': {'name': 'test_tool', 'arguments': '{}'},
+                  },
+                ],
+              },
+              'finish_reason': 'tool_calls',
+            },
+          ],
+        };
+        final streamClient = StreamingTestClient(
+          (_) => http.StreamedResponse(
+            Stream.value(
+              utf8.encode(
+                ['data: ${jsonEncode(streamEvent)}', 'data: [DONE]'].join('\n'),
+              ),
+            ),
+            200,
+            headers: {'content-type': 'text/event-stream'},
+          ),
+        );
+        final adapter = BaseOpenAIAdapter(
+          config,
+          profile,
+          client: streamClient,
+        );
+        const options = LLMRequestOptions(
+          providerInstanceId: 'provider-stream',
+        );
+
+        final responses = await adapter
+            .generateStream([], options: options)
+            .toList();
+        final toolMessage = responses
+            .map((response) => response.message)
+            .singleWhere((message) => message.toolCalls?.isNotEmpty ?? false);
+
+        expect(toolMessage.providerState, isNotNull);
+        expect(
+          toolMessage.providerState!.data,
+          containsPair('reasoning_content', ''),
+        );
+
+        late Map<String, dynamic> replayBody;
+        final replayClient = MockClient((request) async {
+          replayBody = (jsonDecode(request.body) as Map)
+              .cast<String, dynamic>();
+          return http.Response(
+            jsonEncode({
+              'choices': [
+                {
+                  'message': {'content': 'done'},
+                  'finish_reason': 'stop',
+                },
+              ],
+            }),
+            200,
+          );
+        });
+        final replayAdapter = BaseOpenAIAdapter(
+          config,
+          profile,
+          client: replayClient,
+        );
+
+        await replayAdapter.generateResponse([toolMessage], options: options);
+
+        expect(
+          (replayBody['messages'] as List).single,
+          containsPair('reasoning_content', ''),
+        );
+      },
+    );
+
     test('uses thought tags only as a streamed reasoning fallback', () async {
       final chunks = ['<tho', 'ught>Fallback', ' thought</thought>Final'];
       final mockClient = StreamingTestClient(

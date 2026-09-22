@@ -380,6 +380,30 @@ void main() {
             jsonDecode(stdoutBuf.toString()) as Map<String, dynamic>;
         expect(betaCli['status'], 'needs_permission');
         expect(betaCli['session_id'], 'session-beta');
+
+        // The default --json projection is bounded: the full messages payload
+        // is NOT embedded, while owner identities and count summaries are.
+        expect(alphaCli.containsKey('messages'), isFalse);
+        expect(betaCli.containsKey('messages'), isFalse);
+        expect(alphaCli.containsKey('summary'), isTrue);
+        expect(alphaCli.containsKey('identities'), isTrue);
+        expect(alphaCli['identities']['session_id'], 'session-alpha');
+        expect(alphaCli['message_count'], 0);
+
+        stdoutBuf.clear();
+        final exitCodeFull = await runner.run([
+          'session',
+          'show',
+          'session-alpha',
+          '--json',
+          '--include-messages',
+        ]);
+        expect(exitCodeFull, 0);
+        final alphaFull =
+            jsonDecode(stdoutBuf.toString()) as Map<String, dynamic>;
+        expect(alphaFull.containsKey('messages'), isTrue);
+        expect(alphaFull['messages'], isEmpty);
+        expect(alphaFull['summary'], isNotNull);
       },
     );
 

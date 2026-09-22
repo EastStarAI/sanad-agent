@@ -1,9 +1,9 @@
 ---
 title: "Task 98: OpenCode Go Provider Model Compatibility and Sanad Delegation Architecture"
 description: "OpenCode Go compatibility evidence plus daemon-backed session intervention, native sanad run delegation machine contract, and supervisor integration for safe delegated coding."
-status: "g3-complete-g4-ready"
-current_gate: "G4 — agy-Driven Interactive Runtime Dogfooding (ready)"
-remaining_estimate: "25%"
+status: "completed"
+current_gate: "G5 — Delegation Tool-Use Proof and Acceptance"
+remaining_estimate: "15%"
 priority: "high"
 depends_on: "OpenCode Go provider profile; Provider Registry; Sanad CLI and local gateway session runtime; Task 43 reasoning runtime"
 evidence_id: "98"
@@ -291,7 +291,7 @@ Separate development SOP (not part of the delegation call path):
 ### G2 — Native Delegation Machine Contract & Instruction Skill (Completed)
 - [x] Create `.agents/skills/sanad-delegate/SKILL.md` instruction skill and integrate the delegation machine contract directly into `sanad run` CLI.
 - [x] Accept briefs through a file (`--brief-file`) or stdin and record a known session ID before dispatch.
-- [x] Add registered-workspace and temporary execution-root targeting without mutating `Directory.current` or creating/selecting workspaces; the post-dogfood correction below finalizes their alternative-mode precedence.
+- [x] Add registered-workspace and execution-root targeting without mutating `Directory.current` or creating/selecting workspaces; the post-dogfood correction below separates logical conversation ownership from the filesystem execution boundary.
 - [x] Implement timeout, interrupt, cancellation, and structured terminal `result.json` / `events.jsonl` behavior via serialized `RunArtifactCoordinator`.
 - [x] Surface pending clarification and permission states without treating them as terminal completion.
 - [x] Independent verification: analyzer clean; focused G2 suite 119/119; full CLI suite 260/260; relevant interface/runtime suite 115/115; full Agent fast suite 1883 passed and 26 skipped; `git diff --check` and secret/path scans clean. `graphify update .` rebuilt 7477 nodes, 9988 edges, and 679 communities; its untracked `.graphify/` cache was removed per repository policy.
@@ -319,17 +319,30 @@ Separate development SOP (not part of the delegation call path):
 G4 passed its original runtime matrix on 2026-09-22. The interactive run proved restart-safe clarification, explicit allow/deny, fail-closed intervention identity, scoped cancellation with exit 130, an unaffected independent session, structured artifacts, explicit supervisor close, one unchanged logical workspace, bounded clean final logs, and clean managed-runtime shutdown. Dogfooding found and fixed three owning-layer defects: the Local Gateway CLI previously disconnected before scoped stop delivery was transport-confirmed; OpenAI-compatible streaming preserved visible DeepSeek reasoning but not the raw `reasoning_content` required by OpenCode Go on later tool rounds; and the Local Gateway translator nested temporary session metadata instead of exposing `execution_root` to the runtime catalog. Focused regressions, the final 1,892-test Agent suite, and live tool-use reruns passed.
 
 Post-dogfood contract correction:
-- [x] Make `--workspace` and `--execution-root` alternative targeting modes; require at least one.
-- [x] When both are supplied, make `--workspace` authoritative and ignore `--execution-root` for runtime ownership and artifacts.
+- [x] Require at least one of `--workspace` and `--execution-root`; allow both when logical conversation ownership and filesystem execution must differ.
+- [x] When both are supplied, retain `--workspace` as conversation identity while `--execution-root` independently owns tool/runtime context and artifact targeting.
 - [x] Make `--execution-root` alone create only a temporary filesystem execution context, never a registered Sanad workspace.
 - [x] Document the choice and precedence in owning docs plus `sanad-delegate` and `delegate-task-supervisor`, with regression and live-smoke coverage before G4 delivery.
 
 ### G5 — Delegation Tool-Use Proof and Acceptance
-- [ ] Use the existing Task 97 worktree as the real isolated implementation target, and have `sanad-delegate` with `deepseek-v4-flash` complete one genuine remaining Plan 97 task rather than a synthetic fixture. Task 78 is explicitly not the G5 target.
-- [ ] Prove clarification persistence, explicit CLI answering, permission intervention, continuation, and stop through the completed native CLI machine contract and supervisor integration.
-- [ ] Prove default gated-tool containment and explicit broad-approval boundaries.
-- [ ] Run owning analyzers, focused tests, relevant fast suites, and `graphify update .` after code changes.
-- [ ] Review all diffs; do not commit, push, merge, or switch a runtime without fresh user authorization.
+- [x] Use the existing Task 97 worktree as the real isolated implementation target, and have `sanad-delegate` with `deepseek-v4-flash` complete one genuine remaining Plan 97 task rather than a synthetic fixture. Session `0afa0c7c-70c7-445e-8990-17e28c8f66a1` completed 97b in its isolated worktree; Task 78 was not used.
+- [x] Prove clarification persistence, explicit CLI answering, permission intervention, continuation, and stop through the completed native CLI machine contract and supervisor integration. Live medium runs covered clarification answer/resume, permission allow/deny, provider-timeout continuation, and scoped cancellation.
+- [x] Prove default gated-tool containment and explicit broad-approval boundaries. Ordinary gated commands remained pending for identity-bound allow/deny; clarification was never auto-resolved, and no blanket broad approval was used during G5 acceptance.
+- [x] Run owning analyzers, focused tests, relevant fast suites, and `graphify update .` after code changes. Agent analyzers were clean; focused suites passed for adapter replay and suspension, CLI/run/session behavior, gateway client and observability, execution-root propagation, delegation, and supervisor orchestration. The single final Agent full suite ran in the broader 97b engine/recovery worktree: 1811 passed, 26 skipped, 0 failed in 2m43s. Final Graphify updates rebuilt 7596 nodes / 10860 edges for Task98 and 7471 nodes / 10671 edges for 97b; the optional PowerShell parser was unavailable for 10 files and generated untracked caches were removed.
+- [x] Review all diffs; do not commit, push, merge, or switch a runtime without fresh user authorization. Final `git diff --check`, generated-output status, secret/absolute-path scans, stale workspace-precedence scan, code/security review, and documentation review were clean. Commit and push were separately authorized for delivery after review; no merge, PR, or runtime switch was performed.
+
+#### G5 dogfooding defects to repair before acceptance
+
+- [x] Decouple the source checkout used to launch the source-development CLI from the delegated `--execution-root`. The supervisor now accepts a fail-closed `sourceRoot` only for validated FVM source-development tasks, resolves the requested entry point from that checkout, records the effective spawn root, and leaves the task `workspace` / CLI execution root unchanged. Focused supervisor coverage proves same-root compatibility, distinct source/execution roots, execution-root-only targeting, nested/private-consumer layouts, and invalid-root/invocation rejection on Windows.
+- [x] Keep logical conversation workspace and filesystem execution root independent. `sanad run --workspace sanad-agent --execution-root <worktree>` now preserves both identities end to end: the registered workspace owns conversation continuity, while the explicit validated root owns tools/runtime context and artifacts. Supervisor validation checks every supplied execution root against the task workspace instead of ignoring it when a logical workspace is present.
+- [x] Make `sanad session show --json` bounded and reviewer-focused by default. Return the execution/session owner identities, status, pending intervention, model, timestamps, and counts without embedding the complete conversation/history payload. Expose full messages/history only through an explicit opt-in (`--include-messages`). Inspect the existing compact CLI chat projection and adapt reusable ideas or primitives to this machine-review contract without copying its human presentation literally.
+- [x] Preserve provider-owned `reasoning_content` across persisted clarification/permission suspension and CLI-driven continuation, not only across uninterrupted tool-loop rounds. A real `system_ask_user` answer had exposed `The reasoning_content in the thinking mode must be passed back to the API.` Root cause was empty streamed `reasoning_content` being collapsed to absent state on intermittent assistant tool-call messages. The adapter now preserves field presence independently from text length; focused adapter replay and suspended `system_ask_user` continuation regressions pass. A fresh OpenCode Go / `deepseek-v4-flash` run using explicit `medium` thinking then proved `needs_input → resumed → completed` with the exact expected answer and no provider continuity error.
+- [x] Add explicit `sanad run --thinking-mode <effort>` support so delegated sessions can request `medium` without silently becoming `deep`; preserve `--thinking` as the backward-compatible deep shorthand and cover the daemon payload.
+- [x] Make an explicit route/thinking-mode change on continuation complete its handoff and execute the requested turn. Root cause was the one-shot CLI treating the non-terminal `resuming` lifecycle notice (`Resuming…: Resuming last request with the new route.`) as a terminal error. Runtime notices now preserve status, and focused CLI coverage proves `resuming` remains attached through eventual turn completion while only `fatal` or unknown statuses terminate.
+- [x] Keep `sanad run` attached while the daemon performs recoverable provider-timeout recovery. Root cause was the same unconditional runtime-notice failure path: a `waiting` notice ended the terminal artifact while daemon-owned auto-recovery continued. `waiting`, `blocked`, `resuming`, and `cleared` are now advisory/non-terminal; only `fatal` and unknown notices remain fail-closed. Focused coverage proves waiting-to-resuming-to-completed ownership without an early terminal result, and timeout/signal paths retain their existing scoped-stop contract.
+- [x] Update CLI-only delegation startup guidance to launch the managed Agent without an unnecessary Flutter Client. Keep Client startup only for scenarios that actually exercise UI behavior, reducing resource use during delegated code work.
+- [x] After the single-agent baseline succeeds, prove real multi-agent Sanad delegation with at least two concurrently active delegated sessions under one supervisor run, each targeting a distinct worktree and session. Two medium sessions ran concurrently with isolated artifacts and execution roots: session `8f530f2a-ea9d-4a37-b4a7-c1c0a77f1291` remained in `needs_input` and was later scoped-stopped (`cancelled`, exit 130), while session `27c1b81a-64fe-4a70-bd3c-95d5142f88f6` completed `MULTI_B:COMPLETED` without consuming or mutating the first intervention. The long-lived run used dynamic add/enqueue and was explicitly closed with completed status.
+- [x] Collect any additional defects exposed by the complete 97b and multi-agent delegations before finalizing the repair scope; fix every accepted defect in its owning CLI/supervisor/skill layer with focused regression coverage and synchronized documentation. 97b exposed that a recoverable provider timeout first publishes `blocked` before daemon-owned `resuming`; the CLI now treats all non-fatal lifecycle states, including `blocked`, as non-terminal. It also proved the live source-root/logical-workspace/execution-root separation through a completed medium delegation.
 
 ### G6 — Provider Error Guidance (Optional; Never Blocks G1–G5)
 - [ ] Optionally normalize OpenCode privacy errors.
@@ -346,10 +359,10 @@ Post-dogfood contract correction:
 - [x] A CLI clarification answer resumes only the matching session/request; stale, duplicate, cross-session, and permission-kind misuse fail without consuming the request.
 - [x] A CLI permission decision follows the same identity guarantees through a separate command.
 - [x] `session stop` stops the identified active session without affecting another session or runtime.
-- [x] `sanad run` records its session ID before dispatch and targets either a registered workspace or an unregistered temporary execution root; workspace is authoritative when both are supplied.
+- [x] `sanad run` records its session ID before dispatch and targets a registered workspace, an unregistered temporary execution root, or both with independent logical-workspace and filesystem-execution semantics.
 - [x] `watch-once` returns `needs_input` or `needs_permission` promptly instead of waiting for terminal completion.
 - [x] In G4, agy drives the real daemon-backed CLI against OpenCode Go / `deepseek-v4-flash` and proves pending clarification, pending permission, list/show, answer/allow/deny, stop, bounded clean logs, and applicable restart recovery; any discovered defect is fixed and the complete scenario is rerun.
-- [ ] In G5, a real `deepseek-v4-flash` delegation through `sanad-delegate` proves tool use, user-question intervention, permission intervention, continuation, and structured terminal output.
+- [x] In G5, real `deepseek-v4-flash` delegations through the native `sanad run` / `sanad-delegate` contract proved tool use, user-question intervention, permission allow/deny, recoverable provider-timeout continuation, structured completion/cancellation artifacts, and isolated concurrent sessions.
 - [x] No API keys, authorization tokens, absolute machine paths, workspace mutations, or unauthorized broad-tool approvals appear in tracked artifacts or runtime actions.
 
 ---
@@ -360,10 +373,10 @@ Post-dogfood contract correction:
 - [x] G2 lands as the native Agent-owned `sanad run` delegation machine contract and instruction-only skill with deterministic Windows-safe prompt transport, isolated execution roots, and serialized result artifacts.
 - [x] G3 proves event-first intervention, dynamic enqueue, explicit close, and isolated-worktree scheduling.
 - [x] G4 passes agy-driven interactive dogfooding and the post-dogfood targeting correction against one managed test runtime using OpenCode Go / `deepseek-v4-flash`, with real `shell_execute cd` evidence for both target modes and precedence, redacted artifacts, and clean shutdown.
-- [ ] G5 passes a real `sanad-delegate` / `deepseek-v4-flash` delegation covering question, permission, continuation, stop, and terminal output.
+- [x] G5 passes real medium `sanad-delegate` / `deepseek-v4-flash` delegations covering question, permission, continuation through provider recovery, stop, terminal output, multi-agent isolation, and explicit supervisor close.
 - [x] Relevant fast suites pass with bounded output; G4 changed no port-binding integration/E2E boundary requiring an additional sequential suite.
-- [x] `graphify update .` rebuilt the code graph after G4 changes; its untracked local cache was removed. The final diff passed secret, absolute-path, stale-documentation, and whitespace review.
-- [ ] Commit, push, merge, runtime source handoff, and broad tool approval occur only after their required fresh user authorization.
+- [x] `graphify update .` rebuilt the code graph after G4 and final G5 changes; the final G5 graph contained 7596 nodes, 10860 edges, and 625 communities. Its untracked local cache was removed. The final diff passed secret, absolute-path, stale-documentation, generated-output, security, and whitespace review.
+- [x] Task98 G5 and Task97b commit/push delivery received fresh user authorization after final review. No merge, PR, runtime source handoff, or broad tool approval was requested or performed; each still requires separate fresh authorization.
 
 ---
 
@@ -371,6 +384,6 @@ Post-dogfood contract correction:
 
 No blocking product or architecture decision remains before G1.
 
-1. **Locked:** The delegation execution contract is native to `sanad run`. A run targets either a registered logical `--workspace` or an unregistered temporary filesystem context through `--execution-root`. When both are supplied, `--workspace` is authoritative and `--execution-root` is ignored. An execution-root-only run must not register, create, select, or switch a persistent workspace. Documentation and delegation skills must explain when to use each mode. Clarifications and permissions retain distinct identity-bound commands, and `watch-once` exposes non-terminal intervention states.
+1. **Locked:** The delegation execution contract is native to `sanad run`. A run requires `--workspace`, `--execution-root`, or both. When both are supplied, the registered logical workspace owns conversation continuity and the execution root independently owns tool/runtime context in the isolated worktree; neither creates, selects, or switches another persistent workspace. An execution-root-only run remains temporary and unregistered. Documentation and delegation skills must explain when to use each mode. Clarifications and permissions retain distinct identity-bound commands, and `watch-once` exposes non-terminal intervention states.
 2. **Optional Later Decision:** Whether to prune currently unavailable upstream models. This cannot block G1–G5.
 3. **Snapshot Freshness:** Model availability remains dated evidence. Re-verify `deepseek-v4-flash` during G4 and again during G5 before relying on it for acceptance.

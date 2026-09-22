@@ -281,7 +281,14 @@ class SessionShowCommand extends _BaseSessionSubcommand {
     super.clientFactory,
     super.clientOverride,
     super.customAction,
-  });
+  }) {
+    argParser.addFlag(
+      'include-messages',
+      negatable: false,
+      help:
+          'Explicit opt-in: embed the full conversation/messages payload in the output.',
+    );
+  }
 
   @override
   String get name => 'show';
@@ -317,6 +324,9 @@ class SessionShowCommand extends _BaseSessionSubcommand {
                 payload['pending_permission_request'] as Map,
               )
             : null;
+        final executionSnapshot = payload['execution_snapshot'] is Map
+            ? Map<String, dynamic>.from(payload['execution_snapshot'] as Map)
+            : null;
 
         final bool isAskUser =
             pending != null &&
@@ -340,19 +350,60 @@ class SessionShowCommand extends _BaseSessionSubcommand {
                 .toList() ??
             const <Map<String, dynamic>>[];
 
+        // Machine-review contract: by default this projection is bounded and
+        // reviewer-focused. It surfaces owner identities, execution status,
+        // pending intervention, the effective route, timestamps, and message /
+        // tool summary counts WITHOUT embedding the complete conversation.
+        // Full history is exposed only through the explicit --include-messages
+        // opt-in flag.
+        final summary = _summarizeMessages(messages);
+        final identities = <String, dynamic>{
+          'session_id': id,
+          if (inFlight?['run_id'] != null) 'run_id': inFlight!['run_id'],
+          if (executionSnapshot?['work_item_id'] != null)
+            'work_item_id': executionSnapshot!['work_item_id'],
+          if (executionSnapshot?['request_id'] != null)
+            'request_id': executionSnapshot!['request_id'],
+          if (pending?['request_id'] != null)
+            'pending_request_id': pending!['request_id'],
+          if (payload['history_revision'] != null)
+            'history_revision': payload['history_revision'],
+          if (payload['route_revision'] != null)
+            'route_revision': payload['route_revision'],
+        };
+
+        final includeFullHistory = getFlag('include-messages');
+
         final showResult = <String, dynamic>{
           'session_id': id,
           'status': status,
+          'identities': identities,
           'in_flight': inFlight,
           'pending_permission_request': pending,
+          'execution_snapshot': ?executionSnapshot,
           if (payload['model'] != null) 'model': payload['model'],
+          if (payload['model_display'] != null)
+            'model_display': payload['model_display'],
+          if (payload['provider_instance_id'] != null)
+            'provider_instance_id': payload['provider_instance_id'],
+          if (payload['model_provider'] != null)
+            'model_provider': payload['model_provider'],
+          if (payload['route_revision'] != null)
+            'route_revision': payload['route_revision'],
+          if (payload['route_updated_at'] != null)
+            'route_updated_at': payload['route_updated_at'],
+          if (payload['thinking_mode'] != null)
+            'thinking_mode': payload['thinking_mode'],
           if (payload['title'] != null) 'title': payload['title'],
           if (payload['created_at'] != null)
             'created_at': payload['created_at'],
-          if (payload['execution_snapshot'] != null)
-            'execution_snapshot': payload['execution_snapshot'],
+          if (payload['updated_at'] != null)
+            'updated_at': payload['updated_at'],
+          if (payload['last_user_message_at'] != null)
+            'last_user_message_at': payload['last_user_message_at'],
           'message_count': messages.length,
-          'messages': messages,
+          'summary': summary,
+          if (includeFullHistory) 'messages': messages,
         };
 
         if (json) {
@@ -365,8 +416,20 @@ class SessionShowCommand extends _BaseSessionSubcommand {
         if (payload['model'] != null) {
           stdoutSink.writeln('Model: ${payload['model']}');
         }
+        if (payload['provider_instance_id'] != null) {
+          stdoutSink.writeln('Provider: ${payload['provider_instance_id']}');
+        }
         if (payload['title'] != null) {
           stdoutSink.writeln('Title: ${payload['title']}');
+        }
+
+        stdoutSink.writeln(
+          'Messages: ${messages.length} (${_describeSummary(summary)})',
+        );
+        if (messages.isNotEmpty && !includeFullHistory) {
+          stdoutSink.writeln(
+            '  Full history is not shown by default. Add --include-messages to embed the complete messages payload.',
+          );
         }
 
         if (inFlight != null) {
@@ -420,6 +483,64 @@ class SessionShowCommand extends _BaseSessionSubcommand {
       }
       return 1;
     }
+  }
+
+  /// Builds a bounded, reviewer-focused message/tool count summary without
+  /// copying any message/history content into the output.
+  static Map<String, dynamic> _summarizeMessages(
+    List<Map<String, dynamic>> messages,
+  ) {
+    var userMessages = 0;
+    var finalAnswers = 0;
+    var toolCalls = 0;
+    var toolResults = 0;
+    var reasoningRows = 0;
+    var thoughtRows = 0;
+    for (final message in messages) {
+      switch (message['type']?.toString()) {
+        case 'user_message':
+          userMessages++;
+          break;
+        case 'final_answer':
+          finalAnswers++;
+          break;
+        case 'tool_use':
+          toolCalls++;
+          break;
+        case 'tool_result':
+          toolResults++;
+          break;
+        case 'reasoning':
+          reasoningRows++;
+          break;
+        case 'thought':
+          thoughtRows++;
+          break;
+      }
+    }
+    return <String, dynamic>{
+      'message_count': messages.length,
+      'user_messages': userMessages,
+      'final_answers': finalAnswers,
+      'tool_calls': toolCalls,
+      'tool_results': toolResults,
+      'reasoning_rows': reasoningRows,
+      'thought_rows': thoughtRows,
+    };
+  }
+
+  /// One-line human-friendly rendering of the bounded [summary] map.
+  static String _describeSummary(Map<String, dynamic> summary) {
+    final parts = <String>[
+      '${summary['user_messages']} user',
+      '${summary['final_answers']} replies',
+    ];
+    if (summary['tool_calls'] != 0 || summary['tool_results'] != 0) {
+      parts.add(
+        '${summary['tool_calls']} tools / ${summary['tool_results']} results',
+      );
+    }
+    return parts.join(', ');
   }
 }
 

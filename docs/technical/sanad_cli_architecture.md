@@ -124,7 +124,7 @@ The CLI supports both attached daemon operation and standalone fallback:
 2. **Standalone Fallback Mode:**
    - Triggered when `--standalone` is passed or when no running daemon is detected.
    - `StandaloneCliTurnClient` initializes DI, auth, sessions, `SessionRunOrchestrator`, tools, permissions, provider routing, and canonical event translation inside the CLI process.
-   - It binds both orchestrator responses and `RuntimeRecoveryService` notices into the canonical event path. Terminal provider failures therefore complete the one-shot command immediately instead of waiting for the CLI timeout.
+   - It binds both orchestrator responses and `RuntimeRecoveryService` notices into the canonical event path. Only `fatal` (or an unknown fail-closed status) terminates the current one-shot command. `waiting`, `blocked`, `resuming`, and `cleared` are non-terminal recovery lifecycle events: an attached `sanad run` remains connected while blocked for intervention and through a later resume, until the turn completes or its own timeout/stop boundary fires.
    - It starts no Local Gateway, cloud transport, daemon supervisor, cron scheduler, or listening port.
    - The daemon and standalone process compete for the same owner-only state-root lock before SQLite opens. A conflict exits with configuration code `78` and advises attachment or another Home.
    - Teardown detaches the runtime bridge, closes orchestrator subscriptions, workspace/MCP/OAuth resources, provider model cache, the database owner, event streams, and finally the ownership lease.
@@ -216,7 +216,7 @@ The CLI provides daemon-backed session inspection and safe intervention paths ac
 | Subcommand | Invocations | Description |
 |---|---|---|
 | `list` | `sanad session list [--json]` | Lists active sessions discovered via the gateway. Appends `[Pending intervention]` when a session is suspended awaiting tool approval or user input. |
-| `show` | `sanad session show <session-id> [--json]` | Authoritative session inspection. Exposes status (`needs_input`, `needs_permission`, `running`, `idle`), in-flight execution details, pending request payloads, and the exact intervention syntax. |
+| `show` | `sanad session show <session-id> [--json] [--include-messages]` | Authoritative session inspection. Exposes status (`needs_input`, `needs_permission`, `running`, `idle`), owner identities, in-flight execution details, pending request payloads, the effective route, timestamps, and message/tool count summaries. By default the projection is **bounded** and excludes the full messages payload; pass `--include-messages` to opt in to the complete conversation/history. |
 | `stop` | `sanad session stop <session-id> [--json]` | Halts execution strictly for the specified session, leaving other active sessions untouched. |
 | `answer` | `sanad session answer <session-id> -r <req-id> --answer <text> [--file <path>] [--json]` | Explicit resolution path for pending `system_ask_user` questions. Accepts direct text or JSON/text file payload. |
 | `permission` | `sanad session permission <session-id> -r <req-id> (--allow \| --deny) [--decision allow\|deny] [--scope once\|session\|workspace] [--comment <text>] [--file <path>] [--json]` | Explicit decision path for gated tool approvals. Accepts boolean flags or a structured JSON file payload. Aliases: `permit`, `decide`. |
@@ -241,3 +241,16 @@ The CLI provides daemon-backed session inspection and safe intervention paths ac
    - Headless execution (`sanad run "<prompt>"`) leaves gated tool permissions pending and emits a diagnostic notice to `stderr` specifying the exact intervention command syntax (`sanad session permission <session-id> -r <req-id> --allow / --deny`).
    - Permissions are never auto-denied, enabling external supervisors and developers to inspect via `session show` and resolve via `session permission`.
    - The `--allow-all-tools` option automatically approves ordinary tool execution only. Clarification questions (`system_ask_user`) always remain pending and require explicit user input.
+
+### 9.3. Bounded Session Show Projection (Machine-Review Contract)
+
+`session show <session-id> --json` returns a **bounded, reviewer-focused** envelope by default so that supervisors and orchestrators can inspect a session without pulling the entire conversation/history payload. The default envelope includes:
+
+- **Owner identities** (`identities`): `session_id`, active `run_id`, `work_item_id`, `request_id`, `pending_request_id`, `history_revision`, and `route_revision` when present.
+- **Execution status** (`status`): `idle`, `running`, `needs_input`, or `needs_permission`, derived from in-flight state and any pending suspended request.
+- **Pending intervention** (`pending_permission_request`) and in-flight execution (`in_flight`, `execution_snapshot`).
+- **Effective route**: `model`, `model_display`, `provider_instance_id`, `model_provider`, `route_revision`, `route_updated_at`, and `thinking_mode`.
+- **Timestamps**: `created_at`, `updated_at`, `last_user_message_at`.
+- **Counts** (`message_count` + `summary`): total rows plus bounded `user_messages`, `final_answers`, `tool_calls`, `tool_results`, `reasoning_rows`, and `thought_rows` counts derived from the message history without copying any content.
+
+The complete conversation/history is **never** embedded by default. It is exposed only through the explicit `--include-messages` opt-in flag, which adds the full `messages` payload. The plain-text (non-`--json`) branch already renders a bounded human summary and, when history exists, reminds the operator that full history requires `--include-messages`.

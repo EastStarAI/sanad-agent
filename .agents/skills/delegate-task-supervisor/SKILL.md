@@ -40,7 +40,7 @@ The installer adds only missing dependencies. Authentication remains user-owned:
 
 ## 2. Choose workspace and continuity
 
-Every task must declare an absolute `workspace` for process spawning and supervisor identity. For Sanad, this field does not override the CLI targeting contract: choose either a registered `--workspace` or an unregistered temporary `--execution-root` in the task arguments.
+Every task must declare an absolute `workspace` for supervisor identity and as the delegated execution boundary. It is also the default process spawn directory. A Sanad source-development task may additionally declare an absolute `sourceRoot`; the supervisor then spawns the validated `fvm dart run <entry>/sanad_agent.dart run` command from that checkout while preserving `workspace` as the target execution root. For Sanad, neither field overrides the CLI targeting contract: choose either a registered `--workspace` or an unregistered temporary `--execution-root` in the task arguments.
 
 Inspect the remembered identity for that workspace:
 
@@ -104,9 +104,9 @@ Write one self-contained brief per task according to the owning delegate skill. 
 }
 ```
 
-For a temporary unregistered Sanad context, replace the `--workspace` pair with `"--execution-root", "<target-worktree-path>"`. If both appear, `--workspace` wins and the execution root is ignored. The supervisor requires at least one; execution-root-only mode must match the task's absolute `workspace` field.
+For a temporary unregistered Sanad context, replace the `--workspace` pair with `"--execution-root", "<target-worktree-path>"`. For an isolated worktree that must retain an existing logical conversation owner, supply both; `--workspace` owns conversation continuity while `--execution-root` owns tools and runtime context. The supervisor requires at least one and validates every supplied execution root against the task's absolute `workspace` field.
 
-*(Source development checkout fallback from the worktree root: `command: "fvm", args: ["dart", "run", "agent/bin/sanad_agent.dart", "run", ...]`)*.
+For source development, use `command: "fvm"`, `args: ["dart", "run", "agent/bin/sanad_agent.dart", "run", ...]`, and optionally `sourceRoot: "<sanad-source-checkout>"` when that checkout differs from the target `workspace`. `sourceRoot` is accepted only for this FVM form, must contain the requested entry point, and is recorded with the effective spawn directory in the run manifest. Installed `sanad run` tasks and non-Sanad implementers must not declare it.
 
 Build relay arguments from the loaded delegate skill. The supervisor treats non-Sanad relay arguments as opaque; for Sanad it validates only the required machine-contract flags and workspace boundary. Commands are spawned directly except that Windows `.cmd`/`.bat` wrappers require Node's shell mode after shell metacharacters have been rejected. Keep secrets out of briefs, arguments, specs, and logs.
 

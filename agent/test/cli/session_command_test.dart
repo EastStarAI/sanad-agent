@@ -279,6 +279,114 @@ void main() {
         );
       });
 
+      test(
+        'is bounded by default and omits the full messages payload',
+        () async {
+          client.historyToReturn = {
+            'payload': {
+              'session_id': 'sess-bounded',
+              'in_flight': {'run_id': 'run-200', 'type': 'thinking'},
+              'execution_snapshot': {
+                'state': 'running',
+                'work_item_id': 'wi-200',
+                'request_id': 'req-200',
+                'revision': 7,
+              },
+              'model': 'deepseek-v4-flash',
+              'provider_instance_id': 'OpenCode Go',
+              'model_provider': 'OpenCode Go',
+              'route_revision': 3,
+              'thinking_mode': 'medium',
+              'created_at': '2026-09-22T00:00:00.000Z',
+              'updated_at': '2026-09-22T00:00:05.000Z',
+              'last_user_message_at': '2026-09-22T00:00:01.000Z',
+              'messages': [
+                {'type': 'user_message', 'content': 'build the feature'},
+                {'type': 'tool_use', 'tool': 'shell_execute', 'content': 'x'},
+                {
+                  'type': 'tool_result',
+                  'tool': 'shell_execute',
+                  'content': 'ok',
+                },
+                {'type': 'final_answer', 'content': 'done'},
+              ],
+            },
+          };
+
+          final runner = buildRunner();
+          final exitCode = await runner.run([
+            'session',
+            'show',
+            'sess-bounded',
+            '--json',
+          ]);
+          expect(exitCode, equals(0));
+
+          final decoded =
+              jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+          expect(decoded['session_id'], equals('sess-bounded'));
+          expect(decoded['status'], equals('running'));
+          // The full conversation payload must NOT be embedded by default.
+          expect(decoded.containsKey('messages'), isFalse);
+          expect(decoded['message_count'], equals(4));
+          expect(decoded['model'], equals('deepseek-v4-flash'));
+          expect(decoded['provider_instance_id'], equals('OpenCode Go'));
+          expect(decoded['thinking_mode'], equals('medium'));
+          expect(decoded['created_at'], isNotNull);
+          expect(decoded['updated_at'], isNotNull);
+          expect(decoded['last_user_message_at'], isNotNull);
+          // Owner identities from execution state are surfaced.
+          final identities = decoded['identities'] as Map<String, dynamic>;
+          expect(identities['session_id'], equals('sess-bounded'));
+          expect(identities['run_id'], equals('run-200'));
+          expect(identities['work_item_id'], equals('wi-200'));
+          expect(identities['request_id'], equals('req-200'));
+          // Bounded summary counts include message and tool breakdowns.
+          final summary = decoded['summary'] as Map<String, dynamic>;
+          expect(summary['message_count'], equals(4));
+          expect(summary['user_messages'], equals(1));
+          expect(summary['tool_calls'], equals(1));
+          expect(summary['tool_results'], equals(1));
+          expect(summary['final_answers'], equals(1));
+        },
+      );
+
+      test(
+        'embeds full messages only with the --include-messages opt-in flag',
+        () async {
+          client.historyToReturn = {
+            'payload': {
+              'session_id': 'sess-full',
+              'in_flight': {'run_id': 'run-300', 'type': 'thinking'},
+              'model': 'deepseek-v4-flash',
+              'messages': [
+                {'type': 'user_message', 'content': 'refactor the module'},
+                {'type': 'final_answer', 'content': 'refactored'},
+              ],
+            },
+          };
+
+          final runner = buildRunner();
+          final exitCode = await runner.run([
+            'session',
+            'show',
+            'sess-full',
+            '--json',
+            '--include-messages',
+          ]);
+          expect(exitCode, equals(0));
+
+          final decoded =
+              jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+          expect(decoded['status'], equals('running'));
+          final messages = decoded['messages'] as List;
+          expect(messages, hasLength(2));
+          expect(messages.first['content'], equals('refactor the module'));
+          expect(decoded['summary'], isNotNull);
+          expect((decoded['summary'] as Map)['message_count'], equals(2));
+        },
+      );
+
       test('fails with exit code 1 when session ID is omitted', () async {
         final runner = buildRunner();
         final exitCode = await runner.run(['session', 'show']);
