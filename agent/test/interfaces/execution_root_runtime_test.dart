@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:mockito/mockito.dart';
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
+import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
@@ -69,7 +71,10 @@ void main() {
         sanadHomePath: tempDir.path,
         currentWorkingDirectory: logicalWorkspaceDir.path,
       );
-      catalog = LocalRuntimeCatalog(workspaceRuntimeService: workspaceService);
+      catalog = LocalRuntimeCatalog(
+        workspaceRuntimeService: workspaceService,
+        mcpRuntimeManager: _NoopMcpRuntimeManager(),
+      );
       contextBuilder = RecordingRuntimeContextBuilder();
       orchestrator = LocalRuntimeOrchestrator(
         workspaceService,
@@ -361,6 +366,7 @@ void main() {
 
         catalog = LocalRuntimeCatalog(
           workspaceRuntimeService: workspaceService,
+          mcpRuntimeManager: _NoopMcpRuntimeManager(),
         );
         contextBuilder = RecordingRuntimeContextBuilder();
 
@@ -477,4 +483,12 @@ void main() {
       );
     },
   );
+}
+
+/// Deterministic MCP facade for suites that build tools without an ambient
+/// prepared Sanad home; the suites under test do not exercise MCP discovery.
+class _NoopMcpRuntimeManager extends McpRuntimeManager {
+  @override
+  Future<List<LocalToolSpec>> listToolSpecs({String? workspacePath}) async =>
+      const [];
 }

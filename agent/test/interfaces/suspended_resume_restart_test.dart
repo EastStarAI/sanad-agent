@@ -1,4 +1,6 @@
 import 'package:mockito/mockito.dart';
+import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
+import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
@@ -102,6 +104,7 @@ void main() {
         workspaceRuntimeService: workspaceRuntimeService,
         permissionManager: permissionManager,
         platformRuntimeBridge: PlatformRuntimeBridge(),
+        mcpRuntimeManager: _NoopMcpRuntimeManager(),
       );
       getIt.registerSingleton<LocalRuntimeCatalog>(runtimeCatalog);
       getIt.registerSingleton<RuntimeContextBuilder>(
@@ -605,4 +608,12 @@ void main() {
       },
     );
   });
+}
+
+/// Deterministic MCP facade for suites that resume runtime context without an
+/// ambient prepared Sanad home; the suites under test do not exercise MCP.
+class _NoopMcpRuntimeManager extends McpRuntimeManager {
+  @override
+  Future<List<LocalToolSpec>> listToolSpecs({String? workspacePath}) async =>
+      const [];
 }

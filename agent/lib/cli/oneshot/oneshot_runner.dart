@@ -423,9 +423,12 @@ class OneshotRunner {
         errorMessage = signal == ProcessSignal.sigterm
             ? 'Turn execution terminated by SIGTERM.'
             : 'Turn execution interrupted by SIGINT.';
-        await requestStop();
         if (!json) err.writeln('Error: $errorMessage');
+        // Complete with the stable signal exit code BEFORE requesting the
+        // scoped stop: the stop-driven turn-cancelled event (exit 130) must
+        // never race ahead and overwrite the signal classification.
         if (!completer.isCompleted) completer.complete(signalCode);
+        await requestStop();
       }
 
       if (signalStream != null) {
@@ -805,6 +808,10 @@ class OneshotRunner {
       } on TimeoutException {
         hasError = true;
         errorMessage = 'Turn execution timed out after ${timeout.inSeconds}s';
+        // Seal the timeout outcome before requesting the scoped stop so the
+        // stop-driven cancellation event cannot clobber the error/message or
+        // complete the terminal decision with a different code.
+        if (!completer.isCompleted) completer.complete(124);
         await requestStop();
         if (!json) {
           err.writeln('Error: $errorMessage');
