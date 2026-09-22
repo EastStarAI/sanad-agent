@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:test/test.dart';
 import 'package:sanad_agent/cli/cli.dart';
+import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import '../support/isolated_sanad_test_home.dart';
 
@@ -224,6 +225,45 @@ void main() {
       expect(complete.provider, 'openai');
       expect(complete.usage?['total_tokens'], 150);
     });
+
+    test('parses stopped canonical event as CliTurnCancelledEvent', () {
+      final event = CliEvent.fromJson({
+        'type': 'device_event',
+        'event': {
+          'type': 'stopped',
+          'session_id': 'session-stopped-1',
+          'run_id': 'run-123',
+          'payload': {
+            'session_id': 'session-stopped-1',
+            'run_id': 'run-123',
+            'reason': 'Session execution stopped',
+          },
+        },
+      });
+
+      expect(event, isA<CliTurnCancelledEvent>());
+      final cancelled = event as CliTurnCancelledEvent;
+      expect(cancelled.sessionId, 'session-stopped-1');
+      expect(cancelled.runId, 'run-123');
+      expect(cancelled.reason, 'Session execution stopped');
+    });
+
+    test('parses top-level stopped event as CliTurnCancelledEvent', () {
+      final event = CliEvent.fromJson({
+        'type': 'stopped',
+        'session_id': 'session-stopped-2',
+        'run_id': 'run-456',
+        'payload': {
+          'session_id': 'session-stopped-2',
+          'reason': 'Execution stopped by user',
+        },
+      });
+
+      expect(event, isA<CliTurnCancelledEvent>());
+      final cancelled = event as CliTurnCancelledEvent;
+      expect(cancelled.sessionId, 'session-stopped-2');
+      expect(cancelled.reason, 'Execution stopped by user');
+    });
   });
 
   group('LocalGatewayCliClient', () {
@@ -300,7 +340,42 @@ void main() {
       await client.dispose();
     });
 
-    test('dispatches steer and stop commands', () async {
+    test(
+      'dispatchTurnRequest preserves independent workspace and execution root',
+      () async {
+        final client = createClient();
+        await client.connect();
+
+        await client.dispatchTurnRequest(
+          const AgentTurnRequest(
+            sessionId: 'session-workspace-precedence',
+            message: 'Hello',
+            workspaceId: 'ws-authoritative',
+            requestId: 'request-workspace-precedence',
+            metadata: {'execution_root': 'isolated-worktree'},
+          ),
+        );
+
+        final sent =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        final payload = sent['payload'] as Map<String, dynamic>;
+        final sessionMetadata =
+            payload['session_metadata'] as Map<String, dynamic>;
+        expect(payload['workspace_id'], equals('ws-authoritative'));
+        expect(
+          sessionMetadata,
+          containsPair('workspace_id', 'ws-authoritative'),
+        );
+        expect(
+          sessionMetadata,
+          containsPair('execution_root', 'isolated-worktree'),
+        );
+
+        await client.dispose();
+      },
+    );
+
+    test('dispatches steer and waits for authoritative scoped stop', () async {
       final client = createClient();
       await client.connect();
 
@@ -314,13 +389,79 @@ void main() {
       expect(steerMsg['command'], 'steer');
       expect(steerMsg['payload']['message'], 'Cancel that action');
 
-      await client.stop(sessionId: 'session-42', runId: 'run-1');
-      expect(mockSocket.sentMessages.length, 2);
+      var stopCompleted = false;
+      final stopFuture = client
+          .stop(sessionId: 'session-42', runId: 'run-1')
+          .then((_) => stopCompleted = true);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(mockSocket.sentMessages.length, 3);
       final stopMsg =
           jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
       expect(stopMsg['command'], 'stop');
       expect(stopMsg['payload']['run_id'], 'run-1');
+      expect(stopMsg['payload']['request_id'], stopMsg['request_id']);
 
+      final historyMsg =
+          jsonDecode(mockSocket.sentMessages[2]) as Map<String, dynamic>;
+      expect(historyMsg['command'], 'get_session_history');
+      expect(historyMsg['payload']['session_id'], 'session-42');
+
+      mockSocket.emitFromServer(
+        jsonEncode({
+          'type': 'stopped',
+          'session_id': 'another-session',
+          'payload': {'session_id': 'another-session'},
+        }),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(stopCompleted, isFalse);
+
+      mockSocket.emitFromServer(
+        jsonEncode({
+          'type': 'device_event',
+          'request_id': historyMsg['request_id'],
+          'payload': {
+            'session_id': 'session-42',
+            'in_flight': {'status': 'running'},
+          },
+        }),
+      );
+      mockSocket.emitFromServer(
+        jsonEncode({
+          'type': 'stopped',
+          'session_id': 'session-42',
+          'run_id': 'run-1',
+          'payload': {'session_id': 'session-42'},
+        }),
+      );
+
+      await stopFuture;
+      expect(stopCompleted, isTrue);
+      await client.dispose();
+    });
+
+    test('treats an already-idle scoped stop as idempotent', () async {
+      final client = createClient();
+      await client.connect();
+
+      final stopFuture = client.stop(sessionId: 'session-idle');
+      await Future<void>.delayed(Duration.zero);
+      final historyMsg =
+          jsonDecode(mockSocket.sentMessages[1]) as Map<String, dynamic>;
+      mockSocket.emitFromServer(
+        jsonEncode({
+          'type': 'device_event',
+          'request_id': historyMsg['request_id'],
+          'payload': {
+            'session_id': 'session-idle',
+            'in_flight': null,
+            'pending_permission_request': null,
+          },
+        }),
+      );
+
+      await stopFuture;
       await client.dispose();
     });
 
@@ -345,6 +486,95 @@ void main() {
 
       await client.dispose();
     });
+
+    test(
+      'dispatches respondAnswer query with session and request correlation',
+      () async {
+        final client = createClient();
+        await client.connect();
+
+        final answerFuture = client.respondAnswer(
+          sessionId: 'sess-ask-1',
+          requestId: 'req-ask-1',
+          answer: 'Target PostgreSQL',
+        );
+
+        expect(mockSocket.sentMessages.length, 1);
+        final sent =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        expect(sent['command'], equals('tool_permission_response'));
+        expect(sent['payload']['session_id'], equals('sess-ask-1'));
+        expect(sent['payload']['request_id'], equals('req-ask-1'));
+        expect(sent['payload']['answer'], equals('Target PostgreSQL'));
+        expect(sent['payload']['allowed'], isTrue);
+
+        final rpcReqId = sent['request_id'] as String;
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'tool_permission_resolved',
+            'request_id': rpcReqId,
+            'payload': {
+              'session_id': 'sess-ask-1',
+              'outcome': 'resolved',
+              'success': true,
+            },
+          }),
+        );
+
+        final result = await answerFuture;
+        expect(result['payload']['outcome'], equals('resolved'));
+
+        await client.dispose();
+      },
+    );
+
+    test(
+      'dispatches respondToolPermission query with decision and scope',
+      () async {
+        final client = createClient();
+        await client.connect();
+
+        final permFuture = client.respondToolPermission(
+          sessionId: 'sess-perm-1',
+          requestId: 'req-perm-1',
+          allowed: false,
+          scope: 'session',
+          decision: 'deny',
+          comment: 'Denied by user',
+        );
+
+        expect(mockSocket.sentMessages.length, 1);
+        final sent =
+            jsonDecode(mockSocket.sentMessages.single) as Map<String, dynamic>;
+        expect(sent['command'], equals('tool_permission_response'));
+        expect(sent['payload']['session_id'], equals('sess-perm-1'));
+        expect(sent['payload']['request_id'], equals('req-perm-1'));
+        expect(sent['payload']['allowed'], isFalse);
+        expect(sent['payload']['decision'], equals('deny'));
+        expect(sent['payload']['scope'], equals('session'));
+        expect(sent['payload']['comment'], equals('Denied by user'));
+
+        final rpcReqId = sent['request_id'] as String;
+        mockSocket.emitFromServer(
+          jsonEncode({
+            'type': 'event',
+            'event': 'tool_permission_resolved',
+            'request_id': rpcReqId,
+            'payload': {
+              'session_id': 'sess-perm-1',
+              'outcome': 'resolved',
+              'success': true,
+            },
+          }),
+        );
+
+        final result = await permFuture;
+        expect(result['payload']['outcome'], equals('resolved'));
+
+        await client.dispose();
+      },
+    );
 
     test('query correlates responses by request_id', () async {
       final client = createClient();

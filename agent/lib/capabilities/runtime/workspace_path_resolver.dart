@@ -28,6 +28,31 @@ class WorkspacePathResolver {
     return _canonicalizeExistingPath(trimmed);
   }
 
+  /// Validates that [rawExecutionRoot] exists and is a directory, returning its
+  /// canonical absolute normalized path. Throws [FileSystemException] if it is
+  /// missing or not a directory. Returns null if [rawExecutionRoot] is null or empty.
+  String? validateAndNormalizeExecutionRoot(String? rawExecutionRoot) {
+    if (rawExecutionRoot == null) return null;
+    final trimmed = rawExecutionRoot.trim();
+    if (trimmed.isEmpty) return null;
+
+    final absolute = p.normalize(p.absolute(trimmed));
+    final type = FileSystemEntity.typeSync(absolute, followLinks: true);
+    if (type == FileSystemEntityType.notFound) {
+      throw FileSystemException(
+        'Execution root directory does not exist.',
+        absolute,
+      );
+    }
+    if (type != FileSystemEntityType.directory) {
+      throw FileSystemException(
+        'Execution root path is not a directory.',
+        absolute,
+      );
+    }
+    return _canonicalizeExistingPath(absolute);
+  }
+
   WorkspacePathResolution classifyExistingPath({
     required String workspaceRoot,
     required String inputPath,

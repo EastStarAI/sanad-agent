@@ -3,14 +3,18 @@
 import { existsSync, readFileSync, watch } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 
-const TERMINAL_STATUSES = new Set([
+const WATCH_STATUSES = new Set([
   'completed',
   'failed',
   'blocked',
   'timeout',
   'aborted',
+  'interrupted',
+  'cancelled',
   'agy_unavailable',
   'opencode_unavailable',
+  'needs_input',
+  'needs_permission',
 ]);
 const HELP = `watch-once
 
@@ -67,7 +71,7 @@ function nextEvent(journal, since, includeAll) {
       continue;
     }
     if (event.seq <= since) continue;
-    if (includeAll || TERMINAL_STATUSES.has(event.to)) return event;
+    if (includeAll || WATCH_STATUSES.has(event.to)) return event;
   }
   return null;
 }
@@ -76,15 +80,43 @@ const options = parseOptions(process.argv.slice(2));
 const runDir = resolve(options.run);
 if (!existsSync(runDir)) fail(`run directory does not exist: ${runDir}`);
 const journal = resolve(runDir, 'events.jsonl');
+const manifestPath = resolve(runDir, 'manifest.json');
 let finished = false;
 let watcher;
+let livenessTimer;
+
+function staleSupervisorEvent() {
+  if (!existsSync(manifestPath)) return null;
+  let manifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (manifest.status !== 'running' || !Number.isInteger(manifest.supervisorPid)) return null;
+  try {
+    process.kill(manifest.supervisorPid, 0);
+    return null;
+  } catch {
+    return {
+      seq: manifest.seq,
+      timestamp: new Date().toISOString(),
+      taskId: null,
+      from: 'running',
+      to: 'stale',
+      kind: 'supervisor_stale',
+      supervisorPid: manifest.supervisorPid,
+    };
+  }
+}
 
 function completeIfReady() {
   if (finished) return;
-  const event = nextEvent(journal, options.since, options.all);
+  const event = nextEvent(journal, options.since, options.all) || staleSupervisorEvent();
   if (!event) return;
   finished = true;
   watcher?.close();
+  clearInterval(livenessTimer);
   process.stdout.write(`${JSON.stringify(event)}\n`);
   process.exit(0);
 }
@@ -93,7 +125,12 @@ function completeIfReady() {
 // scan, while an append after registration triggers the watcher. This closes the
 // common read-then-watch race without introducing a polling interval.
 watcher = watch(dirname(journal), (_eventType, filename) => {
-  if (!filename || String(filename) === basename(journal)) completeIfReady();
+  if (!filename || [basename(journal), basename(manifestPath)].includes(String(filename))) {
+    completeIfReady();
+  }
 });
 watcher.once('error', (error) => fail(`watch failed: ${error.message}`));
+// Filesystem events remain the primary wake-up path. This bounded liveness fallback
+// prevents an already-dead supervisor from leaving the caller blocked forever.
+livenessTimer = setInterval(completeIfReady, 1_000);
 completeIfReady();

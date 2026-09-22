@@ -58,8 +58,45 @@ mixin SanadGatewayBehavior {
     final payload = rawPayload is Map
         ? Map<String, dynamic>.from(rawPayload)
         : <String, dynamic>{};
-    if (commandName == CanonicalEventTypes.toolPermissionResponse ||
-        commandName == CanonicalEventTypes.platformToolResult) {
+    if (commandName == CanonicalEventTypes.toolPermissionResponse) {
+      final result = await runtimeBridge.handlePermissionResponse(
+        CanonicalEvent(
+          type: commandName,
+          sessionId: payload['session_id']?.toString(),
+          payload: payload,
+        ),
+      );
+      final rpcRequestId = envelope['request_id']?.toString();
+      if (rpcRequestId != null && rpcRequestId.isNotEmpty) {
+        if (result.isSuccess) {
+          await onResponse({
+            'type': 'event',
+            'event': CanonicalEventTypes.toolPermissionResolved,
+            'request_id': rpcRequestId,
+            'payload': {
+              'request_id': rpcRequestId,
+              'session_id': payload['session_id'],
+              'permission_request_id': payload['request_id'],
+              'success': true,
+              'outcome': result.outcome,
+            },
+          });
+        } else {
+          await onResponse({
+            'type': 'error',
+            'request_id': rpcRequestId,
+            'payload': {
+              'request_id': rpcRequestId,
+              'code': result.errorCode,
+              'message': result.errorMessage,
+              'outcome': result.outcome,
+            },
+          });
+        }
+      }
+      return true;
+    }
+    if (commandName == CanonicalEventTypes.platformToolResult) {
       return runtimeBridge.handleProtocolEvent(
         CanonicalEvent(
           type: commandName,
