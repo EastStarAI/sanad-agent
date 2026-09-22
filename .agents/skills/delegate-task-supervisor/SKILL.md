@@ -4,7 +4,7 @@ description: Bootstrap and orchestrate one or many delegated coding-agent CLI ta
 license: MIT
 compatibility: Requires Node.js 18+ and git. The bootstrap helper can install delegate-skills and supported implementer CLIs with explicit approval. Runtime scripts use Node built-ins only and support macOS, Linux, and Windows.
 metadata:
-  version: 0.1.0
+  version: 0.1.1
 ---
 
 # Delegate Task Supervisor
@@ -86,7 +86,7 @@ node "<skill-dir>/scripts/supervisor.mjs" start \
   --run-dir <absolute-run-directory>
 ```
 
-The command returns after a detached supervisor starts. Record its JSON output, especially `runDir`, `supervisorPid`, and `cursor`. Artifacts remain outside the source workspace so relay bookkeeping does not dirty the repository.
+The command returns only after the detached supervisor publishes a startup handshake. Record its JSON output, especially `runDir`, `supervisorPid`, and `cursor`. Artifacts remain outside the source workspace so relay bookkeeping does not dirty the repository. On Windows, the launcher uses the existing Explorer shell as a broker so an Agent-owned kill-on-close Job does not terminate the supervisor when the initiating tool call returns; a missing broker handshake is a launch failure, never a reported running task.
 
 Default concurrency is the task count. Bound expensive queues with `--max-concurrency <n>`. Run dependent tasks sequentially, landing or verifying each prerequisite before dispatching its dependent.
 
@@ -100,7 +100,7 @@ node "<skill-dir>/scripts/watch-once.mjs" \
   --since <last-sequence>
 ```
 
-This command is event-driven. It blocks until a task enters `completed`, `failed`, `blocked`, `timeout`, or `aborted`, prints one JSON event, and exits. Review that task, update the cursor from the returned `seq`, then invoke `watch-once` again for remaining tasks.
+This command is event-driven. It blocks until a task enters `completed`, `failed`, `blocked`, `timeout`, or `aborted`, prints one JSON event, and exits. It also returns a synthetic `supervisor_stale` intervention event when a manifest says `running` but its supervisor PID is dead, using filesystem events first and a one-second liveness fallback so callers cannot block forever on stale state. Review that task or intervention, update the cursor from the returned `seq`, then invoke `watch-once` again for remaining tasks.
 
 A watcher can be interrupted and restarted without stopping workers or losing already-journaled events.
 
@@ -124,7 +124,7 @@ When the user asks to watch a particular subagent, open a dedicated terminal win
 node "<skill-dir>/scripts/supervisor.mjs" view --run <run-directory> --task <task-id>
 ```
 
-The terminal follows observable events until interrupted. Closing it does not stop the task. OpenCode normally exposes structured tool events. Antigravity visibility is limited to the lifecycle and log data emitted by its relay; never claim unavailable private reasoning or tool detail.
+The terminal follows observable events until interrupted. Closing it does not stop the task. On Windows, `view` writes a run-local viewer script and asks the existing Explorer shell to open it, keeping the terminal outside an Agent-owned kill-on-close Job; the window pauses instead of disappearing if the viewer exits with an error. OpenCode normally exposes structured tool events. Antigravity visibility is limited to the lifecycle and log data emitted by its relay; never claim unavailable private reasoning or tool detail.
 
 Other useful views:
 

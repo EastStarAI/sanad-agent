@@ -76,11 +76,26 @@ function readJson(path, label = path) {
   }
 }
 
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
 function writeJsonAtomic(path, value) {
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.${process.pid}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
-  renameSync(temporary, path);
+  const deadline = Date.now() + 2_000;
+  while (true) {
+    try {
+      renameSync(temporary, path);
+      return;
+    } catch (error) {
+      const transientWindowsContention = process.platform === 'win32'
+        && ['EPERM', 'EACCES', 'EBUSY'].includes(error.code);
+      if (!transientWindowsContention || Date.now() >= deadline) throw error;
+      sleepSync(25);
+    }
+  }
 }
 
 function canonicalWorkspace(path) {
@@ -226,6 +241,67 @@ function publicTask(task, runDir) {
   };
 }
 
+function windowsBatchQuote(value) {
+  return `"${String(value).replaceAll('"', '""')}"`;
+}
+
+function launchThroughWindowsExplorer(scriptPath) {
+  const result = spawnSync('explorer.exe', [scriptPath], {
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+  if (result.error) {
+    throw new Error(`Windows Explorer broker failed: ${result.error.message}`);
+  }
+  // Explorer commonly returns 1 after handing the file to the existing shell.
+  // The caller verifies the requested effect instead of trusting that status.
+}
+
+function writeWindowsWorkerBroker(runDir, paths, maxConcurrency) {
+  const workerPath = join(runDir, 'start-supervisor.cmd');
+  const brokerPath = join(runDir, 'start-supervisor.vbs');
+  const command = [
+    process.execPath,
+    SCRIPT_PATH,
+    '__worker',
+    '--run', runDir,
+    '--max-concurrency', String(maxConcurrency),
+  ].map(windowsBatchQuote).join(' ');
+  writeFileSync(
+    workerPath,
+    `@echo off\r\n${command} >> ${windowsBatchQuote(paths.supervisorLog)} 2>&1\r\n`,
+    'utf8',
+  );
+  const escapedWorkerPath = workerPath.replaceAll('"', '""');
+  writeFileSync(
+    brokerPath,
+    `CreateObject("WScript.Shell").Run Chr(34) & "${escapedWorkerPath}" & Chr(34), 0, False\r\n`,
+    'utf8',
+  );
+  return brokerPath;
+}
+
+function waitForWindowsWorkerHandshake(paths, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const manifest = JSON.parse(readFileSync(paths.manifest, 'utf8'));
+      if (manifest.status !== 'starting' && Number.isInteger(manifest.supervisorPid)) {
+        return manifest;
+      }
+    } catch {
+      // Atomic manifest replacement can briefly race this read.
+    }
+    sleepSync(50);
+  }
+  const manifest = JSON.parse(readFileSync(paths.manifest, 'utf8'));
+  manifest.status = 'failed';
+  manifest.finishedAt = new Date().toISOString();
+  manifest.error = 'Windows supervisor broker did not publish its startup handshake.';
+  writeJsonAtomic(paths.manifest, manifest);
+  throw new Error(manifest.error);
+}
+
 function startCommand(options) {
   if (!options.spec || !options['run-dir']) fail('start requires --spec and --run-dir');
   if (!isAbsolute(options['run-dir'])) fail('--run-dir must be absolute');
@@ -254,6 +330,22 @@ function startCommand(options) {
     maxConcurrency,
     tasks: Object.fromEntries(tasks.map((task) => [task.id, publicTask(task, runDir)])),
   });
+
+  if (process.platform === 'win32') {
+    try {
+      const brokerPath = writeWindowsWorkerBroker(runDir, paths, maxConcurrency);
+      launchThroughWindowsExplorer(brokerPath);
+      const running = waitForWindowsWorkerHandshake(paths);
+      process.stdout.write(`${JSON.stringify({
+        runDir,
+        supervisorPid: running.supervisorPid,
+        cursor: 0,
+      })}\n`);
+    } catch (error) {
+      fail(error.message, 1);
+    }
+    return;
+  }
 
   const logFd = openSync(paths.supervisorLog, 'a');
   const child = spawn(process.execPath, [
@@ -411,9 +503,23 @@ function requireTask(manifest, id) {
   return task;
 }
 
+function processIsAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function statusCommand(options) {
   if (!options.run) fail('status requires --run');
   const manifest = loadManifest(options.run);
+  if (manifest.status === 'running' && !processIsAlive(manifest.supervisorPid)) {
+    manifest.status = 'stale';
+    manifest.staleReason = 'Supervisor process is not running.';
+  }
   if (options.json) {
     process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
     return;
@@ -588,14 +694,27 @@ function viewCommand(options) {
     const child = spawn('osascript', ['-e', script], { detached: true, stdio: 'ignore' });
     child.unref();
   } else if (process.platform === 'win32') {
-    const quote = (value) => `"${String(value).replaceAll('"', '\\"')}"`;
-    const command = [process.execPath, ...args].map(quote).join(' ');
-    const child = spawn('cmd.exe', ['/d', '/c', 'start', '"Delegate Task Timeline"', 'cmd.exe', '/k', command], {
-      detached: true,
-      windowsHide: false,
-      stdio: 'ignore',
-    });
-    child.unref();
+    const runDir = resolve(options.run);
+    const viewerPath = join(runDir, `view-${options.task}.cmd`);
+    const command = [process.execPath, ...args].map(windowsBatchQuote).join(' ');
+    writeFileSync(
+      viewerPath,
+      [
+        '@echo off',
+        `title Delegate Task Timeline - ${options.task}`,
+        command,
+        'echo.',
+        'echo Timeline viewer exited with code %ERRORLEVEL%.',
+        'pause',
+        '',
+      ].join('\r\n'),
+      'utf8',
+    );
+    try {
+      launchThroughWindowsExplorer(viewerPath);
+    } catch (error) {
+      fail(error.message, 1);
+    }
   } else {
     const candidates = [
       ['x-terminal-emulator', ['-e', process.execPath, ...args]],

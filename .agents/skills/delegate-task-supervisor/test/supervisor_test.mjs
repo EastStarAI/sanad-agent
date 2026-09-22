@@ -154,3 +154,33 @@ test('supervises out-of-order tasks and watch-once survives watcher replacement'
   ], env));
   assert.equal(identity.opencode.sessionId, 'ses_test_fast');
 });
+
+test('reports a dead running supervisor as stale instead of blocking', () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'delegate-supervisor-stale-test-'));
+  const deadPid = 2_147_483_647;
+  writeFileSync(join(runDir, 'events.jsonl'), '', 'utf8');
+  writeFileSync(join(runDir, 'manifest.json'), `${JSON.stringify({
+    version: 'delegate-supervisor.v1',
+    runDir,
+    supervisorPid: deadPid,
+    status: 'running',
+    seq: 4,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    maxConcurrency: 1,
+    tasks: {},
+  }, null, 2)}\n`, 'utf8');
+
+  const status = JSON.parse(runNode(SUPERVISOR, [
+    'status', '--run', runDir, '--json',
+  ]));
+  assert.equal(status.status, 'stale');
+  assert.match(status.staleReason, /not running/);
+
+  const event = JSON.parse(runNode(WATCH_ONCE, [
+    '--run', runDir, '--since', '4',
+  ]));
+  assert.equal(event.kind, 'supervisor_stale');
+  assert.equal(event.to, 'stale');
+  assert.equal(event.supervisorPid, deadPid);
+});
