@@ -79,8 +79,10 @@ failure is fatal before payload access continues.
 Ordinary Sanad Home files use one atomic writer. It creates an unpredictable,
 exclusive temporary file in the destination directory, applies ownership
 before the first payload byte, flushes the file, replaces the destination
-atomically, and cleans the temporary file on every failure. Existing
-destinations and path components are revalidated before activation.
+atomically, and cleans the temporary file on every in-process failure. Existing
+destinations and path components are revalidated before activation. On Windows,
+the already-restricted temporary file carries the owner-only boundary through
+replacement; a final ACL reassertion still fails closed.
 Cross-process read-modify-write owners use a stable owner-only lock inode opened
 through the same boundary. The Linux owner-file Agent credential backend uses
 this lock plus the atomic writer; its filesystem mode protects against other
