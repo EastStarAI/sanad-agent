@@ -507,7 +507,6 @@ class ConversationState {
     if (existingText.isEmpty) return incomingText;
     if (incomingText == existingText) return existingText;
     if (incomingText.startsWith(existingText)) return incomingText;
-    if (existingText.startsWith(incomingText)) return existingText;
     return existingText + incomingText;
   }
 
