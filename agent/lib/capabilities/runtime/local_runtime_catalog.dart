@@ -560,11 +560,11 @@ class LocalRuntimeCatalog {
         ? '.'
         : inputPath;
     final resolution = allowMissing
-        ? _pathResolver.classifyPathAllowMissing(
+        ? await _pathResolver.classifyPathAllowMissingAsync(
             workspaceRoot: workspacePath,
             inputPath: effectivePath,
           )
-        : _pathResolver.classifyExistingPath(
+        : await _pathResolver.classifyExistingPathAsync(
             workspaceRoot: workspacePath,
             inputPath: effectivePath,
           );
