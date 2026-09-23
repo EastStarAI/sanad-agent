@@ -43,6 +43,10 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
       if (context.read<AuthCubit>().state is AuthAuthenticated) {
         unawaited(_routeAfterCloudAuth());
       }
+      final gatewayStatus = context.read<GatewayConnectionCubit>().state;
+      if (gatewayStatus.isDesktop && gatewayStatus.localGateway == LocalGatewayStatus.connected && !_showProviderSetup) {
+        unawaited(_checkProviderReadiness());
+      }
     });
   }
 
@@ -62,7 +66,7 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
   /// not ready, the provider setup UI is shown instead of the chat screen.
   Future<void> _checkProviderReadiness() async {
     if (_providerChecked || _checkingProvider) return;
-    _checkingProvider = true;
+    setState(() => _checkingProvider = true);
     try {
       final readiness = await getIt<ProviderSetupClient>().runtimeCheck();
       if (!mounted) return;
@@ -72,13 +76,17 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
       } else {
         setState(() => _showProviderSetup = true);
       }
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
-      // If the check itself fails, surface the setup UI so the user can retry.
-      _providerChecked = true;
-      setState(() => _showProviderSetup = true);
+      // Do not trap into _showProviderSetup on connection/timeout error.
+      // Allow retryable error display without false setup assumption.
+      setState(() {
+        _error = 'Could not verify provider readiness: $e';
+      });
     } finally {
-      _checkingProvider = false;
+      if (mounted) {
+        setState(() => _checkingProvider = false);
+      }
     }
   }
 
@@ -134,7 +142,18 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
             ),
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 300),
-              child: _showProviderSetup
+              child: _checkingProvider
+                  ? const Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 16),
+                          Text('Checking provider readiness...'),
+                        ],
+                      ),
+                    )
+                  : _showProviderSetup
                   ? ProviderSetupFlow(
                       onReady: (_) {
                         if (mounted) context.go(AppRoutes.home);

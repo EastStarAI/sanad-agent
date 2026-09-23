@@ -1144,11 +1144,16 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   }
 
   String _canonicalPath(String path) {
+    String resolved;
     try {
-      return Directory(path).resolveSymbolicLinksSync();
+      resolved = Directory(path).resolveSymbolicLinksSync();
     } catch (_) {
-      return Directory(path).absolute.path;
+      resolved = Directory(path).absolute.path;
     }
+    if (Platform.isWindows && resolved.length >= 2 && resolved[1] == ':') {
+      return '${resolved[0].toLowerCase()}${resolved.substring(1)}';
+    }
+    return resolved;
   }
 
   int _stableHash(String value) {
@@ -1161,6 +1166,8 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   }
 
   String _workspaceHash() {
+    final envHash = Platform.environment['SANAD_DEV_WORKSPACE_HASH'];
+    if (envHash != null && envHash.isNotEmpty) return envHash;
     final gitTop = _findGitTopLevel(Directory.current.absolute.path);
     if (gitTop == null) return 'unknown';
     return _stableHash(
