@@ -64,7 +64,7 @@ commit_push_authorized: planning-delivery-only
 | [97e — الملكية والاسترداد ودورة الحياة](docs/plans/tasks/97e-launcher-lifecycle-verification.md) | 97d | completed (automated matrix; full interactive in 97l) |
 | [97f — استجابة الوكيل أثناء أدوات الملفات](docs/plans/tasks/97f-agent-responsiveness.md) | 97b | completed |
 | [97g — جاهزية المزودين وتحميل الأجهزة](docs/plans/tasks/97g-readiness-and-loading.md) | 97f | planned |
-| [97h — ملكية الجلب ومنع استدعاءات إعادة البناء](docs/plans/tasks/97h-request-ownership-and-dedup.md) | 97g | planned |
+| [97h — ملكية الجلب ومنع استدعاءات إعادة البناء](docs/plans/tasks/97h-request-ownership-and-dedup.md) | 97g | review |
 | [97i — كفاءة تحميل المحادثات والصفحات](docs/plans/tasks/97i-pagination-request-efficiency.md) | 97h | planned |
 | [97j — مؤشرات نشاط ثابتة وخفض تكلفة رسم Windows](docs/plans/tasks/97j-windows-static-activity-ui.md) | 97h | planned |
 | [97k — ميزانيات منع التراجع والتقرير المقارن](docs/plans/tasks/97k-regression-budgets-and-report.md) | 97e, 97f, 97g, 97h, 97i, 97j | planned |
