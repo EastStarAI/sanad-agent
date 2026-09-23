@@ -155,7 +155,18 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
     final contextUsage = rawContextUsage is Map
         ? LlmUsageSnapshot.fromJson(Map<String, dynamic>.from(rawContextUsage))
         : null;
-    final runtimeMs = event['runtime_ms'] is num ? (event['runtime_ms'] as num).toInt() : null;
+    final rawRuntimeMs = event['runtime_ms'] is num ? (event['runtime_ms'] as num).toInt() : null;
+    final derivedRuntimeMs = rawRuntimeMs ??
+        (() {
+          final startedAt = DateTime.tryParse(event['started_at']?.toString() ?? '');
+          final terminalAt = DateTime.tryParse(event['terminal_at']?.toString() ?? '');
+          if (startedAt != null && terminalAt != null) {
+            final diff = terminalAt.difference(startedAt).inMilliseconds;
+            return diff >= 0 ? diff : null;
+          }
+          return null;
+        })();
+    final runtimeMs = derivedRuntimeMs;
     final contextTokens = event['context_tokens'] is num ? (event['context_tokens'] as num).toInt() : null;
     final thinkingMode = event['thinking_mode']?.toString();
     final reasoningLevel = event['reasoning_level']?.toString();

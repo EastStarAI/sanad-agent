@@ -493,6 +493,10 @@ class ToolPresentationHelper {
         cleanName.contains('command') ||
         cleanName.contains('execute') ||
         cleanName == 'ran') {
+      final description = mapInput['description']?.toString().trim();
+      if (description != null && description.isNotEmpty) {
+        return description;
+      }
       final cmd = mapInput['command'];
       if (cmd != null) {
         return cmd.toString().trim().replaceAll('\n', ' ');

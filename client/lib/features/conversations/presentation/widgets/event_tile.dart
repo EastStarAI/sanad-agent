@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/conversation_clock_scope.dart';
 import 'package:sanad_client/utils/format_utils.dart';
 import 'package:sanad_client/utils/link_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/plan_task_list.dart';
@@ -408,17 +409,47 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         spacing: 8,
         runSpacing: 4,
         children: [
-          if (metaText.isNotEmpty || timestampText.isNotEmpty)
-            Text(
-              [
-                timestampText,
-                metaText,
-              ].where((part) => part.isNotEmpty).join('  •  '),
-              style: GoogleFonts.roboto(
-                color: Theme.of(context).colorScheme.onSurfaceVariant
-                    .withValues(alpha: 0.8),
-                fontSize: 11,
-              ),
+          if (timestampText.isNotEmpty || metaText.isNotEmpty)
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (timestampText.isNotEmpty) ...[
+                  Tooltip(
+                    message: EventMetadataFormatter.dateTooltip(
+                      widget.event.timestamp,
+                      context,
+                    ),
+                    child: Text(
+                      timestampText,
+                      style: GoogleFonts.roboto(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.8),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                  if (metaText.isNotEmpty) ...[
+                    const SizedBox(width: 8),
+                    Text(
+                      '•  $metaText',
+                      style: GoogleFonts.roboto(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.8),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ] else if (metaText.isNotEmpty) ...[
+                  Text(
+                    metaText,
+                    style: GoogleFonts.roboto(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant
+                          .withValues(alpha: 0.8),
+                      fontSize: 11,
+                    ),
+                  ),
+                ],
+              ],
             ),
           Row(
             mainAxisSize: MainAxisSize.min,
@@ -429,6 +460,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                   child: IconButton(
                     key: const Key('fork_conversation_button'),
                     tooltip: 'Fork',
+                    style: ConversationActionStyle.buttonStyle,
                     visualDensity: VisualDensity.compact,
                     constraints: ConversationActionStyle.constraints,
                     padding: EdgeInsets.zero,
@@ -522,6 +554,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                         ),
                       ),
                     ],
+                    _buildToolHeaderTimer(context),
                     if (isError) ...[
                       const SizedBox(width: 6),
                       Icon(
@@ -540,6 +573,77 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     );
 
     return header;
+  }
+
+  Widget _buildToolHeaderTimer(BuildContext context) {
+    if (widget.event.kind != EventKind.toolCall) {
+      return const SizedBox.shrink();
+    }
+
+    final textStyle = GoogleFonts.outfit(
+      fontSize: 11.5,
+      fontWeight: FontWeight.w500,
+      fontFeatures: const [FontFeature.tabularFigures()],
+      color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.65),
+    );
+
+    if (widget.event.status == EventStatus.running) {
+      final clock = ConversationClockScope.maybeOf(context);
+      if (clock != null) {
+        return Padding(
+          padding: const EdgeInsetsDirectional.only(start: 6),
+          child: ValueListenableBuilder<DateTime>(
+            valueListenable: clock,
+            builder: (context, now, _) {
+              final diff = now.difference(widget.event.timestamp);
+              final text = EventMetadataFormatter.formatRuntime(diff.inMilliseconds);
+              return Text(
+                text.isEmpty ? '0s' : text,
+                key: const Key('tool_header_timer'),
+                style: textStyle,
+              );
+            },
+          ),
+        );
+      }
+      final diff = DateTime.now().difference(widget.event.timestamp);
+      final text = EventMetadataFormatter.formatRuntime(diff.inMilliseconds);
+      return Padding(
+        padding: const EdgeInsetsDirectional.only(start: 6),
+        child: Text(
+          text.isEmpty ? '0s' : text,
+          key: const Key('tool_header_timer'),
+          style: textStyle,
+        ),
+      );
+    }
+
+    final runtimeMs = widget.event.runtimeMs ??
+        (() {
+          final startedAt = DateTime.tryParse(widget.event.metadata?['started_at']?.toString() ?? '');
+          final terminalAt = DateTime.tryParse(widget.event.metadata?['terminal_at']?.toString() ?? '');
+          if (startedAt != null && terminalAt != null) {
+            return terminalAt.difference(startedAt).inMilliseconds;
+          }
+          final raw = widget.event.metadata?['runtime_ms'];
+          if (raw is num) return raw.toInt();
+          return null;
+        })();
+    if (runtimeMs != null) {
+      final text = EventMetadataFormatter.formatRuntime(runtimeMs);
+      if (text.isNotEmpty) {
+        return Padding(
+          padding: const EdgeInsetsDirectional.only(start: 6),
+          child: Text(
+            text,
+            key: const Key('tool_header_runtime'),
+            style: textStyle,
+          ),
+        );
+      }
+    }
+
+    return const SizedBox.shrink();
   }
 
   Widget _buildEventBody() {

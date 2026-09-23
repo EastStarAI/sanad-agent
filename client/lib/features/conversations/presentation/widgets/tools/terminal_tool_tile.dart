@@ -244,11 +244,13 @@ class TerminalToolTile extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
               const SizedBox(width: 12),
-              Text(
-                'Executing terminal command...',
-                style: GoogleFonts.roboto(
-                  fontSize: 12,
-                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+              Expanded(
+                child: Text(
+                  'Executing terminal command...',
+                  style: GoogleFonts.roboto(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
+                  ),
                 ),
               ),
             ],
