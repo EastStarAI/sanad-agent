@@ -98,6 +98,7 @@ For CLI-only delegation, the managed runtime needs the Agent daemon only. Do not
 | `--allow-all-tools` | | Flag | Auto-approves ordinary tool execution permissions. Questions (`system_ask_user`) ALWAYS remain pending. |
 | `--provider` | | String | Target LLM provider override. |
 | `--model` | `-m` | String | Target LLM model override. |
+| `--home` | | Path | Absolute Sanad Home directory. Authoritative when supplied: the CLI attaches to this Home instead of the default. A source-development task against a managed custom Home must pass it explicitly (the `delegate-task-supervisor` injects it from the task `home` field); without it a detached worker can fall back to an unrelated default Home and fail closed with exit 78 when that Home's daemon is active. Relative or malformed paths are rejected. |
 | `--thinking-mode` | | Enum | Select explicit reasoning effort, including `medium`; the value is forwarded to the daemon. |
 | `--thinking` | | Flag | Backward-compatible shorthand for deep reasoning. |
 | `--quiet` | `-q` | Flag | Suppress banners, headers, and tool output, printing only the final assistant text. |

@@ -2,7 +2,7 @@
 title: "Plan 97: Windows-first Agent and Client Performance"
 status: ready-for-windows-execution
 current_gate: 97c
-remaining_estimate: "97a–97b completed; implementation and final acceptance remain across 97c–97l"
+remaining_estimate: "97a–97b completed; 97x remains active for workflow blockers; implementation and final acceptance remain across 97c–97l"
 platforms: windows-first, macos-linux-mobile-final-verification
 implementation_authorized: windows-handoff
 commit_push_authorized: planning-delivery-only
@@ -36,9 +36,9 @@ commit_push_authorized: planning-delivery-only
 9. لا generic Job breakaway ولا قتل عمليات غير مثبتة الملكية ولا runtime switch. لا نسخ Home أو secrets لإعادة إنتاج المشكلة.
 10. بعد كل بوابة: دليل ومعايير قبول وحالة ونسبة متبقي محدثة. لا يُحسب كتابة الكود إغلاقًا للبوابة.
 11. فرع التنفيذ `perf/97-windows-first-performance` في worktree الخطة هو فرع التجميع الوحيد. يُفضّل التنفيذ التسلسلي داخله؛ لا تُنشأ worktree فرعية إلا لمهمة مستقلة قابلة للتوازي وبملكية ملفات لا تتداخل مع العمل الجاري. يبقى وكيل واحد في worktree الخطة، ويُعزل كل وكيل متزامن إضافي في worktree منفصلة.
-12. تُراجع نتيجة كل مهمة وتُثبت بواباتها أولًا، ثم يُطلب إذن المستخدم قبل إنشاء commit مستقل وواضح لها. نتيجة worktree الفرعية المأذون بها تُدمج محليًا في فرع الخطة ثم تُحذف worktree الفرعية؛ التسليم النهائي PR واحد إلى `main` يضم commits المهام المستقلة، وليس commit واحدًا مجمعًا.
-13. لا commit أو merge محلي أو حذف worktree أو push أو runtime source switch دون إذن صريح من المستخدم عند تلك النقطة. إنشاء worktree للتوازي لا يعني إذنًا بهذه العمليات اللاحقة.
-14. التنفيذ المفوض يستخدم OpenCode بالنموذج المعتمد `opencode/deepseek-v4-flash`، ولا يستخدم نموذجًا مجانيًا بديلًا تلقائيًا. قبل تشغيل أي وكيل فرعي، يعرض الأوركستريتور المهمة والاعتماديات وملكية الملفات وworktree المقترحة للمستخدم ويأخذ موافقته؛ أي تغيير للنموذج أو عدد الوكلاء يحتاج اتفاقًا جديدًا.
+12. يراجع وكيل مستقل كل بوابة؛ بعد قبولها يملك المنفذ/المراجع تفويض commit وpush مرحلي واضح دون تأكيد متكرر. تُدمج النتائج المقبولة في فرع التجميع، ويُفتح Draft PR بعد أول بوابة مقبولة لتشغيل CI على كل push.
+13. يبقى تحويل Draft إلى Ready والـmerge وprotected labels وruntime source switch بحاجة لتفويض صريح ما لم يمنحه طلب التنفيذ من البداية. الحذف أو العمل المدمر خارج brief لا يستفيدان من صلاحية الأدوات العامة.
+14. قبل كل مهمة/موجة يعرض الأوركستريتور ملخص مسؤولية المهمة وتغييرها واعتمادياتها ومعايير قبولها ثم يستمر فورًا ما لم يطلب المستخدم التوقف. المنفذون يعملون بصلاحيات الأدوات الكاملة ضمن brief؛ المنفذون المفوضون يستخدمون provider `agy` وmodel `gemini-3.8-flash-medium` حصريًا، والمراجع يستخدم provider `ChatGPT` وmodel `gpt-5.6-sol` حصريًا ويتوقف إذا لم يتوفر.
 
 ## 4. إغلاق الخطط القديمة ونقل ملكية المتبقي
 
@@ -69,6 +69,9 @@ commit_push_authorized: planning-delivery-only
 | [97j — مؤشرات نشاط ثابتة وخفض تكلفة رسم Windows](docs/plans/tasks/97j-windows-static-activity-ui.md) | 97h | planned |
 | [97k — ميزانيات منع التراجع والتقرير المقارن](docs/plans/tasks/97k-regression-budgets-and-report.md) | 97e, 97f, 97g, 97h, 97i, 97j | planned |
 | [97l — القبول التفاعلي النهائي عبر sanad-dev](docs/plans/tasks/97l-interactive-final-acceptance.md) | 97k | planned |
+| [97x — إزالة عوائق تنفيذ الخطة](docs/plans/tasks/97x-workflow-obstacle-removal.md) | 97a | active طوال التنفيذ |
+
+97x مسار cross-cutting في worktree التجميع: يسجل ويزيل عوائق delegation/supervisor/skills/CI/`sanad-dev` والصيانة المثبتة التي تبطئ بقية المهام، دون امتلاك تغييرات المنتج الخاصة بـ97c–97l.
 
 المسار الحرج يبدأ 97a ثم 97b. يمكن تنفيذ 97c/97d بالتوازي مع 97b بملكية منفصلة. 97h يسبق 97i/97j كي لا يختلط حمل الطلبات بحمل الرسم. 97k يجمع القبول الآلي والتقرير، و97l آخر بوابة تفاعلية. القياسات الحية التشخيصية المبكرة مسموحة؛ ليست قبولًا تفاعليًا نهائيًا.
 

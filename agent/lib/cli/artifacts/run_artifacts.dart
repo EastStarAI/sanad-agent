@@ -4,6 +4,13 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 
+String _isoUtcMilliseconds(DateTime value) {
+  final utc = value.toUtc();
+  final milliseconds = utc.millisecond.toString().padLeft(3, '0');
+  final base = utc.toIso8601String().split('.').first;
+  return '$base.${milliseconds}Z';
+}
+
 /// Represents a timestamped lifecycle event in a one-shot or delegated run.
 class RunLifecycleEvent {
   final String timestamp;
@@ -55,6 +62,9 @@ class RunResultArtifact {
   final int? durationMs;
   final String? text;
   final String? error;
+  final String? cause;
+  final String? stateSince;
+  final String? lastProgressAt;
   final Map<String, dynamic>? pendingIntervention;
   final Map<String, dynamic>? terminalOutput;
 
@@ -73,6 +83,9 @@ class RunResultArtifact {
     this.durationMs,
     this.text,
     this.error,
+    this.cause,
+    this.stateSince,
+    this.lastProgressAt,
     this.pendingIntervention,
     this.terminalOutput,
   });
@@ -91,6 +104,26 @@ class RunResultArtifact {
       status == 'cancelled';
   bool get isNeedsIntervention =>
       status == 'needs_input' || status == 'needs_permission';
+  bool get isBlocked => status == 'blocked';
+  bool get isWaiting => status == 'waiting';
+  bool get isResuming => status == 'resuming';
+
+  static String classifyCause({required String code, required String message}) {
+    // Runtime notices already carry RuntimeFailureReason's structured wire
+    // value. Do not reinterpret prose: generic words such as "timeout" or
+    // "connection" can describe a local observer without identifying the
+    // provider failure class.
+    final normalizedCode = code.trim().toLowerCase();
+    return switch (normalizedCode) {
+      'timeout' || 'provider_timeout' => 'provider_timeout',
+      'billing' || 'quota' || 'provider_quota' => 'provider_quota',
+      'rate_limit' || 'upstream_rate_limit' => 'rate_limit',
+      'network_error' => 'network_error',
+      'auth' || 'auth_error' => 'auth_error',
+      '' => 'unknown',
+      _ => normalizedCode,
+    };
+  }
 
   RunResultArtifact copyWith({
     String? status,
@@ -101,6 +134,10 @@ class RunResultArtifact {
     String? error,
     String? provider,
     String? model,
+    String? cause,
+    String? stateSince,
+    String? lastProgressAt,
+    bool clearCause = false,
     Map<String, dynamic>? pendingIntervention,
     Map<String, dynamic>? terminalOutput,
     bool clearPendingIntervention = false,
@@ -120,6 +157,9 @@ class RunResultArtifact {
       durationMs: durationMs ?? this.durationMs,
       text: text ?? this.text,
       error: error ?? this.error,
+      cause: clearCause ? null : (cause ?? this.cause),
+      stateSince: stateSince ?? this.stateSince,
+      lastProgressAt: lastProgressAt ?? this.lastProgressAt,
       pendingIntervention: clearPendingIntervention
           ? null
           : (pendingIntervention ?? this.pendingIntervention),
@@ -142,6 +182,9 @@ class RunResultArtifact {
     if (durationMs != null) 'duration_ms': durationMs,
     if (text != null) 'text': text,
     if (error != null) 'error': error,
+    if (cause != null) 'cause': cause,
+    if (stateSince != null) 'state_since': stateSince,
+    if (lastProgressAt != null) 'last_progress_at': lastProgressAt,
     if (pendingIntervention != null)
       'pending_intervention': pendingIntervention,
     if (terminalOutput != null) 'terminal_output': terminalOutput,
@@ -165,6 +208,9 @@ class RunResultArtifact {
       durationMs: json['duration_ms'] as int?,
       text: json['text'] as String?,
       error: json['error'] as String?,
+      cause: json['cause'] as String?,
+      stateSince: json['state_since'] as String?,
+      lastProgressAt: json['last_progress_at'] as String?,
       pendingIntervention: json['pending_intervention'] is Map
           ? Map<String, dynamic>.from(json['pending_intervention'] as Map)
           : null,
@@ -229,6 +275,21 @@ class RunArtifactStore {
     }
     return null;
   }
+
+  /// Reads all events from `events.jsonl` if it exists.
+  Future<List<RunLifecycleEvent>> readEvents() async {
+    final file = File(eventsPath);
+    if (!file.existsSync()) return const [];
+    final lines = await file.readAsLines();
+    return lines
+        .where((line) => line.trim().isNotEmpty)
+        .map(
+          (line) => RunLifecycleEvent.fromJson(
+            Map<String, dynamic>.from(jsonDecode(line) as Map),
+          ),
+        )
+        .toList();
+  }
 }
 
 /// Serializes all state transitions and event emissions through a strictly sequential async queue.
@@ -249,6 +310,7 @@ class RunArtifactCoordinator {
 
   Future<void> _queue = Future.value();
   bool _isTerminal = false;
+  DateTime? _lastProgressWriteAt;
   late RunResultArtifact _currentArtifact;
 
   RunArtifactCoordinator({
@@ -270,7 +332,7 @@ class RunArtifactCoordinator {
       model: initialModel,
       status: 'running',
       exitCode: 0,
-      startedAt: this.startTime.toIso8601String(),
+      startedAt: _isoUtcMilliseconds(this.startTime),
     );
   }
 
@@ -320,8 +382,10 @@ class RunArtifactCoordinator {
         if (questions != null && questions.isNotEmpty) 'questions': questions,
       };
 
+      final now = _isoUtcMilliseconds(DateTime.now());
       _currentArtifact = _currentArtifact.copyWith(
         status: kind,
+        stateSince: now,
         pendingIntervention: interventionData,
       );
 
@@ -340,15 +404,100 @@ class RunArtifactCoordinator {
           !_currentArtifact.isNeedsIntervention) {
         return;
       }
+      final now = _isoUtcMilliseconds(DateTime.now());
       _currentArtifact = _currentArtifact.copyWith(
         status: 'running',
+        stateSince: now,
+        lastProgressAt: now,
         clearPendingIntervention: true,
       );
+      _lastProgressWriteAt = DateTime.parse(now);
 
       if (store != null) {
         await store!.writeResult(_currentArtifact);
       }
       await _emitEvent('resumed', const {'status': 'running'});
+    });
+  }
+
+  /// Non-terminal runtime notice (e.g. blocked, waiting, resuming).
+  Future<void> recordRuntimeNotice({
+    required String status,
+    required String code,
+    required String message,
+    String? provider,
+    String? model,
+    String? cause,
+  }) {
+    return _enqueue(() async {
+      if (_isTerminal || _currentArtifact.isTerminal) return;
+      final now = _isoUtcMilliseconds(DateTime.now());
+      final effectiveCause =
+          cause ??
+          RunResultArtifact.classifyCause(code: code, message: message);
+      final isNewState =
+          _currentArtifact.status != status ||
+          _currentArtifact.cause != effectiveCause;
+      final noticeData = <String, dynamic>{
+        'status': status,
+        'code': code,
+        'cause': effectiveCause,
+        'message': message,
+        'session_id': sessionId,
+        'provider': ?provider,
+        'model': ?model,
+      };
+
+      _currentArtifact = _currentArtifact.copyWith(
+        status: status,
+        cause: effectiveCause,
+        stateSince: isNewState ? now : _currentArtifact.stateSince,
+        provider: provider,
+        model: model,
+      );
+
+      if (store != null) {
+        await store!.writeResult(_currentArtifact);
+      }
+      await _emitEvent(status, noticeData);
+    });
+  }
+
+  /// Records active progress (assistant chunk, tool call/result, reasoning).
+  Future<void> recordProgress() {
+    return _enqueue(() async {
+      if (_isTerminal || _currentArtifact.isTerminal) return;
+      final nowDate = DateTime.now().toUtc();
+      final now = _isoUtcMilliseconds(nowDate);
+      final wasNonterminalBlockedOrWaiting =
+          _currentArtifact.status == 'blocked' ||
+          _currentArtifact.status == 'waiting' ||
+          _currentArtifact.status == 'resuming' ||
+          _currentArtifact.isNeedsIntervention;
+      if (!wasNonterminalBlockedOrWaiting &&
+          _lastProgressWriteAt != null &&
+          nowDate.difference(_lastProgressWriteAt!) <
+              const Duration(seconds: 5)) {
+        return;
+      }
+      _lastProgressWriteAt = nowDate;
+
+      _currentArtifact = _currentArtifact.copyWith(
+        status: 'running',
+        lastProgressAt: now,
+        stateSince: wasNonterminalBlockedOrWaiting
+            ? now
+            : _currentArtifact.stateSince,
+        clearCause: wasNonterminalBlockedOrWaiting,
+        clearPendingIntervention: wasNonterminalBlockedOrWaiting,
+      );
+
+      if (store != null) {
+        await store!.writeResult(_currentArtifact);
+      }
+      if (wasNonterminalBlockedOrWaiting) {
+        await _emitEvent('resumed', const {'status': 'running'});
+      }
     });
   }
 
@@ -385,7 +534,7 @@ class RunArtifactCoordinator {
       final terminalArtifact = _currentArtifact.copyWith(
         status: status,
         exitCode: exitCode,
-        endedAt: endTime.toIso8601String(),
+        endedAt: _isoUtcMilliseconds(endTime),
         durationMs: durationMs,
         text: text,
         error: error,
@@ -415,7 +564,7 @@ class RunArtifactCoordinator {
 
   Future<void> _emitEvent(String type, Map<String, dynamic> data) async {
     final event = RunLifecycleEvent(
-      timestamp: DateTime.now().toUtc().toIso8601String(),
+      timestamp: _isoUtcMilliseconds(DateTime.now()),
       type: type,
       sessionId: sessionId,
       data: data,

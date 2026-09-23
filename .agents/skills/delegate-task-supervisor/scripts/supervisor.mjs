@@ -27,7 +27,6 @@ const SUPPORTED_IMPLEMENTERS = new Set(['opencode', 'agy', 'antigravity', 'sanad
 const TERMINAL_STATUSES = new Set([
   'completed',
   'failed',
-  'blocked',
   'timeout',
   'aborted',
   'interrupted',
@@ -37,6 +36,7 @@ const TERMINAL_STATUSES = new Set([
 ]);
 const TASK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/;
 const SHELL_META = /[|;&<>$`]/;
+const WINDOWS_BATCH_META = /[|;&<>$`%^!]/;
 const HELP = `delegate-task-supervisor
 
 Usage:
@@ -219,6 +219,14 @@ function validateTask(item, existingIds = new Set()) {
   if (SHELL_META.test(item.command) || item.args.some((arg) => SHELL_META.test(arg))) {
     fail(`task ${item.id} command and args must not contain shell metacharacters`);
   }
+  const isWindowsBatchCommand = process.platform === 'win32' && /\.(cmd|bat)$/i.test(item.command);
+  if (isWindowsBatchCommand && (
+    WINDOWS_BATCH_META.test(item.command) ||
+    item.args.some((arg) => WINDOWS_BATCH_META.test(arg)) ||
+    (typeof item.home === 'string' && WINDOWS_BATCH_META.test(item.home))
+  )) {
+    fail(`task ${item.id} Windows batch command, args, and home must not contain cmd metacharacters`);
+  }
 
   const workspace = canonicalWorkspace(item.workspace);
   const normalizeOptionalPath = (value, field) => {
@@ -237,6 +245,16 @@ function validateTask(item, existingIds = new Set()) {
   // workspace or CLI targeting mode.
   if (item.sourceRoot != null && item.implementer !== 'sanad') {
     fail(`task ${item.id} sourceRoot is only valid for sanad source-development invocations`);
+  }
+
+  // `home` is the explicit custom Sanad Home contract. A detached Sanad worker
+  // must never fall back to a default Home (observed standalone/exit 78 when
+  // the managed custom Home was not reachable). Valid only for sanad tasks;
+  // the value is injected as `--home` and duplicate/malformed declarations
+  // fail closed. Credentials never belong in this field.
+  const customHome = item.home ?? null;
+  if (customHome != null && item.implementer !== 'sanad') {
+    fail(`task ${item.id} home is only valid for sanad tasks`);
   }
 
   let resultPath = normalizeOptionalPath(item.resultPath, 'resultPath');
@@ -294,6 +312,26 @@ function validateTask(item, existingIds = new Set()) {
       fail(`task ${item.id} must not pass credentials via command args`);
     }
 
+    // Explicit custom-Home propagation (97x): a detached worker must attach to
+    // the declared managed Home instead of falling back to a default that may
+    // conflict with an active daemon (observed standalone/exit 78). The value
+    // is injected as `--home`; a relative, missing, or duplicated declaration
+    // fails closed so delegation never runs against the wrong Home.
+    const hasHomeArg = item.args.some(
+      (arg) => arg === '--home' || (typeof arg === 'string' && arg.startsWith('--home=')),
+    );
+    if (hasHomeArg) {
+      fail(`task ${item.id} declare the custom Home via task.home, not a --home argument`);
+    }
+    if (customHome != null) {
+      if (typeof customHome !== 'string' || !isAbsolute(customHome)) {
+        fail(`task ${item.id} home must be an absolute path`);
+      }
+      if (!existsSync(customHome) || !statSync(customHome).isDirectory()) {
+        fail(`task ${item.id} home must be an existing directory: ${customHome}`);
+      }
+    }
+
     const logicalWorkspace = getArgValue(item.args, item.id, '--workspace', '-w');
 
     const execRoot = getArgValue(item.args, item.id, '--execution-root');
@@ -346,9 +384,14 @@ function validateTask(item, existingIds = new Set()) {
     implementer: item.implementer,
     workspace,
     sourceRoot: item.sourceRoot != null ? resolve(item.sourceRoot) : null,
+    home: customHome != null ? resolve(customHome) : null,
     spawnCwd,
     command: item.command,
     args: item.args,
+    // The task's declared Home is injected once, after validation, so the
+    // worker always attaches to the managed custom Home. Nothing else may
+    // pass --home (duplicates fail closed during validation).
+    effectiveArgs: customHome != null ? [...item.args, '--home', resolve(customHome)] : item.args,
     resultPath,
     timelinePath,
     timelineFormat,
@@ -384,6 +427,7 @@ function publicTask(task, runDir, initialStatus = 'queued') {
     implementer: task.implementer,
     workspace: task.workspace,
     sourceRoot: task.sourceRoot ?? null,
+    home: task.home ?? null,
     spawnCwd: task.spawnCwd ?? task.workspace,
     status: initialStatus,
     pid: null,
@@ -607,9 +651,11 @@ function workerCommand(options) {
       sessionId: result.sessionId ?? result.session_id ?? null,
     };
     if (result) recordIdentity(task, result);
+    const finishedAt = new Date().toISOString();
     transition(task, status, {
       pid: manifest.tasks[task.id]?.pid ?? null,
-      finishedAt: new Date().toISOString(),
+      finishedAt,
+      stateSince: finishedAt,
       exitCode: code,
       signal,
       reportedStatus,
@@ -698,15 +744,60 @@ function workerCommand(options) {
             requestId,
             intervention,
             kind: type,
+            stateSince: event.timestamp || null,
+          });
+        } else if (type === 'blocked' || type === 'waiting') {
+          const cause = data.cause || data.code || 'unknown';
+          const noticeIdentity = requestId || cause;
+          if (lastSeenType === type && lastSeenRequestId === noticeIdentity) continue;
+          lastSeenType = type;
+          lastSeenRequestId = noticeIdentity;
+          transition(task, type, {
+            sessionId,
+            cause,
+            stateSince: event.timestamp || null,
           });
         } else if (type === 'resumed') {
           if (manifest.tasks[task.id]?.status === 'running') continue;
           lastSeenType = 'resumed';
+          transition(task, 'resuming', {
+            sessionId,
+            requestId: null,
+            intervention: null,
+            cause: null,
+            stateSince: event.timestamp || null,
+          });
+        } else if (type === 'running') {
+          if (manifest.tasks[task.id]?.status === 'running') continue;
+          lastSeenType = 'running';
           transition(task, 'running', {
             sessionId,
             requestId: null,
             intervention: null,
+            cause: null,
+            stateSince: event.timestamp || null,
           });
+        }
+
+        if (type === 'tool_use' || event.part?.type === 'tool' || event.tool_executions) {
+          const taskState = manifest.tasks[task.id];
+          if (taskState) {
+            const progressAt = event.timestamp || null;
+            if (!progressAt) continue;
+            if (taskState.status === 'resuming') {
+              transition(task, 'running', {
+                cause: null,
+                stateSince: progressAt,
+                lastProgressAt: progressAt,
+              });
+            } else {
+              // Tool boundaries are meaningful progress and low-frequency.
+              // Assistant text can arrive per token, so it must never trigger
+              // persistent manifest writes here.
+              taskState.lastProgressAt = progressAt;
+              persist();
+            }
+          }
         }
       }
     };
@@ -730,15 +821,25 @@ function workerCommand(options) {
     const stdoutFd = openSync(manifest.tasks[task.id].stdoutPath, 'a');
     const stderrFd = openSync(manifest.tasks[task.id].stderrPath, 'a');
     const isBatch = process.platform === 'win32' && /\.(cmd|bat)$/i.test(task.command);
+    const effectiveArgs = task.effectiveArgs || task.args;
     let child;
     try {
-      child = spawn(task.command, task.args, {
+      const spawnOptions = {
         cwd: task.spawnCwd || task.workspace,
         env: process.env,
         windowsHide: true,
         stdio: ['ignore', stdoutFd, stderrFd],
-        shell: isBatch,
-      });
+      };
+      if (isBatch) {
+        const batchCommand = [task.command, ...effectiveArgs].map(windowsBatchQuote).join(' ');
+        child = spawn(
+          process.env.ComSpec || 'cmd.exe',
+          ['/d', '/s', '/c', `"${batchCommand}"`],
+          { ...spawnOptions, windowsVerbatimArguments: true },
+        );
+      } else {
+        child = spawn(task.command, effectiveArgs, spawnOptions);
+      }
     } catch (error) {
       closeSync(stdoutFd);
       closeSync(stderrFd);
@@ -747,9 +848,11 @@ function workerCommand(options) {
     }
     closeSync(stdoutFd);
     closeSync(stderrFd);
+    const startedAt = new Date().toISOString();
     transition(task, 'running', {
       pid: child.pid,
-      startedAt: new Date().toISOString(),
+      startedAt,
+      stateSince: startedAt,
     });
 
     observeTimeline(task, child);
@@ -1147,6 +1250,116 @@ async function closeCommand(options) {
   }
 }
 
+function formatDuration(ms) {
+  if (ms == null || isNaN(ms) || ms < 0) return 'unknown';
+  const totalSeconds = Math.floor(ms / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function resolveSessionDetails(task, manifest) {
+  let result = null;
+  if (task.resultPath && existsSync(task.resultPath)) {
+    try {
+      result = JSON.parse(readFileSync(task.resultPath, 'utf8'));
+    } catch {}
+  }
+
+  const pid = task.pid ?? manifest?.tasks?.[task.id]?.pid ?? null;
+  const isAlive = pid ? processIsAlive(pid) : false;
+  const terminalStates = new Set(['completed', 'failed', 'timeout', 'cancelled', 'aborted', 'interrupted']);
+  // Once the supervisor observes process exit, its terminal transition wins
+  // over a stale nonterminal result artifact.
+  const rawStatus = terminalStates.has(task.status)
+    ? task.status
+    : (result?.status || task.status);
+  const cause = result?.cause || task.cause || (rawStatus === 'timeout' ? 'timeout' : null);
+  let stateSince = result?.state_since || result?.stateSince || null;
+  if (!stateSince && task.status === rawStatus) stateSince = task.stateSince || null;
+  if (!stateSince && terminalStates.has(rawStatus)) {
+    stateSince = task.finishedAt || result?.ended_at || result?.endedAt || null;
+  }
+  const lastProgressAt = result?.last_progress_at || result?.lastProgressAt || task.lastProgressAt || null;
+
+  let sessionState = 'unknown';
+  if (rawStatus === 'completed') {
+    sessionState = 'completed';
+  } else if (terminalStates.has(rawStatus)) {
+    sessionState = 'stopped';
+  } else if (rawStatus === 'needs_input') {
+    sessionState = 'waiting for input';
+  } else if (rawStatus === 'needs_permission') {
+    sessionState = 'waiting for permission';
+  } else if (rawStatus === 'waiting') {
+    sessionState = 'waiting';
+  } else if (rawStatus === 'blocked') {
+    sessionState = 'blocked';
+  } else if (rawStatus === 'resuming') {
+    sessionState = 'resuming';
+  } else if (rawStatus === 'running') {
+    // PID liveness proves only that a process exists. Report working only when
+    // the runtime or supervisor recorded actual progress.
+    sessionState = lastProgressAt ? 'working' : 'unknown';
+  } else if (rawStatus === 'queued') {
+    sessionState = 'queued';
+  } else if (rawStatus === 'held') {
+    sessionState = 'held';
+  }
+
+  const parseMillis = (value) => {
+    if (!value) return null;
+    const parsed = new Date(value).getTime();
+    return Number.isNaN(parsed) ? null : parsed;
+  };
+  const explicitDuration = result?.duration_ms ?? result?.durationMs ?? null;
+  const startTime = parseMillis(task.startedAt || result?.started_at || result?.startedAt);
+  const endTime = parseMillis(task.finishedAt || result?.ended_at || result?.endedAt)
+    ?? (terminalStates.has(rawStatus) ? null : Date.now());
+  const elapsedMs = Number.isFinite(explicitDuration)
+    ? explicitDuration
+    : (startTime != null && endTime != null ? Math.max(0, endTime - startTime) : null);
+
+  let observationSource = result ? 'result.json' : 'manifest';
+  if (pid) observationSource += isAlive ? ` (process alive: ${pid})` : ' (process not running)';
+
+  const formatIso = (value, fallback) => {
+    if (!value) return fallback;
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? fallback : parsed.toISOString();
+  };
+
+  return {
+    taskId: task.id,
+    sessionState,
+    cause: cause || '-',
+    stateSince: formatIso(stateSince, '[unknown time]'),
+    lastProgressAt: formatIso(lastProgressAt, '-'),
+    elapsed: formatDuration(elapsedMs),
+    elapsedMs,
+    observationSource,
+    currentTime: new Date().toISOString(),
+  };
+}
+
+function formatSessionFooter(details) {
+  return [
+    '--- Session Observability ---',
+    `Task ID:            ${details.taskId}`,
+    `Session State:      ${details.sessionState}`,
+    `Cause:              ${details.cause}`,
+    `State Since:        ${details.stateSince}`,
+    `Last Progress:      ${details.lastProgressAt}`,
+    `Elapsed:            ${details.elapsed}`,
+    `Observation Source: ${details.observationSource}`,
+    `Current Time:       ${details.currentTime}`,
+    '-----------------------------',
+  ].join('\n');
+}
+
 function statusCommand(options) {
   if (!options.run) fail('status requires --run');
   const manifest = loadManifest(options.run);
@@ -1155,6 +1368,13 @@ function statusCommand(options) {
     manifest.staleReason = 'Supervisor process is not running.';
   }
   if (options.json) {
+    for (const task of Object.values(manifest.tasks || {})) {
+      const details = resolveSessionDetails(task, manifest);
+      task.sessionState = details.sessionState;
+      task.sessionCause = details.cause;
+      task.lastProgressAt = details.lastProgressAt !== '-' ? details.lastProgressAt : null;
+      task.stateSince = details.stateSince !== '[unknown time]' ? details.stateSince : null;
+    }
     process.stdout.write(`${JSON.stringify(manifest, null, 2)}\n`);
     return;
   }
@@ -1163,6 +1383,17 @@ function statusCommand(options) {
   process.stdout.write('TASK\tIMPLEMENTER\tSTATUS\tPID\tWORKSPACE\n');
   for (const task of Object.values(manifest.tasks)) {
     process.stdout.write(`${task.id}\t${task.implementer}\t${task.status}\t${task.pid ?? '-'}\t${task.workspace}\n`);
+  }
+
+  if (options.task) {
+    const task = requireTask(manifest, options.task);
+    const details = resolveSessionDetails(task, manifest);
+    process.stdout.write(`\n${formatSessionFooter(details)}\n`);
+  } else {
+    for (const task of Object.values(manifest.tasks)) {
+      const details = resolveSessionDetails(task, manifest);
+      process.stdout.write(`\n${formatSessionFooter(details)}\n`);
+    }
   }
 }
 
@@ -1181,10 +1412,19 @@ function readLastLines(path, count) {
   if (!existsSync(path)) return '';
   const lines = readFileSync(path, 'utf8').split(/\r?\n/);
   if (lines.at(-1) === '') lines.pop();
-  return `${lines.slice(-count).join('\n')}${lines.length ? '\n' : ''}`;
+  const observed = lines.slice(-count).map((line) => formatTimelineLine(line));
+  return `${observed.join('\n')}${observed.length ? '\n' : ''}`;
 }
 
-function followFiles(entries) {
+function formatObservedLogContent(content, receiptTime) {
+  const lines = content.split(/\r?\n/);
+  const trailingNewline = lines.at(-1) === '';
+  if (trailingNewline) lines.pop();
+  const observed = lines.map((line) => formatTimelineLine(line, receiptTime));
+  return `${observed.join('\n')}${trailingNewline && observed.length ? '\n' : ''}`;
+}
+
+function followFiles(entries, options = {}) {
   const offsets = new Map();
   const watchers = [];
   const drain = (entry) => {
@@ -1196,8 +1436,28 @@ function followFiles(entries) {
     if (size === nextOffset) return;
     const content = readFileSync(entry.path, 'utf8').slice(nextOffset);
     offsets.set(entry.path, size);
-    entry.consume(content);
+    const now = new Date().toISOString();
+    entry.consume(content, now);
   };
+
+  const runDir = options.runDir || null;
+  const observerFile = runDir ? join(runDir, 'observers', `${process.pid}.json`) : null;
+  const observerRecord = {
+    pid: process.pid,
+    command: options.command || 'follow',
+    taskId: options.taskId || null,
+    startedAt: new Date().toISOString(),
+    endedAt: null,
+    status: 'active',
+    cancellationSignal: null,
+  };
+
+  if (observerFile) {
+    try {
+      mkdirSync(dirname(observerFile), { recursive: true });
+      writeJsonAtomic(observerFile, observerRecord);
+    } catch {}
+  }
 
   for (const entry of entries) {
     if (entry.path && existsSync(entry.path)) offsets.set(entry.path, statSync(entry.path).size);
@@ -1219,65 +1479,137 @@ function followFiles(entries) {
     watchers.push(watcher);
   }
   for (const entry of entries) drain(entry);
-  const close = () => {
+
+  const close = (signal = null) => {
+    const endedAt = new Date().toISOString();
     for (const watcher of watchers) watcher.close();
+    if (observerFile) {
+      try {
+        observerRecord.endedAt = endedAt;
+        observerRecord.status = signal ? 'cancelled' : 'completed';
+        observerRecord.cancellationSignal = signal;
+        writeJsonAtomic(observerFile, observerRecord);
+      } catch {}
+    }
+    if (signal) {
+      process.stderr.write(`[observer cancelled by ${signal} at ${endedAt}]\n`);
+    }
     process.exit(0);
   };
-  process.on('SIGINT', close);
-  process.on('SIGTERM', close);
+  process.on('SIGINT', () => close('SIGINT'));
+  process.on('SIGTERM', () => close('SIGTERM'));
   if (watchers.length === 0) fail('no observable files exist yet');
 }
 
-function formatTimelineLine(line) {
-  if (!line.trim()) return null;
+function formatTimelineLine(line, receiptTime = null) {
+  if (!line || !line.trim()) return null;
   let event;
+  let isJson = true;
   try {
     event = JSON.parse(line);
   } catch {
-    return line;
+    isJson = false;
   }
-  const time = event.timestamp
-    ? new Date(event.timestamp).toISOString()
-    : event.at || '';
+
+  let sourceTime = null;
+  if (isJson) {
+    const rawTime = event.timestamp ?? event.at ?? null;
+    if (rawTime != null) {
+      try {
+        const d = new Date(rawTime);
+        if (!isNaN(d.getTime())) sourceTime = d.toISOString();
+      } catch {}
+    }
+  }
+
+  const effectiveReceipt = receiptTime || (isJson ? (event.received_at || event.receivedAt || null) : null);
+  let receiptIso = null;
+  if (effectiveReceipt) {
+    try {
+      const d = new Date(effectiveReceipt);
+      if (!isNaN(d.getTime())) receiptIso = d.toISOString();
+    } catch {}
+  }
+
+  let timeLabel;
+  if (sourceTime) {
+    timeLabel = receiptIso ? `${sourceTime} (received: ${receiptIso})` : sourceTime;
+  } else {
+    timeLabel = receiptIso ? `[unknown time] (received: ${receiptIso})` : '[unknown time]';
+  }
+
+  if (!isJson) {
+    const leadingIso = line.match(/^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))(?:\s+|$)(.*)$/);
+    if (leadingIso) {
+      const parsed = new Date(leadingIso[1]);
+      if (!Number.isNaN(parsed.getTime())) {
+        const sourceLabel = parsed.toISOString();
+        const label = receiptIso ? `${sourceLabel} (received: ${receiptIso})` : sourceLabel;
+        return `${label}  ${leadingIso[2]}`.trimEnd();
+      }
+    }
+    return `${timeLabel}  ${line}`;
+  }
+
   if (event.taskId && event.to) {
-    return `${time}  ${event.taskId}  ${event.from} -> ${event.to}`;
+    const causeStr = event.cause ? ` (${event.cause})` : '';
+    return `${timeLabel}  ${event.taskId}  ${event.from} -> ${event.to}${causeStr}`;
   }
+
   const type = event.type || event.part?.type || 'event';
   if (type === 'tool_use' || event.part?.type === 'tool') {
     const part = event.part || {};
     const state = part.state || {};
     const input = state.input || {};
     const detail = input.filePath || input.path || input.pattern || input.command || '';
-    return `${time}  tool:${part.tool || 'unknown'}  ${state.status || ''}  ${String(detail).slice(0, 240)}`.trimEnd();
+    return `${timeLabel}  tool:${part.tool || 'unknown'}  ${state.status || ''}  ${String(detail).slice(0, 240)}`.trimEnd();
   }
   if (type === 'text') {
-    return `${time}  text  ${String(event.part?.text || event.text || '').replace(/\s+/g, ' ').slice(0, 500)}`;
+    return `${timeLabel}  text  ${String(event.part?.text || event.text || '').replace(/\s+/g, ' ').slice(0, 500)}`;
+  }
+  if (type === 'notice') {
+    const code = event.code || event.data?.code || 'notice';
+    const message = event.message || event.data?.message || '';
+    return `${timeLabel}  notice:${code}  ${message}`.trimEnd();
+  }
+  if (type === 'blocked' || type === 'waiting') {
+    const cause = event.cause || event.data?.cause || event.code || event.data?.code || 'unknown';
+    const message = event.message || event.data?.message || '';
+    return `${timeLabel}  ${type} (${cause})  ${message}`.trimEnd();
+  }
+  if (type === 'resumed' || type === 'resuming') {
+    return `${timeLabel}  resuming`.trimEnd();
+  }
+  if (type === 'needs_input' || type === 'needs_permission') {
+    const tool = event.data?.tool_name ? ` tool=${event.data.tool_name}` : '';
+    return `${timeLabel}  ${type}${tool}`.trimEnd();
   }
   const reason = event.part?.reason ? ` reason=${event.part.reason}` : '';
-  return `${time}  ${type}${reason}`.trimEnd();
+  return `${timeLabel}  ${type}${reason}`.trimEnd();
 }
 
 function timelineCommand(options) {
   if (!options.run || !options.task) fail('timeline requires --run and --task');
-  const manifest = loadManifest(options.run);
+  const runDir = resolve(options.run);
+  const manifest = loadManifest(runDir);
   const task = requireTask(manifest, options.task);
-  const journalPath = runPaths(resolve(options.run)).journal;
+  const journalPath = runPaths(runDir).journal;
 
-  const printSupervisorEvents = (content) => {
+  const printSupervisorEvents = (content, receiptTime = null) => {
     for (const line of content.split(/\r?\n/)) {
       if (!line.trim()) continue;
       try {
         const event = JSON.parse(line);
-        if (event.taskId === task.id) process.stdout.write(`${formatTimelineLine(line)}\n`);
+        if (event.taskId === task.id) process.stdout.write(`${formatTimelineLine(line, receiptTime)}\n`);
       } catch {
         // Ignore malformed partial lines; atomic append records are newline terminated.
       }
     }
   };
-  const printTaskEvents = (content) => {
+  const printTaskEvents = (content, receiptTime = null) => {
     for (const line of content.split(/\r?\n/)) {
       if (!line.trim()) continue;
-      process.stdout.write(`${task.timelineFormat === 'jsonl' ? formatTimelineLine(line) : line}\n`);
+      process.stdout.write(`${formatTimelineLine(line, receiptTime)}\n`);
     }
   };
 
@@ -1285,17 +1617,21 @@ function timelineCommand(options) {
   if (task.timelinePath && existsSync(task.timelinePath)) {
     printTaskEvents(readFileSync(task.timelinePath, 'utf8'));
   }
+  const details = resolveSessionDetails(task, manifest);
+  process.stdout.write(`\n${formatSessionFooter(details)}\n`);
+
   if (options.follow) {
     followFiles([
       { path: journalPath, consume: printSupervisorEvents },
       { path: task.timelinePath, consume: printTaskEvents },
-    ]);
+    ], { runDir, command: 'timeline', taskId: task.id });
   }
 }
 
 function logsCommand(options) {
   if (!options.run || !options.task) fail('logs requires --run and --task');
-  const manifest = loadManifest(options.run);
+  const runDir = resolve(options.run);
+  const manifest = loadManifest(runDir);
   const task = requireTask(manifest, options.task);
   const stream = options.stream || 'both';
   if (!['stdout', 'stderr', 'both'].includes(stream)) fail('--stream must be stdout, stderr, or both');
@@ -1307,11 +1643,16 @@ function logsCommand(options) {
   for (const entry of entries) {
     process.stdout.write(`--- ${entry.label} ---\n${readLastLines(entry.path, tail)}`);
   }
+  const details = resolveSessionDetails(task, manifest);
+  process.stdout.write(`\n${formatSessionFooter(details)}\n`);
+
   if (options.follow) {
     followFiles(entries.map((entry) => ({
       path: entry.path,
-      consume: (content) => process.stdout.write(`[${entry.label}] ${content}`),
-    })));
+      consume: (content, receiptTime) => process.stdout.write(
+        `[${entry.label}] ${formatObservedLogContent(content, receiptTime)}`,
+      ),
+    })), { runDir, command: 'logs', taskId: task.id });
   }
 }
 

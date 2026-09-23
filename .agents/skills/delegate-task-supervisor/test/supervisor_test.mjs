@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, watch, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, watch, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import test from 'node:test';
@@ -19,7 +19,7 @@ function waitForFileChange(directory, predicate, timeoutMs = 8_000) {
       try {
         const value = predicate();
         if (!value) return;
-        clearTimeout(timer);
+        clearInterval(timer);
         watcher?.close();
         resolvePromise(value);
       } catch {
@@ -139,7 +139,7 @@ test('supervises out-of-order tasks and watch-once survives watcher replacement'
   writeFileSync(specPath, JSON.stringify({ tasks: [
     task('slow', 1_300, 'failed'),
     task('fast', 800, 'completed', 'ses_test_fast'),
-    task('middle', 1_050, 'blocked'),
+    task('middle', 1_050, 'timeout'),
   ] }), 'utf8');
 
   const env = { ...process.env, XDG_CONFIG_HOME: config };
@@ -166,6 +166,13 @@ test('supervises out-of-order tasks and watch-once survives watcher replacement'
   const interruptedResult = await collectProcess(interrupted);
   assert.notEqual(interruptedResult.code, 0);
 
+  // A watcher timeout/interruption never stops the worker: the run is still
+  // running and unfinished work keeps progressing. Re-entry uses a bounded
+  // status read plus the cursor, never scheduled polling.
+  const midStatus = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+  assert.equal(midStatus.status, 'running');
+  assert.equal(midStatus.tasks.slow.status, 'running');
+
   const first = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', '3'], env));
   assert.equal(first.taskId, 'fast');
   assert.equal(first.to, 'completed');
@@ -174,7 +181,7 @@ test('supervises out-of-order tasks and watch-once survives watcher replacement'
     '--run', runDir, '--since', String(first.seq),
   ], env));
   assert.equal(second.taskId, 'middle');
-  assert.equal(second.to, 'blocked');
+  assert.equal(second.to, 'timeout');
 
   const third = JSON.parse(runNode(WATCH_ONCE, [
     '--run', runDir, '--since', String(second.seq),
@@ -375,7 +382,7 @@ test('add, enqueue, and close semantics, duplicate ID rejection, and post-close 
   assert.equal(completed.tasks['task-held'].status, 'completed');
 });
 
-test('Sanad fixture writing G2 events: needs_input and needs_permission wake default watch-once, resumed is non-terminal, session identity recorded', async () => {
+test('Sanad fixture writing G2 events: intervention and resuming states wake default watch-once, session identity recorded', async () => {
   const root = mkdtempSync(join(tmpdir(), 'delegate-sanad-fixture-test-'));
   const workspace = join(root, 'worktree');
   const runDir = join(root, 'run');
@@ -517,17 +524,24 @@ test('Sanad fixture writing G2 events: needs_input and needs_permission wake def
   assert.equal(JSON.stringify(event1).includes('must-not-reach'), false);
   assert.equal(JSON.stringify(event1).includes('provider_payload'), false);
 
-  // 2. watch-once ignores intermediate 'resumed' and wakes up on needs_permission
+  // 2. watch-once surfaces the meaningful resuming transition.
   const event2 = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', String(event1.seq)], env));
   assert.equal(event2.taskId, 'sanad-task-1');
-  assert.equal(event2.to, 'needs_permission');
-  assert.equal(event2.sessionId, 'ses_sanad_42');
-  assert.equal(event2.requestId, 'req-perm-1');
+  assert.equal(event2.to, 'resuming');
 
-  // 3. watch-once ignores intermediate 'resumed' and wakes up on completed
+  // 3. The next intervention remains observable.
   const event3 = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', String(event2.seq)], env));
   assert.equal(event3.taskId, 'sanad-task-1');
-  assert.equal(event3.to, 'completed');
+  assert.equal(event3.to, 'needs_permission');
+  assert.equal(event3.sessionId, 'ses_sanad_42');
+  assert.equal(event3.requestId, 'req-perm-1');
+
+  // 4. A second resume and the eventual terminal state are distinct wakes.
+  const event4 = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', String(event3.seq)], env));
+  assert.equal(event4.to, 'resuming');
+  const event5 = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', String(event4.seq)], env));
+  assert.equal(event5.taskId, 'sanad-task-1');
+  assert.equal(event5.to, 'completed');
 
   const supervisorEvents = readFileSync(join(runDir, 'events.jsonl'), 'utf8')
     .trim()
@@ -971,4 +985,470 @@ test('sanad sourceRoot validation fails closed on missing roots, entries, and wr
   const nestedResult = JSON.parse(readFileSync(join(outDir, 'result.json'), 'utf8'));
   assert.equal(nestedResult.status, 'completed');
   runNode(SUPERVISOR, ['close', '--run', nestedRun]);
+});
+
+test('sanad custom Home propagation injects --home and fails closed on ambiguity', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-home-test-'));
+  const worktree = join(root, 'target-worktree');
+  const customHome = join(root, 'managed-home');
+  const outDir = join(root, 'task-out');
+  const briefFile = join(root, 'brief.txt');
+  const runDir = join(root, 'run');
+  mkdirSync(worktree, { recursive: true });
+  mkdirSync(customHome, { recursive: true });
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(briefFile, 'Brief', 'utf8');
+
+  // Mock sanad records the full argument vector it received. No token is ever
+  // part of the spec; this proves the detached worker attached to the declared
+  // custom Home without starting a second runtime.
+  const mockScript = join(root, 'mock_home.mjs');
+  writeFileSync(mockScript, `
+    import {appendFileSync, mkdirSync, writeFileSync} from 'node:fs';
+    import {dirname, resolve} from 'node:path';
+    const args = process.argv.slice(2);
+    let outDir = '';
+    let home = null;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--out-dir') outDir = args[i + 1];
+      if (args[i] === '--home') home = args[i + 1];
+    }
+    const resPath = resolve(outDir, 'result.json');
+    const evPath = resolve(outDir, 'events.jsonl');
+    mkdirSync(dirname(resPath), {recursive:true});
+    writeFileSync(resPath, JSON.stringify({status: 'completed', exit_code: 0, home, argv: args}));
+    appendFileSync(evPath, JSON.stringify({type: 'completed', status: 'completed'}) + '\\n');
+    process.exit(0);
+  `, 'utf8');
+  const sanadBin = createSanadWrapper(root, mockScript);
+
+  const spec = join(root, 'tasks.json');
+  writeFileSync(spec, JSON.stringify({
+    tasks: [{
+      id: 'home-task',
+      implementer: 'sanad',
+      workspace: worktree,
+      home: customHome,
+      command: sanadBin,
+      args: [
+        'run',
+        '--brief-file', briefFile,
+        '--workspace', 'ws-logical',
+        '--execution-root', worktree,
+        '--out-dir', outDir,
+        '--events',
+      ],
+      resultPath: join(outDir, 'result.json'),
+      timelinePath: join(outDir, 'events.jsonl'),
+      timelineFormat: 'jsonl',
+    }],
+  }), 'utf8');
+
+  runNode(SUPERVISOR, ['start', '--spec', spec, '--run-dir', runDir, '--max-concurrency', '1']);
+
+  const event = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', '0']));
+  assert.equal(event.to, 'completed');
+
+  const result = JSON.parse(readFileSync(join(outDir, 'result.json'), 'utf8'));
+  assert.equal(result.status, 'completed');
+  assert.equal(result.home, customHome);
+  assert.equal(result.argv.filter((value) => value === '--home').length, 1);
+
+  const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+  assert.equal(manifest.tasks['home-task'].home, customHome);
+  assert.equal(manifest.tasks['home-task'].workspace, worktree);
+  assert.equal(JSON.stringify(result).includes('secret'), false);
+
+  runNode(SUPERVISOR, ['close', '--run', runDir]);
+});
+
+test('sanad home validation fails closed on relative, missing, or duplicate declarations', () => {
+  const root = mkdtempSync(join(tmpdir(), 'delegate-homeval-test-'));
+  const worktree = join(root, 'workspace');
+  const outDir = join(root, 'out');
+  const brief = join(root, 'brief.txt');
+  mkdirSync(worktree, { recursive: true });
+  mkdirSync(outDir, { recursive: true });
+  writeFileSync(brief, 'Brief', 'utf8');
+  const missingHome = join(root, 'no-such-home');
+
+  const sanadBin = createSanadWrapper(root, join(root, 'mock.mjs'));
+  const fvmBin = createFvmWrapper(root, join(root, 'mock.mjs'));
+
+  const validate = (taskOverrides) => {
+    const spec = join(root, `spec_${Math.random().toString(36).slice(2)}.json`);
+    const runDir = join(root, `run_${Math.random().toString(36).slice(2)}`);
+    writeFileSync(spec, JSON.stringify({
+      tasks: [{
+        id: 'home-val-task',
+        implementer: 'sanad',
+        workspace: worktree,
+        command: sanadBin,
+        args: ['run', '--brief-file', brief, '--workspace', 'ws-valid', '--execution-root', worktree, '--out-dir', outDir, '--events'],
+        resultPath: join(outDir, 'result.json'),
+        timelinePath: join(outDir, 'events.jsonl'),
+        timelineFormat: 'jsonl',
+        ...taskOverrides,
+      }],
+    }), 'utf8');
+    return runNodeThrows(SUPERVISOR, ['start', '--spec', spec, '--run-dir', runDir]);
+  };
+
+  // 1. Relative home is rejected (a detached worker must never guess a Home).
+  assert.match(validate({ home: 'relative-home' }), /home must be an absolute path/);
+
+  // 2. Missing home directory fails closed before any worker spawns.
+  assert.match(validate({ home: missingHome }), /home must be an existing directory/);
+
+  // 3. Declaring --home inside args is ambiguous and rejected; task.home owns it.
+  assert.match(validate({
+    home: worktree,
+    args: ['run', '--brief-file', brief, '--workspace', 'ws-valid', '--execution-root', worktree, '--out-dir', outDir, '--home', worktree, '--events'],
+  }), /declare the custom Home via task.home/);
+  assert.match(validate({
+    args: ['run', '--brief-file', brief, '--workspace', 'ws-valid', '--execution-root', worktree, '--out-dir', outDir, `--home=${worktree}`, '--events'],
+  }), /declare the custom Home via task.home/);
+
+  // 4. home is valid only for sanad tasks.
+  assert.match(validate({
+    implementer: 'opencode',
+    home: worktree,
+    command: process.execPath,
+    args: ['-e', 'process.exit(0)'],
+  }), /home is only valid for sanad tasks/);
+
+  // 5. The fvm source-development form accepts an explicit custom Home too,
+  //    with the same injection guarantees (no standalone fallback path).
+  const fvmSpec = join(root, 'fvm_home_ok.json');
+  const fvmRun = join(root, 'fvm_home_run');
+  const fvmOut = join(root, 'fvm_home_out');
+  mkdirSync(join(worktree, 'agent', 'bin'), { recursive: true });
+  writeFileSync(join(worktree, 'agent', 'bin', 'sanad_agent.dart'), '// fixture entry\n', 'utf8');
+  const fvmHomeMock = join(root, 'fvm_home_ok.mjs');
+  writeFileSync(fvmHomeMock, `
+    import {mkdirSync, writeFileSync} from 'node:fs';
+    import {dirname, resolve} from 'node:path';
+    const args = process.argv.slice(2);
+    let outDir = '';
+    let home = null;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === '--out-dir') outDir = args[i + 1];
+      if (args[i] === '--home') home = args[i + 1];
+    }
+    const resPath = resolve(outDir, 'result.json');
+    mkdirSync(dirname(resPath), {recursive:true});
+    writeFileSync(resPath, JSON.stringify({status: 'completed', exit_code: 0, home}));
+    process.exit(0);
+  `, 'utf8');
+  const fvmHomeBin = createFvmWrapper(root, fvmHomeMock);
+  writeFileSync(fvmSpec, JSON.stringify({
+    tasks: [{
+      id: 'fvm-home-ok',
+      implementer: 'sanad',
+      workspace: worktree,
+      home: worktree,
+      command: fvmHomeBin,
+      args: ['dart', 'run', 'agent/bin/sanad_agent.dart', 'run', '--brief-file', brief, '--execution-root', worktree, '--out-dir', fvmOut, '--events'],
+      resultPath: join(fvmOut, 'result.json'),
+      timelinePath: join(fvmOut, 'events.jsonl'),
+      timelineFormat: 'jsonl',
+    }],
+  }), 'utf8');
+  runNode(SUPERVISOR, ['start', '--spec', fvmSpec, '--run-dir', fvmRun, '--max-concurrency', '1']);
+  const fvmEvent = JSON.parse(runNode(WATCH_ONCE, ['--run', fvmRun, '--since', '0']));
+  assert.equal(fvmEvent.to, 'completed');
+  const fvmResult = JSON.parse(readFileSync(join(fvmOut, 'result.json'), 'utf8'));
+  assert.equal(fvmResult.home, worktree);
+  runNode(SUPERVISOR, ['close', '--run', fvmRun]);
+});
+
+test('timeline formatting distinguishes source timestamp, receipt timestamp, and unknown time', () => {
+  const root = mkdtempSync(join(tmpdir(), 'timeline-format-test-'));
+  const runDir = join(root, 'run');
+  const out = join(root, 'out');
+  mkdirSync(runDir, { recursive: true });
+  mkdirSync(out, { recursive: true });
+
+  const eventsPath = join(out, 'events.jsonl');
+  writeFileSync(eventsPath, [
+    JSON.stringify({ type: 'session_started', timestamp: '2026-09-23T01:00:00.000Z' }),
+    JSON.stringify({ type: 'notice', timestamp: '2026-09-23T01:01:00.000Z', code: 'provider_timeout', message: 'upstream timed out' }),
+    JSON.stringify({ type: 'blocked', timestamp: '2026-09-23T01:01:05.000Z', data: { cause: 'provider_timeout' } }),
+    JSON.stringify({ type: 'resumed', timestamp: '2026-09-23T01:02:00.000Z' }),
+    JSON.stringify({ type: 'tool_use', timestamp: '2026-09-23T01:02:30.000Z', part: { tool: 'view_file', state: { status: 'running', input: { path: 'lib/test.dart' } } } }),
+    JSON.stringify({ type: 'plain_event' }),
+    'raw unparseable text without date',
+  ].join('\n') + '\n', 'utf8');
+
+  const manifest = {
+    version: 'delegate-supervisor.v1',
+    runDir,
+    supervisorPid: process.pid,
+    status: 'running',
+    closed: false,
+    seq: 1,
+    startedAt: '2026-09-23T01:00:00.000Z',
+    finishedAt: null,
+    maxConcurrency: 1,
+    tasks: {
+      t1: {
+        id: 't1',
+        implementer: 'sanad',
+        workspace: root,
+        status: 'running',
+        timelinePath: eventsPath,
+        timelineFormat: 'jsonl',
+        stdoutPath: join(runDir, 't1.stdout.log'),
+        stderrPath: join(runDir, 't1.stderr.log'),
+        resultPath: join(out, 'result.json'),
+        pid: process.pid,
+        startedAt: '2026-09-23T01:00:00.000Z',
+        finishedAt: null,
+        exitCode: null,
+        signal: null,
+        error: null,
+        cause: null,
+        stateSince: null,
+        lastProgressAt: null,
+      },
+    },
+  };
+  writeFileSync(join(runDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+  writeFileSync(join(runDir, 'events.jsonl'), JSON.stringify({
+    seq: 1,
+    taskId: 't1',
+    implementer: 'sanad',
+    workspace: root,
+    from: 'queued',
+    to: 'running',
+    at: '2026-09-23T01:00:00.000Z',
+  }) + '\n', 'utf8');
+
+  const timelineOutput = runNode(SUPERVISOR, ['timeline', '--run', runDir, '--task', 't1']);
+  assert.match(timelineOutput, /2026-09-23T01:00:00\.000Z\s+t1\s+queued -> running/);
+  assert.match(timelineOutput, /2026-09-23T01:01:00\.000Z\s+notice:provider_timeout\s+upstream timed out/);
+  assert.match(timelineOutput, /2026-09-23T01:01:05\.000Z\s+blocked \(provider_timeout\)/);
+  assert.match(timelineOutput, /2026-09-23T01:02:00\.000Z\s+resuming/);
+  assert.match(timelineOutput, /2026-09-23T01:02:30\.000Z\s+tool:view_file/);
+  assert.match(timelineOutput, /\[unknown time\]\s+plain_event/);
+  assert.match(timelineOutput, /\[unknown time\]\s+raw unparseable text without date/);
+
+  // Footer verification
+  assert.match(timelineOutput, /--- Session Observability ---/);
+  // A live PID without an authoritative persisted progress timestamp is not
+  // evidence that the session is actively working.
+  assert.match(timelineOutput, /Session State:\s+unknown/);
+  assert.match(timelineOutput, /Current Time:\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+});
+
+test('session footer derives blocked state, cause, progress, and preserves json compatibility', () => {
+  const root = mkdtempSync(join(tmpdir(), 'session-footer-test-'));
+  const runDir = join(root, 'run');
+  const out = join(root, 'out');
+  mkdirSync(runDir, { recursive: true });
+  mkdirSync(out, { recursive: true });
+
+  const resultPath = join(out, 'result.json');
+  writeFileSync(resultPath, JSON.stringify({
+    status: 'blocked',
+    cause: 'provider_timeout',
+    state_since: '2026-09-23T01:10:00.000Z',
+    last_progress_at: '2026-09-23T01:08:00.000Z',
+    started_at: '2026-09-23T01:00:00.000Z',
+  }), 'utf8');
+
+  const manifest = {
+    version: 'delegate-supervisor.v1',
+    runDir,
+    supervisorPid: process.pid,
+    status: 'running',
+    closed: false,
+    seq: 2,
+    startedAt: '2026-09-23T01:00:00.000Z',
+    finishedAt: null,
+    maxConcurrency: 1,
+    tasks: {
+      stalled_task: {
+        id: 'stalled_task',
+        implementer: 'sanad',
+        workspace: root,
+        status: 'running',
+        timelinePath: null,
+        stdoutPath: join(runDir, 'stalled.stdout.log'),
+        stderrPath: join(runDir, 'stalled.stderr.log'),
+        resultPath,
+        pid: process.pid,
+        startedAt: '2026-09-23T01:00:00.000Z',
+        finishedAt: null,
+        cause: 'provider_timeout',
+        stateSince: '2026-09-23T01:10:00.000Z',
+        lastProgressAt: '2026-09-23T01:08:00.000Z',
+      },
+    },
+  };
+  writeFileSync(join(runDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+  writeFileSync(join(runDir, 'events.jsonl'), '', 'utf8');
+
+  const humanStatus = runNode(SUPERVISOR, ['status', '--run', runDir]);
+  assert.match(humanStatus, /--- Session Observability ---/);
+  assert.match(humanStatus, /Task ID:\s+stalled_task/);
+  assert.match(humanStatus, /Session State:\s+blocked/);
+  assert.match(humanStatus, /Cause:\s+provider_timeout/);
+  assert.match(humanStatus, /State Since:\s+2026-09-23T01:10:00\.000Z/);
+  assert.match(humanStatus, /Last Progress:\s+2026-09-23T01:08:00\.000Z/);
+  assert.match(humanStatus, /Observation Source:\s+result\.json \(process alive: \d+\)/);
+
+  const jsonStatus = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json']));
+  assert.equal(jsonStatus.status, 'running');
+  assert.equal(jsonStatus.tasks.stalled_task.sessionState, 'blocked');
+  assert.equal(jsonStatus.tasks.stalled_task.sessionCause, 'provider_timeout');
+  assert.equal(jsonStatus.tasks.stalled_task.stateSince, '2026-09-23T01:10:00.000Z');
+  assert.equal(jsonStatus.tasks.stalled_task.lastProgressAt, '2026-09-23T01:08:00.000Z');
+});
+
+test('default watch-once surfaces blocked and resuming transitions', () => {
+  const runDir = mkdtempSync(join(tmpdir(), 'watch-state-test-'));
+  writeFileSync(join(runDir, 'manifest.json'), JSON.stringify({
+    status: 'running',
+    supervisorPid: process.pid,
+    seq: 2,
+  }), 'utf8');
+  writeFileSync(join(runDir, 'events.jsonl'), [
+    JSON.stringify({ seq: 1, taskId: 'task-1', from: 'running', to: 'blocked', cause: 'provider_timeout' }),
+    JSON.stringify({ seq: 2, taskId: 'task-1', from: 'blocked', to: 'resuming' }),
+  ].join('\n') + '\n', 'utf8');
+
+  const blocked = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', '0']));
+  assert.equal(blocked.to, 'blocked');
+  assert.equal(blocked.cause, 'provider_timeout');
+  const resuming = JSON.parse(runNode(WATCH_ONCE, ['--run', runDir, '--since', '1']));
+  assert.equal(resuming.to, 'resuming');
+});
+
+test('legacy timeout footer and logs use honest causes and timestamps', () => {
+  const root = mkdtempSync(join(tmpdir(), 'legacy-observability-test-'));
+  const runDir = join(root, 'run');
+  const out = join(root, 'out');
+  mkdirSync(runDir, { recursive: true });
+  mkdirSync(out, { recursive: true });
+  const resultPath = join(out, 'result.json');
+  const stdoutPath = join(runDir, 'legacy.stdout.log');
+  const stderrPath = join(runDir, 'legacy.stderr.log');
+  writeFileSync(resultPath, JSON.stringify({ status: 'timeout', exit_code: 124 }), 'utf8');
+  writeFileSync(stdoutPath, '2026-09-23T03:30:00+02:00 source event\nlegacy line without time\n', 'utf8');
+  writeFileSync(stderrPath, '', 'utf8');
+  writeFileSync(join(runDir, 'events.jsonl'), '', 'utf8');
+  writeFileSync(join(runDir, 'manifest.json'), JSON.stringify({
+    version: 'delegate-supervisor.v1',
+    runDir,
+    supervisorPid: process.pid,
+    status: 'running',
+    closed: false,
+    seq: 1,
+    tasks: {
+      legacy: {
+        id: 'legacy',
+        implementer: 'sanad',
+        workspace: root,
+        status: 'timeout',
+        pid: 2147483647,
+        startedAt: '2026-09-23T01:00:00.000Z',
+        finishedAt: '2026-09-23T01:15:00.000Z',
+        resultPath,
+        timelinePath: null,
+        stdoutPath,
+        stderrPath,
+      },
+    },
+  }), 'utf8');
+
+  const status = runNode(SUPERVISOR, ['status', '--run', runDir, '--task', 'legacy']);
+  assert.match(status, /Session State:\s+stopped/);
+  assert.match(status, /Cause:\s+timeout/);
+  assert.match(status, /State Since:\s+2026-09-23T01:15:00\.000Z/);
+  assert.doesNotMatch(status, /State Since:\s+2026-09-23T01:00:00\.000Z/);
+
+  const logs = runNode(SUPERVISOR, ['logs', '--run', runDir, '--task', 'legacy']);
+  assert.match(logs, /2026-09-23T01:30:00\.000Z\s+source event/);
+  assert.match(logs, /\[unknown time\]\s+legacy line without time/);
+});
+
+test('observer records start timing and cancellation without manufacturing durations', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'observer-timing-test-'));
+  const runDir = join(root, 'run');
+  const out = join(root, 'out');
+  const observersDir = join(runDir, 'observers');
+  mkdirSync(runDir, { recursive: true });
+  mkdirSync(out, { recursive: true });
+  mkdirSync(observersDir, { recursive: true });
+
+  const timelinePath = join(out, 'events.jsonl');
+  writeFileSync(timelinePath, JSON.stringify({ type: 'start', timestamp: new Date().toISOString() }) + '\n', 'utf8');
+
+  const manifest = {
+    version: 'delegate-supervisor.v1',
+    runDir,
+    supervisorPid: process.pid,
+    status: 'running',
+    closed: false,
+    seq: 1,
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    maxConcurrency: 1,
+    tasks: {
+      obs_task: {
+        id: 'obs_task',
+        implementer: 'sanad',
+        workspace: root,
+        status: 'running',
+        timelinePath,
+        timelineFormat: 'jsonl',
+        stdoutPath: join(runDir, 'obs.stdout.log'),
+        stderrPath: join(runDir, 'obs.stderr.log'),
+        resultPath: null,
+        pid: process.pid,
+        startedAt: new Date().toISOString(),
+      },
+    },
+  };
+  writeFileSync(join(runDir, 'manifest.json'), JSON.stringify(manifest, null, 2), 'utf8');
+  writeFileSync(join(runDir, 'events.jsonl'), '', 'utf8');
+
+  const child = spawn(process.execPath, [
+    SUPERVISOR,
+    'timeline',
+    '--run', runDir,
+    '--task', 'obs_task',
+    '--follow',
+  ], { stdio: ['ignore', 'pipe', 'pipe'] });
+  let childStderr = '';
+  let childStdout = '';
+  child.stderr.on('data', (d) => { childStderr += d.toString(); });
+  child.stdout.on('data', (d) => { childStdout += d.toString(); });
+
+  const observerFile = join(observersDir, `${child.pid}.json`);
+
+  const record = await waitForFileChange(observersDir, () => {
+    if (!existsSync(observerFile)) return null;
+    return JSON.parse(readFileSync(observerFile, 'utf8'));
+  });
+  assert.equal(record.pid, child.pid);
+  assert.equal(record.command, 'timeline');
+  assert.equal(record.status, 'active');
+  assert.ok(record.startedAt, 'startedAt is set');
+  assert.equal(record.endedAt, null, 'endedAt is initially null');
+
+  child.kill();
+  await new Promise((res) => {
+    child.once('exit', res);
+    setTimeout(res, 1000);
+  });
+
+  const finalRecord = JSON.parse(readFileSync(observerFile, 'utf8'));
+  assert.ok(finalRecord.startedAt, 'startedAt is preserved');
+  if (finalRecord.status === 'cancelled') {
+    assert.ok(finalRecord.endedAt, 'endedAt set on graceful cancellation');
+  } else {
+    assert.equal(finalRecord.endedAt, null, 'endedAt remains null on hard kill');
+  }
 });
