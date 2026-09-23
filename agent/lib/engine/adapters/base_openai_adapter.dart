@@ -413,7 +413,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
     if (metadataLimit != null) return metadataLimit;
 
-    return 4000;
+    return ModelMetadata.unknownContextLimit;
   }
 
   String _resolveModel(String? override) {

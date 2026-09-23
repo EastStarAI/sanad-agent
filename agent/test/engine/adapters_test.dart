@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:http/http.dart' as http;
@@ -8,6 +9,7 @@ import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/model_metadata.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/core/models/llm_finish_reason.dart';
 import 'package:sanad_agent/engine/adapters/provider_registry.dart';
@@ -129,6 +131,20 @@ void main() {
         expect(adapter.lastModelsException, isNotNull);
       },
     );
+
+    test('keeps unknown model context fallback conservative', () async {
+      final adapter = BaseOpenAIAdapter(config, profile);
+
+      for (final model in [
+        'unknown-small-local-model',
+        'gpt-6-unlisted-small-variant',
+      ]) {
+        expect(
+          await adapter.getContextLimit(model),
+          ModelMetadata.unknownContextLimit,
+        );
+      }
+    });
 
     test('strips copied config prefixes before model discovery', () async {
       final mockClient = MockClient((request) async {
@@ -1186,6 +1202,28 @@ void main() {
       expect(response.usage?['completion_tokens'], 5);
       expect(response.usage, isNot(contains('total_tokens')));
       expect(response.finishReason, LLMFinishReason.stop);
+    });
+
+    test('ignores invalid Ollama context metadata and fails closed', () async {
+      for (final invalidLimit in ['invalid', 0, -1]) {
+        final adapter = OllamaAdapter(
+          config,
+          profile,
+          client: MockClient(
+            (_) async => http.Response(
+              jsonEncode({
+                'model_info': {'llama.context_length': invalidLimit},
+              }),
+              200,
+            ),
+          ),
+        );
+
+        expect(
+          await adapter.getContextLimit('unknown-small-local-model'),
+          ModelMetadata.unknownContextLimit,
+        );
+      }
     });
 
     test('maps Ollama length termination to finishReason', () async {
