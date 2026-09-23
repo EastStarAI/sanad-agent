@@ -1,5 +1,9 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -682,7 +686,9 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
     );
     if (widget.embedded) return body;
     return Scaffold(
+      backgroundColor: Colors.transparent,
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
         title: const Text('MCP'),
         actions: [
           IconButton(
@@ -739,17 +745,21 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
         ? AppLocalizations.of(context)!.mcpConnecting
         : error ?? (isConnected ? '${tools.length} tools' : 'Disconnected');
 
-    return Semantics(
-      container: true,
-      explicitChildNodes: true,
-      label: '${server.name}, ${server.enabled ? AppLocalizations.of(context)!.mcpEnabled : AppLocalizations.of(context)!.mcpDisabled}, ${tools.length} tools',
-      child: Container(
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.12)),
+    final appearance = context.watch<AppearanceCubit?>()?.state;
+    final isCustomBg = appearance != null && appearance.backgroundOption != AppBackgroundOption.defaultTheme;
+    final cardColor = isCustomBg
+        ? (Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface).withValues(alpha: 0.60)
+        : Theme.of(context).colorScheme.surface;
+
+    final card = Container(
+      decoration: BoxDecoration(
+        color: cardColor,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Theme.of(context).colorScheme.outline.withValues(alpha: isCustomBg ? 0.25 : 0.12),
         ),
-        child: Column(
+      ),
+      child: Column(
           children: [
             Semantics(
               button: true,
@@ -942,7 +952,23 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
               ),
           ],
         ),
-      ),
+      );
+
+    final wrappedCard = isCustomBg
+        ? ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+              child: card,
+            ),
+          )
+        : card;
+
+    return Semantics(
+      container: true,
+      explicitChildNodes: true,
+      label: '${server.name}, ${server.enabled ? AppLocalizations.of(context)!.mcpEnabled : AppLocalizations.of(context)!.mcpDisabled}, ${tools.length} tools',
+      child: wrappedCard,
     );
   }
 

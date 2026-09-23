@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/theme/theme_cubit.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
@@ -151,133 +153,562 @@ class _GeneralPageState extends State<GeneralPage> {
 
   @override
   Widget build(BuildContext context) {
-    final mode = context.watch<ThemeCubit>().state;
+    final appearance = context.watch<AppearanceCubit>().state;
+    final l10n = AppLocalizations.of(context)!;
     return PageFrame(
-      title: AppLocalizations.of(context)!.general,
-      subtitle: AppLocalizations.of(context)!.settings,
-      child: SettingsCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              AppLocalizations.of(context)!.appearance,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              AppLocalizations.of(context)!.theme,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+      title: l10n.general,
+      subtitle: l10n.settings,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (AppPlatform.isDesktop) ...[
+            // Updates Card
+            SettingsCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    AppLocalizations.of(context)!.updates,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    AppPlatform.isLinux
+                        ? AppLocalizations.of(context)!.updatesLinuxNote
+                        : AppLocalizations.of(context)!.updatesAutoNote,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_currentVersion != null) ...[
+                        Text(
+                          AppLocalizations.of(context)!.currentVersion(_currentVersion!),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                      ],
+                      OutlinedButton.icon(
+                        onPressed: _checking ? null : _checkForUpdates,
+                        icon: _checking
+                            ? const SizedBox.square(
+                                dimension: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.system_update_alt),
+                        label: Text(AppLocalizations.of(context)!.checkForUpdates),
+                      ),
+                    ],
+                  ),
+                  if (_updateMessage != null) ...[
+                    const SizedBox(height: 10),
+                    Text(_updateMessage!),
+                  ],
+                ],
               ),
             ),
             const SizedBox(height: 16),
-            SegmentedButton<ThemeMode>(
-              segments: [
-                ButtonSegment(
-                  value: ThemeMode.system,
-                  label: Text(AppLocalizations.of(context)!.themeSystem),
-                  icon: Icon(Icons.settings_brightness_outlined),
+          ],
+          // Language Card
+          SettingsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  AppLocalizations.of(context)!.language,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
                 ),
-                ButtonSegment(
-                  value: ThemeMode.light,
-                  label: Text(AppLocalizations.of(context)!.themeLight),
-                  icon: Icon(Icons.light_mode_outlined),
+                const SizedBox(height: 6),
+                Text(
+                  AppLocalizations.of(context)!.selectLanguage,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
-                ButtonSegment(
-                  value: ThemeMode.dark,
-                  label: Text(AppLocalizations.of(context)!.themeDark),
-                  icon: Icon(Icons.dark_mode_outlined),
+                const SizedBox(height: 14),
+                BlocBuilder<LocaleCubit, Locale>(
+                  builder: (context, locale) => SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<Locale>(
+                      key: const Key('language_selector'),
+                      segments: const [
+                        ButtonSegment(
+                          value: Locale('en'),
+                          label: Text('English'),
+                          icon: Icon(Icons.language_outlined),
+                        ),
+                        ButtonSegment(
+                          value: Locale('ar'),
+                          label: Text('العربية'),
+                          icon: Icon(Icons.translate_outlined),
+                        ),
+                      ],
+                      selected: {locale},
+                      onSelectionChanged: (selection) =>
+                          context.read<LocaleCubit>().updateLocale(selection.first),
+                    ),
+                  ),
                 ),
               ],
-              selected: {mode},
-              onSelectionChanged: (selection) => context.read<ThemeCubit>().updateTheme(selection.first),
             ),
-            const SizedBox(height: 24),
-            Text(
-              AppLocalizations.of(context)!.language,
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              AppLocalizations.of(context)!.selectLanguage,
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 16),
-            BlocBuilder<LocaleCubit, Locale>(
-              builder: (context, locale) => SegmentedButton<Locale>(
-                key: const Key('language_selector'),
-                segments: [
-                  ButtonSegment(
-                    value: Locale('en'),
-                    label: Text('English'),
-                    icon: Icon(Icons.language_outlined),
+          ),
+          const SizedBox(height: 16),
+          // Appearance & Typography
+          SettingsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  l10n.appearance,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  l10n.theme,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
-                  ButtonSegment(
-                    value: Locale('ar'),
-                    label: Text('العربية'),
-                    icon: Icon(Icons.translate_outlined),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<AppThemeStyle>(
+                    key: const Key('theme_style_selector'),
+                    segments: [
+                      ButtonSegment(
+                        value: AppThemeStyle.light,
+                        label: Text(l10n.themeLight),
+                        icon: const Icon(Icons.light_mode_outlined),
+                      ),
+                      ButtonSegment(
+                        value: AppThemeStyle.dark,
+                        label: Text(l10n.themeDark),
+                        icon: const Icon(Icons.dark_mode_outlined),
+                      ),
+                      ButtonSegment(
+                        value: AppThemeStyle.midnight,
+                        label: Text(l10n.themeMidnight),
+                        icon: const Icon(Icons.nightlight_round),
+                      ),
+                      ButtonSegment(
+                        value: AppThemeStyle.sepia,
+                        label: Text(l10n.themeSepia),
+                        icon: const Icon(Icons.menu_book_outlined),
+                      ),
+                    ],
+                    selected: {appearance.themeStyle},
+                    onSelectionChanged: (selection) {
+                      final style = selection.first;
+                      unawaited(context.read<AppearanceCubit>().updateThemeStyle(style));
+                      unawaited(context.read<ThemeCubit>().updateTheme(style.themeMode));
+                    },
                   ),
-                ],
-                selected: {locale},
-                onSelectionChanged: (selection) =>
-                    context.read<LocaleCubit>().updateLocale(selection.first),
-              ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  l10n.primaryColor,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  l10n.selectPrimaryColor,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<AppPrimaryColor>(
+                    key: const Key('primary_color_selector_row1'),
+                    showSelectedIcon: false,
+                    emptySelectionAllowed: true,
+                    segments: [
+                      ButtonSegment(
+                        value: AppPrimaryColor.blue,
+                        label: Text(l10n.colorDefaultBlue),
+                        icon: _ColorDot(color: AppPrimaryColor.blue.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.teal,
+                        label: Text(l10n.colorTeal),
+                        icon: _ColorDot(color: AppPrimaryColor.teal.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.green,
+                        label: Text(l10n.colorGreen),
+                        icon: _ColorDot(color: AppPrimaryColor.green.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.cyan,
+                        label: Text(l10n.colorCyan),
+                        icon: _ColorDot(color: AppPrimaryColor.cyan.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                    ],
+                    selected: const {
+                      AppPrimaryColor.blue,
+                      AppPrimaryColor.teal,
+                      AppPrimaryColor.green,
+                      AppPrimaryColor.cyan,
+                    }.contains(appearance.primaryColor)
+                        ? {appearance.primaryColor}
+                        : <AppPrimaryColor>{},
+                    onSelectionChanged: (selection) {
+                      if (selection.isNotEmpty) {
+                        unawaited(context.read<AppearanceCubit>().updatePrimaryColor(selection.first));
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<AppPrimaryColor>(
+                    key: const Key('primary_color_selector_row2'),
+                    showSelectedIcon: false,
+                    emptySelectionAllowed: true,
+                    segments: [
+                      ButtonSegment(
+                        value: AppPrimaryColor.purple,
+                        label: Text(l10n.colorPurple),
+                        icon: _ColorDot(color: AppPrimaryColor.purple.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.magenta,
+                        label: Text(l10n.colorMagenta),
+                        icon: _ColorDot(color: AppPrimaryColor.magenta.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.orange,
+                        label: Text(l10n.colorOrange),
+                        icon: _ColorDot(color: AppPrimaryColor.orange.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.rose,
+                        label: Text(l10n.colorRose),
+                        icon: _ColorDot(color: AppPrimaryColor.rose.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                    ],
+                    selected: const {
+                      AppPrimaryColor.purple,
+                      AppPrimaryColor.magenta,
+                      AppPrimaryColor.orange,
+                      AppPrimaryColor.rose,
+                    }.contains(appearance.primaryColor)
+                        ? {appearance.primaryColor}
+                        : <AppPrimaryColor>{},
+                    onSelectionChanged: (selection) {
+                      if (selection.isNotEmpty) {
+                        unawaited(context.read<AppearanceCubit>().updatePrimaryColor(selection.first));
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  l10n.fontFamily,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  l10n.selectFontFamily,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<AppFontFamily>(
+                    key: const Key('font_family_selector'),
+                    segments: const [
+                      ButtonSegment(
+                        value: AppFontFamily.system,
+                        label: Text('System'),
+                      ),
+                      ButtonSegment(
+                        value: AppFontFamily.cairo,
+                        label: Text('Cairo'),
+                      ),
+                      ButtonSegment(
+                        value: AppFontFamily.inter,
+                        label: Text('Inter'),
+                      ),
+                      ButtonSegment(
+                        value: AppFontFamily.roboto,
+                        label: Text('Roboto'),
+                      ),
+                    ],
+                    selected: {appearance.fontFamily},
+                    onSelectionChanged: (selection) =>
+                        unawaited(context.read<AppearanceCubit>().updateFontFamily(selection.first)),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  l10n.fontSize,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  l10n.fontSizeDescription,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<AppFontSizeScale>(
+                    key: const Key('font_size_selector'),
+                    segments: [
+                      ButtonSegment(
+                        value: AppFontSizeScale.small,
+                        label: Text(l10n.fontSizeSmall),
+                      ),
+                      ButtonSegment(
+                        value: AppFontSizeScale.normal,
+                        label: Text(l10n.fontSizeNormal),
+                      ),
+                      ButtonSegment(
+                        value: AppFontSizeScale.large,
+                        label: Text(l10n.fontSizeLarge),
+                      ),
+                      ButtonSegment(
+                        value: AppFontSizeScale.extraLarge,
+                        label: Text(l10n.fontSizeExtraLarge),
+                      ),
+                    ],
+                    selected: {appearance.fontSizeScale},
+                    onSelectionChanged: (selection) =>
+                        unawaited(context.read<AppearanceCubit>().updateFontSizeScale(selection.first)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .surfaceContainerHighest
+                        .withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .outline
+                          .withValues(alpha: 0.15),
+                    ),
+                  ),
+                  child: Text(
+                    l10n.previewText,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+              ],
             ),
-            if (AppPlatform.isDesktop) ...[
-              const Divider(height: 40),
-              Text(
-                AppLocalizations.of(context)!.updates,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                AppPlatform.isLinux
-                    ? AppLocalizations.of(context)!.updatesLinuxNote
-                    : AppLocalizations.of(context)!.updatesAutoNote,
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (_currentVersion != null) ...[
-                    Text(
-                      AppLocalizations.of(context)!.currentVersion(_currentVersion!),
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(height: 16),
+          // Background Selection Card
+          SettingsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  l10n.background,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  l10n.backgroundDescription,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _BackgroundSelectionGrid(
+                  selected: appearance.backgroundOption,
+                  themeStyle: appearance.themeStyle,
+                  onSelected: (option) =>
+                      unawaited(context.read<AppearanceCubit>().updateBackgroundOption(option)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BackgroundSelectionGrid extends StatelessWidget {
+  final AppBackgroundOption selected;
+  final AppThemeStyle themeStyle;
+  final ValueChanged<AppBackgroundOption> onSelected;
+
+  const _BackgroundSelectionGrid({
+    required this.selected,
+    required this.themeStyle,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final options = AppBackgroundOption.values;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const crossAxisCount = 3;
+        const spacing = 12.0;
+        final totalSpacing = spacing * (crossAxisCount - 1);
+        final itemWidth = ((constraints.maxWidth - totalSpacing) / crossAxisCount).floorToDouble();
+
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: options.map((option) {
+            final isSelected = option == selected;
+            final label = switch (option) {
+              AppBackgroundOption.defaultTheme => l10n.backgroundDefault,
+              AppBackgroundOption.solidSlate => l10n.backgroundSlate,
+              AppBackgroundOption.solidNavy => l10n.backgroundNavy,
+              AppBackgroundOption.natureForest => l10n.backgroundForest,
+              AppBackgroundOption.natureMountain => l10n.backgroundMountain,
+              AppBackgroundOption.natureLake => l10n.backgroundLake,
+            };
+
+            return InkWell(
+              key: Key('background_option_${option.name}'),
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => onSelected(option),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: itemWidth,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: isSelected
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).colorScheme.outline.withValues(alpha: 0.25),
+                    width: isSelected ? 2 : 1,
+                  ),
+                  color: isSelected
+                      ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.15)
+                      : Colors.transparent,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: SizedBox(
+                        height: 70,
+                        width: double.infinity,
+                        child: _buildThumbnail(context, option),
                       ),
                     ),
-                    const SizedBox(width: 16),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (isSelected) ...[
+                          Icon(
+                            Icons.check_circle,
+                            size: 14,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: 4),
+                        ],
+                        Flexible(
+                          child: Text(
+                            label,
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
-                  OutlinedButton.icon(
-                    onPressed: _checking ? null : _checkForUpdates,
-                    icon: _checking
-                        ? const SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.system_update_alt),
-                    label: Text(AppLocalizations.of(context)!.checkForUpdates),
-                  ),
-                ],
+                ),
               ),
-              if (_updateMessage != null) ...[
-                const SizedBox(height: 10),
-                Text(_updateMessage!),
-              ],
-            ],
-          ],
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+
+  Widget _buildThumbnail(BuildContext context, AppBackgroundOption option) {
+    final theme = Theme.of(context);
+    final isDark = themeStyle == AppThemeStyle.dark || themeStyle == AppThemeStyle.midnight;
+
+    if (option == AppBackgroundOption.defaultTheme) {
+      return Container(
+        color: theme.scaffoldBackgroundColor,
+        child: Center(
+          child: Icon(
+            Icons.format_paint_outlined,
+            color: theme.colorScheme.onSurfaceVariant,
+            size: 24,
+          ),
         ),
-      ),
+      );
+    }
+
+    if (!option.isWallpaper) {
+      final solidColor = switch (option) {
+        AppBackgroundOption.solidSlate =>
+          isDark ? const Color(0xFF20262E) : const Color(0xFFE5E9EE),
+        AppBackgroundOption.solidNavy =>
+          isDark ? const Color(0xFF0B132B) : const Color(0xFFE0E7F5),
+        _ => theme.scaffoldBackgroundColor,
+      };
+      return Container(color: solidColor);
+    }
+
+    // Wallpaper thumbnail with theme-adaptive barrier representation
+    final scrimColor = switch (themeStyle) {
+      AppThemeStyle.light => Colors.white.withValues(alpha: 0.70),
+      AppThemeStyle.sepia => const Color(0xFFFBF0D9).withValues(alpha: 0.72),
+      AppThemeStyle.dark => const Color(0xFF181818).withValues(alpha: 0.72),
+      AppThemeStyle.midnight => const Color(0xFF000000).withValues(alpha: 0.78),
+    };
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.asset(
+          option.assetPath!,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Container(color: theme.scaffoldBackgroundColor),
+        ),
+        ColoredBox(color: scrimColor),
+      ],
     );
   }
 }
@@ -1180,7 +1611,7 @@ class WorkspacePage extends StatelessWidget {
     child: Column(
       children: [
         Material(
-          color: Theme.of(context).colorScheme.surface,
+          color: Colors.transparent,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1324,3 +1755,26 @@ class WorkspaceRemovalButton extends StatelessWidget {
     label: const Text('Remove workspace'),
   );
 }
+
+class _ColorDot extends StatelessWidget {
+  const _ColorDot({required this.color});
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 14,
+      height: 14,
+      margin: const EdgeInsetsDirectional.only(end: 4),
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.5),
+          width: 1.5,
+        ),
+      ),
+    );
+  }
+}
+

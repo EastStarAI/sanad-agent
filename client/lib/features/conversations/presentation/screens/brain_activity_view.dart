@@ -1040,7 +1040,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
 
     if (widget.visualState.isNewConversation) {
       return Container(
-        color: Theme.of(context).scaffoldBackgroundColor,
+        color: Colors.transparent,
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: SidebarBreakpoints.maxConversationWidth),
@@ -1054,7 +1054,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     }
 
     return Container(
-      color: Theme.of(context).scaffoldBackgroundColor,
+      color: Colors.transparent,
       padding: const EdgeInsets.symmetric(horizontal: 8.0),
       child: Stack(
         children: [

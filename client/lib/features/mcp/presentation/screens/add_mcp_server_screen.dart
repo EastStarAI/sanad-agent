@@ -1,4 +1,8 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -442,7 +446,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
+      backgroundColor: Colors.transparent,
       body: SafeArea(
         child: Form(
           key: _formKey,
@@ -715,17 +719,25 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
   }
 
   Widget _buildBottomBar(ThemeData theme) {
-    return SafeArea(
-      top: false,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          border: Border(top: BorderSide(color: theme.dividerColor)),
+    final appearance = context.watch<AppearanceCubit?>()?.state;
+    final isCustomBg = appearance != null && appearance.backgroundOption != AppBackgroundOption.defaultTheme;
+    final barColor = isCustomBg
+        ? (theme.cardTheme.color ?? theme.colorScheme.surface).withValues(alpha: 0.60)
+        : theme.colorScheme.surface;
+
+    final bar = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+      decoration: BoxDecoration(
+        color: barColor,
+        border: Border(
+          top: BorderSide(
+            color: isCustomBg ? theme.colorScheme.outline.withValues(alpha: 0.25) : theme.dividerColor,
+          ),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
             TextButton(
               onPressed: _isSaving ? null : () => Navigator.pop(context),
               child: const Text('Cancel'),
@@ -748,8 +760,22 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
             ),
           ],
         ),
-      ),
+      );
+
+    final barWidget = SafeArea(
+      top: false,
+      child: bar,
     );
+
+    if (isCustomBg) {
+      return ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: barWidget,
+        ),
+      );
+    }
+    return barWidget;
   }
 
   List<Widget> _remoteFields() => [

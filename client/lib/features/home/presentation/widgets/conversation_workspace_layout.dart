@@ -289,9 +289,9 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
                   filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.transparent,
+                      color: theme.colorScheme.surface.withValues(alpha: 0.25),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.3)),
+                      border: Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.25)),
                       // boxShadow: [
                       //   BoxShadow(
                       //     color: Colors.black.withValues(alpha: 0.15),

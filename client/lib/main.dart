@@ -12,5 +12,6 @@ void main() async {
   runApp(SanadAgentApp(
     initialTheme: bootstrap.initialTheme,
     initialLocale: bootstrap.initialLocale,
+    initialAppearance: bootstrap.initialAppearance,
   ));
 }

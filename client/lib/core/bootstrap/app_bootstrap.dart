@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:path/path.dart' as p;
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/theme/theme_cubit.dart';
 import 'package:sanad_client/core/presentation/state/app_state.dart';
@@ -18,10 +20,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 class AppBootstrapResult {
   final ThemeMode initialTheme;
   final Locale initialLocale;
+  final AppearanceState initialAppearance;
 
   const AppBootstrapResult({
     required this.initialTheme,
     required this.initialLocale,
+    required this.initialAppearance,
   });
 }
 
@@ -59,6 +63,7 @@ class AppBootstrap {
 
     final initialTheme = await ThemeCubit.getSavedTheme();
     final initialLocale = await LocaleCubit.getSavedLocale();
+    final initialAppearance = await AppearanceCubit.getSavedAppearance();
     await _trace('theme-ready');
     await Future.wait([
       WindowManagerService.initialize(),
@@ -73,6 +78,10 @@ class AppBootstrap {
     await getIt<ConversationCachePersistor>().hydrate();
     await _trace('cache-ready');
 
-    return AppBootstrapResult(initialTheme: initialTheme, initialLocale: initialLocale);
+    return AppBootstrapResult(
+      initialTheme: initialTheme,
+      initialLocale: initialLocale,
+      initialAppearance: initialAppearance,
+    );
   }
 }
