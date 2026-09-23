@@ -115,4 +115,47 @@ void main() {
       expect(state.events.single.text, 'Part 1: Part ');
     });
   });
+
+  group('ConversationState tool execution merging', () {
+    test('preserves start timestamp and computes runtimeMs when tool_result merges into running tool_use', () {
+      final state = ConversationState();
+      final startTime = DateTime(2026, 1, 1, 10, 0, 0);
+      final finishTime = DateTime(2026, 1, 1, 10, 0, 3); // 3 seconds later
+
+      // tool_use arrives (running)
+      state.apply(
+        CanonicalEvent(
+          id: 'call_1',
+          toolCallId: 'call_1',
+          kind: EventKind.toolCall,
+          status: EventStatus.running,
+          tool: {'name': 'shell_execute', 'input': {'command': 'ls'}},
+          timestamp: startTime,
+        ),
+      );
+
+      expect(state.events.single.status, EventStatus.running);
+      expect(state.events.single.runtimeMs, isNull);
+      expect(state.events.single.timestamp, startTime);
+
+      // tool_result arrives (done)
+      state.apply(
+        CanonicalEvent(
+          id: 'call_1',
+          toolCallId: 'call_1',
+          kind: EventKind.toolCall,
+          status: EventStatus.done,
+          tool: {'output': 'files.txt'},
+          timestamp: finishTime,
+        ),
+      );
+
+      final merged = state.events.single;
+      expect(merged.status, EventStatus.done);
+      expect(merged.timestamp, startTime); // start timestamp preserved!
+      expect(merged.runtimeMs, 3000); // 3000ms computed!
+      expect(merged.tool?['name'], 'shell_execute');
+      expect(merged.tool?['output'], 'files.txt');
+    });
+  });
 }
