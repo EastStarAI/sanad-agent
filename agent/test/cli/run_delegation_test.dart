@@ -153,6 +153,40 @@ class MockDelegationTurnClient extends CliTurnClientBase {
   }
 }
 
+/// Awaits [predicate] until true (bounded) instead of relying on a fixed sleep.
+///
+/// The oneshot runner processes incoming events and writes artifacts through a
+/// serialized asynchronous queue, so a bare `Future.delayed(...)` is timing
+/// dependent and flakes under slow/parallel CI. This helper waits on the actual
+/// observable contract condition; it does NOT weaken the caller's assertions,
+/// which still verify the precise status/fields after the underlying handler
+/// has progressed.
+Future<void> waitFor(
+  Future<bool> Function() predicate, {
+  Duration timeout = const Duration(seconds: 5),
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    if (await predicate()) return;
+    await Future<void>.delayed(const Duration(milliseconds: 5));
+  }
+  fail('waitFor timed out before the expected contract condition was met');
+}
+
+Future<bool> _statusIs(
+  Directory outDir,
+  String status, {
+  String? requestId,
+}) async {
+  final result = await RunArtifactStore(outDir.path).readResult();
+  if (result == null || result.status != status) return false;
+  if (requestId != null &&
+      result.pendingIntervention?['request_id'] != requestId) {
+    return false;
+  }
+  return true;
+}
+
 void main() {
   useIsolatedSanadTestHome();
 
@@ -407,7 +441,9 @@ void main() {
           stderrSink: stderrBuf,
         );
 
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await waitFor(
+          () => _statusIs(outDir, 'running'),
+        );
 
         final store = RunArtifactStore(outDir.path);
         var midResult = await store.readResult();
@@ -458,7 +494,9 @@ void main() {
           stderrSink: stderrBuf,
         );
 
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await waitFor(
+          () => _statusIs(outDir, 'running'),
+        );
 
         // 1. Emit user question
         fakeClient.emitUserQuestion(
@@ -466,7 +504,9 @@ void main() {
           question: 'Which file should be edited?',
           sessionId: 'sess-supervise-1',
         );
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await waitFor(
+          () => _statusIs(outDir, 'needs_input', requestId: 'req-q-1'),
+        );
 
         final store = RunArtifactStore(outDir.path);
         var result = await store.readResult();
@@ -479,7 +519,10 @@ void main() {
           'Resuming with answers.',
           sessionId: 'sess-supervise-1',
         );
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await waitFor(() async {
+          final r = await RunArtifactStore(outDir.path).readResult();
+          return r?.status == 'running' && r?.pendingIntervention == null;
+        });
 
         result = await store.readResult();
         expect(result!.status, equals('running'));
@@ -492,7 +535,13 @@ void main() {
           toolName: 'delete_directory',
           sessionId: 'sess-supervise-1',
         );
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await waitFor(
+          () async {
+            final r = await RunArtifactStore(outDir.path).readResult();
+            return r?.status == 'needs_permission' &&
+                r?.pendingIntervention?['tool_name'] == 'delete_directory';
+          },
+        );
 
         result = await store.readResult();
         expect(result!.status, equals('needs_permission'));
@@ -528,7 +577,9 @@ void main() {
           stderrSink: stderrBuf,
         );
 
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await fakeClient.turnDispatched.future.timeout(
+          const Duration(seconds: 5),
+        );
 
         // 1. Emit ordinary tool permission -> auto approved
         fakeClient.emitToolPermission(
@@ -536,7 +587,9 @@ void main() {
           toolName: 'git_commit',
           sessionId: 'sess-auto-1',
         );
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await waitFor(() async {
+          return fakeClient.permissionResponses.length == 1;
+        });
 
         expect(fakeClient.permissionResponses.length, equals(1));
         expect(fakeClient.permissionResponses.first['allowed'], isTrue);
@@ -551,7 +604,9 @@ void main() {
           question: 'Confirm action?',
           sessionId: 'sess-auto-1',
         );
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await waitFor(
+          () => _statusIs(outDir, 'needs_input'),
+        );
 
         expect(
           fakeClient.permissionResponses.length,
@@ -613,7 +668,9 @@ void main() {
           stderrSink: stderrBuf,
         );
 
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await fakeClient.turnDispatched.future.timeout(
+          const Duration(seconds: 5),
+        );
         signalStream.add(ProcessSignal.sigint);
 
         final exitCode = await runFuture;
@@ -673,7 +730,9 @@ void main() {
           stderrSink: stderrBuf,
         );
 
-        await Future<void>.delayed(const Duration(milliseconds: 30));
+        await fakeClient.turnDispatched.future.timeout(
+          const Duration(seconds: 5),
+        );
         fakeClient.emitChunk('Human response.', sessionId: 'sess-human-1');
         fakeClient.emitTurnComplete(sessionId: 'sess-human-1');
 

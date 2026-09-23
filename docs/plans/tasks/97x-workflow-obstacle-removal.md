@@ -91,6 +91,14 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
 
 ## Evidence
 
+### Batch 4: Deterministic run_delegation nonterminal/allow-all-tools waits (urgent CI fix)
+
+- **Obstacle:** In `agent/test/cli/run_delegation_test.dart` the `needs_input`/`needs_permission` surfacing test and the `--allow-all-tools`-leaves-`system_ask_user`-pending test waited on the oneshot runner's serialized, asynchronous artifact writes and permission handling via hardcoded `Future.delayed(30ms)` sleeps. Under slow/parallel CI those sleeps race the async record queue and intermittently observe `readResult() == null` or a stale status — a timing flake, not a weak assertion.
+- **Repair (smallest owning fixture, machine contract preserved):** Added a bounded `waitFor(predicate)` helper plus `_statusIs(outDir, status, {requestId})` to the test fixture and replaced every timing sleep in these tests with a wait on the *actual* emitted contract condition (`result.json` status + `pending_intervention` fields, or `permissionResponses` count). Initial-start waits now await `fakeClient.turnDispatched` instead of a fixed delay. None of the assertions were weakened; step-specific assertions on status/`pending_intervention`/`tool_name`/`sessionId`/auto-approval counts remain byte-for-byte intact.
+- **Files changed:** `agent/test/cli/run_delegation_test.dart` (fixture only; no production source change).
+- **Focused regressions (run on Windows, real fvm):** `fvm dart test test/cli/run_delegation_test.dart` — 21/21 pass, repeated 5× (stable); `fvm dart analyze test/cli/run_delegation_test.dart` — 0 issues. Blast radius: `fvm dart test test/cli/run_delegation_test.dart test/cli/run_command_test.dart test/cli/session_command_test.dart test/cli/run_artifacts_test.dart` — 77/77 pass; `fvm dart analyze lib/cli test/cli` — 0 issues.
+- **Constraints honored:** no production source change, no weakened assertions, no second runtime, no source switch.
+
 ### Batch 1 (implemented in the Plan97 aggregation worktree, branch `perf/97-windows-first-performance`)
 
 - **Files changed:** `.agents/skills/delegate-task-supervisor/{SKILL.md,scripts/supervisor.mjs,scripts/bootstrap.mjs,test/supervisor_test.mjs,test/bootstrap_test.mjs}`; `.agents/skills/{sanad-orchestrator,sanad-subagent-developer,sanad-pull-request-review,sanad-pull-request-lifecycle,sanad-delegate}/SKILL.md`; `scripts/workflow_guards/**` (new Pure-Dart package); `docs/agent_engine/sanad_delegate_relay.md`; `docs/operations/developer_guide.md`; `docs/plans/97-windows-first-agent-client-performance.md` (parent reconciliation); this file.
