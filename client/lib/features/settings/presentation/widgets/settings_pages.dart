@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -151,6 +153,70 @@ class _GeneralPageState extends State<GeneralPage> {
     });
   }
 
+  Future<void> _exportAppearance() async {
+    final l10n = AppLocalizations.of(context)!;
+    try {
+      final appearance = context.read<AppearanceCubit>().state;
+      final activeDeviceId = context.read<AppearanceCubit>().activeDeviceId;
+      final fileName = activeDeviceId != null && activeDeviceId.isNotEmpty
+          ? 'sanad-appearance-$activeDeviceId.json'
+          : 'sanad-appearance.json';
+
+      final saveLocation = await getSaveLocation(
+        suggestedName: fileName,
+        acceptedTypeGroups: const [
+          XTypeGroup(label: 'JSON', extensions: ['json']),
+        ],
+      );
+      if (saveLocation == null) return;
+
+      final jsonContent = const JsonEncoder.withIndent('  ').convert(appearance.toJson());
+      final xFile = XFile.fromData(
+        utf8.encode(jsonContent),
+        mimeType: 'application/json',
+        name: fileName,
+      );
+      await xFile.saveTo(saveLocation.path);
+      if (mounted) {
+        ToastUtils.showSuccess(context, l10n.appearanceExported);
+      }
+    } catch (e) {
+      if (mounted) {
+        ToastUtils.showError(context, e.toString());
+      }
+    }
+  }
+
+  Future<void> _importAppearance() async {
+    final l10n = AppLocalizations.of(context)!;
+    try {
+      const typeGroup = XTypeGroup(
+        label: 'JSON',
+        extensions: ['json'],
+      );
+      final file = await openFile(acceptedTypeGroups: const [typeGroup]);
+      if (file == null) return;
+
+      final content = await file.readAsString();
+      final decoded = jsonDecode(content);
+      if (decoded is! Map) {
+        if (mounted) {
+          ToastUtils.showError(context, l10n.appearanceImportFailed);
+        }
+        return;
+      }
+      final map = Map<String, dynamic>.from(decoded);
+      if (mounted) {
+        await context.read<AppearanceCubit>().importAppearance(map);
+        ToastUtils.showSuccess(context, l10n.appearanceImported);
+      }
+    } catch (_) {
+      if (mounted) {
+        ToastUtils.showError(context, l10n.appearanceImportFailed);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final appearance = context.watch<AppearanceCubit>().state;
@@ -266,11 +332,34 @@ class _GeneralPageState extends State<GeneralPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  l10n.appearance,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      l10n.appearance,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        OutlinedButton.icon(
+                          key: const Key('appearance_export_btn'),
+                          onPressed: _exportAppearance,
+                          icon: const Icon(Icons.file_upload_outlined, size: 16),
+                          label: Text(l10n.exportAppearance),
+                        ),
+                        OutlinedButton.icon(
+                          key: const Key('appearance_import_btn'),
+                          onPressed: _importAppearance,
+                          icon: const Icon(Icons.file_download_outlined, size: 16),
+                          label: Text(l10n.importAppearance),
+                        ),
+                      ],
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 6),
                 Text(

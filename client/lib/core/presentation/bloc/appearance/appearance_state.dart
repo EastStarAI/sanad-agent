@@ -144,6 +144,34 @@ class AppearanceState extends Equatable {
     );
   }
 
+  Map<String, dynamic> toJson() => {
+    'theme_style': themeStyle.id,
+    'primary_color': primaryColor.id,
+    'font_family': fontFamily.id,
+    'font_size': fontSizeScale.id,
+    'background_option': backgroundOption.id,
+  };
+
+  factory AppearanceState.fromJson(Map<String, dynamic> json) {
+    return AppearanceState(
+      themeStyle: AppThemeStyle.fromId(
+        (json['theme_style'] ?? json['themeStyle'])?.toString(),
+      ),
+      primaryColor: AppPrimaryColor.fromId(
+        (json['primary_color'] ?? json['primaryColor'])?.toString(),
+      ),
+      fontFamily: AppFontFamily.fromId(
+        (json['font_family'] ?? json['fontFamily'])?.toString(),
+      ),
+      fontSizeScale: AppFontSizeScale.fromId(
+        (json['font_size'] ?? json['fontSize'] ?? json['fontSizeScale'])?.toString(),
+      ),
+      backgroundOption: AppBackgroundOption.fromId(
+        (json['background_option'] ?? json['backgroundOption'])?.toString(),
+      ),
+    );
+  }
+
   @override
   List<Object?> get props => [
         themeStyle,

@@ -60,7 +60,12 @@ class AppProviders extends StatelessWidget {
 
     return MultiBlocProvider(
       providers: [
-        BlocProvider(create: (_) => AppearanceCubit(initialAppearance)),
+        BlocProvider(
+          create: (_) => AppearanceCubit(
+            initialAppearance,
+            connectionCoordinator: connectionCoordinator,
+          ),
+        ),
         BlocProvider(create: (_) => ThemeCubit(initialTheme)),
         BlocProvider(create: (_) => LocaleCubit(initialLocale)),
         BlocProvider(create: (_) => AppErrorCubit()),
