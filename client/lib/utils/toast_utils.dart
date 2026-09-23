@@ -11,14 +11,17 @@ class ToastUtils {
 
   static void showError(BuildContext context, String message) {
     _logger.warning('Showing user-visible error toast');
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
     toastification.show(
       context: context,
       type: ToastificationType.error,
       style: ToastificationStyle.flat,
       autoCloseDuration: defaultDuration,
       title: Text(message),
-      alignment: AppPlatform.isMobile ? Alignment.topCenter : Alignment.topRight,
-      direction: TextDirection.ltr,
+      alignment: AppPlatform.isMobile
+          ? Alignment.topCenter
+          : (isRtl ? Alignment.topLeft : Alignment.topRight),
+      direction: isRtl ? TextDirection.rtl : TextDirection.ltr,
       animationDuration: const Duration(milliseconds: 300),
       // animationBuilder:
       //     (context, animation, alignment, child) {
@@ -45,14 +48,17 @@ class ToastUtils {
   }
 
   static void showSuccess(BuildContext context, String message) {
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
     toastification.show(
       context: context,
       type: ToastificationType.success,
       style: ToastificationStyle.flat,
       autoCloseDuration: defaultDuration,
       title: Text(message),
-      alignment: AppPlatform.isMobile ? Alignment.topCenter : Alignment.topRight,
-      direction: TextDirection.ltr,
+      alignment: AppPlatform.isMobile
+          ? Alignment.topCenter
+          : (isRtl ? Alignment.topLeft : Alignment.topRight),
+      direction: isRtl ? TextDirection.rtl : TextDirection.ltr,
       animationDuration: const Duration(milliseconds: 300),
       icon: Icon(Icons.check_circle_outline, color: Theme.of(context).colorScheme.primary),
       showIcon: true,

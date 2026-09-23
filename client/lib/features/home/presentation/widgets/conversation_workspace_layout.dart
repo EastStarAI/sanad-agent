@@ -87,8 +87,10 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
   }
 
   void _resizeSidebar(DragUpdateDetails details) {
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
+    final delta = isRtl ? -details.delta.dx : details.delta.dx;
     setState(() {
-      _sidebarWidth = (_sidebarWidth + details.delta.dx).clamp(
+      _sidebarWidth = (_sidebarWidth + delta).clamp(
         SidebarBreakpoints.minWidth,
         SidebarBreakpoints.maxWidth,
       );
@@ -116,6 +118,7 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
     final theme = Theme.of(context);
     final dividerColor = theme.colorScheme.outline.withValues(alpha: 0.24);
     final duration = _isResizing ? Duration.zero : const Duration(milliseconds: 250);
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
 
     final permanentSidebar = AnimatedContainer(
       duration: duration,
@@ -238,10 +241,18 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
     return Stack(
       children: [
         Row(
+          // A Row inside an RTL Directionality lays out its children from
+          // the right edge automatically, so the same child order works
+          // for both directions and keeps the conversation space reserved.
           children: [
             permanentSidebar,
             Transform.translate(
-              offset: Offset(isMacOS ? -8 : -(_resizeHandleWidth / 2), 0),
+              offset: Offset(
+                isRtl
+                    ? (isMacOS ? 8 : (_resizeHandleWidth / 2))
+                    : (isMacOS ? -8 : -(_resizeHandleWidth / 2)),
+                0,
+              ),
               child: resizeHandle,
             ),
             Expanded(child: widget.child),
@@ -250,7 +261,8 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
         if (!_isPinned)
           // Hover trigger area on the left edge (16 pixels)
           Positioned(
-            left: 0,
+            left: isRtl ? null : 0,
+            right: isRtl ? 0 : null,
             top: 0,
             bottom: 0,
             width: 16,
@@ -262,7 +274,8 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
         AnimatedPositioned(
           duration: duration,
           curve: Curves.easeInOut,
-          left: _isPinned ? 0 : (_isHovered ? 0 : -_sidebarWidth - 10),
+          left: isRtl ? null : (_isPinned ? 0 : (_isHovered ? 0 : -_sidebarWidth - 10)),
+          right: isRtl ? (_isPinned ? 0 : (_isHovered ? 0 : -_sidebarWidth - 10)) : null,
           top: 0,
           bottom: 0,
           width: _sidebarWidth,
@@ -276,9 +289,9 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
                   filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.transparent,
+                      color: theme.colorScheme.surface.withValues(alpha: 0.25),
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.3)),
+                      border: Border.all(color: theme.colorScheme.outline.withValues(alpha: 0.25)),
                       // boxShadow: [
                       //   BoxShadow(
                       //     color: Colors.black.withValues(alpha: 0.15),
@@ -298,7 +311,8 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
           ),
         ),
         Positioned(
-          left: 0,
+          left: isRtl ? null : 0,
+          right: isRtl ? 0 : null,
           top: 0,
           width: isMacOS ? 300 : 240,
           child: MouseRegion(

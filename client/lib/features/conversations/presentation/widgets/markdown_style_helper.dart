@@ -20,7 +20,7 @@ class MarkdownStyleHelper {
     final codeColor = theme.colorScheme.codeColor;
 
     return MarkdownStyleSheet(
-      p: GoogleFonts.roboto(
+      p: (theme.textTheme.bodyMedium ?? const TextStyle()).copyWith(
         color: isFinal ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
         fontSize: 13,
         height: 1.5,
@@ -37,7 +37,7 @@ class MarkdownStyleHelper {
           color: theme.colorScheme.outline.withValues(alpha: 0.1),
         ),
       ),
-      blockquote: GoogleFonts.roboto(
+      blockquote: (theme.textTheme.bodyMedium ?? const TextStyle()).copyWith(
         color: isDark ? theme.colorScheme.onSurface.withValues(alpha: 0.9) : theme.colorScheme.onSurfaceVariant,
         fontSize: 13,
         height: 1.5,

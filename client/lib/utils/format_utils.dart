@@ -70,22 +70,35 @@ class EventMetadataFormatter {
   }
 
   static String timestampText(DateTime timestamp, BuildContext context) {
-    return MaterialLocalizations.of(context).formatTimeOfDay(
-      TimeOfDay.fromDateTime(timestamp.toLocal()),
+    final localTimestamp = timestamp.toLocal();
+    final loc = MaterialLocalizations.of(context);
+    return loc.formatTimeOfDay(
+      TimeOfDay.fromDateTime(localTimestamp),
       alwaysUse24HourFormat: false,
     );
+  }
+
+  static String dateTooltip(DateTime timestamp, BuildContext context) {
+    final localTimestamp = timestamp.toLocal();
+    final loc = MaterialLocalizations.of(context);
+    return loc.formatFullDate(localTimestamp);
   }
 
   static String formatRuntime(dynamic runtimeMs) {
     if (runtimeMs is! num) return '';
     final milliseconds = runtimeMs.round();
-    if (milliseconds < 1000) return '${milliseconds}ms';
-    final seconds = milliseconds / 1000;
-    if (seconds < 60) {
-      return '${seconds.toStringAsFixed(seconds >= 10 ? 0 : 1)}s';
+    if (milliseconds <= 0) return '0s';
+    if (milliseconds < 1000) {
+      final s = (milliseconds / 1000).toStringAsFixed(1);
+      if (s == '1.0' || s == '1') return '1s';
+      return '${s}s';
     }
 
     final totalSeconds = (milliseconds / 1000).round();
+    if (totalSeconds < 60) {
+      return '${totalSeconds}s';
+    }
+
     final hours = totalSeconds ~/ 3600;
     final minutes = (totalSeconds % 3600) ~/ 60;
     final remainingSeconds = totalSeconds % 60;

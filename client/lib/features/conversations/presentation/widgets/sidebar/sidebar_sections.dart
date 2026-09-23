@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
+
 
 import '../../../../devices/domain/models/device_config.dart';
 import '../../../domain/models/conversation_resource_state.dart';
@@ -55,7 +57,7 @@ class SidebarWorkspacesSection extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  'Workspaces',
+                  AppLocalizations.of(context)!.workspacesSection,
                   style: TextStyle(
                     color: theme.colorScheme.onSurfaceVariant,
                     fontSize: 12,
@@ -84,7 +86,7 @@ class SidebarWorkspacesSection extends StatelessWidget {
         _SectionStatusInline(
           state: workspacesState,
           isDrawerMode: isDrawerMode,
-          staleLabel: 'Could not refresh workspaces',
+          staleLabel: AppLocalizations.of(context)!.couldNotRefreshWorkspaces,
           onRetry: onRetryWorkspaces,
         ),
         if (workspaces.isEmpty && workspacesState == ConversationResourceState.loading)
@@ -102,7 +104,7 @@ class SidebarWorkspacesSection extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Text(
-              'No workspaces',
+              AppLocalizations.of(context)!.noWorkspaces,
               style: TextStyle(
                 color: theme.colorScheme.onSurface.withValues(alpha: 0.38),
                 fontSize: 11,
@@ -168,7 +170,7 @@ class SidebarUnscopedConversationsSection extends StatelessWidget {
             children: [
               Expanded(
                 child: Text(
-                  'Conversations',
+                  AppLocalizations.of(context)!.conversationsSection,
                   style: TextStyle(
                     color: theme.colorScheme.onSurfaceVariant,
                     fontSize: 12,
@@ -216,7 +218,7 @@ class SidebarUnscopedConversationsSection extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: Text(
-              'No conversations',
+              AppLocalizations.of(context)!.noConversations,
               style: TextStyle(
                 color: theme.colorScheme.onSurface.withValues(alpha: 0.38),
                 fontSize: 11,
@@ -246,7 +248,7 @@ class SidebarUnscopedConversationsSection extends StatelessWidget {
               iconAlignment: IconAlignment.end,
               icon: Icon(Icons.expand_more, size: 16, color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5)),
               label: Text(
-                group!.isLoadingMore ? 'Loading…' : 'Load more',
+                group!.isLoadingMore ? AppLocalizations.of(context)!.loading : AppLocalizations.of(context)!.loadMore,
                 style: TextStyle(
                   fontSize: 11,
                   color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),

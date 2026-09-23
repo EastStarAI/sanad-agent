@@ -1,0 +1,335 @@
+{
+  "@@locale": "en",
+  "appTitle": "Sanad",
+  "newChat": "New Chat",
+  "searchConversations": "Search conversations",
+  "settings": "Settings",
+  "general": "General",
+  "language": "Language",
+  "languageEnglish": "English",
+  "languageArabic": "Arabic",
+  "selectLanguage": "Select interface language",
+  "theme": "Theme",
+  "themeDark": "Dark",
+  "themeLight": "Light",
+  "themeSystem": "System",
+  "themeMidnight": "Midnight",
+  "themeSepia": "Sepia",
+  "primaryColor": "Accent Color",
+  "selectPrimaryColor": "Choose primary accent color for active controls",
+  "colorDefaultBlue": "Default",
+  "colorTeal": "Teal",
+  "colorGreen": "Green",
+  "colorCyan": "Cyan",
+  "colorPurple": "Purple",
+  "colorMagenta": "Magenta",
+  "colorOrange": "Orange",
+  "colorRose": "Rose",
+  "fontFamily": "Font Family",
+  "selectFontFamily": "Choose typography for interface and messages",
+  "fontSize": "Font Size",
+  "fontSizeDescription": "Scale interface and chat text size",
+  "fontSizeSmall": "Small",
+  "fontSizeNormal": "Default",
+  "fontSizeLarge": "Large",
+  "fontSizeExtraLarge": "Extra Large",
+  "background": "Background",
+  "backgroundDescription": "Choose a solid accent or nature wallpaper with adaptive contrast protection",
+  "backgroundDefault": "Default",
+  "backgroundSlate": "Slate",
+  "backgroundNavy": "Deep Navy",
+  "backgroundForest": "Forest Mist",
+  "backgroundMountain": "Mountain Dusk",
+  "backgroundLake": "Calm Aurora Lake",
+  "previewText": "Sanad AI: Fast, localized, and intelligent assistant. | سند: مساعدك الذكي المتطور والسريع.",
+  "appearance": "Appearance",
+  "exportAppearance": "Export",
+  "importAppearance": "Import",
+  "appearanceExported": "Appearance settings exported successfully",
+  "appearanceImported": "Appearance settings imported successfully",
+  "appearanceImportFailed": "Failed to import appearance settings. Invalid file format.",
+  "account": "Account",
+  "signOut": "Sign out",
+  "deleteAccount": "Delete account",
+  "confirm": "Confirm",
+  "cancel": "Cancel",
+  "save": "Save",
+  "close": "Close",
+  "delete": "Delete",
+  "retry": "Retry",
+  "send": "Send",
+  "stop": "Stop",
+  "stopGenerating": "Stop generating",
+  "typeMessage": "Type a message…",
+  "conversations": "Conversations",
+  "today": "Today",
+  "yesterday": "Yesterday",
+  "previous7Days": "Previous 7 days",
+  "older": "Older",
+  "renameConversation": "Rename conversation",
+  "deleteConversation": "Delete conversation",
+  "deleteConversationConfirm": "Are you sure you want to delete this conversation?",
+  "devices": "Devices",
+  "addDevice": "Add Device",
+  "connected": "Connected",
+  "disconnected": "Disconnected",
+  "connecting": "Connecting…",
+  "connectionError": "Connection error",
+  "providers": "Providers",
+  "providerSetup": "Provider setup",
+  "apiKey": "API key",
+  "model": "Model",
+  "attachFile": "Attach file",
+  "loading": "Loading…",
+  "error": "Error",
+  "unexpectedError": "Something went wrong. Please try again.",
+  "emptyConversation": "Start a new conversation",
+  "newTask": "Start a new task",
+  "newTaskInWorkspace": "Start a new task in {workspace}",
+  "statusReady": "Ready",
+  "statusWorking": "Working…",
+  "sessions": "Sessions",
+  "noConversationsYet": "No conversations yet",
+  "@newTaskInWorkspace": {
+    "placeholders": {
+      "workspace": {
+        "type": "String"
+      }
+    }
+  },
+  "backToConversations": "Back to conversations",
+  "personal": "Personal",
+  "profile": "Profile",
+  "sessionsDevices": "Sessions & Devices",
+  "addDeviceTooltip": "Add device",
+  "noDevicesAvailable": "No devices available.",
+  "deviceSettings": "{device} Settings",
+  "overview": "Overview",
+  "mcpServers": "MCP Servers",
+  "skills": "Skills",
+  "workspaces": "Workspaces",
+  "showLess": "Show less",
+  "showAll": "Show all ({count})",
+  "checkForUpdates": "Check for Updates",
+  "@deviceSettings": {
+    "placeholders": {
+      "device": {
+        "type": "String"
+      }
+    }
+  },
+  "@showAll": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "workspacesSection": "Workspaces",
+  "couldNotRefreshWorkspaces": "Could not refresh workspaces",
+  "noWorkspaces": "No workspaces",
+  "conversationsSection": "Conversations",
+  "noConversations": "No conversations",
+  "loadMore": "Load more",
+  "newSession": "New Session",
+  "profileSubtitle": "Your Sanad account and session.",
+  "manageAccount": "Manage account",
+  "signIn": "Sign in",
+  "signInPrompt": "Sign in to manage your Sanad account.",
+  "linuxUpdateManual": "The official Linux release was opened. Download, replace, and restart Sanad manually.",
+  "upToDate": "Sanad Client is up to date.",
+  "sourceManagedUpdate": "This source build is updated from its developer checkout.",
+  "updateNoPackage": "A newer release exists, but no matching package is available.",
+  "updateLaunchFailed": "The official release was found, but the browser could not be opened.",
+  "updateStarted": "The update check has started.",
+  "updates": "Updates",
+  "updatesLinuxNote": "Linux updates are manual. Sanad only opens a newer official package after validating its release manifest.",
+  "updatesAutoNote": "Automatic update checks run in the background. Use this action to check the signed update feed now.",
+  "currentVersion": "Current Version: {version}",
+  "checkingForUpdates": "Checking for updates…",
+  "sourceManagedAgent": "This agent runs from source and stays developer-managed.",
+  "selectADevice": "Select a device",
+  "deviceSettingsPlaceholder": "Device settings will appear here.",
+  "languageUpdated": "Interface language updated.",
+  "@currentVersion": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "mcpAddServer": "Add MCP server",
+  "mcpEditServer": "Edit MCP server",
+  "mcpAddToList": "Add server",
+  "mcpServerName": "Name",
+  "mcpServerDescription": "Description (optional)",
+  "mcpServerDetails": "Server Details",
+  "mcpServerIdentity": "Server identity and metadata.",
+  "mcpServerIdentityHint": "Enter basic details for this MCP server.",
+  "mcpTransport": "Transport",
+  "mcpRemoteServer": "Remote server",
+  "mcpLocalCommand": "Local command",
+  "mcpServerUrl": "Server URL",
+  "mcpUrlHint": "Enter an HTTP or HTTPS URL",
+  "mcpCommand": "Command",
+  "mcpCommandHint": "Specify the executable command to run locally.",
+  "mcpArguments": "Arguments",
+  "mcpAddArgument": "Add argument",
+  "mcpRemove": "Remove",
+  "mcpRemoveRow": "Remove row",
+  "mcpEnvVariables": "Environment variables",
+  "mcpAddVariable": "Add variable",
+  "mcpEnvHint": "Set environment variables for the subprocess.",
+  "mcpInspectionTools": "Inspection & Tools",
+  "mcpAuthAndTest": "Authorize & Test",
+  "mcpTestConnection": "Test Connection",
+  "mcpWorking": "Working…",
+  "mcpSaving": "Saving…",
+  "mcpSaveChanges": "Save changes",
+  "mcpConnection": "Connection",
+  "mcpConnectionSucceeded": "Connection succeeded",
+  "mcpConnectionFailed": "Connection failed",
+  "mcpTestSuccessNote": "Test the server successfully before saving.",
+  "mcpRiskNote": "Only enable tools and servers you trust.",
+  "mcpRiskAck": "I understand this server can access data and perform actions.",
+  "mcpRiskAckSave": "Acknowledge the MCP server risks before saving.",
+  "mcpCredentials": "Credentials",
+  "mcpAuthentication": "Authentication",
+  "mcpBearerToken": "Bearer token",
+  "mcpBearerTokenRequired": "Bearer token is required.",
+  "mcpReplaceBearerToken": "Replace bearer token",
+  "mcpOAuthCredentials": "OAuth credentials",
+  "mcpOAuthClientId": "OAuth client ID (optional)",
+  "mcpEnterClientSecret": "Enter client secret",
+  "mcpReplaceClientSecret": "Replace OAuth client secret (optional)",
+  "mcpConfiguredEnterReplacement": "Configured — enter replacement",
+  "mcpImportConfig": "Import configuration",
+  "mcpPaste": "Paste",
+  "mcpPasteHint": "Paste an MCP server object or mcpServers document. Nothing is saved until review.",
+  "mcpDraftToReview": "Draft to review",
+  "mcpPreview": "Preview",
+  "mcpUseDraft": "Use draft",
+  "mcpImport": "Import",
+  "mcpBack": "Back",
+  "mcpCancel": "Cancel",
+  "mcpCouldNotOpenAuthUrl": "Could not open the authorization URL.",
+  "mcpOAuthStatus": "OAuth: {status}",
+  "mcpNoInspectionResults": "No inspection results yet",
+  "mcpTestDiscoveryNote": "Test the server connection to discover available tools and verify communication.",
+  "mcpHeaders": "Headers",
+  "mcpAddHeader": "Add header",
+  "mcpAllowedTools": "Allowed tools",
+  "mcpCmdArgsHint": "Command line arguments passed to the process.",
+  "mcpSecretValue": "Secret value",
+  "mcpEnterTokenString": "Enter token string",
+  "mcpSelectCredentials": "Select and configure credentials for this server.",
+  "mcpAddServerTitle": "Add MCP Server",
+  "mcpDeleteServer": "Delete Server",
+  "mcpDeleteConfirm": "Delete `{name}` from this source?",
+  "mcpConnectToDiscover": "Connect to discover tools.",
+  "mcpConnecting": "Connecting...",
+  "mcpCopiedRedacted": "Copied redacted JSON. Credentials were excluded.",
+  "mcpPreviewRequiredNote": "Credentials are excluded. Preview is required before Save.",
+  "mcpAdvancedActions": "Advanced actions",
+  "mcpEditJson": "Edit JSON",
+  "mcpExportJson": "Export JSON",
+  "mcpPreviewChanges": "Preview changes",
+  "mcpAutoDetect": "Auto-detect",
+  "mcpNoServers": "No MCP servers found for this source and filter.",
+  "mcpSelectDeviceFirst": "Select a device before managing MCP servers.",
+  "mcpSelectWorkspaceFirst": "Select a workspace to manage local MCP servers.",
+  "mcpServerDisabled": "Server is disabled.",
+  "mcpDeviceOffline": "This device is offline. Reconnect to manage MCP servers.",
+  "mcpEnabled": "Enabled",
+  "mcpDisabled": "Disabled",
+  "mcpEnable": "Enable",
+  "mcpDisable": "Disable",
+  "mcpExpand": "Expand",
+  "mcpCollapse": "Collapse",
+  "mcpEdit": "Edit",
+  "mcpDelete": "Delete",
+  "mcpTest": "Test",
+  "mcpSave": "Save",
+  "mcpRemote": "Remote",
+  "mcpEffective": "Effective",
+  "mcpAddToDevice": "Add to Device",
+  "@mcpOAuthStatus": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "@mcpDeleteConfirm": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "timeNow": "now",
+  "secondsShort": "{n}s",
+  "@secondsShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "minutesShort": "{n}m",
+  "@minutesShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "hoursShort": "{n}h",
+  "@hoursShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "daysShort": "{n}d",
+  "@daysShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "weeksShort": "{n}w",
+  "@weeksShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "monthsShort": "{n}mo",
+  "@monthsShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "yearsShort": "{n}y",
+  "@yearsShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "helpMessage0": "Automate tasks, analyze data, and write code — just ask.",
+  "helpMessage1": "I can search the web, manage files, and run terminal commands.",
+  "helpMessage2": "Start a conversation or pick a workspace to work with local files.",
+  "helpMessage3": "Ask me to research, summarize, or draft content for you.",
+  "helpMessage4": "Need help debugging? Share your error logs or code to fix it together.",
+  "helpMessage5": "I can design system architectures, database schemas, and workflows.",
+  "helpMessage6": "Create structured implementation plans and execute tasks step-by-step.",
+  "helpMessage7": "Let me generate test suites, run checks, and keep documentation updated."
+}

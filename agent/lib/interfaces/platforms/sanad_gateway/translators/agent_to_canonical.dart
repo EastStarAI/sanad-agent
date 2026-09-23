@@ -87,6 +87,8 @@ class AgentToCanonical {
           'started_at': terminalMetadata!['started_at'],
         if (terminalMetadata?['terminal_at'] != null)
           'terminal_at': terminalMetadata!['terminal_at'],
+        if (terminalMetadata?['runtime_ms'] != null)
+          'runtime_ms': terminalMetadata!['runtime_ms'],
         if (terminalMetadata?['cleanup_outcome'] != null)
           'cleanup_outcome': terminalMetadata!['cleanup_outcome'],
       };

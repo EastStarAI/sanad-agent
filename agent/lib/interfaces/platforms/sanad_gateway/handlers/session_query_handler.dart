@@ -322,6 +322,8 @@ class SessionQueryHandler {
             'started_at': message.metadata!['started_at'],
           if (message.metadata?['terminal_at'] != null)
             'terminal_at': message.metadata!['terminal_at'],
+          if (message.metadata?['runtime_ms'] != null)
+            'runtime_ms': message.metadata!['runtime_ms'],
           if (message.metadata?['cleanup_outcome'] != null)
             'cleanup_outcome': message.metadata!['cleanup_outcome'],
           'created_at': msgTime,

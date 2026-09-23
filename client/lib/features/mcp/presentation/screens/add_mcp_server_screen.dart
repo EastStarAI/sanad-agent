@@ -1,4 +1,9 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -206,7 +211,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
           authorizationUrl,
           mode: LaunchMode.externalApplication,
         );
-        if (!launched) throw StateError('Could not open the authorization URL.');
+        if (!launched) throw StateError(AppLocalizations.of(context)!.mcpCouldNotOpenAuthUrl);
       }
       while (mounted && !flow.isTerminal) {
         await Future<void>.delayed(const Duration(seconds: 2));
@@ -259,11 +264,11 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
   Future<void> _save() async {
     if (!_validate()) return;
     if (_inspection?.success != true) {
-      ToastUtils.showError(context, 'Test the server successfully before saving.');
+      ToastUtils.showError(context, AppLocalizations.of(context)!.mcpTestSuccessNote);
       return;
     }
     if (!_acceptedRisks) {
-      ToastUtils.showError(context, 'Acknowledge the MCP server risks before saving.');
+      ToastUtils.showError(context, AppLocalizations.of(context)!.mcpRiskAckSave);
       return;
     }
     setState(() => _isSaving = true);
@@ -294,7 +299,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
         _authType == McpAuthType.bearer &&
         _bearer.text.isEmpty &&
         widget.initialConfig?.bearerConfigured != true) {
-      ToastUtils.showError(context, 'Bearer token is required.');
+      ToastUtils.showError(context, AppLocalizations.of(context)!.mcpBearerTokenRequired);
       return false;
     }
     return true;
@@ -310,14 +315,14 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Import configuration'),
+          title: Text(AppLocalizations.of(context)!.mcpImportConfig),
           content: SizedBox(
             width: 620,
             child: SingleChildScrollView(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Paste an MCP server object or mcpServers document. Nothing is saved until review.'),
+                  Text(AppLocalizations.of(context)!.mcpPasteHint),
                   const SizedBox(height: 12),
                   TextField(
                     controller: input,
@@ -338,8 +343,8 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
                     const SizedBox(height: 12),
                     DropdownButtonFormField<McpDraftPreviewEntry>(
                       initialValue: selected,
-                      decoration: const InputDecoration(
-                        labelText: 'Draft to review',
+                      decoration: InputDecoration(
+                        labelText: AppLocalizations.of(context)!.mcpDraftToReview,
                         border: OutlineInputBorder(),
                       ),
                       items: preview!.servers
@@ -378,11 +383,11 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
                         setDialogState(() => busy = false);
                       }
                     },
-              child: const Text('Preview'),
+              child: Text(AppLocalizations.of(context)!.mcpPreview),
             ),
             FilledButton(
               onPressed: selected == null ? null : () => Navigator.pop(context, selected!.config),
-              child: const Text('Use draft'),
+              child: Text(AppLocalizations.of(context)!.mcpUseDraft),
             ),
           ],
         ),
@@ -441,7 +446,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return Scaffold(
-      backgroundColor: theme.scaffoldBackgroundColor,
+      backgroundColor: Colors.transparent,
       body: SafeArea(
         child: Form(
           key: _formKey,
@@ -458,7 +463,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
                   children: [
                     IconButton(
                       icon: const Icon(Icons.arrow_back_rounded),
-                      tooltip: 'Back',
+                      tooltip: AppLocalizations.of(context)!.mcpBack,
                       onPressed: () {
                         if (context.canPop()) {
                           context.pop();
@@ -469,14 +474,14 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      _isEditing ? 'Edit MCP server' : 'Add MCP server',
+                      _isEditing ? AppLocalizations.of(context)!.mcpEditServer : AppLocalizations.of(context)!.mcpAddServer,
                       style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
                     ),
                     const Spacer(),
                     TextButton.icon(
                       onPressed: _import,
                       icon: const Icon(Icons.file_open_outlined, size: 18),
-                      label: const Text('Import'),
+                      label: Text(AppLocalizations.of(context)!.mcpImport),
                     ),
                   ],
                 ),
@@ -556,16 +561,16 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         SegmentedButton<_McpServerFormType>(
-          key: const Key('mcp_form_segment_btn'),
-          segments: const [
+          key: Key('mcp_form_segment_btn'),
+          segments: [
             ButtonSegment(
               value: _McpServerFormType.remote,
-              label: Text('Remote server'),
+              label: Text(AppLocalizations.of(context)!.mcpRemoteServer),
               icon: Icon(Icons.cloud_outlined),
             ),
             ButtonSegment(
               value: _McpServerFormType.stdio,
-              label: Text('Local command'),
+              label: Text(AppLocalizations.of(context)!.mcpLocalCommand),
               icon: Icon(Icons.terminal),
             ),
           ],
@@ -577,18 +582,18 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
         ),
         const SizedBox(height: 24),
         Text(
-          'Server Details',
+          AppLocalizations.of(context)!.mcpServerDetails,
           style: Theme.of(context).textTheme.titleMedium,
         ),
         const SizedBox(height: 4),
         Text(
-          _isEditing ? 'Server identity and metadata.' : 'Enter basic details for this MCP server.',
+          _isEditing ? AppLocalizations.of(context)!.mcpServerIdentity : AppLocalizations.of(context)!.mcpServerIdentityHint,
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 12),
         _field(
           _name,
-          'Name',
+          AppLocalizations.of(context)!.mcpServerName,
           key: const Key('mcp_form_name_input'),
           hint: 'e.g. Memory Server',
           prefixIcon: const Icon(Icons.badge_outlined),
@@ -598,7 +603,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
         const SizedBox(height: 12),
         _field(
           _description,
-          'Description (optional)',
+          AppLocalizations.of(context)!.mcpServerDescription,
           key: const Key('mcp_form_description_input'),
           hint: 'e.g. MCP server for persistent memory storage',
           prefixIcon: const Icon(Icons.description_outlined),
@@ -620,7 +625,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              'Inspection & Tools',
+              AppLocalizations.of(context)!.mcpInspectionTools,
               style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
             ),
             FilledButton.icon(
@@ -634,10 +639,10 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
                   : const Icon(Icons.wifi_find, size: 18),
               label: Text(
                 _isTesting
-                    ? 'Working…'
+                    ? AppLocalizations.of(context)!.mcpWorking
                     : _authType == McpAuthType.oauth && widget.initialConfig?.oauthConfigured != true
-                    ? 'Authorize & Test'
-                    : 'Test Connection',
+                    ? AppLocalizations.of(context)!.mcpAuthAndTest
+                    : AppLocalizations.of(context)!.mcpTestConnection,
               ),
               style: FilledButton.styleFrom(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -655,7 +660,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
             ),
             tileColor: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
             leading: const Icon(Icons.key_outlined),
-            title: Text('OAuth: ${_oauthFlow!.status.name}'),
+            title: Text(AppLocalizations.of(context)!.mcpOAuthStatus(_oauthFlow!.status.name)),
             subtitle: _oauthFlow!.error == null ? null : Text(_oauthFlow!.error!),
             trailing: _oauthFlow!.isTerminal ? null : TextButton(onPressed: _cancelOAuth, child: const Text('Cancel')),
           ),
@@ -682,7 +687,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
                   ),
                   const SizedBox(height: 12),
                   Text(
-                    'No inspection results yet',
+                    AppLocalizations.of(context)!.mcpNoInspectionResults,
                     style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 6),
@@ -714,17 +719,25 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
   }
 
   Widget _buildBottomBar(ThemeData theme) {
-    return SafeArea(
-      top: false,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-        decoration: BoxDecoration(
-          color: theme.colorScheme.surface,
-          border: Border(top: BorderSide(color: theme.dividerColor)),
+    final appearance = context.watch<AppearanceCubit?>()?.state;
+    final isCustomBg = appearance != null && appearance.backgroundOption != AppBackgroundOption.defaultTheme;
+    final barColor = isCustomBg
+        ? (theme.cardTheme.color ?? theme.colorScheme.surface).withValues(alpha: 0.60)
+        : theme.colorScheme.surface;
+
+    final bar = Container(
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+      decoration: BoxDecoration(
+        color: barColor,
+        border: Border(
+          top: BorderSide(
+            color: isCustomBg ? theme.colorScheme.outline.withValues(alpha: 0.25) : theme.dividerColor,
+          ),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.end,
-          children: [
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
             TextButton(
               onPressed: _isSaving ? null : () => Navigator.pop(context),
               child: const Text('Cancel'),
@@ -747,8 +760,22 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
             ),
           ],
         ),
-      ),
+      );
+
+    final barWidget = SafeArea(
+      top: false,
+      child: bar,
     );
+
+    if (isCustomBg) {
+      return ClipRect(
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: barWidget,
+        ),
+      );
+    }
+    return barWidget;
   }
 
   List<Widget> _remoteFields() => [
