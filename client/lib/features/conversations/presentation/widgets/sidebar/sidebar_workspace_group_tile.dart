@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 import '../../../../devices/domain/models/device_config.dart';
 import '../../../domain/models/conversation_resource_state.dart';
@@ -164,7 +165,7 @@ class SidebarWorkspaceGroupTile extends StatelessWidget {
         Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
           child: Text(
-            'No conversations',
+            AppLocalizations.of(context)!.noConversations,
             style: TextStyle(
               color: theme.colorScheme.onSurface.withValues(alpha: 0.38),
               fontSize: 11,
@@ -269,7 +270,7 @@ class _LoadMoreTile extends StatelessWidget {
         iconAlignment: IconAlignment.end,
         icon: Icon(Icons.expand_more, size: 16, color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5)),
         label: Text(
-          'Load more',
+          AppLocalizations.of(context)!.loadMore,
           style: TextStyle(
             fontSize: 11,
             color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),

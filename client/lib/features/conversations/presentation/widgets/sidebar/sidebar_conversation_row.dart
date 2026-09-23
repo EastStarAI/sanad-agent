@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../../../devices/domain/models/device_config.dart';
@@ -232,35 +233,44 @@ class _SidebarConversationRowState extends State<SidebarConversationRow> {
   }
 }
 
-String formatCompactRelativeTime(DateTime dateTime) {
+/// Compact relative time localized via the shared app locale snapshot.
+/// [localeOverride] lets call sites that already hold a BuildContext inject
+/// the real app locale; fallback uses the platform locale.
+String formatCompactRelativeTime(DateTime dateTime, {Locale? localeOverride}) {
+  final resolved = localeOverride ?? WidgetsBinding.instance.platformDispatcher.locale;
+  final l10n = lookupAppLocalizations(
+    const {'ar', 'en'}.contains(resolved.languageCode) ? resolved : const Locale('en'),
+  );
   final now = DateTime.now();
   final diff = now.difference(dateTime);
 
+  // Locale-aware relative time: The single app locale lives on the shared
+  // localizations binding, not the platform dispatcher.
   if (diff.isNegative || diff.inSeconds < 10) {
-    return 'now';
+    return l10n.timeNow;
   }
   if (diff.inSeconds < 60) {
-    return '${diff.inSeconds}s';
+    return l10n.secondsShort(diff.inSeconds);
   }
   if (diff.inMinutes < 60) {
-    return '${diff.inMinutes}m';
+    return l10n.minutesShort(diff.inMinutes);
   }
   if (diff.inHours < 24) {
-    return '${diff.inHours}h';
+    return l10n.hoursShort(diff.inHours);
   }
   if (diff.inDays < 7) {
-    return '${diff.inDays}d';
+    return l10n.daysShort(diff.inDays);
   }
   if (diff.inDays < 30) {
     final weeks = (diff.inDays / 7).floor();
-    return '${weeks}w';
+    return l10n.weeksShort(weeks);
   }
   if (diff.inDays < 365) {
     final months = (diff.inDays / 30).floor();
-    return '${months}mo';
+    return l10n.monthsShort(months);
   }
   final years = (diff.inDays / 365).floor();
-  return '${years}y';
+  return l10n.yearsShort(years);
 }
 
 void _showMobileSessionOptions(
@@ -418,7 +428,7 @@ class _SidebarSessionTrailing extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               child: Text(
-                formatCompactRelativeTime(session.updatedAt),
+                formatCompactRelativeTime(session.updatedAt, localeOverride: Localizations.maybeLocaleOf(context)),
                 style: TextStyle(
                   color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
                   fontSize: 10,
@@ -504,7 +514,7 @@ class _SidebarSessionTrailing extends StatelessWidget {
                 Padding(
                   padding: const EdgeInsets.only(right: 4),
                   child: Text(
-                    formatCompactRelativeTime(session.updatedAt),
+                    formatCompactRelativeTime(session.updatedAt, localeOverride: Localizations.maybeLocaleOf(context)),
                     style: TextStyle(
                       color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.5),
                       fontSize: 10,

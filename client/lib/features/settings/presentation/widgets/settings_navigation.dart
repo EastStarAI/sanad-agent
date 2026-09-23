@@ -4,6 +4,7 @@ import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/devices/presentation/utils/device_ui_mapper.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 enum SettingsDestination { profile, general, sessionsDevices, overview, providers, mcp, skills, workspace }
 
@@ -52,49 +53,49 @@ class SettingsNavigation extends StatelessWidget {
                 IconButton(
                   key: const Key('settings_back_to_conversations_btn'),
                   icon: const Icon(Icons.arrow_back_rounded),
-                  tooltip: 'Back to conversations',
+                  tooltip: AppLocalizations.of(context)!.backToConversations,
                   onPressed: () => context.go(AppRoutes.home),
                 ),
                 Text(
-                  'Settings',
+                  AppLocalizations.of(context)!.settings,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w700),
                 ),
               ],
             ),
           ),
-          const NavigationLabel('Personal'),
+          NavigationLabel(AppLocalizations.of(context)!.personal),
           NavigationTile(
             icon: Icons.person_outline,
-            label: 'Profile',
+            label: AppLocalizations.of(context)!.profile,
             selected: selectedDestination == SettingsDestination.profile,
             onTap: () => onSelectPersonal(SettingsDestination.profile),
           ),
           NavigationTile(
             icon: Icons.tune,
-            label: 'General',
+            label: AppLocalizations.of(context)!.general,
             selected: selectedDestination == SettingsDestination.general,
             onTap: () => onSelectPersonal(SettingsDestination.general),
           ),
           NavigationTile(
             icon: Icons.devices_other_outlined,
-            label: 'Sessions & Devices',
+            label: AppLocalizations.of(context)!.sessionsDevices,
             selected: selectedDestination == SettingsDestination.sessionsDevices,
             onTap: () => onSelectPersonal(SettingsDestination.sessionsDevices),
           ),
           Row(
             children: [
-              const Expanded(child: NavigationLabel('Devices')),
+              Expanded(child: NavigationLabel(AppLocalizations.of(context)!.devices)),
               IconButton(
                 onPressed: () => context.push(AppRoutes.addAgent),
                 icon: const Icon(Icons.add, size: 19),
-                tooltip: 'Add device',
+                tooltip: AppLocalizations.of(context)!.addDeviceTooltip,
               ),
             ],
           ),
           if (devices.isEmpty)
-            const Padding(
-              padding: EdgeInsets.all(12),
-              child: Text('No devices available.'),
+            Padding(
+              padding: const EdgeInsets.all(12),
+              child: Text(AppLocalizations.of(context)!.noDevicesAvailable),
             ),
           for (final device in devices)
             DeviceNavigationTile(
@@ -105,25 +106,26 @@ class SettingsNavigation extends StatelessWidget {
             ),
           const SizedBox(height: 18),
           if (selectedDevice != null) ...[
-            NavigationLabel('${selectedDevice!.name} Settings'),
-            for (final item in const [
-              (SettingsDestination.overview, Icons.dashboard_outlined, 'Overview'),
-              (SettingsDestination.providers, Icons.hub_outlined, 'Providers'),
-              (SettingsDestination.mcp, Icons.dns_outlined, 'MCP Servers'),
-              (SettingsDestination.skills, Icons.auto_awesome_outlined, 'Skills'),
+            NavigationLabel(AppLocalizations.of(context)!.deviceSettings(selectedDevice!.name)),
+            for (final item in [
+              (SettingsDestination.overview, Icons.dashboard_outlined, AppLocalizations.of(context)!.overview, 'overview'),
+              (SettingsDestination.providers, Icons.hub_outlined, AppLocalizations.of(context)!.providers, 'providers'),
+              (SettingsDestination.mcp, Icons.dns_outlined, AppLocalizations.of(context)!.mcpServers, 'mcp_servers'),
+              (SettingsDestination.skills, Icons.auto_awesome_outlined, AppLocalizations.of(context)!.skills, 'skills'),
             ])
               Padding(
                 padding: const EdgeInsets.only(left: 0),
                 child: NavigationTile(
                   icon: item.$2,
                   label: item.$3,
+                  navKey: item.$4,
                   selected: selectedDestination == item.$1,
                   onTap: () => onSelectDeviceSection(item.$1),
                 ),
               ),
-            const Padding(
-              padding: EdgeInsets.only(left: 30),
-              child: NavigationLabel('Workspaces'),
+            Padding(
+              padding: const EdgeInsets.only(left: 30),
+              child: NavigationLabel(AppLocalizations.of(context)!.workspaces),
             ),
             for (final workspace in visibleWorkspaces)
               Padding(
@@ -142,7 +144,11 @@ class SettingsNavigation extends StatelessWidget {
                 child: TextButton(
                   key: const Key('settings_show_all_workspaces_btn'),
                   onPressed: onToggleWorkspaces,
-                  child: Text(showAllWorkspaces ? 'Show less' : 'Show all (${workspaces.length})'),
+                  child: Text(
+                    showAllWorkspaces
+                        ? AppLocalizations.of(context)!.showLess
+                        : AppLocalizations.of(context)!.showAll(workspaces.length),
+                  ),
                 ),
               ),
           ],
@@ -181,6 +187,7 @@ class NavigationTile extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.navKey,
   });
 
   final IconData icon;
@@ -188,9 +195,12 @@ class NavigationTile extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
 
+  /// Stable locale-independent identifier for driver/UI automation.
+  final String? navKey;
+
   @override
   Widget build(BuildContext context) => ListTile(
-    key: Key('nav_tile_${label.toLowerCase().replaceAll(' ', '_')}'),
+    key: Key('nav_tile_${navKey ?? label.toLowerCase().replaceAll(' ', '_')}'),
     dense: true,
     selected: selected,
     selectedTileColor: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.15),

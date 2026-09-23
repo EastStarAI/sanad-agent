@@ -328,7 +328,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
             const SizedBox(width: 8),
             Flexible(
               child: Directionality(
-                textDirection: TextDirection.ltr,
+                textDirection: TextUtils.getTextDirection(preview),
                 child: RichText(
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,

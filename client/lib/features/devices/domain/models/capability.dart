@@ -38,6 +38,7 @@ class Capability {
   final List<String> thinkingModesList;
   final List<String> workplacesList;
   final List<SlashCommand> slashCommandsList;
+  final Map<String, dynamic>? appearance;
 
   const Capability({
     this.supportsModelChange = false,
@@ -68,10 +69,16 @@ class Capability {
     this.thinkingModesList = const [],
     this.workplacesList = const [],
     this.slashCommandsList = const [],
+    this.appearance,
   });
 
   factory Capability.fromJson(Map<String, dynamic> json) {
     final caps = json['capabilities'] as Map<String, dynamic>? ?? json;
+    final appearanceMap = json['appearance'] is Map
+        ? Map<String, dynamic>.from(json['appearance'] as Map)
+        : (caps['appearance'] is Map
+            ? Map<String, dynamic>.from(caps['appearance'] as Map)
+            : null);
 
     return Capability(
       supportsModelChange: caps['supports_model_change'] ?? false,
@@ -104,6 +111,7 @@ class Capability {
       slashCommandsList: (caps['slash_commands_list'] as List? ?? [])
           .map((e) => SlashCommand.fromJson(e as Map<String, dynamic>))
           .toList(),
+      appearance: appearanceMap,
     );
   }
 

@@ -149,35 +149,32 @@ class _ActivityRow extends StatelessWidget {
             ),
             const SizedBox(width: 8),
             Expanded(
-              child: Directionality(
-                textDirection: TextDirection.ltr,
-                child: Text.rich(
-                  TextSpan(
-                    style: GoogleFonts.outfit(
-                      fontSize: 13,
-                      letterSpacing: 0.5,
+              child: Text.rich(
+                TextSpan(
+                  style: GoogleFonts.outfit(
+                    fontSize: 13,
+                    letterSpacing: 0.5,
+                  ),
+                  children: [
+                    TextSpan(
+                      text: text.label,
+                      style: TextStyle(
+                        color: colors.onSurface.withValues(alpha: 0.4),
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                    children: [
+                    if (text.detail.isNotEmpty)
                       TextSpan(
-                        text: text.label,
+                        text: text.detail,
                         style: TextStyle(
-                          color: colors.onSurface.withValues(alpha: 0.4),
+                          color: colors.primary,
                           fontWeight: FontWeight.w500,
                         ),
                       ),
-                      if (text.detail.isNotEmpty)
-                        TextSpan(
-                          text: text.detail,
-                          style: TextStyle(
-                            color: colors.primary,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                    ],
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
+                  ],
                 ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
             if (elapsedText != null) ...[
