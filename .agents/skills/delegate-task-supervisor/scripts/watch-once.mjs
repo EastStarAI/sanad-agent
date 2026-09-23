@@ -7,6 +7,8 @@ const WATCH_STATUSES = new Set([
   'completed',
   'failed',
   'blocked',
+  'waiting',
+  'resuming',
   'timeout',
   'aborted',
   'interrupted',
@@ -21,8 +23,9 @@ const HELP = `watch-once
 Usage:
   watch-once.mjs --run <absolute-run-directory> [--since <sequence>] [--all]
 
-Waits without polling and prints exactly one event as JSON. By default only terminal
-or intervention-worthy transitions are returned; --all returns the next transition.
+Waits without polling and prints exactly one event as JSON. By default terminal,
+intervention, blocked, waiting, and resuming transitions are returned; --all returns
+any next transition.
 `;
 
 function fail(message) {

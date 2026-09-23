@@ -376,6 +376,132 @@ void main() {
         expect(result.exitCode, 124);
       },
     );
+
+    test('cause classification trusts structured codes, not generic prose', () {
+      expect(
+        RunResultArtifact.classifyCause(
+          code: 'timeout',
+          message: 'provider request timed out',
+        ),
+        'provider_timeout',
+      );
+      expect(
+        RunResultArtifact.classifyCause(
+          code: 'observer_error',
+          message: 'timeout while reading a local log connection',
+        ),
+        'observer_error',
+      );
+      expect(
+        RunResultArtifact.classifyCause(
+          code: 'billing',
+          message: 'account action required',
+        ),
+        'provider_quota',
+      );
+      expect(
+        RunResultArtifact.classifyCause(
+          code: 'upstream_rate_limit',
+          message: 'retry later',
+        ),
+        'rate_limit',
+      );
+    });
+
+    test(
+      'RunArtifactCoordinator records nonterminal notices (blocked/waiting/resuming), tracks cause, transitions on progress, and preserves terminal precedence',
+      () async {
+        final store = RunArtifactStore(tempDir.path);
+        final coordinator = RunArtifactCoordinator(
+          store: store,
+          sessionId: 'sess-nonterminal-1',
+          initialProvider: 'OpenCode Go',
+          initialModel: 'deepseek-v4-flash',
+        );
+
+        await coordinator.recordInitial();
+        var current = (await store.readResult())!;
+        expect(current.status, 'running');
+        expect(current.isTerminal, isFalse);
+        expect(current.cause, isNull);
+
+        // 1. Transition to blocked with provider timeout
+        await coordinator.recordRuntimeNotice(
+          status: 'blocked',
+          code: 'timeout',
+          message:
+              'Notice: Request timed out\n\nProvider response: TimeoutException: generateStream',
+          provider: 'OpenCode Go',
+          model: 'deepseek-v4-flash',
+        );
+
+        current = (await store.readResult())!;
+        expect(current.status, 'blocked');
+        expect(current.isBlocked, isTrue);
+        expect(current.isTerminal, isFalse);
+        expect(current.cause, 'provider_timeout');
+        expect(
+          current.stateSince,
+          matches(RegExp(r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$')),
+        );
+
+        var events = await store.readEvents();
+        expect(events.length, 2);
+        expect(events[1].type, 'blocked');
+        expect(events[1].data['cause'], 'provider_timeout');
+        expect(events[1].data['code'], 'timeout');
+
+        // 2. Transition to resuming
+        await coordinator.recordRuntimeNotice(
+          status: 'resuming',
+          code: 'resuming',
+          message: 'Notice: Resuming…: Retrying the last request.',
+          provider: 'OpenCode Go',
+          model: 'deepseek-v4-flash',
+        );
+
+        current = (await store.readResult())!;
+        expect(current.status, 'resuming');
+        expect(current.isResuming, isTrue);
+
+        events = await store.readEvents();
+        expect(events.length, 3);
+        expect(events[2].type, 'resuming');
+
+        // 3. Progress returns session to running and sets lastProgressAt
+        await coordinator.recordProgress();
+        current = (await store.readResult())!;
+        expect(current.status, 'running');
+        expect(current.cause, isNull);
+        expect(current.lastProgressAt, isNotNull);
+        final firstProgressAt = current.lastProgressAt;
+        // Streaming callbacks may arrive per token. Progress persistence is
+        // bounded instead of rewriting result.json for every callback.
+        await coordinator.recordProgress();
+        current = (await store.readResult())!;
+        expect(current.lastProgressAt, firstProgressAt);
+
+        events = await store.readEvents();
+        expect(events.length, 4);
+        expect(events[3].type, 'resumed');
+
+        // 4. Terminal completion latches
+        await coordinator.recordTerminal(exitCode: 0, status: 'completed');
+        current = (await store.readResult())!;
+        expect(current.status, 'completed');
+        expect(current.isCompleted, isTrue);
+        expect(current.isTerminal, isTrue);
+
+        // 5. Subsequent nonterminal notice must NOT overwrite terminal state
+        await coordinator.recordRuntimeNotice(
+          status: 'blocked',
+          code: 'late_notice',
+          message: 'Should be ignored',
+        );
+        current = (await store.readResult())!;
+        expect(current.status, 'completed');
+      },
+    );
   });
 }
 
