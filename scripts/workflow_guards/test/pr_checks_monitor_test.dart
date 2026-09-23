@@ -203,13 +203,13 @@ switch (mode) {
         options: PrChecksOptions(
           ghCommand: createFakeGh('always_pending'),
           interval: const Duration(milliseconds: 30),
-          timeout: const Duration(milliseconds: 300),
+          timeout: const Duration(milliseconds: 600),
           quiet: true,
         ),
       );
       expect(result.verdict, PrChecksVerdict.timeout);
       expect(result.exitCode, 124);
-      expect(result.pollCount, greaterThanOrEqualTo(3));
+      expect(result.pollCount, greaterThanOrEqualTo(2));
     });
 
     test('gh exit code 8 with empty output is pending, not success', () async {

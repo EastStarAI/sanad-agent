@@ -47,7 +47,20 @@ fvm dart run scripts/workflow_guards/bin/merge_validate.dart <resolved-file>...
 - Intended as the smallest fail-closed guard: reconstruct from
   base/ours/theirs (`git show :1:<path>` / `:2:` / `:3:`) when a merge driver
   is ambiguous, then validate, then run the affected analyzer/tests before
-  staging.
+## `verify` — bounded verification runner
+
+Runs any verification command, bounds console output, measures elapsed wall time, captures full logs to an untracked temp file, and preserves child exit status:
+
+```bash
+fvm dart run scripts/workflow_guards/bin/verify.dart [--tail <n>] [--] <command> [args...]
+```
+
+- Bounded console: prints only the final `--tail` lines of stdout (default 5) plus a 1-line summary with elapsed time, exit code, and log path.
+- Error section: on failure, also prints the final `--tail` lines of stderr.
+- Full log capture: the complete stdout and stderr are written to a unique file in the system temp directory (or `--log-dir`).
+- Preserved exit status: returns the exact exit code of the child process (`0`, failure code, etc.) or `2` on usage/spawn errors.
+- JSON output: pass `--json` to output a structured JSON envelope.
+- Windows-safe: direct execution where possible, shell routing with strict metacharacter validation for `.cmd`/`.bat` wrappers.
 
 ## Tests
 

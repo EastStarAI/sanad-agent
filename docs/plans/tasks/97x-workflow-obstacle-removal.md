@@ -1,12 +1,13 @@
 ---
 title: "97x: إزالة عوائق تنفيذ الخطة"
 status: active
-current_gate: "G2 (batches 1–2 independently accepted; bounded-verification follow-up pending)"
-remaining_estimate: "one preserved bounded-verification follow-up plus future Plan97 blockers"
+current_gate: "G2 (batches 1–3 independently accepted; batch 3 verified with real passing & real failing test proofs; direct user authorization for delivery)"
+remaining_estimate: "future Plan97 blockers"
 platforms: windows-first, cross-platform-when-affected
 parent_plan: docs/plans/97-windows-first-agent-client-performance.md
 depends_on: "97a"
 execution_worktree: plan-97-aggregation
+delegated_authority: "user-authorized closure, commit/push, separated PR delivery, and squash-merge by reviewer agy"
 ---
 
 # 97x — إزالة عوائق تنفيذ الخطة
@@ -39,7 +40,7 @@ execution_worktree: plan-97-aggregation
   - Bounded session observability footer for `status`, `logs`, and `timeline` displaying true known session state, cause, state-since, last progress, elapsed duration, observation source, and current time. Existing JSON consumers remain fully compatible.
   - Observer cancellation tracking in `observers/<pid>.json` capturing start and cancellation cleanly; if hard kill prevents end recording, end time remains unknown rather than manufacturing an artificial duration.
   - Reviewer repair: snake_case runtime artifact fields are consumed correctly; legacy terminal timeout uses its observed terminal time and `timeout` cause rather than launch time/`-`; PID liveness alone reports `unknown`; structured cause codes are authoritative; progress writes are throttled and never persisted per token; default `watch-once` surfaces blocked/waiting/resuming; static logs distinguish source timestamps from unknown time.
-- [ ] **Bounded verification timer/log follow-up (preserved, not accepted in this gate):** partial untracked files `scripts/workflow_guards/{bin/verify.dart,lib/bounded_verify.dart,lib/src/bounded_verify.dart,test/bounded_verify_test.dart}` remain from the timed-out implementer. They are intentionally excluded from this batch's commit and PR evidence until their owner completes and independently verifies them.
+- [x] **Bounded verification timer/log follow-up (batch 3):** Pure-Dart runner in `scripts/workflow_guards/bin/verify.dart`, `scripts/workflow_guards/lib/bounded_verify.dart`, `scripts/workflow_guards/lib/src/bounded_verify.dart`, and `scripts/workflow_guards/test/bounded_verify_test.dart`. Measures elapsed wall time in milliseconds, bounds console output to final tail lines (default 5) plus 1-line summary, writes full stdout/stderr to a unique temporary log file, preserves exact child exit code, and handles Windows batch/executable invocation safety. Fully tested with unit and end-to-end CLI tests (9/9 pass, 33/33 in package).
 - [ ] **Future blockers:** أي خلل مثبت في `sanad-dev` أو delegation/supervisor/skills/CI يعطل العمل أو الاختبارات أو logs أو ownership يضاف هنا قبل إصلاحه.
 
 ## Gates for each batch
@@ -96,4 +97,35 @@ execution_worktree: plan-97-aggregation
   - `node scripts/supervisor.mjs timeline --run C:/Users/aatia/.sanad-delegations/plan97/run --task plan97x-timed-tests-followup` rendered full ISO timestamps, terminal timeout transition, and the session footer (`stopped`, elapsed `2h 0m 15s`, source `result.json (process exited)`).
 - **Independent review evidence (ChatGPT / `gpt-5.6-sol`):** Agent CLI analyzer passed in 11.227s; run-artifact regressions passed 9/9 in 7.271s; delegation regressions passed 21/21 in 7.936s; supervisor passed 17/17 in 20.497s; bootstrap passed 2/2 in 0.416s; accepted workflow-guard analyzer passed in 11.236s and tests passed 24/24 in 8.032s. Unique temporary log paths are retained in the reviewer handoff rather than tracked documentation.
 - **Replay limitation:** the historical `plan97x-timed-tests-followup` artifact replay now reports `stopped`, `Cause: timeout`, terminal state-since, and unknown last progress. This is proof of formatter/fallback behavior only; source checkout differs from the running daemon, so no live-runtime claim is made. The `.sanad-test` Agent/Client was not stopped or restarted.
-- **Constraints honored:** no second runtime or source switch invoked; no secrets or tokens logged; backwards compatibility for JSON consumers intact; 97x task remains `active`. The pending bounded-verification files were preserved but excluded from acceptance and delivery.
+- **Constraints honored:** no second runtime or source switch invoked; no secrets or tokens logged; backwards compatibility for JSON consumers intact; 97x task remains `active`.
+
+### Batch 3: Bounded verification runner (implemented and independently reviewed in the Plan97 aggregation worktree)
+
+- **Files changed:**
+  - `scripts/workflow_guards/bin/verify.dart` (CLI runner: async/await, exit preservation, bounded tail output)
+  - `scripts/workflow_guards/lib/bounded_verify.dart` (public library export)
+  - `scripts/workflow_guards/lib/src/bounded_verify.dart` (bounded execution core: allowMalformed UTF-8, Future.wait stream completion, direct PATH extension resolution, directory creation)
+  - `scripts/workflow_guards/test/bounded_verify_test.dart` (unit and CLI regressions)
+  - `scripts/workflow_guards/test/fixtures/failing_test_fixture.dart` (reproducible failing test fixture for runner proof)
+  - `scripts/workflow_guards/test/pr_checks_monitor_test.dart` (robust timeout under Windows subprocess latency)
+  - `scripts/workflow_guards/README.md` (CLI documentation for `verify`)
+  - `docs/plans/tasks/97x-workflow-obstacle-removal.md`
+- **Focused regressions (run on Windows, real fvm):**
+  - Full package suite: `cd scripts/workflow_guards && fvm dart test` — 33/33 pass in 2.0s.
+  - Analyzer: `cd scripts/workflow_guards && fvm dart analyze` — 0 issues found.
+  - Supervisor suite: `cd .agents/skills/delegate-task-supervisor && node --test test/supervisor_test.mjs` — 17/17 pass in 22.2s.
+  - Bootstrap suite: `cd .agents/skills/delegate-task-supervisor && node --test test/bootstrap_test.mjs` — 2/2 pass in 0.35s.
+- **Live CLI smoke proof (real passing and real failing tests):**
+  - Real passing test execution: `fvm dart run bin/verify.dart --tail 5 -- fvm dart test test/merge_validator_test.dart` — elapsed 11407ms, exit 0, console output bounded to 5 lines of stdout plus single summary line, full output captured in untracked temporary log file (`verify-...-b5b19a.log`).
+  - Real failing test execution: `fvm dart run bin/verify.dart --tail 5 -- fvm dart test test/fixtures/failing_test_fixture.dart` — elapsed 7067ms, exit 1, console output bounded to 5 lines of stdout plus single summary line, full failure assertion (`Expected: <3>, Actual: <2>`) and stack trace captured in untracked temporary log file (`verify-...-915824.log`). Not a 0-test filter (exit 79), but an actual test assertion failure (exit 1).
+- **Independent review repairs (agy):**
+  - UTF-8 decode safety: added `allowMalformed: true` to prevent unhandled `FormatException` on malformed bytes or OEM codepage output from Windows child processes.
+  - Stream lifecycle safety: synchronized process exit and output streams via `Future.wait([process.exitCode, stdoutFuture, stderrFuture])`.
+  - PATH lookup robustness: checked direct `$dir\$command` existence before appending `pathext` entries so commands already containing extensions (e.g. `fvm.bat`, `git.exe`) resolve cleanly.
+  - Log persistence safety: ensured target directory exists via `Directory(logDir).createSync(recursive: true)`.
+  - Modernized entrypoint: converted `bin/verify.dart` `main` to `Future<void> main` with async/await and structured try/catch.
+  - Test robustness: adjusted `pr_checks_monitor_test.dart` timeout to 600ms and assertion to `>= 2` polls to absorb Windows subprocess startup latency without flakiness.
+- **Delegated delivery path:**
+  - Per direct user authorization, 97x changes (Batches 1–3) are delivered via a clean branch isolated from unfinished Plan97 product tasks (97a, 97b, 97i) to protect `main` stability.
+  - No second runtime, source switch, or daemon/Client stop was performed.
+  - Task 97x remains `active` in the Plan97 aggregation worktree for future workflow obstacles.
