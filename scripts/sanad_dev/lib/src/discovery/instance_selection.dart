@@ -178,6 +178,7 @@ Future<AgentInstance?> selectAgentInstance(
   int? portOverride, {
   bool allowStartupGrace = false,
   String? sanadHomePath,
+  bool exitOnError = true,
 }) async {
   var instances = await discoverAgentInstances(
     sanadHomeOverride: sanadHomePath,
@@ -192,10 +193,11 @@ Future<AgentInstance?> selectAgentInstance(
     }
   }
   if (instances.isEmpty) {
-    print(
+    stderr.writeln(
       'Error: No running agent instances found. Make sure the agent daemon is running.',
     );
-    exit(1);
+    if (exitOnError) exit(1);
+    return null;
   }
 
   if (portOverride != null) {
@@ -204,12 +206,13 @@ Future<AgentInstance?> selectAgentInstance(
         return inst;
       }
     }
-    print('Error: No running agent instance found on port $portOverride.');
-    print('Active instances:');
+    stderr.writeln('Error: No running agent instance found on port $portOverride.');
+    stderr.writeln('Active instances:');
     for (final inst in instances) {
-      print('  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})');
+      stderr.writeln('  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})');
     }
-    exit(1);
+    if (exitOnError) exit(1);
+    return null;
   }
 
   // Filter instances matching the current worktree's workspace root hash
@@ -240,21 +243,23 @@ Future<AgentInstance?> selectAgentInstance(
   }
 
   if (matchingInstances.isEmpty) {
-    print(
+    stderr.writeln(
       'Error: No running agent instances found for the current worktree (${runtime.worktreeId}).',
     );
-    print('Active instances in other worktrees:');
+    stderr.writeln('Active instances in other worktrees:');
     for (final inst in instances) {
-      print('  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})');
+      stderr.writeln('  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})');
     }
-    exit(1);
+    if (exitOnError) exit(1);
+    return null;
   }
 
-  print(
+  stderr.writeln(
     'Error: Multiple running agent instances found for the current worktree. Please specify which instance to target using the -p/--port option:',
   );
   for (final inst in matchingInstances) {
-    print('  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})');
+    stderr.writeln('  Port: ${inst.port} (Workspace Hash: ${inst.workspaceHash})');
   }
-  exit(1);
+  if (exitOnError) exit(1);
+  return null;
 }
