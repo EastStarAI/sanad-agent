@@ -445,6 +445,13 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
     required String instanceId,
   }) {
     final deviceId = _deviceId(agent);
+    if (state.hasSupportAnswer(deviceId, instanceId)) {
+      if (!state.support.supports(deviceId, instanceId)) return Future.value();
+      final entry = state.entry(deviceId, instanceId);
+      if (entry != null && entry.hasVisibleSnapshot && !entry.isStale(freshness, now: _now())) {
+        return Future.value();
+      }
+    }
     final key = _loadKey(deviceId, [instanceId]);
     final inFlight = _instancesLoadsInFlight[key];
     if (inFlight != null) return inFlight;
