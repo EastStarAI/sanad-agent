@@ -45,6 +45,22 @@ class _ControlledFetchDeviceRepository extends FakeDeviceRepository {
   void failFetch() {
     fetchCompleter.completeError(StateError('inventory unavailable'));
   }
+
+  void failFetchWith(Object error) {
+    fetchCompleter.completeError(error);
+  }
+}
+
+class _FailingRefreshRepository extends FakeDeviceRepository {
+  Object? errorToThrow;
+
+  @override
+  Future<List<DeviceConfig>> fetchAgents() {
+    final error = errorToThrow;
+    if (error != null) return Future.error(error);
+    emitAgentsUpdate();
+    return Future.value(agents);
+  }
 }
 
 void main() {
@@ -212,6 +228,83 @@ void main() {
 
     expect((cubit.state as DeviceNoActive).isLoadingFromBackend, isFalse);
     await cubit.close();
+  });
+
+  test('failed initial inventory fetch surfaces a typed error, not an authoritative empty', () async {
+    final controlledRepository = _ControlledFetchDeviceRepository();
+    repository = controlledRepository;
+    socket.setConnected(true);
+
+    final cubit = buildCubit();
+    await cubit.init();
+    expect((cubit.state as DeviceNoActive).isLoadingFromBackend, isTrue);
+
+    controlledRepository.failFetch();
+    await Future<void>.delayed(Duration.zero);
+
+    final state = cubit.state as DeviceNoActive;
+    expect(state.isLoadingFromBackend, isFalse);
+    expect(state.phase, DevicesPhase.error);
+    expect(state.errorMessage, isNotNull);
+    // A failure never clears the auth/session or repository identity.
+    expect(repository.getActiveAgentId(), isNull);
+    await cubit.close();
+  });
+
+  test('timeout is a typed error, never an authoritative empty', () async {
+    final controlledRepository = _ControlledFetchDeviceRepository();
+    repository = controlledRepository;
+    socket.setConnected(true);
+
+    final cubit = buildCubit();
+    await cubit.init();
+
+    controlledRepository.failFetchWith(TimeoutException('Device inventory timed out'));
+    await Future<void>.delayed(Duration.zero);
+
+    final state = cubit.state as DeviceNoActive;
+    expect(state.phase, DevicesPhase.error);
+    expect(state.isLoadingFromBackend, isFalse);
+    expect(state.errorMessage, contains('Timed out'));
+    await cubit.close();
+  });
+
+  test('failed refresh during a live session keeps the active device and never logs out', () async {
+    final failingRepository = _FailingRefreshRepository();
+    failingRepository.seedAgents([localDevice, cloudDevice], activeAgentId: cloudDevice.id);
+    repository = failingRepository;
+    socket.setConnected(true);
+
+    final cubit = buildCubit();
+    await cubit.init();
+    expect(cubit.state, isA<DeviceActive>());
+
+    failingRepository.errorToThrow = StateError('cloud unreachable');
+    await cubit.fetchAgents();
+    await Future<void>.delayed(Duration.zero);
+
+    final state = cubit.state;
+    expect(state, isA<DeviceActive>());
+    expect((state as DeviceActive).activeAgent.id, cloudDevice.id);
+    // Cached/active data retained and auth session intact.
+    expect(repository.getActiveAgentId(), cloudDevice.id);
+    await cubit.close();
+  });
+
+  test('DeviceNoActive exposes typed loading/ready-empty/error/stale phases', () async {
+    const emptyLoading = DeviceNoActive(isLoadingFromBackend: true);
+    expect(emptyLoading.phase, DevicesPhase.loading);
+
+    const authoritativeEmpty = DeviceNoActive();
+    expect(authoritativeEmpty.phase, DevicesPhase.readyEmpty);
+
+    final stale = DeviceNoActive(agents: [cloudDevice], isLoadingFromBackend: true);
+    expect(stale.phase, DevicesPhase.stale);
+
+    final failed = DeviceNoActive(errorMessage: 'failed');
+    expect(failed.phase, DevicesPhase.error);
+    expect(failed.agents, isEmpty);
+    await Future<void>.delayed(Duration.zero);
   });
 
   test('logout invalidates a pending inventory fetch without claiming a new fetch', () async {
