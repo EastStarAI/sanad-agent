@@ -80,9 +80,14 @@ void main() {
 param([string] $Algorithm, [string] $Path)
 [pscustomobject]@{ Hash = 'fixture-hash' }
 ''');
+      final powershellWrapper = (await File('../sanad-dev.ps1').readAsString())
+          .replaceAll(
+            r'Ensure-UserBinPath $binRoot',
+            '# Test fixture suppresses user PATH persistence.',
+          );
       await File(
         '${fixture.path}${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad-dev.ps1',
-      ).writeAsString(await File('../sanad-dev.ps1').readAsString());
+      ).writeAsString(powershellWrapper);
     } else {
       final fakeFvm = File('${fakeBin.path}${Platform.pathSeparator}fvm');
       await fakeFvm.writeAsString('''#!/usr/bin/env bash

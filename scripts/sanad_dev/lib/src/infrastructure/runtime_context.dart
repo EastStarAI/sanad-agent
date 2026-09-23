@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:sanad_windows_path/windows_path.dart';
 
+import 'path_equivalence.dart';
 import 'secure_runtime_file.dart';
 
 class SanadDevRuntime {
@@ -433,13 +434,7 @@ String _absolutePath(String path, String base) {
   return _join(base, path);
 }
 
-String _canonicalPath(String path) {
-  try {
-    return Directory(path).resolveSymbolicLinksSync();
-  } catch (_) {
-    return Directory(path).absolute.path;
-  }
-}
+String _canonicalPath(String path) => canonicalComparablePath(path);
 
 String _join(String first, [String? second, String? third, String? fourth]) {
   final separator = Platform.pathSeparator;

@@ -114,6 +114,8 @@ current-only diagnostics, not before/after improvement claims. All remain far
 below the two-second acceptance budget and start no PowerShell subprocess from
 the production Windows secure-file path.
 
+97d Windows test-baseline reliability is owned by `scripts/sanad_dev`. Independent review rejected over-escaped path cases, an unlocked "locked artifact" case, a same-checkout "foreign" shim, swallowed teardown failures, and wrapper fixtures that persisted temporary directories into the real user PATH. The accepted boundary uses `lib/src/infrastructure/path_equivalence.dart` plus 10 path/fixture tests for spaces, Arabic Unicode, drive roots, real UNC/device-prefix syntax, and stable preferences identity. Eight PowerShell OS-integration tests cover help/install, collision rejection and explicit force, stage failure, setup direction, incremental reuse, a functional foreign-checkout shim, and a genuinely locked stale artifact. Separated review measurements were: pre-existing suite 163 passed + 17 skipped, 2 s reporter / 9,811 ms wall; new tests 18 passed, 6 s / 12,370 ms; FVM SDK-startup median 5,042 ms over five samples. Two consecutive full runs each passed 181 + 17 skipped in 6 s reporter time, with 13,848 ms and 13,332 ms wall time. The user PATH hash was unchanged across both runs, strict fixture deletion passed, and no added test binds a port or uses fixed sleeps/general timeout increases.
+
 ## Final interactive evidence
 
 97l follows successful static, unit/widget and relevant integration results.
