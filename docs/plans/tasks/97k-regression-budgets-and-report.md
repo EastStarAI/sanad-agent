@@ -1,18 +1,24 @@
 ---
 title: "97k: ميزانيات منع التراجع والتقرير المقارن"
-status: planned
-current_gate: G0
-remaining_estimate: "100% of this task; historical work is reconciled in G0"
+status: deferred-non-blocking-follow-up
+current_gate: deferred-until-after-plan97-merge
+remaining_estimate: "100% of this follow-up; explicitly outside the Plan97 merge gate"
 platforms: windows-first
 parent_plan: docs/plans/97-windows-first-agent-client-performance.md
-depends_on: "97e, 97f, 97g, 97h, 97i, 97j"
+depends_on: "Plan97 merged"
 ---
 
 # 97k — ميزانيات منع التراجع والتقرير المقارن
 
 ## Goal
 
-تثبيت ضمانات الأداء وتكلفة الاختبارات قبل القبول التفاعلي الأخير.
+تجميع التقرير المقارن الشامل ورفع تغطية ميزانيات منع التراجع بعد دمج Plan97، دون جعل هذه المتابعة بوابة مانعة لدمج تحسينات المنتج المقبولة.
+
+## Merge relationship
+
+- هذه المهمة مؤجلة صراحةً إلى ما بعد دمج Plan97 ولا تعتمد عليها 97l.
+- لا تمنع تحويل Draft PR إلى Ready أو دمجها عندما تنجح بوابات المنتج 97g–97j والقبول التفاعلي 97l والفحوص المطلوبة.
+- تبقى الاختبارات والقياسات الخاصة بكل بوابة منتج مطلوبة داخل مهمتها؛ المؤجل هنا هو التجميع الشامل، الميزانيات الإضافية، والتقرير المقارن الموحد، لا صحة التغييرات الأساسية.
 
 ## Locked scope and ownership
 
@@ -20,7 +26,7 @@ depends_on: "97e, 97f, 97g, 97h, 97i, 97j"
 
 - التصميم والقبول العام: `docs/plans/97-windows-first-agent-client-performance.md`.
 - الأسطح/المراجع المالكة: `docs/qa_maintenance/windows_first_performance_qa.md`، `docs/qa_maintenance/test_suite_performance_qa.md`، `AGENTS.md`، `client/AGENTS.md`.
-- التنفيذ والقياس على Windows؛ لا تُستبدل أدلته بنتائج جهاز أسرع. تحقق بقية المنصات بعد نجاح Windows في 97k/97l.
+- تجمع هذه المتابعة بعد الدمج أدلة Windows والمنصات التي أغلقتها 97l؛ لا تعيد فتح دمج Plan97 إلا إذا كشفت regression correctness/security مستقلًا يستوجب معالجة منفصلة.
 - لا إعادة تنفيذ إصلاح مدمج أو منافسة مهمة نشطة؛ مراجعة المصدر والأدلة الحالية أولًا.
 - لا إضعاف للأمان أو durability أو ترتيب الأحداث أو حداثة الواجهة. تغيير كبير منخفض العائد يؤجل بقرار موثق، لا إغلاق زائف.
 

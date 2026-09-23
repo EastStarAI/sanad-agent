@@ -19,7 +19,7 @@ depends_on: "97a"
 - جميع بنود G1–G4 من سجل cross-platform-test-baseline المتقاعد ضمن النطاق، بما فيها foreign shim/install --force وartifact fingerprint/executable/locked reuse؛ لا يكتفى بعناوينها المختصرة هنا.
 - التصميم والقبول العام: `docs/plans/97-windows-first-agent-client-performance.md`.
 - الأسطح/المراجع المالكة: `docs/plans/done/sanad-dev-cross-platform-test-baseline-reliability.md`، `docs/qa_maintenance/test_suite_performance_qa.md`.
-- التنفيذ والقياس على Windows؛ لا تُستبدل أدلته بنتائج جهاز أسرع. تحقق بقية المنصات بعد نجاح Windows في 97k/97l.
+- التنفيذ والقياس على Windows؛ لا تُستبدل أدلته بنتائج جهاز أسرع. تحقق بقية المنصات المطلوب للدمج في 97l؛ 97k متابعة تقريرية غير مانعة بعد الدمج.
 - لا إعادة تنفيذ إصلاح مدمج أو منافسة مهمة نشطة؛ مراجعة المصدر والأدلة الحالية أولًا.
 - لا إضعاف للأمان أو durability أو ترتيب الأحداث أو حداثة الواجهة. تغيير كبير منخفض العائد يؤجل بقرار موثق، لا إغلاق زائف.
 
@@ -107,4 +107,4 @@ Run from `scripts/sanad_dev/`:
 
 ### Remaining platform ownership
 
-97d closes the Windows gate only. Hosted macOS/Linux parity, expected-count lane enforcement, and final managed-runtime/UI acceptance remain owned by 97k/97l. No Client, Agent runtime, aggregation worktree, or runtime source was changed by this gate.
+97d closes the Windows gate only. Merge-required hosted macOS/Linux parity, expected-count lane enforcement, and final managed-runtime/UI acceptance remain owned by 97l; 97k is a non-blocking post-merge reporting follow-up. No Client, Agent runtime, aggregation worktree, or runtime source was changed by this gate.
