@@ -374,7 +374,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
       if (!mounted) return;
       setState(() {
         _lastCheckedDeviceId = activeDevice.id;
-        _providerSetupDevice = readiness.runtimeReady ? null : activeDevice;
+        _providerSetupDevice = (!readiness.hasProvider) ? activeDevice : null;
       });
     } catch (_) {
       // Connection failures are indeterminate, not a "no providers" result.

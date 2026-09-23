@@ -97,3 +97,46 @@ depends_on: "97f"
 ### 5. Deferred / open
 - Broad cross-platform interactive end-to-end acceptance across all other flows is deferred to 97l per plan.
 - Other-platform (macOS/Linux/mobile) final verification is deferred to 97l. The comprehensive 97k report is a non-blocking post-merge follow-up. Phone layout is covered here via Windows-run widget tests.
+
+### 6. Review Rejection, Root-Cause Analysis, Win32 FFI Backend & Hardening Evidence (Windows Regression Fix)
+- **Rejection Context**:
+  - Initial 97g delivery was rejected during user review: on Windows startup and upon `sanad-dev restart client`, the UI flashed "Add provider / Provider setup required" as if no provider was configured, only for configured providers to appear after hydration ~3–5s later.
+  - Differential proof: The same Client connected to an Agent on non-Windows OS did not exhibit the bug. It reproduced exclusively on Windows, and had appeared approximately 1 month prior due to an Agent-side modification.
+- **Root-Cause Investigation (Git History & Blame)**:
+  - Traced to commit `a056336` (SEC-02, Aug 2026): `SanadHomeBootstrap.readSecretBytes` introduced `_enforceSecretOwnershipSync`.
+  - On POSIX (Linux/macOS), `_chmodSync` checked `FileStat.mode == 0600` and returned in <10µs.
+  - On Windows, it executed `Process.runSync('powershell.exe', ...)` to set SDDL ACL on **every single secret read and atomic write**!
+  - Each PowerShell subprocess on Windows incurs ~500ms–800ms of startup and execution overhead.
+  - `provider.instances.list` calls `_credentialService.summary(id)` for every instance, reading `provider_secrets.json` and spawning PowerShell for each. With 4 instances: 4 × ~700ms = **~2.84s**!
+  - `provider.runtime_check` called `summary()` → spawning PowerShell = **~1.72s**.
+  - This 1.7s–2.8s Windows Agent latency created an asynchronous window where the Client router and onboarding screens fell back to unready assumptions before authoritative responses arrived.
+- **Agent-Side Root-Cause Fix (`WindowsSecureRuntimeBackend`)**:
+  - Implemented `agent/lib/core/sanad_home/windows_secure_runtime_backend.dart`: direct in-process Win32 FFI backend calling `advapi32.dll` (`OpenProcessToken`, `GetTokenInformation`, `SetNamedSecurityInfoW`, `GetNamedSecurityInfoW`) and `kernel32.dll` (`MoveFileExW`).
+  - Integrated into `SanadHomeBootstrap` in `agent/lib/core/sanad_home/sanad_home_bootstrap.dart`: completely eliminated all `powershell.exe` subprocess calls on Windows.
+  - Added performance regression test in `agent/test/core/sanad_home/sanad_home_bootstrap_test.dart`: `readSecret and writeSecret execute without subprocess overhead` (50 sequential reads/writes complete in <200ms; measured at ~2ms vs ~35,000ms with PowerShell).
+- **Client-Side Boundary Hardening**:
+  - `client/lib/features/devices/presentation/screens/onboarding_setup_screen.dart`:
+    - Added explicit `_checkingProvider` neutral loading state in `AnimatedSwitcher`: renders a neutral indicator (`Checking provider readiness...`), never flashing setup choices while readiness check is in flight.
+    - Added error resilience: check failures/timeouts do not trap the user into `_showProviderSetup = true`, but display a retryable error message.
+    - Added immediate post-frame check on `initState` when the local gateway is already connected.
+  - `client/lib/features/home/presentation/screens/home_screen.dart`:
+    - Updated `_checkProviderSetupForActiveDevice`: sets `_providerSetupDevice = (!readiness.hasProvider) ? activeDevice : null`. Prevents false gating modal when providers exist.
+  - Added widget regression tests in `client/test/widget/delayed_readiness_startup_test.dart`:
+    - Proves onboarding screen with delayed readiness check renders neutral checking UI without flashing setup choices.
+    - Proves check error does not trap into setup flow.
+- **Sanad-dev Casing & Workspace Hash Normalization**:
+  - Fixed Windows drive letter casing in `agent/lib/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart` (`_canonicalPath` and `_workspaceHash`) and passed `SANAD_DEV_WORKSPACE_HASH` in `scripts/sanad_dev/lib/src/runtime/lifecycle/runtime_run.dart` so `sanad-dev restart client` and `restart agent` match workspace hashes identically on Windows.
+- **Live Windows Verification on Isolated `.sanad-test` Runtime**:
+  - Tested multiple live client restarts via `sanad-dev restart client` against live Windows Agent daemon on port `58158`:
+    - Before fix: `provider.runtime_check` took ~1,720ms; `provider.instances.list` took ~2,840ms. UI flashed setup dialog for ~4.6s.
+    - After fix: `provider.runtime_check` logged at 19:34:27.754 and completed at 19:34:27.758 (**4 milliseconds**!). Repeated sample logged at 19:36:22.944 and completed at 19:36:22.958 (**14 milliseconds**!). Over **100x speedup** on Windows!
+    - UI state verified via `sanad-dev ui snapshot`: app directly transitions to chat screen `/conversations/...` with zero flash of "Add provider" or "Provider setup required".
+- **Verification Gates**:
+  - `fvm flutter analyze` in `client/` → `No issues found!` (0 errors).
+  - `fvm dart analyze lib/ test/` in `agent/` → `No issues found!` (0 errors).
+  - `fvm dart analyze lib/ test/` in `scripts/sanad_dev/` → `No issues found!` (0 errors).
+  - `fvm flutter test test/widget/delayed_readiness_startup_test.dart` → **2/2 passed**.
+  - `fvm dart test test/core/sanad_home/sanad_home_bootstrap_test.dart` → **21/21 passed**.
+- **Runtime Preservation**:
+  - The live test runtime on `C:\Users\aatia\.sanad-test` (Agent port 58158, Client VM 51831) remains actively RUNNING for user inspection.
+
