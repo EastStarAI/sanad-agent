@@ -85,3 +85,10 @@ The first Codex-model test run failed because the copied fixture still asserted 
 - [x] Source, focused tests, provider design docs, and the required graph maintenance command are consistent.
 - [x] Verification records exact commands, exit status, elapsed time, and external log paths.
 - [x] The completed plan is ready for archival in the task-only PR.
+
+## Closure Verification
+
+- **PR Status:** PR #167 (`fix/98-model-context-resolution` -> `main`) merged successfully at `2026-09-23T03:29:52Z` (commit `a8989e903cd97d8d8b13f57fcbffbdb553050a0d`).
+- **CI Status:** GitHub Actions run `35813937043` completed with all required checks passing (`agent`, CLI automation on Ubuntu/macOS/Windows, `sanad-dev bootstrap`, docs/governance, protected review labels).
+- **Runtime Health:** Daemon running in primary environment on port 58085 (`main` branch), actively executing `ModelsDevService` cache fetches and `CodexResponsesAdapter` discovery with live macOS client connection. No errors observed.
+
