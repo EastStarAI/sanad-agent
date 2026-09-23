@@ -81,13 +81,13 @@ void main() {
       expect(prefs.getString('appearance_background_option'), 'natureForest');
     });
 
-    test('getSavedAppearance loads stored values', () async {
+    test('getSavedAppearance loads last active appearance on cold start', () async {
       SharedPreferences.setMockInitialValues({
-        'appearance_theme_style': 'sepia',
-        'appearance_primary_color': 'blue',
-        'appearance_font_family': 'cairo',
-        'appearance_font_size_scale': 'extraLarge',
-        'appearance_background_option': 'natureMountain',
+        'appearance_last_active_theme_style': 'sepia',
+        'appearance_last_active_primary_color': 'blue',
+        'appearance_last_active_font_family': 'cairo',
+        'appearance_last_active_font_size_scale': 'extraLarge',
+        'appearance_last_active_background_option': 'natureMountain',
       });
 
       final loaded = await AppearanceCubit.getSavedAppearance();
@@ -98,13 +98,24 @@ void main() {
       expect(loaded.backgroundOption, AppBackgroundOption.natureMountain);
     });
 
-    test('getSavedAppearance falls back to legacy theme_mode when unset', () async {
+    test('getSavedAppearance loads active agent appearance on cold start when available', () async {
       SharedPreferences.setMockInitialValues({
-        'theme_mode': 1, // Light
+        'active_agent_id': 'device-1',
+        'appearance_theme_style_device-1': 'sepia',
+        'appearance_primary_color_device-1': 'orange',
       });
 
       final loaded = await AppearanceCubit.getSavedAppearance();
-      expect(loaded.themeStyle, AppThemeStyle.light);
+      expect(loaded.themeStyle, AppThemeStyle.sepia);
+      expect(loaded.primaryColor, AppPrimaryColor.orange);
+    });
+
+    test('getSavedAppearance returns default appearance when nothing is saved', () async {
+      SharedPreferences.setMockInitialValues({});
+
+      final loaded = await AppearanceCubit.getSavedAppearance();
+      expect(loaded.themeStyle, AppThemeStyle.dark);
+      expect(loaded.primaryColor, AppPrimaryColor.blue);
       expect(loaded.fontFamily, AppFontFamily.system);
     });
 
@@ -158,18 +169,18 @@ void main() {
       expect(cubit.state.primaryColor, AppPrimaryColor.orange);
     });
 
-    test('getSavedAppearance for deviceId does not bleed global keys', () async {
+    test('getSavedAppearance for deviceId does not bleed last active keys', () async {
       SharedPreferences.setMockInitialValues({
-        'appearance_theme_style': 'sepia',
-        'appearance_primary_color': 'purple',
+        'appearance_last_active_theme_style': 'sepia',
+        'appearance_last_active_primary_color': 'purple',
       });
 
-      // Cold start without deviceId reads global keys
+      // Cold start without deviceId reads last active keys
       final globalAppearance = await AppearanceCubit.getSavedAppearance();
       expect(globalAppearance.themeStyle, AppThemeStyle.sepia);
       expect(globalAppearance.primaryColor, AppPrimaryColor.purple);
 
-      // When querying for an unconfigured device, strictly return defaults instead of global keys
+      // When querying for an unconfigured device, strictly return defaults instead of last active keys
       final deviceAppearance = await AppearanceCubit.getSavedAppearance(deviceId: 'unconfigured-device');
       expect(deviceAppearance.themeStyle, AppThemeStyle.dark);
       expect(deviceAppearance.primaryColor, AppPrimaryColor.blue);

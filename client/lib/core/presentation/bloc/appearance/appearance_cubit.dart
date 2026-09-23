@@ -12,6 +12,12 @@ class AppearanceCubit extends Cubit<AppearanceState> {
   static const String _fontSizeScaleKey = 'appearance_font_size_scale';
   static const String _backgroundOptionKey = 'appearance_background_option';
 
+  static const String _lastActiveThemeStyleKey = 'appearance_last_active_theme_style';
+  static const String _lastActivePrimaryColorKey = 'appearance_last_active_primary_color';
+  static const String _lastActiveFontFamilyKey = 'appearance_last_active_font_family';
+  static const String _lastActiveFontSizeScaleKey = 'appearance_last_active_font_size_scale';
+  static const String _lastActiveBackgroundOptionKey = 'appearance_last_active_background_option';
+
   String? _activeDeviceId;
   DeviceConfig? _activeAgent;
   DeviceConnectionCoordinator? _connectionCoordinator;
@@ -46,6 +52,15 @@ class AppearanceCubit extends Cubit<AppearanceState> {
     }
   }
 
+  static Future<void> _persistLastActiveAppearance(AppearanceState state) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_lastActiveThemeStyleKey, state.themeStyle.id);
+    await prefs.setString(_lastActivePrimaryColorKey, state.primaryColor.id);
+    await prefs.setString(_lastActiveFontFamilyKey, state.fontFamily.id);
+    await prefs.setString(_lastActiveFontSizeScaleKey, state.fontSizeScale.id);
+    await prefs.setString(_lastActiveBackgroundOptionKey, state.backgroundOption.id);
+  }
+
   void _handleSocketEvent(Map<String, dynamic> event) {
     final messageType = event['message_type'] ?? event['event'] ?? event['type'];
     if (messageType == 'appearance_snapshot' || messageType == 'appearance_updated') {
@@ -58,6 +73,7 @@ class AppearanceCubit extends Cubit<AppearanceState> {
             final next = AppearanceState.fromJson(Map<String, dynamic>.from(rawAppearance));
             if (next != state) {
               unawaited(_persistStateLocally(next, deviceId: deviceId));
+              unawaited(_persistLastActiveAppearance(next));
               emit(next);
             }
           }
@@ -76,6 +92,7 @@ class AppearanceCubit extends Cubit<AppearanceState> {
     if (remoteAppearance != null && remoteAppearance.isNotEmpty) {
       final remoteState = AppearanceState.fromJson(remoteAppearance);
       await _persistStateLocally(remoteState, deviceId: agent.id);
+      unawaited(_persistLastActiveAppearance(remoteState));
       emit(remoteState);
       return;
     }
@@ -85,6 +102,7 @@ class AppearanceCubit extends Cubit<AppearanceState> {
       deviceId: agent.id,
       fallbackDeviceId: agent.cloudDeviceId,
     );
+    unawaited(_persistLastActiveAppearance(cached));
     emit(cached);
 
     // In background, fetch fresh appearance from agent
@@ -98,6 +116,7 @@ class AppearanceCubit extends Cubit<AppearanceState> {
     final remoteState = AppearanceState.fromJson(remoteAppearance);
     if (remoteState != state) {
       await _persistStateLocally(remoteState, deviceId: deviceId);
+      unawaited(_persistLastActiveAppearance(remoteState));
       emit(remoteState);
     }
   }
@@ -134,6 +153,7 @@ class AppearanceCubit extends Cubit<AppearanceState> {
 
   Future<void> _applyAndSync(AppearanceState nextState) async {
     await _persistStateLocally(nextState, deviceId: _activeDeviceId);
+    unawaited(_persistLastActiveAppearance(nextState));
     emit(nextState);
     final agent = _activeAgent;
     if (agent != null) {
@@ -237,32 +257,35 @@ class AppearanceCubit extends Cubit<AppearanceState> {
       );
     }
 
-    // Only if deviceId == null (app cold start before any device is selected)
-    final themeStyleId = prefs.getString(_themeStyleKey);
-    final primaryColorId = prefs.getString(_primaryColorKey);
-    final fontFamilyId = prefs.getString(_fontFamilyKey);
-    final fontSizeScaleId = prefs.getString(_fontSizeScaleKey);
-    final backgroundOptionId = prefs.getString(_backgroundOptionKey);
-
-    AppThemeStyle style;
-    if (themeStyleId != null) {
-      style = AppThemeStyle.fromId(themeStyleId);
-    } else {
-      final legacyThemeIndex = prefs.getInt('theme_mode');
-      if (legacyThemeIndex == 1) {
-        style = AppThemeStyle.light;
-      } else {
-        style = AppThemeStyle.dark;
+    // When deviceId == null (app cold start before any device is selected):
+    // 1. First, check if the previously active agent has a saved appearance:
+    final activeDeviceId = prefs.getString('active_agent_id');
+    if (activeDeviceId != null && activeDeviceId.isNotEmpty) {
+      final themeStyleId = prefs.getString(_key(_themeStyleKey, activeDeviceId));
+      if (themeStyleId != null) {
+        return getSavedAppearance(deviceId: activeDeviceId);
       }
     }
 
-    return AppearanceState(
-      themeStyle: style,
-      primaryColor: AppPrimaryColor.fromId(primaryColorId),
-      fontFamily: AppFontFamily.fromId(fontFamilyId),
-      fontSizeScale: AppFontSizeScale.fromId(fontSizeScaleId),
-      backgroundOption: AppBackgroundOption.fromId(backgroundOptionId),
-    );
+    // 2. Otherwise, check the last active appearance that was displayed before closing:
+    final lastThemeStyleId = prefs.getString(_lastActiveThemeStyleKey);
+    if (lastThemeStyleId != null) {
+      final lastPrimaryColorId = prefs.getString(_lastActivePrimaryColorKey);
+      final lastFontFamilyId = prefs.getString(_lastActiveFontFamilyKey);
+      final lastFontSizeScaleId = prefs.getString(_lastActiveFontSizeScaleKey);
+      final lastBackgroundOptionId = prefs.getString(_lastActiveBackgroundOptionKey);
+
+      return AppearanceState(
+        themeStyle: AppThemeStyle.fromId(lastThemeStyleId),
+        primaryColor: AppPrimaryColor.fromId(lastPrimaryColorId),
+        fontFamily: AppFontFamily.fromId(lastFontFamilyId),
+        fontSizeScale: AppFontSizeScale.fromId(lastFontSizeScaleId),
+        backgroundOption: AppBackgroundOption.fromId(lastBackgroundOptionId),
+      );
+    }
+
+    // 3. Fallback to clean initial default (Dark theme, default blue, system font, no wallpaper)
+    return const AppearanceState();
   }
 
   @override
