@@ -7,6 +7,10 @@ description: Prepare and deliver a focused Sanad pull request through an isolate
 
 Use this skill after work is accepted and scoped. It may prepare local changes and a review handoff, but it must not push, merge, close an Issue, delete a branch, or mutate repository settings without explicit authorization.
 
+## Delegated Gate Flow
+
+In the delegated three-role workflow, open a **Draft PR after the first accepted gate** so CI runs on every push. Draft-to-Ready conversion, merge, and protected labels remain authorization boundaries unless the brief granted them up front.
+
 ## Prepare
 
 1. Confirm the owning Issue or plan, acceptance criteria, dependencies, and required protected-review labels.
@@ -40,6 +44,35 @@ so they do not load release-only procedure tokens.
 3. Repeat focused local verification before updating the review branch.
 4. Stop after a bounded repair loop and report the unresolved blocker rather than churning.
 5. Fork-origin jobs must work without signing, deployment, or repository secrets.
+
+For long waits on CI, use the bounded `pr-checks` monitor instead of hand-rolled shell loops:
+
+```bash
+fvm dart run scripts/workflow_guards/bin/pr_checks_watch.dart <pr-number>
+```
+
+It polls `gh pr checks --json` every 5 seconds, stops on the first failed check (fail-fast), enforces a 7-minute maximum, prints bounded per-poll summaries, and preserves its exit status (0 success, 1 first failure, 124 timeout). It is Windows-safe (no `for /f` parsing) and cross-platform; see `scripts/workflow_guards/README.md` for flags and exit codes.
+
+## Merge, Rebase, and Conflict Safety
+
+Resolving a conflict must be fail-closed, especially on Windows where transient `cmd` quoting/expansion can corrupt a resolved file:
+
+1. Prefer an explicit three-way reconstruction when the merge driver is ambiguous. With both trees staged, extract the stages and rebuild the file deterministically:
+   - base: `git show :1:<path>`
+   - ours (HEAD / target): `git show :2:<path>`
+   - theirs (incoming / feature): `git show :3:<path>`
+   Then resolve into the working tree using explicit argument arrays or tracked tooling; never pipe a resolved file through hand-built `for /f` or quoted `cmd` one-liners.
+2. Before staging a resolved file, run the reusable validation gate:
+
+   ```bash
+   fvm dart run scripts/workflow_guards/bin/merge_validate.dart <resolved-file>...
+   ```
+
+   It rejects leftover conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) and corrupt JSON/JSONL syntax, and exits nonzero (3 markers, 4 syntax, 2 usage/missing) so `git add` refuses a corrupt file.
+3. Re-run the focused syntax check or affected tests for the resolved file before staging: analyzer for Dart, `flutter test`/`dart test` for behavior, strict JSON parse for data files.
+4. Never `git add` (or force-commit) a file with markers or syntax corruption; reconstruct and re-validate instead.
+
+No broad merge framework is introduced here: these are the smallest fail-closed guards with regression coverage.
 
 ## Pre-Merge Handoff
 

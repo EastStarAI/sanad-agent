@@ -30,6 +30,8 @@ Check prerequisites and installed integrations:
 node "<skill-dir>/scripts/bootstrap.mjs" check
 ```
 
+`check` distinguishes the installed Sanad CLI from a validated source-development fallback. When the installed binary is absent but the invoking checkout contains `agent/bin/sanad_agent.dart` and `fvm` (or `dart`) resolves on PATH, the report names the fallback as validated and actionable instead of treating the missing CLI as a blocker; `install-sanad` is then only needed when a release binary is required. An installed `sanad` command always remains the preferred delegation path.
+
 If anything is missing, show the complete planned changes and obtain explicit approval. Then run:
 
 ```bash
@@ -88,6 +90,7 @@ Write one self-contained brief per task according to the owning delegate skill. 
       "id": "task-02",
       "implementer": "sanad",
       "workspace": "<target-worktree-path>",
+      "home": "<absolute-custom-sanad-home>",
       "command": "sanad",
       "args": [
         "run",
@@ -108,6 +111,8 @@ For a temporary unregistered Sanad context, replace the `--workspace` pair with 
 
 For source development, use `command: "fvm"`, `args: ["dart", "run", "agent/bin/sanad_agent.dart", "run", ...]`, and optionally `sourceRoot: "<sanad-source-checkout>"` when that checkout differs from the target `workspace`. `sourceRoot` is accepted only for this FVM form, must contain the requested entry point, and is recorded with the effective spawn directory in the run manifest. Installed `sanad run` tasks and non-Sanad implementers must not declare it.
 
+A Sanad task running against a managed custom Home must declare `home: "<absolute-sanad-home>"`. The supervisor validates the path (absolute, existing directory) and injects `--home` into the worker invocation so a detached worker never falls back to a different default Home (observed standalone/exit 78). Declaring `--home` inside `args` is rejected as ambiguous, and `home` is valid only for Sanad tasks. Secrets and tokens never belong in `home`, briefs, arguments, or specs.
+
 Build relay arguments from the loaded delegate skill. The supervisor treats non-Sanad relay arguments as opaque; for Sanad it validates only the required machine-contract flags and workspace boundary. Commands are spawned directly except that Windows `.cmd`/`.bat` wrappers require Node's shell mode after shell metacharacters have been rejected. Keep secrets out of briefs, arguments, specs, and logs.
 
 ## 4. Run Topology: Start, Add, Enqueue, and Close
@@ -123,9 +128,7 @@ node "<skill-dir>/scripts/supervisor.mjs" start \
   [--max-concurrency <n>]
 ```
 
-The command returns after the detached supervisor publishes a startup handshake. Record its JSON output (`runDir`, `supervisorPid`, and `cursor`). On Windows, the launcher uses an Explorer broker so the supervisor process outlives the initiating agent tool call.
-
-### 4.2. Register held tasks dynamically (`add`)
+The command returns after the detached supervisor publishes a startup handshake. Record its JSON output (`runDir`, `supervisorPid`, and `cursor`). Artifacts remain outside the source workspace so relay bookkeeping does not dirty the repository. On Windows, the launcher uses the existing Explorer shell as a broker so an Agent-owned kill-on-close Job does not terminate the supervisor when the initiating tool call returns; a missing broker handshake is a launch failure, never a reported running task.
 
 Register tasks in `held` state without immediately launching them:
 
@@ -173,11 +176,11 @@ node "<skill-dir>/scripts/watch-once.mjs" \
   --since <last-sequence>
 ```
 
-This command is event-driven. By default, it blocks until a task enters an intervention status (`needs_input`, `needs_permission`) or a terminal status (`completed`, `failed`, `blocked`, `timeout`, `aborted`, `interrupted`, `cancelled`), prints one JSON event, and exits. It does not wake on routine `running` or `resumed` transitions unless `--all` is passed.
-
-It also returns a synthetic `supervisor_stale` intervention event when a manifest says `running` but its supervisor PID is dead, using filesystem events first and a bounded liveness fallback. Review that task or intervention, update the cursor from the returned `seq`, then invoke `watch-once` again.
+This command is event-driven. By default, it blocks until a task enters an intervention status (`needs_input`, `needs_permission`) or a terminal status (`completed`, `failed`, `blocked`, `timeout`, `aborted`, `interrupted`, `cancelled`), prints one JSON event, and exits. It does not wake on routine `running` or `resumed` transitions unless `--all` is passed. It also returns a synthetic `supervisor_stale` intervention event when a manifest says `running` but its supervisor PID is dead, using filesystem events first and a one-second bounded liveness fallback so callers cannot block forever on stale state. Review that task or intervention, update the cursor from the returned `seq`, then invoke `watch-once` again.
 
 A watcher can be interrupted and restarted without stopping workers or losing already-journaled events.
+
+**Caller timeout does not mean worker failure.** If an agent tool call that blocks on `watch-once` times out, the worker and the supervised tasks keep running; a watcher timeout only ends the caller's wait. Re-enter with the cursor from the last returned event (or `supervisor status --run <dir> --json` to read the current `seq`), then resume with `--since <seq>`. Use only bounded `status`/`inspect` reads between waits; never schedule polling or stop the worker because a watcher call timed out.
 
 ## 6. Inspect progress and let the user watch
 
@@ -199,7 +202,7 @@ When the user asks to watch a particular subagent, open a dedicated terminal win
 node "<skill-dir>/scripts/supervisor.mjs" view --run <run-directory> --task <task-id>
 ```
 
-The terminal follows observable events until interrupted. Closing it does not stop the task. On Windows, `view` writes a run-local viewer script and asks the Explorer shell to open it, keeping the terminal outside an Agent-owned kill-on-close Job.
+The terminal follows observable events until interrupted. Closing it does not stop the task. On Windows, `view` writes a run-local viewer script and asks the existing Explorer shell to open it, keeping the terminal outside an Agent-owned kill-on-close Job; the window pauses instead of disappearing if the viewer exits with an error. OpenCode normally exposes structured tool events. Antigravity visibility is limited to the lifecycle and log data emitted by its relay; never claim unavailable private reasoning or tool detail.
 
 Other useful views:
 
@@ -208,7 +211,9 @@ node "<skill-dir>/scripts/supervisor.mjs" logs --run <run-directory> --task <tas
 node "<skill-dir>/scripts/supervisor.mjs" inspect --run <run-directory> --task <task-id>
 ```
 
-Use `--follow` only in a human-owned terminal. Agent tool calls use bounded reads or `watch-once`, never an indefinite follow stream.
+`status`, `timeline`, and `logs` human outputs include a bounded **Session Observability** footer reporting true session state (`working`, `waiting for input`, `waiting for permission`, `waiting`, `resuming`, `blocked`, `stopped`, `completed`, or `unknown`), error cause (`provider_timeout`, `rate_limit`, `network_error`, `provider_quota`, `auth_error`), state-since, last progress timestamp, elapsed duration, observation source, and current time. PID liveness is shown only as observation metadata and never establishes `working`; without persisted progress the state is `unknown`. Timelines strictly display full ISO timestamps with timezone (`YYYY-MM-DDTHH:mm:ss.sssZ`), distinguish stream receipt time (`(received: <ISO>)`), and label missing historical timestamps as `[unknown time]` without manufacturing fake times from file mtime. Observer attachments persist timing records in `observers/<pid>.json`, tracking start and cancellation cleanly without manufacturing durations when hard kills occur.
+
+Default `watch-once` wakes on blocked, waiting, resuming, intervention, and terminal transitions; use `--all` only when routine transitions are also relevant. Use `--follow` only in a human-owned terminal. Agent tool calls use bounded reads or `watch-once`, never an indefinite follow stream.
 
 ## 7. Review every result
 
