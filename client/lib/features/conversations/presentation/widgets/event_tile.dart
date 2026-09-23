@@ -88,7 +88,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     );
 
     _expansionController.addStatusListener((status) {
-      if (status == AnimationStatus.dismissed || status == AnimationStatus.completed) {
+      if (status == AnimationStatus.dismissed ||
+          status == AnimationStatus.completed) {
         if (mounted) {
           setState(() {});
         }
@@ -108,7 +109,9 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       _isExpanded = widget.isExpanded!;
     } else {
       // Default fallback if no external state is provided
-      _isExpanded = widget.event.kind == EventKind.userMessage || widget.event.kind == EventKind.finalAnswer;
+      _isExpanded =
+          widget.event.kind == EventKind.userMessage ||
+          widget.event.kind == EventKind.finalAnswer;
     }
 
     if (_isExpanded) {
@@ -124,7 +127,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       return;
     }
 
-    if (widget.isExpanded != null && widget.isExpanded != oldWidget.isExpanded) {
+    if (widget.isExpanded != null &&
+        widget.isExpanded != oldWidget.isExpanded) {
       _setExpanded(widget.isExpanded!, notifyParent: false, rebuild: false);
     }
   }
@@ -219,12 +223,16 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         ),
         failureReason: metadata['failure_reason']?.toString(),
         contextWindowTokens: metadata['context_window_tokens'] as int?,
-        effectiveInputBudgetTokens: metadata['effective_input_budget_tokens'] as int?,
+        effectiveInputBudgetTokens:
+            metadata['effective_input_budget_tokens'] as int?,
         autoThresholdTokens: metadata['auto_threshold_tokens'] as int?,
-        estimatedRequestTokensBefore: metadata['estimated_request_tokens_before'] as int?,
-        estimatedRequestTokensAfter: metadata['estimated_request_tokens_after'] as int?,
+        estimatedRequestTokensBefore:
+            metadata['estimated_request_tokens_before'] as int?,
+        estimatedRequestTokensAfter:
+            metadata['estimated_request_tokens_after'] as int?,
         beforeMeasurementKind: metadata['before_measurement_kind']?.toString(),
-        providerConfirmedRequestTokensAfter: metadata['provider_confirmed_request_tokens_after'] as int?,
+        providerConfirmedRequestTokensAfter:
+            metadata['provider_confirmed_request_tokens_after'] as int?,
         retainedTailTokens: metadata['retained_tail_tokens'] as int?,
         durationMs: metadata['duration_ms'] as int?,
       );
@@ -338,7 +346,9 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                         TextSpan(
                           text: preview,
                           style: TextStyle(
-                            color: isRunning ? Theme.of(context).colorScheme.primary : color.withValues(alpha: 0.55),
+                            color: isRunning
+                                ? Theme.of(context).colorScheme.primary
+                                : color.withValues(alpha: 0.55),
                             fontWeight: FontWeight.w500,
                           ),
                         ),
@@ -354,7 +364,11 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   }
 
   static String _firstWords(String text, int count) {
-    final words = text.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    final words = text
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .toList();
     if (words.isEmpty) return '';
     return words.take(count).join(' ');
   }
@@ -363,13 +377,15 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     return SelectionArea(
       child: Directionality(
         textDirection: TextUtils.getTextDirection(widget.event.text),
-        child: SizedBox(
-          key: Key('primary_markdown_${widget.event.kind.name}'),
-          width: double.infinity,
-          child: AppMarkdownRenderer(
-            data: widget.event.text,
-            isFinal: true,
-            onTapLink: _onTapLink,
+        child: KeyedSubtree(
+          key: Key('assistant_message_body:${widget.event.id}'),
+          child: SizedBox(
+            width: double.infinity,
+            child: AppMarkdownRenderer(
+              data: widget.event.text,
+              isFinal: true,
+              onTapLink: _onTapLink,
+            ),
           ),
         ),
       ),
@@ -399,7 +415,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                 metaText,
               ].where((part) => part.isNotEmpty).join('  •  '),
               style: GoogleFonts.roboto(
-                color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
+                color: Theme.of(context).colorScheme.onSurfaceVariant
+                    .withValues(alpha: 0.8),
                 fontSize: 11,
               ),
             ),
@@ -415,7 +432,9 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                     visualDensity: VisualDensity.compact,
                     constraints: ConversationActionStyle.constraints,
                     padding: EdgeInsets.zero,
-                    onPressed: widget.isForkPending || widget.onFork == null ? null : () => unawaited(widget.onFork!()),
+                    onPressed: widget.isForkPending || widget.onFork == null
+                        ? null
+                        : () => unawaited(widget.onFork!()),
                     icon: widget.isForkPending
                         ? const SizedBox(
                             width: 14,
@@ -447,7 +466,9 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       return _buildEventBody();
     }
 
-    final bool isToolLike = widget.event.kind == EventKind.toolCall || widget.event.kind == EventKind.plan;
+    final bool isToolLike =
+        widget.event.kind == EventKind.toolCall ||
+        widget.event.kind == EventKind.plan;
     final bool canExpand = isToolLike;
 
     return Column(children: [_buildEventHeader(canExpand), _buildEventBody()]);
@@ -522,7 +543,9 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   }
 
   Widget _buildEventBody() {
-    final isAskUserRunning = widget.event.toolName == 'system_ask_user' && widget.event.status == EventStatus.running;
+    final isAskUserRunning =
+        widget.event.toolName == 'system_ask_user' &&
+        widget.event.status == EventStatus.running;
     final hasContent =
         (widget.event.text.trim().isNotEmpty ||
             widget.event.kind == EventKind.toolCall ||
@@ -541,10 +564,12 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
           : Container(
               margin: const EdgeInsets.symmetric(vertical: 4, horizontal: 16),
               decoration: BoxDecoration(
-                color: Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.5),
+                color: Theme.of(context).scaffoldBackgroundColor
+                    .withValues(alpha: 0.5),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(
-                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.05),
+                  color: Theme.of(context).colorScheme.onSurface
+                      .withValues(alpha: 0.05),
                 ),
               ),
               child: Padding(
@@ -562,20 +587,26 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
 
   Widget _buildStatusIndicator() {
     if (widget.waitingIndicator != ToolWaitingIndicator.none) {
-      final isQuestion = widget.waitingIndicator == ToolWaitingIndicator.question;
+      final isQuestion =
+          widget.waitingIndicator == ToolWaitingIndicator.question;
       return Semantics(
-        label: isQuestion ? 'Waiting for your answer' : 'Waiting for permission',
+        label: isQuestion
+            ? 'Waiting for your answer'
+            : 'Waiting for permission',
         child: Icon(
           isQuestion ? Icons.help_outline_rounded : Icons.shield_outlined,
           key: Key(
-            isQuestion ? 'tool_waiting_question_icon' : 'tool_waiting_permission_icon',
+            isQuestion
+                ? 'tool_waiting_question_icon'
+                : 'tool_waiting_permission_icon',
           ),
           size: 18,
           color: Theme.of(context).colorScheme.tertiary,
         ),
       );
     }
-    if (widget.event.status == EventStatus.running && widget.event.toolName != 'system_ask_user') {
+    if (widget.event.status == EventStatus.running &&
+        widget.event.toolName != 'system_ask_user') {
       return Padding(
         padding: const EdgeInsets.all(2),
         child: SizedBox(
@@ -688,7 +719,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     if (widget.event.status == EventStatus.cancelled) {
       return Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6);
     }
-    if (widget.event.kind == EventKind.error || widget.event.status == EventStatus.error) {
+    if (widget.event.kind == EventKind.error ||
+        widget.event.status == EventStatus.error) {
       return Theme.of(context).colorScheme.error;
     }
     return Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.7);

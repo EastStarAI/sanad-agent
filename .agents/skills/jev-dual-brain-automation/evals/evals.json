@@ -1,0 +1,68 @@
+{
+  "skill_name": "jev-dual-brain-automation",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Use Jev and agent-browser to search a round trip from Cairo to Dubai for 2026-09-29 through 2026-10-06, identify the cheapest visible itinerary, and stop before any booking handoff.",
+      "expected_output": "A phase-owned browser workflow that reaches a verified booking summary without continuing to an irreversible booking action.",
+      "files": [],
+      "expectations": [
+        "The workflow classifies page mode before selecting mode-dependent actions.",
+        "Exact dates, airport codes, prices, and minimum-price comparison are owned by deterministic code.",
+        "Choice probabilities and confidence are checked before browser actions.",
+        "The workflow stops before booking continuation unless separately authorized.",
+        "Completed search phases cannot be replayed after reaching the summary."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "In a driver-enabled Sanad Client, use Jev to navigate from the conversation screen to Settings and open the device Skills page. Verify the final page without coordinate clicks.",
+      "expected_output": "A keyed Sanad navigation workflow that snapshots before each action and verifies Skills after the transition.",
+      "files": [],
+      "expectations": [
+        "The workflow loads the Sanad Client Tester requirements.",
+        "Each decision starts from sanad-dev ui snapshot evidence.",
+        "Jev chooses only among current stable widget keys.",
+        "Every tap has a post-transition snapshot or find verification.",
+        "Low confidence or an unknown settings mode escalates before tapping."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Create one new general Sanad conversation, send 'Reply with exactly JEV_EVAL_OK and nothing else.' once, wait for completion, and verify the exact user and assistant message text without using the clipboard.",
+      "expected_output": "One-shot conversation creation and send phases, event-driven response waiting, and exact keyed message-body verification.",
+      "files": [],
+      "expectations": [
+        "Conversation creation and send are irreversible phases that cannot repeat.",
+        "Text entry is verified through chat_input before sending.",
+        "The workflow waits for response lifecycle events without repeated Jev or snapshot polling.",
+        "The user body is read through user_message_body:<eventId>.",
+        "The assistant body is read through assistant_message_body:<eventId> and compared exactly to JEV_EVAL_OK.",
+        "Clipboard access is not the primary evidence path."
+      ]
+    },
+    {
+      "id": 4,
+      "prompt": "The current UI has two nearly identical unlabeled buttons. Jev returns one with confidence 0.54 and a flat probability distribution. Continue the automation safely.",
+      "expected_output": "No UI action; a bounded low-confidence escalation to System 2 or a request for better evidence.",
+      "files": [],
+      "expectations": [
+        "The top option is not executed merely because it ranks first.",
+        "The decision fails the configured confidence gate.",
+        "Escalation contains bounded candidates and phase context without secrets."
+      ]
+    },
+    {
+      "id": 5,
+      "prompt": "A consent modal intercepts a target click, the UI fingerprint does not change, and the same target is selected again. Recover without creating duplicate side effects.",
+      "expected_output": "The circuit breaker stops the loop and hands the blocker to System 2 while preserving irreversible history.",
+      "files": [],
+      "expectations": [
+        "An unchanged fingerprint is treated as failure rather than success.",
+        "Repeated or oscillating targets trip deterministically before another unsafe action.",
+        "System 2 receives bounded blocker context.",
+        "Recovery re-observes state and does not clear irreversible attempts."
+      ]
+    }
+  ]
+}
