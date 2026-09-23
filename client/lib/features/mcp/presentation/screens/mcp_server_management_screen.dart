@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
@@ -279,16 +280,16 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete Server'),
-        content: Text('Delete `${server.name}` from this source?'),
+        title: Text(AppLocalizations.of(context)!.mcpDeleteServer),
+        content: Text(AppLocalizations.of(context)!.mcpDeleteConfirm(server.name)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
+            child: Text(AppLocalizations.of(context)!.mcpCancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
-            child: const Text('Delete'),
+            child: Text(AppLocalizations.of(context)!.mcpDelete),
           ),
         ],
       ),
@@ -343,7 +344,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
       if (mounted) {
         ToastUtils.showSuccess(
           context,
-          'Copied redacted JSON. Credentials were excluded.',
+          AppLocalizations.of(context)!.mcpCopiedRedacted,
         );
       }
     } catch (error) {
@@ -380,7 +381,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Credentials are excluded. Preview is required before Save.'),
+                    Text(AppLocalizations.of(context)!.mcpPreviewRequiredNote),
                     const SizedBox(height: 12),
                     TextField(
                       controller: controller,
@@ -406,7 +407,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
               ),
             ),
             actions: [
-              TextButton(onPressed: busy ? null : () => Navigator.pop(context, false), child: const Text('Cancel')),
+              TextButton(onPressed: busy ? null : () => Navigator.pop(context, false), child: Text(AppLocalizations.of(context)!.mcpCancel)),
               OutlinedButton(
                 onPressed: busy
                     ? null
@@ -430,7 +431,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                           setDialogState(() => busy = false);
                         }
                       },
-                child: const Text('Preview changes'),
+                child: Text(AppLocalizations.of(context)!.mcpPreviewChanges),
               ),
               FilledButton(
                 onPressed: busy || preview == null
@@ -454,7 +455,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                           if (context.mounted) setDialogState(() => busy = false);
                         }
                       },
-                child: const Text('Save'),
+                child: Text(AppLocalizations.of(context)!.mcpSave),
               ),
             ],
           ),
@@ -492,7 +493,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.public),
-                title: const Text('Add to Device'),
+                title: Text(AppLocalizations.of(context)!.mcpAddToDevice),
                 onTap: () => Navigator.pop(context, _McpConfigSource.global),
               ),
               ListTile(
@@ -576,7 +577,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
     if (explicit != null) return explicit;
     final state = context.read<DeviceCubit>().state;
     if (state is DeviceActive) return state.activeAgent;
-    throw StateError('Select a device before managing MCP servers.');
+    throw StateError(AppLocalizations.of(context)!.mcpSelectDeviceFirst);
   }
 
   bool get _deviceOnline {
@@ -608,7 +609,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                         key: const ValueKey('add-mcp-server'),
                         onPressed: _deviceOnline && !_mutating ? _openAddServer : null,
                         icon: const Icon(Icons.add),
-                        label: const Text('Add server'),
+                        label: Text(AppLocalizations.of(context)!.mcpAddToList),
                       ),
                     ),
                   if (widget.embedded && _workspaceId != null) const SizedBox(height: 12),
@@ -627,9 +628,9 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                           icon: const Icon(Icons.workspaces_outline),
                           enabled: _workspaceId != null,
                         ),
-                        const ButtonSegment(
+                        ButtonSegment(
                           value: _McpConfigSource.effective,
-                          label: Text('Effective'),
+                          label: Text(AppLocalizations.of(context)!.mcpEffective),
                           icon: Icon(Icons.merge_type),
                         ),
                       ],
@@ -687,7 +688,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
           IconButton(
             onPressed: _deviceOnline && !_mutating ? _openAddServer : null,
             icon: const Icon(Icons.add),
-            tooltip: 'Add MCP Server',
+            tooltip: AppLocalizations.of(context)!.mcpAddServerTitle,
           ),
         ],
       ),
@@ -699,13 +700,13 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
     if (!_deviceOnline) {
       return _buildEmptyMessage(
         context,
-        'This device is offline. Reconnect to manage MCP servers.',
+        AppLocalizations.of(context)!.mcpDeviceOffline,
       );
     }
     if (_source == _McpConfigSource.workspace && _workspaceId == null) {
       return _buildEmptyMessage(
         context,
-        'Select a workspace to manage local MCP servers.',
+        AppLocalizations.of(context)!.mcpSelectWorkspaceFirst,
       );
     }
 
@@ -713,7 +714,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
     if (servers.isEmpty) {
       return _buildEmptyMessage(
         context,
-        'No MCP servers found for this source and filter.',
+        AppLocalizations.of(context)!.mcpNoServers,
       );
     }
 
@@ -733,15 +734,15 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
     final isExpanded = _expandedServerIds.contains(server.id);
 
     final statusText = !server.enabled
-        ? 'Disabled'
+        ? AppLocalizations.of(context)!.mcpDisabled
         : isConnecting
-        ? 'Connecting...'
+        ? AppLocalizations.of(context)!.mcpConnecting
         : error ?? (isConnected ? '${tools.length} tools' : 'Disconnected');
 
     return Semantics(
       container: true,
       explicitChildNodes: true,
-      label: '${server.name}, ${server.enabled ? 'Enabled' : 'Disabled'}, ${tools.length} tools',
+      label: '${server.name}, ${server.enabled ? AppLocalizations.of(context)!.mcpEnabled : AppLocalizations.of(context)!.mcpDisabled}, ${tools.length} tools',
       child: Container(
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surface,
@@ -754,7 +755,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
               button: true,
               container: true,
               explicitChildNodes: true,
-              label: '${isExpanded ? 'Collapse' : 'Expand'} ${server.name} details',
+              label: '${isExpanded ? AppLocalizations.of(context)!.mcpCollapse : AppLocalizations.of(context)!.mcpExpand} ${server.name} details',
 
               child: InkWell(
                 key: ValueKey('mcp_server_toggle_${server.name}'),
@@ -795,7 +796,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                               spacing: 8,
                               runSpacing: 8,
                               children: [
-                                _MetaChip(label: server.enabled ? 'Enabled' : 'Disabled'),
+                                _MetaChip(label: server.enabled ? AppLocalizations.of(context)!.mcpEnabled : AppLocalizations.of(context)!.mcpDisabled),
                                 _MetaChip(label: _transportLabel(server)),
                                 _MetaChip(label: server.authType.displayName),
                                 _MetaChip(label: '${tools.length} tools'),
@@ -821,7 +822,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                       const SizedBox(width: 12),
                       Semantics(
                         excludeSemantics: true,
-                        label: '${server.enabled ? 'Disable' : 'Enable'} ${server.name}',
+                        label: '${server.enabled ? AppLocalizations.of(context)!.mcpDisable : AppLocalizations.of(context)!.mcpEnable} ${server.name}',
                         toggled: server.enabled,
 
                         child: Switch(
@@ -846,7 +847,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
-                          server.enabled ? 'Connect to discover tools.' : 'Server is disabled.',
+                          server.enabled ? AppLocalizations.of(context)!.mcpConnectToDiscover : AppLocalizations.of(context)!.mcpServerDisabled,
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(
                             color: Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
@@ -878,7 +879,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                               children: [
                                 Semantics(
                                   excludeSemantics: true,
-                                  label: '${server.isToolDisabled(tool.name) ? 'Enable' : 'Disable'} tool ${tool.name}',
+                                  label: '${server.isToolDisabled(tool.name) ? AppLocalizations.of(context)!.mcpEnable : AppLocalizations.of(context)!.mcpDisable} tool ${tool.name}',
                                   toggled: !server.isToolDisabled(tool.name),
                                   child: Switch(
                                     value: !server.isToolDisabled(tool.name),
@@ -888,7 +889,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                                   ),
                                 ),
                                 Text(
-                                  server.isToolDisabled(tool.name) ? 'Disabled' : 'Enabled',
+                                  server.isToolDisabled(tool.name) ? AppLocalizations.of(context)!.mcpDisabled : AppLocalizations.of(context)!.mcpEnabled,
                                   style: Theme.of(context).textTheme.bodySmall,
                                 ),
                               ],
@@ -908,23 +909,23 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                               ? () => _connectToServer(server, _connectionRefreshCycle)
                               : null,
                           icon: const Icon(Icons.wifi_find),
-                          label: const Text('Test'),
+                          label: Text(AppLocalizations.of(context)!.mcpTest),
                         ),
                         if (_source != _McpConfigSource.effective || _effectiveOrigins.containsKey(server.name))
                           OutlinedButton.icon(
                             onPressed: _deviceOnline && !_mutating ? () => _openEditServer(server) : null,
-                            icon: const Icon(Icons.edit_outlined),
-                            label: const Text('Edit'),
+                            icon: Icon(Icons.edit_outlined),
+                            label: Text(AppLocalizations.of(context)!.mcpEdit),
                           ),
                         PopupMenuButton<String>(
-                          tooltip: 'Advanced actions',
+                          tooltip: AppLocalizations.of(context)!.mcpAdvancedActions,
                           onSelected: (value) {
                             if (value == 'export') unawaited(_exportServer(server));
                             if (value == 'json') unawaited(_editAdvancedJson(server));
                           },
-                          itemBuilder: (context) => const [
-                            PopupMenuItem(value: 'export', child: Text('Export JSON')),
-                            PopupMenuItem(value: 'json', child: Text('Edit JSON')),
+                          itemBuilder: (context) => [
+                            PopupMenuItem(value: 'export', child: Text(AppLocalizations.of(context)!.mcpExportJson)),
+                            PopupMenuItem(value: 'json', child: Text(AppLocalizations.of(context)!.mcpEditJson)),
                           ],
                         ),
                         if (_canMutate)
@@ -932,7 +933,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                             key: ValueKey('mcp_server_remove_${server.name}'),
                             onPressed: () => _deleteServer(server),
                             icon: const Icon(Icons.delete_outline),
-                            label: const Text('Remove'),
+                            label: Text(AppLocalizations.of(context)!.mcpRemove),
                           ),
                       ],
                     ),
@@ -1019,7 +1020,7 @@ class _MetaChip extends StatelessWidget {
 
 String _transportLabel(McpServerConfig server) {
   return switch (server.transport) {
-    McpTransportType.auto => 'Auto-detect',
+    McpTransportType.auto => 'Auto',
     McpTransportType.stdio => 'STDIO',
     McpTransportType.sse => 'SSE',
     McpTransportType.streamableHttp => 'HTTP',

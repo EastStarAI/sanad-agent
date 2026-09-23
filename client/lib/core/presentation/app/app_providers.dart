@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/app_error_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/connection/connection_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/debug_panel_cubit.dart';
@@ -32,11 +33,13 @@ import 'package:toastification/toastification.dart';
 
 class AppProviders extends StatelessWidget {
   final ThemeMode initialTheme;
+  final Locale initialLocale;
   final Widget child;
 
   const AppProviders({
     super.key,
     required this.initialTheme,
+    required this.initialLocale,
     required this.child,
   });
 
@@ -53,6 +56,7 @@ class AppProviders extends StatelessWidget {
     return MultiBlocProvider(
       providers: [
         BlocProvider(create: (_) => ThemeCubit(initialTheme)),
+        BlocProvider(create: (_) => LocaleCubit(initialLocale)),
         BlocProvider(create: (_) => AppErrorCubit()),
         BlocProvider(create: (_) => DebugPanelCubit()),
         BlocProvider(

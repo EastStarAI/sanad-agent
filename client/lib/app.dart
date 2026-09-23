@@ -20,7 +20,8 @@ final appNavigatorKey = GlobalKey<NavigatorState>();
 
 class SanadAgentApp extends StatefulWidget {
   final ThemeMode initialTheme;
-  const SanadAgentApp({super.key, required this.initialTheme});
+  final Locale initialLocale;
+  const SanadAgentApp({super.key, required this.initialTheme, required this.initialLocale});
 
   @override
   State<SanadAgentApp> createState() => _SanadAgentAppState();
@@ -86,6 +87,7 @@ class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserv
 
     return AppProviders(
       initialTheme: widget.initialTheme,
+      initialLocale: widget.initialLocale,
       child: AppAuthListener(
         authService: appState.authService,
         socketService: appState.brainSocketController,

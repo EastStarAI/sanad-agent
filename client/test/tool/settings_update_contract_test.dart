@@ -8,19 +8,15 @@ void main() {
       'lib/features/settings/presentation/widgets/settings_pages.dart',
     ).readAsStringSync();
 
+    // Localization pass (Task 95) moved visible copy into AppLocalizations;
+    // the contract now asserts the localized accessors plus desktop gating.
     expect(source, contains('if (AppPlatform.isDesktop)'));
-    expect(source, contains("label: const Text('Check for Updates')"));
     expect(
       source,
-      contains('Automatic update checks run in the background.'),
+      contains('AppLocalizations.of(context)!.checkForUpdates'),
     );
-    expect(
-      source,
-      contains('Linux updates are manual.'),
-    );
-    expect(
-      source,
-      contains('Current Version:'),
-    );
+    expect(source, contains('AppLocalizations.of(context)!.updatesAutoNote'));
+    expect(source, contains('AppLocalizations.of(context)!.updatesLinuxNote'));
+    expect(source, contains('AppLocalizations.of(context)!.currentVersion('));
   });
 }

@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/theme/theme_cubit.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -29,8 +31,8 @@ class ProfilePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthCubit>().state;
     return PageFrame(
-      title: 'Profile',
-      subtitle: 'Your Sanad account and session.',
+      title: AppLocalizations.of(context)!.profile,
+      subtitle: AppLocalizations.of(context)!.profileSubtitle,
       child: SettingsCard(
         child: auth is AuthAuthenticated
             ? Column(
@@ -57,7 +59,7 @@ class ProfilePage extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: () => context.read<AuthCubit>().logout(),
                     icon: const Icon(Icons.logout),
-                    label: const Text('Sign out'),
+                    label: Text(AppLocalizations.of(context)!.signOut),
                   ),
                 ],
               )
@@ -71,12 +73,12 @@ class ProfilePage extends StatelessWidget {
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Sign in to manage your Sanad account.'),
+                  Text(AppLocalizations.of(context)!.signInPrompt),
                   const SizedBox(height: 16),
                   OutlinedButton.icon(
                     onPressed: () => unawaited(context.read<AuthCubit>().login()),
                     icon: const Icon(Icons.login),
-                    label: const Text('Sign in'),
+                    label: Text(AppLocalizations.of(context)!.signIn),
                   ),
                 ],
               ),
@@ -136,13 +138,13 @@ class _GeneralPageState extends State<GeneralPage> {
           result.message ??
           switch (result.status) {
             ClientUpdateStatus.updateOpened =>
-              'The official Linux release was opened. Download, replace, and restart Sanad manually.',
-            ClientUpdateStatus.upToDate => 'Sanad Client is up to date.',
-            ClientUpdateStatus.sourceManaged => 'This source build is updated from its developer checkout.',
+              AppLocalizations.of(context)!.linuxUpdateManual,
+            ClientUpdateStatus.upToDate => AppLocalizations.of(context)!.upToDate,
+            ClientUpdateStatus.sourceManaged => AppLocalizations.of(context)!.sourceManagedUpdate,
             ClientUpdateStatus.artifactUnavailable =>
-              'A newer release exists, but no matching Linux package is available.',
-            ClientUpdateStatus.launchFailed => 'The official release was found, but the browser could not be opened.',
-            _ => 'The update check has started.',
+              AppLocalizations.of(context)!.updateNoPackage,
+            ClientUpdateStatus.launchFailed => AppLocalizations.of(context)!.updateLaunchFailed,
+            _ => AppLocalizations.of(context)!.updateStarted,
           };
     });
   }
@@ -151,51 +153,86 @@ class _GeneralPageState extends State<GeneralPage> {
   Widget build(BuildContext context) {
     final mode = context.watch<ThemeCubit>().state;
     return PageFrame(
-      title: 'General',
-      subtitle: 'Preferences for this Sanad app.',
+      title: AppLocalizations.of(context)!.general,
+      subtitle: AppLocalizations.of(context)!.settings,
       child: SettingsCard(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Appearance',
+              AppLocalizations.of(context)!.appearance,
               style: Theme.of(
                 context,
               ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 6),
             Text(
-              'Choose how Sanad looks on this device.',
+              AppLocalizations.of(context)!.theme,
               style: TextStyle(
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
             const SizedBox(height: 16),
             SegmentedButton<ThemeMode>(
-              segments: const [
+              segments: [
                 ButtonSegment(
                   value: ThemeMode.system,
-                  label: Text('System'),
+                  label: Text(AppLocalizations.of(context)!.themeSystem),
                   icon: Icon(Icons.settings_brightness_outlined),
                 ),
                 ButtonSegment(
                   value: ThemeMode.light,
-                  label: Text('Light'),
+                  label: Text(AppLocalizations.of(context)!.themeLight),
                   icon: Icon(Icons.light_mode_outlined),
                 ),
                 ButtonSegment(
                   value: ThemeMode.dark,
-                  label: Text('Dark'),
+                  label: Text(AppLocalizations.of(context)!.themeDark),
                   icon: Icon(Icons.dark_mode_outlined),
                 ),
               ],
               selected: {mode},
               onSelectionChanged: (selection) => context.read<ThemeCubit>().updateTheme(selection.first),
             ),
+            const SizedBox(height: 24),
+            Text(
+              AppLocalizations.of(context)!.language,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              AppLocalizations.of(context)!.selectLanguage,
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 16),
+            BlocBuilder<LocaleCubit, Locale>(
+              builder: (context, locale) => SegmentedButton<Locale>(
+                key: const Key('language_selector'),
+                segments: [
+                  ButtonSegment(
+                    value: Locale('en'),
+                    label: Text('English'),
+                    icon: Icon(Icons.language_outlined),
+                  ),
+                  ButtonSegment(
+                    value: Locale('ar'),
+                    label: Text('العربية'),
+                    icon: Icon(Icons.translate_outlined),
+                  ),
+                ],
+                selected: {locale},
+                onSelectionChanged: (selection) =>
+                    context.read<LocaleCubit>().updateLocale(selection.first),
+              ),
+            ),
             if (AppPlatform.isDesktop) ...[
               const Divider(height: 40),
               Text(
-                'Updates',
+                AppLocalizations.of(context)!.updates,
                 style: Theme.of(
                   context,
                 ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
@@ -203,8 +240,8 @@ class _GeneralPageState extends State<GeneralPage> {
               const SizedBox(height: 6),
               Text(
                 AppPlatform.isLinux
-                    ? 'Linux updates are manual. Sanad only opens a newer official package after validating its release manifest.'
-                    : 'Automatic update checks run in the background. Use this action to check the signed update feed now.',
+                    ? AppLocalizations.of(context)!.updatesLinuxNote
+                    : AppLocalizations.of(context)!.updatesAutoNote,
               ),
               const SizedBox(height: 16),
               Row(
@@ -212,7 +249,7 @@ class _GeneralPageState extends State<GeneralPage> {
                 children: [
                   if (_currentVersion != null) ...[
                     Text(
-                      'Current Version: $_currentVersion',
+                      AppLocalizations.of(context)!.currentVersion(_currentVersion!),
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w500,
@@ -229,7 +266,7 @@ class _GeneralPageState extends State<GeneralPage> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.system_update_alt),
-                    label: const Text('Check for Updates'),
+                    label: Text(AppLocalizations.of(context)!.checkForUpdates),
                   ),
                 ],
               ),
@@ -255,9 +292,9 @@ class EmptyDevicePage extends StatelessWidget {
       children: [
         const Icon(Icons.devices_other_outlined, size: 52),
         const SizedBox(height: 12),
-        Text('Select a device', style: Theme.of(context).textTheme.titleLarge),
+        Text(AppLocalizations.of(context)!.selectADevice, style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 6),
-        const Text('Device settings will appear here.'),
+        Text(AppLocalizations.of(context)!.deviceSettingsPlaceholder),
       ],
     ),
   );
@@ -327,7 +364,7 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
     if (_runtimeBusy || !widget.device.isOnline) return;
     setState(() {
       _runtimeBusy = true;
-      _runtimeStatus = 'Checking for updates…';
+      _runtimeStatus = AppLocalizations.of(context)!.checkingForUpdates;
       _error = null;
     });
     try {
@@ -358,7 +395,7 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
     if (check.sourceManaged) {
       ToastUtils.showError(
         context,
-        check.message ?? 'This agent runs from source and stays developer-managed.',
+        check.message ?? AppLocalizations.of(context)!.sourceManagedAgent,
       );
       return;
     }
