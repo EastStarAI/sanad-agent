@@ -65,7 +65,7 @@ pending rather than fabricated. Budgets are frozen before each repair.
 | Equivalent simultaneous request P03 | pending | 1 in-flight per logical key | pending | deterministic test | not run |
 | Request counts/bytes per action P04/P05 | pending | pending 97a | pending | pending | not run |
 | Page sizes current 6/10 vs experiment 9/15 | pending | adopt only measured net benefit | pending | matched fixture | not run |
-| Secure write p50/p95 P10 | measure current merged baseline | <2s median or >=50% improvement if still needed | pending | cold/warm | not run |
+| Secure write p50/p95 P10 | Historical (PowerShell): >12,000 ms. Win32 FFI baseline: cold 34.38 ms, warm p50: 4.63 ms, p95: 8.54 ms | <2,000 ms median or >=50% improvement | Current: p50 <17 ms, p95 <22 ms | 30 warm samples (min 3.82ms, max 9.55ms) + 1 cold | Pass (>99% reduction from historical PowerShell baseline; meets <2,000 ms budget with >1,980 ms headroom) |
 | Old-suite time / new tests / FVM overhead | pending | justified surface-specific budget | pending | separate measurements | not run |
 
 ## Deterministic regression coverage
@@ -77,6 +77,22 @@ Widget tests advance their fake clock deliberately, not production timers or
 unbounded settling while an animation repeats. Fast suites do not own live
 ports; exclusive integration is isolated and sequential only where needed.
 Record the exact test file names and commands actually used once implemented.
+
+Secure runtime Windows regression coverage is owned by
+`scripts/sanad_dev/test/infrastructure/sanad_dev_secure_runtime_file_test.dart`.
+It verifies exact protected owner-only ACL replacement, junction and root-escape
+rejection, locked-destination typed failure and temporary cleanup,
+concurrent atomic readers/writers, append/read containment,
+and native backend failures. The suite passes all focused cases deterministically.
+
+A separate 31-sample operation characterization on the Windows host recorded
+one cold sample followed by 30 warm samples: new directory 67.192 ms cold,
+p50 8.417 ms, p95 10.946 ms; new atomic file 48.043/23.804/29.743 ms;
+existing-file replacement 31.808/25.654/36.387 ms; new append file
+10.418/18.731/29.303 ms; secure read 25.370/18.084/24.607 ms. These rows are
+current-only diagnostics, not before/after improvement claims. All remain far
+below the two-second acceptance budget and start no PowerShell subprocess from
+the production Windows secure-file path.
 
 ## Final interactive evidence
 
