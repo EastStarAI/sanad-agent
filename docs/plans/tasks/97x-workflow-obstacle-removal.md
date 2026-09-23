@@ -41,6 +41,27 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
   - Observer cancellation tracking in `observers/<pid>.json` capturing start and cancellation cleanly; if hard kill prevents end recording, end time remains unknown rather than manufacturing an artificial duration.
   - Reviewer repair: snake_case runtime artifact fields are consumed correctly; legacy terminal timeout uses its observed terminal time and `timeout` cause rather than launch time/`-`; PID liveness alone reports `unknown`; structured cause codes are authoritative; progress writes are throttled and never persisted per token; default `watch-once` surfaces blocked/waiting/resuming; static logs distinguish source timestamps from unknown time.
 - [x] **Bounded verification timer/log follow-up (batch 3):** Pure-Dart runner in `scripts/workflow_guards/bin/verify.dart`, `scripts/workflow_guards/lib/bounded_verify.dart`, `scripts/workflow_guards/lib/src/bounded_verify.dart`, and `scripts/workflow_guards/test/bounded_verify_test.dart`. Measures elapsed wall time in milliseconds, bounds console output to final tail lines (default 5) plus 1-line summary, writes full stdout/stderr to a unique temporary log file, preserves exact child exit code, and handles Windows batch/executable invocation safety. Fully tested with unit and end-to-end CLI tests (9/9 pass, 33/33 in package).
+- [ ] **Bounded command and monitor output (future batch — uncompleted):** عائق تشغيلي ملحوظ فعلياً أثناء مراقبة المهام وسير العمل:
+  - **الملاحظة الفعلية (Observed obstacle):**
+    - أداة `pr_checks_watch` طبعت رسائل استطلاع دورية (poll) كل 5 ثوانٍ مما لوّث المخرجات.
+    - أمر `supervisor status` أعاد تاريخاً مطولاً (verbose history) ملأ سياق المحادثة (context flood).
+  - **معيار المعالجة المطلوب للدفعة المستقبلية:**
+    - المخرجات الافتراضية مقيدة وموجزة (default bounded summary / changes / final).
+    - التفاصيل وسجلات التتبع الموسعة اختيارية صراحة (details opt-in).
+    - السجلات والبيانات الكاملة محفوظة دون اقتطاع في ملفات logs مخصصة (full logs preserved).
+    - الحفاظ التام والدقيق على رمز الخروج للعملية (exit code preserved).
+  - **حالة البند:** مجدول كدفعة مستقبلية قيد الانتظار (future batch — uncompleted)؛ هذا التوثيق لحصر العائق وتعميم معيار القبول فقط دون تنفيذ أي كود برمجي أو ادعاء قياسات في هذه المرحلة.
+- [ ] **Result data fidelity and semantic terminal validation (future batch — uncompleted):** عائق دقة بيانات نتائج المهام والنجاح الدلالي الزائف (Semantic false success):
+  - **الملاحظة الفعلية والدليل (Observed obstacle & evidence):**
+    - مهمة `97f` أبلغت عن حالة `completed` مع رمز خروج `exit 0`، لكن حقل `finalMessage` احتوى على رسالة تقدم مرحلية فقط (progress: مثل «جاري...») دون أي خلاصة أو نتيجة نهائية فعلية للمهمة.
+  - **الخلل الجذري ومعيار المعالجة المطلوب للدفعة المستقبلية:**
+    - مجرد مطابقة الـ schema شكلياً (`schema-valid`) لا تكفي لضمان صحة النتيجة أو اكتمالها.
+    - الفصل الصارم بين رسائل التقدم المؤقتة (`progress`) والرسالة الختامية (`finalMessage` / final summary).
+    - منع حالات النجاح النهائي الدلالي الناقص (incomplete semantic terminal success)؛ إتمام العملية تقنياً مع مخرجات مبتورة يُعد خللاً في دقة البيانات.
+  - **معيار القبول الصريح (Acceptance Criteria):**
+    - غياب النتيجة أو الخلاصة الختامية (`missing final`) يجب أن يوسم النتيجة كـ `incomplete` أو `needs_review` أو كفشل صريح (`explicit failure`)، ويمنع اعتبارها نجاحاً نهائياً.
+    - إضافة وتطبيق اختبارات تعاقدية (`contract tests`) تمنع النجاح الزائف (`false success`) وتتحقق دلالياً من اكتمال مخرجات النتيجة.
+  - **حالة البند:** مجدول كدفعة مستقبلية قيد الانتظار (future batch — uncompleted)؛ توثيق لحصر العائق وتحديد معيار القبول الدلالي دون تنفيذ إصلاح كود الآن.
 - [ ] **Future blockers:** أي خلل مثبت في `sanad-dev` أو delegation/supervisor/skills/CI يعطل العمل أو الاختبارات أو logs أو ownership يضاف هنا قبل إصلاحه.
 
 ## Gates for each batch
@@ -61,9 +82,11 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
 
 ## Acceptance criteria
 
+- **معيار المخرجات المقيدة (Bounded Output Standard):** المخرجات الافتراضية لأدوات المراقبة والأوامر تكون مقيدة وموجزة حصرًا (default bounded summary / changes / final)، والتفاصيل الموسعة والتاريخ المطول اختيارية صراحة (details opt-in)، مع حفظ السجلات الكاملة في ملفات logs مخصصة (full logs preserved)، والحفاظ الدقيق على رمز الخروج (exit code preserved / صحيح).
+- **معيار دقة النتائج والتحقق الدلالي (Result Fidelity & Semantic Acceptance):** مجرد مطابقة الـ schema شكلياً (`schema-valid`) لا تكفي؛ يجب فصل الـ progress عن الـ final، ومنع النجاح النهائي الدلالي الناقص (terminal success). عند غياب الخلاصة النهائية (`missing final`)، يجب تصنيف النتيجة كـ `incomplete` أو `needs_review` أو فشل صريح (`failure`)، مع فرض اختبارات تعاقدية (`contract tests`) تمنع النجاح الزائف (`false success`).
 - العائق المثبت لا يتكرر في السيناريو نفسه، ويعطي الفشل المستقبلي رسالة fail-closed قابلة للتنفيذ.
 - لا runtime إضافية على Home واحدة، ولا workspace mutation، ولا source handoff ضمن الإصلاح.
-- لا polling مجدول، ولا انتظار blocking داخل الأوركستريتور، ولا تكرار full suites بلا invalidation.
+- لا polling مجدول غير مقيد في المخرجات، ولا انتظار blocking داخل الأوركستريتور، ولا تكرار full suites بلا invalidation.
 - العوائق المستقبلية تبقى مرئية هنا حتى الإصلاح أو التأجيل المعلل.
 
 ## Evidence
