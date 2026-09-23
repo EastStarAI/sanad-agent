@@ -1,49 +1,97 @@
-# System 1 Failure Modes, Circuit Breakers, and Escalation Patterns
+# Failure Modes and Recovery
 
-## The Nature of System 1 Blindspots
-TypeSafe Jev operates as a pure semantic and perceptual classifier. It maps semantic descriptions to goal-oriented choices with high speed and zero generative latency. However, because it lacks causal multi-step reasoning and deep world models, it exhibits predictable failure modes when operating alone:
+## Principle
 
-1. **Overlay Blindness (Layer Invisibility)**:
-   - *Symptom*: When a cookie banner, modal backdrop, or alert dialog covers the screen, Jev continues selecting the underlying target button (e.g. "Destination" or "Search") because its label matches the goal, unaware that clicks are intercepted by the overlay.
-2. **Ping-Pong Oscillation**:
-   - *Symptom*: The agent clicks "Search", a date picker opens; Jev clicks "Departure", the calendar expands; Jev clicks "Search" again without selecting calendar cells. The agent enters an infinite loop between 2 or 3 elements.
-3. **Multi-Dimensional Spatial Matrices**:
-   - *Symptom*: Interactive calendar grids, complex sliders, canvas drawing tools, and drag-and-drop elements cannot be resolved by simple 1-of-N discrete choices.
+System 1 classifies evidence. It does not own causal recovery, phase history, or safety policy. Detect failure deterministically and escalate before another side effect.
 
----
+## Failure taxonomy
 
-## Defensive Strategy: The Three Pillars
+### Low confidence or flat distribution
 
-### Pillar 1: Pre-Flight Prevention via Persistent Profile
-Prevent transient cookie banners, consent prompts, and session resets by launching `agent-browser` with a persistent profile directory:
+**Signal:** Choice/Score confidence or selected probability is below the phase threshold.
 
-```bash
-agent-browser --headed --profile ~/.sanad/browser-profile open "https://example.com"
+**Response:** Do not act. Gather better evidence, ask for confirmation, or escalate to System 2. Never silently choose the top option.
+
+### Invalid or stale target
+
+**Signal:** Jev returns an ID absent from the current observation, or the UI changed after classification.
+
+**Response:** Reject the decision. Re-observe and reclassify only if the phase remains safely retryable.
+
+### Layer or blocker blindness
+
+**Signal:** A modal, consent prompt, captcha, permission card, error, or loading layer prevents the selected target from receiving the action.
+
+**Response:** Stop the normal phase. Escalate the blocker evidence. Captchas and authorization prompts remain human/policy boundaries; do not bypass them.
+
+### Repetition
+
+**Signal:** The same target would be acted on three consecutive times.
+
+**Response:** Trip before the third action and escalate the bounded history.
+
+### Oscillation
+
+**Signal:** Four prospective actions alternate between two targets, such as Search → Date picker → Search → Date picker.
+
+**Response:** Trip before the fourth action. System 2 diagnoses the missing subtask or wrong page-mode classification.
+
+### No transition
+
+**Signal:** The post-action fingerprint equals the pre-action fingerprint, or no relevant transition event arrives before the deadline.
+
+**Response:** Fail closed. Do not infer success from an action command's zero exit code.
+
+### Irreversible phase ambiguity
+
+**Signal:** Send, submit, delete, purchase, booking continuation, permission approval, or another externally visible action was attempted but confirmation is missing.
+
+**Response:** Preserve the attempted phase and escalate. Never retry automatically; doing so can duplicate the side effect.
+
+### Jagged task mismatch
+
+**Signal:** The decision requires arithmetic, exact date selection, spatial reasoning, dependent planning, policy interpretation, or broad causal diagnosis.
+
+**Response:** Keep exact operations in code and route structural reasoning to System 2. Jev may later resume narrow judgments after a fresh observation.
+
+## Event-driven waiting
+
+After an action, subscribe to the owning event stream and block for relevant transitions. Examples:
+
+- browser navigation/load/DOM transition;
+- Sanad response lifecycle or conversation event;
+- dialog appearance/disappearance;
+- exact keyed widget becoming present or absent.
+
+Each event may be tested by deterministic predicates. This is not polling: no repeated snapshot or Jev request occurs while no event is emitted. Apply one deadline to the wait and escalate on timeout.
+
+## System 2 handoff
+
+Provide bounded, non-secret context:
+
+```json
+{
+  "reason_code": "no_transition",
+  "goal": "Send one exact test message",
+  "phase": "send_message",
+  "irreversible_attempted": true,
+  "screen_mode": "conversation",
+  "candidate_ids": ["send_message_btn"],
+  "completed_phases": ["create_conversation", "enter_text"],
+  "recent_actions": [
+    {"phase": "send_message", "target": "send_message_btn"}
+  ]
+}
 ```
-Once cookies are accepted or credentials saved in the profile, subsequent runs remain free of overlay interruptions.
 
----
+Do not include secrets, obscured field values, authentication URLs, or unrelated UI content.
 
-### Pillar 2: The Circuit Breaker Pattern
-The runner tracks executed actions in an `action_history` buffer. After each step, a deterministic rule checks for repetitive loops:
+After intervention:
 
-- **Single-Element Lock**: If the same element ID is targeted 3 times consecutively.
-- **Oscillating Loop**: If the last 4 actions alternate between a set of <= 2 element IDs.
-- **No-DOM-Change Lock**: If the snapshot hash does not change after an executed action.
+1. Re-observe the UI.
+2. Preserve completed and irreversible-attempted phases.
+3. Rebuild current candidates.
+4. Reclassify only the next safe, retryable decision.
+5. Reapply confidence and policy gates.
 
-When any condition is met, the **Circuit Breaker immediately trips**, pauses the Jev micro-loop, and emits an escalation event with full execution context.
-
----
-
-### Pillar 3: System 2 Handshake Protocol
-System 2 (Frontier LLM / High-Level Orchestrator) intervenes only when the Circuit Breaker trips:
-
-1. **Ingest Context**: System 2 receives:
-   - Reason for trip (e.g., `Oscillation between Search and Date Picker`).
-   - Current raw DOM snapshot or semantic tree.
-   - Action history buffer.
-2. **Diagnose & Solve Structural Blocker**:
-   - Dismiss the modal, accept the terms, solve the captcha, or select the specific calendar cells.
-3. **Clear History & Re-delegate**:
-   - Flush the `action_history` buffer.
-   - Hand control back to the System 1 Jev micro-loop to resume fast sub-second execution.
+Never “recover” by clearing all history; that re-enables duplicate side effects.

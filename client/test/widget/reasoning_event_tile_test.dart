@@ -29,7 +29,10 @@ void main() {
       expect(renderer.styleSheet, finalStyle);
       expect(renderer.builders, isNotNull);
       expect(renderer.builders.keys, contains('code'));
-      expect(find.byKey(const Key('primary_markdown_thinking')), findsOneWidget);
+      expect(
+        find.byKey(const Key('assistant_message_body:event-1')),
+        findsOneWidget,
+      );
     },
   );
 
@@ -127,7 +130,10 @@ void main() {
     expect(rowText, contains('the quick brown fox jumps'));
     expect(rowText, isNot(contains('lazy dog')));
     // Not a full markdown bubble.
-    expect(find.byKey(const Key('primary_markdown_reasoning')), findsNothing);
+    expect(
+      find.byKey(const Key('assistant_message_body:event-1')),
+      findsNothing,
+    );
     expect(find.byType(MarkdownBody), findsNothing);
     // No copy action on the transient reasoning row.
     expect(find.byType(CopyButton), findsNothing);

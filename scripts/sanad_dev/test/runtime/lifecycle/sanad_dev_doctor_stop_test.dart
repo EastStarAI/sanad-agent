@@ -554,5 +554,58 @@ void main() {
       expect(stillLive, contains('still live'));
       expect(deleted, isFalse);
     });
+
+    test('selectAgentInstance returns null when exitOnError is false', () async {
+      final selected = await sanad_dev.selectAgentInstance(
+        58999,
+        exitOnError: false,
+        sanadHomePath: Directory.systemTemp.path,
+      );
+      expect(selected, isNull);
+    });
+
+    test('handleAgentRestart returns false without process exit when exitOnError is false', () async {
+      final result = await sanad_dev.handleAgentRestart(
+        58999,
+        exitOnError: false,
+        sanadHomePath: Directory.systemTemp.path,
+      );
+      expect(result, isFalse);
+    });
+
+    test('handleRuntimeStop with force: true stops an orphaned runtime', () async {
+      final home = await Directory.systemTemp.createTemp('sanad-stop-force-');
+      addTearDown(() => home.delete(recursive: true));
+      final runtime = await runtime_context.discoverSanadDevRuntime(
+        callerDirectory: Directory.current.path,
+        sanadHomeOverride: home.path,
+      );
+      final record = runtime_ownership.RuntimeLauncherRecord(
+        launcherId: 'test-launcher',
+        runtimeNonce: 'test-nonce',
+        launcherPid: 999999,
+        launcherProcessIdentity: 'test-identity',
+        workspaceHash: runtime.worktreeId.split('-').last,
+        sourceRoot: runtime.repositoryRoot,
+        agentPort: runtime.agentPort,
+        sanadHome: home.path,
+        preferencesPrefix: '',
+        clientPids: const [],
+        vmServicePorts: const [],
+        status: 'running',
+        updatedAt: DateTime.now().toUtc(),
+      );
+      await runtime_ownership.writeRuntimeLauncherRecord(record);
+      final recordFile = File(runtime_ownership.runtimeLauncherRecordPath(home.path, runtime.agentPort));
+      expect(await recordFile.exists(), isTrue);
+
+      await sanad_dev.handleRuntimeStop(
+        force: true,
+        sanadHomePath: home.path,
+        processRunning: (_) async => false,
+      );
+
+      expect(await recordFile.exists(), isFalse);
+    });
   });
 }
