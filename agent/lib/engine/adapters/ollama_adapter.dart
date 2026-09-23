@@ -1,8 +1,10 @@
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/models/model_metadata.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
+
 import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
 import '../../core/models/tool_call.dart';
@@ -153,7 +155,8 @@ class OllamaAdapter extends BaseOpenAIAdapter {
         if (modelInfo != null) {
           for (var entry in modelInfo.entries) {
             if (entry.key.contains('context_length')) {
-              return int.tryParse(entry.value.toString()) ?? 4000;
+              final parsed = int.tryParse(entry.value.toString());
+              if (parsed != null && parsed > 0) return parsed;
             }
           }
         }
@@ -165,7 +168,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
     if (metadataLimit != null) return metadataLimit;
 
-    return 4000;
+    return ModelMetadata.unknownContextLimit;
   }
 
   @override

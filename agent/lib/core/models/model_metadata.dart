@@ -1,6 +1,14 @@
 class ModelMetadata {
+  /// Fail-closed limit used only when configuration, the provider catalog,
+  /// provider metadata, and known model metadata cannot resolve a model.
+  static const int unknownContextLimit = 4000;
+
   static const Map<String, int> defaultContextLimits = {
     // OpenAI
+    'gpt-6-astra': 1050000,
+    'gpt-6-sol': 1050000,
+    'gpt-6-luna': 1050000,
+    'gpt-5.6': 1050000,
     'gpt-5.5': 1050000,
     'gpt-5.4': 1050000,
     'gpt-5': 400000,
