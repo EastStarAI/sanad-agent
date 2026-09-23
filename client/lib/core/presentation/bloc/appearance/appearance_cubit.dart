@@ -15,16 +15,55 @@ class AppearanceCubit extends Cubit<AppearanceState> {
   String? _activeDeviceId;
   DeviceConfig? _activeAgent;
   DeviceConnectionCoordinator? _connectionCoordinator;
-  StreamSubscription? _socketEventSubscription;
+  final List<StreamSubscription> _socketSubscriptions = [];
 
   AppearanceCubit(super.initialState, {DeviceConnectionCoordinator? connectionCoordinator})
-      : _connectionCoordinator = connectionCoordinator;
+      : _connectionCoordinator = connectionCoordinator {
+    if (connectionCoordinator != null) {
+      _listenToSocketEvents();
+    }
+  }
 
   String? get activeDeviceId => _activeDeviceId;
   DeviceConfig? get activeAgent => _activeAgent;
 
   void bindConnectionCoordinator(DeviceConnectionCoordinator coordinator) {
     _connectionCoordinator = coordinator;
+    _listenToSocketEvents();
+  }
+
+  void _listenToSocketEvents() {
+    for (final sub in _socketSubscriptions) {
+      unawaited(sub.cancel());
+    }
+    _socketSubscriptions.clear();
+
+    final coordinator = _connectionCoordinator;
+    if (coordinator == null) return;
+
+    for (final stream in coordinator.eventStreams) {
+      _socketSubscriptions.add(stream.listen(_handleSocketEvent));
+    }
+  }
+
+  void _handleSocketEvent(Map<String, dynamic> event) {
+    final messageType = event['message_type'] ?? event['event'] ?? event['type'];
+    if (messageType == 'appearance_snapshot' || messageType == 'appearance_updated') {
+      final payload = event['payload'];
+      if (payload is Map) {
+        final rawAppearance = payload['appearance'] ?? payload;
+        if (rawAppearance is Map) {
+          final deviceId = event['device_id'] as String? ?? _activeDeviceId;
+          if (deviceId != null && (_activeDeviceId == deviceId || _activeAgent?.representsDeviceId(deviceId) == true)) {
+            final next = AppearanceState.fromJson(Map<String, dynamic>.from(rawAppearance));
+            if (next != state) {
+              unawaited(_persistStateLocally(next, deviceId: deviceId));
+              emit(next);
+            }
+          }
+        }
+      }
+    }
   }
 
   static String _key(String prefix, String? deviceId) =>
@@ -42,7 +81,10 @@ class AppearanceCubit extends Cubit<AppearanceState> {
     }
 
     // Load from device-scoped local cache, falling back to default appearance
-    final cached = await getSavedAppearance(deviceId: agent.id);
+    final cached = await getSavedAppearance(
+      deviceId: agent.id,
+      fallbackDeviceId: agent.cloudDeviceId,
+    );
     emit(cached);
 
     // In background, fetch fresh appearance from agent
@@ -51,7 +93,7 @@ class AppearanceCubit extends Cubit<AppearanceState> {
 
   Future<void> onCapabilitiesReceived(String deviceId, Map<String, dynamic>? remoteAppearance) async {
     if (remoteAppearance == null || remoteAppearance.isEmpty) return;
-    if (_activeDeviceId != deviceId) return;
+    if (_activeDeviceId != deviceId && _activeAgent?.representsDeviceId(deviceId) != true) return;
 
     final remoteState = AppearanceState.fromJson(remoteAppearance);
     if (remoteState != state) {
@@ -101,20 +143,29 @@ class AppearanceCubit extends Cubit<AppearanceState> {
 
   Future<void> _persistStateLocally(AppearanceState appearance, {String? deviceId}) async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_key(_themeStyleKey, deviceId), appearance.themeStyle.id);
-    await prefs.setString(_key(_primaryColorKey, deviceId), appearance.primaryColor.id);
-    await prefs.setString(_key(_fontFamilyKey, deviceId), appearance.fontFamily.id);
-    await prefs.setString(_key(_fontSizeScaleKey, deviceId), appearance.fontSizeScale.id);
-    await prefs.setString(_key(_backgroundOptionKey, deviceId), appearance.backgroundOption.id);
-    await prefs.setInt('theme_mode', appearance.themeStyle.themeMode.index);
+    if (deviceId != null && deviceId.isNotEmpty) {
+      await prefs.setString(_key(_themeStyleKey, deviceId), appearance.themeStyle.id);
+      await prefs.setString(_key(_primaryColorKey, deviceId), appearance.primaryColor.id);
+      await prefs.setString(_key(_fontFamilyKey, deviceId), appearance.fontFamily.id);
+      await prefs.setString(_key(_fontSizeScaleKey, deviceId), appearance.fontSizeScale.id);
+      await prefs.setString(_key(_backgroundOptionKey, deviceId), appearance.backgroundOption.id);
 
-    // Also persist to global keys for backward compatibility
-    if (deviceId != null) {
+      final fallbackId = _activeAgent?.cloudDeviceId;
+      if (fallbackId != null && fallbackId.isNotEmpty && fallbackId != deviceId) {
+        await prefs.setString(_key(_themeStyleKey, fallbackId), appearance.themeStyle.id);
+        await prefs.setString(_key(_primaryColorKey, fallbackId), appearance.primaryColor.id);
+        await prefs.setString(_key(_fontFamilyKey, fallbackId), appearance.fontFamily.id);
+        await prefs.setString(_key(_fontSizeScaleKey, fallbackId), appearance.fontSizeScale.id);
+        await prefs.setString(_key(_backgroundOptionKey, fallbackId), appearance.backgroundOption.id);
+      }
+    } else {
+      // Global fallback only (cold start before any device is selected)
       await prefs.setString(_themeStyleKey, appearance.themeStyle.id);
       await prefs.setString(_primaryColorKey, appearance.primaryColor.id);
       await prefs.setString(_fontFamilyKey, appearance.fontFamily.id);
       await prefs.setString(_fontSizeScaleKey, appearance.fontSizeScale.id);
       await prefs.setString(_backgroundOptionKey, appearance.backgroundOption.id);
+      await prefs.setInt('theme_mode', appearance.themeStyle.themeMode.index);
     }
   }
 
@@ -154,18 +205,44 @@ class AppearanceCubit extends Cubit<AppearanceState> {
     }
   }
 
-  static Future<AppearanceState> getSavedAppearance({String? deviceId}) async {
+  static Future<AppearanceState> getSavedAppearance({
+    String? deviceId,
+    String? fallbackDeviceId,
+  }) async {
     final prefs = await SharedPreferences.getInstance();
-    final themeStyleId = prefs.getString(_key(_themeStyleKey, deviceId)) ??
-        (deviceId != null ? prefs.getString(_themeStyleKey) : null);
-    final primaryColorId = prefs.getString(_key(_primaryColorKey, deviceId)) ??
-        (deviceId != null ? prefs.getString(_primaryColorKey) : null);
-    final fontFamilyId = prefs.getString(_key(_fontFamilyKey, deviceId)) ??
-        (deviceId != null ? prefs.getString(_fontFamilyKey) : null);
-    final fontSizeScaleId = prefs.getString(_key(_fontSizeScaleKey, deviceId)) ??
-        (deviceId != null ? prefs.getString(_fontSizeScaleKey) : null);
-    final backgroundOptionId = prefs.getString(_key(_backgroundOptionKey, deviceId)) ??
-        (deviceId != null ? prefs.getString(_backgroundOptionKey) : null);
+
+    if (deviceId != null && deviceId.isNotEmpty) {
+      String? themeStyleId = prefs.getString(_key(_themeStyleKey, deviceId));
+      String? primaryColorId = prefs.getString(_key(_primaryColorKey, deviceId));
+      String? fontFamilyId = prefs.getString(_key(_fontFamilyKey, deviceId));
+      String? fontSizeScaleId = prefs.getString(_key(_fontSizeScaleKey, deviceId));
+      String? backgroundOptionId = prefs.getString(_key(_backgroundOptionKey, deviceId));
+
+      if (themeStyleId == null && fallbackDeviceId != null && fallbackDeviceId.isNotEmpty) {
+        themeStyleId = prefs.getString(_key(_themeStyleKey, fallbackDeviceId));
+        primaryColorId ??= prefs.getString(_key(_primaryColorKey, fallbackDeviceId));
+        fontFamilyId ??= prefs.getString(_key(_fontFamilyKey, fallbackDeviceId));
+        fontSizeScaleId ??= prefs.getString(_key(_fontSizeScaleKey, fallbackDeviceId));
+        backgroundOptionId ??= prefs.getString(_key(_backgroundOptionKey, fallbackDeviceId));
+      }
+
+      // If this device has no saved preferences, strictly return initial defaults!
+      // NEVER fall back to global keys or legacy theme_mode when querying a specific device.
+      return AppearanceState(
+        themeStyle: themeStyleId != null ? AppThemeStyle.fromId(themeStyleId) : AppThemeStyle.dark,
+        primaryColor: AppPrimaryColor.fromId(primaryColorId),
+        fontFamily: AppFontFamily.fromId(fontFamilyId),
+        fontSizeScale: AppFontSizeScale.fromId(fontSizeScaleId),
+        backgroundOption: AppBackgroundOption.fromId(backgroundOptionId),
+      );
+    }
+
+    // Only if deviceId == null (app cold start before any device is selected)
+    final themeStyleId = prefs.getString(_themeStyleKey);
+    final primaryColorId = prefs.getString(_primaryColorKey);
+    final fontFamilyId = prefs.getString(_fontFamilyKey);
+    final fontSizeScaleId = prefs.getString(_fontSizeScaleKey);
+    final backgroundOptionId = prefs.getString(_backgroundOptionKey);
 
     AppThemeStyle style;
     if (themeStyleId != null) {
@@ -190,7 +267,10 @@ class AppearanceCubit extends Cubit<AppearanceState> {
 
   @override
   Future<void> close() async {
-    await _socketEventSubscription?.cancel();
+    for (final sub in _socketSubscriptions) {
+      await sub.cancel();
+    }
+    _socketSubscriptions.clear();
     return super.close();
   }
 }

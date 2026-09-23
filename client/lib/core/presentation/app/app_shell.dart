@@ -54,10 +54,14 @@ class _AppShellState extends State<AppShell> {
           listener: (context, deviceState) {
             if (deviceState is DeviceActive) {
               final activeAgent = deviceState.activeAgent;
-              final caps = context
-                  .read<DeviceCapabilitiesCubit>()
-                  .state
-                  .getForAgent(activeAgent.id);
+              final capsState = context.read<DeviceCapabilitiesCubit>().state;
+              var caps = capsState.getForAgent(activeAgent.id);
+              if (caps.appearance == null && activeAgent.cloudDeviceId != null) {
+                caps = capsState.getForAgent(activeAgent.cloudDeviceId!);
+              }
+              if (caps.appearance == null && activeAgent.hardwareId != null) {
+                caps = capsState.getForAgent(activeAgent.hardwareId!);
+              }
               unawaited(
                 context.read<AppearanceCubit>().setActiveAgent(
                       activeAgent,
@@ -69,14 +73,19 @@ class _AppShellState extends State<AppShell> {
         ),
         BlocListener<DeviceCapabilitiesCubit, DeviceCapabilitiesState>(
           listener: (context, capsState) {
-            final activeDeviceId =
-                context.read<AppearanceCubit>().activeDeviceId;
-            if (activeDeviceId != null) {
-              final caps = capsState.getForAgent(activeDeviceId);
+            final activeAgent = context.read<AppearanceCubit>().activeAgent;
+            if (activeAgent != null) {
+              var caps = capsState.getForAgent(activeAgent.id);
+              if (caps.appearance == null && activeAgent.cloudDeviceId != null) {
+                caps = capsState.getForAgent(activeAgent.cloudDeviceId!);
+              }
+              if (caps.appearance == null && activeAgent.hardwareId != null) {
+                caps = capsState.getForAgent(activeAgent.hardwareId!);
+              }
               if (caps.appearance != null) {
                 unawaited(
                   context.read<AppearanceCubit>().onCapabilitiesReceived(
-                        activeDeviceId,
+                        activeAgent.id,
                         caps.appearance,
                       ),
                 );

@@ -134,6 +134,47 @@ void main() {
       expect(cubit.state.primaryColor, AppPrimaryColor.orange);
     });
 
+    test('switching to unconfigured/legacy device falls back to initial default appearance', () async {
+      final cubit = AppearanceCubit(const AppearanceState());
+      final legacyAgent = DeviceConfig(id: 'legacy-agent', name: 'Old Agent', isOnline: true);
+
+      // Device 1: customize to Sepia + Orange
+      await cubit.setActiveAgent(testAgent1);
+      await cubit.updateThemeStyle(AppThemeStyle.sepia);
+      await cubit.updatePrimaryColor(AppPrimaryColor.orange);
+      expect(cubit.state.themeStyle, AppThemeStyle.sepia);
+
+      // Switch to legacy device with no saved preferences and no remote appearance
+      await cubit.setActiveAgent(legacyAgent);
+      expect(cubit.state.themeStyle, AppThemeStyle.dark);
+      expect(cubit.state.primaryColor, AppPrimaryColor.blue);
+      expect(cubit.state.fontFamily, AppFontFamily.system);
+      expect(cubit.state.fontSizeScale, AppFontSizeScale.normal);
+      expect(cubit.state.backgroundOption, AppBackgroundOption.defaultTheme);
+
+      // Switch back to Device 1: restores customized appearance
+      await cubit.setActiveAgent(testAgent1);
+      expect(cubit.state.themeStyle, AppThemeStyle.sepia);
+      expect(cubit.state.primaryColor, AppPrimaryColor.orange);
+    });
+
+    test('getSavedAppearance for deviceId does not bleed global keys', () async {
+      SharedPreferences.setMockInitialValues({
+        'appearance_theme_style': 'sepia',
+        'appearance_primary_color': 'purple',
+      });
+
+      // Cold start without deviceId reads global keys
+      final globalAppearance = await AppearanceCubit.getSavedAppearance();
+      expect(globalAppearance.themeStyle, AppThemeStyle.sepia);
+      expect(globalAppearance.primaryColor, AppPrimaryColor.purple);
+
+      // When querying for an unconfigured device, strictly return defaults instead of global keys
+      final deviceAppearance = await AppearanceCubit.getSavedAppearance(deviceId: 'unconfigured-device');
+      expect(deviceAppearance.themeStyle, AppThemeStyle.dark);
+      expect(deviceAppearance.primaryColor, AppPrimaryColor.blue);
+    });
+
     test('onCapabilitiesReceived updates active device appearance', () async {
       final cubit = AppearanceCubit(const AppearanceState());
       await cubit.setActiveAgent(testAgent1);

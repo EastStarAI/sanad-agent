@@ -209,7 +209,7 @@ class DeviceCubit extends Cubit<DeviceState> {
 
   Future<void> setActiveAgent(String deviceId) async {
     await agentRepository.setActiveAgent(deviceId);
-    final selected = agentRepository.agents.where((a) => a.id == deviceId).firstOrNull;
+    final selected = agentRepository.agents.where((a) => a.representsDeviceId(deviceId)).firstOrNull;
     if (selected != null) {
       await switchAgent(selected);
     }
