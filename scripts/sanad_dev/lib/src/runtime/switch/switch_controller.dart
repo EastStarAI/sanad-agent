@@ -57,6 +57,7 @@ class _SwitchableRuntimeController {
       RuntimeSwitchManifestWarningGate();
   bool _stopping = false;
   bool _agentTerminalActionInProgress = false;
+  bool _agentRestartInProgress = false;
 
   String get _manifestPath =>
       runtimeSwitchManifestPath(runtime.sanadHome, runtime.agentPort);
@@ -89,11 +90,15 @@ class _SwitchableRuntimeController {
               process.stdin.write(key);
               unawaited(process.stdin.flush());
             }
-          } else if ((key == 'r' || key == 'R') && _agent != null) {
-            unawaited(handleAgentRestart(runtime.agentPort));
+          } else if ((key == 'r' || key == 'R') &&
+              _agent != null &&
+              !_agentTerminalActionInProgress &&
+              !_agentRestartInProgress) {
+            unawaited(_restartAgentFromTerminal());
           } else if ((key == 's' || key == 'q') &&
               _agent != null &&
-              !_agentTerminalActionInProgress) {
+              !_agentTerminalActionInProgress &&
+              !_agentRestartInProgress) {
             unawaited(_stopAgentFromTerminal());
           }
         }
@@ -208,6 +213,26 @@ class _SwitchableRuntimeController {
       }
     } finally {
       _agentTerminalActionInProgress = false;
+    }
+  }
+
+  Future<void> _restartAgentFromTerminal() async {
+    _agentRestartInProgress = true;
+    try {
+      print('\n[sanad-dev] Safe Agent restart requested.');
+      final succeeded = await handleAgentRestart(
+        runtime.agentPort,
+        exitOnError: false,
+      );
+      if (!succeeded) {
+        stderr.writeln(
+          'Agent restart failed; the managed runtime remains active.',
+        );
+      }
+    } catch (e) {
+      stderr.writeln('Agent restart request error: $e');
+    } finally {
+      _agentRestartInProgress = false;
     }
   }
 
