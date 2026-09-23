@@ -1,8 +1,8 @@
 ---
 title: "Plan 97: Windows-first Agent and Client Performance"
 status: ready-for-windows-execution
-current_gate: 97c
-remaining_estimate: "97a–97b completed; 97x remains active for workflow blockers; implementation and final acceptance remain across 97c–97l"
+current_gate: 97d-and-97f
+remaining_estimate: "97a–97b completed; 97c closed without integration after scope correction; 97x remains active for workflow blockers; implementation and final acceptance remain across 97d–97l"
 platforms: windows-first, macos-linux-mobile-final-verification
 implementation_authorized: windows-handoff
 commit_push_authorized: planning-delivery-only
@@ -47,7 +47,7 @@ commit_push_authorized: planning-delivery-only
 | المالك السابق | كيفية التعامل |
 |---|---|
 | `docs/plans/done/agent-windows-intermittent-tool-and-history-latency.md` | 97f و97g يملكان التنفيذ الجديد؛ تبقى الملاحظات السابقة أدلة، ولا مسار تنفيذ موازٍ. |
-| `docs/plans/done/sanad-dev-windows-secure-runtime-file-performance.md` | الإصلاح الأساسي مدرج في a087238؛ 97c يوفق الأدلة ويستكمل الفجوات فقط. |
+| `docs/plans/done/sanad-dev-windows-secure-runtime-file-performance.md` | الإصلاح الأساسي مدرج في a087238. نُقلت تغطية regression المفيدة من 97c إلى تسليم مستقل لأنها لا تطابق مشكلة أدوات الملفات؛ تملك 97f مشكلة الاستجابة ولا تعتمد على ذلك التسليم. |
 | `docs/plans/done/sanad-dev-stale-launcher-recovery.md` | مدرج في a087238؛ 97e لا يعيد التصميم المنفذ ولا يعتبر merge دليلًا على كل checkbox. |
 | `docs/plans/done/sanad-dev-cross-platform-test-baseline-reliability.md` | 97d يملك Windows و97k/97l يستكملان بقية المنصات في النهاية. |
 | Task 96 المحذوفة | لا مرجع تنفيذي ولا فرع يُستعادان. كان الملف تخمينًا غير دقيق ولم يحتوِ تنفيذًا؛ يحتفظ 97b فقط باللوج الخام كدليل غير موثوق في التشخيص، ويملك reproduction والإصلاح. ينسق 97i مع حدود 97b الحالية بدل وثيقة محذوفة. |
@@ -59,10 +59,10 @@ commit_push_authorized: planning-delivery-only
 |---|---|---|
 | [97a — خط الأساس وتوفيق الأعمال السابقة](docs/plans/tasks/97a-baseline-and-ownership.md) | none | completed |
 | [97b — حلقة الاستئناف وهوية نتائج الأدوات](docs/plans/tasks/97b-recovery-loop-integration.md) | 97a | completed |
-| [97c — استكمال التحقق من الكتابة الآمنة](docs/plans/tasks/97c-secure-runtime-verification.md) | 97a | planned |
-| [97d — موثوقية اختبارات أدوات التشغيل](docs/plans/tasks/97d-windows-test-baseline.md) | 97a | planned |
-| [97e — الملكية والاسترداد ودورة الحياة](docs/plans/tasks/97e-launcher-lifecycle-verification.md) | 97c, 97d | planned |
-| [97f — استجابة الوكيل أثناء أدوات الملفات](docs/plans/tasks/97f-agent-responsiveness.md) | 97b, 97c | planned |
+| [97c — نقل تغطية الكتابة الآمنة خارج الخطة](docs/plans/tasks/done/97c-secure-runtime-verification.md) | 97a | moved-out-of-plan؛ تسليم مستقل |
+| [97d — موثوقية اختبارات أدوات التشغيل](docs/plans/tasks/97d-windows-test-baseline.md) | 97a | review |
+| [97e — الملكية والاسترداد ودورة الحياة](docs/plans/tasks/97e-launcher-lifecycle-verification.md) | 97d | planned |
+| [97f — استجابة الوكيل أثناء أدوات الملفات](docs/plans/tasks/97f-agent-responsiveness.md) | 97b | active |
 | [97g — جاهزية المزودين وتحميل الأجهزة](docs/plans/tasks/97g-readiness-and-loading.md) | 97f | planned |
 | [97h — ملكية الجلب ومنع استدعاءات إعادة البناء](docs/plans/tasks/97h-request-ownership-and-dedup.md) | 97g | planned |
 | [97i — كفاءة تحميل المحادثات والصفحات](docs/plans/tasks/97i-pagination-request-efficiency.md) | 97h | planned |

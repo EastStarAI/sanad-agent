@@ -5,7 +5,7 @@ current_gate: G0
 remaining_estimate: "100% of this task; historical work is reconciled in G0"
 platforms: windows-first
 parent_plan: docs/plans/97-windows-first-agent-client-performance.md
-depends_on: "97b, 97c"
+depends_on: "97b"
 ---
 
 # 97f — استجابة الوكيل أثناء أدوات الملفات
