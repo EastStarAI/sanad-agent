@@ -43,6 +43,10 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
       if (context.read<AuthCubit>().state is AuthAuthenticated) {
         unawaited(_routeAfterCloudAuth());
       }
+      final gatewayStatus = context.read<GatewayConnectionCubit>().state;
+      if (gatewayStatus.isDesktop && gatewayStatus.localGateway == LocalGatewayStatus.connected && !_showProviderSetup) {
+        unawaited(_checkProviderReadiness());
+      }
     });
   }
 
@@ -62,7 +66,7 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
   /// not ready, the provider setup UI is shown instead of the chat screen.
   Future<void> _checkProviderReadiness() async {
     if (_providerChecked || _checkingProvider) return;
-    _checkingProvider = true;
+    setState(() => _checkingProvider = true);
     try {
       final readiness = await getIt<ProviderSetupClient>().runtimeCheck();
       if (!mounted) return;
@@ -72,13 +76,17 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
       } else {
         setState(() => _showProviderSetup = true);
       }
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
-      // If the check itself fails, surface the setup UI so the user can retry.
-      _providerChecked = true;
-      setState(() => _showProviderSetup = true);
+      // Do not trap into _showProviderSetup on connection/timeout error.
+      // Allow retryable error display without false setup assumption.
+      setState(() {
+        _error = 'Could not verify provider readiness: $e';
+      });
     } finally {
-      _checkingProvider = false;
+      if (mounted) {
+        setState(() => _checkingProvider = false);
+      }
     }
   }
 
@@ -134,7 +142,18 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
             ),
             child: AnimatedSwitcher(
               duration: const Duration(milliseconds: 300),
-              child: _showProviderSetup
+              child: _checkingProvider
+                  ? const Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 16),
+                          Text('Checking provider readiness...'),
+                        ],
+                      ),
+                    )
+                  : _showProviderSetup
                   ? ProviderSetupFlow(
                       onReady: (_) {
                         if (mounted) context.go(AppRoutes.home);
@@ -161,12 +180,19 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
           builder: (context, deviceState) {
             final isAuthenticated = authState is AuthAuthenticated;
             final hasRegisteredDevices = _registeredDevicesFromState(deviceState).isNotEmpty;
+            final noActive = deviceState is DeviceNoActive ? deviceState : null;
+            // `loading` is the only phase that means "fetch in flight with no
+            // authoritative result yet"; stale/error/readyEmpty keep cached data.
+            final isLoadingDevices = deviceState is DeviceLoading || (noActive?.phase == DevicesPhase.loading);
+            final deviceError = noActive != null && noActive.phase == DevicesPhase.error ? noActive.errorMessage : null;
 
             return OnboardingSetupChoices(
               isDesktop: AppPlatform.isDesktop,
               isAuthenticated: isAuthenticated,
               hasRegisteredDevices: hasRegisteredDevices,
-              error: _error,
+              isLoadingDevices: isLoadingDevices,
+              error: deviceError ?? _error,
+              onRetry: () => unawaited(_refreshDevices()),
               onRunLocally: () {
                 setState(() {
                   _showTerminal = true;
@@ -189,6 +215,20 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
         );
       },
     );
+  }
+
+  /// Retries the device inventory fetch after a failure. [DeviceCubit] records
+  /// any failure as a typed error (it never rethrows), and this screen's
+  /// BlocListener routes home only when a registered device becomes
+  /// authoritative. Keeping the explicit route here also covers the non-cloud
+  /// fetch path that returns the cached list without a stream event.
+  Future<void> _refreshDevices() async {
+    await context.read<DeviceCubit>().fetchAgents();
+    if (!mounted) return;
+    final state = context.read<DeviceCubit>().state;
+    if (_registeredDevicesFromState(state).isNotEmpty) {
+      context.go(AppRoutes.home);
+    }
   }
 
   Future<void> _routeAfterCloudAuth() async {

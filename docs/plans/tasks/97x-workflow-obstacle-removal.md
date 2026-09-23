@@ -1,7 +1,7 @@
 ---
 title: "97x: إزالة عوائق تنفيذ الخطة"
-status: active
-current_gate: "G2 (batches 1–3 independently accepted; batch 3 verified with real passing & real failing test proofs; direct user authorization for delivery)"
+status: active-non-blocking-follow-up
+current_gate: "G2 (batches 1–3 independently accepted; remaining backlog does not block Plan97 merge unless a specific item directly blocks the active product gate or CI)"
 remaining_estimate: "future Plan97 blockers"
 platforms: windows-first, cross-platform-when-affected
 parent_plan: docs/plans/97-windows-first-agent-client-performance.md
@@ -14,7 +14,7 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
 
 ## Goal
 
-مسار مفتوح لتسجيل وإزالة العوائق التي تمنع تنفيذ Plan97 بكفاءة وموثوقية، دون خلطها مع تغييرات المنتج التي تملكها 97c–97l. يشمل عوائق التفويض، supervisor، المهارات، التشغيل المتوازي، CI، و`sanad-dev` عندما تعيق runtime أو الاختبارات أو logs أو الاسترداد.
+مسار مفتوح لتسجيل وإزالة عوائق سير العمل دون خلطها مع تغييرات المنتج التي تملكها 97c–97l. backlog هذه المهمة غير مانع لدمج Plan97 ويُستكمل بعد الدمج؛ الاستثناء الوحيد عائق محدد مثبت يمنع بوابة المنتج الحالية أو CI مباشرة. يشمل عوائق التفويض، supervisor، المهارات، التشغيل المتوازي، CI، و`sanad-dev` عندما تعيق runtime أو الاختبارات أو logs أو الاسترداد.
 
 ## Ownership
 
@@ -62,6 +62,12 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
     - غياب النتيجة أو الخلاصة الختامية (`missing final`) يجب أن يوسم النتيجة كـ `incomplete` أو `needs_review` أو كفشل صريح (`explicit failure`)، ويمنع اعتبارها نجاحاً نهائياً.
     - إضافة وتطبيق اختبارات تعاقدية (`contract tests`) تمنع النجاح الزائف (`false success`) وتتحقق دلالياً من اكتمال مخرجات النتيجة.
   - **حالة البند:** مجدول كدفعة مستقبلية قيد الانتظار (future batch — uncompleted)؛ توثيق لحصر العائق وتحديد معيار القبول الدلالي دون تنفيذ إصلاح كود الآن.
+- [ ] **Self-healing `sanad-dev status` setup (future non-blocking batch):**
+  - **الملاحظة الفعلية:** `sanad-dev status` يفشل كثيرًا برسالة تطلب تشغيل `sanad-dev setup` يدويًا بدل إكمال طلب الحالة.
+  - **السلوك المطلوب:** عندما يثبت status أن setup مطلوب وقابل للإصلاح الآمن، يطبع سطر log موجزًا يوضح أن setup مطلوب، يشغّل setup تلقائيًا مرة واحدة، ثم يعيد محاولة status ويعرض مخرجات status الطبيعية فقط؛ لا يعيد payload الطويل الخاص بـsetup في المسار الناجح.
+  - **حدود الأمان:** لا loop أو retry غير مقيد، ولا إخفاء لفشل setup؛ failure يعرض سببًا موجزًا وقابلًا للتنفيذ ويحافظ على exit code. لا source switch أو runtime restart أو إنشاء runtime إضافية، ولا auto-setup لأخطاء ownership/security/explicit-home غير القابلة للإصلاح.
+  - **القبول:** اختبارات تغطي setup-required→setup-success→normal-status، setup failure، repeated failure/no-loop، JSON/text output، ومخرجات bounded؛ يبقى البند متابعة بعد دمج Plan97 ما لم يمنع بوابة حالية مباشرة.
+- [ ] **Supervisor watch-once stalled-error wakeup (batch 4):** إذا كان الأوركستريتور في وضع المراقبة وحدث خطأ داخل محادثة الوكيل الفرعي (`blocked`, provider timeout, invalid request, gateway loss, or stopped/failed) ثم بقيت المحادثة بلا تعافٍ تلقائي لأكثر من 60 ثانية، يجب أن يعود `watch-once` فورًا بحدث قابل للتصرف بدل الاستمرار في الانتظار حتى انتهاء نافذة المراقبة. هذا يمنع حالة مراقبة مضللة حيث يبدو العمل جارياً بينما الوكيل متوقف، كما حدث أثناء مراقبة 97h بعد `provider_timeout`. DoD: regression يثبت أن الأخطاء العابرة الأقصر من 60 ثانية لا توقظ المراقب إذا تعافت، وأن الخطأ المستمر لأكثر من 60 ثانية يوقظ `watch-once` مع task/session/cause/state-since وبدون scheduled polling.
 - [ ] **Future blockers:** أي خلل مثبت في `sanad-dev` أو delegation/supervisor/skills/CI يعطل العمل أو الاختبارات أو logs أو ownership يضاف هنا قبل إصلاحه.
 
 ## Gates for each batch

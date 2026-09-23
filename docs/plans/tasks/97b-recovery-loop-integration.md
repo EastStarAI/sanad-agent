@@ -18,7 +18,7 @@ depends_on: "97a"
 
 - التصميم والقبول العام: `docs/plans/97-windows-first-agent-client-performance.md`.
 - الأسطح/المراجع المالكة: `agent/lib/engine/runtime/tool_execution_coordinator.dart`، `agent/lib/engine/runtime/continuation_checkpoint_coordinator.dart`، `agent/lib/engine/agent_runner.dart`.
-- التنفيذ والقياس على Windows؛ لا تُستبدل أدلته بنتائج جهاز أسرع. تحقق بقية المنصات بعد نجاح Windows في 97k/97l.
+- التنفيذ والقياس على Windows؛ لا تُستبدل أدلته بنتائج جهاز أسرع. تحقق بقية المنصات المطلوب للدمج في 97l؛ 97k متابعة تقريرية غير مانعة بعد الدمج.
 - لا إعادة تنفيذ إصلاح مدمج أو منافسة مهمة نشطة؛ مراجعة المصدر والأدلة الحالية أولًا.
 - لا إضعاف للأمان أو durability أو ترتيب الأحداث أو حداثة الواجهة. تغيير كبير منخفض العائد يؤجل بقرار موثق، لا إغلاق زائف.
 
@@ -112,4 +112,4 @@ result and never executed — producing the observed non-progress loop.
 - A legacy long-lived checkpoint written before 97b whose records were never tagged
   is treated as durable id-based reuse; this preserves recovery but does not add
   per-step scoping to pre-fix durable state. New writes are always tagged.
-- The final Agent full suite passed after G5 iteration. Broader interactive and cross-platform recovery acceptance remains owned by 97k/97l.
+- The final Agent full suite passed after G5 iteration. Merge-required interactive and cross-platform recovery acceptance remains owned by 97l; 97k is a non-blocking post-merge reporting follow-up.

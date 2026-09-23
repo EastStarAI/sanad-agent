@@ -1,8 +1,8 @@
 ---
 title: "Plan 97: Windows-first Agent and Client Performance"
 status: ready-for-windows-execution
-current_gate: 97d-97f-97e
-remaining_estimate: "97a–97b completed; 97c closed without integration after scope correction; 97d, 97f, and 97e accepted (97e automated lifecycle matrix green on Windows; its full interactive cycle remains in 97l); 97x remains active for workflow blockers; implementation and final acceptance remain across 97g–97l"
+current_gate: 97g-review-paused
+remaining_estimate: "97a–97b, 97d, 97e, and 97f accepted; merge-critical product work remains in 97g–97j and final interactive acceptance in 97l; 97k and 97x are explicit non-blocking follow-ups and do not prevent Plan97 merge"
 platforms: windows-first, macos-linux-mobile-final-verification
 implementation_authorized: windows-handoff
 commit_push_authorized: planning-delivery-only
@@ -22,6 +22,7 @@ commit_push_authorized: planning-delivery-only
 - سجل استئناف rate-limit على macOS يعرض استجابات 200 جديدة ثم 15 إعادة استخدام متعاقبة تقريبًا لنتائج checkpoint بأسماء `shell_execute` و`file_read` حتى أوقف المستخدم الجولة. السجل نفسه يعرض تكرار IDs مثل `shell_execute_0` ووجود tool calls غير مجابة عالجها `HistoryHealer`. المصدر الحالي يخزن `model_step_id` لكنه يراكم `completed_tool_results` بمفتاح `toolCall.id` فقط، ثم يعيد النتيجة عند تطابق هذا المفتاح دون مطابقة step/name/arguments؛ هذه فرضية سبب قوية يثبتها أو يرفضها اختبار 97b الحتمي، وليست تشخيصًا نهائيًا من اللوج وحده.
 - `get_sessions` تكرر تسع مرات خلال نحو 15ms؛ دون query/cursor لا يثبت أنه نفس الطلب. repository يجلب أقسام workspaces متعددة، بحجم أولي 6 ولاحق 10.
 - شاشة الأجهزة لا تعكس loading في مسار الاختيارات رغم وجود حالة `isLoadingFromBackend`؛ المزودون لهم hydration وreadiness مستقلان يجب قياسهما.
+- بلاغ المستخدم المؤكد على Windows: جلب قائمة المزودين بطيء بشكل ملحوظ. تملك 97g قياس مراحل المسار وتحديد السلوك البرمجي المسبب وتحسين زمن وصول القائمة، ولا يكفي أن تخفي الواجهة التأخير بحالة loading صحيحة.
 
 ## 3. القرارات المقفلة
 
@@ -38,7 +39,8 @@ commit_push_authorized: planning-delivery-only
 11. فرع التنفيذ `perf/97-windows-first-performance` في worktree الخطة هو فرع التجميع الوحيد. يُفضّل التنفيذ التسلسلي داخله؛ لا تُنشأ worktree فرعية إلا لمهمة مستقلة قابلة للتوازي وبملكية ملفات لا تتداخل مع العمل الجاري. يبقى وكيل واحد في worktree الخطة، ويُعزل كل وكيل متزامن إضافي في worktree منفصلة.
 12. يراجع وكيل مستقل كل بوابة؛ بعد قبولها يملك المنفذ/المراجع تفويض commit وpush مرحلي واضح دون تأكيد متكرر. تُدمج النتائج المقبولة في فرع التجميع، ويُفتح Draft PR بعد أول بوابة مقبولة لتشغيل CI على كل push.
 13. يبقى تحويل Draft إلى Ready والـmerge وprotected labels وruntime source switch بحاجة لتفويض صريح ما لم يمنحه طلب التنفيذ من البداية. الحذف أو العمل المدمر خارج brief لا يستفيدان من صلاحية الأدوات العامة.
-14. قبل كل مهمة/موجة يعرض الأوركستريتور ملخص مسؤولية المهمة وتغييرها واعتمادياتها ومعايير قبولها ثم يستمر فورًا ما لم يطلب المستخدم التوقف. المنفذون يعملون بصلاحيات الأدوات الكاملة ضمن brief؛ المنفذون المفوضون يستخدمون provider `agy` وmodel `gemini-3.8-flash-medium` حصريًا، والمراجع يستخدم provider `ChatGPT` وmodel `gpt-5.6-sol` حصريًا ويتوقف إذا لم يتوفر.
+14. قبل كل مهمة/موجة يعرض الأوركستريتور ملخص مسؤولية المهمة وتغييرها واعتمادياتها ومعايير قبولها ثم يستمر فورًا ما لم يطلب المستخدم التوقف. المنفذون يعملون بصلاحيات الأدوات الكاملة ضمن brief. التوجيه الحالي: DeepSeek عبر Sanad للتنفيذ؛ agy للمراجعة والإصلاح وللمهام التفاعلية المعقدة مثل تشغيل الواجهة والتحكم بها وتحليل logs وموارد الجهاز. لا يُطلق GPT-Sol دون إذن صريح جديد.
+15. بوابات الدمج الحرجة لهذه الخطة هي تغييرات المنتج 97g–97j ثم القبول التفاعلي 97l. 97k تقرير/ميزانيات متابعة بعد الدمج، و97x backlog تشغيلي غير مانع؛ لا يؤخر أي منهما تحويل PR إلى Ready أو دمجها ما دامت بوابات المنتج والاختبارات المطلوبة خضراء ولا يوجد عائق مباشر مثبت.
 
 ## 4. إغلاق الخطط القديمة ونقل ملكية المتبقي
 
@@ -49,7 +51,7 @@ commit_push_authorized: planning-delivery-only
 | `docs/plans/done/agent-windows-intermittent-tool-and-history-latency.md` | 97f و97g يملكان التنفيذ الجديد؛ تبقى الملاحظات السابقة أدلة، ولا مسار تنفيذ موازٍ. |
 | `docs/plans/done/sanad-dev-windows-secure-runtime-file-performance.md` | الإصلاح الأساسي مدرج في a087238. نُقلت تغطية regression المفيدة من 97c إلى تسليم مستقل لأنها لا تطابق مشكلة أدوات الملفات؛ تملك 97f مشكلة الاستجابة ولا تعتمد على ذلك التسليم. |
 | `docs/plans/done/sanad-dev-stale-launcher-recovery.md` | مدرج في a087238؛ 97e لا يعيد التصميم المنفذ ولا يعتبر merge دليلًا على كل checkbox. |
-| `docs/plans/done/sanad-dev-cross-platform-test-baseline-reliability.md` | 97d يملك Windows و97k/97l يستكملان بقية المنصات في النهاية. |
+| `docs/plans/done/sanad-dev-cross-platform-test-baseline-reliability.md` | 97d يملك Windows و97l يملك تحقق بقية المنصات المطلوب للدمج؛ 97k يجمع التقرير اللاحق غير المانع. |
 | Task 96 المحذوفة | لا مرجع تنفيذي ولا فرع يُستعادان. كان الملف تخمينًا غير دقيق ولم يحتوِ تنفيذًا؛ يحتفظ 97b فقط باللوج الخام كدليل غير موثوق في التشخيص، ويملك reproduction والإصلاح. ينسق 97i مع حدود 97b الحالية بدل وثيقة محذوفة. |
 | تحسين بدء الجولات c19bd57 | موجود في baseline الفرع؛ لا نسبة تحسن جديدة تنسبه لهذا العمل دون مقارنة تاريخية مستقلة. |
 
@@ -63,17 +65,17 @@ commit_push_authorized: planning-delivery-only
 | [97d — موثوقية اختبارات أدوات التشغيل](docs/plans/tasks/97d-windows-test-baseline.md) | 97a | review |
 | [97e — الملكية والاسترداد ودورة الحياة](docs/plans/tasks/97e-launcher-lifecycle-verification.md) | 97d | completed (automated matrix; full interactive in 97l) |
 | [97f — استجابة الوكيل أثناء أدوات الملفات](docs/plans/tasks/97f-agent-responsiveness.md) | 97b | completed |
-| [97g — جاهزية المزودين وتحميل الأجهزة](docs/plans/tasks/97g-readiness-and-loading.md) | 97f | planned |
+| [97g — جاهزية المزودين وتحميل الأجهزة](docs/plans/tasks/97g-readiness-and-loading.md) | 97f | completed |
 | [97h — ملكية الجلب ومنع استدعاءات إعادة البناء](docs/plans/tasks/97h-request-ownership-and-dedup.md) | 97g | review |
 | [97i — كفاءة تحميل المحادثات والصفحات](docs/plans/tasks/97i-pagination-request-efficiency.md) | 97h | planned |
 | [97j — مؤشرات نشاط ثابتة وخفض تكلفة رسم Windows](docs/plans/tasks/97j-windows-static-activity-ui.md) | 97h | planned |
-| [97k — ميزانيات منع التراجع والتقرير المقارن](docs/plans/tasks/97k-regression-budgets-and-report.md) | 97e, 97f, 97g, 97h, 97i, 97j | planned |
-| [97l — القبول التفاعلي النهائي عبر sanad-dev](docs/plans/tasks/97l-interactive-final-acceptance.md) | 97k | planned |
-| [97x — إزالة عوائق تنفيذ الخطة](docs/plans/tasks/97x-workflow-obstacle-removal.md) | 97a | active طوال التنفيذ |
+| [97k — ميزانيات منع التراجع والتقرير المقارن](docs/plans/tasks/97k-regression-budgets-and-report.md) | Plan97 merged | deferred follow-up؛ غير مانعة للدمج |
+| [97l — القبول التفاعلي النهائي عبر sanad-dev](docs/plans/tasks/97l-interactive-final-acceptance.md) | 97e, 97g, 97h, 97i, 97j | planned؛ آخر بوابة دمج |
+| [97x — إزالة عوائق تنفيذ الخطة](docs/plans/tasks/97x-workflow-obstacle-removal.md) | 97a | active follow-up؛ غير مانعة للدمج إلا لعائق مباشر |
 
-97x مسار cross-cutting في worktree التجميع: يسجل ويزيل عوائق delegation/supervisor/skills/CI/`sanad-dev` والصيانة المثبتة التي تبطئ بقية المهام، دون امتلاك تغييرات المنتج الخاصة بـ97c–97l.
+97x مسار cross-cutting في worktree التجميع: يسجل ويزيل عوائق delegation/supervisor/skills/CI/`sanad-dev` والصيانة المثبتة، دون امتلاك تغييرات المنتج الخاصة بـ97c–97l. هو backlog غير مانع ويُعمل عليه بعد دمج 97، إلا إذا أثبت عائق بعينه أنه يمنع بوابة المنتج الحالية أو CI مباشرة.
 
-المسار الحرج يبدأ 97a ثم 97b. يمكن تنفيذ 97c/97d بالتوازي مع 97b بملكية منفصلة. 97h يسبق 97i/97j كي لا يختلط حمل الطلبات بحمل الرسم. 97k يجمع القبول الآلي والتقرير، و97l آخر بوابة تفاعلية. القياسات الحية التشخيصية المبكرة مسموحة؛ ليست قبولًا تفاعليًا نهائيًا.
+المسار الحرج للدمج بعد البوابات المكتملة هو 97g ثم 97h، وبعدها 97i/97j، ثم 97l بوصفها آخر بوابة تفاعلية. 97k يجمع التقرير المقارن وميزانيات المتابعة بعد دمج Plan97 ولا يقع على المسار الحرج. القياسات الحية التشخيصية المبكرة مسموحة؛ ليست قبولًا تفاعليًا نهائيًا.
 
 ## 6. التحقق والقياس
 
@@ -93,6 +95,6 @@ commit_push_authorized: planning-delivery-only
 - [ ] 97l مكتمل بأدلة UI وlogs وملكية التشغيل وتنظيفه؛ التقرير يحوي before/after ونسبًا مستقلة وتأجيلات معللة.
 - [ ] إذن مستقل لتسليم تغييرات التنفيذ؛ الإذن الحالي لتسليم الخطة والأرشفة فقط.
 
-## 8. التقرير النهائي والتأجيل
+## 8. أدلة الدمج والتقرير اللاحق
 
-لكل metric: baseline/current/عدد العينات/p50/p95 أو مجال القياس/الفرق/نسبة التحسن/وضع البناء. للأزمنة والطلبات: `(before - after) / before × 100` عندما before أكبر من صفر. CPU/GPU يعرضان القيم المطلقة وفرق النقاط المئوية أيضًا؛ لا نسبة عند baseline صفر ولا مقارنة debug مع release. تكلفة الاختبارات: old-suite before/after + new-tests duration + FVM startup. كل تأجيل يسجل السبب والمكسب المتوقع والتعقيد والمخاطر والمالك وإشارة إعادة التقييم. لا تأجيل لفقد الأحداث أو فساد الاسترداد أو انتهاك الأمان.
+يجمع 97l الأدلة المباشرة الكافية لقرار الدمج لكل بوابة منتج، ولا ينتظر التقرير الشامل. بعد الدمج، يملك 97k التقرير المقارن الموحد: لكل metric يعرض baseline/current/عدد العينات/p50/p95 أو مجال القياس/الفرق/نسبة التحسن/وضع البناء. للأزمنة والطلبات: `(before - after) / before × 100` عندما before أكبر من صفر. CPU/GPU يعرضان القيم المطلقة وفرق النقاط المئوية أيضًا؛ لا نسبة عند baseline صفر ولا مقارنة debug مع release. تكلفة الاختبارات: old-suite before/after + new-tests duration + FVM startup. كل تأجيل يسجل السبب والمكسب المتوقع والتعقيد والمخاطر والمالك وإشارة إعادة التقييم. لا يؤجل فقد الأحداث أو فساد الاسترداد أو انتهاك الأمان إلى 97k.

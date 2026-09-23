@@ -18,7 +18,7 @@ depends_on: "97g"
 
 - التصميم والقبول العام: `docs/plans/97-windows-first-agent-client-performance.md`.
 - الأسطح/المراجع المالكة: `client/lib/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart`، `client/lib/features/conversations/presentation/widgets/conversation_input/conversation_bottom_actions.dart`، `client/lib/features/provider_setup/presentation/bloc/provider_usage_cubit.dart`.
-- التنفيذ والقياس على Windows؛ لا تُستبدل أدلته بنتائج جهاز أسرع. تحقق بقية المنصات بعد نجاح Windows في 97k/97l.
+- التنفيذ والقياس على Windows؛ لا تُستبدل أدلته بنتائج جهاز أسرع. تحقق بقية المنصات المطلوب للدمج في 97l؛ 97k متابعة تقريرية غير مانعة بعد الدمج.
 - لا إعادة تنفيذ إصلاح مدمج أو منافسة مهمة نشطة؛ مراجعة المصدر والأدلة الحالية أولًا.
 - لا إضعاف للأمان أو durability أو ترتيب الأحداث أو حداثة الواجهة. تغيير كبير منخفض العائد يؤجل بقرار موثق، لا إغلاق زائف.
 
