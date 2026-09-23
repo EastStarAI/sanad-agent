@@ -1,8 +1,8 @@
 ---
 title: "Plan 97: Windows-first Agent and Client Performance"
 status: ready-for-windows-execution
-current_gate: 97d-and-97f
-remaining_estimate: "97a–97b completed; 97c closed without integration after scope correction; 97x remains active for workflow blockers; implementation and final acceptance remain across 97d–97l"
+current_gate: 97d-97f-97e
+remaining_estimate: "97a–97b completed; 97c closed without integration after scope correction; 97d, 97f, and 97e accepted (97e automated lifecycle matrix green on Windows; its full interactive cycle remains in 97l); 97x remains active for workflow blockers; implementation and final acceptance remain across 97g–97l"
 platforms: windows-first, macos-linux-mobile-final-verification
 implementation_authorized: windows-handoff
 commit_push_authorized: planning-delivery-only
@@ -61,7 +61,7 @@ commit_push_authorized: planning-delivery-only
 | [97b — حلقة الاستئناف وهوية نتائج الأدوات](docs/plans/tasks/97b-recovery-loop-integration.md) | 97a | completed |
 | [97c — نقل تغطية الكتابة الآمنة خارج الخطة](docs/plans/tasks/done/97c-secure-runtime-verification.md) | 97a | moved-out-of-plan؛ تسليم مستقل |
 | [97d — موثوقية اختبارات أدوات التشغيل](docs/plans/tasks/97d-windows-test-baseline.md) | 97a | review |
-| [97e — الملكية والاسترداد ودورة الحياة](docs/plans/tasks/97e-launcher-lifecycle-verification.md) | 97d | planned |
+| [97e — الملكية والاسترداد ودورة الحياة](docs/plans/tasks/97e-launcher-lifecycle-verification.md) | 97d | completed (automated matrix; full interactive in 97l) |
 | [97f — استجابة الوكيل أثناء أدوات الملفات](docs/plans/tasks/97f-agent-responsiveness.md) | 97b | completed |
 | [97g — جاهزية المزودين وتحميل الأجهزة](docs/plans/tasks/97g-readiness-and-loading.md) | 97f | planned |
 | [97h — ملكية الجلب ومنع استدعاءات إعادة البناء](docs/plans/tasks/97h-request-ownership-and-dedup.md) | 97g | planned |
