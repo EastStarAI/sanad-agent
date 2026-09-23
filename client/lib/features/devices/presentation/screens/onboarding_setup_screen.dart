@@ -161,12 +161,19 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
           builder: (context, deviceState) {
             final isAuthenticated = authState is AuthAuthenticated;
             final hasRegisteredDevices = _registeredDevicesFromState(deviceState).isNotEmpty;
+            final noActive = deviceState is DeviceNoActive ? deviceState : null;
+            // `loading` is the only phase that means "fetch in flight with no
+            // authoritative result yet"; stale/error/readyEmpty keep cached data.
+            final isLoadingDevices = deviceState is DeviceLoading || (noActive?.phase == DevicesPhase.loading);
+            final deviceError = noActive != null && noActive.phase == DevicesPhase.error ? noActive.errorMessage : null;
 
             return OnboardingSetupChoices(
               isDesktop: AppPlatform.isDesktop,
               isAuthenticated: isAuthenticated,
               hasRegisteredDevices: hasRegisteredDevices,
-              error: _error,
+              isLoadingDevices: isLoadingDevices,
+              error: deviceError ?? _error,
+              onRetry: () => unawaited(_refreshDevices()),
               onRunLocally: () {
                 setState(() {
                   _showTerminal = true;
@@ -189,6 +196,20 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
         );
       },
     );
+  }
+
+  /// Retries the device inventory fetch after a failure. [DeviceCubit] records
+  /// any failure as a typed error (it never rethrows), and this screen's
+  /// BlocListener routes home only when a registered device becomes
+  /// authoritative. Keeping the explicit route here also covers the non-cloud
+  /// fetch path that returns the cached list without a stream event.
+  Future<void> _refreshDevices() async {
+    await context.read<DeviceCubit>().fetchAgents();
+    if (!mounted) return;
+    final state = context.read<DeviceCubit>().state;
+    if (_registeredDevicesFromState(state).isNotEmpty) {
+      context.go(AppRoutes.home);
+    }
   }
 
   Future<void> _routeAfterCloudAuth() async {
