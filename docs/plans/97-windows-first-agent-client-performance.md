@@ -68,7 +68,7 @@ commit_push_authorized: planning-delivery-only
 | [97g — جاهزية المزودين وتحميل الأجهزة](docs/plans/tasks/97g-readiness-and-loading.md) | 97f | completed |
 | [97h — ملكية الجلب ومنع استدعاءات إعادة البناء](docs/plans/tasks/97h-request-ownership-and-dedup.md) | 97g | review |
 | [97i — كفاءة تحميل المحادثات والصفحات](docs/plans/tasks/97i-pagination-request-efficiency.md) | 97h | completed |
-| [97j — مؤشرات نشاط ثابتة وخفض تكلفة رسم Windows](docs/plans/tasks/97j-windows-static-activity-ui.md) | 97h | planned |
+| [97j — مؤشرات نشاط ثابتة وخفض تكلفة رسم Windows](docs/plans/tasks/97j-windows-static-activity-ui.md) | 97i | completed |
 | [97k — ميزانيات منع التراجع والتقرير المقارن](docs/plans/tasks/97k-regression-budgets-and-report.md) | Plan97 merged | deferred follow-up؛ غير مانعة للدمج |
 | [97l — القبول التفاعلي النهائي عبر sanad-dev](docs/plans/tasks/97l-interactive-final-acceptance.md) | 97e, 97g, 97h, 97i, 97j | planned؛ آخر بوابة دمج |
 | [97x — إزالة عوائق تنفيذ الخطة](docs/plans/tasks/97x-workflow-obstacle-removal.md) | 97a | active follow-up؛ غير مانعة للدمج إلا لعائق مباشر |
@@ -89,7 +89,7 @@ commit_push_authorized: planning-delivery-only
 - [x] 97a مكتمل مع baseline وميزانيات واضحة وملاك الأعمال المتداخلة.
 - [ ] الاستئناف يتقدم؛ الأداة البطيئة لا تجمد استقبال الأوامر؛ readiness/loading صحيحان.
 - [ ] resize/rebuild/remount لنفس المورد يسبب صفر طلبات جلب إضافية، دون تعطيل تحديثات مشروعة.
-- [ ] مؤشرات Windows الثابتة تزيل الحمل المستمر المستهدف وتحتفظ بكل حالات التنفيذ.
+- [x] مؤشرات Windows الثابتة تزيل الحمل المستمر المستهدف وتحتفظ بكل حالات التنفيذ.
 - [ ] اختبارات Windows ناجحة وتكلفتها مقاسة ومبررة؛ الفجوات الأمنية القديمة موفقة.
 - [ ] التحقق النهائي لبقية المنصات المتأثرة مكتمل؛ غير المتاح blocked لا success.
 - [ ] 97l مكتمل بأدلة UI وlogs وملكية التشغيل وتنظيفه؛ التقرير يحوي before/after ونسبًا مستقلة وتأجيلات معللة.

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
 import '../../../../devices/domain/models/device_config.dart';
@@ -229,7 +230,7 @@ class _SectionSpinner extends StatelessWidget {
         child: SizedBox(
           width: 22,
           height: 22,
-          child: CircularProgressIndicator(strokeWidth: 2),
+          child: AppProgressIndicator(strokeWidth: 2),
         ),
       ),
     );
@@ -258,7 +259,7 @@ class _LoadMoreTile extends StatelessWidget {
           child: SizedBox(
             width: 16,
             height: 16,
-            child: CircularProgressIndicator(strokeWidth: 1.5, color: theme.colorScheme.onSurfaceVariant),
+            child: AppProgressIndicator(strokeWidth: 1.5, color: theme.colorScheme.onSurfaceVariant),
           ),
         ),
       );

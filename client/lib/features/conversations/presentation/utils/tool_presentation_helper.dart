@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
@@ -161,7 +162,8 @@ class ToolPresentationHelper {
 
     final rawName = event.toolName ?? 'Using Tool';
     final cleanTitle = cleanToolTitle(rawName);
-    final displayTitle = displayToolTitle(event);
+    final l10n = AppLocalizations.of(context);
+    final displayTitle = displayToolTitle(event, l10n: l10n);
 
     // Parse input and output
     final input = event.toolInput;
@@ -547,13 +549,13 @@ class ToolPresentationHelper {
     return '';
   }
 
-  static String displayToolTitle(CanonicalEvent event) {
+  static String displayToolTitle(CanonicalEvent event, {AppLocalizations? l10n}) {
     final cleanTitle = cleanToolTitle(event.toolName ?? 'Using Tool');
     if (event.status == EventStatus.cancelled) {
-      return 'Cancelled';
+      return l10n?.statusCancelled ?? 'Cancelled';
     }
     if (cleanTitle == 'Ran' && event.status == EventStatus.running) {
-      return 'Running';
+      return l10n?.statusRunning ?? 'Running';
     }
     return cleanTitle;
   }

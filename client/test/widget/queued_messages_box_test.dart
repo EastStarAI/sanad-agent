@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/queued_messages_box.dart';
 
@@ -63,7 +64,7 @@ void main() {
       ),
     );
 
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(AppProgressIndicator), findsOneWidget);
     expect(find.text('Steer'), findsNothing);
     expect(find.text('queued text'), findsOneWidget);
   });

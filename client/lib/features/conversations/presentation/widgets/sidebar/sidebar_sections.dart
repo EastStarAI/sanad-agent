@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
 
@@ -96,7 +97,7 @@ class SidebarWorkspacesSection extends StatelessWidget {
               child: SizedBox(
                 width: 22,
                 height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                child: AppProgressIndicator(strokeWidth: 2),
               ),
             ),
           )
@@ -210,7 +211,7 @@ class SidebarUnscopedConversationsSection extends StatelessWidget {
               child: SizedBox(
                 width: 22,
                 height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                child: AppProgressIndicator(strokeWidth: 2),
               ),
             ),
           )

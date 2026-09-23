@@ -38,6 +38,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 
 class ConversationInputComposer extends StatelessWidget {
   final SlashCommandTextController chatController;
@@ -1029,7 +1030,7 @@ class _SendStopButton extends StatelessWidget {
                   key: const Key('stop_message_progress_indicator'),
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(
+                  child: AppProgressIndicator(
                     strokeWidth: 2,
                     color: Theme.of(context).colorScheme.error,
                   ),
@@ -1060,7 +1061,7 @@ class _SendStopButton extends StatelessWidget {
           icon: const SizedBox(
             width: 16,
             height: 16,
-            child: CircularProgressIndicator(
+            child: AppProgressIndicator(
               strokeWidth: 2,
               color: Colors.black,
             ),

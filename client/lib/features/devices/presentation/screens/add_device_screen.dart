@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/devices/domain/models/gateway_connection_status.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
@@ -194,7 +195,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                                             ? const SizedBox(
                                                 width: 20,
                                                 height: 20,
-                                                child: CircularProgressIndicator(
+                                                child: AppProgressIndicator(
                                                   strokeWidth: 2,
                                                   valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                                                 ),
@@ -248,7 +249,7 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                                             SizedBox(
                                               width: 14,
                                               height: 14,
-                                              child: CircularProgressIndicator(
+                                              child: AppProgressIndicator(
                                                 strokeWidth: 2,
                                                 color: theme.colorScheme.primary,
                                               ),

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -147,7 +148,7 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          CircularProgressIndicator(),
+                          AppProgressIndicator(),
                           SizedBox(height: 16),
                           Text('Checking provider readiness...'),
                         ],

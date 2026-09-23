@@ -5,6 +5,7 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_execution_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_clock_scope.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
@@ -221,7 +222,7 @@ class _ConversationActivityBarState extends State<ConversationActivityBar> {
               children: [
                 SizedBox.square(
                   dimension: 14,
-                  child: CircularProgressIndicator(
+                  child: AppProgressIndicator(
                     key: const Key('conversation_activity_progress'),
                     strokeWidth: 2,
                     color: colors.primary,

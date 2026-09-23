@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:go_router/go_router.dart';
@@ -150,7 +151,7 @@ class DeviceWorkspaceSidebar extends StatelessWidget {
                             return const SizedBox.shrink();
                           }
                           if (sidebar.showInitialLoading && !sidebar.hasSnapshot) {
-                            return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+                            return const Center(child: AppProgressIndicator(strokeWidth: 2));
                           }
                           return _SidebarBody(
                             device: activeDevice,

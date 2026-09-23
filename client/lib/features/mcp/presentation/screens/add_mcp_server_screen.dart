@@ -1,5 +1,6 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
@@ -634,7 +635,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
               icon: _isTesting
                   ? const SizedBox.square(
                       dimension: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      child: AppProgressIndicator(strokeWidth: 2, color: Colors.white),
                     )
                   : const Icon(Icons.wifi_find, size: 18),
               label: Text(

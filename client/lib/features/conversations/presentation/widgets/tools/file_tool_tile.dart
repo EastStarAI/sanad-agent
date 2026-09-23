@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:re_highlight/re_highlight.dart';
 import 'package:re_highlight/languages/dart.dart';
@@ -17,6 +18,7 @@ import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/app_markdown_renderer.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/utils/link_utils.dart';
 
 class FileToolTile extends StatefulWidget {
@@ -162,17 +164,18 @@ class _FileToolTileState extends State<FileToolTile> {
     final pattern = mapInput['pattern'] ?? '';
     final searchPath = mapInput['path'] ?? '';
 
+    final l10n = AppLocalizations.of(context);
     String statusText = 'Running file operation...';
     if (cleanName == 'file_read') {
-      statusText = 'Reading file...';
+      statusText = l10n?.toolReadingFile ?? 'Reading file...';
     } else if (cleanName == 'file_write') {
-      statusText = 'Writing file...';
+      statusText = l10n?.toolWritingFile ?? 'Writing file...';
     } else if (cleanName == 'file_edit') {
-      statusText = 'Editing file...';
+      statusText = l10n?.toolEditingFile ?? 'Editing file...';
     } else if (cleanName == 'search_glob') {
-      statusText = 'Searching files (glob)...';
+      statusText = l10n?.toolSearchingFiles ?? 'Searching files (glob)...';
     } else if (cleanName == 'search_grep') {
-      statusText = 'Grep searching files...';
+      statusText = l10n?.toolSearchingFiles ?? 'Grep searching files...';
     }
 
     return Padding(
@@ -197,7 +200,7 @@ class _FileToolTileState extends State<FileToolTile> {
               const SizedBox(
                 width: 14,
                 height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                child: AppProgressIndicator(strokeWidth: 2),
               ),
               const SizedBox(width: 12),
               Text(

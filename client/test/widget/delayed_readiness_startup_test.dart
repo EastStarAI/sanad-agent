@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
@@ -149,7 +150,7 @@ void main() {
 
       // Proves: neutral checking UI is rendered, not the setup choices or "No provider" flash
       expect(find.text('Checking provider readiness...'), findsOneWidget);
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      expect(find.byType(AppProgressIndicator), findsOneWidget);
       expect(find.text('Run Sanad Locally'), findsNothing);
 
       // Now complete the readiness check with ready=true

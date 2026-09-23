@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_state.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_header.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -117,7 +118,7 @@ class _ApiKeyProviderFormState extends State<ApiKeyProviderForm> {
                         ? const SizedBox(
                             width: 18,
                             height: 18,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child: AppProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.save_outlined),
                     label: Text(saving ? 'Saving...' : 'Save & continue'),

@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:sanad_client/utils/format_utils.dart';
 import 'package:sanad_client/utils/link_utils.dart';
@@ -225,7 +226,7 @@ class _UserMessageTileState extends State<UserMessageTile>
                     const SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: AppProgressIndicator(strokeWidth: 2),
                     )
                   else
                     Semantics(
@@ -287,7 +288,7 @@ class _UserMessageTileState extends State<UserMessageTile>
                           ? const SizedBox(
                               width: 14,
                               height: 14,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: AppProgressIndicator(strokeWidth: 2),
                             )
                           : Icon(
                               Icons.refresh,
@@ -349,7 +350,7 @@ class _UserMessageTileState extends State<UserMessageTile>
                   ? const SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: AppProgressIndicator(strokeWidth: 2),
                     )
                   : const Text('Send'),
             ),

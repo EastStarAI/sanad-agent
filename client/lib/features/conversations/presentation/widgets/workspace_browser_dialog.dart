@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 
 typedef WorkspaceTreeLoader = Future<WorkspaceTreeSnapshot> Function({String? path});
@@ -265,7 +266,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
               ),
             if (_isLoading)
               const Expanded(
-                child: Center(child: CircularProgressIndicator()),
+                child: Center(child: AppProgressIndicator()),
               )
             else if (_loadError != null)
               Expanded(
