@@ -80,7 +80,7 @@ Numeric acceptance budgets are frozen. Rows marked pending or blocked are not me
 | Equivalent simultaneous request P03 | Baseline: concurrent duplicate fetches observed on remount | Exactly 1 in-flight request per logical resource key (device/query scope); 100% request deduplication | pending | deterministic unit/widget test (97h) | Budget frozen (97a) |
 | Request counts/bytes per action P04/P05 | User log: `get_sessions` repeated 9 times in 15ms | Exactly 1 fetch per workspace section/cursor; 0 redundant duplicate calls within 500ms debounce | pending | pagination test matrix (97i) | Budget frozen (97a) |
 | Page sizes current 6/10 vs experiment 9/15 | Current default: initial 6, subsequent 10 | Adopt +50% page size (9/15) only upon payload overhead <15% and scroll request drop >=30% | pending | matched fixture experiment (97i) | Budget frozen (97a) |
-| Secure write p50/p95 P10 | Historical (PowerShell): >12,000 ms. Current (Win32 FFI a087238): Cold 34.38 ms, Warm p50: 4.63 ms, p95: 8.54 ms | <2,000 ms median or >=50% improvement | Current: p50 4.63 ms, p95 8.54 ms | 30 warm samples (min 3.82ms, max 9.55ms) + 1 cold | Pass (99.9% reduction from historical PowerShell baseline; meets <2,000 ms budget with >1,990 ms headroom) |
+| Secure write p50/p95 P10 | Historical (PowerShell): >12,000 ms. Win32 FFI a087238 baseline: cold 34.38 ms, warm p50 4.63 ms, p95 8.54 ms | <2,000 ms median or >=50% improvement | Independent 97c review, three matched current runs: p50 14.926–16.638 ms, p95 19.723–21.347 ms; direct-parent implementation on the same review host/load: p50 13.338–15.846 ms, p95 23.913–26.302 ms | 3 × 30 warm samples per implementation plus one cold sample per run; same host, fixture, SDK, and payload | Pass: current medians remain below 17 ms and the small parent/current variation is below the matched p95 noise; no regression is attributed to the immediate-delete repair |
 | FVM startup overhead | Direct cached Dart: p50 1010 ms (min 1004ms, max 2079ms). FVM: p50 5051 ms (min 5023ms, max 6052ms). Delta p50: +4041 ms | Account for ~4.04s Windows FVM wrapper startup in test/command timeouts; direct cached Dart is diagnostic-only and does not replace FVM rule | Current: FVM overhead isolated | 30 samples direct Dart + 30 samples FVM | Measured & isolated |
 | Test suite duration baseline | Suite durations: sanad_dev: 2.52s (156 tests); evolution: 58.7s (255 tests); engine: 12.54s; reproduction test: <1s. Top 10 slowest test cases recorded | Fast suites remain deterministic without unbounded sleeps; no unexplained regression | Current: baselines and 10 slowest cases recorded | FVM test --reporter json commands | Pass / Baseline established |
 | Checkpoint tool-id reuse P07 | 97a: stale `completed_tool_results` keyed by provider id reused across model steps → non-progress loop | Every new causal invocation executes once; completed result reused only when model step, tool name, and structured arguments match; no repeated-request loop; no duplicate side effect | 97b: model-step-scoped reuse implemented; 5 regression tests pass; focused owning suites pass (89 + 93 tests, 0 failures) | `fvm dart test test/engine/runtime/checkpoint_tool_identity_reproduction_test.dart` (6603 ms total incl. ~5.0s FVM bootstrap); `fvm dart test test/engine/agent_runner_test.dart` (9065 ms total incl. bootstrap) | Pass (97b fixes loop without replaying durable side effects) |
@@ -95,6 +95,24 @@ unbounded settling while an animation repeats. Fast suites do not own live
 ports; exclusive integration is isolated and sequential only where needed.
 
 97b deterministic regression suite (implemented): `agent/test/engine/runtime/checkpoint_tool_identity_reproduction_test.dart`, run with `fvm dart test test/engine/runtime/checkpoint_tool_identity_reproduction_test.dart`. It covers: reused tool IDs across model steps and turns with different arguments; same-checkpoint replay; restart after a durable result; restart during a non-idempotent side-effecting tool; and the no-repeated-request-loop/no-duplicate-side-effect invariants. Record the exact test file names and commands actually used once implemented.
+
+97c Windows coverage is owned by
+`scripts/sanad_dev/test/infrastructure/sanad_dev_secure_runtime_file_test.dart`.
+It verifies exact protected owner-only ACL replacement, junction and root-escape
+rejection, locked-destination typed failure and temporary cleanup, immediate
+consumer deletion, concurrent atomic readers/writers, append/read containment,
+and native backend failures. The final Windows ACL reassertion may be skipped
+only when the published path is already absent; any failure while it still
+exists remains fatal. The independent review run passed all 11 focused cases.
+
+A separate 31-sample operation characterization on the same review host recorded
+one cold sample followed by 30 warm samples: new directory 67.192 ms cold,
+p50 8.417 ms, p95 10.946 ms; new atomic file 48.043/23.804/29.743 ms;
+existing-file replacement 31.808/25.654/36.387 ms; new append file
+10.418/18.731/29.303 ms; secure read 25.370/18.084/24.607 ms. These rows are
+current-only diagnostics, not before/after improvement claims. All remain far
+below the two-second acceptance budget and start no PowerShell subprocess from
+the production Windows secure-file path.
 
 ## Final interactive evidence
 

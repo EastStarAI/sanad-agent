@@ -48,7 +48,13 @@ Future<void> secureRuntimeAtomicWrite(
     // second chmod after publication because a waiting consumer may delete the
     // completed request immediately after the atomic rename.
     if (Platform.isWindows) {
-      await _restrictRuntimePath(destination.path);
+      if (await destination.exists()) {
+        try {
+          await _restrictRuntimePath(destination.path);
+        } on SecureRuntimeFileException {
+          if (await destination.exists()) rethrow;
+        }
+      }
     }
   } on SecureRuntimeFileException {
     rethrow;

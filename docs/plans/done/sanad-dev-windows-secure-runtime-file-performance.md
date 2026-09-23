@@ -24,9 +24,9 @@ Archived under docs/plans/done with superseded status; references point to this 
 
 | Original outstanding scope | New execution owner |
 |---|---|
-| G0 — individual operations, subprocess counts, cold/warm median/p95 | [97c](docs/plans/tasks/97c-secure-runtime-verification.md) |
-| G1/G3 — security authorization, races/interruption/replacement/immediate-delete, failure cleanup | [97c](docs/plans/tasks/97c-secure-runtime-verification.md) |
-| G4 + acceptance — Windows analysis/tests and native/backend boundaries | [97c](docs/plans/tasks/97c-secure-runtime-verification.md) |
+| G0 — individual operations, subprocess counts, cold/warm median/p95 | [97c](docs/plans/tasks/done/97c-secure-runtime-verification.md) |
+| G1/G3 — security authorization, races/interruption/replacement/immediate-delete, failure cleanup | [97c](docs/plans/tasks/done/97c-secure-runtime-verification.md) |
+| G4 + acceptance — Windows analysis/tests and native/backend boundaries | [97c](docs/plans/tasks/done/97c-secure-runtime-verification.md) |
 | G4 + acceptance — hosted three-OS suites, POSIX modes/rename, architecture/dependency regressions, final security/CI evidence | [97k](docs/plans/tasks/97k-regression-budgets-and-report.md) |
 | Final managed-runtime smoke | [97l](docs/plans/tasks/97l-interactive-final-acceptance.md) |
 
