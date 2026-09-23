@@ -133,7 +133,6 @@ class ConversationAppBar extends StatelessWidget implements PreferredSizeWidget 
     final isRtl = titleDirection == TextDirection.rtl || workspaceDirection == TextDirection.rtl;
 
     return Row(
-      textDirection: TextDirection.ltr,
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         ConversationHeaderActions(

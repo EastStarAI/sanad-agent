@@ -65,7 +65,7 @@ class _UserMessageTileState extends State<UserMessageTile>
     final isPending = pendingState == 'pending';
 
     final textDirection = TextUtils.getTextDirection(widget.event.text);
-    final textStyle = GoogleFonts.roboto(
+    final textStyle = (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
       color: Theme.of(context).colorScheme.onSurface,
       fontSize: 14,
       height: 1.5,

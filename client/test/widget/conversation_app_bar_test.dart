@@ -241,4 +241,26 @@ void main() {
     await tester.tap(find.byTooltip('Open navigation menu'));
     expect(menuPressed, isTrue);
   });
+
+  testWidgets('mobile app bar inherits ambient RTL directionality without forcing LTR', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Directionality(
+          textDirection: TextDirection.rtl,
+          child: Scaffold(
+            body: ConversationAppBar(
+              sessionTitle: 'محادثة',
+              isMobile: true,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final row = tester.widgetList<Row>(find.byType(Row)).first;
+    expect(row.textDirection, isNull);
+    expect(Directionality.of(tester.element(find.byType(ConversationAppBar))), TextDirection.rtl);
+  });
 }

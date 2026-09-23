@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_header_actions.dart';
@@ -25,23 +26,30 @@ class NewChatView extends StatefulWidget {
 }
 
 class _NewChatViewState extends State<NewChatView> {
-  static const List<String> _helpMessages = [
-    'Automate tasks, analyze data, and write code — just ask.',
-    'I can search the web, manage files, and run terminal commands.',
-    'Start a conversation or pick a workspace to work with local files.',
-    'Ask me to research, summarize, or draft content for you.',
-    'Need help debugging? Share your error logs or code to fix it together.',
-    'I can design system architectures, database schemas, and workflows.',
-    'Create structured implementation plans and execute tasks step-by-step.',
-    'Let me generate test suites, run checks, and keep documentation updated.',
+  static const List<String> _helpKeys = [
+    'helpMessage0','helpMessage1','helpMessage2','helpMessage3',
+    'helpMessage4','helpMessage5','helpMessage6','helpMessage7',
   ];
 
-  late final String _helpMessage;
+  late final int _helpMessageIndex;
+
+  String _resolveHelpMessage(AppLocalizations l10n) {
+    return switch (_helpMessageIndex) {
+      0 => l10n.helpMessage0,
+      1 => l10n.helpMessage1,
+      2 => l10n.helpMessage2,
+      3 => l10n.helpMessage3,
+      4 => l10n.helpMessage4,
+      5 => l10n.helpMessage5,
+      6 => l10n.helpMessage6,
+      _ => l10n.helpMessage7,
+    };
+  }
 
   @override
   void initState() {
     super.initState();
-    _helpMessage = _helpMessages[Random().nextInt(_helpMessages.length)];
+    _helpMessageIndex = Random().nextInt(_helpKeys.length);
   }
 
   @override
@@ -77,7 +85,10 @@ class _NewChatViewState extends State<NewChatView> {
               BlocBuilder<ConversationInputCubit, ConversationInputState>(
                 builder: (context, inputState) {
                   final workspaceName = inputState.selectedWorkspace?.name;
-                  final titleText = workspaceName != null ? 'Start a new task in $workspaceName' : 'Start a new task';
+                  final l10n = AppLocalizations.of(context)!;
+                  final titleText = workspaceName != null
+                      ? l10n.newTaskInWorkspace(workspaceName)
+                      : l10n.newTask;
                   return Text(
                     titleText,
                     textAlign: TextAlign.center,
@@ -93,7 +104,7 @@ class _NewChatViewState extends State<NewChatView> {
               ),
               const SizedBox(height: 8),
               Text(
-                _helpMessage,
+                _resolveHelpMessage(AppLocalizations.of(context)!),
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.5),

@@ -1,0 +1,335 @@
+{
+  "@@locale": "ar",
+  "appTitle": "سند",
+  "newChat": "محادثة جديدة",
+  "searchConversations": "ابحث في المحادثات",
+  "settings": "الإعدادات",
+  "general": "عام",
+  "language": "اللغة",
+  "languageEnglish": "الإنجليزية",
+  "languageArabic": "العربية",
+  "selectLanguage": "اختر لغة الواجهة",
+  "theme": "المظهر",
+  "themeDark": "غامق",
+  "themeLight": "فاتح",
+  "themeSystem": "النظام",
+  "themeMidnight": "داكن جداً",
+  "themeSepia": "سيبيا دافئ",
+  "primaryColor": "اللون",
+  "selectPrimaryColor": "اختر اللون الأساسي لعناصر التحديد والتمييز",
+  "colorDefaultBlue": "الافتراضي",
+  "colorTeal": "سماوي",
+  "colorGreen": "أخضر",
+  "colorCyan": "بحري",
+  "colorPurple": "بنفسجي",
+  "colorMagenta": "فوشيا",
+  "colorOrange": "برتقالي",
+  "colorRose": "وردي",
+  "fontFamily": "نوع الخط",
+  "selectFontFamily": "اختر نوع الخط للواجهة والرسائل",
+  "fontSize": "حجم الخط",
+  "fontSizeDescription": "تحكم في مقياس وحجم نصوص التطبيق",
+  "fontSizeSmall": "صغير",
+  "fontSizeNormal": "افتراضي",
+  "fontSizeLarge": "كبير",
+  "fontSizeExtraLarge": "كبير جداً",
+  "background": "الخلفية",
+  "backgroundDescription": "اختر لوناً مصمتاً أو خلفية طبيعية مع طبقة حماية عازلة للتباين",
+  "backgroundDefault": "الافتراضية",
+  "backgroundSlate": "رمادي داكن",
+  "backgroundNavy": "كحلي داكن",
+  "backgroundForest": "غابة ضبابية",
+  "backgroundMountain": "أفق الجبال",
+  "backgroundLake": "بحيرة الشفق",
+  "previewText": "Sanad AI: Fast, localized, and intelligent assistant. | سند: مساعدك الذكي المتطور والسريع.",
+  "appearance": "المظهر",
+  "exportAppearance": "تصدير",
+  "importAppearance": "استيراد",
+  "appearanceExported": "تم تصدير إعدادات المظهر بنجاح",
+  "appearanceImported": "تم استيراد إعدادات المظهر بنجاح",
+  "appearanceImportFailed": "فشل استيراد إعدادات المظهر. صيغة الملف غير صالحة.",
+  "account": "الحساب",
+  "signOut": "تسجيل الخروج",
+  "deleteAccount": "حذف الحساب",
+  "confirm": "تأكيد",
+  "cancel": "إلغاء",
+  "save": "حفظ",
+  "close": "إغلاق",
+  "delete": "حذف",
+  "retry": "إعادة المحاولة",
+  "send": "إرسال",
+  "stop": "إيقاف",
+  "stopGenerating": "إيقاف التوليد",
+  "typeMessage": "اكتب رسالة…",
+  "conversations": "المحادثات",
+  "today": "اليوم",
+  "yesterday": "أمس",
+  "previous7Days": "آخر ٧ أيام",
+  "older": "أقدم",
+  "renameConversation": "إعادة تسمية المحادثة",
+  "deleteConversation": "حذف المحادثة",
+  "deleteConversationConfirm": "هل أنت متأكد أنك تريد حذف هذه المحادثة؟",
+  "devices": "الأجهزة",
+  "addDevice": "إضافة جهاز",
+  "connected": "متصل",
+  "disconnected": "غير متصل",
+  "connecting": "جارٍ الاتصال…",
+  "connectionError": "خطأ في الاتصال",
+  "providers": "المزودون",
+  "providerSetup": "إعداد المزود",
+  "apiKey": "مفتاح API",
+  "model": "النموذج",
+  "attachFile": "إرفاق ملف",
+  "loading": "جارٍ التحميل…",
+  "error": "خطأ",
+  "unexpectedError": "حدث خطأ ما. يرجى المحاولة مرة أخرى.",
+  "emptyConversation": "ابدأ محادثة جديدة",
+  "newTask": "ابدأ مهمة جديدة",
+  "newTaskInWorkspace": "ابدأ مهمة جديدة في {workspace}",
+  "statusReady": "جاهز",
+  "statusWorking": "جارٍ العمل…",
+  "sessions": "الجلسات",
+  "noConversationsYet": "لا توجد محادثات بعد",
+  "@newTaskInWorkspace": {
+    "placeholders": {
+      "workspace": {
+        "type": "String"
+      }
+    }
+  },
+  "backToConversations": "العودة إلى المحادثات",
+  "personal": "شخصي",
+  "profile": "الملف الشخصي",
+  "sessionsDevices": "الجلسات والأجهزة",
+  "addDeviceTooltip": "إضافة جهاز",
+  "noDevicesAvailable": "لا توجد أجهزة متاحة.",
+  "deviceSettings": "إعدادات {device}",
+  "overview": "نظرة عامة",
+  "mcpServers": "خوادم MCP",
+  "skills": "المهارات",
+  "workspaces": "مساحات العمل",
+  "showLess": "إظهار أقل",
+  "showAll": "إظهار الكل ({count})",
+  "checkForUpdates": "التحقق من التحديثات",
+  "@deviceSettings": {
+    "placeholders": {
+      "device": {
+        "type": "String"
+      }
+    }
+  },
+  "@showAll": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "workspacesSection": "مساحات العمل",
+  "couldNotRefreshWorkspaces": "تعذّر تحديث مساحات العمل",
+  "noWorkspaces": "لا توجد مساحات عمل",
+  "conversationsSection": "المحادثات",
+  "noConversations": "لا توجد محادثات",
+  "loadMore": "تحميل المزيد",
+  "newSession": "جلسة جديدة",
+  "profileSubtitle": "حسابك وجلستك في Sanad.",
+  "manageAccount": "إدارة الحساب",
+  "signIn": "تسجيل الدخول",
+  "signInPrompt": "سجّل الدخول لإدارة حسابك في Sanad.",
+  "linuxUpdateManual": "تم فتح حزمة Linux الرسمية. نزّلها واستبدلها وأعد تشغيل Sanad يدويًا.",
+  "upToDate": "عميل Sanad محدَّث.",
+  "sourceManagedUpdate": "هذه النسخة المصدرية تُحدَّث من مجلد التطوير الخاص بها.",
+  "updateNoPackage": "توجد إصدار أحدث، لكن لا توجد حزمة مطابقة متاحة.",
+  "updateLaunchFailed": "تم العثور على الإصدار الرسمي، لكن لم يتمكن المتصفح من فتحه.",
+  "updateStarted": "بدأ التحقق من التحديثات.",
+  "updates": "التحديثات",
+  "updatesLinuxNote": "تحديثات Linux يدوية. يفتح Sanad حزمة رسمية أحدث فقط بعد التحقق من موجز الإصدار.",
+  "updatesAutoNote": "تعمل عمليات التحقق التلقائي من التحديثات في الخلفية. استخدم هذا الإجراء للتحقق الآن.",
+  "currentVersion": "الإصدار الحالي: {version}",
+  "checkingForUpdates": "جارٍ التحقق من التحديثات…",
+  "sourceManagedAgent": "يعمل هذا الوكيل من المصدر ويظل مُدارًا من التطوير.",
+  "selectADevice": "اختر جهازًا",
+  "deviceSettingsPlaceholder": "ستظهر إعدادات الجهاز هنا.",
+  "languageUpdated": "تم تحديث لغة الواجهة.",
+  "@currentVersion": {
+    "placeholders": {
+      "version": {
+        "type": "String"
+      }
+    }
+  },
+  "mcpAddServer": "إضافة خادم MCP",
+  "mcpEditServer": "تعديل خادم MCP",
+  "mcpAddToList": "إضافة خادم",
+  "mcpServerName": "الاسم",
+  "mcpServerDescription": "الوصف (اختياري)",
+  "mcpServerDetails": "تفاصيل الخادم",
+  "mcpServerIdentity": "هوية الخادم وبياناته.",
+  "mcpServerIdentityHint": "أدخل التفاصيل الأساسية لخادم MCP هذا.",
+  "mcpTransport": "نوع النقل",
+  "mcpRemoteServer": "خادم عن بُعد",
+  "mcpLocalCommand": "أمر محلي",
+  "mcpServerUrl": "رابط الخادم",
+  "mcpUrlHint": "أدخل رابط HTTP أو HTTPS",
+  "mcpCommand": "الأمر",
+  "mcpCommandHint": "حدّد الأمر القابل للتنفيذ للتشغيل محليًا.",
+  "mcpArguments": "الوسائط",
+  "mcpAddArgument": "إضافة وسيط",
+  "mcpRemove": "إزالة",
+  "mcpRemoveRow": "إزالة الصف",
+  "mcpEnvVariables": "متغيرات البيئة",
+  "mcpAddVariable": "إضافة متغير",
+  "mcpInspectionTools": "الفحص والأدوات",
+  "mcpAuthAndTest": "التخويل والاختبار",
+  "mcpTestConnection": "اختبار الاتصال",
+  "mcpWorking": "جارٍ العمل…",
+  "mcpSaving": "جارٍ الحفظ…",
+  "mcpSaveChanges": "حفظ التغييرات",
+  "mcpConnection": "الاتصال",
+  "mcpConnectionSucceeded": "نجح الاتصال",
+  "mcpConnectionFailed": "فشل الاتصال",
+  "mcpTestSuccessNote": "اختبر الخادم بنجاح قبل الحفظ.",
+  "mcpRiskNote": "فعّل الأدوات والخوادم التي تثق بها فقط.",
+  "mcpRiskAck": "أفهم أن هذا الخادم يمكنه الوصول إلى البيانات وتنفيذ إجراءات.",
+  "mcpRiskAckSave": "أقر بمخاطر خادم MCP قبل الحفظ.",
+  "mcpCredentials": "بيانات الاعتماد",
+  "mcpAuthentication": "المصادقة",
+  "mcpBearerToken": "رمز Bearer",
+  "mcpBearerTokenRequired": "رمز Bearer مطلوب.",
+  "mcpReplaceBearerToken": "استبدال رمز Bearer",
+  "mcpOAuthCredentials": "بيانات OAuth",
+  "mcpOAuthClientId": "معرّف عميل OAuth (اختياري)",
+  "mcpEnterClientSecret": "أدخل سر العميل",
+  "mcpReplaceClientSecret": "استبدال سر عميل OAuth (اختياري)",
+  "mcpConfiguredEnterReplacement": "مضبوط — أدخل بديلًا",
+  "mcpImportConfig": "استيراد الإعداد",
+  "mcpPaste": "لصق",
+  "mcpPasteHint": "ألصق كائن خادم MCP أو مستند mcpServers. لا يُحفظ شيء قبل المراجعة.",
+  "mcpDraftToReview": "مسودة للمراجعة",
+  "mcpPreview": "معاينة",
+  "mcpUseDraft": "استخدام المسودة",
+  "mcpImport": "استيراد",
+  "mcpBack": "رجوع",
+  "mcpCancel": "إلغاء",
+  "mcpCouldNotOpenAuthUrl": "تعذّر فتح رابط التخويل.",
+  "mcpOAuthStatus": "OAuth: {status}",
+  "mcpNoInspectionResults": "لا توجد نتائج فحص بعد",
+  "mcpTestDiscoveryNote": "اختبر اتصال الخادم لاكتشاف الأدوات المتاحة والتحقق من الاتصال.",
+  "mcpHeaders": "الترويسات",
+  "mcpAddHeader": "إضافة ترويسة",
+  "mcpAllowedTools": "الأدوات المسموحة",
+  "mcpCmdArgsHint": "وسائط سطر الأوامر الممررة إلى العملية.",
+  "mcpSecretValue": "قيمة السر",
+  "mcpEnterTokenString": "أدخل نص الرمز",
+  "mcpSelectCredentials": "اختر واضبط بيانات الاعتماد لهذا الخادم.",
+  "mcpAddServerTitle": "إضافة خادم MCP",
+  "mcpDeleteServer": "حذف الخادم",
+  "mcpDeleteConfirm": "حذف `{name}` من هذا المصدر؟",
+  "mcpConnectToDiscover": "اتصل لاكتشاف الأدوات.",
+  "mcpConnecting": "جارٍ الاتصال...",
+  "mcpCopiedRedacted": "تم نسخ JSON مُنقّح. أُستثنيت بيانات الاعتماد.",
+  "mcpPreviewRequiredNote": "أُستثنيت بيانات الاعتماد. المعاينة مطلوبة قبل الحفظ.",
+  "mcpAdvancedActions": "إجراءات متقدمة",
+  "mcpEditJson": "تعديل JSON",
+  "mcpExportJson": "تصدير JSON",
+  "mcpPreviewChanges": "معاينة التغييرات",
+  "mcpAutoDetect": "كشف تلقائي",
+  "mcpNoServers": "لا توجد خوادم MCP لهذا المصدر والمرشح.",
+  "mcpSelectDeviceFirst": "اختر جهازًا قبل إدارة خوادم MCP.",
+  "mcpSelectWorkspaceFirst": "اختر مساحة عمل لإدارة خوادم MCP المحلية.",
+  "mcpServerDisabled": "الخادم معطّل.",
+  "mcpDeviceOffline": "هذا الجهاز غير متصل. أعد الاتصال لإدارة خوادم MCP.",
+  "mcpEnabled": "مفعّل",
+  "mcpDisabled": "معطّل",
+  "mcpEnable": "تفعيل",
+  "mcpDisable": "تعطيل",
+  "mcpExpand": "توسيع",
+  "mcpCollapse": "طي",
+  "mcpEdit": "تعديل",
+  "mcpDelete": "حذف",
+  "mcpTest": "اختبار",
+  "mcpRemote": "عن بُعد",
+  "mcpEffective": "الفعّال",
+  "mcpAddToDevice": "إضافة إلى الجهاز",
+  "@mcpOAuthStatus": {
+    "placeholders": {
+      "status": {
+        "type": "String"
+      }
+    }
+  },
+  "@mcpDeleteConfirm": {
+    "placeholders": {
+      "name": {
+        "type": "String"
+      }
+    }
+  },
+  "timeNow": "الآن",
+  "secondsShort": "{n}ث",
+  "@secondsShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "minutesShort": "{n}د",
+  "@minutesShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "hoursShort": "{n}س",
+  "@hoursShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "daysShort": "{n}ي",
+  "@daysShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "weeksShort": "{n}أ",
+  "@weeksShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "monthsShort": "{n}ش",
+  "@monthsShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "yearsShort": "{n}س",
+  "@yearsShort": {
+    "placeholders": {
+      "n": {
+        "type": "int"
+      }
+    }
+  },
+  "mcpEnvHint": "عيّن متغيرات البيئة للعملية الفرعية.",
+  "mcpSave": "حفظ",
+  "helpMessage0": "أتمّة المهام وتحليل البيانات وكتابة الأكواد — فقط اسأل.",
+  "helpMessage1": "أستطيع البحث في الويب وإدارة الملفات وتشغيل أوامر الطرفية.",
+  "helpMessage2": "ابدأ محادثة أو اختر مساحة عمل للتعامل مع الملفات المحلية.",
+  "helpMessage3": "اطلب مني البحث أو التلخيص أو صياغة المحتوى.",
+  "helpMessage4": "تحتاج مساعدة في تصحيح الأخطاء؟ شارك سجلات الأخطاء أو الكود لنصلحها معًا.",
+  "helpMessage5": "أستطيع تصميم بنى الأنظمة ومخططات قواعد البيانات وسير العمل.",
+  "helpMessage6": "أنشئ خطط تنفيذ منظمة ونفّذ المهام خطوة بخطوة.",
+  "helpMessage7": "أستطيع توليد حزم الاختبارات وتشغيل الفحوصات وتحديث التوثيق."
+}
