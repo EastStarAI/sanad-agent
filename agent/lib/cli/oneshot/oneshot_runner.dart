@@ -461,7 +461,7 @@ class OneshotRunner {
       }
 
       void onTurnActivity() {
-        coordinator.recordResumed();
+        coordinator.recordProgress();
       }
 
       subscriptions.add(
@@ -663,7 +663,15 @@ class OneshotRunner {
               if (event.sessionId == null ||
                   event.sessionId == effectiveSessionId) {
                 if (event.isRecovering) {
-                  onTurnActivity();
+                  coordinator.recordRuntimeNotice(
+                    status: event.status == 'cleared'
+                        ? 'resuming'
+                        : (event.status ?? 'waiting'),
+                    code: event.code,
+                    message: event.message,
+                    provider: finalProvider,
+                    model: finalModel,
+                  );
                   if (!json && !quiet && event.status != 'cleared') {
                     err.writeln('Notice: ${event.message}');
                   }

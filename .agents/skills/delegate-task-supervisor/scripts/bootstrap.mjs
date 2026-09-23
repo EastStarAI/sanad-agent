@@ -1,13 +1,18 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, statSync, writeFileSync } from 'node:fs';
 import { homedir, platform, tmpdir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const SKILLS_ROOT = resolve(dirname(SCRIPT_PATH), '..', '..');
+// The source-development checkout is two levels above the skills directory in
+// this repository. Installed (user-global) copies resolve to a profile root
+// where the entry point does not exist, so the fallback stays unclaimed.
+const REPOSITORY_ROOT = resolve(SKILLS_ROOT, '..', '..');
+const SANAD_SOURCE_ENTRY = join(REPOSITORY_ROOT, 'agent', 'bin', 'sanad_agent.dart');
 const DELEGATE_SOURCE = 'amElnagdy/delegate-skills';
 const REQUIRED_SKILLS = ['delegate-setup', 'agy-delegate', 'opencode-delegate'];
 const HELP = `delegate-task-supervisor bootstrap
@@ -42,8 +47,13 @@ function parse(argv) {
   return options;
 }
 
-function pathCandidates(binary) {
-  const entries = (process.env.PATH || '').split(delimiter).filter(Boolean);
+function scanPath() {
+  // Overridable for deterministic tests and non-interactive environments.
+  return process.env.SANAD_DELEGATE_BOOTSTRAP_PATH || process.env.PATH || '';
+}
+
+function pathCandidates(binary, basePath = scanPath()) {
+  const entries = basePath.split(delimiter).filter(Boolean);
   if (binary === 'agy') entries.unshift(join(homedir(), '.local', 'bin'));
   const extensions = platform() === 'win32'
     ? (process.env.PATHEXT || '.COM;.EXE;.BAT;.CMD').split(';')
@@ -55,8 +65,26 @@ function pathCandidates(binary) {
   return candidates;
 }
 
-function findBinary(binary) {
-  return pathCandidates(binary).find((candidate) => existsSync(candidate)) || null;
+function findBinary(binary, basePath = scanPath()) {
+  return pathCandidates(binary, basePath).find((candidate) => existsSync(candidate)) || null;
+}
+
+function validatedSourceFallback() {
+  // A source-development fallback is validated by the checkout actually
+  // containing the delegated entry point. The launcher is resolved on the real
+  // PATH (never the test scan override) and reported separately.
+  const entryFound = existsSync(SANAD_SOURCE_ENTRY) && statSync(SANAD_SOURCE_ENTRY).isFile();
+  const launcher = findBinary('fvm', process.env.PATH || '')
+    ? 'fvm'
+    : findBinary('dart', process.env.PATH || '')
+      ? 'dart'
+      : null;
+  return {
+    available: entryFound && launcher != null,
+    entryFound,
+    entryPath: SANAD_SOURCE_ENTRY,
+    launcher,
+  };
 }
 
 function windowsBatchQuote(value) {
@@ -155,6 +183,9 @@ function collectState() {
         version: versionOf('sanad'),
         skillInstalled: Boolean(sanadSkillPath),
         skillPath: sanadSkillPath,
+        // A missing installed CLI is NOT a blocker when a validated
+        // source-development fallback is available and its launcher resolves.
+        sourceFallback: validatedSourceFallback(),
       },
     },
   };
@@ -191,9 +222,21 @@ function printState(state, actions, json) {
   }
   for (const [name, details] of Object.entries(state.implementers)) {
     if (name === 'sanad') {
-      const status = details.installed ? details.version : 'missing (install with install-sanad skill)';
       const skillStatus = details.skillInstalled ? 'installed' : 'missing (see .agents/skills/sanad-delegate)';
-      process.stdout.write(`${name}: ${status}; skill=${skillStatus}\n`);
+      if (details.installed) {
+        process.stdout.write(`${name}: ${details.version}; skill=${skillStatus}\n`);
+      } else if (details.sourceFallback.available) {
+        // Distinct state: the installed CLI is absent, but the checkout is a
+        // validated source-development fallback, so this is not a blocker.
+        process.stdout.write(
+          `${name}: installed CLI missing; validated source-development fallback at ${details.sourceFallback.entryPath} via ${details.sourceFallback.launcher}; skill=${skillStatus}; install the packaged CLI with install-sanad only when a release binary is required\n`,
+        );
+      } else {
+        const guidance = details.sourceFallback.entryFound
+          ? '; source entry found but no fvm/dart launcher on PATH — install fvm for the source workflow'
+          : ' (install with install-sanad skill)';
+        process.stdout.write(`${name}: missing${guidance}; skill=${skillStatus}\n`);
+      }
     } else {
       process.stdout.write(`${name}: ${details.installed ? details.version : 'missing'}; auth=${details.authenticated}\n`);
     }
