@@ -9,5 +9,9 @@ void main() async {
     usePathUrlStrategy();
   }
   final bootstrap = await AppBootstrap.initialize();
-  runApp(SanadAgentApp(initialTheme: bootstrap.initialTheme));
+  runApp(SanadAgentApp(
+    initialTheme: bootstrap.initialTheme,
+    initialLocale: bootstrap.initialLocale,
+    initialAppearance: bootstrap.initialAppearance,
+  ));
 }

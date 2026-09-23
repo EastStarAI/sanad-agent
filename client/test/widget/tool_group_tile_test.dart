@@ -76,6 +76,30 @@ void main() {
     expect(find.textContaining('"isError"'), findsNothing);
   });
 
+  testWidgets('terminal tool with description displays intent instead of raw command', (
+    tester,
+  ) async {
+    final event = _tool(
+      'terminal-with-desc',
+      'shell_execute',
+      input: {
+        'command': 'launchctl load /path/to/daemon.plist',
+        'description': 'Starting background daemon',
+      },
+    );
+
+    await tester.pumpWidget(_app(EventTile(event: event)));
+
+    expect(
+      find.text('Ran: Starting background daemon', findRichText: true),
+      findsOneWidget,
+    );
+    expect(
+      find.text('Ran: launchctl load /path/to/daemon.plist', findRichText: true),
+      findsNothing,
+    );
+  });
+
   testWidgets('group reuses tool styling and caps its independent scroll body', (
     tester,
   ) async {

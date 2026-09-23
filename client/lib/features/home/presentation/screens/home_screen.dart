@@ -464,7 +464,6 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return BlocListener<SessionCubit, SessionState>(
       listenWhen: (previous, current) {
         final previousSession = previous.selectedSession;
@@ -507,6 +506,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
                 final enableHoverDrawer = AppPlatform.isDesktop && !isDesktop && isCompactWindow;
                 return Scaffold(
                   key: _scaffoldKey,
+                  backgroundColor: Colors.transparent,
                   drawer: isDesktop
                       ? null
                       : _SidebarDrawer(
@@ -521,20 +521,14 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
                         child: Stack(
                           children: [
                             if (isDesktop)
-                              ConversationWorkspaceLayout(
-                                child: Container(
-                                  color: theme.scaffoldBackgroundColor,
-                                  child: const _MainContent(isMobile: false),
-                                ),
+                              const ConversationWorkspaceLayout(
+                                child: _MainContent(isMobile: false),
                               )
                             else
-                              Container(
-                                color: theme.scaffoldBackgroundColor,
-                                child: _MainContent(
-                                  isMobile: true,
-                                  onMenuHoverEnter: enableHoverDrawer ? _onCompactMenuButtonEnter : null,
-                                  onMenuHoverExit: enableHoverDrawer ? _onCompactMenuButtonExit : null,
-                                ),
+                              _MainContent(
+                                isMobile: true,
+                                onMenuHoverEnter: enableHoverDrawer ? _onCompactMenuButtonEnter : null,
+                                onMenuHoverExit: enableHoverDrawer ? _onCompactMenuButtonExit : null,
                               ),
                             if (_providerSetupDevice != null)
                               _ProviderSetupGate(
@@ -884,7 +878,7 @@ class _SidebarDrawer extends StatelessWidget {
     }
 
     return Drawer(
-      backgroundColor: Theme.of(context).colorScheme.surface,
+      backgroundColor: Theme.of(context).colorScheme.surface.withValues(alpha: 0.85),
       width: (MediaQuery.of(context).size.width * SidebarBreakpoints.drawerWidthFactor).clamp(
         SidebarBreakpoints.minWidth,
         MediaQuery.of(context).size.width,

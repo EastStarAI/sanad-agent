@@ -292,6 +292,85 @@ void main() {
         '1 web search',
       ]);
     });
+
+    test('resolveCurrentActivity returns running tool activity when active', () {
+      final user = CanonicalEvent(
+        id: 'user-1',
+        kind: EventKind.userMessage,
+        text: 'run command',
+        timestamp: DateTime.utc(2026, 8, 16),
+      );
+      final runningTool = _tool(
+        'tool-shell',
+        'shell_execute',
+        status: EventStatus.running,
+        input: {'command': 'ls', 'description': 'Listing files'},
+      );
+
+      final activity = resolveCurrentActivity([user, runningTool], activityEligible: true);
+      expect(activity, isNotNull);
+      expect(activity!.kind, ConversationActivityKind.runningTool);
+      expect(activity.event!.id, 'tool-shell');
+    });
+
+    test('resolveLatestToolDescription extracts description from latest tool', () {
+      final user = CanonicalEvent(
+        id: 'user-1',
+        kind: EventKind.userMessage,
+        text: 'run commands',
+        timestamp: DateTime.utc(2026, 8, 16),
+      );
+      final tool1 = _tool(
+        'tool-1',
+        'shell_execute',
+        input: {'command': 'pwd', 'description': 'Checking working directory'},
+      );
+      final tool2 = _tool(
+        'tool-2',
+        'shell_execute',
+        status: EventStatus.running,
+        input: {'command': 'cat file.txt', 'description': 'Reading file content'},
+      );
+
+      final desc = resolveLatestToolDescription([user, tool1, tool2]);
+      expect(desc, 'Reading file content');
+    });
+
+    test('resolveLatestToolDescription returns null when tool execution is completed', () {
+      final user = CanonicalEvent(
+        id: 'user-1',
+        kind: EventKind.userMessage,
+        text: 'run commands',
+        timestamp: DateTime.utc(2026, 8, 16),
+      );
+      final tool1 = _tool(
+        'tool-1',
+        'shell_execute',
+        status: EventStatus.done,
+        input: {'command': 'pwd', 'description': 'Checking working directory'},
+      );
+
+      final desc = resolveLatestToolDescription([user, tool1]);
+      expect(desc, isNull);
+    });
+
+    test('resolveConversationIsRtl correctly detects Arabic user message', () {
+      final userAr = CanonicalEvent(
+        id: 'user-ar',
+        kind: EventKind.userMessage,
+        text: 'مرحبا، كيف حالك؟',
+        timestamp: DateTime.utc(2026, 8, 16),
+      );
+      expect(resolveConversationIsRtl([userAr]), isTrue);
+
+      final userEn = CanonicalEvent(
+        id: 'user-en',
+        kind: EventKind.userMessage,
+        text: 'Hello, how are you?',
+        timestamp: DateTime.utc(2026, 8, 16),
+      );
+      expect(resolveConversationIsRtl([userEn]), isFalse);
+    });
   });
 }
 

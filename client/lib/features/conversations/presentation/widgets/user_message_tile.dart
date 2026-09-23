@@ -65,7 +65,7 @@ class _UserMessageTileState extends State<UserMessageTile>
     final isPending = pendingState == 'pending';
 
     final textDirection = TextUtils.getTextDirection(widget.event.text);
-    final textStyle = GoogleFonts.roboto(
+    final textStyle = (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
       color: Theme.of(context).colorScheme.onSurface,
       fontSize: 14,
       height: 1.5,
@@ -195,12 +195,18 @@ class _UserMessageTileState extends State<UserMessageTile>
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 if (timestampText.isNotEmpty) ...[
-                  Text(
-                    timestampText,
-                    style: GoogleFonts.roboto(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant
-                          .withValues(alpha: 0.8),
-                      fontSize: 11,
+                  Tooltip(
+                    message: EventMetadataFormatter.dateTooltip(
+                      widget.event.timestamp,
+                      context,
+                    ),
+                    child: Text(
+                      timestampText,
+                      style: GoogleFonts.roboto(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.8),
+                        fontSize: 11,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -226,11 +232,9 @@ class _UserMessageTileState extends State<UserMessageTile>
                       label: 'Delete pending message',
                       child: IconButton(
                         tooltip: 'Delete pending message',
+                        style: ConversationActionStyle.buttonStyle,
                         visualDensity: VisualDensity.compact,
-                        constraints: const BoxConstraints.tightFor(
-                          width: 28,
-                          height: 28,
-                        ),
+                        constraints: ConversationActionStyle.constraints,
                         padding: EdgeInsets.zero,
                         onPressed:
                             requestId == null ||
@@ -252,6 +256,7 @@ class _UserMessageTileState extends State<UserMessageTile>
                     child: IconButton(
                       key: const Key('edit_message_button'),
                       tooltip: 'Edit message',
+                      style: ConversationActionStyle.buttonStyle,
                       visualDensity: VisualDensity.compact,
                       constraints: ConversationActionStyle.constraints,
                       padding: EdgeInsets.zero,
@@ -270,6 +275,7 @@ class _UserMessageTileState extends State<UserMessageTile>
                     child: IconButton(
                       key: const Key('retry_message_button'),
                       tooltip: 'Retry message',
+                      style: ConversationActionStyle.buttonStyle,
                       visualDensity: VisualDensity.compact,
                       constraints: ConversationActionStyle.constraints,
                       padding: EdgeInsets.zero,

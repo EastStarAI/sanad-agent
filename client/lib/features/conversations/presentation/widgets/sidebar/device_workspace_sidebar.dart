@@ -23,6 +23,7 @@ import '../../bloc/session_cubit.dart';
 import '../../bloc/session_sidebar_cubit.dart';
 import '../../bloc/session_sidebar_state.dart';
 import 'sidebar_composition.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'sidebar_device_header_bar.dart';
 import 'sidebar_sections.dart';
 import 'sidebar_workspace_group_tile.dart';
@@ -362,7 +363,7 @@ class _SidebarBody extends StatelessWidget {
 
   Session _fallbackSession(String id) => Session(
     id: id,
-    title: 'Loading…',
+    title: '…',
     deviceId: device.id,
     createdAt: DateTime.now(),
     updatedAt: DateTime.now(),
@@ -536,7 +537,7 @@ class _NewSessionButton extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'New Session',
+                    AppLocalizations.of(context)!.newSession,
                     style: TextStyle(
                       color: theme.colorScheme.onSurface,
                       fontSize: 12,
