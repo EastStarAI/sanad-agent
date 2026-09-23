@@ -66,15 +66,19 @@ class PrCheckState {
       bucket == 'fail' ||
       bucket == 'cancel' ||
       _failedValues.contains(state) ||
-      _failedValues.contains(conclusion);
+      (conclusion != null && _failedValues.contains(conclusion));
+
+  bool get isSkipped =>
+      bucket == 'skipping' ||
+      _skippedValues.contains(state) ||
+      (conclusion != null && _skippedValues.contains(conclusion));
 
   bool get isPending =>
       !isFailed &&
+      !isSkipped &&
       (bucket == 'pending' ||
           _pendingValues.contains(state) ||
-          conclusion == null);
-
-  bool get isSkipped => bucket == 'skipping' || _skippedValues.contains(state);
+          (state == null && bucket != 'pass'));
 }
 
 /// Parses `gh pr checks <ref> --json` output into check states.
