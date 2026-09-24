@@ -157,22 +157,14 @@ void main() {
     expect(bounds.height, 750);
   });
 
-  test('compact desktop menu hover drawer is gated and tracks both hover regions', () {
+  test('compact desktop menu drawer requires explicit click and disables hover opening', () {
     final homeScreen = File(
       'lib/features/home/presentation/screens/home_screen.dart',
     ).readAsStringSync();
 
-    expect(
-      homeScreen,
-      contains('AppPlatform.isDesktop && !isDesktop && isCompactWindow'),
-    );
-    final headerActions = File(
-      'lib/features/conversations/presentation/widgets/conversation_header_actions.dart',
-    ).readAsStringSync();
-    expect(headerActions, contains("Key('conversation_menu_hover_region')"));
-    expect(homeScreen, contains("Key('compact_sidebar_hover_region')"));
-    expect(homeScreen, contains('_isMenuButtonHovered || _isDrawerHovered'));
-    expect(homeScreen, contains('scaffold!.closeDrawer()'));
+    expect(homeScreen, contains('_SidebarDrawer'));
+    expect(homeScreen, isNot(contains('_onCompactMenuButtonEnter')));
+    expect(homeScreen, isNot(contains('Key(\'compact_sidebar_hover_region\')')));
   });
 
   test('custom caption tracks maximize and full-screen lifecycle events', () {

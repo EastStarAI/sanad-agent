@@ -599,6 +599,13 @@ void main() {
       tester.getSize(find.byKey(const Key('sidebar_toggle_btn'))),
     );
 
+    final wordmarkFinder = find.byKey(const Key('sidebar_wordmark_logo'));
+    expect(wordmarkFinder, findsOneWidget);
+    expect(
+      tester.getTopLeft(wordmarkFinder).dx,
+      greaterThan(tester.getTopRight(find.byKey(const Key('sidebar_forward_btn'))).dx),
+    );
+
     await tester.tap(find.byKey(const Key('sidebar_back_btn')));
     await tester.pumpAndSettle();
     expect(navigatedRoute, '/conversations/device-1/s-1');

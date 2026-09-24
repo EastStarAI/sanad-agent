@@ -8,7 +8,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_execution_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_clock_scope.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
-import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/tool_presentation_helper.dart';
 
 class ConversationActivityBar extends StatefulWidget {
@@ -192,7 +191,6 @@ class _ConversationActivityBarState extends State<ConversationActivityBar> {
     final theme = Theme.of(context);
     final colors = theme.colorScheme;
     final text = _currentText(context);
-    final direction = TextUtils.getTextDirection(text);
 
     final isDark = theme.brightness == Brightness.dark;
     final containerColor = isDark
@@ -229,19 +227,17 @@ class _ConversationActivityBarState extends State<ConversationActivityBar> {
                 ),
                 const SizedBox(width: 8),
                 Expanded(
-                  child: Directionality(
-                    textDirection: direction,
-                    child: Text(
-                      text,
-                      key: const Key('conversation_activity_text'),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.outfit(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w500,
-                        letterSpacing: 0.3,
-                        color: colors.primary,
-                      ),
+                  child: Text(
+                    text,
+                    key: const Key('conversation_activity_text'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.start,
+                    style: GoogleFonts.outfit(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.3,
+                      color: colors.primary,
                     ),
                   ),
                 ),

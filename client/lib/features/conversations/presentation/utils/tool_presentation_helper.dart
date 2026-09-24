@@ -4,13 +4,13 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
-import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 
 class ToolPresentationHelper {
-  static String getEventTitle(CanonicalEvent event) {
+  static String getEventTitle(CanonicalEvent event, {bool isArabic = false}) {
     switch (event.kind) {
       case EventKind.toolCall:
-        final cleanTitle = displayToolTitle(event);
+        final cleanTitle = cleanToolTitle(event.toolName ?? 'Using Tool');
+        final displayTitle = displayToolTitle(event, isArabic: isArabic);
 
         final input = event.toolInput;
         final output = event.toolOutput;
@@ -119,17 +119,17 @@ class ToolPresentationHelper {
         }
 
         if (details.isNotEmpty) {
-          return '$cleanTitle: $details';
+          return '$displayTitle: $details';
         }
-        return cleanTitle;
+        return displayTitle;
       case EventKind.plan:
-        return event.text.isNotEmpty ? event.text : 'Execution Plan';
+        return event.text.isNotEmpty ? event.text : (isArabic ? 'خطة التنفيذ' : 'Execution Plan');
       case EventKind.error:
-        return 'Error';
+        return isArabic ? 'خطأ' : 'Error';
       case EventKind.reasoning:
-        return 'Reasoning';
+        return isArabic ? 'استنتاج' : 'Reasoning';
       case EventKind.thinking:
-        return event.text.isNotEmpty ? 'Thoughts' : 'Thinking...';
+        return event.text.isNotEmpty ? (isArabic ? 'أفكار' : 'Thoughts') : (isArabic ? 'تفكير...' : 'Thinking...');
       default:
         return '';
     }
@@ -140,9 +140,10 @@ class ToolPresentationHelper {
     required CanonicalEvent event,
     required Color titleColor,
     TextDirection? textDirection,
+    bool isArabic = false,
   }) {
-    final title = getEventTitle(event);
-    final resolvedDirection = textDirection ?? TextUtils.getTextDirection(title);
+    final title = getEventTitle(event, isArabic: isArabic);
+    final resolvedDirection = textDirection ?? (isArabic ? TextDirection.rtl : TextDirection.ltr);
 
     if (event.kind != EventKind.toolCall) {
       return Text(
@@ -161,7 +162,7 @@ class ToolPresentationHelper {
 
     final rawName = event.toolName ?? 'Using Tool';
     final cleanTitle = cleanToolTitle(rawName);
-    final displayTitle = displayToolTitle(event);
+    final displayTitle = displayToolTitle(event, isArabic: isArabic);
 
     // Parse input and output
     final input = event.toolInput;
@@ -547,15 +548,37 @@ class ToolPresentationHelper {
     return '';
   }
 
-  static String displayToolTitle(CanonicalEvent event) {
+  static String localizedTitle(String cleanTitle, {bool isArabic = false}) {
+    if (!isArabic) return cleanTitle;
+    return switch (cleanTitle) {
+      'Read' => 'قراءة',
+      'Write' => 'كتابة',
+      'Edit' => 'تعديل',
+      'Search' => 'بحث',
+      'Grep' => 'بحث نصي',
+      'Ran' => 'تشغيل',
+      'Running' => 'قيد التشغيل',
+      'Search Web' => 'بحث في الويب',
+      'Fetch' => 'جلب',
+      'Ask' => 'سؤال',
+      'Search Capabilities' => 'بحث الإمكانيات',
+      'Skill Load' => 'تحميل مهارة',
+      'Memory' => 'الذاكرة',
+      'Cancelled' => 'ملغى',
+      'Using Tool' => 'استخدام أداة',
+      _ => cleanTitle,
+    };
+  }
+
+  static String displayToolTitle(CanonicalEvent event, {bool isArabic = false}) {
     final cleanTitle = cleanToolTitle(event.toolName ?? 'Using Tool');
     if (event.status == EventStatus.cancelled) {
-      return 'Cancelled';
+      return isArabic ? 'ملغى' : 'Cancelled';
     }
-    if (cleanTitle == 'Ran' && event.status == EventStatus.running) {
-      return 'Running';
+    if ((cleanTitle == 'Ran' || cleanTitle == 'تشغيل') && event.status == EventStatus.running) {
+      return isArabic ? 'قيد التشغيل' : 'Running';
     }
-    return cleanTitle;
+    return localizedTitle(cleanTitle, isArabic: isArabic);
   }
 
   static String cleanToolTitle(String rawName) {
