@@ -38,7 +38,6 @@ class AppProgressIndicator extends StatelessWidget {
   Widget build(BuildContext context) {
     if (value != null || ActivityAnimationPolicy.allowContinuousActivityAnimation) {
       return CircularProgressIndicator(
-        key: key,
         value: value,
         backgroundColor: backgroundColor,
         color: color,
