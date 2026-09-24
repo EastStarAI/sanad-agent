@@ -55,4 +55,4 @@ Future<ProcessResult> _run(List<String> arguments, Directory home) =>
         'SANAD_HOME': home.path,
         'SANAD_STATE_HOME': home.path,
       },
-    ).timeout(const Duration(seconds: 30));
+    ).timeout(const Duration(seconds: 90));

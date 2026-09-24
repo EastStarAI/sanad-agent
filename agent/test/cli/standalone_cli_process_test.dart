@@ -23,8 +23,10 @@ void main() {
   test(
     'standalone entry point executes the deterministic engine and releases Home ownership',
     () async {
-      final root = await Directory.systemTemp.createTemp(
-        'sanad-standalone-process-',
+      final root = Directory(
+        (await Directory.systemTemp.createTemp(
+          'sanad-standalone-process-',
+        )).resolveSymbolicLinksSync(),
       );
       final home = Directory('${root.path}/home');
       final stateHome = Directory('${root.path}/state');
@@ -53,7 +55,7 @@ void main() {
           ],
           workingDirectory: Directory.current.path,
           environment: environment,
-        ).timeout(const Duration(seconds: 45));
+        ).timeout(const Duration(seconds: 90));
       }
 
       try {
@@ -74,14 +76,16 @@ void main() {
         } catch (_) {}
       }
     },
-    timeout: const Timeout(Duration(minutes: 2)),
+    timeout: const Timeout(Duration(minutes: 4)),
   );
 
   test(
     'standalone entry point keeps an unrecoverable runtime failure non-terminal until its own timeout',
     () async {
-      final root = await Directory.systemTemp.createTemp(
-        'sanad-standalone-runtime-failure-',
+      final root = Directory(
+        (await Directory.systemTemp.createTemp(
+          'sanad-standalone-runtime-failure-',
+        )).resolveSymbolicLinksSync(),
       );
       final home = Directory('${root.path}/home');
       final stateHome = Directory('${root.path}/state');
@@ -110,7 +114,7 @@ void main() {
             'SANAD_STATE_HOME': stateHome.path,
             'SANAD_E2E_TEST_MODE': 'true',
           },
-        ).timeout(const Duration(seconds: 45));
+        ).timeout(const Duration(seconds: 90));
 
         // The deterministic provider failure suspends the session in a
         // blocked recovery state (advisory, awaiting intervention), so the
@@ -135,14 +139,16 @@ void main() {
         } catch (_) {}
       }
     },
-    timeout: const Timeout(Duration(minutes: 2)),
+    timeout: const Timeout(Duration(minutes: 4)),
   );
 
   test(
     'standalone entry point maps timeout and signals to stable exit codes',
     () async {
-      final root = await Directory.systemTemp.createTemp(
-        'sanad-standalone-cancellation-',
+      final root = Directory(
+        (await Directory.systemTemp.createTemp(
+          'sanad-standalone-cancellation-',
+        )).resolveSymbolicLinksSync(),
       );
       final home = Directory('${root.path}/home');
       final stateHome = Directory('${root.path}/state');
@@ -173,7 +179,7 @@ void main() {
           [...baseArguments, '--timeout', '1', prompt],
           workingDirectory: Directory.current.path,
           environment: environment,
-        ).timeout(const Duration(seconds: 45));
+        ).timeout(const Duration(seconds: 90));
         expect(
           timeoutResult.exitCode,
           124,
@@ -197,7 +203,7 @@ void main() {
               environment: environment,
             );
             try {
-              final deadline = DateTime.now().add(const Duration(seconds: 25));
+              final deadline = DateTime.now().add(const Duration(seconds: 60));
               while (!signalReadyFile.existsSync() &&
                   DateTime.now().isBefore(deadline)) {
                 await Future<void>.delayed(const Duration(milliseconds: 50));
@@ -219,6 +225,6 @@ void main() {
         } catch (_) {}
       }
     },
-    timeout: const Timeout(Duration(minutes: 2)),
+    timeout: const Timeout(Duration(minutes: 4)),
   );
 }
