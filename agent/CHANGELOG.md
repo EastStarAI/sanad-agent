@@ -1,3 +1,7 @@
+## 1.0.12
+
+- Resolved symbolic links on temporary test directories for macOS runtime parity (#179).
+
 ## 1.0.11
 
 - Added native `sanad run` CLI delegation with OpenCode compatibility and automatic session recovery (#148, #149, #150).
