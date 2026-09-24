@@ -13,6 +13,7 @@ import 'package:uuid/uuid.dart';
 import '../../core/constants.dart';
 import '../../core/sanad_home/sanad_home_bootstrap.dart';
 import 'session_lineage.dart';
+import '../models/session_search.dart';
 
 /// Single owner of the agent's local SQLite connection (`state.db`).
 ///
@@ -226,6 +227,17 @@ class AgentStateDatabase {
 
   void _init() {
     _retryOnBusy<void>(() {
+      // Register the search normalization function used by session search
+      // queries before any schema/migration work.
+      _db.createFunction(
+        functionName: 'sanad_search_normalize',
+        argumentCount: const AllowedArgumentCount(1),
+        deterministic: true,
+        function: (arguments) {
+          final value = arguments.first;
+          return value is String ? SessionSearchRequest.normalize(value) : '';
+        },
+      );
       // Configure busy_timeout first so internal waits apply to WAL and all
       // subsequent DDL/migration statements.
       _db.execute('PRAGMA busy_timeout = 5000');

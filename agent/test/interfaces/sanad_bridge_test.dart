@@ -1761,6 +1761,37 @@ void main() {
       },
     );
 
+    test('search_sessions emits correlated anchored results', () async {
+      final manager = getIt<SessionManager>();
+      manager.db.saveSession(
+        SessionState(
+          sessionId: 'search-session',
+          model: 'model-1',
+          title: 'Searchable conversation',
+          createdAt: DateTime.utc(2026),
+          updatedAt: DateTime.utc(2026),
+        ),
+      );
+      manager.db.replaceMessages('search-session', [
+        Message(role: MessageRole.user, content: 'protocol needle'),
+      ]);
+      Map<String, dynamic>? emitted;
+
+      final handled = await SanadProtocolBridge().handleCommand({
+        'command': CanonicalEventTypes.searchSessions,
+        'payload': {'request_id': 'search-1', 'query': 'needle'},
+      }, (envelope) async => emitted = envelope);
+
+      expect(handled, isTrue);
+      expect(emitted?['event'], CanonicalEventTypes.sessionSearchResults);
+      expect(emitted?['request_id'], 'search-1');
+      expect(emitted?['payload']['results'], hasLength(1));
+      expect(
+        emitted?['payload']['results'][0]['anchor_event_id'],
+        matches(r'^history:search-session:\d+:user_message:0$'),
+      );
+    });
+
     test(
       'workspace.set_permission_mode rejects an unknown workspace id',
       () async {

@@ -43,6 +43,7 @@ class SessionMessagesState extends Equatable {
   final bool hasNewerHistory;
   final bool isNewerHistoryLoading;
   final String? newerHistoryError;
+  final int historyOpenRevision;
 
   const SessionMessagesState({
     this.messages = const [],
@@ -79,6 +80,7 @@ class SessionMessagesState extends Equatable {
     this.hasNewerHistory = false,
     this.isNewerHistoryLoading = false,
     this.newerHistoryError,
+    this.historyOpenRevision = 0,
   });
 
   SessionMessagesState copyWith({
@@ -133,6 +135,7 @@ class SessionMessagesState extends Equatable {
     bool? isNewerHistoryLoading,
     String? newerHistoryError,
     bool clearNewerHistoryError = false,
+    int? historyOpenRevision,
   }) {
     return SessionMessagesState(
       messages: messages ?? this.messages,
@@ -181,6 +184,7 @@ class SessionMessagesState extends Equatable {
       hasNewerHistory: hasNewerHistory ?? this.hasNewerHistory,
       isNewerHistoryLoading: isNewerHistoryLoading ?? this.isNewerHistoryLoading,
       newerHistoryError: clearNewerHistoryError ? null : newerHistoryError ?? this.newerHistoryError,
+      historyOpenRevision: historyOpenRevision ?? this.historyOpenRevision,
     );
   }
 
@@ -230,5 +234,6 @@ class SessionMessagesState extends Equatable {
     hasNewerHistory,
     isNewerHistoryLoading,
     newerHistoryError,
+    historyOpenRevision,
   ];
 }

@@ -67,6 +67,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   final Set<String> _freshSessionIdsAwaitingFirstTurn = {};
   final Set<String> _initiatedStopRequestIds = {};
   final Map<String, String> _stopRecoveryClaimIds = {};
+  final Map<String, String> _requestedHistoryAnchors = {};
   int _requestGeneration = 0;
   Timer? _delayedLoadingTimer;
 
@@ -167,6 +168,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       return;
     }
 
+    final requestedAnchorKey = nextSessionId == null
+        ? null
+        : '${selectedSession?.deviceId ?? _currentAgent?.id}:$nextSessionId';
+    _requestedHistoryAnchors.removeWhere(
+      (key, _) => requestedAnchorKey == null || key != requestedAnchorKey,
+    );
     final generation = ++_requestGeneration;
     _delayedLoadingTimer?.cancel();
     _selectedSessionId = nextSessionId;
@@ -421,23 +428,42 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     }
   }
 
-  Future<void> loadAnchoredHistory(String anchorEventId) async {
+  void requestHistoryAnchor({
+    required String deviceId,
+    required String sessionId,
+    required String anchorEventId,
+  }) {
+    final anchor = anchorEventId.trim();
+    if (anchor.isEmpty) return;
+    _requestedHistoryAnchors['$deviceId:$sessionId'] = anchor;
+  }
+
+  Future<void> loadAnchoredHistory(
+    String anchorEventId, {
+    bool forceReopen = false,
+  }) async {
     final agent = _currentAgent;
     final sessionId = state.activeSessionId;
     if (agent == null || sessionId == null || anchorEventId.trim().isEmpty) {
       return;
     }
-    if (state.messages.any((event) => event.id == anchorEventId)) return;
+    final anchorIsLoaded = state.messages.any(
+      (event) => event.id == anchorEventId || event.eventId == anchorEventId,
+    );
+    if (anchorIsLoaded && !forceReopen) return;
     final generation = ++_requestGeneration;
     try {
-      await conversationRepository.loadAnchoredSessionHistory(
-        agent,
-        sessionId,
-        anchorEventId,
-      );
+      if (!anchorIsLoaded) {
+        await conversationRepository.loadAnchoredSessionHistory(
+          agent,
+          sessionId,
+          anchorEventId,
+        );
+      }
       if (isClosed || generation != _requestGeneration || state.activeSessionId != sessionId) {
         return;
       }
+      _requestedHistoryAnchors.remove('${agent.id}:$sessionId');
       emit(
         state.copyWith(
           messages: conversationRepository.currentMessages(agent),
@@ -447,6 +473,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           clearOlderHistoryError: true,
           isNewerHistoryLoading: false,
           clearNewerHistoryError: true,
+          historyOpenRevision: forceReopen ? state.historyOpenRevision + 1 : state.historyOpenRevision,
         ),
       );
     } catch (error, stackTrace) {
@@ -489,8 +516,19 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     int generation,
   ) async {
     try {
-      await conversationRepository.loadSessionHistory(agent, sessionId);
+      final anchorKey = '${agent.id}:$sessionId';
+      final requestedAnchor = _requestedHistoryAnchors[anchorKey];
+      if (requestedAnchor == null) {
+        await conversationRepository.loadSessionHistory(agent, sessionId);
+      } else {
+        await conversationRepository.loadAnchoredSessionHistory(
+          agent,
+          sessionId,
+          requestedAnchor,
+        );
+      }
       if (isClosed || generation != _requestGeneration) return;
+      _requestedHistoryAnchors.remove(anchorKey);
 
       _delayedLoadingTimer?.cancel();
       final attention = _attentionFor(agent, sessionId);

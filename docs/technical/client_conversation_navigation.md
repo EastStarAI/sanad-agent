@@ -16,6 +16,7 @@ description: "Technical design for device-scoped sidebar projection, atomic hist
 - `SessionMessagesCubit` owns requested-versus-presented session state and the
   atomic history swap.
 - `SessionSidebarCubit` is a read-only projection of the active cache device.
+- `SessionSearchCubit` owns transient debounced search presentation, request generations, and search pagination; it never mutates sidebar cache pages.
 
 ## Sidebar Composition
 
@@ -37,6 +38,16 @@ destination is restored. New Conversation and session destinations remain
 distinct; `lastSelectedSessionId` is only context inheritance and never decides
 the restart route. Background refreshes with usable cached rows are visually
 silent; only initial loading and stale errors add sidebar chrome.
+
+## Authoritative Conversation Search
+
+The Client sends the independent canonical command `search_sessions` with `query`, bounded `limit`, and an opaque `cursor`. The Agent responds with `session_search_results`: one result per session, a normal session summary, `match_kind`, bounded `snippet`, optional `anchor_event_id`, `next_cursor`, and `has_more`. Typed errors use the same correlated result envelope.
+
+`SessionDB` applies trim, whitespace collapse, and ASCII-only case folding while preserving non-ASCII code points and diacritics. It searches session titles and active visible user/assistant text, including visible thoughts while excluding reasoning, tools, superseded rows, and private payloads. Results rank title+content, title-only, then content-only before deterministic activity/session ordering. Cursors include a query fingerprint and ordering tuple, so reuse with another query fails closed.
+
+`SessionSearchCubit` clears prior results as soon as a query/device generation changes, debounces first-page requests, and rejects stale first-page and load-more completions. `ConversationCommands.searchSessions` bypasses the ordinary session-page caches. The wide dialog and compact bottom sheet consume only this transient state.
+
+When a hit carries an Agent-issued history anchor, the search selection registers it with `SessionMessagesCubit` before `SessionCubit` changes selection. The atomic history swap then calls `loadAnchoredSessionHistory` instead of loading the newest page, preserving requested-versus-presented timeline safety while making unloaded matches reachable. The same anchor is recorded as the intended opening viewport event. Route initialization reuses this already-selected typed session, including its title and workspace metadata, even when it is absent from partial sidebar pages; cache absence alone must not replace it with a `Loading...` placeholder or redirect the result to a new conversation.
 
 ## Atomic Session Swap
 

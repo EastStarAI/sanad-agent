@@ -8,6 +8,7 @@ import 'package:sanad_client/core/navigation/navigation_history_controller.dart'
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/conversation_draft.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/devices/domain/device_client_registry.dart';
 import 'package:sanad_client/features/devices/domain/device_repository.dart';
 import 'package:sanad_client/features/conversations/domain/conversation_client.dart';
@@ -2305,6 +2306,13 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
     String? model,
     String? thinkingMode,
   }) async {}
+
+  @override
+  Future<SessionSearchPage> searchSessions({
+    required String query,
+    int limit = 20,
+    String? cursor,
+  }) async => const SessionSearchPage(hits: [], hasMore: false);
 
   @override
   Future<SessionQueryResult> getSessions({SessionQueryRequest? query}) async {

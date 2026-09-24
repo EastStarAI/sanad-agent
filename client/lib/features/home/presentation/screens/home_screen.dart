@@ -19,6 +19,7 @@ import 'package:sanad_client/features/conversations/presentation/bloc/session_cu
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_sidebar_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_search_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_app_bar.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
@@ -53,6 +54,24 @@ class HomeScreen extends StatefulWidget {
     super.key,
     this.destination,
   });
+
+  @visibleForTesting
+  static Session resolveRouteSession({
+    required ConversationDestination destination,
+    required Session? selectedSession,
+    required DateTime placeholderTime,
+  }) {
+    if (selectedSession?.id == destination.sessionId && selectedSession?.deviceId == destination.deviceId) {
+      return selectedSession!;
+    }
+    return Session(
+      id: destination.sessionId!,
+      title: 'Loading...',
+      deviceId: destination.deviceId,
+      createdAt: placeholderTime,
+      updatedAt: placeholderTime,
+    );
+  }
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -126,6 +145,11 @@ class _HomeScreenState extends State<HomeScreen> {
         BlocProvider(
           create: (context) => SessionSidebarCubit(
             cacheRepository: context.read<ConversationCacheRepository>(),
+          ),
+        ),
+        BlocProvider(
+          create: (context) => SessionSearchCubit(
+            repository: context.read<ConversationRepository>(),
           ),
         ),
         BlocProvider(
@@ -258,21 +282,22 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
 
       if (dest.isSession && dest.sessionId != null) {
         final knownSessions = context.read<SessionCubit>().state.agentSessions[dest.deviceId];
-        if (knownSessions != null && knownSessions.every((session) => session.id != dest.sessionId)) {
+        final selectedSessionId = context.read<SessionCubit>().state.selectedSession?.id;
+        if (knownSessions != null &&
+            knownSessions.every((session) => session.id != dest.sessionId) &&
+            selectedSessionId != dest.sessionId) {
           final fallback = ConversationDestination.newConversation(deviceId: dest.deviceId);
           getIt<ConversationHistoryController>().replaceCurrent(fallback);
           await context.read<SessionCubit>().startNewChat(destinationAgent);
           if (mounted) context.go(fallback.routePath);
           return;
         }
-        final mockSession = Session(
-          id: dest.sessionId!,
-          title: 'Loading...',
-          deviceId: dest.deviceId,
-          createdAt: DateTime.now(),
-          updatedAt: DateTime.now(),
+        final routeSession = HomeScreen.resolveRouteSession(
+          destination: dest,
+          selectedSession: context.read<SessionCubit>().state.selectedSession,
+          placeholderTime: DateTime.now(),
         );
-        await context.read<SessionCubit>().selectSession(mockSession);
+        await context.read<SessionCubit>().selectSession(routeSession);
       } else if (dest.isNewConversation) {
         await context.read<SessionCubit>().startNewChat(
           destinationAgent,
@@ -695,7 +720,7 @@ class _MainContent extends StatelessWidget {
         messagesState.attentionState?.visualState == SessionAttentionVisualState.runningOrResuming;
 
     return BrainActivityView(
-      key: ValueKey(sessionId),
+      key: ValueKey('$sessionId:${messagesState.historyOpenRevision}'),
       messagesStream: null,
       initialMessages: messagesState.messages,
       sessionId: sessionId,

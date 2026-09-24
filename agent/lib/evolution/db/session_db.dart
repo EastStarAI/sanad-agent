@@ -5,6 +5,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/session_query.dart';
+import '../models/session_search.dart';
 import '../models/session_history_page.dart';
 import '../models/session_state.dart';
 import '../models/suspended_checkpoint.dart';
@@ -345,6 +346,235 @@ class SessionDB {
       hasMore: hasMore,
     );
   }
+
+  SessionSearchResult searchSessions(SessionSearchRequest request) {
+    final cursor = request.cursor == null
+        ? null
+        : _decodeSearchCursor(request.cursor!, request.fingerprint);
+    final params = <Object?>[request.query];
+    final cursorClause = cursor == null
+        ? ''
+        : '''
+          WHERE match_rank > ?
+             OR (match_rank = ? AND order_at < ?)
+             OR (match_rank = ? AND order_at = ? AND session_id < ?)
+          ''';
+    if (cursor != null) {
+      params.addAll([
+        cursor.rank,
+        cursor.rank,
+        cursor.orderAt,
+        cursor.rank,
+        cursor.orderAt,
+        cursor.sessionId,
+      ]);
+    }
+    params.add(request.limit + 1);
+
+    final rows = _db.select(
+      '''
+      WITH base_messages AS (
+        SELECT m.id, m.session_id,
+               json_extract(m.data, '\$.role') AS role,
+               json_extract(m.data, '\$.content') AS content,
+               json_extract(m.data, '\$.thought') AS thought,
+               json_extract(m.data, '\$.reasoning') AS reasoning,
+               COALESCE(json_array_length(json_extract(m.data, '\$.toolCalls')), 0) AS tool_count,
+               CASE
+                 WHEN json_extract(m.data, '\$.metadata.terminal_work_item_id') IS NOT NULL THEN 1
+                 WHEN json_extract(m.data, '\$.role') = 'assistant'
+                      AND COALESCE(json_array_length(json_extract(m.data, '\$.toolCalls')), 0) = 0
+                      AND m.id = (
+                        SELECT MAX(m2.id)
+                        FROM messages m2
+                        WHERE m2.session_id = m.session_id
+                          AND (m2.history_status = 'active' OR m2.history_status IS NULL)
+                          AND json_extract(m2.data, '\$.role') = 'assistant'
+                          AND COALESCE(json_array_length(json_extract(m2.data, '\$.toolCalls')), 0) = 0
+                          AND COALESCE(json_extract(m2.data, '\$.metadata.superseded_by_steer'), 0) != 1
+                      ) THEN 1
+                 ELSE 0
+               END AS is_terminal
+        FROM messages m
+        WHERE (m.history_status = 'active' OR m.history_status IS NULL)
+          AND COALESCE(json_extract(m.data, '\$.metadata.superseded_by_steer'), 0) != 1
+      ),
+      visible_texts AS (
+        SELECT id, session_id, content, 'user_message' AS anchor_kind,
+               0 AS anchor_ordinal, 1 AS candidate_priority
+        FROM base_messages
+        WHERE role = 'user' AND NULLIF(TRIM(content), '') IS NOT NULL
+        UNION ALL
+        SELECT id, session_id, content, 'final_answer', 0, 0
+        FROM base_messages
+        WHERE role = 'assistant' AND tool_count = 0 AND is_terminal = 1
+          AND NULLIF(TRIM(content), '') IS NOT NULL
+        UNION ALL
+        SELECT id, session_id, thought, 'thought', 0, 2
+        FROM base_messages
+        WHERE role = 'assistant' AND tool_count = 0
+          AND NULLIF(TRIM(thought), '') IS NOT NULL
+          AND (NULLIF(TRIM(reasoning), '') IS NULL OR thought != reasoning)
+        UNION ALL
+        SELECT id, session_id, content, 'thought',
+               CASE
+                 WHEN NULLIF(TRIM(thought), '') IS NOT NULL
+                      AND (NULLIF(TRIM(reasoning), '') IS NULL OR thought != reasoning)
+                 THEN 1 ELSE 0
+               END,
+               3
+        FROM base_messages
+        WHERE role = 'assistant' AND tool_count = 0 AND is_terminal = 0
+          AND NULLIF(TRIM(content), '') IS NOT NULL
+          AND (NULLIF(TRIM(reasoning), '') IS NULL OR content != reasoning)
+          AND (NULLIF(TRIM(thought), '') IS NULL OR content != thought)
+        UNION ALL
+        SELECT id, session_id,
+               CASE WHEN NULLIF(TRIM(thought), '') IS NOT NULL THEN thought ELSE content END,
+               'thought', 0, 2
+        FROM base_messages
+        WHERE role = 'assistant' AND tool_count > 0
+          AND COALESCE(NULLIF(TRIM(thought), ''), NULLIF(TRIM(content), '')) IS NOT NULL
+          AND (
+            NULLIF(TRIM(reasoning), '') IS NULL
+            OR COALESCE(NULLIF(TRIM(thought), ''), NULLIF(TRIM(content), '')) != reasoning
+          )
+      ),
+      eligible_matches AS (
+        SELECT *, ROW_NUMBER() OVER (
+          PARTITION BY session_id
+          ORDER BY id DESC, candidate_priority ASC
+        ) AS match_order
+        FROM visible_texts
+        WHERE instr(sanad_search_normalize(content), ?) > 0
+      ),
+      latest_match AS (
+        SELECT * FROM eligible_matches WHERE match_order = 1
+      ),
+      ranked AS (
+        SELECT s.*,
+               COALESCE(s.last_user_message_at, s.created_at) AS order_at,
+               lm.id AS match_row_id,
+               lm.content AS match_content,
+               lm.anchor_kind AS match_anchor_kind,
+               lm.anchor_ordinal AS match_anchor_ordinal,
+               CASE
+                 WHEN instr(sanad_search_normalize(COALESCE(s.title, '')), ?) > 0
+                      AND lm.id IS NOT NULL THEN 0
+                 WHEN instr(sanad_search_normalize(COALESCE(s.title, '')), ?) > 0 THEN 1
+                 ELSE 2
+               END AS match_rank
+        FROM sessions s
+        LEFT JOIN latest_match lm ON lm.session_id = s.session_id
+        WHERE instr(sanad_search_normalize(COALESCE(s.title, '')), ?) > 0
+           OR lm.id IS NOT NULL
+      )
+      SELECT * FROM ranked
+      $cursorClause
+      ORDER BY match_rank ASC, order_at DESC, session_id DESC
+      LIMIT ?
+      ''',
+      [request.query, request.query, request.query, ...params],
+    );
+
+    final hits = <SessionSearchHit>[];
+    for (final row in rows.take(request.limit)) {
+      final rank = row['match_rank'] as int;
+      final rowId = row['match_row_id'] as int?;
+      final anchorKind = row['match_anchor_kind'] as String?;
+      final anchorOrdinal = row['match_anchor_ordinal'] as int?;
+      hits.add(
+        SessionSearchHit(
+          session: SessionState.fromMap(row, const []),
+          matchKind: switch (rank) {
+            0 => SessionSearchMatchKind.titleAndContent,
+            1 => SessionSearchMatchKind.title,
+            _ => SessionSearchMatchKind.content,
+          },
+          snippet: _searchSnippet(
+            row['match_content'] as String?,
+            request.query,
+          ),
+          anchorEventId:
+              rowId == null || anchorKind == null || anchorOrdinal == null
+              ? null
+              : 'history:${row['session_id']}:$rowId:$anchorKind:$anchorOrdinal',
+        ),
+      );
+    }
+    final hasMore = rows.length > request.limit;
+    final last = hits.lastOrNull;
+    return SessionSearchResult(
+      hits: hits,
+      hasMore: hasMore,
+      nextCursor: hasMore && last != null
+          ? _encodeSearchCursor(
+              fingerprint: request.fingerprint,
+              rank: rows[request.limit - 1]['match_rank'] as int,
+              orderAt: rows[request.limit - 1]['order_at'] as String,
+              sessionId: last.session.sessionId,
+            )
+          : null,
+    );
+  }
+
+  String? _searchSnippet(String? content, String query) {
+    if (content == null || content.trim().isEmpty) return null;
+    final display = content.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final normalized = SessionSearchRequest.normalize(display);
+    final index = normalized.indexOf(query);
+    if (index < 0) return null;
+    final start = (index - SessionSearchRequest.maxSnippetLength ~/ 2).clamp(
+      0,
+      display.length,
+    );
+    final end = (start + SessionSearchRequest.maxSnippetLength).clamp(
+      0,
+      display.length,
+    );
+    return '${start > 0 ? '…' : ''}${display.substring(start, end)}${end < display.length ? '…' : ''}';
+  }
+
+  ({int rank, String orderAt, String sessionId}) _decodeSearchCursor(
+    String cursor,
+    String fingerprint,
+  ) {
+    try {
+      final decoded = jsonDecode(utf8.decode(base64Url.decode(cursor)));
+      if (decoded is! Map ||
+          decoded['v'] != 1 ||
+          decoded['q'] != fingerprint ||
+          decoded['r'] is! int ||
+          decoded['t'] is! String ||
+          decoded['s'] is! String) {
+        throw const FormatException();
+      }
+      return (
+        rank: decoded['r'] as int,
+        orderAt: decoded['t'] as String,
+        sessionId: decoded['s'] as String,
+      );
+    } catch (_) {
+      throw ArgumentError('Invalid or stale search cursor');
+    }
+  }
+
+  String _encodeSearchCursor({
+    required String fingerprint,
+    required int rank,
+    required String orderAt,
+    required String sessionId,
+  }) => base64Url.encode(
+    utf8.encode(
+      jsonEncode({
+        'v': 1,
+        'q': fingerprint,
+        'r': rank,
+        't': orderAt,
+        's': sessionId,
+      }),
+    ),
+  );
 
   String _encodeCursor(DateTime lastUserMessageAt, String sessionId) {
     final jsonStr = jsonEncode({
