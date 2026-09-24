@@ -1,3 +1,12 @@
+## 1.0.11
+
+- Added native `sanad run` CLI delegation with OpenCode compatibility and automatic session recovery (#148, #149, #150).
+- Raised default context-compaction threshold to 90% and hardened model context limit resolution (#163).
+- Hardened agent state database concurrency and added automated database maintenance (#153).
+- Added Windows-first headless background daemon launching without console allocation (#156).
+- Implemented local turn request deduplication and concurrent turn serialization (#168).
+- Reduced long-session turn startup latency and improved child process execution safety (#168).
+
 ## 1.0.10
 
 - Added account session and device lifecycle management with secure remote revocation and immediate cross-transport disconnect.
