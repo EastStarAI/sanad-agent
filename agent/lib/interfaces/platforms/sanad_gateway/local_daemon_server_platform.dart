@@ -101,8 +101,12 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   Stream<GatewayEvent> get eventStream => _eventController.stream;
 
   SanadProtocolBridge get _protocolBridge => getIt<SanadProtocolBridge>();
+  final PlatformRuntimeBridge? _injectedPlatformRuntimeBridge;
   PlatformRuntimeBridge get _platformRuntimeBridge =>
-      getIt<PlatformRuntimeBridge>();
+      _injectedPlatformRuntimeBridge ??
+      (getIt.isRegistered<PlatformRuntimeBridge>()
+          ? getIt<PlatformRuntimeBridge>()
+          : PlatformRuntimeBridge());
   Config get _config => getIt<Config>();
   bool get _e2eTestModeEnabled =>
       Platform.environment['SANAD_E2E_TEST_MODE']?.trim().toLowerCase() ==
@@ -113,8 +117,10 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     ColocatedAuthCoupling? authCoupling,
     this.beforeUpgradeAuthentication,
     this.deliveryPresence,
+    PlatformRuntimeBridge? platformRuntimeBridge,
   }) : _security = security,
-       _authCoupling = authCoupling;
+       _authCoupling = authCoupling,
+       _injectedPlatformRuntimeBridge = platformRuntimeBridge;
 
   @override
   Future<void> initialize() async {
