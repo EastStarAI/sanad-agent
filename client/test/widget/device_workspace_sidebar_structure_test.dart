@@ -616,6 +616,48 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
+  testWidgets('ConversationWorkspaceLayout reveals hover trigger when unpinned and reacts to hover', (tester) async {
+    final history = ConversationHistoryController();
+    getIt.registerSingleton<ConversationHistoryController>(history);
+    addTearDown(() => getIt.unregister<ConversationHistoryController>());
+
+    await pumpSidebar(
+      tester,
+      router: GoRouter(
+        initialLocation: '/',
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (context, state) => const Scaffold(
+              body: ConversationWorkspaceLayout(
+                showChrome: false,
+                child: SizedBox(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('sidebar_edge_hover_trigger')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('sidebar_toggle_btn')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('sidebar_edge_hover_trigger')), findsOneWidget);
+
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: Offset.zero);
+    addTearDown(gesture.removePointer);
+
+    await gesture.moveTo(tester.getCenter(find.byKey(const Key('sidebar_edge_hover_trigger'))));
+    await tester.pumpAndSettle();
+
+    final state = tester.state<ConversationWorkspaceLayoutState>(find.byType(ConversationWorkspaceLayout));
+    expect(state.isPinned, isFalse);
+  });
+
   testWidgets('options menu works when hover exits row to pop up menu', (tester) async {
     final capsCubit = _FakeDeviceCapabilitiesCubit(
       DeviceCapabilitiesState(

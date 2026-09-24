@@ -300,6 +300,19 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
               Expanded(child: widget.child),
             ],
           ),
+          if (!_isPinned)
+            // Hover trigger area on the edge (16 pixels)
+            Positioned(
+              left: isRtl ? null : 0,
+              right: isRtl ? 0 : null,
+              top: 0,
+              bottom: 0,
+              width: 16,
+              child: MouseRegion(
+                key: const Key('sidebar_edge_hover_trigger'),
+                onEnter: (_) => setHovered(true),
+              ),
+            ),
           // Animated unified sidebar (always present in the Stack, slides/blurs based on state)
           AnimatedPositioned(
             duration: duration,
@@ -338,9 +351,12 @@ class ConversationWorkspaceLayoutState extends State<ConversationWorkspaceLayout
             right: isRtl ? 0 : null,
             top: 0,
             width: isMacOS ? 300 : 240,
-            child: Directionality(
-              textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
-              child: buildButtonRow(),
+            child: MouseRegion(
+              onEnter: (_) => setHovered(true),
+              child: Directionality(
+                textDirection: isRtl ? TextDirection.rtl : TextDirection.ltr,
+                child: buildButtonRow(),
+              ),
             ),
           ),
         ],
