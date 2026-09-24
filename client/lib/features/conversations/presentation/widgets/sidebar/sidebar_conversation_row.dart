@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/theme/activity_animation_policy.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -712,24 +713,39 @@ class _BusyDot extends StatefulWidget {
 }
 
 class _BusyDotState extends State<_BusyDot> with SingleTickerProviderStateMixin {
-  late final AnimationController _controller;
+  AnimationController? _controller;
   @override
   void initState() {
     super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000));
-    unawaited(_controller.repeat(reverse: true));
+    if (ActivityAnimationPolicy.allowContinuousActivityAnimation) {
+      _controller = AnimationController(vsync: this, duration: const Duration(milliseconds: 1000));
+      unawaited(_controller!.repeat(reverse: true));
+    }
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _controller?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    if (!ActivityAnimationPolicy.allowContinuousActivityAnimation || _controller == null) {
+      return Container(
+        key: const Key('sidebar_busy_dot_static'),
+        width: 8,
+        height: 8,
+        decoration: const BoxDecoration(
+          color: Color(0xFF22C55E),
+          shape: BoxShape.circle,
+        ),
+      );
+    }
+
     return FadeTransition(
-      opacity: _controller,
+      key: const Key('sidebar_busy_dot_animated'),
+      opacity: _controller!,
       child: Container(
         width: 8,
         height: 8,

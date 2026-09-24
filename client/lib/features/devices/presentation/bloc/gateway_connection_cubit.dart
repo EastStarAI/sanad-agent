@@ -219,6 +219,13 @@ class GatewayConnectionCubit extends Cubit<GatewayConnectionStatus> {
 
     try {
       final devices = await _deviceCubit.fetchAgents();
+      // The cubit never rethrows a failed fetch; it reports it as a typed
+      // error. A timed-out/errored fetch must not be presented as an
+      // authoritative inventory snapshot, so fall through to the cached state.
+      final state = _deviceCubit.state;
+      if (state is DeviceNoActive && state.errorMessage != null) {
+        return null;
+      }
       await _waitForDeviceStateToInclude(devices);
       return devices;
     } catch (_) {}

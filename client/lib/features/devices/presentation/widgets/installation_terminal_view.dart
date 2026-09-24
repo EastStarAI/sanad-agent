@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
 import 'package:sanad_client/features/devices/data/daemon/local_daemon_controller.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 
 class InstallationTerminalView extends StatefulWidget {
@@ -162,7 +163,7 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
                       ? SizedBox(
                           width: 20,
                           height: 20,
-                          child: CircularProgressIndicator(
+                          child: AppProgressIndicator(
                             strokeWidth: 2,
                             valueColor: AlwaysStoppedAnimation<Color>(
                               iconColor,

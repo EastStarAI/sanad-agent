@@ -99,17 +99,21 @@ Future<void> handleRuntimeStop({
   String? sanadHomePath,
   Future<bool> Function(int? pid) processRunning = isProcessRunning,
   Future<String?> Function(int pid) processIdentity = readProcessIdentity,
-  Future<void> Function(int pid) terminateProcess = terminateSanadDevProcessTree,
+  Future<void> Function(int pid) terminateProcess =
+      terminateSanadDevProcessTree,
+  Future<List<AgentInstance>> Function({String? sanadHomeOverride})
+      discoverAgents =
+      discoverAgentInstances,
+  Future<List<ClientInstance>> Function() discoverClients =
+      discoverClientInstances,
 }) async {
   final runtime = await discoverSanadDevRuntime(
     callerDirectory: _callerDirectory,
     sanadHomeOverride: sanadHomePath,
   );
   final processState = selectRuntimeProcessState(
-    activeAgents: await discoverAgentInstances(
-      sanadHomeOverride: sanadHomePath,
-    ),
-    activeClients: await discoverClientInstances(),
+    activeAgents: await discoverAgents(sanadHomeOverride: sanadHomePath),
+    activeClients: await discoverClients(),
     runtime: runtime,
     requestedAgentPort: target == SanadDevComponentTarget.agent
         ? vmServicePort

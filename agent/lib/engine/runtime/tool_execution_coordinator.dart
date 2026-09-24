@@ -84,6 +84,8 @@ class ToolExecutionCoordinator {
       checkpointMeta['deferred_tool_results'] as Map? ?? const {},
     );
 
+    final currentModelStepId = ctx.currentModelStepId;
+
     final finalResults = <String, String>{};
     final toolCallsToRun = <ToolCall>[];
     final interruptedTools = <String, String>{};
@@ -123,10 +125,30 @@ class ToolExecutionCoordinator {
               .toList(),
         );
       }
-      if (completedResults.containsKey(toolCall.id)) {
-        finalResults[toolCall.id] = completedResults[toolCall.id]!;
+      final freshMeta = _currentContinuationMetadata();
+      // Reuse a completed result only under its causal model step. When no
+      // causal step is supplied (runner invoked outside the model loop) or the
+      // record is a legacy untagged durable result, fall back to durable
+      // id-based reuse to preserve recovery semantics.
+      final reusable =
+          currentModelStepId == null
+          ? completedResults.containsKey(toolCall.id)
+          : checkpointCoordinator.isCompletedResultForCausalToolCall(
+              freshMeta,
+              toolCall,
+              modelStepId: currentModelStepId,
+            );
+      if (reusable) {
+        final storedRecord = checkpointCoordinator.completedToolOutputFor(
+          freshMeta,
+          toolCall.id,
+        );
+        finalResults[toolCall.id] =
+            storedRecord?['result']?.toString() ??
+            completedResults[toolCall.id] ??
+            'Error: No result for tool call';
         _logger.info(
-          '🔄 [Agent] Resuming tool call ${toolCall.name} from checkpoint.',
+          '🔄 [Agent] Resuming tool call ${toolCall.name} from checkpoint (model step $currentModelStepId).',
         );
       } else if (currentlyExecuting.contains(toolCall.id) &&
           toolReplaySafety[toolCall.id] != true) {
@@ -249,6 +271,17 @@ class ToolExecutionCoordinator {
   bool _canPublishToolEvents(RunCancellationScope? cancellationScope) =>
       cancellationScope?.isPublicationOpen ?? true;
 
+  /// Returns the live continuation metadata for the active work item, used to
+  /// validate result ownership against the persisted checkpoint on every reuse
+  /// decision (so deferred/tool resolution in-flight writes are observed).
+  Map<String, dynamic> _currentContinuationMetadata() {
+    final repo = getIt.isRegistered<PersistedRuntimeStateRepository>()
+        ? getIt<PersistedRuntimeStateRepository>()
+        : null;
+    final item = repo?.findActiveWorkItem(sessionId);
+    return item?.continuationMetadata ?? const {};
+  }
+
   String? _lockedCancelledResult(String toolCallId) {
     final repo = getIt.isRegistered<PersistedRuntimeStateRepository>()
         ? getIt<PersistedRuntimeStateRepository>()
@@ -315,9 +348,12 @@ class ToolExecutionCoordinator {
       }
       if (!_canPublishToolEvents(cancellationScope)) return results;
 
-      // Mark as currently executing
+      // Mark as currently executing. A genuinely-new execution of a reused id
+      // purges any prior-step result so a crash mid-execution is never masked
+      // by an older step's completed outcome.
       checkpointCoordinator.saveCheckpoint(
         ctx: ctx,
+        removeCompletedToolCallIds: [toolCall.id],
         currentlyExecutingToolCallIds: [toolCall.id],
       );
 
@@ -418,10 +454,13 @@ class ToolExecutionCoordinator {
     }
     if (!_canPublishToolEvents(cancellationScope)) return const {};
 
-    // Mark all as currently executing
+    // Mark all as currently executing. Purging prior-step entries for these ids
+    // guarantees a crash during any of them is never masked by an older step's
+    // completed outcome.
     final idsToRun = toolCallsToRun.map((tc) => tc.id).toList();
     checkpointCoordinator.saveCheckpoint(
       ctx: ctx,
+      removeCompletedToolCallIds: idsToRun,
       currentlyExecutingToolCallIds: idsToRun,
     );
 

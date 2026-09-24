@@ -379,12 +379,4 @@ String? primaryResourceOwnershipConflict(
   return null;
 }
 
-bool _samePath(String? first, String second) {
-  if (first == null) return false;
-  try {
-    return Directory(first).resolveSymbolicLinksSync() ==
-        Directory(second).resolveSymbolicLinksSync();
-  } catch (_) {
-    return Directory(first).absolute.path == Directory(second).absolute.path;
-  }
-}
+bool _samePath(String? first, String second) => equivalentPaths(first, second);

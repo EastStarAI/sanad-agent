@@ -331,5 +331,15 @@
   "helpMessage4": "Need help debugging? Share your error logs or code to fix it together.",
   "helpMessage5": "I can design system architectures, database schemas, and workflows.",
   "helpMessage6": "Create structured implementation plans and execute tasks step-by-step.",
-  "helpMessage7": "Let me generate test suites, run checks, and keep documentation updated."
+  "helpMessage7": "Let me generate test suites, run checks, and keep documentation updated.",
+  "statusRunning": "Running",
+  "statusCompleted": "Completed",
+  "statusFailed": "Failed",
+  "statusCancelled": "Cancelled",
+  "statusWaiting": "Waiting",
+  "toolReadingFile": "Reading file...",
+  "toolWritingFile": "Writing file...",
+  "toolEditingFile": "Editing file...",
+  "toolSearchingFiles": "Searching files...",
+  "toolExecuting": "Executing tool..."
 }

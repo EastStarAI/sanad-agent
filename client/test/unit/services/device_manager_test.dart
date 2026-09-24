@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/data/device_manager.dart';
@@ -249,6 +251,52 @@ void main() {
 
     expect(manager.agents.map((device) => device.id), ['oldest', 'newest']);
     expect(manager.agents.first.isOnline, isTrue);
+  });
+
+  test('a timed-out inventory fetch is a typed error, never an authoritative empty', () async {
+    final seedSocket = FakeSanadSocketService(hardwareId: 'current-device')..setConnected(true);
+    final seedLocal = FakeSanadSocketService(hardwareId: 'current-device');
+    final seedCoordinator = DeviceConnectionCoordinator(
+      cloudSocketService: seedSocket,
+      localSocketService: seedLocal,
+      currentDeviceId: 'current-device',
+    );
+    final seedManager = await DeviceManager.create(
+      seedSocket,
+      seedCoordinator,
+      fetchTimeout: const Duration(milliseconds: 50),
+    );
+
+    // Seed a cached inventory so we can verify it survives a failed refresh.
+    await seedManager.handleDevicesResponseForTesting({
+      'status': 'ok',
+      'devices': [
+        {'id': 'dev-1', 'name': 'Device 1', 'is_online': false},
+      ],
+    });
+    // The cloud inventory also merges this machine's local device; the seeded
+    // cloud device must be present (not an authoritative-empty list).
+    expect(seedManager.agents.map((d) => d.id), contains('dev-1'));
+    final cachedIdsBefore = seedManager.agents.map((d) => d.id).toSet();
+    seedSocket.clearCaptured();
+
+    // A timed-out read must surface as an error, not as an empty inventory.
+    await expectLater(
+      seedManager.fetchAgents(),
+      throwsA(isA<TimeoutException>()),
+    );
+
+    // The failed/timed-out refresh preserves the cached inventory: the seeded
+    // device remains and no device was wiped on error.
+    final cachedIdsAfter = seedManager.agents.map((d) => d.id).toSet();
+    expect(cachedIdsAfter, cachedIdsBefore);
+    expect(cachedIdsAfter, contains('dev-1'));
+    expect(seedManager.agents, isNotEmpty);
+
+    seedManager.dispose();
+    seedCoordinator.dispose();
+    seedSocket.dispose();
+    seedLocal.dispose();
   });
 }
 

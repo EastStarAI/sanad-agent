@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_execution_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/tool_presentation_helper.dart';
@@ -130,9 +132,14 @@ class _ActivityRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
+    final l10n = AppLocalizations.of(context);
+    final displayLabel = switch (text.label) {
+      'Running: ' => '${l10n?.statusRunning ?? 'Running'}: ',
+      _ => text.label,
+    };
     return Semantics(
       label: [
-        text.detail.isEmpty ? text.label : '${text.label} ${text.detail}',
+        text.detail.isEmpty ? displayLabel : '$displayLabel ${text.detail}',
         if (elapsedText != null) elapsedText!,
       ].join(' '),
       child: Padding(
@@ -141,7 +148,7 @@ class _ActivityRow extends StatelessWidget {
           children: [
             SizedBox.square(
               dimension: 14,
-              child: CircularProgressIndicator(
+              child: AppProgressIndicator(
                 key: const Key('conversation_activity_progress'),
                 strokeWidth: 2,
                 color: colors.primary,
@@ -157,7 +164,7 @@ class _ActivityRow extends StatelessWidget {
                   ),
                   children: [
                     TextSpan(
-                      text: text.label,
+                      text: displayLabel,
                       style: TextStyle(
                         color: colors.onSurface.withValues(alpha: 0.4),
                         fontWeight: FontWeight.w500,

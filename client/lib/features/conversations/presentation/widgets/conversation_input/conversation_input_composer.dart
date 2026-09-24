@@ -38,6 +38,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 
 class ConversationInputComposer extends StatelessWidget {
   final SlashCommandTextController chatController;
@@ -587,28 +588,27 @@ class _ModelChip extends StatefulWidget {
 }
 
 class _ModelChipState extends State<_ModelChip> {
-  static const Duration _emptyProviderDisplayRetryCooldown = Duration(seconds: 30);
-  final Map<String, Map<String, String>> _providerDisplayNamesByAgent = {};
-  final Set<String> _providerDisplayLoadsInFlight = <String>{};
-  final Set<String> _providerDisplayLookupAttempts = <String>{};
-  final Map<String, DateTime> _emptyProviderDisplayFetchUntilByAgent = {};
-  bool _didLoadInitialProviderDisplayNames = false;
-  String? _lastLoadedProviderId;
-  String? _lastLoadedAgentId;
+  // (97h) No provider display-name fetch lives in this widget anymore; the
+  // resource owner (`ProviderUsageCubit`) resolves `model.snapshot` and
+  // `provider.usage.support` once per (device, query) and shares in-flight
+  // requests. Widget lifecycle only asks the owner to ensure the logical
+  // resource it consumes, which is a no-op when unchanged — rebuild/theme/
+  // responsive remounts stay at zero extra Agent requests.
+  bool _didSyncInitialResource = false;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_ensureProviderDisplayNamesLoaded());
+    _syncProviderResource();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_didLoadInitialProviderDisplayNames) return;
-    _didLoadInitialProviderDisplayNames = true;
+    if (_didSyncInitialResource) return;
+    _didSyncInitialResource = true;
     final selectedSession = context.read<SessionCubit>().state.selectedSession;
-    unawaited(_ensureProviderDisplayNamesLoaded(selectedSession: selectedSession));
+    _syncProviderResource(selectedSession: selectedSession);
   }
 
   @override
@@ -617,9 +617,27 @@ class _ModelChipState extends State<_ModelChip> {
     final agentChanged = oldWidget.agentSlice.activeAgent?.id != widget.agentSlice.activeAgent?.id;
     final providerChanged = oldWidget.inputSlice.nextMessageProviderId != widget.inputSlice.nextMessageProviderId;
     if (agentChanged || providerChanged) {
-      _providerDisplayLookupAttempts.clear();
-      unawaited(_ensureProviderDisplayNamesLoaded());
+      _syncProviderResource();
     }
+  }
+
+  /// Asks the resource owner to ensure the catalog and the active provider's
+  /// usage/support are loaded for the current device. The owner dedupes by
+  /// (device, query) and shares in-flight requests, so repeated calls from
+  /// rebuilds and remounts cost zero Agent requests after the first load.
+  void _syncProviderResource({Session? selectedSession}) {
+    if (!getIt.isRegistered<ProviderUsageCubit>()) return;
+    final cubit = getIt<ProviderUsageCubit>();
+    final resolved = selectedSession ?? (mounted ? context.read<SessionCubit>().state.selectedSession : null);
+    final activeProviderId = _activeProviderId(resolved);
+    if (activeProviderId == null || activeProviderId.isEmpty) return;
+    unawaited(cubit.ensureProviderDisplayNames(agent: widget.agentSlice.activeAgent));
+    unawaited(
+      cubit.ensureInstanceUsage(
+        agent: widget.agentSlice.activeAgent,
+        instanceId: activeProviderId,
+      ),
+    );
   }
 
   @override
@@ -628,18 +646,20 @@ class _ModelChipState extends State<_ModelChip> {
     final contextUsage = context.select<SessionMessagesCubit, LlmUsageSnapshot?>(
       (cubit) => latestContextUsage(cubit.state.messages),
     );
-    final providerDisplayNames =
-        _providerDisplayNamesByAgent[_providerLookupKey(widget.agentSlice.activeAgent)] ?? const <String, String>{};
-
-    final currentModel = _currentModelLabel(
-      selectedSession,
-      nextMessageModel: widget.inputSlice.nextMessageModel,
-      providerDisplayNames: providerDisplayNames,
-    );
-
     final showProgress = getIt.isRegistered<ProviderUsageCubit>();
 
-    Widget buildChip(BuildContext context, double? progress, Color? progressColor) {
+    Widget buildChip(
+      BuildContext context,
+      Map<String, String> providerDisplayNames,
+      double? progress,
+      Color? progressColor,
+    ) {
+      final currentModel = _currentModelLabel(
+        selectedSession,
+        nextMessageModel: widget.inputSlice.nextMessageModel,
+        providerDisplayNames: providerDisplayNames,
+      );
+
       return InkWell(
         key: const Key('model_selector_btn'),
         onTap: () => _openModelPicker(context),
@@ -651,20 +671,20 @@ class _ModelChipState extends State<_ModelChip> {
     return BlocListener<SessionCubit, SessionState>(
       listenWhen: (previous, current) => previous.selectedSession != current.selectedSession,
       listener: (context, state) {
-        _providerDisplayLookupAttempts.clear();
-        unawaited(_ensureProviderDisplayNamesLoaded(selectedSession: state.selectedSession));
+        _syncProviderResource(selectedSession: state.selectedSession);
       },
       child: showProgress
           ? BlocBuilder<ProviderUsageCubit, ProviderUsageState>(
               bloc: getIt<ProviderUsageCubit>(),
               builder: (context, usageState) {
                 final theme = Theme.of(context);
+                final deviceId = widget.agentSlice.activeAgent?.id ?? getIt<ProviderUsageCubit>().localDeviceId;
+                final providerDisplayNames = usageState.displayNamesFor(deviceId);
                 final activeProviderId = _activeProviderId(selectedSession);
                 double? progress;
                 Color? progressColor;
 
                 if (activeProviderId != null && activeProviderId.isNotEmpty) {
-                  final deviceId = widget.agentSlice.activeAgent?.id ?? getIt<ProviderUsageCubit>().localDeviceId;
                   final entry = usageState.entry(deviceId, activeProviderId);
                   final supports = usageState.support.supports(deviceId, activeProviderId);
 
@@ -692,98 +712,13 @@ class _ModelChipState extends State<_ModelChip> {
                   }
                 }
 
-                return buildChip(context, progress, progressColor);
+                return buildChip(context, providerDisplayNames, progress, progressColor);
               },
             )
           : Builder(
-              builder: (context) => buildChip(context, null, null),
+              builder: (context) => buildChip(context, const {}, null, null),
             ),
     );
-  }
-
-  String _providerLookupKey(DeviceConfig? agent) => agent?.id ?? '__local__';
-
-  String _providerDisplayLookupAttemptKey(String agentKey, String providerId) => '$agentKey::$providerId';
-
-  Future<void> _ensureProviderDisplayNamesLoaded({Session? selectedSession}) async {
-    final activeAgent = widget.agentSlice.activeAgent;
-    if (activeAgent == null) return;
-    final key = _providerLookupKey(activeAgent);
-    final activeProviderId = _activeProviderId(selectedSession);
-    if (activeProviderId == null || activeProviderId.isEmpty) return;
-
-    final activeAgentId = activeAgent.id;
-    if (activeProviderId != _lastLoadedProviderId || activeAgentId != _lastLoadedAgentId) {
-      _lastLoadedProviderId = activeProviderId;
-      _lastLoadedAgentId = activeAgentId;
-      if (getIt.isRegistered<ProviderUsageCubit>()) {
-        unawaited(
-          getIt<ProviderUsageCubit>().onInstancesLoaded(
-            agent: activeAgent,
-            instanceIds: [activeProviderId],
-          ),
-        );
-      }
-    }
-    final knownDisplays = _providerDisplayNamesByAgent[key];
-    if (knownDisplays != null && knownDisplays.isNotEmpty && knownDisplays.containsKey(activeProviderId)) return;
-
-    final retryAfter = _emptyProviderDisplayFetchUntilByAgent[key];
-    if (retryAfter != null && DateTime.now().isBefore(retryAfter)) return;
-    if (_providerDisplayLoadsInFlight.contains(key)) return;
-
-    final attemptKey = _providerDisplayLookupAttemptKey(key, activeProviderId);
-    if (_providerDisplayLookupAttempts.contains(attemptKey)) return;
-    _providerDisplayLookupAttempts.add(attemptKey);
-    _providerDisplayLoadsInFlight.add(key);
-    try {
-      final client = getIt<ProviderSetupClient>();
-      final names = <String, String>{};
-
-      final snapshot = await client.modelSnapshot(agent: activeAgent);
-      for (final instance in snapshot.instances) {
-        final id = instance.id.trim();
-        final displayName = instance.displayName.trim();
-        if (id.isNotEmpty && displayName.isNotEmpty) names[id] = displayName;
-      }
-
-      if (names.isEmpty) {
-        final instances = await client.listInstances(agent: activeAgent);
-        for (final instance in instances) {
-          final id = instance.id.trim();
-          final displayName = instance.displayName.trim();
-          if (id.isNotEmpty && displayName.isNotEmpty) names[id] = displayName;
-        }
-      }
-
-      if (!mounted) return;
-
-      final previousNames = _providerDisplayNamesByAgent[key] ?? const <String, String>{};
-      if (names.isEmpty) {
-        _emptyProviderDisplayFetchUntilByAgent[key] = DateTime.now().add(_emptyProviderDisplayRetryCooldown);
-        _providerDisplayLookupAttempts.remove(attemptKey);
-        if (previousNames.isEmpty) return;
-      } else if (_sameProviderDisplayNames(previousNames, names)) {
-        return;
-      }
-
-      setState(() {
-        _providerDisplayNamesByAgent[key] = names;
-        if (names.isNotEmpty) _emptyProviderDisplayFetchUntilByAgent.remove(key);
-      });
-    } catch (_) {
-      _providerDisplayLookupAttempts.remove(attemptKey);
-    } finally {
-      _providerDisplayLoadsInFlight.remove(key);
-    }
-  }
-
-  bool _sameProviderDisplayNames(Map<String, String> a, Map<String, String> b) {
-    if (a.length != b.length) return false;
-    for (final entry in a.entries) {
-      if (b[entry.key] != entry.value) return false;
-    }
-    return true;
   }
 
   void _openModelPicker(BuildContext context) {
@@ -1101,7 +1036,7 @@ class _SendStopButton extends StatelessWidget {
                   key: const Key('stop_message_progress_indicator'),
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(
+                  child: AppProgressIndicator(
                     strokeWidth: 2,
                     color: Theme.of(context).colorScheme.error,
                   ),
@@ -1132,7 +1067,7 @@ class _SendStopButton extends StatelessWidget {
           icon: const SizedBox(
             width: 16,
             height: 16,
-            child: CircularProgressIndicator(
+            child: AppProgressIndicator(
               strokeWidth: 2,
               color: Colors.black,
             ),

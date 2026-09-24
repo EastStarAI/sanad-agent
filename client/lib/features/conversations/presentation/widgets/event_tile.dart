@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_clock_scope.dart';
 import 'package:sanad_client/utils/format_utils.dart';
 import 'package:sanad_client/utils/link_utils.dart';
@@ -319,7 +320,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                 SizedBox(
                   width: 14,
                   height: 14,
-                  child: CircularProgressIndicator(
+                  child: AppProgressIndicator(
                     strokeWidth: 2,
                     color: Theme.of(context).colorScheme.primary,
                   ),
@@ -452,7 +453,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                         ? const SizedBox(
                             width: 14,
                             height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child: AppProgressIndicator(strokeWidth: 2),
                           )
                         : Icon(
                             Icons.account_tree_outlined,
@@ -693,7 +694,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         child: SizedBox(
           width: 14,
           height: 14,
-          child: CircularProgressIndicator(
+          child: AppProgressIndicator(
             key: const Key('tool_running_progress_indicator'),
             strokeWidth: 2,
             color: Theme.of(context).colorScheme.primary,

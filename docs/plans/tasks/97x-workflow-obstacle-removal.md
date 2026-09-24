@@ -1,7 +1,7 @@
 ---
 title: "97x: إزالة عوائق تنفيذ الخطة"
-status: active
-current_gate: "G2 (batches 1–3 independently accepted; batch 3 verified with real passing & real failing test proofs; direct user authorization for delivery)"
+status: active-non-blocking-follow-up
+current_gate: "G2 (batches 1–3 independently accepted; remaining backlog does not block Plan97 merge unless a specific item directly blocks the active product gate or CI)"
 remaining_estimate: "future Plan97 blockers"
 platforms: windows-first, cross-platform-when-affected
 parent_plan: docs/plans/97-windows-first-agent-client-performance.md
@@ -14,7 +14,7 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
 
 ## Goal
 
-مسار مفتوح لتسجيل وإزالة العوائق التي تمنع تنفيذ Plan97 بكفاءة وموثوقية، دون خلطها مع تغييرات المنتج التي تملكها 97c–97l. يشمل عوائق التفويض، supervisor، المهارات، التشغيل المتوازي، CI، و`sanad-dev` عندما تعيق runtime أو الاختبارات أو logs أو الاسترداد.
+مسار مفتوح لتسجيل وإزالة عوائق سير العمل دون خلطها مع تغييرات المنتج التي تملكها 97c–97l. backlog هذه المهمة غير مانع لدمج Plan97 ويُستكمل بعد الدمج؛ الاستثناء الوحيد عائق محدد مثبت يمنع بوابة المنتج الحالية أو CI مباشرة. يشمل عوائق التفويض، supervisor، المهارات، التشغيل المتوازي، CI، و`sanad-dev` عندما تعيق runtime أو الاختبارات أو logs أو الاسترداد.
 
 ## Ownership
 
@@ -41,6 +41,33 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
   - Observer cancellation tracking in `observers/<pid>.json` capturing start and cancellation cleanly; if hard kill prevents end recording, end time remains unknown rather than manufacturing an artificial duration.
   - Reviewer repair: snake_case runtime artifact fields are consumed correctly; legacy terminal timeout uses its observed terminal time and `timeout` cause rather than launch time/`-`; PID liveness alone reports `unknown`; structured cause codes are authoritative; progress writes are throttled and never persisted per token; default `watch-once` surfaces blocked/waiting/resuming; static logs distinguish source timestamps from unknown time.
 - [x] **Bounded verification timer/log follow-up (batch 3):** Pure-Dart runner in `scripts/workflow_guards/bin/verify.dart`, `scripts/workflow_guards/lib/bounded_verify.dart`, `scripts/workflow_guards/lib/src/bounded_verify.dart`, and `scripts/workflow_guards/test/bounded_verify_test.dart`. Measures elapsed wall time in milliseconds, bounds console output to final tail lines (default 5) plus 1-line summary, writes full stdout/stderr to a unique temporary log file, preserves exact child exit code, and handles Windows batch/executable invocation safety. Fully tested with unit and end-to-end CLI tests (9/9 pass, 33/33 in package).
+- [ ] **Bounded command and monitor output (future batch — uncompleted):** عائق تشغيلي ملحوظ فعلياً أثناء مراقبة المهام وسير العمل:
+  - **الملاحظة الفعلية (Observed obstacle):**
+    - أداة `pr_checks_watch` طبعت رسائل استطلاع دورية (poll) كل 5 ثوانٍ مما لوّث المخرجات.
+    - أمر `supervisor status` أعاد تاريخاً مطولاً (verbose history) ملأ سياق المحادثة (context flood).
+  - **معيار المعالجة المطلوب للدفعة المستقبلية:**
+    - المخرجات الافتراضية مقيدة وموجزة (default bounded summary / changes / final).
+    - التفاصيل وسجلات التتبع الموسعة اختيارية صراحة (details opt-in).
+    - السجلات والبيانات الكاملة محفوظة دون اقتطاع في ملفات logs مخصصة (full logs preserved).
+    - الحفاظ التام والدقيق على رمز الخروج للعملية (exit code preserved).
+  - **حالة البند:** مجدول كدفعة مستقبلية قيد الانتظار (future batch — uncompleted)؛ هذا التوثيق لحصر العائق وتعميم معيار القبول فقط دون تنفيذ أي كود برمجي أو ادعاء قياسات في هذه المرحلة.
+- [ ] **Result data fidelity and semantic terminal validation (future batch — uncompleted):** عائق دقة بيانات نتائج المهام والنجاح الدلالي الزائف (Semantic false success):
+  - **الملاحظة الفعلية والدليل (Observed obstacle & evidence):**
+    - مهمة `97f` أبلغت عن حالة `completed` مع رمز خروج `exit 0`، لكن حقل `finalMessage` احتوى على رسالة تقدم مرحلية فقط (progress: مثل «جاري...») دون أي خلاصة أو نتيجة نهائية فعلية للمهمة.
+  - **الخلل الجذري ومعيار المعالجة المطلوب للدفعة المستقبلية:**
+    - مجرد مطابقة الـ schema شكلياً (`schema-valid`) لا تكفي لضمان صحة النتيجة أو اكتمالها.
+    - الفصل الصارم بين رسائل التقدم المؤقتة (`progress`) والرسالة الختامية (`finalMessage` / final summary).
+    - منع حالات النجاح النهائي الدلالي الناقص (incomplete semantic terminal success)؛ إتمام العملية تقنياً مع مخرجات مبتورة يُعد خللاً في دقة البيانات.
+  - **معيار القبول الصريح (Acceptance Criteria):**
+    - غياب النتيجة أو الخلاصة الختامية (`missing final`) يجب أن يوسم النتيجة كـ `incomplete` أو `needs_review` أو كفشل صريح (`explicit failure`)، ويمنع اعتبارها نجاحاً نهائياً.
+    - إضافة وتطبيق اختبارات تعاقدية (`contract tests`) تمنع النجاح الزائف (`false success`) وتتحقق دلالياً من اكتمال مخرجات النتيجة.
+  - **حالة البند:** مجدول كدفعة مستقبلية قيد الانتظار (future batch — uncompleted)؛ توثيق لحصر العائق وتحديد معيار القبول الدلالي دون تنفيذ إصلاح كود الآن.
+- [ ] **Self-healing `sanad-dev status` setup (future non-blocking batch):**
+  - **الملاحظة الفعلية:** `sanad-dev status` يفشل كثيرًا برسالة تطلب تشغيل `sanad-dev setup` يدويًا بدل إكمال طلب الحالة.
+  - **السلوك المطلوب:** عندما يثبت status أن setup مطلوب وقابل للإصلاح الآمن، يطبع سطر log موجزًا يوضح أن setup مطلوب، يشغّل setup تلقائيًا مرة واحدة، ثم يعيد محاولة status ويعرض مخرجات status الطبيعية فقط؛ لا يعيد payload الطويل الخاص بـsetup في المسار الناجح.
+  - **حدود الأمان:** لا loop أو retry غير مقيد، ولا إخفاء لفشل setup؛ failure يعرض سببًا موجزًا وقابلًا للتنفيذ ويحافظ على exit code. لا source switch أو runtime restart أو إنشاء runtime إضافية، ولا auto-setup لأخطاء ownership/security/explicit-home غير القابلة للإصلاح.
+  - **القبول:** اختبارات تغطي setup-required→setup-success→normal-status، setup failure، repeated failure/no-loop، JSON/text output، ومخرجات bounded؛ يبقى البند متابعة بعد دمج Plan97 ما لم يمنع بوابة حالية مباشرة.
+- [ ] **Supervisor watch-once stalled-error wakeup (batch 4):** إذا كان الأوركستريتور في وضع المراقبة وحدث خطأ داخل محادثة الوكيل الفرعي (`blocked`, provider timeout, invalid request, gateway loss, or stopped/failed) ثم بقيت المحادثة بلا تعافٍ تلقائي لأكثر من 60 ثانية، يجب أن يعود `watch-once` فورًا بحدث قابل للتصرف بدل الاستمرار في الانتظار حتى انتهاء نافذة المراقبة. هذا يمنع حالة مراقبة مضللة حيث يبدو العمل جارياً بينما الوكيل متوقف، كما حدث أثناء مراقبة 97h بعد `provider_timeout`. DoD: regression يثبت أن الأخطاء العابرة الأقصر من 60 ثانية لا توقظ المراقب إذا تعافت، وأن الخطأ المستمر لأكثر من 60 ثانية يوقظ `watch-once` مع task/session/cause/state-since وبدون scheduled polling.
 - [ ] **Future blockers:** أي خلل مثبت في `sanad-dev` أو delegation/supervisor/skills/CI يعطل العمل أو الاختبارات أو logs أو ownership يضاف هنا قبل إصلاحه.
 
 ## Gates for each batch
@@ -61,12 +88,22 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
 
 ## Acceptance criteria
 
+- **معيار المخرجات المقيدة (Bounded Output Standard):** المخرجات الافتراضية لأدوات المراقبة والأوامر تكون مقيدة وموجزة حصرًا (default bounded summary / changes / final)، والتفاصيل الموسعة والتاريخ المطول اختيارية صراحة (details opt-in)، مع حفظ السجلات الكاملة في ملفات logs مخصصة (full logs preserved)، والحفاظ الدقيق على رمز الخروج (exit code preserved / صحيح).
+- **معيار دقة النتائج والتحقق الدلالي (Result Fidelity & Semantic Acceptance):** مجرد مطابقة الـ schema شكلياً (`schema-valid`) لا تكفي؛ يجب فصل الـ progress عن الـ final، ومنع النجاح النهائي الدلالي الناقص (terminal success). عند غياب الخلاصة النهائية (`missing final`)، يجب تصنيف النتيجة كـ `incomplete` أو `needs_review` أو فشل صريح (`failure`)، مع فرض اختبارات تعاقدية (`contract tests`) تمنع النجاح الزائف (`false success`).
 - العائق المثبت لا يتكرر في السيناريو نفسه، ويعطي الفشل المستقبلي رسالة fail-closed قابلة للتنفيذ.
 - لا runtime إضافية على Home واحدة، ولا workspace mutation، ولا source handoff ضمن الإصلاح.
-- لا polling مجدول، ولا انتظار blocking داخل الأوركستريتور، ولا تكرار full suites بلا invalidation.
+- لا polling مجدول غير مقيد في المخرجات، ولا انتظار blocking داخل الأوركستريتور، ولا تكرار full suites بلا invalidation.
 - العوائق المستقبلية تبقى مرئية هنا حتى الإصلاح أو التأجيل المعلل.
 
 ## Evidence
+
+### Batch 4: Deterministic run_delegation nonterminal/allow-all-tools waits (urgent CI fix)
+
+- **Obstacle:** In `agent/test/cli/run_delegation_test.dart` the `needs_input`/`needs_permission` surfacing test and the `--allow-all-tools`-leaves-`system_ask_user`-pending test waited on the oneshot runner's serialized, asynchronous artifact writes and permission handling via hardcoded `Future.delayed(30ms)` sleeps. Under slow/parallel CI those sleeps race the async record queue and intermittently observe `readResult() == null` or a stale status — a timing flake, not a weak assertion.
+- **Repair (smallest owning fixture, machine contract preserved):** Added a bounded `waitFor(predicate)` helper plus `_statusIs(outDir, status, {requestId})` to the test fixture and replaced every timing sleep in these tests with a wait on the *actual* emitted contract condition (`result.json` status + `pending_intervention` fields, or `permissionResponses` count). Initial-start waits now await `fakeClient.turnDispatched` instead of a fixed delay. None of the assertions were weakened; step-specific assertions on status/`pending_intervention`/`tool_name`/`sessionId`/auto-approval counts remain byte-for-byte intact.
+- **Files changed:** `agent/test/cli/run_delegation_test.dart` (fixture only; no production source change).
+- **Focused regressions (run on Windows, real fvm):** `fvm dart test test/cli/run_delegation_test.dart` — 21/21 pass, repeated 5× (stable); `fvm dart analyze test/cli/run_delegation_test.dart` — 0 issues. Blast radius: `fvm dart test test/cli/run_delegation_test.dart test/cli/run_command_test.dart test/cli/session_command_test.dart test/cli/run_artifacts_test.dart` — 77/77 pass; `fvm dart analyze lib/cli test/cli` — 0 issues.
+- **Constraints honored:** no production source change, no weakened assertions, no second runtime, no source switch.
 
 ### Batch 1 (implemented in the Plan97 aggregation worktree, branch `perf/97-windows-first-performance`)
 

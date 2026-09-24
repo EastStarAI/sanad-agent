@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sanad_client/core/di/injection.dart';
@@ -71,7 +72,7 @@ class ProfilePage extends StatelessWidget {
             ? const Center(
                 child: Padding(
                   padding: EdgeInsets.all(16),
-                  child: CircularProgressIndicator(),
+                  child: AppProgressIndicator(),
                 ),
               )
             : Column(
@@ -265,7 +266,7 @@ class _GeneralPageState extends State<GeneralPage> {
                         icon: _checking
                             ? const SizedBox.square(
                                 dimension: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: AppProgressIndicator(strokeWidth: 2),
                               )
                             : const Icon(Icons.system_update_alt),
                         label: Text(AppLocalizations.of(context)!.checkForUpdates),
@@ -1519,7 +1520,7 @@ class _DeviceRenameDialogState extends State<DeviceRenameDialog> {
           child: _saving
               ? const SizedBox.square(
                   dimension: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: AppProgressIndicator(strokeWidth: 2),
                 )
               : const Text('Rename'),
         ),

@@ -29,14 +29,25 @@ class ConversationCacheRepository {
   final ConversationCacheStore _cache;
   final ConversationRepository _transport;
   final Future<void> Function()? _flushPersistence;
+  final Duration debounceDuration;
+
+  final Map<String, Future<void>> _workspacesRefreshInFlight = {};
+  final Map<String, Future<void>> _deviceSidebarRefreshInFlight = {};
+  final Map<String, Future<void>> _sectionRefreshInFlight = {};
+  final Map<String, Future<void>> _loadMoreInFlight = {};
+  final Map<String, DateTime> _lastSectionRefreshStartedAt = {};
+  final Map<String, DateTime> _lastDeviceSidebarRefreshStartedAt = {};
 
   ConversationCacheRepository({
     required ConversationCacheStore cache,
     required ConversationRepository transport,
     Future<void> Function()? flushPersistence,
+    this.debounceDuration = Duration.zero,
   }) : _cache = cache,
        _transport = transport,
        _flushPersistence = flushPersistence;
+
+  static String _sectionKey(String deviceId, String? workspaceId) => '$deviceId:${workspaceId ?? ''}';
 
   // ---------------------------------------------------------------------------
   // Device context
@@ -70,7 +81,20 @@ class ConversationCacheRepository {
   // Workspaces
   // ---------------------------------------------------------------------------
 
-  Future<void> refreshWorkspaces(DeviceConfig device) async {
+  Future<void> refreshWorkspaces(DeviceConfig device, {bool force = false}) {
+    final existing = _workspacesRefreshInFlight[device.id];
+    if (existing != null) return existing;
+
+    final future = _runRefreshWorkspaces(device);
+    _workspacesRefreshInFlight[device.id] = future;
+    return future.whenComplete(() {
+      if (identical(_workspacesRefreshInFlight[device.id], future)) {
+        unawaited(_workspacesRefreshInFlight.remove(device.id));
+      }
+    });
+  }
+
+  Future<void> _runRefreshWorkspaces(DeviceConfig device) async {
     final generation = _cache.advanceWorkspacesGeneration(device.id);
     _cache.setWorkspacesLoading(device.id);
     try {
@@ -83,8 +107,29 @@ class ConversationCacheRepository {
 
   /// Refresh all sidebar resources for one device while preserving its cached
   /// snapshot until each authoritative response arrives.
-  Future<void> refreshDeviceSidebar(DeviceConfig device) async {
-    await refreshWorkspaces(device);
+  Future<void> refreshDeviceSidebar(DeviceConfig device, {bool force = false}) {
+    final existing = _deviceSidebarRefreshInFlight[device.id];
+    if (existing != null) return existing;
+
+    if (!force && debounceDuration > Duration.zero) {
+      final last = _lastDeviceSidebarRefreshStartedAt[device.id];
+      if (last != null && DateTime.now().difference(last) < debounceDuration) {
+        return Future.value();
+      }
+    }
+
+    _lastDeviceSidebarRefreshStartedAt[device.id] = DateTime.now();
+    final future = _runRefreshDeviceSidebar(device, force: force);
+    _deviceSidebarRefreshInFlight[device.id] = future;
+    return future.whenComplete(() {
+      if (identical(_deviceSidebarRefreshInFlight[device.id], future)) {
+        unawaited(_deviceSidebarRefreshInFlight.remove(device.id));
+      }
+    });
+  }
+
+  Future<void> _runRefreshDeviceSidebar(DeviceConfig device, {bool force = false}) async {
+    await refreshWorkspaces(device, force: force);
     final context = _cache.snapshot.contexts[device.id];
     final workspaceIds =
         context?.workspaces.workspaces
@@ -97,8 +142,8 @@ class ConversationCacheRepository {
             .toList(growable: false) ??
         const <String>[];
     await Future.wait([
-      refreshUnscopedConversations(device),
-      for (final workspaceId in workspaceIds) refreshWorkspaceConversations(device, workspaceId),
+      refreshUnscopedConversations(device, force: force),
+      for (final workspaceId in workspaceIds) refreshWorkspaceConversations(device, workspaceId, force: force),
     ]);
   }
 
@@ -106,20 +151,48 @@ class ConversationCacheRepository {
   // Conversation sections
   // ---------------------------------------------------------------------------
 
-  Future<void> refreshUnscopedConversations(DeviceConfig device) async {
-    await _refreshSection(device, workspaceId: null);
+  Future<void> refreshUnscopedConversations(DeviceConfig device, {bool force = false}) async {
+    await _refreshSection(device, workspaceId: null, force: force);
   }
 
   Future<void> refreshWorkspaceConversations(
     DeviceConfig device,
-    String workspaceId,
-  ) async {
-    await _refreshSection(device, workspaceId: workspaceId);
+    String workspaceId, {
+    bool force = false,
+  }) async {
+    await _refreshSection(device, workspaceId: workspaceId, force: force);
   }
 
   Future<void> _refreshSection(
     DeviceConfig device, {
     required String? workspaceId,
+    bool force = false,
+  }) {
+    final key = _sectionKey(device.id, workspaceId);
+    final existing = _sectionRefreshInFlight[key];
+    if (existing != null) return existing;
+
+    if (!force && debounceDuration > Duration.zero) {
+      final last = _lastSectionRefreshStartedAt[key];
+      if (last != null && DateTime.now().difference(last) < debounceDuration) {
+        return Future.value();
+      }
+    }
+
+    _lastSectionRefreshStartedAt[key] = DateTime.now();
+    final future = _runRefreshSection(device, workspaceId: workspaceId, key: key);
+    _sectionRefreshInFlight[key] = future;
+    return future.whenComplete(() {
+      if (identical(_sectionRefreshInFlight[key], future)) {
+        unawaited(_sectionRefreshInFlight.remove(key));
+      }
+    });
+  }
+
+  Future<void> _runRefreshSection(
+    DeviceConfig device, {
+    required String? workspaceId,
+    required String key,
   }) async {
     final generation = _cache.advanceGeneration(device.id, workspaceId);
     _cache.setSectionLoading(device.id, workspaceId);
@@ -149,7 +222,13 @@ class ConversationCacheRepository {
   Future<void> loadMore(
     DeviceConfig device, {
     required String? workspaceId,
-  }) async {
+  }) {
+    final key = _sectionKey(device.id, workspaceId);
+    final existingLoadMore = _loadMoreInFlight[key];
+    if (existingLoadMore != null) {
+      return existingLoadMore;
+    }
+
     final page = _cache.snapshot.contexts[device.id];
     final section = workspaceId == null ? page?.unscopedConversations : page?.workspaceConversationPages[workspaceId];
     if (section == null ||
@@ -157,8 +236,28 @@ class ConversationCacheRepository {
         section.nextCursor == null ||
         section.state.isLoading ||
         _cache.isSectionLoadingMore(device.id, workspaceId)) {
-      return;
+      return Future.value();
     }
+    final future = _runLoadMore(
+      device,
+      workspaceId: workspaceId,
+      key: key,
+      cursor: section.nextCursor!,
+    );
+    _loadMoreInFlight[key] = future;
+    return future.whenComplete(() {
+      if (identical(_loadMoreInFlight[key], future)) {
+        unawaited(_loadMoreInFlight.remove(key));
+      }
+    });
+  }
+
+  Future<void> _runLoadMore(
+    DeviceConfig device, {
+    required String? workspaceId,
+    required String key,
+    required String cursor,
+  }) async {
     final generation = _cache.advanceGeneration(device.id, workspaceId);
     _cache.setSectionLoadMoreInProgress(device.id, workspaceId);
     try {
@@ -168,7 +267,7 @@ class ConversationCacheRepository {
           workspaceId: workspaceId,
           unscopedOnly: workspaceId == null,
           limit: _nextPageSize,
-          cursor: section.nextCursor,
+          cursor: cursor,
         ),
       );
       _cache.applySectionPageAppended(
@@ -557,10 +656,20 @@ class ConversationCacheRepository {
   // ---------------------------------------------------------------------------
 
   void clearDevice(String deviceId) {
+    unawaited(_workspacesRefreshInFlight.remove(deviceId));
+    unawaited(_deviceSidebarRefreshInFlight.remove(deviceId));
+    _lastDeviceSidebarRefreshStartedAt.remove(deviceId);
+    final prefix = '$deviceId:';
+    _sectionRefreshInFlight.removeWhere((k, _) => k.startsWith(prefix));
+    _loadMoreInFlight.removeWhere((k, _) => k.startsWith(prefix));
+    _lastSectionRefreshStartedAt.removeWhere((k, _) => k.startsWith(prefix));
     _cache.clearDevice(deviceId);
   }
 
   void clearCloudUserScope(Set<String> cloudDeviceIds) {
+    for (final id in cloudDeviceIds) {
+      clearDevice(id);
+    }
     _cache.clearCloudUserScope(cloudDeviceIds);
   }
 

@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:sanad_client/core/di/injection.dart';
@@ -241,7 +242,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
                                 ? const SizedBox(
                                     width: 18,
                                     height: 18,
-                                    child: CircularProgressIndicator(
+                                    child: AppProgressIndicator(
                                       strokeWidth: 2,
                                     ),
                                   )
@@ -361,7 +362,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
       return const Center(
         child: Padding(
           padding: EdgeInsets.all(24),
-          child: CircularProgressIndicator(strokeWidth: 2),
+          child: AppProgressIndicator(strokeWidth: 2),
         ),
       );
     }
@@ -903,7 +904,7 @@ class _ProviderHeaderDelegate extends SliverPersistentHeaderDelegate {
                       child: SizedBox(
                         width: 14,
                         height: 14,
-                        child: CircularProgressIndicator(
+                        child: AppProgressIndicator(
                           value: progress,
                           strokeWidth: 2.0,
                           backgroundColor: theme.colorScheme.onSurface.withValues(alpha: 0.08),
@@ -920,7 +921,7 @@ class _ProviderHeaderDelegate extends SliverPersistentHeaderDelegate {
                         ? const SizedBox(
                             width: 14,
                             height: 14,
-                            child: CircularProgressIndicator(strokeWidth: 1.5),
+                            child: AppProgressIndicator(strokeWidth: 1.5),
                           )
                         : Icon(
                             Icons.refresh,

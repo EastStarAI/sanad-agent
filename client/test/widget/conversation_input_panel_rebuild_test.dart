@@ -25,6 +25,7 @@ import 'package:sanad_client/features/devices/presentation/bloc/device_state.dar
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input_panel.dart';
 import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/models/provider_usage_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
@@ -483,6 +484,11 @@ void main() {
   testWidgets('model chip provider lookup does not repeat after unmatched snapshot result', (tester) async {
     final providerClient = _FakeProviderLookupClient();
     getIt.registerSingleton<ProviderSetupClient>(providerClient);
+    // 97h: the provider display-name catalog is owned by ProviderUsageCubit,
+    // so the widget's lookup now flows through the owner, keyed by device.
+    final usageCubit = ProviderUsageCubit(localDeviceId: 'hardware-1', client: providerClient);
+    getIt.registerSingleton<ProviderUsageCubit>(usageCubit);
+    addTearDown(usageCubit.close);
     await sessionCubit.selectSession(
       Session(
         id: 'session-1',
@@ -894,6 +900,90 @@ void main() {
     expect(conversationRepository.createdWorkspaces.single['path'], isNull);
   });
 
+  testWidgets(
+    '20 resize/theme/rebuild/remount cycles add zero Agent requests after initial load',
+    (tester) async {
+      final countingClient = _CountingProviderClient();
+      getIt.registerSingleton<ProviderSetupClient>(countingClient);
+      final usageCubit = ProviderUsageCubit(localDeviceId: 'hardware-1', client: countingClient);
+      getIt.registerSingleton<ProviderUsageCubit>(usageCubit);
+      addTearDown(usageCubit.close);
+
+      await sessionCubit.selectSession(
+        Session(
+          id: 'session-1',
+          title: 'Chat',
+          deviceId: agent.id,
+          createdAt: DateTime(2026, 1, 1),
+          updatedAt: DateTime(2026, 1, 1),
+          model: 'glm-5.2',
+          modelProvider: 'provider-1',
+        ),
+      );
+
+      Widget actions({Key? key, ThemeData? theme}) => Theme(
+        data: theme ?? ThemeData.light(),
+        child: KeyedSubtree(
+          key: key,
+          child: ConversationBottomActions(
+            activeAgent: agent,
+            inputSlice: const ConversationInputSlice(
+              isProcessing: false,
+              nextMessageModel: 'glm-5.2',
+              nextMessageProviderId: 'provider-1',
+              nextMessageThinkingMode: null,
+              availableWorkspaces: [],
+              selectedWorkspace: null,
+              isLoadingWorkspaces: false,
+              requiresWorkspace: false,
+              permissionMode: WorkspacePermissionMode.defaultMode,
+              isLoadingPermissionMode: false,
+              pendingSuspendedRequest: null,
+              runtimeNotice: null,
+              queuedMessages: [],
+            ),
+            capabilities: const Capability(supportsModelChange: true, supportsThinkingModeChange: true),
+            dimTextColor: Colors.black,
+            chipBgColor: Colors.white,
+            borderColor: Colors.black12,
+            onConfirmFullAccess: () async => true,
+          ),
+        ),
+      );
+
+      await pumpTestApp(tester, sessionCubit: sessionCubit, child: actions());
+      await tester.pumpAndSettle();
+
+      final initialSnapshot = countingClient.modelSnapshotCalls;
+      final initialSupport = countingClient.usageSupportCalls;
+      final initialGets = countingClient.usageGetCalls;
+      expect(initialSnapshot, 1, reason: 'one catalog load for initial mount');
+      expect(initialSupport, 1, reason: 'one usage.support for initial mount');
+      expect(initialGets, 1, reason: 'one usage.get for initial mount');
+
+      // 20 cycles of resize + theme rebuild + full remount: the owner
+      // (ProviderUsageCubit) must keep it at zero extra Agent requests.
+      for (var i = 0; i < 20; i++) {
+        final narrow = i.isEven;
+        await tester.binding.setSurfaceSize(Size(narrow ? 900 : 1400, 860));
+        await pumpTestApp(
+          tester,
+          sessionCubit: sessionCubit,
+          child: actions(
+            key: ValueKey('cycle-$i'),
+            theme: ThemeData(brightness: i.isEven ? Brightness.light : Brightness.dark),
+          ),
+        );
+        await tester.pumpAndSettle();
+      }
+
+      expect(countingClient.modelSnapshotCalls, initialSnapshot, reason: 'no catalog re-fetch on rebuild/remount');
+      expect(countingClient.usageSupportCalls, initialSupport, reason: 'no support re-query on rebuild/remount');
+      expect(countingClient.usageGetCalls, initialGets, reason: 'no usage re-fetch on rebuild/remount');
+      await tester.binding.setSurfaceSize(null);
+    },
+  );
+
   testWidgets('appends dropped file paths to input field when files are dragged and dropped', (tester) async {
     socket.setConnected(true);
     agent = DeviceConfig(
@@ -996,6 +1086,69 @@ class _TestSessionMessagesCubit extends SessionMessagesCubit {
   void emitState(SessionMessagesState state) {
     emit(state);
   }
+}
+
+class _CountingProviderClient extends ProviderSetupClient {
+  var modelSnapshotCalls = 0;
+  var usageSupportCalls = 0;
+  var usageGetCalls = 0;
+
+  @override
+  Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) async {
+    modelSnapshotCalls += 1;
+    return const ModelCacheSnapshotDto(
+      instances: [
+        ModelCacheInstanceDto(
+          id: 'provider-1',
+          displayName: 'Z.AI Coding Plan',
+          defaultModel: 'glm-5.2',
+          status: 'ready',
+          isDefault: true,
+          cacheStatus: 'fetched',
+          models: [ModelCacheModelDto(id: 'glm-5.2')],
+        ),
+      ],
+      recent: [],
+    );
+  }
+
+  @override
+  Future<List<ProviderInstanceDto>> listInstances({DeviceConfig? agent}) async => const [];
+
+  @override
+  Future<ProviderUsageSupportDto> usageSupport({
+    required List<String> providerInstanceIds,
+    DeviceConfig? agent,
+  }) async {
+    usageSupportCalls += 1;
+    return ProviderUsageSupportDto(
+      support: {for (final id in providerInstanceIds) id: true},
+    );
+  }
+
+  @override
+  Future<ProviderUsageResultDto> usageGet({
+    required String providerInstanceId,
+    DeviceConfig? agent,
+  }) async {
+    usageGetCalls += 1;
+    return ProviderUsageResultDto(
+      status: 'available',
+      providerInstanceId: providerInstanceId,
+      snapshot: ProviderUsageSnapshotDto(
+        providerInstanceId: providerInstanceId,
+        providerTemplateId: 'openai-codex',
+        source: 'test',
+        fetchedAt: DateTime.now().toUtc(),
+        windows: const [
+          ProviderUsageWindowDto(type: 'weekly', label: 'Weekly', usedPercent: 10),
+        ],
+      ),
+    );
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _FakeProviderLookupClient extends ProviderSetupClient {

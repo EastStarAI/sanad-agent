@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 
@@ -162,7 +163,8 @@ class ToolPresentationHelper {
 
     final rawName = event.toolName ?? 'Using Tool';
     final cleanTitle = cleanToolTitle(rawName);
-    final displayTitle = displayToolTitle(event, isArabic: isArabic);
+    final l10n = AppLocalizations.of(context);
+    final displayTitle = displayToolTitle(event, l10n: l10n, isArabic: isArabic);
 
     // Parse input and output
     final input = event.toolInput;
@@ -570,13 +572,13 @@ class ToolPresentationHelper {
     };
   }
 
-  static String displayToolTitle(CanonicalEvent event, {bool isArabic = false}) {
+  static String displayToolTitle(CanonicalEvent event, {AppLocalizations? l10n, bool isArabic = false}) {
     final cleanTitle = cleanToolTitle(event.toolName ?? 'Using Tool');
     if (event.status == EventStatus.cancelled) {
-      return isArabic ? 'ملغى' : 'Cancelled';
+      return l10n?.statusCancelled ?? (isArabic ? 'ملغى' : 'Cancelled');
     }
     if ((cleanTitle == 'Ran' || cleanTitle == 'تشغيل') && event.status == EventStatus.running) {
-      return isArabic ? 'قيد التشغيل' : 'Running';
+      return l10n?.statusRunning ?? (isArabic ? 'قيد التشغيل' : 'Running');
     }
     return localizedTitle(cleanTitle, isArabic: isArabic);
   }

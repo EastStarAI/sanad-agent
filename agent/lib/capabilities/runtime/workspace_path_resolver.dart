@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:meta/meta.dart';
 import 'package:path/path.dart' as p;
 
 class WorkspacePathResolution {
@@ -19,13 +20,39 @@ class WorkspacePathResolution {
 class WorkspacePathResolver {
   const WorkspacePathResolver();
 
+  static final Map<String, String> _workspaceRootCache = {};
+
+  @visibleForTesting
+  static void clearCache() {
+    _workspaceRootCache.clear();
+  }
+
   String normalizeWorkspaceRoot(String workspacePath) {
     final trimmed = workspacePath.trim();
     if (trimmed.isEmpty) {
       throw const FormatException('Workspace path is required.');
     }
 
-    return _canonicalizeExistingPath(trimmed);
+    final cached = _workspaceRootCache[trimmed];
+    if (cached != null) return cached;
+
+    final canonical = _canonicalizeExistingPath(trimmed);
+    _workspaceRootCache[trimmed] = canonical;
+    return canonical;
+  }
+
+  Future<String> normalizeWorkspaceRootAsync(String workspacePath) async {
+    final trimmed = workspacePath.trim();
+    if (trimmed.isEmpty) {
+      throw const FormatException('Workspace path is required.');
+    }
+
+    final cached = _workspaceRootCache[trimmed];
+    if (cached != null) return cached;
+
+    final canonical = await _canonicalizeExistingPathAsync(trimmed);
+    _workspaceRootCache[trimmed] = canonical;
+    return canonical;
   }
 
   /// Validates that [rawExecutionRoot] exists and is a directory, returning its
@@ -108,6 +135,71 @@ class WorkspacePathResolver {
       inputPath: inputPath,
     );
     return _ensureWithinWorkspace(
+      workspaceRoot: resolution.workspaceRoot,
+      resolvedPath: resolution.resolvedPath,
+      authorizedExternalRoot: authorizedExternalRoot,
+    );
+  }
+
+  Future<WorkspacePathResolution> classifyExistingPathAsync({
+    required String workspaceRoot,
+    required String inputPath,
+  }) async {
+    final normalizedWorkspace = await normalizeWorkspaceRootAsync(
+      workspaceRoot,
+    );
+    final candidate = _candidatePath(normalizedWorkspace, inputPath);
+    final type = await FileSystemEntity.type(candidate, followLinks: false);
+    if (type == FileSystemEntityType.notFound) {
+      throw FileSystemException('Path does not exist.', candidate);
+    }
+
+    return WorkspacePathResolution(
+      workspaceRoot: normalizedWorkspace,
+      resolvedPath: await _canonicalizeExistingPathAsync(candidate),
+    );
+  }
+
+  Future<WorkspacePathResolution> classifyPathAllowMissingAsync({
+    required String workspaceRoot,
+    required String inputPath,
+  }) async {
+    final normalizedWorkspace = await normalizeWorkspaceRootAsync(
+      workspaceRoot,
+    );
+    final candidate = _candidatePath(normalizedWorkspace, inputPath);
+    return WorkspacePathResolution(
+      workspaceRoot: normalizedWorkspace,
+      resolvedPath: await _canonicalizePathAllowMissingAsync(candidate),
+    );
+  }
+
+  Future<String> resolveExistingPathAsync({
+    required String workspaceRoot,
+    required String inputPath,
+    String? authorizedExternalRoot,
+  }) async {
+    final resolution = await classifyExistingPathAsync(
+      workspaceRoot: workspaceRoot,
+      inputPath: inputPath,
+    );
+    return _ensureWithinWorkspaceAsync(
+      workspaceRoot: resolution.workspaceRoot,
+      resolvedPath: resolution.resolvedPath,
+      authorizedExternalRoot: authorizedExternalRoot,
+    );
+  }
+
+  Future<String> resolvePathAllowMissingAsync({
+    required String workspaceRoot,
+    required String inputPath,
+    String? authorizedExternalRoot,
+  }) async {
+    final resolution = await classifyPathAllowMissingAsync(
+      workspaceRoot: workspaceRoot,
+      inputPath: inputPath,
+    );
+    return _ensureWithinWorkspaceAsync(
       workspaceRoot: resolution.workspaceRoot,
       resolvedPath: resolution.resolvedPath,
       authorizedExternalRoot: authorizedExternalRoot,
@@ -206,6 +298,85 @@ class WorkspacePathResolver {
 
     if (authorizedExternalRoot != null) {
       final normalizedAuthorizedRoot = _canonicalizePathAllowMissing(
+        authorizedExternalRoot,
+      );
+      if (p.equals(normalizedAuthorizedRoot, normalizedPath) ||
+          p.isWithin(normalizedAuthorizedRoot, normalizedPath)) {
+        return normalizedPath;
+      }
+    }
+
+    throw FileSystemException(
+      'Path escapes the current workspace without authorization.',
+      normalizedPath,
+    );
+  }
+
+  Future<String> _canonicalizeExistingPathAsync(String rawPath) async {
+    try {
+      final type = await FileSystemEntity.type(rawPath, followLinks: false);
+      if (type == FileSystemEntityType.directory) {
+        return await Directory(rawPath).resolveSymbolicLinks();
+      }
+      if (type == FileSystemEntityType.file ||
+          type == FileSystemEntityType.link) {
+        return await File(rawPath).resolveSymbolicLinks();
+      }
+    } catch (_) {}
+    return p.normalize(p.absolute(rawPath));
+  }
+
+  Future<String> _canonicalizePathAllowMissingAsync(String rawPath) async {
+    final absolute = p.normalize(p.absolute(rawPath));
+    final existingAncestor = await _nearestExistingAncestorAsync(absolute);
+    if (existingAncestor == null) {
+      return absolute;
+    }
+
+    final ancestorCanonical = await _canonicalizeExistingPathAsync(
+      existingAncestor.path,
+    );
+    final relativeRemainder = p.relative(absolute, from: existingAncestor.path);
+    if (relativeRemainder == '.') {
+      return ancestorCanonical;
+    }
+    return p.normalize(p.join(ancestorCanonical, relativeRemainder));
+  }
+
+  Future<FileSystemEntity?> _nearestExistingAncestorAsync(
+    String absolutePath,
+  ) async {
+    var cursor = absolutePath;
+    while (true) {
+      final type = await FileSystemEntity.type(cursor, followLinks: false);
+      if (type != FileSystemEntityType.notFound) {
+        return type == FileSystemEntityType.directory
+            ? Directory(cursor)
+            : File(cursor);
+      }
+
+      final parent = p.dirname(cursor);
+      if (parent == cursor) {
+        return null;
+      }
+      cursor = parent;
+    }
+  }
+
+  Future<String> _ensureWithinWorkspaceAsync({
+    required String workspaceRoot,
+    required String resolvedPath,
+    String? authorizedExternalRoot,
+  }) async {
+    final normalizedWorkspace = p.normalize(workspaceRoot);
+    final normalizedPath = p.normalize(resolvedPath);
+    if (p.equals(normalizedWorkspace, normalizedPath) ||
+        p.isWithin(normalizedWorkspace, normalizedPath)) {
+      return normalizedPath;
+    }
+
+    if (authorizedExternalRoot != null) {
+      final normalizedAuthorizedRoot = await _canonicalizePathAllowMissingAsync(
         authorizedExternalRoot,
       );
       if (p.equals(normalizedAuthorizedRoot, normalizedPath) ||

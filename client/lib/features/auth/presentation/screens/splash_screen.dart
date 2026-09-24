@@ -6,6 +6,7 @@ import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/gateway_connection_cubit.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -116,7 +117,7 @@ class _SplashScreenState extends State<SplashScreen> {
                       return Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          CircularProgressIndicator(
+                          AppProgressIndicator(
                             color: theme.colorScheme.primary,
                             strokeWidth: 3,
                           ),
@@ -136,7 +137,7 @@ class _SplashScreenState extends State<SplashScreen> {
                       return Column(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          CircularProgressIndicator(
+                          AppProgressIndicator(
                             color: theme.colorScheme.primary,
                             strokeWidth: 3,
                           ),

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/markdown_style_helper.dart';
@@ -123,7 +124,7 @@ void main() {
     );
 
     // Spinner for the running state.
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(AppProgressIndicator), findsOneWidget);
     // Dim "Thinking:" prefix + first five words only (rendered via RichText).
     final rowText = _richTextContent(tester);
     expect(rowText, contains('Thinking:'));

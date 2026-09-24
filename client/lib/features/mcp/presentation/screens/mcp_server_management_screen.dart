@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
@@ -678,7 +679,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
               child: Container(
                 color: theme.colorScheme.surface.withValues(alpha: 0.72),
                 alignment: Alignment.center,
-                child: const CircularProgressIndicator(),
+                child: const AppProgressIndicator(),
               ),
             ),
           ),

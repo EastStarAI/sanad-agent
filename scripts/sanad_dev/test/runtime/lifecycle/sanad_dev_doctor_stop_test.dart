@@ -9,6 +9,7 @@ import 'package:sanad_dev/src/infrastructure/runtime_context.dart'
     as runtime_context;
 import 'package:sanad_dev/src/runtime/ownership/runtime_ownership.dart'
     as runtime_ownership;
+import '../../support/sanad_dev_caller_env.dart';
 import '../../support/sanad_dev_test_fixtures.dart';
 
 void main() {
@@ -555,57 +556,110 @@ void main() {
       expect(deleted, isFalse);
     });
 
-    test('selectAgentInstance returns null when exitOnError is false', () async {
-      final selected = await sanad_dev.selectAgentInstance(
-        58999,
-        exitOnError: false,
-        sanadHomePath: Directory.systemTemp.path,
-      );
-      expect(selected, isNull);
-    });
+    test(
+      'preserves the lease when the launcher returns during recovery (partial exit)',
+      () async {
+        var deleted = false;
+        final error = await sanad_dev.recoverStaleAgentLease(
+          runtime: testLinkedRuntime,
+          state: state(),
+          record: record(),
+          activeHome: '/isolated/home',
+          launcherLive: false,
+          requestPermanentRestart: () async => true,
+          waitForAgentExit: () async => true,
+          launcherIsRunning: () async => true,
+          discoverAgents: () async => const [],
+          discoverClients: () async => const [],
+          deleteRecord: () async => deleted = true,
+        );
+        expect(error, contains('became live'));
+        expect(deleted, isFalse);
 
-    test('handleAgentRestart returns false without process exit when exitOnError is false', () async {
-      final result = await sanad_dev.handleAgentRestart(
-        58999,
-        exitOnError: false,
-        sanadHomePath: Directory.systemTemp.path,
-      );
-      expect(result, isFalse);
-    });
+        final notStopped = await sanad_dev.recoverStaleAgentLease(
+          runtime: testLinkedRuntime,
+          state: state(),
+          record: record(),
+          activeHome: '/isolated/home',
+          launcherLive: false,
+          requestPermanentRestart: () async => true,
+          waitForAgentExit: () async => false,
+          launcherIsRunning: () async => false,
+          discoverAgents: () async => const [],
+          discoverClients: () async => const [],
+          deleteRecord: () async => deleted = true,
+        );
+        expect(notStopped, contains('did not stop'));
+        expect(deleted, isFalse);
+      },
+    );
 
-    test('handleRuntimeStop with force: true stops an orphaned runtime', () async {
-      final home = await Directory.systemTemp.createTemp('sanad-stop-force-');
-      addTearDown(() => home.delete(recursive: true));
-      final runtime = await runtime_context.discoverSanadDevRuntime(
-        callerDirectory: Directory.current.path,
-        sanadHomeOverride: home.path,
-      );
-      final record = runtime_ownership.RuntimeLauncherRecord(
-        launcherId: 'test-launcher',
-        runtimeNonce: 'test-nonce',
-        launcherPid: 999999,
-        launcherProcessIdentity: 'test-identity',
-        workspaceHash: runtime.worktreeId.split('-').last,
-        sourceRoot: runtime.repositoryRoot,
-        agentPort: runtime.agentPort,
-        sanadHome: home.path,
-        preferencesPrefix: '',
-        clientPids: const [],
-        vmServicePorts: const [],
-        status: 'running',
-        updatedAt: DateTime.now().toUtc(),
-      );
-      await runtime_ownership.writeRuntimeLauncherRecord(record);
-      final recordFile = File(runtime_ownership.runtimeLauncherRecordPath(home.path, runtime.agentPort));
-      expect(await recordFile.exists(), isTrue);
+    test(
+      'selectAgentInstance returns null when exitOnError is false',
+      () async {
+        final selected = await sanad_dev.selectAgentInstance(
+          58999,
+          exitOnError: false,
+          sanadHomePath: Directory.systemTemp.path,
+        );
+        expect(selected, isNull);
+      },
+    );
 
-      await sanad_dev.handleRuntimeStop(
-        force: true,
-        sanadHomePath: home.path,
-        processRunning: (_) async => false,
-      );
+    test(
+      'handleAgentRestart returns false without process exit when exitOnError is false',
+      () async {
+        final result = await sanad_dev.handleAgentRestart(
+          58999,
+          exitOnError: false,
+          sanadHomePath: Directory.systemTemp.path,
+        );
+        expect(result, isFalse);
+      },
+    );
 
-      expect(await recordFile.exists(), isFalse);
-    });
+    test(
+      'handleRuntimeStop with force: true stops an orphaned runtime',
+      () async {
+        final home = await Directory.systemTemp.createTemp('sanad-stop-force-');
+        addTearDown(() => home.delete(recursive: true));
+        final runtime = await resolveHandlerRuntime(
+          sanadHomeOverride: home.path,
+        );
+        final record = runtime_ownership.RuntimeLauncherRecord(
+          launcherId: 'test-launcher',
+          runtimeNonce: 'test-nonce',
+          launcherPid: 999999,
+          launcherProcessIdentity: 'test-identity',
+          workspaceHash: runtime.worktreeId.split('-').last,
+          sourceRoot: runtime.repositoryRoot,
+          agentPort: runtime.agentPort,
+          sanadHome: home.path,
+          preferencesPrefix: '',
+          clientPids: const [],
+          vmServicePorts: const [],
+          status: 'running',
+          updatedAt: DateTime.now().toUtc(),
+        );
+        await runtime_ownership.writeRuntimeLauncherRecord(record);
+        final recordFile = File(
+          runtime_ownership.runtimeLauncherRecordPath(
+            home.path,
+            runtime.agentPort,
+          ),
+        );
+        expect(await recordFile.exists(), isTrue);
+
+        await sanad_dev.handleRuntimeStop(
+          force: true,
+          sanadHomePath: home.path,
+          processRunning: (_) async => false,
+          discoverAgents: ({sanadHomeOverride}) async => const [],
+          discoverClients: () async => const [],
+        );
+
+        expect(await recordFile.exists(), isFalse);
+      },
+    );
   });
 }

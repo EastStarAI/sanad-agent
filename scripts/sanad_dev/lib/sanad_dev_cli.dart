@@ -8,6 +8,7 @@ import 'src/infrastructure/cloud_endpoints.dart';
 import 'src/infrastructure/command_options.dart';
 import 'src/infrastructure/component_journal.dart';
 import 'src/infrastructure/local_gateway_credential.dart';
+import 'src/infrastructure/path_equivalence.dart';
 import 'src/infrastructure/runtime_component_control.dart';
 import 'src/infrastructure/runtime_context.dart';
 import 'src/infrastructure/secure_runtime_file.dart';

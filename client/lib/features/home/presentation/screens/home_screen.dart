@@ -3,6 +3,7 @@ import 'dart:ui';
 
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sanad_client/core/di/injection.dart';
@@ -325,7 +326,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
       if (!mounted) return;
       setState(() {
         _lastCheckedDeviceId = activeDevice.id;
-        _providerSetupDevice = readiness.runtimeReady ? null : activeDevice;
+        _providerSetupDevice = (!readiness.hasProvider) ? activeDevice : null;
       });
     } catch (_) {
       // Connection failures are indeterminate, not a "no providers" result.
@@ -759,7 +760,7 @@ class _HistoryTransitionOverlay extends StatelessWidget {
                     children: [
                       SizedBox.square(
                         dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: AppProgressIndicator(strokeWidth: 2),
                       ),
                       SizedBox(width: 10),
                       Text('Loading conversation…'),

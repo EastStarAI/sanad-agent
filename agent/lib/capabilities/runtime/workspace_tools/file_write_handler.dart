@@ -20,8 +20,10 @@ class FileWriteHandler {
       throw const FileSystemException('Content is too large to write safely.');
     }
 
-    final workspaceRoot = _pathResolver.normalizeWorkspaceRoot(workspacePath);
-    final resolvedPath = _pathResolver.resolvePathAllowMissing(
+    final workspaceRoot = await _pathResolver.normalizeWorkspaceRootAsync(
+      workspacePath,
+    );
+    final resolvedPath = await _pathResolver.resolvePathAllowMissingAsync(
       workspaceRoot: workspaceRoot,
       inputPath: path,
       authorizedExternalRoot: authorizedExternalRoot,
