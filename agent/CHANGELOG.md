@@ -1,3 +1,8 @@
+## 1.0.14
+
+- Ensured appearance synchronization works across both local and cloud gateway transports (#183).
+- Guarded PlatformRuntimeBridge resolution in LocalDaemonServerPlatform against test teardown GetIt race (#184).
+
 ## 1.0.13
 
 - Hardened child process test execution timeouts and CI latency tolerance for constrained virtual runners (#181).
