@@ -224,6 +224,7 @@ void main() {
             authManager: authManager,
           ),
         ),
+        platformRuntimeBridge: runtimeBridge,
         security: LocalGatewaySecurity(
           config: LocalGatewaySecurityConfig(
             allowedPort: port,
