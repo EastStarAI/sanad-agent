@@ -1,3 +1,8 @@
+## 1.0.13
+
+- Hardened child process test execution timeouts and CI latency tolerance for constrained virtual runners (#181).
+- Resolved symbolic links on temporary test directories for macOS runtime parity (#179).
+
 ## 1.0.12
 
 - Resolved symbolic links on temporary test directories for macOS runtime parity (#179).

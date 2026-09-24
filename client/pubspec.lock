@@ -1039,7 +1039,7 @@ packages:
       path: "../release/contract"
       relative: true
     source: path
-    version: "1.0.12"
+    version: "1.0.13"
   screen_retriever:
     dependency: transitive
     description:
