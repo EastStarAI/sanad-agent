@@ -61,7 +61,11 @@ void main() {
     late LocalRuntimeOrchestrator orchestrator;
 
     setUp(() {
-      tempDir = Directory.systemTemp.createTempSync('exec-root-orchestrator-');
+      tempDir = Directory(
+        Directory.systemTemp
+            .createTempSync('exec-root-orchestrator-')
+            .resolveSymbolicLinksSync(),
+      );
       logicalWorkspaceDir = Directory(p.join(tempDir.path, 'logical-ws'))
         ..createSync();
       executionRootDir = Directory(p.join(tempDir.path, 'isolated-worktree'))
@@ -318,7 +322,11 @@ void main() {
         SessionManager.resetForTesting();
         getIt.allowReassignment = true;
 
-        tempDir = Directory.systemTemp.createTempSync('exec-root-restart-');
+        tempDir = Directory(
+          Directory.systemTemp
+              .createTempSync('exec-root-restart-')
+              .resolveSymbolicLinksSync(),
+        );
         logicalWorkspaceDir = Directory(p.join(tempDir.path, 'logical-ws'))
           ..createSync();
         executionRootDir = Directory(p.join(tempDir.path, 'isolated-worktree'))
