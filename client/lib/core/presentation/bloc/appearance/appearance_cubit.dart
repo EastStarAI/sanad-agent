@@ -69,10 +69,17 @@ class AppearanceCubit extends Cubit<AppearanceState> {
         final rawAppearance = payload['appearance'] ?? payload;
         if (rawAppearance is Map) {
           final deviceId = event['device_id'] as String? ?? _activeDeviceId;
-          if (deviceId != null && (_activeDeviceId == deviceId || _activeAgent?.representsDeviceId(deviceId) == true)) {
+          final hardwareId = event['hardware_id'] as String?;
+          final matchesActive = (deviceId != null &&
+                  (_activeDeviceId == deviceId || _activeAgent?.representsDeviceId(deviceId) == true)) ||
+              (hardwareId != null &&
+                  (_activeDeviceId == hardwareId ||
+                      _activeAgent?.representsDeviceId(hardwareId) == true ||
+                      _activeAgent?.hardwareId == hardwareId));
+          if (matchesActive) {
             final next = AppearanceState.fromJson(Map<String, dynamic>.from(rawAppearance));
             if (next != state) {
-              unawaited(_persistStateLocally(next, deviceId: deviceId));
+              unawaited(_persistStateLocally(next, deviceId: deviceId ?? _activeDeviceId));
               unawaited(_persistLastActiveAppearance(next));
               emit(next);
             }
@@ -94,18 +101,17 @@ class AppearanceCubit extends Cubit<AppearanceState> {
       await _persistStateLocally(remoteState, deviceId: agent.id);
       unawaited(_persistLastActiveAppearance(remoteState));
       emit(remoteState);
-      return;
+    } else {
+      // Load from device-scoped local cache, falling back to default appearance
+      final cached = await getSavedAppearance(
+        deviceId: agent.id,
+        fallbackDeviceId: agent.cloudDeviceId,
+      );
+      unawaited(_persistLastActiveAppearance(cached));
+      emit(cached);
     }
 
-    // Load from device-scoped local cache, falling back to default appearance
-    final cached = await getSavedAppearance(
-      deviceId: agent.id,
-      fallbackDeviceId: agent.cloudDeviceId,
-    );
-    unawaited(_persistLastActiveAppearance(cached));
-    emit(cached);
-
-    // In background, fetch fresh appearance from agent
+    // In background, fetch fresh appearance from agent (stale-while-revalidate)
     unawaited(_fetchAppearanceFromAgent(agent));
   }
 
@@ -178,6 +184,15 @@ class AppearanceCubit extends Cubit<AppearanceState> {
         await prefs.setString(_key(_fontSizeScaleKey, fallbackId), appearance.fontSizeScale.id);
         await prefs.setString(_key(_backgroundOptionKey, fallbackId), appearance.backgroundOption.id);
       }
+
+      final activeId = _activeDeviceId;
+      if (activeId != null && activeId.isNotEmpty && activeId != deviceId && activeId != fallbackId) {
+        await prefs.setString(_key(_themeStyleKey, activeId), appearance.themeStyle.id);
+        await prefs.setString(_key(_primaryColorKey, activeId), appearance.primaryColor.id);
+        await prefs.setString(_key(_fontFamilyKey, activeId), appearance.fontFamily.id);
+        await prefs.setString(_key(_fontSizeScaleKey, activeId), appearance.fontSizeScale.id);
+        await prefs.setString(_key(_backgroundOptionKey, activeId), appearance.backgroundOption.id);
+      }
     } else {
       // Global fallback only (cold start before any device is selected)
       await prefs.setString(_themeStyleKey, appearance.themeStyle.id);
@@ -195,13 +210,13 @@ class AppearanceCubit extends Cubit<AppearanceState> {
     try {
       final endpoint = await coordinator.ensureConnectedEndpointForAgent(agent);
       if (endpoint.socketService.isConnected) {
-        endpoint.socketService.emit('execute_command', {
-          'command': 'update_appearance',
-          'device_id': endpoint.protocolDeviceId,
-          'payload': {
+        endpoint.socketService.sendDeviceCommand(
+          deviceId: endpoint.protocolDeviceId,
+          command: 'update_appearance',
+          payload: {
             'appearance': appearance.toJson(),
           },
-        });
+        );
       }
     } catch (_) {
       // Best-effort remote synchronization
@@ -214,11 +229,11 @@ class AppearanceCubit extends Cubit<AppearanceState> {
     try {
       final endpoint = await coordinator.ensureConnectedEndpointForAgent(agent);
       if (endpoint.socketService.isConnected) {
-        endpoint.socketService.emit('execute_command', {
-          'command': 'get_appearance',
-          'device_id': endpoint.protocolDeviceId,
-          'payload': {},
-        });
+        endpoint.socketService.sendDeviceCommand(
+          deviceId: endpoint.protocolDeviceId,
+          command: 'get_appearance',
+          payload: {},
+        );
       }
     } catch (_) {
       // Best-effort remote fetch

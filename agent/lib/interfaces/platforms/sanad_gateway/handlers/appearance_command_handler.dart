@@ -1,3 +1,4 @@
+import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/appearance/appearance_store.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 
@@ -12,11 +13,13 @@ class AppearanceCommandHandler {
 
   final AppearanceStore _store;
   final SanadProtocolBridge _bridge;
+  final Logger _logger = Logger('AppearanceCommandHandler');
 
   Future<Map<String, dynamic>> buildSnapshotEnvelope(
     CanonicalEvent event,
   ) async {
     final appearance = await _store.readAppearance();
+    _logger.fine('Read appearance snapshot from store');
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(
         type: CanonicalEventTypes.appearanceSnapshot,
@@ -37,6 +40,7 @@ class AppearanceCommandHandler {
       final rawAppearance = event.payload['appearance'] ?? event.payload['changes'] ?? event.payload;
       final appearanceMap = rawAppearance is Map ? Map<String, dynamic>.from(rawAppearance) : <String, dynamic>{};
       final updated = await _store.saveAppearance(appearanceMap);
+      _logger.info('Appearance saved to store: $updated');
       return _bridge.buildAgentEventEnvelope(
         CanonicalEvent(
           type: CanonicalEventTypes.appearanceUpdated,
