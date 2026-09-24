@@ -292,12 +292,16 @@ class _UnifiedComposerContainer extends StatelessWidget {
                 child: ValueListenableBuilder<TextEditingValue>(
                   valueListenable: chatController,
                   builder: (context, value, _) {
-                    final textDirection = TextUtils.getTextDirection(chatController.exportPlainText());
+                    final plainText = chatController.exportPlainText();
+                    final ambientDirection = Directionality.of(context);
+                    final textDirection = plainText.trim().isEmpty
+                        ? ambientDirection
+                        : TextUtils.getTextDirection(plainText);
                     return TextField(
                       key: const Key('chat_input'),
                       controller: chatController,
                       focusNode: chatFocusNode,
-                      style: GoogleFonts.inter(
+                      style: (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
                         color: Theme.of(context).colorScheme.onSurface,
                         fontSize: 15,
                         height: 1.5,
@@ -309,8 +313,10 @@ class _UnifiedComposerContainer extends StatelessWidget {
                       textAlign: textDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
                       textDirection: textDirection,
                       decoration: InputDecoration(
-                        hintText: 'Ask Sanad anything',
-                        hintStyle: GoogleFonts.inter(
+                        hintText: Directionality.of(context) == TextDirection.rtl
+                            ? 'اسأل سند أي شيء'
+                            : 'Ask Sanad anything',
+                        hintStyle: (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
                           color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.35),
                           fontSize: 15,
                         ),

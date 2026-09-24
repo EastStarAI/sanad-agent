@@ -93,6 +93,16 @@ class AppThemes {
         elevation: 0,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: const Color(0xFFFFFFFF).withValues(alpha: 0.85),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+            color: const Color(0xFFDCDDE0).withValues(alpha: 0.6),
+          ),
+        ),
+      ),
       tooltipTheme: TooltipThemeData(
         decoration: BoxDecoration(
           color: const Color(0xFFFFFFFF),
@@ -140,6 +150,16 @@ class AppThemes {
         color: const Color(0xFF252525),
         elevation: 0,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: const Color(0xFF252525).withValues(alpha: 0.85),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+            color: Colors.white.withValues(alpha: 0.12),
+          ),
+        ),
       ),
       tooltipTheme: TooltipThemeData(
         decoration: BoxDecoration(
@@ -189,6 +209,16 @@ class AppThemes {
         elevation: 0,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: const Color(0xFF121212).withValues(alpha: 0.85),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+            color: const Color(0xFF2A2A2A),
+          ),
+        ),
+      ),
       tooltipTheme: TooltipThemeData(
         decoration: BoxDecoration(
           color: const Color(0xFF141414),
@@ -236,6 +266,16 @@ class AppThemes {
         color: const Color(0xFFF5E8D3),
         elevation: 0,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: const Color(0xFFF5E8D3).withValues(alpha: 0.85),
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(16),
+          side: BorderSide(
+            color: const Color(0xFFD8C5A8),
+          ),
+        ),
       ),
       tooltipTheme: TooltipThemeData(
         decoration: BoxDecoration(

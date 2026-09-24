@@ -186,7 +186,7 @@ void main() {
     expect(titleText.textDirection, TextDirection.rtl);
   });
 
-  testWidgets('app bar applies RTL text direction and alignments in mobile layout', (
+  testWidgets('app bar keeps mobile layout aligned to the left regardless of language direction', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -207,14 +207,14 @@ void main() {
 
     final titleText = tester.widget<Text>(find.text('محادثة جديدة'));
     expect(titleText.textDirection, TextDirection.rtl);
-    expect(titleText.textAlign, TextAlign.right);
+    expect(titleText.textAlign, TextAlign.left);
 
     final workspaceText = tester.widget<Text>(find.text('مساحة العمل'));
     expect(workspaceText.textDirection, TextDirection.rtl);
-    expect(workspaceText.textAlign, TextAlign.right);
+    expect(workspaceText.textAlign, TextAlign.left);
 
     final column = tester.widget<Column>(find.byType(Column));
-    expect(column.crossAxisAlignment, CrossAxisAlignment.end);
+    expect(column.crossAxisAlignment, CrossAxisAlignment.start);
   });
 
   testWidgets('mobile app bar renders default Conversation title and menu button when sessionTitle is null', (

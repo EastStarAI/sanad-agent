@@ -304,33 +304,35 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   Widget _buildReasoningRow(BuildContext context) {
     final color = Theme.of(context).colorScheme.onSurface;
     final isRunning = widget.event.status == EventStatus.running;
+    final textDirection = Directionality.of(context);
+    final isArabic = textDirection == TextDirection.rtl;
     final preview = _firstWords(widget.event.text, 5);
 
     return Semantics(
-      label: 'Thinking',
+      label: isArabic ? 'تفكير' : 'Thinking',
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 12.0),
-        child: Row(
-          children: [
-            if (isRunning)
-              SizedBox(
-                width: 14,
-                height: 14,
-                child: AppProgressIndicator(
-                  strokeWidth: 2,
-                  color: Theme.of(context).colorScheme.primary,
+        child: Directionality(
+          textDirection: textDirection,
+          child: Row(
+            children: [
+              if (isRunning)
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: AppProgressIndicator(
+                    strokeWidth: 2,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                )
+              else
+                Icon(
+                  Icons.psychology_outlined,
+                  size: 18,
+                  color: color.withValues(alpha: 0.4),
                 ),
-              )
-            else
-              Icon(
-                Icons.psychology_outlined,
-                size: 18,
-                color: color.withValues(alpha: 0.4),
-              ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Directionality(
-                textDirection: TextUtils.getTextDirection(preview),
+              const SizedBox(width: 8),
+              Flexible(
                 child: RichText(
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -338,7 +340,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                     style: GoogleFonts.outfit(fontSize: 13, letterSpacing: 0.5),
                     children: [
                       TextSpan(
-                        text: 'Thinking: ',
+                        text: isArabic ? 'تفكير: ' : 'Thinking: ',
                         style: TextStyle(
                           color: color.withValues(alpha: 0.4),
                           fontWeight: FontWeight.w500,
@@ -358,8 +360,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -395,7 +397,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   }
 
   Widget _buildFinalAnswerFooter(BuildContext context) {
-    final metaText = EventMetadataFormatter.responseMetaText(
+    final metaParts = EventMetadataFormatter.responseMetaParts(
       widget.event,
       context,
     );
@@ -403,6 +405,11 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       widget.event.timestamp,
       context,
     );
+    final subTextStyle = GoogleFonts.roboto(
+      color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
+      fontSize: 11,
+    );
+
     return Directionality(
       textDirection: TextDirection.ltr,
       child: Wrap(
@@ -410,47 +417,21 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         spacing: 8,
         runSpacing: 4,
         children: [
-          if (timestampText.isNotEmpty || metaText.isNotEmpty)
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (timestampText.isNotEmpty) ...[
-                  Tooltip(
-                    message: EventMetadataFormatter.dateTooltip(
-                      widget.event.timestamp,
-                      context,
-                    ),
-                    child: Text(
-                      timestampText,
-                      style: GoogleFonts.roboto(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant
-                            .withValues(alpha: 0.8),
-                        fontSize: 11,
-                      ),
-                    ),
-                  ),
-                  if (metaText.isNotEmpty) ...[
-                    const SizedBox(width: 8),
-                    Text(
-                      '•  $metaText',
-                      style: GoogleFonts.roboto(
-                        color: Theme.of(context).colorScheme.onSurfaceVariant
-                            .withValues(alpha: 0.8),
-                        fontSize: 11,
-                      ),
-                    ),
-                  ],
-                ] else if (metaText.isNotEmpty) ...[
-                  Text(
-                    metaText,
-                    style: GoogleFonts.roboto(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant
-                          .withValues(alpha: 0.8),
-                      fontSize: 11,
-                    ),
-                  ),
-                ],
-              ],
+          if (timestampText.isNotEmpty)
+            Tooltip(
+              message: EventMetadataFormatter.dateTooltip(
+                widget.event.timestamp,
+                context,
+              ),
+              child: Text(
+                timestampText,
+                style: subTextStyle,
+              ),
+            ),
+          for (int i = 0; i < metaParts.length; i++)
+            Text(
+              (i == 0 && timestampText.isEmpty) ? metaParts[i] : '•  ${metaParts[i]}',
+              style: subTextStyle,
             ),
           Row(
             mainAxisSize: MainAxisSize.min,
@@ -511,13 +492,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
 
   Widget _buildEventHeader(bool canExpand) {
     final bool isError = widget.event.status == EventStatus.error;
-    final titleText = ToolPresentationHelper.getEventTitle(widget.event);
-    final titleDetail = widget.event.kind == EventKind.toolCall
-        ? ToolPresentationHelper.getToolDetailSuffix(widget.event)
-        : '';
-    final textDirection = TextUtils.getTextDirection(
-      titleDetail.isNotEmpty ? titleDetail : titleText,
-    );
+    final textDirection = Directionality.of(context);
+    final isArabic = textDirection == TextDirection.rtl;
 
     final Widget header = InkWell(
       onTap: canExpand ? _toggleExpanded : null,
@@ -540,6 +516,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                         event: widget.event,
                         titleColor: _getTitleColor(context),
                         textDirection: textDirection,
+                        isArabic: isArabic,
                       ),
                     ),
                     if (canExpand) ...[
@@ -776,14 +753,20 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     // live/history reconciliation. The specialized tile still unwraps and
     // renders that result safely without requiring a command suffix.
     if (category == 'Ran') {
-      return TerminalToolTile(event: widget.event);
+      return Directionality(
+        textDirection: TextDirection.ltr,
+        child: TerminalToolTile(event: widget.event),
+      );
     }
 
     final details = ToolPresentationHelper.getToolDetailSuffix(widget.event);
 
     // If we could not extract any suffix details, fall back to the old GenericToolTile (input/output JSON)
     if (details.isEmpty) {
-      return GenericToolTile(event: widget.event);
+      return Directionality(
+        textDirection: TextDirection.ltr,
+        child: GenericToolTile(event: widget.event),
+      );
     }
 
     switch (category) {
@@ -792,9 +775,12 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       case 'Edit':
       case 'Search':
       case 'Grep':
-        return FileToolTile(
-          event: widget.event,
-          isFullyExpanded: _isExpanded && _expansionController.isCompleted,
+        return Directionality(
+          textDirection: TextDirection.ltr,
+          child: FileToolTile(
+            event: widget.event,
+            isFullyExpanded: _isExpanded && _expansionController.isCompleted,
+          ),
         );
       case 'Search Web':
       case 'Fetch':
@@ -807,7 +793,10 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       // case 'Memory':
       //   return MemoryToolTile(event: widget.event);
       default:
-        return GenericToolTile(event: widget.event);
+        return Directionality(
+          textDirection: TextDirection.ltr,
+          child: GenericToolTile(event: widget.event),
+        );
     }
   }
 

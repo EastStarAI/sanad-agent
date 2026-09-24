@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
@@ -15,6 +18,7 @@ import 'package:intl/intl.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
+import 'model_brand_icon.dart';
 
 /// Hierarchical model picker dialog: shows all configured providers as
 /// section headers with their models listed beneath, plus a "Recently Used"
@@ -46,6 +50,58 @@ class ModelPickerDialog extends StatefulWidget {
     this.activeModelId,
   });
 
+  static IconData getProviderIconData(
+    String providerId, {
+    String? displayName,
+    String? modelName,
+  }) {
+    final combined =
+        '${providerId.toLowerCase()} ${displayName?.toLowerCase() ?? ''} ${modelName?.toLowerCase() ?? ''}';
+    if (combined.contains('openai') || combined.contains('chatgpt') || combined.contains('gpt')) {
+      return Symbols.smart_toy;
+    }
+    if (combined.contains('opencode')) {
+      return Symbols.terminal;
+    }
+    if (combined.contains('deepseek')) {
+      return Symbols.explore;
+    }
+    if (combined.contains('qwen') || combined.contains('alibaba')) {
+      return Symbols.psychology_alt;
+    }
+    if (combined.contains('kimi') || combined.contains('moonshot')) {
+      return Symbols.dark_mode;
+    }
+    if (combined.contains('anthropic') || combined.contains('claude')) {
+      return Symbols.psychology;
+    }
+    if (combined.contains('google') || combined.contains('gemini')) {
+      return Symbols.auto_awesome;
+    }
+    if (combined.contains('ollama') || combined.contains('local')) {
+      return Symbols.terminal;
+    }
+    if (combined.contains('groq')) {
+      return Symbols.bolt;
+    }
+    if (combined.contains('mistral') || combined.contains('codestral')) {
+      return Symbols.air;
+    }
+    if (combined.contains('openrouter')) {
+      return Symbols.hub;
+    }
+    if (combined.contains('bedrock') || combined.contains('aws')) {
+      return Symbols.cloud;
+    }
+    if (combined.contains('azure')) {
+      return Symbols.cloud_queue;
+    }
+    if (combined.contains('copilot') || combined.contains('github')) {
+      return Symbols.code_blocks;
+    }
+    return Symbols.memory;
+  }
+
   @override
   State<ModelPickerDialog> createState() => _ModelPickerDialogState();
 }
@@ -55,6 +111,8 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
   final FocusNode _searchFocusNode = FocusNode();
   String _query = '';
   final Set<String> _expandedProviderIds = {};
+  int _focusedIndex = 0;
+  List<({String providerId, String model})> _flatVisibleModels = [];
 
   List<ProviderModelGroupDto> _sortGroupsByRecency(
     List<ProviderModelGroupDto> groups,
@@ -143,9 +201,26 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
           );
         },
         child: Dialog(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 480, maxHeight: 560),
-            child: Padding(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: BackdropFilter(
+              filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.70),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.25),
+                  ),
+                ),
+                child: Material(
+                  type: MaterialType.transparency,
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 480, maxHeight: 560),
+                    child: Padding(
               padding: const EdgeInsets.only(top: 16, bottom: 8),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -201,19 +276,54 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
                       horizontal: 16,
                       vertical: 8,
                     ),
-                    child: TextField(
-                      controller: _searchController,
-                      focusNode: _searchFocusNode,
-                      decoration: InputDecoration(
-                        isDense: true,
-                        hintText: 'Search models...',
-                        prefixIcon: const Icon(Icons.search, size: 18),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
+                    child: Focus(
+                      onKeyEvent: (node, event) {
+                        final isDownOrRepeat = event is KeyDownEvent || event is KeyRepeatEvent;
+                        if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+                          if (isDownOrRepeat && _flatVisibleModels.isNotEmpty) {
+                            setState(() {
+                              _focusedIndex = (_focusedIndex + 1).clamp(0, _flatVisibleModels.length - 1);
+                            });
+                          }
+                          return KeyEventResult.handled;
+                        } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+                          if (isDownOrRepeat && _flatVisibleModels.isNotEmpty) {
+                            setState(() {
+                              _focusedIndex = (_focusedIndex - 1).clamp(0, _flatVisibleModels.length - 1);
+                            });
+                          }
+                          return KeyEventResult.handled;
+                        } else if (event.logicalKey == LogicalKeyboardKey.enter) {
+                          if (event is KeyDownEvent &&
+                              _flatVisibleModels.isNotEmpty &&
+                              _focusedIndex >= 0 &&
+                              _focusedIndex < _flatVisibleModels.length) {
+                            final target = _flatVisibleModels[_focusedIndex];
+                            widget.onSelected(target.providerId, target.model);
+                            Navigator.of(context).pop();
+                            return KeyEventResult.handled;
+                          }
+                          return KeyEventResult.handled;
+                        }
+                        return KeyEventResult.ignored;
+                      },
+                      child: TextField(
+                        controller: _searchController,
+                        focusNode: _searchFocusNode,
+                        decoration: InputDecoration(
+                          isDense: true,
+                          hintText: 'Search models...',
+                          prefixIcon: const Icon(Icons.search, size: 18),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(vertical: 8),
                         ),
-                        contentPadding: const EdgeInsets.symmetric(vertical: 8),
+                        onChanged: (value) => setState(() {
+                          _query = value.trim().toLowerCase();
+                          _focusedIndex = 0;
+                        }),
                       ),
-                      onChanged: (value) => setState(() => _query = value.trim().toLowerCase()),
                     ),
                   ),
                   BlocBuilder<ProviderRuntimeCubit, ProviderRuntimeState>(
@@ -240,7 +350,11 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
           ),
         ),
       ),
-    );
+    ),
+  ),
+),
+),
+);
   }
 
   Widget _buildBody(BuildContext context, ProviderRuntimeState state) {
@@ -266,6 +380,22 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
     final groups = _sortGroupsByRecency(_filteredGroups(state.groups), state.recent);
     final recent = _query.isEmpty ? state.recent : <RecentModelDto>[];
 
+    final flatList = <({String providerId, String model})>[];
+    if (recent.isNotEmpty) {
+      for (final r in recent.take(5)) {
+        flatList.add((providerId: r.instanceId, model: r.modelId));
+      }
+    }
+    for (final group in groups) {
+      final sortedModels = _sortModelsByRecency(group, state.recent);
+      final isExpanded = _expandedProviderIds.contains(group.providerId);
+      final models = (_query.isNotEmpty || isExpanded) ? sortedModels : sortedModels.take(5);
+      for (final m in models) {
+        flatList.add((providerId: group.providerId, model: m));
+      }
+    }
+    _flatVisibleModels = flatList;
+
     if (groups.isEmpty && recent.isEmpty) {
       return Center(
         child: Padding(
@@ -288,9 +418,12 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
         ),
       );
       slivers.add(
-        SliverList.builder(
-          itemCount: recentToShow.length,
-          itemBuilder: (context, index) => _buildRecentItem(context, recentToShow[index]),
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 8),
+          sliver: SliverList.builder(
+            itemCount: recentToShow.length,
+            itemBuilder: (context, index) => _buildRecentItem(context, recentToShow[index]),
+          ),
         ),
       );
     }
@@ -373,7 +506,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
   Widget _buildShowAllButton(BuildContext context, String providerId, int moreCount) {
     final theme = Theme.of(context);
     return Align(
-      alignment: Alignment.centerLeft,
+      alignment: AlignmentDirectional.centerStart,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
         child: InkWell(
@@ -412,7 +545,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
   Widget _buildShowLessButton(BuildContext context, String providerId) {
     final theme = Theme.of(context);
     return Align(
-      alignment: Alignment.centerLeft,
+      alignment: AlignmentDirectional.centerStart,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
         child: InkWell(
@@ -452,12 +585,23 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
     final theme = Theme.of(context);
     return Padding(
       padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
-      child: Text(
-        'Recently Used',
-        style: theme.textTheme.labelSmall?.copyWith(
-          color: theme.colorScheme.onSurfaceVariant,
-          fontWeight: FontWeight.w600,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.history,
+            size: 14,
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            'Recently Used',
+            style: theme.textTheme.labelSmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -466,18 +610,49 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
     final label = recent.instanceDisplayName != null
         ? '${recent.instanceDisplayName} / ${recent.modelId}'
         : recent.modelId;
-    return ListTile(
+    final isSelected =
+        widget.activeProviderId?.trim().toLowerCase() == recent.instanceId.trim().toLowerCase() &&
+        widget.activeModelId?.trim().toLowerCase() == recent.modelId.trim().toLowerCase();
+    final isFocused = _flatVisibleModels.isNotEmpty &&
+        _focusedIndex >= 0 &&
+        _focusedIndex < _flatVisibleModels.length &&
+        _flatVisibleModels[_focusedIndex].providerId == recent.instanceId &&
+        _flatVisibleModels[_focusedIndex].model == recent.modelId;
+
+    final tile = ListTile(
       dense: true,
-      selected:
-          widget.activeProviderId?.trim().toLowerCase() == recent.instanceId.trim().toLowerCase() &&
-          widget.activeModelId?.trim().toLowerCase() == recent.modelId.trim().toLowerCase(),
-      leading: const Icon(Icons.history, size: 16),
+      selected: isSelected,
+      leading: Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Center(
+          child: ModelBrandIcon(
+            providerId: recent.instanceId,
+            displayName: recent.instanceDisplayName,
+            modelName: recent.modelId,
+            size: 16,
+          ),
+        ),
+      ),
       title: Text(label, style: const TextStyle(fontSize: 13)),
       onTap: () {
         widget.onSelected(recent.instanceId, recent.modelId);
         Navigator.of(context).pop();
       },
     );
+
+    if (isFocused) {
+      return Material(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(6),
+        child: tile,
+      );
+    }
+    return tile;
   }
 
   List<ProviderModelGroupDto> _filteredGroups(
@@ -530,10 +705,32 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
       return model.toLowerCase() == activeModel;
     }();
 
-    return ListTile(
+    final isFocused = _flatVisibleModels.isNotEmpty &&
+        _focusedIndex >= 0 &&
+        _focusedIndex < _flatVisibleModels.length &&
+        _flatVisibleModels[_focusedIndex].providerId == group.providerId &&
+        _flatVisibleModels[_focusedIndex].model == model;
+
+    final tile = ListTile(
       key: Key('model_item_${group.providerId}_$model'),
       dense: true,
       selected: isSelected,
+      leading: Container(
+        width: 24,
+        height: 24,
+        decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Center(
+          child: ModelBrandIcon(
+            providerId: group.providerId,
+            displayName: group.displayName,
+            modelName: model,
+            size: 16,
+          ),
+        ),
+      ),
       title: Text(model, style: const TextStyle(fontSize: 13)),
       trailing: isSelected ? const Icon(Icons.check, size: 16) : null,
       onTap: () {
@@ -541,6 +738,15 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
         Navigator.of(context).pop();
       },
     );
+
+    if (isFocused) {
+      return Material(
+        color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(6),
+        child: tile,
+      );
+    }
+    return tile;
   }
 }
 
@@ -577,9 +783,15 @@ class _ProviderHeaderDelegate extends SliverPersistentHeaderDelegate {
             : null,
       ),
       padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-      alignment: Alignment.centerLeft,
+      alignment: AlignmentDirectional.centerStart,
       child: Row(
         children: [
+          ModelBrandIcon(
+            providerId: providerId,
+            displayName: displayName,
+            size: 18,
+          ),
+          const SizedBox(width: 8),
           Text(
             displayName,
             style: theme.textTheme.labelLarge?.copyWith(fontWeight: FontWeight.bold),

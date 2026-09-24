@@ -15,6 +15,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/mcp/data/mcp_runtime_client.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_runtime_models.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_server_config.dart';
+import 'package:sanad_client/features/settings/presentation/widgets/settings_widgets.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 
@@ -519,7 +520,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
           child: ListView(
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
             children: [
-              _buildFormFields(),
+              SettingsCard(child: _buildFormFields()),
             ],
           ),
         ),
@@ -533,7 +534,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
           child: ListView(
             padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
             children: [
-              _buildInspectionSection(),
+              SettingsCard(child: _buildInspectionSection()),
             ],
           ),
         ),
@@ -548,9 +549,9 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
-            _buildFormFields(),
+            SettingsCard(child: _buildFormFields()),
             const SizedBox(height: 24),
-            _buildInspectionSection(),
+            SettingsCard(child: _buildInspectionSection()),
           ],
         ),
       ),
