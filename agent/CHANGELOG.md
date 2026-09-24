@@ -1,3 +1,7 @@
+## 1.0.15
+
+- Prevented redundant capabilities fetching and restored sidebar hover trigger (#186).
+
 ## 1.0.14
 
 - Ensured appearance synchronization works across both local and cloud gateway transports (#183).
