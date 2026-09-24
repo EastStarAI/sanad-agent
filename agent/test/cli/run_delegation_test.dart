@@ -208,8 +208,10 @@ void main() {
     }
 
     setUp(() {
-      tempDir = Directory.systemTemp.createTempSync(
-        'sanad-run-delegation-test-',
+      tempDir = Directory(
+        Directory.systemTemp
+            .createTempSync('sanad-run-delegation-test-')
+            .resolveSymbolicLinksSync(),
       );
       outDir = Directory(p.join(tempDir.path, 'out'))..createSync();
       executionDir = Directory(p.join(tempDir.path, 'worktree'))..createSync();

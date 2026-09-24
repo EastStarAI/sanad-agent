@@ -140,7 +140,9 @@ void main() {
     late LocalRuntimeCatalog catalog;
 
     setUp(() async {
-      tempDir = await Directory.systemTemp.createTemp('runtime-catalog-test');
+      final rawTemp =
+          await Directory.systemTemp.createTemp('runtime-catalog-test');
+      tempDir = Directory(rawTemp.resolveSymbolicLinksSync());
       workspaceDir = Directory('${tempDir.path}/workspace')
         ..createSync(recursive: true);
       Directory(
