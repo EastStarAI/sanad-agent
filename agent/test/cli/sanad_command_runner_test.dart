@@ -1,4 +1,6 @@
 import 'package:sanad_agent/cli/runner/commands.dart';
+import 'dart:io';
+
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
 import 'package:test/test.dart';
 import '../support/isolated_sanad_test_home.dart';
@@ -332,15 +334,25 @@ void main() {
     });
 
     test('routes to session command and subcommands', () async {
+      final subcommandsCalled = <String>[];
       final runner = SanadCommandRunner(
         stdoutSink: stdoutBuffer,
         stderrSink: stderrBuffer,
+        customHandlers: {
+          'session': (cmd) {
+            subcommandsCalled.add(cmd.name);
+            stdoutBuffer.writeln('Active sessions:');
+            return 0;
+          },
+        },
       );
 
       expect(await runner.run(['session', 'list']), 0);
+      expect(subcommandsCalled, contains('list'));
       expect(stdoutBuffer.toString(), contains('Active sessions:'));
 
       expect(await runner.run(['session', 'new']), 0);
+      expect(subcommandsCalled, contains('new'));
     });
 
     test('routes to doctor command and prints diagnostics checklist', () async {
@@ -432,7 +444,11 @@ void main() {
         stderrSink: stderrBuffer,
       );
 
-      final result = await runner.run(['run']);
+      final result = await runner.run([
+        'run',
+        '--execution-root',
+        Directory.current.path,
+      ]);
       expect(result, 1);
       expect(
         stderrBuffer.toString(),

@@ -54,11 +54,10 @@ class SuspendedRun {
   });
 }
 
-typedef PersistedSuspendedDecisionResumer =
-    Future<bool> Function({
-      required SuspendedCheckpoint checkpoint,
-      required Future<void> Function(GatewayResponse response) emitResponse,
-    });
+typedef PersistedSuspendedDecisionResumer = Future<bool> Function({
+  required SuspendedCheckpoint checkpoint,
+  required Future<void> Function(GatewayResponse response) emitResponse,
+});
 
 class SessionRunOrchestrator implements SessionQueueProviderOverride {
   static const controlledRestartCheckpointTimeout = Duration(minutes: 1);
@@ -228,6 +227,17 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         _suspendedEvents.containsKey(sessionId) ||
         persistedState?.findActiveWorkItem(sessionId) != null;
   }
+
+  /// Whether deferred database maintenance must pause before its next batch.
+  /// This projection is checked only after durable startup restoration.
+  bool get hasMaintenanceBlockingActivity =>
+      _controlledRestartDraining ||
+      _busySessions.isNotEmpty ||
+      _suspendedEvents.isNotEmpty ||
+      _compactingSessions.isNotEmpty ||
+      _resumingSessions.isNotEmpty ||
+      _queueCoordinator.sessionIds.isNotEmpty ||
+      _turnExecutor.activeSessionIds.isNotEmpty;
 
   bool isSessionCompacting(String sessionId) =>
       _compactingSessions.contains(sessionId);
@@ -594,19 +604,18 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     if (activeRun != null && activeRun.workItemId != null) {
       final cleanupReport = activeRun.cancellationScope.report;
       final terminalRecords =
-          ToolTerminalizationService(
-            repository: persistedState,
-          ).terminalizeExecutingTools(
-            sessionId: sessionId,
-            agentRunner: activeRun.agentRunner,
-            workItemId: activeRun.workItemId!,
-            runId: activeRun.runId,
-            generation: activeRun.generation,
-            modelStepId: stoppedModelStepId,
-            cleanupOutcome:
-                cleanupReport?.finalState.name ??
-                activeRun.cancellationScope.state.name,
-          );
+          ToolTerminalizationService(repository: persistedState)
+              .terminalizeExecutingTools(
+                sessionId: sessionId,
+                agentRunner: activeRun.agentRunner,
+                workItemId: activeRun.workItemId!,
+                runId: activeRun.runId,
+                generation: activeRun.generation,
+                modelStepId: stoppedModelStepId,
+                cleanupOutcome:
+                    cleanupReport?.finalState.name ??
+                    activeRun.cancellationScope.state.name,
+              );
       for (final record in terminalRecords) {
         _emitResponse(
           GatewayResponse(
@@ -760,8 +769,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
             requestId: item.requestId,
             providerInstanceId: item.providerInstanceId,
             title: 'Provider request interrupted for restart',
-            message:
-                'The provider did not finish before the restart timeout. The request was cancelled and will not be sent again automatically. Retry, change provider, or stop the session.',
+            message: 'The provider did not finish before the restart timeout. The request was cancelled and will not be sent again automatically. Retry, change provider, or stop the session.',
             forceBlocked: true,
             runId: activeRun.runId,
           );
@@ -1141,9 +1149,13 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       return;
     }
 
+    final sessionManager = getIt<SessionManager>();
+    final existingSessionRecord = sessionManager.getSessionRecord(
+      event.sessionId,
+    );
+
     if (event.type != 'create_session') {
-      final sessionManager = getIt<SessionManager>();
-      final existingSession = sessionManager.getSession(event.sessionId);
+      final existingSession = existingSessionRecord;
       final requestedWorkspaceId = _resolveWorkspaceId(
         event,
         fallback: existingSession?.workspaceId,
@@ -1422,7 +1434,9 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           );
 
           // 3. Update session preferences
-          final currentSession = sessionManager.getSession(event.sessionId);
+          final currentSession = sessionManager.getSessionRecord(
+            event.sessionId,
+          );
           final resolvedProvider = newProvider ?? currentSession?.providerId;
           final resolvedModel = newModel ?? currentSession?.model;
           if (resolvedProvider != null &&
@@ -1489,8 +1503,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       }
     }
 
-    final sessionManager = getIt<SessionManager>();
-    final existingSession = sessionManager.getSession(event.sessionId);
+    final existingSession = existingSessionRecord;
     var titleOwnerSession = existingSession;
     final isNewSession = existingSession == null;
     final requestedWorkspaceId = _resolveWorkspaceId(
@@ -1622,11 +1635,11 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       liveTurnRequest,
       SessionWorkState.running,
     );
-    sessionManager.recordCanonicalUserMessageAccepted(
-      event.sessionId,
-      receivedAt,
-    );
     if (liveWorkItem?.state == SessionWorkState.queued) {
+      sessionManager.recordCanonicalUserMessageAccepted(
+        event.sessionId,
+        receivedAt,
+      );
       final requestId = liveTurnRequest.requestId ?? requestIdForEvent(event);
       _emitResponse(
         GatewayResponse(
@@ -2105,8 +2118,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         sessionId: sessionId,
         reason: RuntimeFailureReason.unknown,
         title: 'Saved recovery work is unavailable',
-        message:
-            'The daemon could not claim the restored request. Retry, change provider, or stop the session.',
+        message: 'The daemon could not claim the restored request. Retry, change provider, or stop the session.',
         forceBlocked: true,
       );
     }

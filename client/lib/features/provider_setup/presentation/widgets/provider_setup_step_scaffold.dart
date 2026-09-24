@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 
 /// Keeps the current step actions visible in bounded overlays while allowing
 /// Settings to retain ownership of its unbounded page scroll.
@@ -30,19 +33,29 @@ class ProviderSetupStepScaffold extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Expanded(child: SingleChildScrollView(child: bodyWithPadding)),
-            DecoratedBox(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                border: Border(
-                  top: BorderSide(
-                    color: Theme.of(context).colorScheme.outlineVariant,
+            Builder(
+              builder: (context) {
+                final appearance = context.watch<AppearanceCubit?>()?.state;
+                final isCustomBg = appearance != null && appearance.backgroundOption != AppBackgroundOption.defaultTheme;
+                final footerColor = isCustomBg
+                    ? (Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surface).withValues(alpha: 0.60)
+                    : Theme.of(context).colorScheme.surface;
+
+                return DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: footerColor,
+                    border: Border(
+                      top: BorderSide(
+                        color: Theme.of(context).colorScheme.outlineVariant.withValues(alpha: isCustomBg ? 0.25 : 1.0),
+                      ),
+                    ),
                   ),
-                ),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.only(top: 12),
-                child: footer,
-              ),
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 12),
+                    child: footer,
+                  ),
+                );
+              },
             ),
           ],
         );

@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:ui';
 
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sanad_client/core/di/injection.dart';
@@ -39,7 +41,6 @@ import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_servi
 import 'package:sanad_client/infrastructure/local_tools/workspace_tool_runtime_context.dart';
 import 'package:sanad_client/infrastructure/platform/window_manager_service.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
-import 'package:sanad_client/utils/app_platform.dart';
 
 import 'package:sanad_client/features/home/presentation/widgets/status_bar.dart';
 
@@ -204,10 +205,6 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
   String? _skippedDeviceId;
   StreamSubscription<DeletedSessionIdentity>? _deletedSessionSubscription;
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
-  Timer? _hoverDrawerCloseTimer;
-  bool _isMenuButtonHovered = false;
-  bool _isDrawerHovered = false;
-  bool _drawerOpenedByHover = false;
 
   @override
   void initState() {
@@ -230,53 +227,8 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
 
   @override
   void dispose() {
-    _hoverDrawerCloseTimer?.cancel();
     unawaited(_deletedSessionSubscription?.cancel());
     super.dispose();
-  }
-
-  void _onCompactMenuButtonEnter() {
-    _hoverDrawerCloseTimer?.cancel();
-    _isMenuButtonHovered = true;
-    final scaffold = _scaffoldKey.currentState;
-    if (scaffold == null || scaffold.isDrawerOpen) return;
-    _drawerOpenedByHover = true;
-    scaffold.openDrawer();
-  }
-
-  void _onCompactMenuButtonExit() {
-    _isMenuButtonHovered = false;
-    _scheduleHoverDrawerClose();
-  }
-
-  void _onCompactDrawerEnter() {
-    _hoverDrawerCloseTimer?.cancel();
-    _isDrawerHovered = true;
-  }
-
-  void _onCompactDrawerExit() {
-    _isDrawerHovered = false;
-    _scheduleHoverDrawerClose();
-  }
-
-  void _scheduleHoverDrawerClose() {
-    _hoverDrawerCloseTimer?.cancel();
-    if (!_drawerOpenedByHover) return;
-    _hoverDrawerCloseTimer = Timer(const Duration(milliseconds: 150), () {
-      if (!mounted || _isMenuButtonHovered || _isDrawerHovered) return;
-      final scaffold = _scaffoldKey.currentState;
-      if (scaffold?.isDrawerOpen ?? false) {
-        scaffold!.closeDrawer();
-      }
-    });
-  }
-
-  void _onDrawerChanged(bool isOpened) {
-    if (isOpened) return;
-    _hoverDrawerCloseTimer?.cancel();
-    _isMenuButtonHovered = false;
-    _isDrawerHovered = false;
-    _drawerOpenedByHover = false;
   }
 
   @override
@@ -399,7 +351,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
       if (!mounted) return;
       setState(() {
         _lastCheckedDeviceId = activeDevice.id;
-        _providerSetupDevice = readiness.runtimeReady ? null : activeDevice;
+        _providerSetupDevice = (!readiness.hasProvider) ? activeDevice : null;
       });
     } catch (_) {
       // Connection failures are indeterminate, not a "no providers" result.
@@ -489,7 +441,6 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return BlocListener<SessionCubit, SessionState>(
       listenWhen: (previous, current) {
         final previousSession = previous.selectedSession;
@@ -529,37 +480,24 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
             return ValueListenableBuilder<bool>(
               valueListenable: WindowManagerService.compactModeListenable,
               builder: (context, isCompactWindow, _) {
-                final enableHoverDrawer = AppPlatform.isDesktop && !isDesktop && isCompactWindow;
                 return Scaffold(
                   key: _scaffoldKey,
+                  backgroundColor: Colors.transparent,
                   drawer: isDesktop
                       ? null
-                      : _SidebarDrawer(
-                          enableHover: enableHoverDrawer,
-                          onHoverEnter: _onCompactDrawerEnter,
-                          onHoverExit: _onCompactDrawerExit,
-                        ),
-                  onDrawerChanged: _onDrawerChanged,
+                      : const _SidebarDrawer(),
                   body: Column(
                     children: [
                       Expanded(
                         child: Stack(
                           children: [
                             if (isDesktop)
-                              ConversationWorkspaceLayout(
-                                child: Container(
-                                  color: theme.scaffoldBackgroundColor,
-                                  child: const _MainContent(isMobile: false),
-                                ),
+                              const ConversationWorkspaceLayout(
+                                child: _MainContent(isMobile: false),
                               )
                             else
-                              Container(
-                                color: theme.scaffoldBackgroundColor,
-                                child: _MainContent(
-                                  isMobile: true,
-                                  onMenuHoverEnter: enableHoverDrawer ? _onCompactMenuButtonEnter : null,
-                                  onMenuHoverExit: enableHoverDrawer ? _onCompactMenuButtonExit : null,
-                                ),
+                              const _MainContent(
+                                isMobile: true,
                               ),
                             if (_providerSetupDevice != null)
                               _ProviderSetupGate(
@@ -672,13 +610,9 @@ class _ProviderSetupGate extends StatelessWidget {
 
 class _MainContent extends StatelessWidget {
   final bool isMobile;
-  final VoidCallback? onMenuHoverEnter;
-  final VoidCallback? onMenuHoverExit;
 
   const _MainContent({
     required this.isMobile,
-    this.onMenuHoverEnter,
-    this.onMenuHoverExit,
   });
 
   @override
@@ -717,8 +651,6 @@ class _MainContent extends StatelessWidget {
                           workspace: _workspaceFromSession(presentedSession),
                           isMobile: isMobile,
                           onMenuPressed: isMobile ? () => Scaffold.of(context).openDrawer() : null,
-                          onMenuHoverEnter: onMenuHoverEnter,
-                          onMenuHoverExit: onMenuHoverExit,
                         ),
                       ),
                   ],
@@ -853,7 +785,7 @@ class _HistoryTransitionOverlay extends StatelessWidget {
                     children: [
                       SizedBox.square(
                         dimension: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: AppProgressIndicator(strokeWidth: 2),
                       ),
                       SizedBox(width: 10),
                       Text('Loading conversation…'),
@@ -883,38 +815,51 @@ class _HistoryTransitionOverlay extends StatelessWidget {
 // ─── Sidebar drawer (mobile) ───────────────────────────────────────────────
 
 class _SidebarDrawer extends StatelessWidget {
-  final bool enableHover;
-  final VoidCallback? onHoverEnter;
-  final VoidCallback? onHoverExit;
-
-  const _SidebarDrawer({
-    this.enableHover = false,
-    this.onHoverEnter,
-    this.onHoverExit,
-  });
+  const _SidebarDrawer();
 
   @override
   Widget build(BuildContext context) {
-    Widget content = SessionSidebar(
+    final Widget content = SessionSidebar(
       isDrawerMode: true,
       onClose: () => Navigator.pop(context),
     );
-    if (enableHover) {
-      content = MouseRegion(
-        key: const Key('compact_sidebar_hover_region'),
-        onEnter: (_) => onHoverEnter?.call(),
-        onExit: (_) => onHoverExit?.call(),
-        child: content,
-      );
-    }
+    final theme = Theme.of(context);
+    final isRtl = Directionality.of(context) == TextDirection.rtl;
 
     return Drawer(
-      backgroundColor: Theme.of(context).colorScheme.surface,
+      backgroundColor: Colors.transparent,
+      elevation: 0,
       width: (MediaQuery.of(context).size.width * SidebarBreakpoints.drawerWidthFactor).clamp(
         SidebarBreakpoints.minWidth,
         MediaQuery.of(context).size.width,
       ),
-      child: content,
+      child: ClipRRect(
+        borderRadius: BorderRadius.horizontal(
+          right: isRtl ? Radius.zero : const Radius.circular(16),
+          left: isRtl ? const Radius.circular(16) : Radius.zero,
+        ),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+          child: Container(
+            decoration: BoxDecoration(
+              color: theme.colorScheme.surface.withValues(alpha: 0.25),
+              border: Border(
+                right: isRtl
+                    ? BorderSide.none
+                    : BorderSide(
+                        color: theme.colorScheme.outline.withValues(alpha: 0.25),
+                      ),
+                left: isRtl
+                    ? BorderSide(
+                        color: theme.colorScheme.outline.withValues(alpha: 0.25),
+                      )
+                    : BorderSide.none,
+              ),
+            ),
+            child: content,
+          ),
+        ),
+      ),
     );
   }
 }

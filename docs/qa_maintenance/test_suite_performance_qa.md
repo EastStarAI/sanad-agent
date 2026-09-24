@@ -51,3 +51,29 @@ A regression fails this matrix when a fast test introduces a fixed wait of 100
 milliseconds or more without a documented timing contract, relies on an
 external network/provider, leaves a process or port active, or moves
 package-owned coverage back under another product's test tree.
+
+## Windows Fast-Suite Isolation and Root-Cause Remediation
+
+To ensure the Agent fast suite runs reliably in parallel on Windows without resorting to global `--concurrency=1` or masking legitimate failures, all tests and platform infrastructure must adhere to the following isolation rules:
+
+1. **Mandatory Byte-Range Locks (`OS Error: errno = 33 / 32`):**
+   - On Windows, `RandomAccessFile.lock(FileLock.exclusive)` enforces strict mandatory locking. Concurrent calls to `readAsBytesSync()` on locked credential or state files fail with `errno = 33` (`ERROR_LOCK_VIOLATION`). The runtime avoids reading lock file bytes concurrently while holding an exclusive handle, and retries transient lock collisions.
+   - Teardown operations deleting temporary directories must guard against transient locks held by pending async file close operations, SQLite checkpointing, or background Windows indexing (`errno = 32`).
+
+2. **Cross-Platform Path Separators & Normalization:**
+   - Tests asserting path prefixes, directory listings, or JSON outputs must never hardcode POSIX `/` separators when evaluating filesystem paths on Windows. Use `p.join` or normalize paths before string matching.
+
+3. **Line Ending Elasticity (CRLF vs LF):**
+   - String indexing and regular expression matches on source files or release manifests must be CRLF-aware (`\r?\n`), preventing git checkout line-ending transformations from failing index lookups.
+
+4. **Fixture & Mock Completeness:**
+   - Interface additions (such as `SessionManager.getSessionRecord`) must be explicitly stubbed on mocks in test suites consuming those interfaces to avoid `MissingStubError` breaking turn orchestration.
+
+5. **Windows Subprocess Startup & Signal Boundaries:**
+   - Standalone CLI child processes on Windows experience JIT startup and PowerShell security bootstrap overhead. Fast-pathing bundled skills state via `.sanad-managed.json` eliminates repetitive PowerShell ACL calls.
+   - Because Dart on Windows maps `Process.kill` to `TerminateProcess` (yielding `-1`) rather than delivering catchable POSIX `SIGINT`/`SIGTERM` traps, tests asserting POSIX signal exit codes (130/143) must guard real OS signal execution to non-Windows platforms while preserving stream-based signal unit tests on all platforms.
+
+6. **Platform-Neutral Path and Wrapper Parity:**
+   - Synthetic CLI test fixtures use platform-neutral path helpers rather than assuming hardcoded POSIX `/` or `/users/...` paths. Runtime identity comparisons use `equivalentPaths`, which performs a filesystem-free lexical check first, honors host case/separator semantics, strips real Windows `\\?\` and `\\?\UNC\` prefixes, rejects distinct roots without probing them, and resolves symlinks only as a fallback.
+   - Platform bootstrap wrappers (`sanad-dev` and `sanad-dev.ps1`) maintain parity across package setup, lockfile integrity verification, checkout collision rejection, foreign checkout shim preservation, and content-addressed executable reuse. Windows locked-artifact coverage must hold a real exclusive handle and release it in `finally`; an unlocked stale-file deletion is not equivalent evidence.
+   - Wrapper fixtures must not persist test directories into the host user PATH. Tests may suppress the PATH-persistence call only in their copied wrapper while continuing to verify the tracked wrapper contains the real user-scoped installation behavior. Recursive fixture teardown is strict: lock/process leakage fails the test rather than being swallowed.

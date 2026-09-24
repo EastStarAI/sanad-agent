@@ -68,6 +68,7 @@ class AgentCapabilities {
   final List<String> permissionModes;
   final List<String> approvalScopes;
   final List<SlashCommandOption> slashCommands;
+  final Map<String, dynamic>? appearance;
 
   AgentCapabilities({
     required this.displayName,
@@ -94,12 +95,14 @@ class AgentCapabilities {
     this.permissionModes = const ['default'],
     this.approvalScopes = const ['once', 'session', 'workspace'],
     this.slashCommands = const [],
+    this.appearance,
   });
 
   Map<String, dynamic> toJson() => {
     'display_name': displayName,
     'protocol_version': protocolVersion,
     'bridge_version': bridgeVersion,
+    if (appearance != null) 'appearance': appearance,
     'capabilities': {
       'supports_model_change': supportsModelChange,
       'supports_thinking_mode_change': supportsThinkingModeChange,

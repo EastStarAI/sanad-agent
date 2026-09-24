@@ -258,10 +258,16 @@ class AuthService {
   /// exchange notification, preventing an event loop between client and daemon.
   Future<void> synchronizeDesktopAuthFile() async {
     if (!AppPlatform.isDesktop) return;
-    await _settingsStore.withAuthFileLock(_synchronizeDesktopAuthFileUnlocked);
+    final shouldFetchProfile = await _settingsStore.withAuthFileLock(
+      _synchronizeDesktopAuthFileUnlocked,
+    );
+    if (shouldFetchProfile) {
+      await fetchProfile();
+      _emitAccessToken();
+    }
   }
 
-  Future<void> _synchronizeDesktopAuthFileUnlocked() async {
+  Future<bool> _synchronizeDesktopAuthFileUnlocked() async {
     final authDoc = await _settingsStore.readAuthDocument();
     final nextHardwareId = authDoc['hardware_id']?.toString();
     if (nextHardwareId != null && nextHardwareId.isNotEmpty) {
@@ -283,7 +289,7 @@ class AuthService {
       userCredits = 0.0;
       totalCredits = 0.0;
       _emitAccessToken();
-      return;
+      return false;
     }
 
     final fileAccessToken = authDoc['access_token']?.toString();
@@ -297,9 +303,9 @@ class AuthService {
         accessToken: _backendAccessToken!,
         refreshToken: _backendRefreshToken,
       );
-      await fetchProfile();
-      _emitAccessToken();
+      return true;
     }
+    return false;
   }
 
   Future<void> _syncAuthToFile() async {

@@ -2,6 +2,8 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_usage_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
@@ -33,6 +35,19 @@ class _FakeUsageClient implements ProviderSetupClient {
   Future<void> Function()? usageResetLatency;
   final List<(String, String, String?)> resetCalls = [];
   ProviderUsageResetResultDto? resetResult;
+
+  /// `model.snapshot` call count and scripted instance list (97h catalog).
+  int modelSnapshotCalls = 0;
+  List<ModelCacheInstanceDto> scriptedInstances = const [
+    ModelCacheInstanceDto(
+      id: 'a',
+      displayName: 'Provider A',
+      status: 'ready',
+      isDefault: true,
+      cacheStatus: 'fetched',
+      models: [],
+    ),
+  ];
 
   @override
   Future<ProviderUsageResultDto> usageGet({
@@ -92,6 +107,18 @@ class _FakeUsageClient implements ProviderSetupClient {
     }
     return ProviderUsageSupportDto(support: map);
   }
+
+  @override
+  Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) async {
+    modelSnapshotCalls += 1;
+    return ModelCacheSnapshotDto(
+      instances: scriptedInstances,
+      recent: const [],
+    );
+  }
+
+  @override
+  Future<List<ProviderInstanceDto>> listInstances({DeviceConfig? agent}) async => const [];
 
   // ── Unused commands for the usage contract ─────────────────────────────
   @override
@@ -311,7 +338,8 @@ void main() {
   );
 
   test(
-    'stale responses are ignored if a newer fetch sequence supersedes them',
+    'two consumers of the same in-flight usage load share one request; later '
+    'complete loads re-enter without re-fetching while fresh',
     () async {
       final client = _FakeUsageClient();
       final cubit = ProviderUsageCubit(
@@ -321,67 +349,127 @@ void main() {
       );
       addTearDown(cubit.close);
 
-      final firstResult = ProviderUsageResultDto(
-        status: 'available',
-        providerInstanceId: 'a',
-        snapshot: ProviderUsageSnapshotDto(
+      // Hold the wire response open so a second consumer can join the first.
+      final gate = Completer<void>();
+      client.usageGetLatency = () => gate.future;
+      client.usageResults = {
+        'a': ProviderUsageResultDto(
+          status: 'available',
           providerInstanceId: 'a',
-          providerTemplateId: 'openai-codex',
-          source: 'first',
-          fetchedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
-          windows: const [],
+          snapshot: ProviderUsageSnapshotDto(
+            providerInstanceId: 'a',
+            providerTemplateId: 'openai-codex',
+            source: 'shared',
+            fetchedAt: DateTime.now().toUtc(),
+            windows: const [],
+          ),
         ),
-      );
-      final secondResult = ProviderUsageResultDto(
-        status: 'available',
-        providerInstanceId: 'a',
-        snapshot: ProviderUsageSnapshotDto(
-          providerInstanceId: 'a',
-          providerTemplateId: 'openai-codex',
-          source: 'second',
-          fetchedAt: DateTime.now().toUtc(),
-          windows: const [
-            ProviderUsageWindowDto(type: 'weekly', label: 'Weekly'),
-          ],
-        ),
-      );
+      };
 
-      // Stall the first response so a newer one can overtake it.
-      final firstCompleter = Completer<void>();
-      client.usageGetLatency = () => firstCompleter.future;
-      client.usageResults = {'a': firstResult};
-
-      // Kick off the first load — _fetch runs under sequence 1 and stalls on
-      // firstCompleter. The cubit is now mid-flight for 'a'.
-      unawaited(
-        cubit.onInstancesLoaded(agent: _local, instanceIds: const ['a']),
-      );
+      // Two independent consumers request the same (device, instance) at the
+      // same time. 97h requires exactly one in-flight Agent request.
+      final consumerA = cubit.ensureInstanceUsage(agent: _local, instanceId: 'a');
+      final consumerB = cubit.ensureInstanceUsage(agent: _local, instanceId: 'a');
       await Future<void>.delayed(Duration.zero);
 
-      // Prime a second response, drop the latency, and re-enter
-      // onInstancesLoaded which issues a fresh fetch under a new sequence.
-      client.usageGetLatency = null;
-      client.usageResults = {'a': secondResult};
-      await cubit.onInstancesLoaded(agent: _local, instanceIds: const ['a']);
+      final getCalls = client.calls.where((c) => c.$1 == 'get').toList();
+      expect(getCalls, hasLength(1), reason: 'one shared usage.get for two consumers');
 
-      // The on-screen snapshot must reflect the second fetch, even though the
-      // first one has not yet resolved at the time it was written.
-      final after = cubit.state.entry(_localDeviceId, 'a')!;
-      expect(after.result!.snapshot!.source, 'second');
-
-      // Re-arming the latency would overwrite 'second' if the orphan wasn't
-      // protected; release the first response and verify it's still discarded.
-      client.usageResults = {'a': firstResult};
-      firstCompleter.complete();
-      // Give the rejected orphan a chance to run its no-op state mutation before
-      // reading the final state.
-      await Future<void>.delayed(Duration.zero);
-      final finalState = cubit.state.entry(_localDeviceId, 'a')!;
+      gate.complete();
+      await Future.wait([consumerA, consumerB]);
       expect(
-        finalState.result!.snapshot!.source,
-        'second',
-        reason: 'the stale orphaned fetch must be ignored',
+        cubit.state.entry(_localDeviceId, 'a')!.result!.snapshot!.source,
+        'shared',
       );
+
+      // A later re-entry (e.g. a rebuild/remount of the consuming widget)
+      // with the same logical resource must not issue another fetch while the
+      // snapshot is still fresh.
+      client.usageGetLatency = null;
+      await cubit.ensureInstanceUsage(agent: _local, instanceId: 'a');
+      final getCallsAfter = client.calls.where((c) => c.$1 == 'get').toList();
+      expect(getCallsAfter, hasLength(1), reason: 'no re-fetch while fresh');
+    },
+  );
+
+  test(
+    'loads for different devices or queries run independently, never share '
+    'or leak across scopes',
+    () async {
+      final client = _FakeUsageClient();
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      final remoteAgent = DeviceConfig(
+        id: 'remote-1',
+        name: 'Remote',
+        isOnline: true,
+      );
+
+      // The same instance id on two devices is two distinct logical queries:
+      // both must resolve and stay isolated in their own device entries.
+      await cubit.ensureInstanceUsage(agent: _local, instanceId: 'a');
+      await cubit.ensureInstanceUsage(agent: remoteAgent, instanceId: 'a');
+
+      final getCalls = client.calls.where((c) => c.$1 == 'get').toList();
+      expect(getCalls, hasLength(2), reason: 'per-device usage.get, no sharing');
+      expect(cubit.state.entry(_localDeviceId, 'a'), isNotNull);
+      expect(cubit.state.entry('remote-1', 'a'), isNotNull);
+
+      // A different query for the same device resolves separately too.
+      await cubit.ensureInstanceUsage(agent: _local, instanceId: 'b');
+      final getCallsAfterB = client.calls.where((c) => c.$1 == 'get').toList();
+      expect(getCallsAfterB, hasLength(3));
+      expect(cubit.state.entry(_localDeviceId, 'b'), isNotNull);
+
+      // Device-switch invalidation drops the previous device's catalog so the
+      // new scope never reuses or inherits the old display names.
+      await cubit.ensureProviderDisplayNames(agent: _local);
+      expect(cubit.state.displayNamesFor(_localDeviceId), isNotEmpty);
+      cubit.clearDevice(_local);
+      expect(cubit.state.displayNamesFor(_localDeviceId), isEmpty);
+    },
+  );
+
+  test(
+    'catalog model.snapshot load is shared and not re-issued per rebuild/remount',
+    () async {
+      final client = _FakeUsageClient();
+      final cubit = ProviderUsageCubit(
+        client: client,
+        localDeviceId: _localDeviceId,
+        freshness: const Duration(minutes: 1),
+      );
+      addTearDown(cubit.close);
+
+      // Two consumers ask for the catalog concurrently: one request.
+      final a = cubit.ensureProviderDisplayNames(agent: _local);
+      final b = cubit.ensureProviderDisplayNames(agent: _local);
+      await Future.wait([a, b]);
+      expect(client.modelSnapshotCalls, 1, reason: 'one shared model.snapshot');
+
+      // Twenty simulated rebuild/remount re-entries: zero additional calls.
+      for (var i = 0; i < 20; i++) {
+        await cubit.ensureProviderDisplayNames(agent: _local);
+      }
+      expect(
+        client.modelSnapshotCalls,
+        1,
+        reason: 'no catalog re-fetch on rebuild/remount of same device',
+      );
+      expect(
+        cubit.state.displayNamesFor(_localDeviceId),
+        containsPair('a', 'Provider A'),
+      );
+
+      // A different device resolves its own catalog separately.
+      final remoteAgent = DeviceConfig(id: 'remote-1', name: 'Remote', isOnline: true);
+      await cubit.ensureProviderDisplayNames(agent: remoteAgent);
+      expect(client.modelSnapshotCalls, 2, reason: 'per-device catalog request');
     },
   );
 

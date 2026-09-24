@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
+import 'package:sanad_windows_path/windows_path.dart';
 
 import '../../models/local_tool_spec.dart';
 import '../../permissions/permission_manager.dart';
@@ -18,11 +19,15 @@ class ShellExecuteTool extends SpecBackedTool {
 
   final String workspacePath;
   final PermissionManager? _permissionManager;
+  final WindowsSystemPath _windowsSystemPath;
 
   ShellExecuteTool({
     required this.workspacePath,
     PermissionManager? permissionManager,
-  }) : _permissionManager = permissionManager;
+    WindowsSystemPath? windowsSystemPath,
+  }) : _permissionManager = permissionManager,
+       _windowsSystemPath =
+           windowsSystemPath ?? sharedWindowsSystemPathResolver;
 
   @override
   bool get isCooperativelyCancellable => true;
@@ -31,20 +36,22 @@ class ShellExecuteTool extends SpecBackedTool {
   LocalToolSpec get toolSpec => const LocalToolSpec(
     name: 'shell_execute',
     displayName: 'Shell Execute',
-    description:
-        'Execute a shell command. Starts inside the active workspace; do not "cd" to it.',
+    description: 'Execute a shell command. Starts inside the active workspace; do not "cd" to it.',
     inputSchema: {
       'type': 'object',
       'properties': {
         'command': {'type': 'string'},
         'cwd': {
           'type': 'string',
-          'description':
-              'Optional subdirectory relative to workspace root. Do not use for root.',
+          'description': 'Optional subdirectory relative to workspace root. Do not use for root.',
         },
         'timeout_ms': {'type': 'integer'},
+        'description': {
+          'type': 'string',
+          'description': 'A concise sentence of no more than seven words that explains to the user, in their own language, the purpose or goal of executing this command.',
+        },
       },
-      'required': ['command'],
+      'required': ['command', 'description'],
       'additionalProperties': false,
     },
     source: {'type': 'builtin_local', 'id': 'sanad-agent.system'},
@@ -150,17 +157,15 @@ class ShellExecuteTool extends SpecBackedTool {
       if (subDir.isAbsolute) {
         workingDir = subDir.resolveSymbolicLinksSync();
       } else {
-        workingDir = Directory(
-          '$workspacePath/$targetSubPath',
-        ).resolveSymbolicLinksSync();
+        workingDir = Directory('$workspacePath/$targetSubPath')
+            .resolveSymbolicLinksSync();
       }
     } else {
       workingDir = Directory(workspacePath).resolveSymbolicLinksSync();
     }
 
-    final resolvedWorkspaceRoot = Directory(
-      workspacePath,
-    ).resolveSymbolicLinksSync();
+    final resolvedWorkspaceRoot = Directory(workspacePath)
+        .resolveSymbolicLinksSync();
     if (!workingDir.startsWith(resolvedWorkspaceRoot)) {
       throw FileSystemException(
         'Security violation: Target path is outside the workspace root.',
@@ -233,21 +238,28 @@ class ShellExecuteTool extends SpecBackedTool {
     }
 
     try {
+      var childEnvironment = Map<String, String>.from(Platform.environment);
+      if (_windowsSystemPath.isWindows) {
+        final path = await _windowsSystemPath.resolve(
+          inheritedPathFromEnvironment(childEnvironment),
+        );
+        childEnvironment = replaceEnvironmentPath(childEnvironment, path);
+      }
+      childEnvironment.addAll({
+        'GIT_TERMINAL_PROMPT': '0',
+        'GCM_INTERACTIVE': 'false',
+        'SSH_ASKPASS_REQUIRE': 'never',
+        if (context?.sessionId.isNotEmpty == true)
+          'SANAD_REQUESTER_SESSION_ID': context!.sessionId,
+        if (context?.toolCallId?.isNotEmpty == true)
+          'SANAD_REQUESTER_TOOL_CALL_ID': context!.toolCallId!,
+      });
       process = await Process.start(
         shell.executable,
         shell.arguments,
         workingDirectory: workingDir,
         runInShell: false,
-        environment: {
-          ...Platform.environment,
-          'GIT_TERMINAL_PROMPT': '0',
-          'GCM_INTERACTIVE': 'false',
-          'SSH_ASKPASS_REQUIRE': 'never',
-          if (context?.sessionId.isNotEmpty == true)
-            'SANAD_REQUESTER_SESSION_ID': context!.sessionId,
-          if (context?.toolCallId?.isNotEmpty == true)
-            'SANAD_REQUESTER_TOOL_CALL_ID': context!.toolCallId!,
-        },
+        environment: childEnvironment,
       );
       tree = ProcessTreeController.attach(
         process,
@@ -390,10 +402,8 @@ class ShellExecuteTool extends SpecBackedTool {
   ) async {
     if (stdoutFuture == null || stderrFuture == null) return '';
     try {
-      final results = await Future.wait([
-        stdoutFuture,
-        stderrFuture,
-      ]).timeout(const Duration(seconds: 2));
+      final results = await Future.wait([stdoutFuture, stderrFuture])
+          .timeout(const Duration(seconds: 2));
       final stdout = _renderBoundedOutput(results[0]);
       final stderr = _renderBoundedOutput(results[1]);
       if (stderr.isEmpty) return stdout;
@@ -419,8 +429,7 @@ class ShellExecuteTool extends SpecBackedTool {
     ),
     RunCancellationReason.shutdown => (
       reason: 'agent_interrupted',
-      message:
-          'The command was interrupted because the agent stopped. Its final outcome is unknown.',
+      message: 'The command was interrupted because the agent stopped. Its final outcome is unknown.',
     ),
     RunCancellationReason.superseded => (
       reason: 'superseded',
@@ -428,8 +437,7 @@ class ShellExecuteTool extends SpecBackedTool {
     ),
     null => (
       reason: 'agent_interrupted',
-      message:
-          'The command was interrupted because the agent stopped unexpectedly. Its final outcome is unknown.',
+      message: 'The command was interrupted because the agent stopped unexpectedly. Its final outcome is unknown.',
     ),
   };
 

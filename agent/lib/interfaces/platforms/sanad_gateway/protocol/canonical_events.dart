@@ -183,6 +183,12 @@ class CanonicalEventTypes {
   static const String deviceSettingsSnapshot = 'device.settings.snapshot';
   static const String deviceSettingsUpdated = 'device.settings.updated';
 
+  // ── Appearance Protocol ────────────────────────────────────────────────
+  static const String getAppearance = 'get_appearance';
+  static const String updateAppearance = 'update_appearance';
+  static const String appearanceSnapshot = 'appearance_snapshot';
+  static const String appearanceUpdated = 'appearance_updated';
+
   // ── Plan 25: workspace policy relocation ──────────────────────────────
   static const String workspaceGetPolicy = 'workspace.get_policy';
   static const String workspaceSetPermissionMode =

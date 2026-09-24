@@ -619,6 +619,13 @@ void main() {
       tester.getSize(find.byKey(const Key('sidebar_toggle_btn'))),
     );
 
+    final wordmarkFinder = find.byKey(const Key('sidebar_wordmark_logo'));
+    expect(wordmarkFinder, findsOneWidget);
+    expect(
+      tester.getTopLeft(wordmarkFinder).dx,
+      greaterThan(tester.getTopRight(find.byKey(const Key('sidebar_forward_btn'))).dx),
+    );
+
     await tester.tap(find.byKey(const Key('sidebar_back_btn')));
     await tester.pumpAndSettle();
     expect(navigatedRoute, '/conversations/device-1/s-1');
@@ -627,6 +634,48 @@ void main() {
     await tester.pumpAndSettle();
     expect(navigatedRoute, '/conversations/device-1/s-2');
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('ConversationWorkspaceLayout reveals hover trigger when unpinned and reacts to hover', (tester) async {
+    final history = ConversationHistoryController();
+    getIt.registerSingleton<ConversationHistoryController>(history);
+    addTearDown(() => getIt.unregister<ConversationHistoryController>());
+
+    await pumpSidebar(
+      tester,
+      router: GoRouter(
+        initialLocation: '/',
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (context, state) => const Scaffold(
+              body: ConversationWorkspaceLayout(
+                showChrome: false,
+                child: SizedBox(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('sidebar_edge_hover_trigger')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('sidebar_toggle_btn')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('sidebar_edge_hover_trigger')), findsOneWidget);
+
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: Offset.zero);
+    addTearDown(gesture.removePointer);
+
+    await gesture.moveTo(tester.getCenter(find.byKey(const Key('sidebar_edge_hover_trigger'))));
+    await tester.pumpAndSettle();
+
+    final state = tester.state<ConversationWorkspaceLayoutState>(find.byType(ConversationWorkspaceLayout));
+    expect(state.isPinned, isFalse);
   });
 
   testWidgets('options menu works when hover exits row to pop up menu', (tester) async {

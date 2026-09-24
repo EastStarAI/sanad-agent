@@ -1,11 +1,13 @@
 import 'dart:async';
 
+import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_session_channel.dart';
+import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_resume_service.dart';
 
 typedef PermissionRequestHandler =
@@ -16,16 +18,67 @@ typedef SessionResponseEmitter =
     Future<void> Function(GatewayResponse response);
 typedef RuntimeResponseSink = void Function(GatewayResponse response);
 
+class PendingPermissionEntry {
+  final Completer<Map<String, dynamic>> completer;
+  final String sessionId;
+  final String requestId;
+  final String toolName;
+  final Map<String, dynamic> payload;
+
+  const PendingPermissionEntry({
+    required this.completer,
+    required this.sessionId,
+    required this.requestId,
+    required this.toolName,
+    required this.payload,
+  });
+
+  bool get isUserQuestion =>
+      toolName == 'system_ask_user' ||
+      (payload['questions'] is List &&
+          (payload['questions'] as List).isNotEmpty);
+}
+
+class PermissionDecisionOutcome {
+  final bool isSuccess;
+  final String outcome;
+  final String? errorCode;
+  final String? errorMessage;
+
+  const PermissionDecisionOutcome.success({this.outcome = 'resolved'})
+    : isSuccess = true,
+      errorCode = null,
+      errorMessage = null;
+
+  const PermissionDecisionOutcome.failure({
+    required this.outcome,
+    required this.errorCode,
+    required this.errorMessage,
+  }) : isSuccess = false;
+}
+
+class ResolvedPermissionRecord {
+  final String sessionId;
+  final Map<String, dynamic> decision;
+  final DateTime resolvedAt;
+
+  ResolvedPermissionRecord({
+    required this.sessionId,
+    required this.decision,
+    DateTime? resolvedAt,
+  }) : resolvedAt = resolvedAt ?? DateTime.now();
+}
+
 class PlatformRuntimeBridge {
+  static final Logger _logger = Logger('PlatformRuntimeBridge');
   static const int _resolvedPermissionRetention = 256;
   final Map<String, PlatformSessionChannel> _sessionChannels = {};
   final Map<String, String> _sessionDeviceIds = {};
   final Map<String, PermissionRequestHandler> _permissionHandlers = {};
   final Map<String, PlatformToolExecutionHandler> _platformToolHandlers = {};
   final Map<String, SessionResponseEmitter> _sessionResponseEmitters = {};
-  final Map<String, Completer<Map<String, dynamic>>>
-  _pendingPermissionRequests = {};
-  final Map<String, Map<String, dynamic>> _resolvedPermissionRequests = {};
+  final Map<String, PendingPermissionEntry> _pendingPermissionRequests = {};
+  final Map<String, ResolvedPermissionRecord> _resolvedPermissionRequests = {};
   final Map<String, Completer<Map<String, dynamic>>> _pendingToolCalls = {};
   final Map<String, OriginContext> _sessionOrigins = {};
   RuntimeResponseSink? _responseSink;
@@ -103,7 +156,13 @@ class PlatformRuntimeBridge {
     final requestId =
         payload['request_id']?.toString() ?? _nextRequestId('permission');
     final completer = Completer<Map<String, dynamic>>();
-    _pendingPermissionRequests[requestId] = completer;
+    _pendingPermissionRequests[requestId] = PendingPermissionEntry(
+      completer: completer,
+      sessionId: sessionId,
+      requestId: requestId,
+      toolName: payload['tool_name']?.toString() ?? '',
+      payload: Map<String, dynamic>.from(payload),
+    );
 
     final origin = _sessionOrigins[sessionId];
     final delivery = _deliveryForOrigin(origin, requestId: requestId);
@@ -182,54 +241,7 @@ class PlatformRuntimeBridge {
   bool handleProtocolEvent(CanonicalEvent event) {
     switch (event.type) {
       case CanonicalEventTypes.toolPermissionResponse:
-        final requestId = event.payload['request_id']?.toString();
-        if (requestId == null) {
-          return true;
-        }
-        final sessionId =
-            event.sessionId ?? event.payload['session_id']?.toString();
-        final completer = _pendingPermissionRequests.remove(requestId);
-        if (completer != null) {
-          _rememberPermissionResolution(requestId, event.payload);
-          completer.complete(event.payload);
-          return true;
-        }
-        if (_resolvedPermissionRequests.containsKey(requestId)) {
-          if (sessionId != null && sessionId.isNotEmpty) {
-            final origin = _sessionOrigins[sessionId];
-            unawaited(
-              _emitPermissionResolution(
-                sessionId: sessionId,
-                requestId: requestId,
-                outcome: 'already_resolved',
-                delivery: _deliveryForOrigin(origin, requestId: requestId),
-                origin: origin,
-              ),
-            );
-          }
-          return true;
-        }
-        final sink = _responseSink;
-        final emitter = sessionId == null
-            ? null
-            : _sessionResponseEmitters[sessionId] ??
-                  (sink == null
-                      ? null
-                      : (GatewayResponse response) async => sink(response));
-        final resumeService = getIt.isRegistered<SuspendedResumeService>()
-            ? getIt<SuspendedResumeService>()
-            : null;
-        if (sessionId != null && resumeService != null && emitter != null) {
-          unawaited(
-            _resumePersistedPermission(
-              resumeService: resumeService,
-              emitter: emitter,
-              sessionId: sessionId,
-              requestId: requestId,
-              decision: event.payload,
-            ),
-          );
-        }
+        unawaited(handlePermissionResponse(event));
         return true;
       case CanonicalEventTypes.platformToolResult:
         final requestId = event.payload['request_id']?.toString();
@@ -243,37 +255,344 @@ class PlatformRuntimeBridge {
     }
   }
 
+  PermissionDecisionOutcome? _validateToolDecision(
+    Map<String, dynamic> payload,
+  ) {
+    if (payload.containsKey('answer')) {
+      return const PermissionDecisionOutcome.failure(
+        outcome: 'wrong_kind',
+        errorCode: 'INVALID_INTERVENTION_KIND',
+        errorMessage:
+            'Cannot submit an answer to an ordinary tool permission request.',
+      );
+    }
+
+    final hasAllowed = payload.containsKey('allowed');
+    final hasDecision = payload.containsKey('decision');
+
+    if (!hasAllowed && !hasDecision) {
+      return const PermissionDecisionOutcome.failure(
+        outcome: 'wrong_kind',
+        errorCode: 'INVALID_DECISION',
+        errorMessage:
+            'Request is a tool permission and requires an allow or deny decision.',
+      );
+    }
+
+    bool? allowed;
+    if (hasAllowed) {
+      final rawAllowed = payload['allowed'];
+      if (rawAllowed is! bool) {
+        return const PermissionDecisionOutcome.failure(
+          outcome: 'invalid_decision',
+          errorCode: 'MALFORMED_DECISION',
+          errorMessage: 'The "allowed" field must be a boolean.',
+        );
+      }
+      allowed = rawAllowed;
+    }
+
+    String? decision;
+    if (hasDecision) {
+      final rawDecision = payload['decision']?.toString().toLowerCase().trim();
+      if (rawDecision != 'allow' && rawDecision != 'deny') {
+        return const PermissionDecisionOutcome.failure(
+          outcome: 'invalid_decision',
+          errorCode: 'MALFORMED_DECISION',
+          errorMessage:
+              'The "decision" field must be either "allow" or "deny".',
+        );
+      }
+      decision = rawDecision;
+    }
+
+    if (allowed != null && decision != null) {
+      final decisionAllowed = decision == 'allow';
+      if (allowed != decisionAllowed) {
+        return PermissionDecisionOutcome.failure(
+          outcome: 'invalid_decision',
+          errorCode: 'CONTRADICTORY_DECISION',
+          errorMessage:
+              'Contradictory decision: "allowed" is $allowed but "decision" is "$decision".',
+        );
+      }
+    }
+
+    return null;
+  }
+
+  PermissionDecisionOutcome? _validateClarificationDecision(
+    Map<String, dynamic> payload,
+  ) {
+    if (!payload.containsKey('answer')) {
+      return const PermissionDecisionOutcome.failure(
+        outcome: 'wrong_kind',
+        errorCode: 'INVALID_ANSWER',
+        errorMessage:
+            'Request is a clarification question and requires a non-empty answer.',
+      );
+    }
+    final rawAnswer = payload['answer'];
+    if (rawAnswer == null) {
+      return const PermissionDecisionOutcome.failure(
+        outcome: 'wrong_kind',
+        errorCode: 'INVALID_ANSWER',
+        errorMessage:
+            'Request is a clarification question and requires a non-empty answer.',
+      );
+    }
+    final answer = rawAnswer.toString().trim();
+    if (answer.isEmpty) {
+      return const PermissionDecisionOutcome.failure(
+        outcome: 'wrong_kind',
+        errorCode: 'INVALID_ANSWER',
+        errorMessage:
+            'Request is a clarification question and requires a non-empty answer.',
+      );
+    }
+    return null;
+  }
+
+  /// Processes an incoming permission or clarification decision with strict
+  /// identity and kind validation. Stale, duplicate, cross-session, or wrong-kind
+  /// responses fail closed without consuming the pending request.
+  Future<PermissionDecisionOutcome> handlePermissionResponse(
+    CanonicalEvent event,
+  ) async {
+    final requestId = event.payload['request_id']?.toString();
+    if (requestId == null || requestId.isEmpty) {
+      return const PermissionDecisionOutcome.failure(
+        outcome: 'invalid_request',
+        errorCode: 'MISSING_REQUEST_ID',
+        errorMessage: 'request_id is required.',
+      );
+    }
+    final sessionId =
+        event.sessionId ?? event.payload['session_id']?.toString();
+    if (sessionId == null || sessionId.isEmpty) {
+      return const PermissionDecisionOutcome.failure(
+        outcome: 'invalid_request',
+        errorCode: 'MISSING_SESSION_ID',
+        errorMessage: 'session_id is required.',
+      );
+    }
+
+    final pending = _pendingPermissionRequests[requestId];
+    if (pending != null) {
+      // 1. Cross-session validation
+      if (pending.sessionId != sessionId) {
+        _logger.warning(
+          'Cross-session permission response rejected: request $requestId belongs to '
+          '${pending.sessionId}, got $sessionId',
+        );
+        return PermissionDecisionOutcome.failure(
+          outcome: 'cross_session_mismatch',
+          errorCode: 'CROSS_SESSION_MISMATCH',
+          errorMessage:
+              'Request $requestId belongs to session ${pending.sessionId}, not $sessionId.',
+        );
+      }
+
+      // 2. Kind and consistency validation
+      final kindFailure = pending.isUserQuestion
+          ? _validateClarificationDecision(event.payload)
+          : _validateToolDecision(event.payload);
+      if (kindFailure != null) {
+        _logger.warning(
+          'Validation failed for request $requestId: ${kindFailure.errorMessage}',
+        );
+        return kindFailure;
+      }
+
+      // Validation passed: consume the pending request and complete it
+      _pendingPermissionRequests.remove(requestId);
+      _rememberPermissionResolution(
+        requestId,
+        event.payload,
+        sessionId: sessionId,
+      );
+      pending.completer.complete(event.payload);
+      return const PermissionDecisionOutcome.success();
+    }
+
+    // 3. Stale / Already-resolved check (with cross-session preservation)
+    final resolved = _resolvedPermissionRequests[requestId];
+    if (resolved != null) {
+      if (resolved.sessionId != sessionId) {
+        _logger.warning(
+          'Cross-session resolved permission response rejected: request $requestId was resolved for '
+          '${resolved.sessionId}, got $sessionId',
+        );
+        return PermissionDecisionOutcome.failure(
+          outcome: 'cross_session_mismatch',
+          errorCode: 'CROSS_SESSION_MISMATCH',
+          errorMessage:
+              'Request $requestId belongs to session ${resolved.sessionId}, not $sessionId.',
+        );
+      }
+
+      final origin = _sessionOrigins[sessionId];
+      unawaited(
+        _emitPermissionResolution(
+          sessionId: sessionId,
+          requestId: requestId,
+          outcome: 'already_resolved',
+          delivery: _deliveryForOrigin(origin, requestId: requestId),
+          origin: origin,
+        ),
+      );
+      return PermissionDecisionOutcome.failure(
+        outcome: 'already_resolved',
+        errorCode: 'ALREADY_RESOLVED',
+        errorMessage: 'Request $requestId has already been resolved.',
+      );
+    }
+
+    // 4. Suspended checkpoint in SuspendedResumeService
+    final resumeService = getIt.isRegistered<SuspendedResumeService>()
+        ? getIt<SuspendedResumeService>()
+        : null;
+    final checkpointStore = getIt.isRegistered<SuspendedCheckpointStore>()
+        ? getIt<SuspendedCheckpointStore>()
+        : null;
+
+    if (checkpointStore != null) {
+      final checkpoint = await checkpointStore.getByRequestId(requestId);
+      if (checkpoint == null) {
+        return PermissionDecisionOutcome.failure(
+          outcome: 'not_found',
+          errorCode: 'REQUEST_NOT_FOUND',
+          errorMessage: 'No pending request found with id $requestId.',
+        );
+      }
+
+      if (checkpoint.sessionId != sessionId) {
+        _logger.warning(
+          'Cross-session suspended permission response rejected: request $requestId belongs to '
+          '${checkpoint.sessionId}, got $sessionId',
+        );
+        return PermissionDecisionOutcome.failure(
+          outcome: 'cross_session_mismatch',
+          errorCode: 'CROSS_SESSION_MISMATCH',
+          errorMessage:
+              'Request $requestId belongs to session ${checkpoint.sessionId}, not $sessionId.',
+        );
+      }
+
+      if (checkpoint.status != 'awaiting_permission') {
+        return PermissionDecisionOutcome.failure(
+          outcome: 'already_resolved',
+          errorCode: 'ALREADY_RESOLVED',
+          errorMessage:
+              'Request $requestId is in status ${checkpoint.status} and cannot be resolved.',
+        );
+      }
+
+      final isAskUser = checkpoint.toolName == 'system_ask_user';
+      final kindFailure = isAskUser
+          ? _validateClarificationDecision(event.payload)
+          : _validateToolDecision(event.payload);
+      if (kindFailure != null) {
+        return kindFailure;
+      }
+    }
+
+    final sink = _responseSink;
+    final emitter =
+        _sessionResponseEmitters[sessionId] ??
+        (sink == null
+            ? null
+            : (GatewayResponse response) async => sink(response));
+
+    if (resumeService != null && emitter != null) {
+      final claimCompleter = Completer<PermissionDecisionOutcome>();
+      unawaited(
+        _resumePersistedPermission(
+          resumeService: resumeService,
+          emitter: emitter,
+          sessionId: sessionId,
+          requestId: requestId,
+          decision: event.payload,
+          onClaimSuccess: () {
+            if (!claimCompleter.isCompleted) {
+              claimCompleter.complete(
+                const PermissionDecisionOutcome.success(),
+              );
+            }
+          },
+          onClaimFailure: (outcome) {
+            if (!claimCompleter.isCompleted) {
+              claimCompleter.complete(outcome);
+            }
+          },
+        ),
+      );
+      return await claimCompleter.future;
+    }
+
+    return PermissionDecisionOutcome.failure(
+      outcome: 'not_found',
+      errorCode: 'REQUEST_NOT_FOUND',
+      errorMessage: 'No pending request found with id $requestId.',
+    );
+  }
+
   Future<void> _resumePersistedPermission({
     required SuspendedResumeService resumeService,
     required SessionResponseEmitter emitter,
     required String sessionId,
     required String requestId,
     required Map<String, dynamic> decision,
+    required void Function() onClaimSuccess,
+    required void Function(PermissionDecisionOutcome outcome) onClaimFailure,
   }) async {
     final origin = _sessionOrigins[sessionId];
     final delivery = _deliveryForOrigin(origin, requestId: requestId);
-    final resumed = await resumeService.resumeFromDecision(
-      requestId: requestId,
-      decision: decision,
-      emitResponse: emitter,
-      onClaimed: () async {
-        _rememberPermissionResolution(requestId, decision);
+    try {
+      final resumed = await resumeService.resumeFromDecision(
+        requestId: requestId,
+        decision: decision,
+        emitResponse: emitter,
+        onClaimed: () async {
+          _rememberPermissionResolution(
+            requestId,
+            decision,
+            sessionId: sessionId,
+          );
+          onClaimSuccess();
+          await _emitPermissionResolution(
+            sessionId: sessionId,
+            requestId: requestId,
+            outcome: 'resolved',
+            delivery: delivery,
+            origin: origin,
+          );
+        },
+      );
+      if (!resumed) {
+        onClaimFailure(
+          const PermissionDecisionOutcome.failure(
+            outcome: 'already_resolved',
+            errorCode: 'ALREADY_RESOLVED',
+            errorMessage:
+                'Request was already resolved or could not be claimed.',
+          ),
+        );
         await _emitPermissionResolution(
           sessionId: sessionId,
           requestId: requestId,
-          outcome: 'resolved',
+          outcome: 'already_resolved',
           delivery: delivery,
           origin: origin,
         );
-      },
-    );
-    if (!resumed) {
-      await _emitPermissionResolution(
-        sessionId: sessionId,
-        requestId: requestId,
-        outcome: 'already_resolved',
-        delivery: delivery,
-        origin: origin,
+      }
+    } catch (e) {
+      onClaimFailure(
+        PermissionDecisionOutcome.failure(
+          outcome: 'error',
+          errorCode: 'RESUME_FAILED',
+          errorMessage: 'Failed to resume decision for request $requestId: $e',
+        ),
       );
     }
   }
@@ -308,9 +627,13 @@ class PlatformRuntimeBridge {
 
   void _rememberPermissionResolution(
     String requestId,
-    Map<String, dynamic> decision,
-  ) {
-    _resolvedPermissionRequests[requestId] = Map.unmodifiable(decision);
+    Map<String, dynamic> decision, {
+    required String sessionId,
+  }) {
+    _resolvedPermissionRequests[requestId] = ResolvedPermissionRecord(
+      sessionId: sessionId,
+      decision: Map.unmodifiable(decision),
+    );
     while (_resolvedPermissionRequests.length > _resolvedPermissionRetention) {
       _resolvedPermissionRequests.remove(
         _resolvedPermissionRequests.keys.first,

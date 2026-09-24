@@ -9,6 +9,7 @@ import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/interfaces/gateway_manager.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
+import 'package:sanad_agent/evolution/db/agent_state_maintenance_service.dart';
 import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
@@ -93,12 +94,40 @@ Future<void> main(List<String> args) async {
     'Daemon is running. Press Ctrl+C to stop (if not in interactive mode).',
   );
 
+  // Task 65 — maintenance starts only after durable restore, transports, and
+  // the readiness signal. It waits for a grace period and runtime idleness,
+  // then yields between bounded delete batches.
+  unawaited(runAgentStateMaintenanceSafely());
+
   // Keep the process alive if needed, though CliPlatform has its own loop.
   // ProcessSignal.sigint.watch().listen((_) async {
   //   print('\nShutting down...');
   //   await gatewayManager.stop();
   //   exit(0);
   // });
+}
+
+/// Resolves and runs deferred database maintenance without allowing any
+/// maintenance-specific failure to affect the ready daemon.
+Future<void> runAgentStateMaintenanceSafely({
+  AgentStateMaintenanceService Function()? resolveService,
+  bool Function()? hasRuntimeActivity,
+  Logger? logger,
+}) async {
+  try {
+    final service =
+        (resolveService ?? () => getIt<AgentStateMaintenanceService>())();
+    final activity =
+        hasRuntimeActivity ??
+        () => getIt<SessionRunOrchestrator>().hasMaintenanceBlockingActivity;
+    await service.runAfterReady(hasRuntimeActivity: activity);
+  } catch (error, stack) {
+    (logger ?? Logger('DaemonStartup')).warning(
+      'Deferred agent state maintenance failed; daemon remains available.',
+      error,
+      stack,
+    );
+  }
 }
 
 Future<void> _recoverPendingTitlesSafely(TitleService titleService) async {

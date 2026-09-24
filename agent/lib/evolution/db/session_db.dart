@@ -30,6 +30,19 @@ class SoftRewindAdmissionCommit {
   });
 }
 
+/// Result of atomically accepting one canonical root-user message.
+class RootUserMessageCommit {
+  final Message message;
+  final int historyRevision;
+  final bool inserted;
+
+  const RootUserMessageCommit({
+    required this.message,
+    required this.historyRevision,
+    required this.inserted,
+  });
+}
+
 /// Persistent storage for sessions, messages, scheduled tasks, and suspended
 /// checkpoints.
 ///
@@ -42,14 +55,18 @@ class SoftRewindAdmissionCommit {
 class SessionDB {
   late Database _db;
   late CompactionBoundaryRepository _compactionBoundaries;
+  final AgentStateDatabase _state;
 
   /// The owner this instance is responsible for disposing. Non-null only for
   /// the default constructor (standalone); `null` when sharing an injected
   /// [AgentStateDatabase] via [SessionDB.fromState].
   final AgentStateDatabase? _disposeOwnedState;
 
-  SessionDB() : _disposeOwnedState = AgentStateDatabase() {
-    final state = _disposeOwnedState!;
+  SessionDB() : this._owned(AgentStateDatabase());
+
+  SessionDB._owned(AgentStateDatabase state)
+    : _state = state,
+      _disposeOwnedState = state {
     _db = state.db;
     _compactionBoundaries = CompactionBoundaryRepository(
       state,
@@ -61,7 +78,9 @@ class SessionDB {
   /// ownership. The caller disposes [state]; this [SessionDB] will not close
   /// it. Used by the DI production path so `SessionDB` and
   /// `ProviderInstanceRepository` share one `state.db` connection.
-  SessionDB.fromState(AgentStateDatabase state) : _disposeOwnedState = null {
+  SessionDB.fromState(AgentStateDatabase state)
+    : _state = state,
+      _disposeOwnedState = null {
     _db = state.db;
     _compactionBoundaries = CompactionBoundaryRepository(
       state,
@@ -587,15 +606,19 @@ class SessionDB {
     return null;
   }
 
-  SessionState? getSession(String sessionId) {
+  /// Reads only the session row. Message rows are never queried or decoded.
+  SessionState? getSessionRecord(String sessionId) {
     final result = _db.select('SELECT * FROM sessions WHERE session_id = ?', [
       sessionId,
     ]);
     if (result.isEmpty) return null;
+    return SessionState.fromMap(result.first);
+  }
 
-    final row = result.first;
-    final messages = getMessages(sessionId);
-    return SessionState.fromMap(row, messages);
+  SessionState? getSession(String sessionId) {
+    final record = getSessionRecord(sessionId);
+    if (record == null) return null;
+    return SessionState.fromMap(record.toMap(), getMessages(sessionId));
   }
 
   List<SessionState> getAllSessions() {
@@ -700,6 +723,82 @@ class SessionDB {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Appends one root-user message without reading or rewriting prior rows.
+  /// A repeated non-empty request id returns the existing active row.
+  RootUserMessageCommit appendRootUserMessage(
+    String sessionId,
+    Message message,
+  ) {
+    if (!MessageHistoryIdentity.isRootUser(message)) {
+      throw ArgumentError.value(
+        message.role,
+        'message',
+        'Must be root user input',
+      );
+    }
+    return _state.transaction((transaction) {
+      final db = transaction.db;
+      final sessionRows = db.select(
+        'SELECT history_revision FROM sessions WHERE session_id = ? LIMIT 1',
+        [sessionId],
+      );
+      if (sessionRows.isEmpty) {
+        throw StateError('Session does not exist: $sessionId');
+      }
+      final requestId = MessageHistoryIdentity.requestIdOf(message);
+      if (requestId != null) {
+        final existing = db.select(
+          '''
+          SELECT * FROM messages
+          WHERE session_id = ? AND request_id = ?
+            AND input_kind = ?
+            AND (history_status = ? OR history_status IS NULL)
+          ORDER BY id DESC LIMIT 1
+          ''',
+          [
+            sessionId,
+            requestId,
+            MessageHistoryIdentity.rootTurn,
+            MessageHistoryIdentity.active,
+          ],
+        );
+        if (existing.isNotEmpty) {
+          return RootUserMessageCommit(
+            message: _persistedMessageFromRow(existing.first).message,
+            historyRevision:
+                (sessionRows.first['history_revision'] as num?)?.toInt() ?? 0,
+            inserted: false,
+          );
+        }
+      }
+
+      final committed = MessageHistoryIdentity.persist(db, sessionId, message);
+      final receivedAt = _normalizeTimestampString(
+        committed.metadata?['received_at']?.toString(),
+      );
+      final now = _normalizeDateTime(DateTime.now());
+      db.execute(
+        '''
+        UPDATE sessions
+        SET last_user_message_at = ?, updated_at = ?
+        WHERE session_id = ?
+        ''',
+        [receivedAt ?? now, now, sessionId],
+      );
+      SessionHistoryRevisionRepository.bumpDatabase(db, sessionId);
+      final revision = db.select(
+        'SELECT history_revision FROM sessions WHERE session_id = ? LIMIT 1',
+        [sessionId],
+      );
+      return RootUserMessageCommit(
+        message: committed,
+        historyRevision:
+            (revision.first['history_revision'] as num?)?.toInt() ?? 0,
+        inserted: true,
+      );
+    });
   }
 
   void replaceMessages(String sessionId, List<Message> messages) {

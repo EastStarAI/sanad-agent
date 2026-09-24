@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/provider_setup/data/models/auth_session_dto.dart';
@@ -55,7 +56,7 @@ class _DeviceCodeAuthViewState extends State<DeviceCodeAuthView> {
                   message: state.error ?? 'Could not start account sign-in.',
                 )
               else if (session == null)
-                const Center(child: CircularProgressIndicator())
+                const Center(child: AppProgressIndicator())
               else ...[
                 Center(
                   child: Text(
@@ -140,7 +141,7 @@ class _DeviceCodeAuthViewState extends State<DeviceCodeAuthView> {
                       SizedBox(
                         width: 18,
                         height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
+                        child: AppProgressIndicator(strokeWidth: 2),
                       ),
                       SizedBox(width: 10),
                       Text('Waiting for authorization...'),

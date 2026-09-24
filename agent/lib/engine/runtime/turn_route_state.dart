@@ -43,13 +43,13 @@ class TurnRouteState {
   });
 
   String? get effectiveModel {
-    final session = sessionManager.getSession(sessionId);
+    final session = sessionManager.getSessionRecord(sessionId);
     return session?.model;
   }
 
   /// Reads the persisted provider id for this session, if any.
   String? sessionProviderId() {
-    final session = sessionManager.getSession(sessionId);
+    final session = sessionManager.getSessionRecord(sessionId);
     final pid = session?.providerId;
     return (pid == null || pid.isEmpty) ? null : pid;
   }
@@ -66,7 +66,7 @@ class TurnRouteState {
   }
 
   String? get effectiveThinkingMode {
-    final session = sessionManager.getSession(sessionId);
+    final session = sessionManager.getSessionRecord(sessionId);
     return _turnThinkingMode ?? session?.thinkingMode;
   }
 
@@ -226,7 +226,7 @@ class TurnRouteState {
   /// Returns the previous values when a switch occurred, otherwise null.
   ({String? providerId, String? model, String? thinkingMode})?
   applyTurnSwitchIfNeeded() {
-    final session = sessionManager.getSession(sessionId);
+    final session = sessionManager.getSessionRecord(sessionId);
     if (session == null) return null;
 
     final newProvider = _turnProviderId ?? sessionProviderId();

@@ -921,10 +921,16 @@ void main() {
     late MockTool mockTool;
     late SessionManager sessionManager;
     late Directory tempDir;
+    late AgentStateDatabase stateDb;
 
     setUp(() {
       tempDir = Directory.systemTemp.createTempSync('sanad_test_');
+      Directory(
+        '${tempDir.path}${Platform.pathSeparator}memories',
+      ).createSync(recursive: true);
       setSanadHomeOverride(tempDir.path);
+      stateDb = AgentStateDatabase.inMemory();
+      GetIt.I.registerSingleton<AgentStateDatabase>(stateDb);
       sessionManager = SessionManager();
       registry = ToolsRegistry();
       mockTool = MockTool();
@@ -934,9 +940,12 @@ void main() {
     tearDown(() {
       GetIt.I.reset();
       SessionManager.resetForTesting();
+      stateDb.dispose();
       setSanadHomeOverride(null);
       if (tempDir.existsSync()) {
-        tempDir.deleteSync(recursive: true);
+        try {
+          tempDir.deleteSync(recursive: true);
+        } catch (_) {}
       }
     });
 
@@ -1154,6 +1163,83 @@ void main() {
         expect(assistant.metadata?['adapter_marker'], isTrue);
         expect(assistant.metadata?['run_id'], isNull);
         expect(assistant.metadata?['model_step_id'], isNotEmpty);
+      },
+    );
+
+    test(
+      'preserves provider state across suspended tool continuation',
+      () async {
+        const providerState = LLMProviderState(
+          namespace: 'openai_chat_completions',
+          issuer: 'provider|openai_compatible|https://example.test',
+          data: {'reasoning_content': ''},
+        );
+        final session = sessionManager.createSession('mock/gpt-3.5-turbo');
+        sessionManager.saveSessionHistory(session.sessionId, [
+          Message(role: MessageRole.user, content: 'Ask for clarification'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'call-question',
+                name: 'system_ask_user',
+                arguments: const {},
+              ),
+            ],
+            providerState: providerState,
+          ),
+        ]);
+        final now = DateTime.now();
+        sessionManager.saveSuspendedCheckpoint(
+          SuspendedCheckpoint(
+            checkpointId: 'question-pending',
+            sessionId: session.sessionId,
+            requestId: 'question-request',
+            toolCallId: 'call-question',
+            toolName: 'system_ask_user',
+            status: 'awaiting_permission',
+            toolArguments: const {},
+            permissionPayload: const {},
+            createdAt: now,
+            updatedAt: now,
+          ),
+        );
+        final adapter = MockAdapter([
+          AgentResponse(
+            message: Message(role: MessageRole.assistant, content: 'Done'),
+            finishReason: LLMFinishReason.stop,
+          ),
+        ]);
+        final runner = AgentRunner(
+          adapter,
+          registry,
+          sessionManager,
+          existingSessionId: session.sessionId,
+        );
+
+        await runner
+            .resumeAfterToolCall(
+              toolCallId: 'call-question',
+              toolName: 'system_ask_user',
+              arguments: const {},
+              forcedOutput: 'approved answer',
+            )
+            .toList();
+
+        expect(adapter.histories, hasLength(1));
+        final replayedAssistant = adapter.histories.single.singleWhere(
+          (message) => message.role == MessageRole.assistant,
+        );
+        expect(replayedAssistant.providerState?.data, {
+          'reasoning_content': '',
+        });
+        final persistedAssistant = sessionManager
+            .getSession(session.sessionId)!
+            .messages
+            .firstWhere((message) => message.role == MessageRole.assistant);
+        expect(persistedAssistant.providerState?.data, {
+          'reasoning_content': '',
+        });
       },
     );
 

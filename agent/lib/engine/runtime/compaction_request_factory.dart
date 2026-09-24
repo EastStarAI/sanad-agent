@@ -52,7 +52,7 @@ abstract final class CompactionRequestFactory {
         .read(sessionId);
     if (projectionRevision == null) return null;
 
-    final session = getIt<SessionManager>().getSession(sessionId);
+    final session = getIt<SessionManager>().getSessionRecord(sessionId);
     final runtime = getIt<AgentRuntimeService>();
     final route = runtime.resolveSignature(
       providerId: session?.providerId,
@@ -132,7 +132,7 @@ abstract final class CompactionRequestFactory {
       targetRequestTokens:
           (effectiveWindow * (targetRatio ?? policy?.targetRatio ?? 0.10))
               .round(),
-      thresholdRatio: policy?.threshold ?? 0.80,
+      thresholdRatio: policy?.threshold ?? 0.90,
     );
   }
 

@@ -70,9 +70,10 @@ The command contract is layered and explicit:
   `.fvmrc`, and the checkout-owned user shim, then stops.
 - `sanad-dev setup` ensures the install layer, resolves the shared Release
   Contract, standalone `sanad-dev`, Agent, and Client packages in dependency
-  order, then stops without a runtime.
-- `sanad-dev run` ensures only missing or stale install/setup stages, then starts
-  the requested runtime target.
+  order, compiles a checkout-local native runtime CLI through FVM, then stops
+  without a runtime.
+- `sanad-dev run` ensures only missing or stale install/setup/runtime-CLI stages,
+  then starts the requested runtime target.
 - `sanad-dev switch --runtime current` prepares the invoking target checkout and
   then submits the handoff as one command; preparation failure leaves the source
   runtime unchanged.
@@ -84,10 +85,14 @@ the user command. FVM archives come from the official GitHub Release
 and use pinned per-platform SHA-256 digests. No stage requests `sudo` or
 administrator access. Every stage that performs work streams the child process's
 real stdout/stderr, then prints its elapsed time and final result. Already-valid
-stages remain silent, including the ready FVM check. The setup stamp binds the
-Flutter pin and all three `pubspec.lock` digests; valid package configs allow
-unchanged stages to be skipped. A failed stage blocks every dependent stage and
-runtime launch.
+stages remain silent, including the ready FVM check. The dependency setup stamp
+binds the Flutter pin and all package lock digests; valid package configs allow
+unchanged dependency stages to be skipped. A separate runtime-CLI stamp binds
+`scripts/sanad_dev/lib/`, its `pubspec.yaml`, and its lockfile to the native
+artifact. Warm runtime commands execute that artifact directly instead of
+repeating FVM SDK discovery; non-run commands report `sanad-dev setup` rather
+than rebuilding a missing or stale artifact. A failed stage blocks every
+dependent stage and runtime launch.
 
 The POSIX user bin is `${XDG_BIN_HOME:-$HOME/.local/bin}` and the Windows user
 bin is `%LOCALAPPDATA%\SanadDev\bin`. PATH changes affect new terminals; follow
@@ -453,11 +458,17 @@ applies.
 
 Use `sanad-dev doctor` before reconciling a Terminal/IDE launch. A complete
 single manual pair may be converted with `sanad-dev takeover`; it passes through
-the daemon's safe restart boundary and refuses Agent-tool-origin takeover.
-`cleanup-target-orphans` is narrower: it can remove only clients from the
-invoking target source when their recorded launcher and Agent are absent. It
-refuses requester/source-attached, live IDE-owned, cross-owned, or incomplete
-groups. There is no generic replace option.
+the daemon's safe restart boundary and refuses Agent-tool-origin takeover. When
+doctor reports an exact Agent-only orphan behind a dead launcher, run
+`sanad-dev doctor --fix` from a human-owned terminal. It requests permanent
+shutdown through the authenticated Agent boundary and removes the stale lease
+only after the Agent and every matching Client are absent. Do not run that
+recovery through an Agent tool call; mismatch, timeout, or remaining runtime
+evidence preserves the lease. `cleanup-target-orphans` is narrower: it can
+remove only Clients from the invoking target source when their recorded
+launcher and Agent are absent. It refuses requester/source-attached, live
+IDE-owned, cross-owned, or incomplete groups. There is no generic replace
+option.
 
 Use `--driver` when the client must expose its test driver and VM service for
 interactive UI verification:
@@ -584,6 +595,46 @@ is verified from its own package root.
 Run focused tests for the changed behavior before broad suites. E2E or
 integration tests that bind shared ports run sequentially; normal unit and
 widget tests do not require forced sequential execution.
+
+## PR workflow guards
+
+The standalone Pure-Dart package `scripts/workflow_guards/` owns two bounded,
+tested developer tools (no external packages; run through FVM):
+
+- **`pr_checks_watch`** — bounded CI check monitor for pull requests:
+
+  ```bash
+  fvm dart run scripts/workflow_guards/bin/pr_checks_watch.dart <pr>
+  ```
+
+  It polls `gh pr checks <pr> --json` every 5 seconds, stops on the first
+  failed/cancelled check (fail-fast), enforces a 7-minute maximum, prints one
+  bounded summary line per poll, and preserves its exit status (`0` all reported checks passed, `1` first failure,
+  `124` timeout pending, `2` tool error or no checks to prove the gate).
+  Windows-safe: no `for /f` parsing; a `.cmd`/`.bat` `--gh` override is routed
+  through the shell only after every argument passes a metacharacter check,
+  and `gh` itself is spawned directly.
+
+- **`merge_validate`** — fail-closed merge/rebase conflict gate:
+
+  ```bash
+  fvm dart run scripts/workflow_guards/bin/merge_validate.dart <resolved-file>...
+  ```
+
+  It rejects leftover conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`,
+  `|||||||`) with line numbers and corrupt JSON/JSONL syntax, exiting `3`
+  (markers) or `4` (syntax) so `git add` refuses a corrupt file. Use it after
+  a three-way reconstruction (`git show :1:<path>` / `:2:` / `:3:`) and before
+  staging, then run the affected analyzer/tests.
+
+Verify the guards with their own package suite:
+
+```bash
+cd scripts/workflow_guards
+fvm dart pub get
+fvm dart analyze
+fvm dart test
+```
 
 ## Documentation
 

@@ -18,11 +18,12 @@ void main() {
       home.path,
       scope: SanadHomeScope.identity,
     );
-    boundary.prepareDatabaseSync();
   });
 
   tearDown(() {
-    if (home.existsSync()) home.deleteSync(recursive: true);
+    try {
+      if (home.existsSync()) home.deleteSync(recursive: true);
+    } catch (_) {}
   });
 
   test('fresh install writes complete packages and state', () {

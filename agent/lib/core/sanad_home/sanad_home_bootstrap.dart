@@ -10,6 +10,7 @@ import 'package:path/path.dart' as p;
 
 import '../constants.dart';
 import 'sanad_home_boundary.dart';
+import 'windows_secure_runtime_backend.dart';
 
 enum SanadHomeScope { identity, state }
 
@@ -391,32 +392,40 @@ class SanadHomeBootstrap {
         );
       }
       if (destination.existsSync()) {
-        destination.renameSync(backup.path);
+        _renameWithRetrySync(destination, backup.path);
         movedOld = true;
       }
-      staging.renameSync(destination.path);
-      if (backup.existsSync()) _deleteStrictChildDirectorySync(backup);
+      _renameWithRetrySync(staging, destination.path);
+      try {
+        if (backup.existsSync()) _deleteStrictChildDirectorySync(backup);
+      } catch (_) {}
     } on SanadHomeBoundaryViolation {
       if (movedOld && !destination.existsSync() && backup.existsSync()) {
-        backup.renameSync(destination.path);
+        _renameWithRetrySync(backup, destination.path);
       }
       rethrow;
     } catch (_) {
       if (destination.existsSync() && movedOld && backup.existsSync()) {
-        _deleteStrictChildDirectorySync(destination);
+        try {
+          _deleteStrictChildDirectorySync(destination);
+        } catch (_) {}
       }
       if (movedOld && backup.existsSync()) {
-        backup.renameSync(destination.path);
+        _renameWithRetrySync(backup, destination.path);
       }
       throw const SanadHomeWriteFailure(
         'directory_replace_failed',
         'The managed directory replacement failed.',
       );
     } finally {
-      if (staging.existsSync()) _deleteStrictChildDirectorySync(staging);
-      if (backup.existsSync() && destination.existsSync()) {
-        _deleteStrictChildDirectorySync(backup);
-      }
+      try {
+        if (staging.existsSync()) _deleteStrictChildDirectorySync(staging);
+      } catch (_) {}
+      try {
+        if (backup.existsSync() && destination.existsSync()) {
+          _deleteStrictChildDirectorySync(backup);
+        }
+      } catch (_) {}
     }
   }
 
@@ -608,51 +617,29 @@ class SanadHomeBootstrap {
 
   void _replaceAtomicallySync(File source, File destination) {
     if (Platform.isWindows) {
-      const script = r'''
-$ErrorActionPreference = 'Stop'
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class SanadAtomicMove {
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  public static extern bool MoveFileExW(
-    string existingFile,
-    string newFile,
-    int flags
-  );
-}
-'@
-$source = $env:SANAD_ATOMIC_SOURCE
-$destination = $env:SANAD_ATOMIC_DESTINATION
-$replaceExisting = 0x1
-$writeThrough = 0x8
-if (-not [SanadAtomicMove]::MoveFileExW(
-  $source,
-  $destination,
-  ($replaceExisting -bor $writeThrough)
-)) {
-  throw [ComponentModel.Win32Exception]::new(
-    [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-  )
-}
-''';
-      final result = Process.runSync(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', script],
-        environment: {
-          'SANAD_ATOMIC_SOURCE': source.path,
-          'SANAD_ATOMIC_DESTINATION': destination.path,
-        },
-      );
-      if (result.exitCode != 0) {
+      try {
+        _windowsBackend.replaceFile(source.path, destination.path);
+        return;
+      } catch (_) {
         throw const SanadHomeWriteFailure(
           'atomic_replace_failed',
           'The Windows atomic replacement failed.',
         );
       }
-      return;
     }
     source.renameSync(destination.path);
+  }
+
+  static void _renameWithRetrySync(Directory source, String destinationPath) {
+    for (var i = 0; i < 10; i++) {
+      try {
+        source.renameSync(destinationPath);
+        return;
+      } on FileSystemException {
+        if (!Platform.isWindows || i == 9) rethrow;
+        sleep(const Duration(milliseconds: 50));
+      }
+    }
   }
 
   static void _assertRegularFile(File file) {
@@ -726,38 +713,14 @@ if (-not [SanadAtomicMove]::MoveFileExW(
     }
   }
 
+  static WindowsSecureRuntimeBackend? _windowsBackendInstance;
+  static WindowsSecureRuntimeBackend get _windowsBackend =>
+      _windowsBackendInstance ??= WindowsSecureRuntimeBackend();
+
   static void _enforceWindowsAclSync(String path, {required bool isDirectory}) {
-    const script = r'''
-$ErrorActionPreference = 'Stop'
-$path = $env:SANAD_SECURE_PATH
-$kind = $env:SANAD_SECURE_KIND
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$ace = if ($kind -eq 'directory') { "(A;OICI;FA;;;$sid)" } else { "(A;;FA;;;$sid)" }
-$sddl = "D:P${ace}"
-$acl = if ($kind -eq 'directory') {
-  [IO.Directory]::GetAccessControl($path)
-} else {
-  [IO.File]::GetAccessControl($path)
-}
-$acl.SetSecurityDescriptorSddlForm(
-  $sddl,
-  [System.Security.AccessControl.AccessControlSections]::Access
-)
-if ($kind -eq 'directory') {
-  [IO.Directory]::SetAccessControl($path, $acl)
-} else {
-  [IO.File]::SetAccessControl($path, $acl)
-}
-''';
-    final result = Process.runSync(
-      'powershell.exe',
-      ['-NoProfile', '-NonInteractive', '-Command', script],
-      environment: {
-        'SANAD_SECURE_PATH': path,
-        'SANAD_SECURE_KIND': isDirectory ? 'directory' : 'file',
-      },
-    );
-    if (result.exitCode != 0) {
+    try {
+      _windowsBackend.restrictPath(path, directory: isDirectory);
+    } catch (_) {
       throw const SanadHomeWriteFailure(
         'acl_enforcement_failed',
         'Owner-only Windows ACL enforcement failed.',

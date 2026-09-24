@@ -155,6 +155,17 @@ jobs:
       - name: Verify isolated CLI contracts
         working-directory: agent
         run: fvm dart test test/guards/e2e_state_isolation_contract_test.dart
+      - name: Build packaged Windows no-console launcher
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          cmake -S windows/launcher -B build/windows-launcher -A x64
+          cmake --build build/windows-launcher --config Release
+          fvm dart compile exe bin/sanad_agent.dart -o build/windows-launcher/sanad.exe
+          fvm dart run tool/package_windows_launcher.dart --agent build/windows-launcher/sanad.exe --launcher build/windows-launcher/out/sanad-launcher.exe
+          & build/windows-launcher/sanad.exe --version
+          if ($LASTEXITCODE -ne 0) { throw 'Packaged Windows Agent smoke failed.' }
       - name: Verify AOT one-shot, pipe, and JSON output
         working-directory: agent
         env:

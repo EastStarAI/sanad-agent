@@ -4,7 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 
 void main() {
   test('Android signing guard is scoped to requested release tasks', () {
-    final gradle = File('android/app/build.gradle').readAsStringSync();
+    final gradle =
+        File('android/app/build.gradle').readAsStringSync().replaceAll('\r\n', '\n');
 
     expect(gradle, contains('gradle.startParameter.taskNames.any'));
     expect(gradle, contains('taskName.toLowerCase().contains("release")'));

@@ -4,16 +4,25 @@
 This contract applies to `agent/lib/evolution/db/`.
 
 ## Connection Ownership
-- Use one shared `AgentStateDatabase` connection for sessions, provider metadata, runtime work, notices, pending input, and route transitions.
+- Use one shared `AgentStateDatabase` connection for sessions, provider metadata, runtime work, notices, pending input, route transitions, and maintenance timestamps.
 - Repositories receive the shared connection; they must not open independent handles to the same state database.
 - Cross-table aggregate mutations execute transactionally through one owning coordinator.
 - Default on-disk connection construction fails closed under `dart test` unless state has been explicitly redirected; tests use in-memory or temporary state and never inherit the user's database.
+- `AgentStateDatabase` owns page-layout statistics and `VACUUM`, and must reject `VACUUM` while it holds an open transaction.
+
+## Concurrency Policy
+- On-disk connections run in WAL journal mode with a 5000ms `busy_timeout`. In-memory connections keep the 5000ms `busy_timeout` only (SQLite cannot enable WAL for `:memory:`).
+- Outer transactions, schema initialization, migrations, and database-wide `VACUUM` wrap their work in a bounded busy-retry loop: up to 3 retries with progressive backoff (50/100/200ms) and a `WARNING` log per retry, rethrowing the underlying `SqliteException` on exhaustion.
+- Nested transactions use SQLite savepoints inside the retry boundary and must never retry independently.
 
 ## Repository Ownership
 - Each table has one repository responsible for schema-facing CRUD and query semantics.
 - Composition facades may delegate but must not duplicate SQL or maintain parallel state.
 - Keep DTO/enums at a stable export seam only while migration requires it.
 - Legacy tables and methods remain migration-only and cannot accept new production work.
+- `AgentMaintenanceStateRepository` is the sole owner of `agent_maintenance_state` success timestamps and the pending-vacuum marker.
+- `AgentStateMaintenanceService` owns post-ready maintenance policy: idle/grace gating, bounded orphan and terminal deletion batches, 14-day retention, prune/vacuum throttles, and vacuum thresholds. It must not perform cleanup before daemon readiness or expose user-facing settings.
+- Full `VACUUM` is never a startup or serving-path operation. The service marks qualifying work pending and may execute it only at the controlled-exit boundary after restart drain and response flush.
 
 ## Session Data
 - Workspace identity is an immutable UUID; filesystem path and display name are mutable workspace properties and must never replace it in session or runtime references.

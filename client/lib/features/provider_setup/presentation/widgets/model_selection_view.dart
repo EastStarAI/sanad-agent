@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_state.dart';
@@ -113,7 +114,7 @@ class _ModelSelectionViewState extends State<ModelSelectionView> {
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                          child: AppProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.check),
                   label: Text(
@@ -152,7 +153,7 @@ class _DiscoveryLoading extends StatelessWidget {
       padding: EdgeInsets.symmetric(vertical: 32),
       child: Column(
         children: [
-          CircularProgressIndicator(),
+          AppProgressIndicator(),
           SizedBox(height: 12),
           Text('Loading models from the provider...'),
         ],

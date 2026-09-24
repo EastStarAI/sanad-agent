@@ -1,0 +1,892 @@
+# Remaining Hard-Coded UI Strings (Task 95)
+
+Scan of string literals inside `presentation/` and `screens/` files only.
+Bloc/data/daemon/auth-infrastructure literals are protocol, logging, or debug text and are excluded deliberately.
+
+Total affected UI files: 81
+
+## Files
+
+- `lib/features/settings/presentation/widgets/settings_pages.dart` (90 strings)
+  - `Accessibility and screen-recording permissions are required.`
+  - `Accessibility or screen-recording permission was not granted.`
+  - `Active`
+  - `Agent is online again.`
+  - `Agent restarted.`
+  - `Agent updated to ${check.availableVersion}.`
+  - `Agent version`
+  - `Allow eligible provider instances to replace a failed provider. Per-provider preferences are preserved while this is off.`
+  - `Allow this agent to connect through Sanad Gateway. Changing this restarts the agent.`
+  - `Applying update…`
+  - `Available`
+  - `Cancel`
+  - `Change Path`
+  - `Check for updates`
+  - `Clear key`
+  - `Cloud`
+  - `Cloud Connection`
+  - `Computer Use`
+  - `Configuration scope on ${device.name}.`
+  - `Configured — enter a replacement`
+  - `Current Version: $_currentVersion`
+  - `Current route`
+  - `Danger zone`
+  - `Device`
+  - `Device ID`
+  - … and 65 more
+
+- `lib/features/provider_setup/presentation/widgets/provider_instance_form_view.dart` (65 strings)
+  - `API Key`
+  - `API Key (optional)`
+  - `Account Name`
+  - `Add ${template?.displayName ?? `
+  - `Add API Key`
+  - `Allow automatic failover`
+  - `Anthropic API Compatible`
+  - `Base URL`
+  - `Cancel`
+  - `Change Model`
+  - `Confirm how Sanad connects to this provider.`
+  - `Connected`
+  - `Connected Account`
+  - `Connection`
+  - `Connection settings are fixed after setup.`
+  - `Continue`
+  - `Credential`
+  - `Credential Action`
+  - `Current model`
+  - `Danger Zone`
+  - `Default Model`
+  - `Delete`
+  - `Delete Provider`
+  - `Delete Provider?`
+  - `Delete “${instance.displayName}” and its stored credentials?`
+  - … and 40 more
+
+- `lib/features/mcp/presentation/screens/add_mcp_server_screen.dart` (50 strings)
+  - `Add argument`
+  - `Add header`
+  - `Add server`
+  - `Add variable`
+  - `Allowed tools`
+  - `Argument ${entry.key + 1}`
+  - `Arguments`
+  - `Authentication`
+  - `Authentication: ${result.authState}`
+  - `Bearer token`
+  - `Cancel`
+  - `Command`
+  - `Command line arguments passed to the process.`
+  - `Configure how Sanad connects to this remote MCP server.`
+  - `Configured — enter replacement`
+  - `Connection`
+  - `Connection failed`
+  - `Connection succeeded`
+  - `Credentials`
+  - `Enter an HTTP or HTTPS URL`
+  - `Enter client secret`
+  - `Enter token string`
+  - `Environment variables`
+  - `Headers`
+  - `I understand this server can access data and perform actions.`
+  - … and 25 more
+
+- `lib/features/provider_setup/presentation/bloc/provider_setup_cubit.dart` (37 strings)
+  - `Authentication failed.`
+  - `Changes saved.`
+  - `Connection test failed.`
+  - `Connection test passed.`
+  - `Could not change the default provider.`
+  - `Could not check authentication status.`
+  - `Could not delete this provider.`
+  - `Could not discard provider setup. Delete the incomplete provider and try again.`
+  - `Could not load models from this provider.`
+  - `Could not load providers.`
+  - `Could not open the verification page.`
+  - `Could not save provider details.`
+  - `Could not save the API key.`
+  - `Could not save the custom endpoint.`
+  - `Could not save the default model.`
+  - `Could not start account sign-in.`
+  - `Could not verify this provider.`
+  - `Custom Endpoint`
+  - `Default provider is not ready.`
+  - `Default provider updated.`
+  - `Deleting...`
+  - `Enter or select a model first.`
+  - `Loading providers...`
+  - `No API key`
+  - `No instance or template selected.`
+  - … and 12 more
+
+- `lib/features/conversations/presentation/widgets/tools/file_tool_tile.dart` (34 strings)
+  - `Arguments`
+  - `Changes applied:`
+  - `Created file`
+  - `Directory Listing`
+  - `Display Patch:\n$displayPatch\n`
+  - `Edited File`
+  - `Editing file...`
+  - `File Changes (Diff):`
+  - `File Content:`
+  - `File Operation Failed`
+  - `File size: $length characters.`
+  - `Glob Pattern`
+  - `Grep Search Pattern`
+  - `Grep searching files...`
+  - `Input Parameters`
+  - `Input: $input\n`
+  - `Matching Files (${files.length}):`
+  - `Matching Lines (${matches.length}):`
+  - `New String: $newString\n`
+  - `No matches found.`
+  - `No matching files found.`
+  - `Old String: $oldString\n`
+  - `Output Result`
+  - `Output: $rawOutput\n`
+  - `Parsed Output: $parsedOutput\n`
+  - … and 9 more
+
+- `lib/features/settings/presentation/widgets/sessions_devices_page.dart` (28 strings)
+  - `Cancel`
+  - `Client Sessions`
+  - `Connected Agents`
+  - `Connection status: $label`
+  - `Last active ${local.year}-${two(local.month)}-${two(local.day)} ${two(local.hour)}:${two(local.minute)}`
+  - `Last active unavailable`
+  - `No Client sessions are available.`
+  - `No connected Agents are available.`
+  - `No sessions are available.`
+  - `Offline`
+  - `Online`
+  - `Open Agent overview`
+  - `Retry`
+  - `Review signed-in Sanad Clients and connected Agent devices.`
+  - `Revoke`
+  - `Revoke Agent device`
+  - `Revoke Client session`
+  - `Revoke access?`
+  - `Sanad $version`
+  - `Sanad Cloud is unavailable. Showing the last synchronized snapshot.`
+  - `Sessions & Devices`
+  - `Sign out`
+  - `Sign out current Client`
+  - `Sign out this Client?`
+  - `Status unavailable`
+  - … and 3 more
+
+- `lib/features/provider_setup/presentation/widgets/device_code_auth_view.dart` (23 strings)
+  - `Authentication failed.`
+  - `Back`
+  - `Cancel`
+  - `Copy device code`
+  - `Could not copy device code`
+  - `Could not start account sign-in.`
+  - `Device code copied`
+  - `Discard`
+  - `Discard provider setup?`
+  - `Enter the code below on the provider verification page.`
+  - `Keep setup`
+  - `Open the verification page to continue.`
+  - `Open verification page`
+  - `Opening the verification page...`
+  - `Provider`
+  - `Re-open verification page`
+  - `Sign in with $displayName`
+  - `The code expired. Go back and try again.`
+  - `The provider did not return a valid verification page.`
+  - `The verification page was opened in your browser.`
+  - `This cancels authentication and removes the incomplete provider created by this setup attempt.`
+  - `Waiting for authorization...`
+  - `Your code`
+
+- `lib/features/provider_setup/presentation/widgets/provider_usage_section.dart` (22 strings)
+  - `Account sign-in is required to view usage limits.`
+  - `Cancel`
+  - `EEE, MMM d, HH:mm`
+  - `EEEE, MMMM d, y, HH:mm:ss`
+  - `Loading usage…`
+  - `Plan: ${snapshot.planName}`
+  - `Reconnect`
+  - `Refresh`
+  - `Refreshing…`
+  - `Reset anyway`
+  - `Reset before limits are exhausted?`
+  - `Reset limits`
+  - `Reset usage limits?`
+  - `Resets ${_formatLocalRelative(window.resetAt!)}`
+  - `Retry`
+  - `This will use one reset credit for this account.`
+  - `Updated ${_updatedLabel(entry.fetchedAt!)}`
+  - `Updated just now`
+  - `Usage & limits`
+  - `Usage information could not be loaded. Please try again.`
+  - `Usage information is temporarily unavailable.`
+  - `Usage information is temporarily unavailable. Please retry.`
+
+- `lib/features/provider_setup/presentation/widgets/provider_instances_list_view.dart` (19 strings)
+  - `API Key`
+  - `Account: ${instance.credential!.accountLabel}`
+  - `Add Provider`
+  - `Cancel`
+  - `Configured Providers`
+  - `Default`
+  - `Delete`
+  - `Delete "${instance.displayName}" and its stored credentials?`
+  - `Delete Provider Instance?`
+  - `Edit`
+  - `Make Default`
+  - `Manage your AI credentials and models. Multiple accounts/keys are supported.`
+  - `Model: ${instance.defaultModel}`
+  - `Name: ${instance.credential!.accountName}`
+  - `No provider instances configured here yet.`
+  - `OAuth Account`
+  - `Provider`
+  - `Resume setup`
+  - `Test`
+
+- `lib/features/conversations/presentation/utils/tool_presentation_helper.dart` (19 strings)
+  - `Cancelled`
+  - `ClickUp: `
+  - `Edit`
+  - `Error`
+  - `Execution Plan`
+  - `Fetch`
+  - `Grep`
+  - `Memory`
+  - `Read`
+  - `Reasoning`
+  - `Running`
+  - `Search`
+  - `Search Capabilities`
+  - `Search Web`
+  - `Skill Load`
+  - `Thinking...`
+  - `Thoughts`
+  - `Using Tool`
+  - `Write`
+
+- `lib/features/conversations/presentation/widgets/event_tile.dart` (17 strings)
+  - `Answer copied to clipboard`
+  - `Content copied to clipboard`
+  - `Edit`
+  - `Fetch`
+  - `Fork`
+  - `Grep`
+  - `Memory`
+  - `Read`
+  - `Search`
+  - `Search Web`
+  - `Session route changed`
+  - `Skill Load`
+  - `Thinking`
+  - `Thinking: `
+  - `Waiting for permission`
+  - `Waiting for your answer`
+  - `Write`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/model_picker_dialog.dart` (16 strings)
+  - `Configure providers`
+  - `EEE, MMM d, HH:mm`
+  - `Load more ($moreCount more)`
+  - `Loading usage...`
+  - `MMM d, HH:mm`
+  - `No configured providers`
+  - `No models match "$_query"`
+  - `No usage data fetched yet`
+  - `Recently Used`
+  - `Refresh models`
+  - `Refresh usage`
+  - `Refreshing models...`
+  - `Resets: $resets available`
+  - `Search models...`
+  - `Select Model`
+  - `Show Less`
+
+- `lib/features/provider_setup/presentation/widgets/model_selection_view.dart` (15 strings)
+  - `Add Model`
+  - `Back`
+  - `Cached suggestions`
+  - `Choose a model`
+  - `Confirm Model`
+  - `Could not load models from this provider.`
+  - `Enter a model name`
+  - `Enter the exact model identifier`
+  - `Loading models from the provider...`
+  - `Model name`
+  - `No models are available. Retry or add one manually.`
+  - `Retry`
+  - `Saving...`
+  - `Select the default model for $displayName.`
+  - `Use Model`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart` (15 strings)
+  - `Ask Sanad anything`
+  - `Default`
+  - `Full Access`
+  - `Loading...`
+  - `Press Enter to steer • Ctrl/Cmd+Enter to queue`
+  - `Select Permission Mode`
+  - `Select Thinking Mode`
+  - `Select a workspace before your first Sanad Agent message.`
+  - `Select model`
+  - `Send message`
+  - `Start voice session`
+  - `Stop response`
+  - `Stop voice session`
+  - `Stopping response`
+  - `Waiting for message acceptance`
+
+- `lib/features/conversations/presentation/widgets/workspace_browser_dialog.dart` (15 strings)
+  - `Cancel`
+  - `Choose Workspace`
+  - `Create`
+  - `Delete`
+  - `Delete "$name" and all files and folders inside it? This cannot be undone.`
+  - `Delete Folder`
+  - `Folder Name`
+  - `Folder name must be a single path segment.`
+  - `New Folder`
+  - `New Folder Name`
+  - `No folders found here.`
+  - `Rename`
+  - `Rename Folder`
+  - `Showing the first set of entries for this folder.`
+  - `Use This Folder`
+
+- `lib/features/home/presentation/widgets/status_bar.dart` (14 strings)
+  - `Add device`
+  - `Desktop Mode`
+  - `Gateway connection status and actions`
+  - `Isolated worktree: $worktreeName`
+  - `Isolated worktree: $worktreeName\nBranch: $branch`
+  - `Local Gateway`
+  - `Repair local agent`
+  - `Restart local agent`
+  - `Retry cloud connection`
+  - `Sanad Cloud Gateway`
+  - `SanadAgent`
+  - `Sign in`
+  - `Start local agent`
+  - `Stop local agent`
+
+- `lib/features/conversations/presentation/bloc/session_messages_cubit.dart` (14 strings)
+  - `Could not load earlier messages.`
+  - `Could not load later messages.`
+  - `Could not load this conversation.`
+  - `Fork committed but child navigation failed.`
+  - `History hydration failed phase=atomic_history_swap `
+  - `Loading...`
+  - `Loading…`
+  - `Newer history load failed device_id=${agent.id} `
+  - `No active agent selected.`
+  - `Older history load failed device_id=${agent.id} `
+  - `Saved history anchor unavailable device_id=${agent.id} `
+  - `Select a workspace before changing its permission mode.`
+  - `Select a workspace before sending your first Sanad Agent message.`
+  - `SessionMessagesCubit`
+
+- `lib/features/devices/presentation/widgets/installation_terminal_view.dart` (14 strings)
+  - `Configure execution permissions`
+  - `Download precompiled agent binary`
+  - `Downloading: ${(_downloadProgress * 100).toStringAsFixed(1)}%`
+  - `Health reports $targetVersion; authenticating the local socket...`
+  - `Initialize setup and data directories`
+  - `Platform execution trust and permissions passed.`
+  - `Preparing the owner-scoped Sanad Home...`
+  - `Register system background service`
+  - `Start service and verify connection`
+  - `Starting Sanad Agent lifecycle for $targetVersion...`
+  - `The agent is healthy, but the authenticated local connection could not be established. Try again.`
+  - `The background service is registered and started.`
+  - `The exact verified agent is installed.`
+  - `Verification successful. The agent version and authenticated connection are ready.`
+
+- `lib/features/mcp/presentation/screens/mcp_server_management_screen.dart` (13 strings)
+  - `Add to ${_workspaceName ?? `
+  - `Advanced JSON · ${server.name}`
+  - `Auto`
+  - `Device`
+  - `Disconnected`
+  - `HTTP`
+  - `Remote`
+  - `STDIO`
+  - `Stdio`
+  - `Unknown`
+  - `Unknown connection error`
+  - `Workspace`
+  - `Workspace definitions override same-name device servers. Overridden device servers: ${_overriddenDeviceServers.join(`
+
+- `lib/features/conversations/presentation/widgets/tools/web_tool_tile.dart` (13 strings)
+  - `Fetched Pages`
+  - `Fetching webpage...`
+  - `HTTP $code`
+  - `Input Parameters`
+  - `No fetch output available.`
+  - `Output Result`
+  - `Result`
+  - `Search Query: `
+  - `Search Results`
+  - `Searching the web...`
+  - `URL: `
+  - `Web operation failed.`
+  - `Working...`
+
+- `lib/features/devices/presentation/screens/add_device_screen.dart` (13 strings)
+  - `Add Host Device`
+  - `Back`
+  - `Connect to SanadGateway before creating a remote device.`
+  - `Continue to Home`
+  - `Create Host Device`
+  - `Create a device record, then run the generated install command on your computer or server.`
+  - `Create a remote host device`
+  - `Device Created Successfully`
+  - `Device Name`
+  - `Install and connect your device`
+  - `Please enter a name`
+  - `Run one of these commands on the target machine. Sanad will continue automatically when it connects.`
+  - `Waiting for the device to come online...`
+
+- `lib/features/devices/presentation/widgets/onboarding_setup_choices.dart` (13 strings)
+  - `Add a Remote Device`
+  - `Add a remote device`
+  - `Connect to Sanad Agent`
+  - `Continue with connected devices`
+  - `Install Sanad Agent as a background service on this computer.`
+  - `Install Sanad Agent on a computer or server to access it from this device.`
+  - `No devices connected`
+  - `Run Sanad Locally`
+  - `Sanad Agent`
+  - `Set up Sanad Agent on this computer. No account is required.`
+  - `Sign In`
+  - `Sign in to access Sanad Agent on your computers and servers.`
+  - `Sign in to connect a remote device`
+
+- `lib/features/settings/presentation/screens/settings_screen.dart` (12 strings)
+  - `Back to conversations`
+  - `Cancel`
+  - `Change Path`
+  - `Could not change workspace path.`
+  - `Could not remove workspace.`
+  - `Could not rename workspace.`
+  - `Open settings menu`
+  - `Rename`
+  - `Rename Workspace`
+  - `Settings`
+  - `Workspace name`
+  - `Workspace removed from Sanad.`
+
+- `lib/features/provider_setup/presentation/widgets/loopback_auth_view.dart` (12 strings)
+  - `Back`
+  - `Cancel`
+  - `Complete sign-in in your browser. Sanad continues automatically after authorization.`
+  - `Could not start account sign-in.`
+  - `Discard`
+  - `Discard provider setup?`
+  - `Keep setup`
+  - `Open authorization page`
+  - `Provider`
+  - `Sign in with $displayName`
+  - `This cancels authentication and removes the incomplete provider created by this setup attempt.`
+  - `Waiting for browser authorization...`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/permission_request_presentation.dart` (12 strings)
+  - `Allow Sanad to edit this file?`
+  - `Allow Sanad to read this file?`
+  - `Allow Sanad to run this command?`
+  - `Allow Sanad to search for matching files?`
+  - `Allow Sanad to search these files?`
+  - `Allow Sanad to use this MCP tool?`
+  - `Allow Sanad to use this tool?`
+  - `Allow Sanad to write to this file?`
+  - `None`
+  - `Pattern`
+  - `Value`
+  - `Working directory`
+
+- `lib/features/provider_setup/presentation/widgets/custom_endpoint_form.dart` (11 strings)
+  - `API Key (optional)`
+  - `Anthropic API Compatible`
+  - `Back`
+  - `Base URL`
+  - `Connect to a local or self-hosted LLM endpoint.`
+  - `Custom Endpoint`
+  - `Model name`
+  - `OpenAI API Compatible`
+  - `Protocol`
+  - `Save & continue`
+  - `Saving...`
+
+- `lib/features/provider_setup/presentation/widgets/provider_picker_view.dart` (11 strings)
+  - `API key`
+  - `Active`
+  - `Choose your AI provider`
+  - `Configured`
+  - `Custom or local endpoint`
+  - `External sign-in`
+  - `No providers available.`
+  - `Pick one below to configure it.`
+  - `Sign in via browser`
+  - `Sign in with a device code`
+  - `The agent needs an LLM provider before you can start chatting. `
+
+- `lib/features/conversations/presentation/screens/brain_activity_view.dart` (11 strings)
+  - `A message edit or retry is already in progress.`
+  - `Could not fork this conversation.`
+  - `Fork created, but it could not be opened. Select it from the sidebar.`
+  - `Messages before context compaction cannot be edited or retried.`
+  - `Only the latest user turn can be edited or retried.`
+  - `Retrying this turn will not send its steering messages again.`
+  - `Sanad could not edit or retry this message.`
+  - `Sanad could not finish stopping the active turn.`
+  - `Steering messages cannot be edited or retried.`
+  - `This conversation changed before the edit could start.`
+  - `This message does not have a reliable turn boundary.`
+
+- `lib/features/conversations/presentation/widgets/conversation_input_panel.dart` (11 strings)
+  - `Cancel`
+  - `Choose a workspace before sending your first Sanad Agent message`
+  - `Context compaction could not start.`
+  - `Context compaction failed: ${result.failureReason}`
+  - `Context compaction is already in progress.`
+  - `Create or select a session before running /compact.`
+  - `Enable`
+  - `Enable Full Access?`
+  - `Full Access lets Sanad Agent run local tools in this workspace without repeated approval prompts.`
+  - `Session is busy. Try /compact again when idle.`
+  - `Workspace selected: ${workspace.name}`
+
+- `lib/features/auth/presentation/widgets/device_login_challenge_overlay.dart` (10 strings)
+  - `Authenticating…`
+  - `Cancel`
+  - `Cancel login`
+  - `Code copied`
+  - `Complete sign in`
+  - `Complete sign in on the portal page that opened.\n`
+  - `Copy`
+  - `Copy sign in code`
+  - `Enter this code in the browser window.`
+  - `If the browser failed to authenticate, cancel and try again.`
+
+- `lib/features/devices/presentation/widgets/gateway_connection_indicator.dart` (10 strings)
+  - `Add device`
+  - `Gateway connection`
+  - `LocalGateway`
+  - `Repair local agent`
+  - `Restart local agent`
+  - `Retry cloud connection`
+  - `SanadGateway`
+  - `Sign in`
+  - `Start local agent`
+  - `Stop local agent`
+
+- `lib/features/conversations/presentation/widgets/tools/memory_tool_tile.dart` (9 strings)
+  - `Content:`
+  - `Failed to perform memory operation.`
+  - `New Content:`
+  - `Project Memory`
+  - `Remove`
+  - `Replace`
+  - `Target Text to ${action == `
+  - `Updating persistent $target ($action)...`
+  - `User Memory`
+
+- `lib/features/conversations/presentation/widgets/user_message_tile.dart` (9 strings)
+  - `Cancel`
+  - `Delete pending message`
+  - `Edit message`
+  - `Message copied to clipboard`
+  - `Pending`
+  - `Read more`
+  - `Retry message`
+  - `See less`
+  - `Send`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/clarifying_question_card.dart` (9 strings)
+  - `Back to options`
+  - `Back to previous question`
+  - `Clarifying Question`
+  - `Clarifying Question (${_currentQuestionIndex + 1} of ${questionsList.length})`
+  - `Dismiss`
+  - `Skip this question`
+  - `Submit Custom Answer`
+  - `Type custom answer...`
+  - `Type your detailed answer here...`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/conversation_context_chips.dart` (9 strings)
+  - `Add New Workspace`
+  - `Choose Workspace`
+  - `Manage Agents`
+  - `No Agents Found`
+  - `No workspace`
+  - `Select Device`
+  - `Select Workspace`
+  - `Workspace`
+  - `Workspace is locked for this session`
+
+- `lib/features/provider_setup/presentation/widgets/api_key_provider_form.dart` (8 strings)
+  - `Back`
+  - `Base URL (optional)`
+  - `Enter your API key to continue.`
+  - `Get a key`
+  - `Paste your API key`
+  - `Provider`
+  - `Save & continue`
+  - `Saving...`
+
+- `lib/features/conversations/presentation/widgets/sidebar/sidebar_workspace_group_tile.dart` (8 strings)
+  - `New conversation`
+  - `Reconnect the workspace folder first`
+  - `Retry`
+  - `Showing cached conversations`
+  - `Workspace`
+  - `Workspace available`
+  - `Workspace folder is missing`
+  - `Workspace settings`
+
+- `lib/features/conversations/presentation/widgets/sidebar/sidebar_conversation_row.dart` (8 strings)
+  - `Are you sure you want to delete "${session.title}"? This cannot be undone.`
+  - `Cancel`
+  - `Conversation ${widget.session.title}`
+  - `Delete`
+  - `Delete Session`
+  - `New title`
+  - `Rename`
+  - `Rename Session`
+
+- `lib/features/conversations/presentation/widgets/compaction_event_tile.dart` (8 strings)
+  - `After compaction`
+  - `Auto threshold`
+  - `Before compaction`
+  - `Context reclaimed: ${_formatTokens(reclaimed)} tokens (${_percentage(reclaimed, before)})`
+  - `Context window: ${_formatTokens(snapshot.contextWindowTokens!)} tokens`
+  - `Failure: ${snapshot.failureReason}`
+  - `Retained tail: ~${_formatTokens(snapshot.retainedTailTokens!)} tokens`
+  - `Usable input: ${_formatTokens(usableInput)} tokens`
+
+- `lib/features/home/presentation/screens/home_screen.dart` (7 strings)
+  - `Close provider setup`
+  - `Could not load this conversation.`
+  - `Loading conversation…`
+  - `Loading...`
+  - `Provider setup required`
+  - `Retry`
+  - `Workspace`
+
+- `lib/features/conversations/presentation/widgets/turn_replay_confirmation_dialog.dart` (7 strings)
+  - `Cancel`
+  - `Continue`
+  - `Edit and rerun this turn?`
+  - `Retry this turn?`
+  - `Sanad cannot verify whether this turn’s tools are safe to repeat. Continuing may repeat changes to files or external systems.`
+  - `This turn includes steering messages. Continuing will not send those follow-up directions again.`
+  - `This turn used tools that may change files or external systems. Continuing can repeat those side effects.`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/context_usage_indicator.dart` (7 strings)
+  - `Cached input: ${_formatTokens(usage.cachedTokens!)} tokens`
+  - `Context window:${(fraction * 100).round()}% full`
+  - `Model: ${usage.modelId}`
+  - `Output: ${_formatTokens(usage.outputTokens!)} tokens`
+  - `Reasoning: ${_formatTokens(usage.reasoningTokens!)} tokens`
+  - `Total: ${_formatTokens(usage.totalTokens!)} tokens`
+  - `Updated: ${MaterialLocalizations.of(context).formatTimeOfDay(TimeOfDay.fromDateTime(usage.observedAt!.toLocal()))}`
+
+- `lib/features/provider_setup/presentation/widgets/provider_setup_flow.dart` (6 strings)
+  - `Continue`
+  - `Loading...`
+  - `Provider is ready`
+  - `Retry`
+  - `Saving...`
+  - `Something went wrong.`
+
+- `lib/features/conversations/presentation/widgets/sidebar/device_workspace_sidebar.dart` (6 strings)
+  - `Conversation sidebar`
+  - `Could not create workspace`
+  - `Could not refresh all sections`
+  - `No device selected`
+  - `Offline — showing cached conversations`
+  - `Retry`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/conversation_bottom_actions.dart` (6 strings)
+  - `Default`
+  - `Full Access`
+  - `Loading...`
+  - `Select Permission Mode`
+  - `Select Thinking Mode`
+  - `Select model`
+
+- `lib/features/conversations/presentation/widgets/conversation_activity_tile.dart` (6 strings)
+  - `Running: `
+  - `Thinking: `
+  - `Working for ${elapsed.inHours}h, ${totalMinutes % Duration.minutesPerHour}m`
+  - `Working for ${totalMinutes}m, ${totalSeconds % Duration.secondsPerMinute}s`
+  - `Working for ${totalSeconds}s`
+  - `Working…`
+
+- `lib/features/auth/presentation/bloc/auth_cubit.dart` (5 strings)
+  - `AuthCubit`
+  - `Failed to fetch credits: $e`
+  - `Failed to restore auth session: $e`
+  - `Failed to synchronize external auth session: $e`
+  - `Login failed: $e`
+
+- `lib/features/voice/presentation/widgets/voice_stream_panel.dart` (5 strings)
+  - `Connecting...`
+  - `Listening to you...`
+  - `Microphone muted`
+  - `Mute Microphone`
+  - `Unmute Microphone`
+
+- `lib/features/conversations/presentation/widgets/tools/skill_load_tool_tile.dart` (5 strings)
+  - `Failed to load skill.`
+  - `Loading skill...`
+  - `Skill`
+  - `Skill source: `
+  - `Target Path`
+
+- `lib/features/conversations/presentation/widgets/tools/terminal_tool_tile.dart` (5 strings)
+  - `Directory: $cwd`
+  - `Executing terminal command...`
+  - `No output returned.`
+  - `STDERR:`
+  - `STDERR:\n`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/runtime_notice_card.dart` (5 strings)
+  - `Change Provider`
+  - `Continuing automatically in ${_formatDuration(_remaining!)}.`
+  - `Limit: ${widget.notice.requestsPerMinuteLimit} requests/min.`
+  - `Retry`
+  - `Stop`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/permission_request_card.dart` (5 strings)
+  - `Submit`
+  - `Tell the agent what to do instead (optional)`
+  - `Yes, allow for this session`
+  - `Yes, allow this time`
+  - `Yes, always allow in this workspace`
+
+- `lib/features/auth/presentation/screens/splash_screen.dart` (4 strings)
+  - `Checking gateway connection...`
+  - `Completing sign-in...`
+  - `Sanad`
+  - `Sign In`
+
+- `lib/features/conversations/presentation/widgets/sidebar/sidebar_device_header_bar.dart` (4 strings)
+  - `Device Settings`
+  - `Device selector`
+  - `Loading devices…`
+  - `No devices`
+
+- `lib/features/conversations/presentation/widgets/tools/ask_user_tool_tile.dart` (4 strings)
+  - `Clarifying question failed.`
+  - `No answer provided.`
+  - `Question:`
+  - `User Answer:`
+
+- `lib/features/conversations/presentation/widgets/tools/generic_tool_tile.dart` (4 strings)
+  - `Executing tool...`
+  - `Input Parameters`
+  - `Output Result`
+  - `Tool execution failed.`
+
+- `lib/core/presentation/screens/not_found_screen.dart` (3 strings)
+  - `Oops! The page you are looking for doesn\`
+  - `Page Not Found`
+  - `Return to Home`
+
+- `lib/features/provider_setup/presentation/bloc/provider_usage_cubit.dart` (3 strings)
+  - `A reset is already in progress.`
+  - `Reset could not be completed. Please try again.`
+  - `Usage information could not be loaded. Please try again.`
+
+- `lib/features/voice/presentation/bloc/voice_stream_cubit.dart` (3 strings)
+  - `Failed to start voice: $e`
+  - `Local connection error: $err`
+  - `VoiceStreamCubit`
+
+- `lib/features/conversations/presentation/widgets/sidebar/sidebar_sections.dart` (3 strings)
+  - `Could not refresh conversations`
+  - `New conversation without a workspace`
+  - `Retry`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/queued_messages_box.dart` (3 strings)
+  - `Delete queued message`
+  - `Queued Messages (${messages.length})`
+  - `Steer`
+
+- `lib/features/conversations/presentation/widgets/conversation_input/provider_selection_dialog.dart` (3 strings)
+  - `Continue With Provider`
+  - `No configured providers`
+  - `No default model`
+
+- `lib/features/conversations/presentation/widgets/conversation_fork_event_tile.dart` (3 strings)
+  - `Conversation forked`
+  - `Fork $sequence`
+  - `This conversation continues independently.`
+
+- `lib/features/conversations/presentation/widgets/device_session_selector.dart` (3 strings)
+  - `No agents available`
+  - `No sessions`
+  - `SessionSelector`
+
+- `lib/features/conversations/presentation/widgets/conversation_header_actions.dart` (3 strings)
+  - `Open navigation menu`
+  - `Restore window size`
+  - `Use compact window`
+
+- `lib/features/conversations/presentation/bloc/conversation_input_cubit.dart` (3 strings)
+  - `Resolve the pending clarifying question or permission request before sending another message.`
+  - `Select a provider and model before sending a message.`
+  - `Select a workspace before sending your first Sanad Agent message.`
+
+- `lib/features/devices/presentation/widgets/device_install_guide.dart` (3 strings)
+  - `PowerShell`
+  - `Terminal`
+  - `Windows`
+
+- `lib/features/home/presentation/widgets/conversation_workspace_layout.dart` (2 strings)
+  - `Restore window size`
+  - `Use phone-size window`
+
+- `lib/features/auth/presentation/widgets/user_profile_tile.dart` (2 strings)
+  - `General settings`
+  - `Signing in...`
+
+- `lib/features/conversations/presentation/widgets/markdown_style_helper.dart` (2 strings)
+  - `Code`
+  - `Code copied to clipboard`
+
+- `lib/features/conversations/presentation/bloc/session_cubit.dart` (2 strings)
+  - `Loading...`
+  - `SessionCubit`
+
+- `lib/features/devices/presentation/bloc/gateway_connection_cubit.dart` (2 strings)
+  - `GatewayBootstrap: route=$route auth=${_authCubit.state.runtimeType} `
+  - `GatewayConnectionCubit`
+
+- `lib/core/presentation/app/app_shell.dart` (1 strings)
+  - `Sanad`
+
+- `lib/features/home/presentation/widgets/mobile_app_bar.dart` (1 strings)
+  - `Sanad`
+
+- `lib/features/home/presentation/widgets/new_chat_view.dart` (1 strings)
+  - `Georgia`
+
+- `lib/features/conversations/presentation/controllers/slash_command_text_controller.dart` (1 strings)
+  - `No slash command token markers are available.`
+
+- `lib/features/conversations/presentation/widgets/plan_task_list.dart` (1 strings)
+  - `Task`
+
+- `lib/features/conversations/presentation/widgets/tools/tool_group_tile.dart` (1 strings)
+  - `Tools`
+
+- `lib/features/conversations/presentation/widgets/conversation_app_bar.dart` (1 strings)
+  - `Conversation`
+
+- `lib/features/conversations/presentation/widgets/message_bar.dart` (1 strings)
+  - `Message...`
+
+- `lib/features/devices/presentation/bloc/device_cubit.dart` (1 strings)
+  - `Failed to load agents: $e`

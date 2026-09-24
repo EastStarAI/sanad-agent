@@ -63,6 +63,18 @@ the provider-reported input value and the exact active model's context-window
 limit. Cached input remains an independent provider-reported value and is not
 used to rewrite any other field.
 
+### 1.5. Session history startup path
+
+`AgentRunner` remains factory-scoped per run; it is not a daemon-wide singleton.
+`SessionManager` may seed a new runner from one of at most eight recently used
+history snapshots. Each snapshot is keyed by session id and the authoritative
+`history_revision`: a matching revision refreshes its LRU position, while any
+mismatch reloads active history from SQLite. Semantic replacement, aggregate
+transaction writes, and deletion invalidate the local projection. Ordinary root
+input uses the database append operation and updates the runner-owned list with
+the returned canonical message rather than reloading and comparing the full
+prefix before the first provider request.
+
 ---
 
 ## 2. Environment Adaptability (`EnvironmentHints`)
@@ -76,6 +88,7 @@ The daemon runs natively across Windows, macOS, Linux, and WSL (Windows Subsyste
 ### 2.2. Windows Native Shell Guidance
 - **Shell Rule:** On native Windows, terminal tool executions route through the native Command Prompt interpreter (`cmd.exe`). Unix-like hosts continue to use `sh`.
 - **Command Resolution:** Windows commands use normal `PATHEXT` lookup, so globally installed batch launchers such as `fvm.bat` can be invoked as `fvm`. Commands execute from a temporary batch wrapper so nested quotes reach `cmd.exe` unchanged.
+- **System PATH Refresh:** Before a Windows `shell_execute` or STDIO MCP child starts, the daemon resolves the current Machine and User `Path` registry values through the shared Pure-Dart `sanad_windows_path` package. One process-wide resolver caches both success and fallback for five minutes and coalesces concurrent asynchronous reads. Environment-key matching is case-insensitive, the child receives one canonical `PATH` entry, explicit MCP-server PATH configuration remains authoritative, and the value is never logged or sent over a gateway. Non-Windows launch environments pass through unchanged.
 - **Syntax Adjustments:** The runtime prompt tells the model to use cmd syntax and native Windows paths. It does not advertise PowerShell cmdlets or POSIX-only shell syntax on native Windows.
 
 ---
@@ -372,7 +385,7 @@ When the daemon restarts, `SessionRunOrchestrator.restorePersistedState()`:
 
 The durable runtime state is persisted by four focused repositories in `agent/lib/evolution/db/runtime/` sharing the same `AgentStateDatabase` connection:
 
-- `SessionWorkItemRepository` owns `session_work_items` — the single durable source of truth for queued and active work (work-item CRUD, FIFO claim, transition graph, route rewrite for queued and non-terminal items, orphan cleanup, cancel-all).
+- `SessionWorkItemRepository` owns `session_work_items` — the single durable source of truth for queued and active work (work-item CRUD, FIFO claim, transition graph, route rewrite for queued and non-terminal items, orphan-row SQL, terminal-row prune SQL, and cancel-all). Recovery joins live sessions and ignores legacy orphans; after readiness, `AgentStateMaintenanceService` performs idle-gated bounded orphan cleanup and 14-day terminal retention.
 - `RuntimeNoticeRepository` owns `session_runtime_notices` — notice persistence and startup hydration.
 - `LegacyRuntimeStateMigrator` owns the legacy `session_suspended_runs` and `session_pending_runs` tables for migration compatibility only; every public method is `@Deprecated`. Production code paths MUST NOT enqueue work through it.
 - `RuntimeStateCleanup` owns the cross-table `clearAllForSession` path used by `Stop` and session deletion. It delegates to notice deletion + work-item cancellation + legacy purge against the same connection to preserve atomic semantics.

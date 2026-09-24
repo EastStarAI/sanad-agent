@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 
+import 'package:logging/logging.dart';
 import 'package:meta/meta.dart';
 import 'package:sqlite3/open.dart';
 import 'package:sqlite3/sqlite3.dart';
@@ -21,12 +22,14 @@ import '../models/session_search.dart';
 /// consume this shared connection so the runtime never opens `state.db` twice.
 /// It enables `PRAGMA foreign_keys = ON` (required for `ON DELETE CASCADE`) and
 /// owns the schema for every table — sessions, messages, scheduled tasks,
-/// suspended checkpoints, and the Plan 29 provider instance/cache/recent tables.
+/// suspended checkpoints, Plan 29 provider instance/cache/recent tables, and
+/// `agent_maintenance_state`.
 ///
 /// Secrets NEVER live here: API keys and OAuth tokens are stored only in the
 /// `SecretStore` (`provider_secrets.json`).
 class AgentStateDatabase {
   late final Database _db;
+  final void Function(Duration) _busyRetryWait;
   bool _owned = false;
   int _transactionDepth = 0;
 
@@ -53,7 +56,7 @@ class AgentStateDatabase {
 
   /// Opens (or creates) `state.db` under [getSanadStateHome] and initializes the
   /// full schema. This is the single production connection.
-  AgentStateDatabase() {
+  AgentStateDatabase() : _busyRetryWait = sleep {
     _rejectUnisolatedTestOpen();
     _openAtPath(getSanadStateHome());
   }
@@ -79,12 +82,17 @@ class AgentStateDatabase {
   /// Opens (or creates) `state.db` under an explicit runtime-state directory.
   /// Used by standalone helpers/tests that must not fall back to the global
   /// SANAD_STATE_HOME when a custom sanad home was provided.
-  AgentStateDatabase.atPath(String stateHomePath) {
+  AgentStateDatabase.atPath(
+    String stateHomePath, {
+    @visibleForTesting void Function(Duration)? busyRetryWait,
+  }) : _busyRetryWait = busyRetryWait ?? sleep {
     _openAtPath(stateHomePath);
   }
 
   /// Opens an in-memory database. Used by tests and ephemeral runtimes.
-  AgentStateDatabase.inMemory() {
+  AgentStateDatabase.inMemory({
+    @visibleForTesting void Function(Duration)? busyRetryWait,
+  }) : _busyRetryWait = busyRetryWait ?? sleep {
     ensureSqliteOverride();
     _db = sqlite3.openInMemory();
     _owned = true;
@@ -93,7 +101,10 @@ class AgentStateDatabase {
 
   /// Wraps an existing connection without taking ownership (caller disposes).
   @visibleForTesting
-  AgentStateDatabase.fromConnection(this._db) {
+  AgentStateDatabase.fromConnection(
+    this._db, {
+    void Function(Duration)? busyRetryWait,
+  }) : _busyRetryWait = busyRetryWait ?? sleep {
     _owned = false;
     _init();
   }
@@ -101,12 +112,44 @@ class AgentStateDatabase {
   /// Wraps an already initialized connection without owning or migrating it.
   /// Transitional facades use this only for backward-compatible constructors;
   /// production dependency injection passes the original owner directly.
-  AgentStateDatabase.attached(this._db) {
+  AgentStateDatabase.attached(this._db) : _busyRetryWait = sleep {
     _owned = false;
   }
 
   /// The underlying SQLite connection, shared by all consumers.
   Database get db => _db;
+
+  /// Whether this owner currently has an open write transaction or savepoint.
+  bool get hasOpenTransaction => _transactionDepth > 0;
+
+  /// Reads SQLite page-layout statistics from the shared connection.
+  AgentStatePageStatistics pageStatistics() {
+    return AgentStatePageStatistics(
+      pageSize: _pragmaInt('page_size'),
+      pageCount: _pragmaInt('page_count'),
+      freelistCount: _pragmaInt('freelist_count'),
+    );
+  }
+
+  /// Rebuilds the database file to reclaim free pages.
+  ///
+  /// SQLite forbids `VACUUM` inside a transaction. This owner rejects the
+  /// call when it holds an open transaction rather than letting SQLite fail
+  /// with a less specific error.
+  void vacuum() {
+    if (_transactionDepth > 0) {
+      throw StateError('VACUUM is not allowed while a transaction is open.');
+    }
+    _retryOnBusy(() => _db.execute('VACUUM'));
+  }
+
+  int _pragmaInt(String name) {
+    final rows = _db.select('PRAGMA $name');
+    final value = rows.first.values.first;
+    if (value is int) return value;
+    if (value is BigInt) return value.toInt();
+    return int.parse(value.toString());
+  }
 
   /// Runs [action] inside the single agent-state connection's write
   /// transaction and exposes a context that repositories can pass between
@@ -116,6 +159,13 @@ class AgentStateDatabase {
   /// independently usable while allowing aggregate owners to compose several
   /// repositories under one outer commit boundary.
   T transaction<T>(T Function(AgentStateTransaction transaction) action) {
+    if (_transactionDepth > 0) {
+      return _transactionInner(action);
+    }
+    return _retryOnBusy(() => _transactionInner(action));
+  }
+
+  T _transactionInner<T>(T Function(AgentStateTransaction transaction) action) {
     final depth = _transactionDepth;
     final savepoint = 'sanad_state_tx_$depth';
     if (depth == 0) {
@@ -138,11 +188,15 @@ class AgentStateDatabase {
       }
       return result;
     } catch (_) {
-      if (depth == 0) {
-        _db.execute('ROLLBACK');
-      } else {
-        _db.execute('ROLLBACK TO SAVEPOINT $savepoint');
-        _db.execute('RELEASE SAVEPOINT $savepoint');
+      try {
+        if (depth == 0) {
+          _db.execute('ROLLBACK');
+        } else {
+          _db.execute('ROLLBACK TO SAVEPOINT $savepoint');
+          _db.execute('RELEASE SAVEPOINT $savepoint');
+        }
+      } catch (_) {
+        // Suppress rollback failures so the primary error rethrows.
       }
       rethrow;
     } finally {
@@ -160,22 +214,81 @@ class AgentStateDatabase {
     final dbPath = boundary.prepareDatabaseSync();
     _db = sqlite3.open(dbPath);
     _owned = true;
-    _init();
-    boundary.secureDatabaseFilesSync();
+    try {
+      _init();
+    } catch (_) {
+      _db.dispose();
+      _owned = false;
+      rethrow;
+    } finally {
+      boundary.secureDatabaseFilesSync();
+    }
   }
 
   void _init() {
-    _db.createFunction(
-      functionName: 'sanad_search_normalize',
-      argumentCount: const AllowedArgumentCount(1),
-      deterministic: true,
-      function: (arguments) {
-        final value = arguments.first;
-        return value is String ? SessionSearchRequest.normalize(value) : '';
-      },
-    );
-    _db.execute('PRAGMA foreign_keys = ON');
-    _createSchemaAndMigrate(_db);
+    _retryOnBusy<void>(() {
+      // Register the search normalization function used by session search
+      // queries before any schema/migration work.
+      _db.createFunction(
+        functionName: 'sanad_search_normalize',
+        argumentCount: const AllowedArgumentCount(1),
+        deterministic: true,
+        function: (arguments) {
+          final value = arguments.first;
+          return value is String ? SessionSearchRequest.normalize(value) : '';
+        },
+      );
+      // Configure busy_timeout first so internal waits apply to WAL and all
+      // subsequent DDL/migration statements.
+      _db.execute('PRAGMA busy_timeout = 5000');
+      _db.execute('PRAGMA foreign_keys = ON');
+      // Multi-process/multi-instance concurrency: WAL allows concurrent
+      // readers with one writer; busy_timeout makes SQLite wait internally
+      // for locks before surfacing SQLITE_BUSY to Dart.
+      _db.execute('PRAGMA journal_mode = WAL');
+      _createSchemaAndMigrate(_db);
+    });
+  }
+
+  static const int _busyRetryAttempts = 3;
+  static const List<Duration> _busyRetryBackoff = [
+    Duration(milliseconds: 50),
+    Duration(milliseconds: 100),
+    Duration(milliseconds: 200),
+  ];
+
+  static final Logger _logger = Logger('AgentStateDatabase');
+
+  /// Whether [error] is a SQLite lock-contention error (`SQLITE_BUSY` or
+  /// `SQLITE_LOCKED`), either at the top level or inside a transaction.
+  static bool _isBusyOrLocked(SqliteException error) {
+    final primary = error.resultCode;
+    return primary ==
+            5 || // SQLITE_BUSY (covers extended codes such as 517 SQLITE_BUSY_SNAPSHOT)
+        primary == 6; // SQLITE_LOCKED
+  }
+
+  /// Runs [action], retrying SQLite busy/locked contentions up to
+  /// [_busyRetryAttempts] times with progressive backoff. Logs a warning for
+  /// each retry; rethrows the original [SqliteException] when exhausted.
+  T _retryOnBusy<T>(T Function() action) {
+    var attempt = 0;
+    while (true) {
+      try {
+        return action();
+      } on SqliteException catch (error) {
+        if (!_isBusyOrLocked(error) || attempt >= _busyRetryAttempts) rethrow;
+        final delay =
+            _busyRetryBackoff[attempt.clamp(0, _busyRetryBackoff.length - 1)];
+        attempt++;
+        _logger.warning(
+          'AgentStateDatabase busy (attempt $attempt/$_busyRetryAttempts, '
+          'retrying in ${delay.inMilliseconds}ms): '
+          '${error.message} (code ${error.resultCode})',
+        );
+        _busyRetryWait(delay);
+      }
+    }
   }
 
   static void _createSchemaAndMigrate(Database db) {
@@ -672,6 +785,15 @@ class AgentStateDatabase {
       CREATE INDEX IF NOT EXISTS idx_session_route_transitions_created
       ON session_route_transitions(session_id, created_at);
     ''');
+
+    // ── Task 65: agent_maintenance_state ────────────────────────────────
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS agent_maintenance_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    ''');
+
     _migrateWorkspaceIdentity(db);
     _migrateLastUserMessageAt(db);
     _migratePlan53Compaction(db);
@@ -945,33 +1067,39 @@ class AgentStateDatabase {
         ) VALUES (?, ?, ?, 'migrated_session', ?, ?)
         ON CONFLICT(path) DO NOTHING
       ''');
-      for (final path in idsByPath.keys.toList(growable: false)) {
-        insert.execute([
-          idsByPath[path],
-          _workspaceDisplayName(path),
-          path,
-          now,
-          now,
-        ]);
-        final stored = db.select(
-          'SELECT id FROM workspaces WHERE path = ? LIMIT 1',
-          [path],
-        );
-        if (stored.isNotEmpty) {
-          idsByPath[path] = stored.first['id'] as String;
+      try {
+        for (final path in idsByPath.keys.toList(growable: false)) {
+          insert.execute([
+            idsByPath[path],
+            _workspaceDisplayName(path),
+            path,
+            now,
+            now,
+          ]);
+          final stored = db.select(
+            'SELECT id FROM workspaces WHERE path = ? LIMIT 1',
+            [path],
+          );
+          if (stored.isNotEmpty) {
+            idsByPath[path] = stored.first['id'] as String;
+          }
         }
+      } finally {
+        insert.dispose();
       }
-      insert.dispose();
 
       for (final table in referenceTables) {
         if (!_columnExists(db, table, 'workspace_id')) continue;
         final update = db.prepare(
           'UPDATE $table SET workspace_id = ? WHERE workspace_id = ?',
         );
-        for (final entry in idsByPath.entries) {
-          update.execute([entry.value, entry.key]);
+        try {
+          for (final entry in idsByPath.entries) {
+            update.execute([entry.value, entry.key]);
+          }
+        } finally {
+          update.dispose();
         }
-        update.dispose();
       }
       _migrateWorkspaceIdsInJsonColumn(
         db,
@@ -1016,20 +1144,25 @@ class AgentStateDatabase {
     final update = db.prepare(
       'UPDATE $table SET $jsonColumn = ? WHERE $idColumn = ?',
     );
-    for (final row in rows) {
-      final raw = row[jsonColumn]?.toString();
-      if (raw == null || raw.isEmpty) continue;
-      try {
-        final decoded = jsonDecode(raw);
-        final migrated = _replaceWorkspaceIds(decoded, idsByPath);
-        final encoded = jsonEncode(migrated);
-        if (encoded != raw) update.execute([encoded, row[idColumn]]);
-      } catch (_) {
-        // Preserve malformed legacy payloads; top-level workspace columns are
-        // still migrated and remain authoritative for recovery.
+    try {
+      for (final row in rows) {
+        final raw = row[jsonColumn]?.toString();
+        if (raw == null || raw.isEmpty) continue;
+        try {
+          final decoded = jsonDecode(raw);
+          final migrated = _replaceWorkspaceIds(decoded, idsByPath);
+          final encoded = jsonEncode(migrated);
+          if (encoded != raw) update.execute([encoded, row[idColumn]]);
+        } on SqliteException catch (error) {
+          if (_isBusyOrLocked(error)) rethrow;
+        } catch (_) {
+          // Preserve malformed legacy payloads; top-level workspace columns are
+          // still migrated and remain authoritative for recovery.
+        }
       }
+    } finally {
+      update.dispose();
     }
-    update.dispose();
   }
 
   static dynamic _replaceWorkspaceIds(
@@ -1084,7 +1217,8 @@ class AgentStateDatabase {
   static void _safeAddColumn(Database db, String ddl) {
     try {
       db.execute(ddl);
-    } catch (_) {
+    } on SqliteException catch (error) {
+      if (_isBusyOrLocked(error)) rethrow;
       // Column already exists.
     }
   }
@@ -1179,29 +1313,32 @@ class AgentStateDatabase {
       'SET last_user_message_at = ?, workspace_id = ? '
       'WHERE session_id = ?',
     );
-    for (final entry in sessionFallbacks.entries) {
-      final sessionId = entry.key;
-      final resolvedTimestamp =
-          resolvedFromSession[sessionId] ??
-          resolvedFromMessages[sessionId] ??
-          entry.value;
-      final rawWorkspaceId = originalWorkspaceIds[sessionId];
-      final normalizedWorkspaceId = (() {
-        final trimmed = rawWorkspaceId?.trim();
-        if (trimmed == null || trimmed.isEmpty) {
-          return null;
+    try {
+      for (final entry in sessionFallbacks.entries) {
+        final sessionId = entry.key;
+        final resolvedTimestamp =
+            resolvedFromSession[sessionId] ??
+            resolvedFromMessages[sessionId] ??
+            entry.value;
+        final rawWorkspaceId = originalWorkspaceIds[sessionId];
+        final normalizedWorkspaceId = (() {
+          final trimmed = rawWorkspaceId?.trim();
+          if (trimmed == null || trimmed.isEmpty) {
+            return null;
+          }
+          return trimmed;
+        })();
+        final rawLastUserMessageAt = originalLastUserMessageAt[sessionId];
+        final shouldUpdateTimestamp = rawLastUserMessageAt != resolvedTimestamp;
+        final shouldUpdateWorkspace = rawWorkspaceId != normalizedWorkspaceId;
+        if (!shouldUpdateTimestamp && !shouldUpdateWorkspace) {
+          continue;
         }
-        return trimmed;
-      })();
-      final rawLastUserMessageAt = originalLastUserMessageAt[sessionId];
-      final shouldUpdateTimestamp = rawLastUserMessageAt != resolvedTimestamp;
-      final shouldUpdateWorkspace = rawWorkspaceId != normalizedWorkspaceId;
-      if (!shouldUpdateTimestamp && !shouldUpdateWorkspace) {
-        continue;
+        stmt.execute([resolvedTimestamp, normalizedWorkspaceId, sessionId]);
       }
-      stmt.execute([resolvedTimestamp, normalizedWorkspaceId, sessionId]);
+    } finally {
+      stmt.dispose();
     }
-    stmt.dispose();
   }
 
   static String? _normalizeTimestampString(String? value) {
@@ -1230,4 +1367,21 @@ class AgentStateTransaction {
   final Database db;
 
   const AgentStateTransaction._(this.db);
+}
+
+/// Typed SQLite page-layout statistics used by startup vacuum policy.
+class AgentStatePageStatistics {
+  final int pageSize;
+  final int pageCount;
+  final int freelistCount;
+
+  const AgentStatePageStatistics({
+    required this.pageSize,
+    required this.pageCount,
+    required this.freelistCount,
+  });
+
+  int get reclaimableBytes => pageSize * freelistCount;
+
+  double get freeRatio => pageCount == 0 ? 0 : freelistCount / pageCount;
 }

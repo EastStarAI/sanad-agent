@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/provider_setup/data/models/auth_session_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_cubit.dart';
@@ -56,7 +57,7 @@ class LoopbackAuthView extends StatelessWidget {
                   ),
                 if (waiting) ...[
                   const SizedBox(height: 24),
-                  const Center(child: CircularProgressIndicator()),
+                  const Center(child: AppProgressIndicator()),
                 ],
               ],
             ],

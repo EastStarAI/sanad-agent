@@ -16,6 +16,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 ## Active Specifications
 
 - [Test Suite Performance and Ownership QA](test_suite_performance_qa.md): Package boundaries, deterministic timer/event testing, hotspot thresholds, and subprocess/port integration classification for Agent, Client, and `sanad-dev` suites.
+- [Agent Turn Startup Performance QA](agent_turn_startup_performance_qa.md): Metadata-only admission, atomic root-message append, revision-validated history reuse, and Windows long-session latency coverage.
 - [Flutter VM Driver CLI QA](flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
 - [Bundled Product Skills QA](bundled_product_skills_qa.md): Deterministic one-file embedding, SANAD_HOME install/update/remove, customization safety, fast startup, and release-artifact coverage.
 - [Local Gateway and Sanad Home Security QA](local_gateway_and_sanad_home_security_qa.md): Authentication, Host/Origin rejection, secure writes, legacy migration, restart, Windows ACL, and worktree isolation coverage.
@@ -49,3 +50,5 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Plan 50 Cancellation Regression Matrix](plan50_cancellation_regression_matrix.md): Provider interruption, shell process-tree cleanup, durable cancelled terminals, and client live/history parity for Stop.
 - [Task 31 Authoritative Session State QA Matrix](task31_authoritative_session_state_matrix.md): Coverage for the seven durable execution states, per-session attention isolation, reconnect ordering, stop/run races, and visible route failover deduplication.
 - [Task 36 Authoritative Steer, Queue, and Stop Recovery QA Matrix](task36_authoritative_steer_queue_stop_recovery_matrix.md): Coverage for daemon-owned delivery classification, raw request-id parity, pending-steer cancellation races, queue mutations, lossless Stop draft recovery, and first-writer restart claims.
+- [Agent State Database Maintenance QA](agent_state_database_maintenance_qa.md): Run/skip/fail matrix for startup orphan cleanup, 14-day terminal work-item prune, and thresholded VACUUM of state.db.
+- [CLI Session Observability & Safe Intervention QA](cli_session_observability_intervention_qa.md): Regression and verification coverage for daemon-backed CLI session listing, authoritative inspection, explicit question answering, ordinary tool permission decisions, cross-session safety, and scoped termination.
