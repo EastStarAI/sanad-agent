@@ -96,6 +96,7 @@ The `NavigationHistoryController` maintains three stacks:
 - Search covers conversation titles plus visible user and assistant text, including visible thoughts and final answers. It does not expose reasoning, system/compaction data, tool content, private payloads, or superseded responses.
 - Each conversation appears at most once with its title, workspace when available, last activity date, match kind, and a bounded safe snippet.
 - Input is debounced and supports clear, Escape, arrow-key selection, Enter, and IME-safe composition. Loading, no-results, failure, retry, and pagination states remain explicit.
+- The clear affordance is a compact circular icon inside the search field that appears only while the input has content; it stays visually distinct from the dialog's close button, which is pinned to the top-right of the header row.
 - Selecting a message result opens its device/session and requests the Agent-issued anchored history slice before the atomic timeline swap. Selecting a result from the already-open session reopens the timeline at that anchor even when the event is loaded. A title-only result opens the session normally.
 - Search is authoritative on the selected Agent and is independent of the partially loaded sidebar cache. Opening a result preserves its returned title and workspace metadata without requiring **Load more** in the sidebar.
 

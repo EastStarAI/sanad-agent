@@ -174,6 +174,7 @@ class _ConversationSearchPanelState extends State<ConversationSearchPanel> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 8, 12),
             child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Expanded(
                   child: TextField(
@@ -189,20 +190,45 @@ class _ConversationSearchPanelState extends State<ConversationSearchPanel> {
                     decoration: InputDecoration(
                       hintText: 'Search titles and messages',
                       prefixIcon: const Icon(Symbols.search_rounded),
-                      suffixIcon: IconButton(
-                        tooltip: 'Clear search',
-                        onPressed: () {
-                          _controller.clear();
-                          context.read<SessionSearchCubit>().queryChanged(widget.device, '');
-                          _focusNode.requestFocus();
+                      suffixIcon: ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: _controller,
+                        builder: (context, value, _) {
+                          if (value.text.isEmpty) {
+                            return const SizedBox.shrink();
+                          }
+                          return IconButton(
+                            tooltip: 'Clear search',
+                            onPressed: () {
+                              _controller.clear();
+                              context.read<SessionSearchCubit>().queryChanged(widget.device, '');
+                              _focusNode.requestFocus();
+                            },
+                            icon: Container(
+                              width: 24,
+                              height: 24,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .surfaceContainerHighest,
+                              ),
+                              child: const Icon(
+                                Symbols.close_rounded,
+                                size: 16,
+                              ),
+                            ),
+                          );
                         },
-                        icon: const Icon(Symbols.close_rounded),
                       ),
                     ),
                   ),
                 ),
                 IconButton(
+                  key: const Key('conversation_search_close_btn'),
                   tooltip: 'Close search',
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
                   onPressed: () => Navigator.of(context).pop(),
                   icon: const Icon(Symbols.close_rounded),
                 ),

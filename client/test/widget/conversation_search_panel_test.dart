@@ -164,4 +164,37 @@ void main() {
     expect(find.text('Conversation search failed. Try again.'), findsOneWidget);
     expect(find.text('Retry'), findsOneWidget);
   });
+
+  testWidgets('clear button is hidden when empty, appears with text, and clears', (tester) async {
+    final repository = FakeConversationRepository();
+    repository.searchSessionsHandler = (_, _, _) async =>
+        SessionSearchPage(hits: [hit], hasMore: false);
+    await pumpPanel(tester, repository: repository, onSelected: (_) {});
+
+    final clearButton = find.byTooltip('Clear search');
+    final field = find.byKey(const Key('conversation_search_field'));
+
+    // Hidden while the field is empty.
+    expect(clearButton, findsNothing);
+
+    // Appears inside a circular frame once the user types.
+    await tester.enterText(field, 'needle');
+    await tester.pump();
+    expect(clearButton, findsOneWidget);
+    expect(
+      find.byWidgetPredicate(
+        (widget) =>
+            widget is Container &&
+            (widget.decoration as BoxDecoration?)?.shape == BoxShape.circle,
+      ),
+      findsWidgets,
+    );
+
+    // Tapping it empties the field and hides it again.
+    await tester.tap(clearButton);
+    await tester.pump();
+    final textField = tester.widget<TextField>(field);
+    expect(textField.controller?.text, isEmpty);
+    expect(clearButton, findsNothing);
+  });
 }
