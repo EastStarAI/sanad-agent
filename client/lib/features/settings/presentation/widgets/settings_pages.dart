@@ -377,22 +377,22 @@ class _GeneralPageState extends State<GeneralPage> {
                     segments: [
                       ButtonSegment(
                         value: AppThemeStyle.light,
-                        label: Text(l10n.themeLight),
+                        label: Text(l10n.themeLight, key: const Key('theme_style_light_btn')),
                         icon: const Icon(Icons.light_mode_outlined),
                       ),
                       ButtonSegment(
                         value: AppThemeStyle.dark,
-                        label: Text(l10n.themeDark),
+                        label: Text(l10n.themeDark, key: const Key('theme_style_dark_btn')),
                         icon: const Icon(Icons.dark_mode_outlined),
                       ),
                       ButtonSegment(
                         value: AppThemeStyle.midnight,
-                        label: Text(l10n.themeMidnight),
+                        label: Text(l10n.themeMidnight, key: const Key('theme_style_midnight_btn')),
                         icon: const Icon(Icons.nightlight_round),
                       ),
                       ButtonSegment(
                         value: AppThemeStyle.sepia,
-                        label: Text(l10n.themeSepia),
+                        label: Text(l10n.themeSepia, key: const Key('theme_style_sepia_btn')),
                         icon: const Icon(Icons.menu_book_outlined),
                       ),
                     ],
@@ -428,22 +428,22 @@ class _GeneralPageState extends State<GeneralPage> {
                     segments: [
                       ButtonSegment(
                         value: AppPrimaryColor.blue,
-                        label: Text(l10n.colorDefaultBlue),
+                        label: Text(l10n.colorDefaultBlue, key: const Key('primary_color_blue_btn')),
                         icon: _ColorDot(color: AppPrimaryColor.blue.colorForBrightness(Theme.of(context).brightness)),
                       ),
                       ButtonSegment(
                         value: AppPrimaryColor.teal,
-                        label: Text(l10n.colorTeal),
+                        label: Text(l10n.colorTeal, key: const Key('primary_color_teal_btn')),
                         icon: _ColorDot(color: AppPrimaryColor.teal.colorForBrightness(Theme.of(context).brightness)),
                       ),
                       ButtonSegment(
                         value: AppPrimaryColor.green,
-                        label: Text(l10n.colorGreen),
+                        label: Text(l10n.colorGreen, key: const Key('primary_color_green_btn')),
                         icon: _ColorDot(color: AppPrimaryColor.green.colorForBrightness(Theme.of(context).brightness)),
                       ),
                       ButtonSegment(
                         value: AppPrimaryColor.cyan,
-                        label: Text(l10n.colorCyan),
+                        label: Text(l10n.colorCyan, key: const Key('primary_color_cyan_btn')),
                         icon: _ColorDot(color: AppPrimaryColor.cyan.colorForBrightness(Theme.of(context).brightness)),
                       ),
                     ],
@@ -472,22 +472,22 @@ class _GeneralPageState extends State<GeneralPage> {
                     segments: [
                       ButtonSegment(
                         value: AppPrimaryColor.purple,
-                        label: Text(l10n.colorPurple),
+                        label: Text(l10n.colorPurple, key: const Key('primary_color_purple_btn')),
                         icon: _ColorDot(color: AppPrimaryColor.purple.colorForBrightness(Theme.of(context).brightness)),
                       ),
                       ButtonSegment(
                         value: AppPrimaryColor.magenta,
-                        label: Text(l10n.colorMagenta),
+                        label: Text(l10n.colorMagenta, key: const Key('primary_color_magenta_btn')),
                         icon: _ColorDot(color: AppPrimaryColor.magenta.colorForBrightness(Theme.of(context).brightness)),
                       ),
                       ButtonSegment(
                         value: AppPrimaryColor.orange,
-                        label: Text(l10n.colorOrange),
+                        label: Text(l10n.colorOrange, key: const Key('primary_color_orange_btn')),
                         icon: _ColorDot(color: AppPrimaryColor.orange.colorForBrightness(Theme.of(context).brightness)),
                       ),
                       ButtonSegment(
                         value: AppPrimaryColor.rose,
-                        label: Text(l10n.colorRose),
+                        label: Text(l10n.colorRose, key: const Key('primary_color_rose_btn')),
                         icon: _ColorDot(color: AppPrimaryColor.rose.colorForBrightness(Theme.of(context).brightness)),
                       ),
                     ],
@@ -1087,8 +1087,12 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
                     '${widget.device.isOnline ? 'Online' : 'Offline'} · ${route == ConnectionScope.local ? 'Local connection' : 'Sanad Gateway'}',
                   ),
                   trailing: widget.isActive
-                      ? const Chip(label: Text('Active'))
+                      ? const Chip(
+                          key: Key('device_active_chip'),
+                          label: Text('Active'),
+                        )
                       : FilledButton.tonal(
+                          key: const Key('device_set_active_btn'),
                           onPressed: () => context.read<DeviceCubit>().setActiveAgent(widget.device.id),
                           child: const Text('Set as active'),
                         ),

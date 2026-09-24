@@ -3,6 +3,7 @@ import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.
 import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../helpers/fake_socket.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -10,6 +11,7 @@ void main() {
   final testAgent1 = DeviceConfig(
     id: 'device-1',
     name: 'MacBook Local',
+    hardwareId: 'device-1',
     isOnline: true,
   );
 
@@ -222,6 +224,89 @@ void main() {
       expect(json['font_family'], 'inter');
       expect(json['font_size'], 'large');
       expect(json['background_option'], 'natureLake');
+    });
+
+    test('setActiveAgent dispatches get_appearance via sendDeviceCommand and handles snapshot', () async {
+      final fakeSocket = FakeSanadSocketService(hardwareId: 'device-1');
+      fakeSocket.setConnected(true);
+      final coordinator = createTestResolver(
+        localSocket: fakeSocket,
+        cloudSocket: fakeSocket,
+        currentDeviceId: 'device-1',
+      );
+      final cubit = AppearanceCubit(const AppearanceState(), connectionCoordinator: coordinator);
+
+      await cubit.setActiveAgent(testAgent1);
+      await pumpEventQueue();
+
+      expect(fakeSocket.capturedCommands, isNotEmpty);
+      final getCmd = fakeSocket.capturedCommands.firstWhere((cmd) => cmd['command'] == 'get_appearance');
+      expect(getCmd['device_id'], 'device-1');
+
+      // Simulate incoming appearance_snapshot event from agent
+      fakeSocket.debugEmitEvent({
+        'type': 'event',
+        'event': 'appearance_snapshot',
+        'device_id': 'device-1',
+        'payload': {
+          'appearance': {
+            'theme_style': 'midnight',
+            'primary_color': 'teal',
+            'font_family': 'cairo',
+            'font_size': 'large',
+            'background_option': 'natureForest',
+          },
+        },
+      });
+      await pumpEventQueue();
+
+      expect(cubit.state.themeStyle, AppThemeStyle.midnight);
+      expect(cubit.state.primaryColor, AppPrimaryColor.teal);
+      expect(cubit.state.fontFamily, AppFontFamily.cairo);
+      expect(cubit.state.fontSizeScale, AppFontSizeScale.large);
+      expect(cubit.state.backgroundOption, AppBackgroundOption.natureForest);
+    });
+
+    test('updating theme style dispatches update_appearance via sendDeviceCommand', () async {
+      final fakeSocket = FakeSanadSocketService(hardwareId: 'device-1');
+      fakeSocket.setConnected(true);
+      final coordinator = createTestResolver(
+        localSocket: fakeSocket,
+        cloudSocket: fakeSocket,
+        currentDeviceId: 'device-1',
+      );
+      final cubit = AppearanceCubit(const AppearanceState(), connectionCoordinator: coordinator);
+
+      await cubit.setActiveAgent(testAgent1);
+      await cubit.updateThemeStyle(AppThemeStyle.sepia);
+      await pumpEventQueue();
+
+      final updateCmd = fakeSocket.capturedCommands.firstWhere((cmd) => cmd['command'] == 'update_appearance');
+      expect(updateCmd['device_id'], 'device-1');
+      final payload = updateCmd['payload'] as Map<String, dynamic>;
+      expect((payload['appearance'] as Map)['theme_style'], 'sepia');
+    });
+
+    test('setActiveAgent with remoteAppearance still revalidates via get_appearance', () async {
+      final fakeSocket = FakeSanadSocketService(hardwareId: 'device-1');
+      fakeSocket.setConnected(true);
+      final coordinator = createTestResolver(
+        localSocket: fakeSocket,
+        cloudSocket: fakeSocket,
+        currentDeviceId: 'device-1',
+      );
+      final cubit = AppearanceCubit(const AppearanceState(), connectionCoordinator: coordinator);
+
+      await cubit.setActiveAgent(testAgent1, remoteAppearance: {
+        'theme_style': 'light',
+        'primary_color': 'green',
+      });
+      expect(cubit.state.themeStyle, AppThemeStyle.light);
+      expect(cubit.state.primaryColor, AppPrimaryColor.green);
+
+      await pumpEventQueue();
+      final getCmd = fakeSocket.capturedCommands.firstWhere((cmd) => cmd['command'] == 'get_appearance');
+      expect(getCmd, isNotNull);
     });
   });
 }
