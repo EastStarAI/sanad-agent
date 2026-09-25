@@ -96,17 +96,66 @@ class RunResultArtifact {
   bool get isTimeout => status == 'timeout';
   bool get isInterrupted => status == 'interrupted';
   bool get isCancelled => status == 'cancelled';
+  bool get isIncomplete => status == 'incomplete' || status == 'needs_review';
+  bool get isNeedsReview => status == 'needs_review';
   bool get isTerminal =>
       status == 'completed' ||
       status == 'failed' ||
       status == 'timeout' ||
       status == 'interrupted' ||
-      status == 'cancelled';
+      status == 'cancelled' ||
+      status == 'incomplete' ||
+      status == 'needs_review';
+  bool get isSuccess =>
+      isCompleted && exitCode == 0 && hasSemanticFinalSummary(text);
   bool get isNeedsIntervention =>
       status == 'needs_input' || status == 'needs_permission';
   bool get isBlocked => status == 'blocked';
   bool get isWaiting => status == 'waiting';
   bool get isResuming => status == 'resuming';
+
+  static final _progressPattern = RegExp(
+    r'^(?:'
+    r'running(?:\s+(?:tests?|tasks?|steps?|commands?))?(?:\s*[/\\].*|\s*\.{2,})?'
+    r'|in[ _-]progress(?:\s*\.{2,})?'
+    r'|working(?:\s*\.{2,}|\s+on\s+.*)?'
+    r'|processing(?:\s*\.{2,})?'
+    r'|executing(?:\s*\.{2,})?'
+    r'|pending(?:\s*\.{2,})?'
+    r'|starting(?:\s*\.{2,})?'
+    r'|جاري(?:\s*\.{2,}|\s+.*)?'
+    r'|قيد\s+(?:التنفيذ|الانتظار|المعالجة)(?:\s*\.{2,})?'
+    r'|يعمل(?:\s*\.{2,})?'
+    r')$',
+    caseSensitive: false,
+  );
+
+  /// Validates whether [text] contains a substantive, non-transient final summary.
+  ///
+  /// Returns false if [text] is null, empty, whitespace-only, punctuation-only,
+  /// or composed solely of mid-progress status messages (e.g. "running/...", "جاري...").
+  static bool hasSemanticFinalSummary(String? text) {
+    if (text == null) return false;
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return false;
+
+    // Reject punctuation or separator-only strings (e.g. "...", "---", ".")
+    final stripped = trimmed.replaceAll(RegExp(r'[\s\.\-_/\\]'), '');
+    if (stripped.isEmpty) return false;
+
+    // Check if the entire content consists exclusively of progress lines
+    final lines = trimmed
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList();
+    if (lines.isEmpty) return false;
+
+    final allLinesAreProgress = lines.every(_progressPattern.hasMatch);
+    if (allLinesAreProgress) return false;
+
+    return true;
+  }
 
   static String classifyCause({required String code, required String message}) {
     // Runtime notices already carry RuntimeFailureReason's structured wire
@@ -120,6 +169,7 @@ class RunResultArtifact {
       'rate_limit' || 'upstream_rate_limit' => 'rate_limit',
       'network_error' => 'network_error',
       'auth' || 'auth_error' => 'auth_error',
+      'missing_final' || 'missing final' => 'missing_final',
       '' => 'unknown',
       _ => normalizedCode,
     };
@@ -501,13 +551,14 @@ class RunArtifactCoordinator {
     });
   }
 
-  /// Terminal execution outcome (completed, failed, timeout, interrupted, cancelled).
+  /// Terminal execution outcome (completed, failed, timeout, interrupted, cancelled, incomplete, needs_review).
   /// Terminal state is latched immediately so no further non-terminal updates can be queued.
   Future<void> recordTerminal({
     required int exitCode,
     required String status,
     String? text,
     String? error,
+    String? cause,
     String? finalModel,
     String? finalProvider,
     Map<String, dynamic>? usage,
@@ -520,24 +571,45 @@ class RunArtifactCoordinator {
       final effectiveModel = finalModel ?? initialModel;
       final effectiveProvider = finalProvider ?? initialProvider;
 
+      var effectiveStatus = status;
+      var effectiveExitCode = exitCode;
+      var effectiveCause = cause ?? _currentArtifact.cause;
+      var effectiveError = error;
+
+      // Enforce semantic completeness: A terminal result reporting completion
+      // or exit code 0 without a substantive final summary (missing or progress-only)
+      // is a false success and data-fidelity defect. It must be classified as incomplete.
+      if ((status == 'completed' || exitCode == 0) &&
+          !RunResultArtifact.hasSemanticFinalSummary(text)) {
+        effectiveStatus = 'incomplete';
+        effectiveExitCode = exitCode == 0 ? 1 : exitCode;
+        effectiveCause = 'missing_final';
+        effectiveError =
+            error ??
+            'Execution finished without a final summary (missing final).';
+      }
+
       final safeTerminalEnvelope = <String, dynamic>{
         'session_id': sessionId,
-        'status': status,
-        'exit_code': exitCode,
+        'status': effectiveStatus,
+        'exit_code': effectiveExitCode,
         if (text != null && text.isNotEmpty) 'text': text,
-        if (error != null && error.isNotEmpty) 'error': error,
+        if (effectiveError != null && effectiveError.isNotEmpty)
+          'error': effectiveError,
+        'cause': ?effectiveCause,
         'model': ?effectiveModel,
         'provider': ?effectiveProvider,
         if (usage != null && usage.isNotEmpty) 'usage': usage,
       };
 
       final terminalArtifact = _currentArtifact.copyWith(
-        status: status,
-        exitCode: exitCode,
+        status: effectiveStatus,
+        exitCode: effectiveExitCode,
         endedAt: _isoUtcMilliseconds(endTime),
         durationMs: durationMs,
         text: text,
-        error: error,
+        error: effectiveError,
+        cause: effectiveCause,
         model: effectiveModel,
         provider: effectiveProvider,
         clearPendingIntervention: true,
@@ -554,10 +626,12 @@ class RunArtifactCoordinator {
       _currentArtifact = terminalArtifact;
       _isTerminal = true;
 
-      await _emitEvent(status, {
-        'exit_code': exitCode,
+      await _emitEvent(effectiveStatus, {
+        'exit_code': effectiveExitCode,
         'duration_ms': durationMs,
-        if (error != null && error.isNotEmpty) 'error': error,
+        'cause': ?effectiveCause,
+        if (effectiveError != null && effectiveError.isNotEmpty)
+          'error': effectiveError,
       });
     });
   }

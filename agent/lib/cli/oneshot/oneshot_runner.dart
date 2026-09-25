@@ -622,10 +622,23 @@ class OneshotRunner {
             if (event.model != null) finalModel = event.model;
             if (event.provider != null) finalProvider = event.provider;
 
-            if (assistantBuffer.isEmpty && event.finalMessage.isNotEmpty) {
-              assistantBuffer.write(event.finalMessage);
-              if (!json && !quiet) {
-                out.write(event.finalMessage);
+            if (event.finalMessage.isNotEmpty) {
+              if (assistantBuffer.isEmpty) {
+                assistantBuffer.write(event.finalMessage);
+                if (!json && !quiet) {
+                  out.write(event.finalMessage);
+                }
+              } else if (!RunResultArtifact.hasSemanticFinalSummary(
+                    assistantBuffer.toString(),
+                  ) &&
+                  RunResultArtifact.hasSemanticFinalSummary(
+                    event.finalMessage,
+                  )) {
+                assistantBuffer.clear();
+                assistantBuffer.write(event.finalMessage);
+                if (!json && !quiet) {
+                  out.write(event.finalMessage);
+                }
               }
             }
 
@@ -838,7 +851,20 @@ class OneshotRunner {
       } else if (exitStatus == 130) {
         terminalStatus = 'interrupted';
       } else if (exitStatus == 0) {
-        terminalStatus = 'completed';
+        if (RunResultArtifact.hasSemanticFinalSummary(
+          assistantBuffer.toString(),
+        )) {
+          terminalStatus = 'completed';
+        } else {
+          terminalStatus = 'incomplete';
+          exitStatus = 1;
+          hasError = true;
+          errorMessage =
+              'Turn execution completed without a final summary (missing final).';
+          if (!json) {
+            err.writeln('Error: $errorMessage');
+          }
+        }
       } else {
         terminalStatus = 'failed';
       }
@@ -859,6 +885,7 @@ class OneshotRunner {
         status: terminalStatus,
         text: assistantBuffer.toString(),
         error: hasError ? errorMessage : null,
+        cause: terminalStatus == 'incomplete' ? 'missing_final' : null,
         finalModel: finalModel,
         finalProvider: finalProvider,
         usage: usageInfo,
