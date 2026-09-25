@@ -45,6 +45,7 @@ import 'handlers/session_query_handler.dart';
 import 'handlers/session_recovery_command_handler.dart';
 import 'handlers/session_compact_command_handler.dart';
 import 'handlers/session_turn_replay_command_handler.dart';
+import 'handlers/remote_cli_command_handler.dart';
 import 'handlers/workspace_command_handler.dart';
 import 'protocol/canonical_events.dart';
 
@@ -64,6 +65,7 @@ class SanadProtocolBridge {
   DeviceSettingsCommandHandler? __deviceSettingsHandler;
   DeviceControlCommandHandler? __deviceControlHandler;
   AppearanceCommandHandler? __appearanceHandler;
+  RemoteCliCommandHandler? __remoteCliHandler;
 
   /// Lazy accessors so optional runtime services registered after
   /// construction (e.g. in tests or deferred daemon startup) are only
@@ -143,6 +145,19 @@ class SanadProtocolBridge {
             : const AppearanceStore(),
         bridge: this,
       );
+
+  RemoteCliCommandHandler get _remoteCliHandler =>
+      __remoteCliHandler ??= RemoteCliCommandHandler(
+        bridge: this,
+        authManager: getIt<AuthManager>(),
+        workspaceRuntime: getIt.isRegistered<LocalWorkspaceRuntimeService>()
+            ? getIt<LocalWorkspaceRuntimeService>()
+            : null,
+      );
+
+  void setRemoteCliHandlerForTesting(RemoteCliCommandHandler? handler) {
+    __remoteCliHandler = handler;
+  }
 
   DeviceControlCommandHandler? get _deviceControlHandler {
     if (__deviceControlHandler != null) return __deviceControlHandler;
@@ -437,11 +452,15 @@ class SanadProtocolBridge {
       case CanonicalEventTypes.deviceUpdateCheck:
       case CanonicalEventTypes.deviceUpdateApply:
       case CanonicalEventTypes.deviceRuntimeRestart:
+      case CanonicalEventTypes.deviceCliExecute:
+      case CanonicalEventTypes.deviceCliCancel:
         event = CanonicalEvent(
           type: command!,
           payload: {
             ...payload,
             if (data['device_id'] != null) 'device_id': data['device_id'],
+            if (data['request_id'] != null && !payload.containsKey('request_id'))
+              'request_id': data['request_id'],
           },
           sessionId: sessionId,
         );
@@ -955,6 +974,12 @@ class SanadProtocolBridge {
             deviceId: event.payload['device_id']?.toString(),
           ),
         );
+        return;
+      case CanonicalEventTypes.deviceCliExecute:
+        await _remoteCliHandler.handleExecute(event, emitEnvelope);
+        return;
+      case CanonicalEventTypes.deviceCliCancel:
+        await _remoteCliHandler.handleCancel(event, emitEnvelope);
         return;
       case CanonicalEventTypes.providerSetupStatus:
         await emitEnvelope(
