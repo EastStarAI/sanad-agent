@@ -280,6 +280,39 @@ void main() {
       expect(transport.refreshSessionsCalls, 2);
     });
 
+    test('refreshDeviceSidebar skips collapsed workspaces', () async {
+      final repo = ConversationCacheRepository(cache: store, transport: transport);
+      store.setActiveDevice(device.id);
+
+      // Pre-seed 2 workspaces where ws-2 is collapsed
+      store.applyWorkspacesRefreshed(
+        device.id,
+        [
+          const DeviceWorkspace(id: 'ws-1', name: 'Expanded', path: '/tmp/1'),
+          const DeviceWorkspace(id: 'ws-2', name: 'Collapsed', path: '/tmp/2'),
+        ],
+        generation: store.advanceWorkspacesGeneration(device.id),
+      );
+      store.setWorkspaceExpansion(device.id, 'ws-2', false);
+
+      final f = repo.refreshDeviceSidebar(device);
+      transport.pendingWorkspaces.first.complete([
+        const DeviceWorkspace(id: 'ws-1', name: 'Expanded', path: '/tmp/1'),
+        const DeviceWorkspace(id: 'ws-2', name: 'Collapsed', path: '/tmp/2'),
+      ]);
+      await Future<void>.delayed(Duration.zero);
+
+      // Should only refresh unscoped + ws-1 (expanded), NOT ws-2 (collapsed)
+      expect(transport.refreshSessionsCalls, 2); // 1 unscoped + 1 ws-1
+
+      for (final completer in transport.pendingRefreshSessions) {
+        if (!completer.isCompleted) {
+          completer.complete(SessionQueryResult(sessions: const [], hasMore: false));
+        }
+      }
+      await f;
+    });
+
     test('enforces 500ms debounce on rapid non-forced duplicate refresh calls', () async {
       final repo = ConversationCacheRepository(
         cache: store,
