@@ -59,16 +59,16 @@ commit_push_authorized: planning-delivery-only
 
 | المهمة | الاعتماديات | الحالة |
 |---|---|---|
-| [97a — خط الأساس وتوفيق الأعمال السابقة](docs/plans/tasks/97a-baseline-and-ownership.md) | none | completed |
-| [97b — حلقة الاستئناف وهوية نتائج الأدوات](docs/plans/tasks/97b-recovery-loop-integration.md) | 97a | completed |
+| [97a — خط الأساس وتوفيق الأعمال السابقة](docs/plans/tasks/done/97a-baseline-and-ownership.md) | none | completed |
+| [97b — حلقة الاستئناف وهوية نتائج الأدوات](docs/plans/tasks/done/97b-recovery-loop-integration.md) | 97a | completed |
 | [97c — نقل تغطية الكتابة الآمنة خارج الخطة](docs/plans/tasks/done/97c-secure-runtime-verification.md) | 97a | moved-out-of-plan؛ تسليم مستقل |
-| [97d — موثوقية اختبارات أدوات التشغيل](docs/plans/tasks/97d-windows-test-baseline.md) | 97a | review |
-| [97e — الملكية والاسترداد ودورة الحياة](docs/plans/tasks/97e-launcher-lifecycle-verification.md) | 97d | completed (automated matrix; full interactive in 97l) |
-| [97f — استجابة الوكيل أثناء أدوات الملفات](docs/plans/tasks/97f-agent-responsiveness.md) | 97b | completed |
-| [97g — جاهزية المزودين وتحميل الأجهزة](docs/plans/tasks/97g-readiness-and-loading.md) | 97f | completed |
-| [97h — ملكية الجلب ومنع استدعاءات إعادة البناء](docs/plans/tasks/97h-request-ownership-and-dedup.md) | 97g | review |
-| [97i — كفاءة تحميل المحادثات والصفحات](docs/plans/tasks/97i-pagination-request-efficiency.md) | 97h | completed |
-| [97j — مؤشرات نشاط ثابتة وخفض تكلفة رسم Windows](docs/plans/tasks/97j-windows-static-activity-ui.md) | 97i | completed |
+| [97d — موثوقية اختبارات أدوات التشغيل](docs/plans/tasks/done/97d-windows-test-baseline.md) | 97a | completed |
+| [97e — الملكية والاسترداد ودورة الحياة](docs/plans/tasks/done/97e-launcher-lifecycle-verification.md) | 97d | completed (automated matrix; full interactive in 97l) |
+| [97f — استجابة الوكيل أثناء أدوات الملفات](docs/plans/tasks/done/97f-agent-responsiveness.md) | 97b | completed |
+| [97g — جاهزية المزودين وتحميل الأجهزة](docs/plans/tasks/done/97g-readiness-and-loading.md) | 97f | completed |
+| [97h — ملكية الجلب ومنع استدعاءات إعادة البناء](docs/plans/tasks/done/97h-request-ownership-and-dedup.md) | 97g | completed |
+| [97i — كفاءة تحميل المحادثات والصفحات](docs/plans/tasks/done/97i-pagination-request-efficiency.md) | 97h | completed |
+| [97j — مؤشرات نشاط ثابتة وخفض تكلفة رسم Windows](docs/plans/tasks/done/97j-windows-static-activity-ui.md) | 97i | completed |
 | [97k — ميزانيات منع التراجع والتقرير المقارن](docs/plans/tasks/97k-regression-budgets-and-report.md) | Plan97 merged | deferred follow-up؛ غير مانعة للدمج |
 | [97l — القبول التفاعلي النهائي عبر sanad-dev](docs/plans/tasks/97l-interactive-final-acceptance.md) | 97e, 97g, 97h, 97i, 97j | planned؛ آخر بوابة دمج |
 | [97x — إزالة عوائق تنفيذ الخطة](docs/plans/tasks/97x-workflow-obstacle-removal.md) | 97a | active follow-up؛ غير مانعة للدمج إلا لعائق مباشر |

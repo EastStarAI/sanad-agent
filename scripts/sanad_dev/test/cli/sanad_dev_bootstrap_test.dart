@@ -218,7 +218,7 @@ fi
       },
     );
 
-    test('stale runtime command fails without invoking bootstrap', () async {
+    test('stale runtime command auto-heals and executes without manual setup', () async {
       expect((await runBootstrap(['setup'])).exitCode, 0);
       await calls.writeAsString('');
       final source = File(
@@ -228,10 +228,12 @@ fi
 
       final result = await runBootstrap(const ['status']);
 
-      expect(result.exitCode, isNonZero);
-      expect(result.stderr, contains('Project runtime is stale'));
-      expect(result.stderr, contains('sanad-dev setup'));
-      expect(await calls.exists() ? await calls.readAsString() : '', isEmpty);
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      expect(result.stderr, contains('running auto-setup'));
+      final invocations = await calls.readAsLines();
+      expect(invocations, hasLength(2));
+      expect(invocations.first, contains('dart compile exe'));
+      expect(invocations.last, contains('runtime|status'));
     });
 
     test('run rebuilds a stale runtime before entering the CLI', () async {

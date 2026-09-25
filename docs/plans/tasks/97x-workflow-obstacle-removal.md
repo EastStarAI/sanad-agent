@@ -58,11 +58,12 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
     - غياب النتيجة أو الخلاصة الختامية (`missing final` أو مخرجات تقتصر على progress) يوسم النتيجة كـ `incomplete` وسبب `cause: missing_final` مع رمز خروج `exit 1`، ويمنع اعتبارها نجاحاً نهائياً.
     - استبدال رسائل التقدم المؤقتة تلقائياً بالخلاصة الختامية الحقيقية عند توفر `event.finalMessage`.
     - تطبيق اختبارات تعاقدية (`contract tests`) تمنع النجاح الزائف (`false success`) وتتحقق دلالياً من اكتمال مخرجات النتيجة في `run_artifacts.dart` و`oneshot_runner.dart` و`supervisor.mjs`.
-- [ ] **Self-healing `sanad-dev status` setup (future non-blocking batch):**
-  - **الملاحظة الفعلية:** `sanad-dev status` يفشل كثيرًا برسالة تطلب تشغيل `sanad-dev setup` يدويًا بدل إكمال طلب الحالة.
-  - **السلوك المطلوب:** عندما يثبت status أن setup مطلوب وقابل للإصلاح الآمن، يطبع سطر log موجزًا يوضح أن setup مطلوب، يشغّل setup تلقائيًا مرة واحدة، ثم يعيد محاولة status ويعرض مخرجات status الطبيعية فقط؛ لا يعيد payload الطويل الخاص بـsetup في المسار الناجح.
-  - **حدود الأمان:** لا loop أو retry غير مقيد، ولا إخفاء لفشل setup؛ failure يعرض سببًا موجزًا وقابلًا للتنفيذ ويحافظ على exit code. لا source switch أو runtime restart أو إنشاء runtime إضافية، ولا auto-setup لأخطاء ownership/security/explicit-home غير القابلة للإصلاح.
-  - **القبول:** اختبارات تغطي setup-required→setup-success→normal-status، setup failure، repeated failure/no-loop، JSON/text output، ومخرجات bounded؛ يبقى البند متابعة بعد دمج Plan97 ما لم يمنع بوابة حالية مباشرة.
+- [x] **Self-healing `sanad-dev` runtime auto-setup and deterministic process identity (batch 6):**
+  - **الملاحظة الفعلية:** أمر `sanad-dev status` والأوامر التابعة تفشل برسالة `Project runtime is stale. Run: sanad-dev setup` عند حدوث أي تعديل في الكود. إضافة إلى ذلك، بعد تشغيل `setup`، تفشل محاولات `restart client` ويُصنف الـ runtime كـ `orphaned` مع رسالة `launcher PID was reused or its process identity changed` بسبب عدم استقرار ناتج `ps` لاختلاف الـ locale وتغير عرض الطرفية.
+  - **السلوك المطبق:**
+    - جعل `require_runtime_cli` في `scripts/sanad-dev` و `scripts/sanad-dev.ps1` ذاتية الإصلاح (self-healing): عند اكتشاف أن البيئة `stale`، تطبع سطر log موجزًا وتشغل `setup` تلقائيًا ثم تكمل الأمر بنجاح.
+    - إصلاح `readProcessIdentity` في `scripts/sanad_dev/lib/src/runtime/ownership/runtime_ownership.dart` بتمرير `LC_ALL: C` و `-ww` لمنع اختلاف تنسيق التاريخ والوقت ومنع اقتطاع مسار الأمر بعرض الشاشة.
+  - **القبول:** تغطية اختبارات وحدة وتراجعية في `sanad_dev_bootstrap_test.dart` و `sanad_dev_runtime_ownership_test.dart`، واختبار حي end-to-end بتشغيل وكيل وعميل وتجربة الـ stale والـ restart عبر مختلف الـ locales (`en_GB`, `C.UTF-8`, `ar_EG.UTF-8`) بنجاح تام.
 - [ ] **Supervisor watch-once stalled-error wakeup (batch 4):** إذا كان الأوركستريتور في وضع المراقبة وحدث خطأ داخل محادثة الوكيل الفرعي (`blocked`, provider timeout, invalid request, gateway loss, or stopped/failed) ثم بقيت المحادثة بلا تعافٍ تلقائي لأكثر من 60 ثانية، يجب أن يعود `watch-once` فورًا بحدث قابل للتصرف بدل الاستمرار في الانتظار حتى انتهاء نافذة المراقبة. هذا يمنع حالة مراقبة مضللة حيث يبدو العمل جارياً بينما الوكيل متوقف، كما حدث أثناء مراقبة 97h بعد `provider_timeout`. DoD: regression يثبت أن الأخطاء العابرة الأقصر من 60 ثانية لا توقظ المراقب إذا تعافت، وأن الخطأ المستمر لأكثر من 60 ثانية يوقظ `watch-once` مع task/session/cause/state-since وبدون scheduled polling.
 - [ ] **Future blockers:** أي خلل مثبت في `sanad-dev` أو delegation/supervisor/skills/CI يعطل العمل أو الاختبارات أو logs أو ownership يضاف هنا قبل إصلاحه.
 
@@ -92,6 +93,24 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
 - العوائق المستقبلية تبقى مرئية هنا حتى الإصلاح أو التأجيل المعلل.
 
 ## Evidence
+
+### Batch 6: Self-healing sanad-dev runtime auto-setup and deterministic process identity
+
+- **Obstacle & G0 Triage:**
+  - *Reproduction:*
+    1. Modifying source files or pulling git changes causes `runtime_cli_fingerprint` to drift from `runtime-cli.stamp`. Subcommands like `status`, `restart client`, `logs`, etc., abort with exit 1: `Project runtime is stale. Run: sanad-dev setup`.
+    2. After running `sanad-dev setup`, `readProcessIdentity(pid)` in `scripts/sanad_dev/lib/src/runtime/ownership/runtime_ownership.dart` ran `ps -p $pid -o lstart= -o command=` without standardizing `LC_ALL` or window width. Because macOS `ps` formats `lstart` using the ambient locale (e.g. `Sat 26 Sep` in British/system locale vs `Sat Sep 26` in `C.UTF-8`/`en_US`), and truncates `command` to the screen width (`COLUMNS`), any invocation across different terminals or tool subshells triggered `launcher PID was reused or its process identity changed`, classifying running instances as `orphaned` and aborting `restart client`.
+  - *Impact:* Disrupted developer and orchestrator workflow, prevented client restart/reload from background agents or distinct terminal windows, and required frequent manual `sanad-dev setup` invocations.
+  - *Owning layers:* Developer launcher wrappers (`scripts/sanad-dev`, `scripts/sanad-dev.ps1`) and ownership assessment in `scripts/sanad_dev` package (`runtime_ownership.dart`).
+- **G1 Repair:**
+  - *`scripts/sanad_dev/lib/src/runtime/ownership/runtime_ownership.dart`:* Enforced `environment: const {'LC_ALL': 'C'}` and added `-ww` flag to `ps` in `readProcessIdentity(pid)` to guarantee locale-independent date/time formatting and prevent terminal width truncation.
+  - *`scripts/sanad-dev` & `scripts/sanad-dev.ps1`:* Made `require_runtime_cli` self-healing; when the runtime CLI is stale, it prints a single bounded notice (`[sanad-dev] Project runtime is stale; running auto-setup...`), compiles the runtime cleanly, and proceeds with the requested command without failing.
+  - *`scripts/sanad_dev/test/cli/sanad_dev_bootstrap_test.dart`:* Updated bootstrap test to verify auto-heal execution on stale runtime commands.
+  - *`scripts/sanad_dev/test/runtime/ownership/sanad_dev_runtime_ownership_test.dart`:* Added regression test verifying `readProcessIdentity` returns stable identity across invocations.
+- **G2 Acceptance Evidence:**
+  - *Analyzer:* `fvm dart analyze` in `scripts/sanad_dev` — 0 issues found (clean).
+  - *Package Suite:* `fvm dart test` in `scripts/sanad_dev` — all tests passed.
+  - *Live Multi-Locale & Stale Smoke:* Launched live agent and client in worktree via `sanad-dev run`. Verified `sanad-dev status` showed `Runtime class: managed`. Successfully executed `sanad-dev restart client` under `LC_TIME=en_GB.UTF-8`, `LC_TIME=C.UTF-8`, and `LC_TIME=ar_EG.UTF-8 COLUMNS=80` with zero orphaning. Simulated stale runtime via source touch; confirmed auto-setup triggered cleanly and executed `restart client` with exit code 0.
 
 ### Batch 5: Result data fidelity and semantic terminal validation
 
