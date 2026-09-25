@@ -160,8 +160,30 @@ void main() {
       await ownership.acquireOwnership(record);
 
       final recordFile = File(ownership.recordPath(tempHome.path));
-      await Process.run('chmod', ['644', recordFile.path]);
 
+      // 1. Group read / other read (644)
+      await Process.run('chmod', ['644', recordFile.path]);
+      expect(
+        () => ownership.readRecord(tempHome.path, verifyPermissions: true),
+        throwsA(isA<ClientCliSecurityException>()),
+      );
+
+      // 2. Group execute only (610)
+      await Process.run('chmod', ['610', recordFile.path]);
+      expect(
+        () => ownership.readRecord(tempHome.path, verifyPermissions: true),
+        throwsA(isA<ClientCliSecurityException>()),
+      );
+
+      // 3. Other execute only (601)
+      await Process.run('chmod', ['601', recordFile.path]);
+      expect(
+        () => ownership.readRecord(tempHome.path, verifyPermissions: true),
+        throwsA(isA<ClientCliSecurityException>()),
+      );
+
+      // 4. Executable record file (700)
+      await Process.run('chmod', ['700', recordFile.path]);
       expect(
         () => ownership.readRecord(tempHome.path, verifyPermissions: true),
         throwsA(isA<ClientCliSecurityException>()),

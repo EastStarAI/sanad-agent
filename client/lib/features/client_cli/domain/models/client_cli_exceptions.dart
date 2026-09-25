@@ -1,8 +1,9 @@
 class ClientCliException implements Exception {
   final String code;
   final String message;
+  final int exitCode;
 
-  const ClientCliException(this.code, this.message);
+  const ClientCliException(this.code, this.message, {this.exitCode = 1});
 
   @override
   String toString() => 'ClientCliException($code): $message';
@@ -14,6 +15,7 @@ class ClientCliNoOwnerException extends ClientCliException {
           'no_owner',
           'No active Sanad Client found for Sanad Home: $sanadHome. '
           'Ensure Sanad Client is running and Client CLI is enabled.',
+          exitCode: 69,
         );
 }
 
@@ -23,6 +25,7 @@ class ClientCliDisabledException extends ClientCliException {
           'disabled',
           'Client CLI is disabled in Sanad Client settings for Sanad Home: $sanadHome. '
           'Enable it in Settings -> General -> Client CLI.',
+          exitCode: 77,
         );
 }
 

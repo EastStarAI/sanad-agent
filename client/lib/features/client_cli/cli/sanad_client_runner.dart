@@ -126,7 +126,7 @@ class SanadClientRunner {
       );
     } on ClientCliException catch (e) {
       err.writeln('Error: ${e.message}');
-      return 1;
+      return e.exitCode;
     }
 
     final httpClient = httpClientFactory != null ? httpClientFactory!() : http.Client();
@@ -194,7 +194,7 @@ class SanadClientRunner {
       );
     } on ClientCliException catch (e) {
       err.writeln('Error: ${e.message}');
-      return 1;
+      return e.exitCode;
     }
 
     // Materialize local brief file content if passed via --brief-file / -b
@@ -202,6 +202,15 @@ class SanadClientRunner {
     for (var i = 0; i < argv.length; i++) {
       if ((argv[i] == '-b' || argv[i] == '--brief-file') && i + 1 < argv.length) {
         final filePath = argv[i + 1];
+        final file = File(filePath);
+        if (!await file.exists()) {
+          err.writeln('Error: Brief file not found at: $filePath');
+          return 2;
+        }
+        briefContent = await file.readAsString();
+        break;
+      } else if (argv[i].startsWith('--brief-file=')) {
+        final filePath = argv[i].substring('--brief-file='.length);
         final file = File(filePath);
         if (!await file.exists()) {
           err.writeln('Error: Brief file not found at: $filePath');
@@ -238,15 +247,23 @@ class SanadClientRunner {
       }
 
       // Handle Ctrl+C (SIGINT) by sending cancel request over WebSocket
+      int sigintCount = 0;
       if (!Platform.isWindows) {
         signalSub = ProcessSignal.sigint.watch().listen((_) {
-          webSocket?.add(
-            jsonEncode({
-              'type': 'cancel',
-              'request_id': uuid.v4(),
-              'target_request_id': requestId,
-            }),
-          );
+          sigintCount++;
+          if (sigintCount == 1) {
+            webSocket?.add(
+              jsonEncode({
+                'type': 'cancel',
+                'request_id': uuid.v4(),
+                'target_request_id': requestId,
+              }),
+            );
+          } else {
+            if (!completer.isCompleted) {
+              completer.complete(130);
+            }
+          }
         });
       }
 

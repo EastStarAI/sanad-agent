@@ -88,8 +88,8 @@ class ClientCliOwnership {
     if (verifyPermissions && !Platform.isWindows) {
       final stat = await file.stat();
       final mode = stat.mode & 0x1ff;
-      // Must be 0600 (owner read/write only, no group or others permissions)
-      if ((mode & 0x077) != 0) {
+      // Must be 0600 (owner read/write only, no group or other permissions, no execute)
+      if ((mode & 0x7f) != 0) {
         throw ClientCliSecurityException(
           'Runtime record has insecure permissions (${mode.toRadixString(8)}). Expected 0600.',
         );

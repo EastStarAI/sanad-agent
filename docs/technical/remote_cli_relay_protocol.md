@@ -350,6 +350,7 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
     "request_id": "req-uuid-1"
   }
   ```
+  *(Note: Accepts either `request_id` or `target_request_id` identifying the execution to cancel.)*
 
 #### Host-to-Client Messages
 

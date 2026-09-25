@@ -29,10 +29,12 @@ class ClientCliApprovalRequest {
 class ClientCliApprovalCoordinator {
   final _requestController = StreamController<ClientCliApprovalRequest?>.broadcast();
   final Set<String> _approvedSessionIds = {};
+  final List<ClientCliApprovalRequest> _queue = [];
   ClientCliApprovalRequest? _currentRequest;
 
   Stream<ClientCliApprovalRequest?> get requestStream => _requestController.stream;
   ClientCliApprovalRequest? get currentRequest => _currentRequest;
+  int get queuedCount => _queue.length;
 
   bool isSessionApproved(String sessionId) =>
       _approvedSessionIds.contains(sessionId);
@@ -59,8 +61,12 @@ class ClientCliApprovalCoordinator {
       completer: completer,
     );
 
-    _currentRequest = request;
-    _requestController.add(request);
+    if (_currentRequest == null) {
+      _currentRequest = request;
+      _requestController.add(request);
+    } else {
+      _queue.add(request);
+    }
 
     try {
       final decision = await completer.future;
@@ -77,10 +83,29 @@ class ClientCliApprovalCoordinator {
       }
     } finally {
       if (_currentRequest == request) {
-        _currentRequest = null;
-        _requestController.add(null);
+        _advanceQueue();
+      } else {
+        _queue.remove(request);
       }
     }
+  }
+
+  void _advanceQueue() {
+    while (_queue.isNotEmpty) {
+      final next = _queue.removeAt(0);
+      if (next.sessionId != null && _approvedSessionIds.contains(next.sessionId)) {
+        if (!next.completer.isCompleted) {
+          next.completer.complete(ClientCliApprovalDecision.allowSession);
+        }
+        continue;
+      }
+      _currentRequest = next;
+      _requestController.add(next);
+      return;
+    }
+
+    _currentRequest = null;
+    _requestController.add(null);
   }
 
   void resolveCurrent(ClientCliApprovalDecision decision) {
@@ -96,6 +121,12 @@ class ClientCliApprovalCoordinator {
 
   void dispose() {
     resolveCurrent(ClientCliApprovalDecision.deny);
+    for (final queued in _queue) {
+      if (!queued.completer.isCompleted) {
+        queued.completer.complete(ClientCliApprovalDecision.deny);
+      }
+    }
+    _queue.clear();
     unawaited(_requestController.close());
     _approvedSessionIds.clear();
   }

@@ -65,7 +65,7 @@ void main() {
         stdoutSink: out,
         stderrSink: err,
       );
-      expect(code, 1);
+      expect(code, 69);
       expect(err.toString(), contains('No active Sanad Client found'));
     });
 
@@ -97,7 +97,7 @@ void main() {
         stdoutSink: out,
         stderrSink: err,
       );
-      expect(code, 1);
+      expect(code, 77);
       expect(err.toString(), contains('Client CLI is disabled in Sanad Client settings'));
     });
 
@@ -193,6 +193,48 @@ void main() {
       );
       expect(code, 1);
       expect(err.toString(), contains('Missing target device'));
+    });
+
+    test('returns exit code 2 if brief file does not exist', () async {
+      final record = ClientCliRecord(
+        pid: pid,
+        port: 58212,
+        token: 'test-tok',
+        sanadHome: tempHome.path,
+        clientVersion: '1.0.15',
+        enabled: true,
+        permissionMode: 'default',
+        updatedAt: DateTime.now().toUtc(),
+      );
+      await ownership.acquireOwnership(record);
+
+      final discovery = ClientCliDiscovery(
+        homeResolver: resolver,
+        ownership: ownership,
+        clientFactory: () => MockClient((_) async => http.Response(
+              jsonEncode({'status': 'ok', 'enabled': true, 'client_version': '1.0.15'}),
+              200,
+            )),
+      );
+      final runner = SanadClientRunner(discovery: discovery);
+
+      final out = StringBuffer();
+      final err = StringBuffer();
+      final code = await runner.run(
+        [
+          '--home',
+          tempHome.path,
+          '-d',
+          'dev-1',
+          'run',
+          '--brief-file',
+          '/non/existent/path/brief.md',
+        ],
+        stdoutSink: out,
+        stderrSink: err,
+      );
+      expect(code, 2);
+      expect(err.toString(), contains('Brief file not found'));
     });
   });
 }

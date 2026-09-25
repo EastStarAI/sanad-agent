@@ -383,6 +383,7 @@ class ClientCliHost {
                   }),
                 );
               } else if (eventName == 'device.cli.result') {
+                unawaited(eventSubscription?.cancel());
                 socket.add(
                   jsonEncode({
                     'type': 'result',
@@ -396,6 +397,7 @@ class ClientCliHost {
                 );
                 unawaited(socket.close(WebSocketStatus.normalClosure));
               } else if (eventName == 'error') {
+                unawaited(eventSubscription?.cancel());
                 socket.add(
                   jsonEncode({
                     'type': 'error',
@@ -421,7 +423,9 @@ class ClientCliHost {
               },
             );
           } else if (type == 'cancel') {
-            final targetRequestId = decoded['target_request_id']?.toString() ?? '';
+            final targetRequestId = decoded['target_request_id']?.toString() ??
+                decoded['request_id']?.toString() ??
+                '';
             final endpoint = currentEndpoint;
             if (endpoint != null && targetRequestId.isNotEmpty) {
               endpoint.socketService.sendDeviceCommand(
@@ -471,6 +475,9 @@ class ClientCliHost {
     for (var i = 0; i < argv.length; i++) {
       if ((argv[i] == '-s' || argv[i] == '--session') && i + 1 < argv.length) {
         return argv[i + 1];
+      }
+      if (argv[i].startsWith('--session=')) {
+        return argv[i].substring('--session='.length);
       }
     }
     return null;

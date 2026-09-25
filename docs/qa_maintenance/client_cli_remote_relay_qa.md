@@ -88,5 +88,5 @@ cd client && fvm flutter analyze 2>&1 | tail -5
 cd client && fvm flutter test test/unit/client_cli/ test/widget/client_cli/ 2>&1 | tail -5
 
 # 3. Run Agent CLI relay tests (102a foundation)
-cd agent && fvm dart test test/unit/cli_relay/ 2>&1 | tail -5
+cd agent && fvm dart test test/interfaces/platforms/sanad_gateway/handlers/remote_cli_command_handler_test.dart 2>&1 | tail -5
 ```
