@@ -238,7 +238,7 @@ If request validation or admission fails prior to execution, or if an unexpected
 |---|---|
 | `invalid_request` | Missing or empty `request_id`, empty `argv`, non-string arguments, or invalid timeout value. |
 | `duplicate_request` | A request with the same `request_id` is currently executing or completed within the deduplication window. |
-| `payload_too_large` | An argument exceeds 1 MB, argument count exceeds 256, or stdin exceeds 10 MB. |
+| `payload_too_large` | An argument exceeds 1 MB, argument count exceeds 256, stdin exceeds 10 MB, brief content exceeds 512 KB, or total payload exceeds 12 MB. |
 | `timeout` | Execution exceeded the specified or default timeout limit. |
 | `cancelled` | Execution was explicitly aborted via `device.cli.cancel`. |
 | `not_found` | For `device.cli.cancel`, the specified `target_request_id` does not match an active execution. |

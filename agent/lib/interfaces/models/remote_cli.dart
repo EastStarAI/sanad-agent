@@ -26,10 +26,22 @@ class RemoteCliLimits {
   static const int maxArgCount = 256;
   static const int maxArgLength = 1024 * 1024; // 1 MB
   static const int maxStdinLength = 10 * 1024 * 1024; // 10 MB
+  static const int maxBriefContentLength = 512 * 1024; // 512 KB
   static const int maxTotalPayloadLength = 12 * 1024 * 1024; // 12 MB
   static const int minTimeoutSeconds = 1;
   static const int defaultTimeoutSeconds = 300;
   static const int maxTimeoutSeconds = 86400; // 24 hours
+}
+
+/// Typed exception thrown when remote CLI request validation fails.
+class RemoteCliValidationException implements Exception {
+  final String code;
+  final String message;
+
+  const RemoteCliValidationException(this.code, this.message);
+
+  @override
+  String toString() => 'RemoteCliValidationException($code): $message';
 }
 
 /// Parsed and validated request to execute a remote Sanad CLI command.
@@ -57,21 +69,34 @@ class RemoteCliExecuteRequest {
   }) {
     final reqId = (payload['request_id'] ?? envelopeRequestId)?.toString().trim() ?? '';
     if (reqId.isEmpty) {
-      throw const FormatException('request_id is required.');
+      throw const RemoteCliValidationException(
+        RemoteCliErrorCodes.invalidRequest,
+        'request_id is required.',
+      );
     }
 
     final rawArgv = payload['argv'];
     if (rawArgv == null) {
-      throw const FormatException('argv is required.');
+      throw const RemoteCliValidationException(
+        RemoteCliErrorCodes.invalidRequest,
+        'argv is required.',
+      );
     }
     if (rawArgv is! List) {
-      throw const FormatException('argv must be a list of strings.');
+      throw const RemoteCliValidationException(
+        RemoteCliErrorCodes.invalidRequest,
+        'argv must be a list of strings.',
+      );
     }
     if (rawArgv.isEmpty) {
-      throw const FormatException('argv must not be empty.');
+      throw const RemoteCliValidationException(
+        RemoteCliErrorCodes.invalidRequest,
+        'argv must not be empty.',
+      );
     }
     if (rawArgv.length > RemoteCliLimits.maxArgCount) {
-      throw const FormatException(
+      throw const RemoteCliValidationException(
+        RemoteCliErrorCodes.payloadTooLarge,
         'argv exceeds maximum argument count of ${RemoteCliLimits.maxArgCount}.',
       );
     }
@@ -79,10 +104,14 @@ class RemoteCliExecuteRequest {
     final argv = <String>[];
     for (final arg in rawArgv) {
       if (arg is! String) {
-        throw const FormatException('Every argument in argv must be a string.');
+        throw const RemoteCliValidationException(
+          RemoteCliErrorCodes.invalidRequest,
+          'Every argument in argv must be a string.',
+        );
       }
       if (arg.length > RemoteCliLimits.maxArgLength) {
-        throw const FormatException(
+        throw const RemoteCliValidationException(
+          RemoteCliErrorCodes.payloadTooLarge,
           'Argument exceeds maximum length of ${RemoteCliLimits.maxArgLength} bytes.',
         );
       }
@@ -93,10 +122,14 @@ class RemoteCliExecuteRequest {
     String? stdin;
     if (rawStdin != null) {
       if (rawStdin is! String) {
-        throw const FormatException('stdin must be a string.');
+        throw const RemoteCliValidationException(
+          RemoteCliErrorCodes.invalidRequest,
+          'stdin must be a string.',
+        );
       }
       if (rawStdin.length > RemoteCliLimits.maxStdinLength) {
-        throw const FormatException(
+        throw const RemoteCliValidationException(
+          RemoteCliErrorCodes.payloadTooLarge,
           'stdin exceeds maximum length of ${RemoteCliLimits.maxStdinLength} bytes.',
         );
       }
@@ -107,14 +140,28 @@ class RemoteCliExecuteRequest {
     String? briefFileContent;
     if (rawBriefContent != null) {
       if (rawBriefContent is! String) {
-        throw const FormatException('brief_content must be a string.');
+        throw const RemoteCliValidationException(
+          RemoteCliErrorCodes.invalidRequest,
+          'brief_content must be a string.',
+        );
       }
-      if (rawBriefContent.length > RemoteCliLimits.maxStdinLength) {
-        throw const FormatException(
-          'brief_content exceeds maximum length of ${RemoteCliLimits.maxStdinLength} bytes.',
+      if (rawBriefContent.length > RemoteCliLimits.maxBriefContentLength) {
+        throw const RemoteCliValidationException(
+          RemoteCliErrorCodes.payloadTooLarge,
+          'brief_content exceeds maximum length of ${RemoteCliLimits.maxBriefContentLength} bytes.',
         );
       }
       briefFileContent = rawBriefContent;
+    }
+
+    final totalPayloadLength = argv.fold<int>(0, (sum, arg) => sum + arg.length) +
+        (stdin?.length ?? 0) +
+        (briefFileContent?.length ?? 0);
+    if (totalPayloadLength > RemoteCliLimits.maxTotalPayloadLength) {
+      throw const RemoteCliValidationException(
+        RemoteCliErrorCodes.payloadTooLarge,
+        'Total payload exceeds maximum size of ${RemoteCliLimits.maxTotalPayloadLength} bytes.',
+      );
     }
 
     int timeoutSeconds = RemoteCliLimits.defaultTimeoutSeconds;
@@ -123,7 +170,8 @@ class RemoteCliExecuteRequest {
       if (parsed == null ||
           parsed < RemoteCliLimits.minTimeoutSeconds ||
           parsed > RemoteCliLimits.maxTimeoutSeconds) {
-        throw const FormatException(
+        throw const RemoteCliValidationException(
+          RemoteCliErrorCodes.invalidRequest,
           'timeout_seconds must be an integer between 1 and 86400.',
         );
       }
@@ -168,12 +216,18 @@ class RemoteCliCancelRequest {
   }) {
     final reqId = (payload['request_id'] ?? envelopeRequestId)?.toString().trim() ?? '';
     if (reqId.isEmpty) {
-      throw const FormatException('request_id is required.');
+      throw const RemoteCliValidationException(
+        RemoteCliErrorCodes.invalidRequest,
+        'request_id is required.',
+      );
     }
 
     final targetId = payload['target_request_id']?.toString().trim() ?? '';
     if (targetId.isEmpty) {
-      throw const FormatException('target_request_id is required.');
+      throw const RemoteCliValidationException(
+        RemoteCliErrorCodes.invalidRequest,
+        'target_request_id is required.',
+      );
     }
 
     return RemoteCliCancelRequest(

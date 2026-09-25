@@ -48,6 +48,7 @@ import 'handlers/session_turn_replay_command_handler.dart';
 import 'handlers/remote_cli_command_handler.dart';
 import 'handlers/workspace_command_handler.dart';
 import 'protocol/canonical_events.dart';
+import 'server_sanad_gateway_platform.dart';
 
 import 'translators/agent_to_canonical.dart';
 import 'translators/canonical_to_agent.dart';
@@ -153,6 +154,10 @@ class SanadProtocolBridge {
         workspaceRuntime: getIt.isRegistered<LocalWorkspaceRuntimeService>()
             ? getIt<LocalWorkspaceRuntimeService>()
             : null,
+        registeredDeviceId: () {
+          if (!getIt.isRegistered<ServerSanadGatewayPlatform>()) return null;
+          return getIt<ServerSanadGatewayPlatform>().registeredDeviceId;
+        },
       );
 
   void setRemoteCliHandlerForTesting(RemoteCliCommandHandler? handler) {

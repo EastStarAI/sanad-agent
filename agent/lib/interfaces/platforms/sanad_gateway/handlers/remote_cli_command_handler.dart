@@ -83,6 +83,7 @@ class RemoteCliCommandHandler {
   final AuthManager _authManager;
   final LocalWorkspaceRuntimeService? _workspaceRuntime;
   final SanadCommandRunnerFactory _runnerFactory;
+  final String? Function()? _registeredDeviceId;
   final Duration duplicateTtl;
   final DateTime Function() _clock;
 
@@ -95,11 +96,13 @@ class RemoteCliCommandHandler {
     required AuthManager authManager,
     LocalWorkspaceRuntimeService? workspaceRuntime,
     SanadCommandRunnerFactory? runnerFactory,
+    String? Function()? registeredDeviceId,
     this.duplicateTtl = const Duration(minutes: 10),
     DateTime Function()? clock,
   }) : _bridge = bridge,
        _authManager = authManager,
        _workspaceRuntime = workspaceRuntime,
+       _registeredDeviceId = registeredDeviceId,
        _clock = clock ?? DateTime.now,
        _runnerFactory =
            runnerFactory ??
@@ -139,6 +142,19 @@ class RemoteCliCommandHandler {
         payload: event.payload,
         envelopeRequestId: rawRequestId,
       );
+    } on RemoteCliValidationException catch (e) {
+      _logger.warning('Invalid remote CLI execute request: ${e.code} - ${e.message}');
+      await emitEnvelope({
+        'type': 'error',
+        'request_id': rawRequestId,
+        'device_id': envelopeDeviceId,
+        'payload': {
+          'request_id': rawRequestId,
+          'code': e.code,
+          'message': e.message,
+        },
+      });
+      return;
     } on FormatException catch (e) {
       _logger.warning('Invalid remote CLI execute request: ${e.message}');
       await emitEnvelope({
@@ -154,23 +170,30 @@ class RemoteCliCommandHandler {
       return;
     }
 
-    // Verify target device identity if specified
-    final localHardwareId = _authManager.hardwareId;
-    if (request.deviceId.isNotEmpty &&
-        localHardwareId != null &&
-        localHardwareId.isNotEmpty &&
-        request.deviceId != localHardwareId) {
-      await emitEnvelope({
-        'type': 'error',
-        'request_id': request.requestId,
-        'device_id': request.deviceId,
-        'payload': {
+    // Verify target device identity if specified against known device identities
+    final localHardwareId = _authManager.hardwareId?.trim();
+    final rawRegistered = _registeredDeviceId?.call();
+    final registeredId = rawRegistered?.trim();
+    final requestedDevice = request.deviceId.trim();
+
+    if (requestedDevice.isNotEmpty) {
+      final knownIds = <String>{
+        if (localHardwareId != null && localHardwareId.isNotEmpty) localHardwareId,
+        if (registeredId != null && registeredId.isNotEmpty) registeredId,
+      };
+      if (knownIds.isNotEmpty && !knownIds.contains(requestedDevice)) {
+        await emitEnvelope({
+          'type': 'error',
           'request_id': request.requestId,
-          'code': RemoteCliErrorCodes.wrongDevice,
-          'message': 'The command targeted a different device.',
-        },
-      });
-      return;
+          'device_id': request.deviceId,
+          'payload': {
+            'request_id': request.requestId,
+            'code': RemoteCliErrorCodes.wrongDevice,
+            'message': 'The command targeted a different device.',
+          },
+        });
+        return;
+      }
     }
 
     _purgeExpired();
@@ -210,6 +233,11 @@ class RemoteCliCommandHandler {
     if (request.briefFileContent != null && request.briefFileContent!.isNotEmpty) {
       try {
         tempBriefDir = Directory.systemTemp.createTempSync('sanad_remote_brief_');
+        if (!Platform.isWindows) {
+          try {
+            Process.runSync('chmod', ['700', tempBriefDir.path]);
+          } catch (_) {}
+        }
         final tempBriefFile = File('${tempBriefDir.path}/brief.txt');
         tempBriefFile.writeAsStringSync(request.briefFileContent!);
 
@@ -250,52 +278,64 @@ class RemoteCliCommandHandler {
 
     final streamingStdoutSink = RemoteCliStreamingSink((chunk) {
       if (execution.isTerminal) return;
-      emitEnvelope(_bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: CanonicalEventTypes.deviceCliStdout,
-          payload: {
-            'request_id': request.requestId,
-            'seq': execution.nextSeq(),
-            'stream': 'stdout',
-            'text': chunk,
-          },
-        ),
-      )).catchError((_) {
+      try {
+        emitEnvelope(_bridge.buildAgentEventEnvelope(
+          CanonicalEvent(
+            type: CanonicalEventTypes.deviceCliStdout,
+            payload: {
+              'request_id': request.requestId,
+              'seq': execution.nextSeq(),
+              'stream': 'stdout',
+              'text': chunk,
+            },
+          ),
+        )).catchError((_) {
+          _handleDisconnect(execution);
+        });
+      } catch (_) {
         _handleDisconnect(execution);
-      });
+      }
     });
 
     final streamingStderrSink = RemoteCliStreamingSink((chunk) {
       if (execution.isTerminal) return;
-      emitEnvelope(_bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: CanonicalEventTypes.deviceCliStderr,
-          payload: {
-            'request_id': request.requestId,
-            'seq': execution.nextSeq(),
-            'stream': 'stderr',
-            'text': chunk,
-          },
-        ),
-      )).catchError((_) {
+      try {
+        emitEnvelope(_bridge.buildAgentEventEnvelope(
+          CanonicalEvent(
+            type: CanonicalEventTypes.deviceCliStderr,
+            payload: {
+              'request_id': request.requestId,
+              'seq': execution.nextSeq(),
+              'stream': 'stderr',
+              'text': chunk,
+            },
+          ),
+        )).catchError((_) {
+          _handleDisconnect(execution);
+        });
+      } catch (_) {
         _handleDisconnect(execution);
-      });
+      }
     });
 
     void onLifecycleEvent(RunLifecycleEvent lcEvent) {
       if (execution.isTerminal) return;
-      emitEnvelope(_bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: CanonicalEventTypes.deviceCliEvent,
-          payload: {
-            'request_id': request.requestId,
-            'seq': execution.nextSeq(),
-            'event': lcEvent.toJson(),
-          },
-        ),
-      )).catchError((_) {
+      try {
+        emitEnvelope(_bridge.buildAgentEventEnvelope(
+          CanonicalEvent(
+            type: CanonicalEventTypes.deviceCliEvent,
+            payload: {
+              'request_id': request.requestId,
+              'seq': execution.nextSeq(),
+              'event': lcEvent.toJson(),
+            },
+          ),
+        )).catchError((_) {
+          _handleDisconnect(execution);
+        });
+      } catch (_) {
         _handleDisconnect(execution);
-      });
+      }
     }
 
     WorkspaceCliService? workspaceService;
@@ -328,6 +368,7 @@ class RemoteCliCommandHandler {
 
     try {
       final runFuture = runner.run(effectiveArgv);
+      unawaited(runFuture.catchError((_) => 0));
       final exitCode = await Future.any([
         runFuture,
         execution.cancelCompleter.future.then((_) => execution.timedOut ? 124 : 130),
@@ -382,6 +423,19 @@ class RemoteCliCommandHandler {
         payload: event.payload,
         envelopeRequestId: rawRequestId,
       );
+    } on RemoteCliValidationException catch (e) {
+      _logger.warning('Invalid remote CLI cancel request: ${e.code} - ${e.message}');
+      await emitEnvelope({
+        'type': 'error',
+        'request_id': rawRequestId,
+        'device_id': envelopeDeviceId,
+        'payload': {
+          'request_id': rawRequestId,
+          'code': e.code,
+          'message': e.message,
+        },
+      });
+      return;
     } on FormatException catch (e) {
       _logger.warning('Invalid remote CLI cancel request: ${e.message}');
       await emitEnvelope({
@@ -395,6 +449,33 @@ class RemoteCliCommandHandler {
         },
       });
       return;
+    }
+
+    // Verify target device identity if specified against known device identities
+    final localHardwareId = _authManager.hardwareId?.trim();
+    final rawRegistered = _registeredDeviceId?.call();
+    final registeredId = rawRegistered?.trim();
+    final requestedDevice = request.deviceId.trim();
+
+    if (requestedDevice.isNotEmpty) {
+      final knownIds = <String>{
+        if (localHardwareId != null && localHardwareId.isNotEmpty) localHardwareId,
+        if (registeredId != null && registeredId.isNotEmpty) registeredId,
+      };
+      if (knownIds.isNotEmpty && !knownIds.contains(requestedDevice)) {
+        await emitEnvelope({
+          'type': 'error',
+          'request_id': request.requestId,
+          'device_id': request.deviceId,
+          'payload': {
+            'request_id': request.requestId,
+            'target_request_id': request.targetRequestId,
+            'code': RemoteCliErrorCodes.wrongDevice,
+            'message': 'The command targeted a different device.',
+          },
+        });
+        return;
+      }
     }
 
     final active = _activeExecutions[request.targetRequestId];

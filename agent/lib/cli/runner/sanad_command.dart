@@ -98,6 +98,7 @@ abstract class SanadCommand extends Command<int> {
       )
       ..addOption(
         'gateway-url',
+        aliases: const ['url'],
         help: 'Override Local Gateway WebSocket endpoint URL',
       );
   }
@@ -147,7 +148,7 @@ abstract class SanadCommand extends Command<int> {
   bool get json => getFlag('json');
   String? get account => getOption('account');
   bool get standalone => getFlag('standalone');
-  String? get gatewayUrl => getOption('gateway-url');
+  String? get gatewayUrl => getOption('gateway-url') ?? getOption('url');
   String get sanadHome => getOption('home') ?? getSanadHome();
 
   @override

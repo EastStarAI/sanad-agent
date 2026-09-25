@@ -1066,6 +1066,48 @@ void main() {
       expect(resultData['payload']['exit_code'], 0);
       expect(resultData['payload']['request_id'], 'req-cli-cloud-1');
     });
+
+    test(
+      'rejects a mismatched device_id for device.cli.execute as wrong_device',
+      () async {
+        await socket.trigger('execute_command', {
+          'command': CanonicalEventTypes.deviceCliExecute,
+          'device_id': 'other-device-id',
+          'request_id': 'req-cli-wrong-device',
+          'payload': {
+            'request_id': 'req-cli-wrong-device',
+            'session_id': 'sess-123',
+            'argv': ['version'],
+          },
+        });
+
+        _expectDisabledError(
+          socket.emittedEvents,
+          requestId: 'req-cli-wrong-device',
+          code: DeviceControlErrorCodes.wrongDevice,
+        );
+      },
+    );
+
+    test('dispatches device.cli.cancel over cloud socket', () async {
+      await socket.trigger('execute_command', {
+        'command': CanonicalEventTypes.deviceCliCancel,
+        'device_id': 'test-device-id',
+        'request_id': 'req-cli-cancel-cloud',
+        'payload': {
+          'request_id': 'req-cli-cancel-cloud',
+          'target_request_id': 'non-existent-in-flight-req',
+        },
+      });
+
+      final cancelErrors = socket.emittedEvents.where(
+        (entry) =>
+            entry['event'] == 'device_event' &&
+            (entry['data'] as Map)['type'] == 'error' &&
+            (entry['data'] as Map)['payload']['code'] == 'not_found',
+      );
+      expect(cancelErrors, isNotEmpty);
+    });
   });
 }
 

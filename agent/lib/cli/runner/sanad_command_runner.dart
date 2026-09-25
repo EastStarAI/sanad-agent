@@ -129,6 +129,7 @@ class SanadCommandRunner extends CommandRunner<int> {
       ..addOption('home', help: 'Path to custom Sanad home directory')
       ..addOption(
         'gateway-url',
+        aliases: const ['url'],
         help: 'Override Local Gateway WebSocket endpoint URL',
       )
       ..addFlag(

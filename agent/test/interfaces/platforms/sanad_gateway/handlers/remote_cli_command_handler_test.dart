@@ -161,7 +161,121 @@ void main() {
       expect(emittedEnvelopes, hasLength(1));
       final env = emittedEnvelopes.first;
       expect(env['type'], 'error');
-      expect(env['payload']['code'], RemoteCliErrorCodes.invalidRequest);
+      expect(env['payload']['code'], RemoteCliErrorCodes.payloadTooLarge);
+    });
+
+    test('rejects payload with an argument exceeding maximum length with payload_too_large', () async {
+      final hugeArg = 'x' * (RemoteCliLimits.maxArgLength + 1);
+      await handler.handleExecute(
+        CanonicalEvent(
+          type: RemoteCliCommands.execute,
+          payload: {
+            'request_id': 'req-huge-arg',
+            'argv': ['version', hugeArg],
+          },
+        ),
+        emitEnvelope,
+      );
+
+      expect(emittedEnvelopes, hasLength(1));
+      final env = emittedEnvelopes.first;
+      expect(env['type'], 'error');
+      expect(env['payload']['code'], RemoteCliErrorCodes.payloadTooLarge);
+    });
+
+    test('rejects payload with stdin exceeding maximum length with payload_too_large', () async {
+      final hugeStdin = 's' * (RemoteCliLimits.maxStdinLength + 1);
+      await handler.handleExecute(
+        CanonicalEvent(
+          type: RemoteCliCommands.execute,
+          payload: {
+            'request_id': 'req-huge-stdin',
+            'argv': ['version'],
+            'stdin': hugeStdin,
+          },
+        ),
+        emitEnvelope,
+      );
+
+      expect(emittedEnvelopes, hasLength(1));
+      final env = emittedEnvelopes.first;
+      expect(env['type'], 'error');
+      expect(env['payload']['code'], RemoteCliErrorCodes.payloadTooLarge);
+    });
+
+    test('rejects payload with brief_content exceeding 512KB with payload_too_large', () async {
+      final hugeBrief = 'b' * (RemoteCliLimits.maxBriefContentLength + 1);
+      await handler.handleExecute(
+        CanonicalEvent(
+          type: RemoteCliCommands.execute,
+          payload: {
+            'request_id': 'req-huge-brief',
+            'argv': ['run', '--brief-file', 'task.md'],
+            'brief_content': hugeBrief,
+          },
+        ),
+        emitEnvelope,
+      );
+
+      expect(emittedEnvelopes, hasLength(1));
+      final env = emittedEnvelopes.first;
+      expect(env['type'], 'error');
+      expect(env['payload']['code'], RemoteCliErrorCodes.payloadTooLarge);
+    });
+
+    test('accepts request targeting registered device ID when hardware ID differs', () async {
+      final customHandler = RemoteCliCommandHandler(
+        bridge: bridge,
+        authManager: authManager, // hardwareId is 'target-device-1'
+        registeredDeviceId: () => 'cloud-assigned-device-42',
+      );
+
+      await customHandler.handleExecute(
+        CanonicalEvent(
+          type: RemoteCliCommands.execute,
+          payload: const {
+            'request_id': 'req-cloud-device-match',
+            'device_id': 'cloud-assigned-device-42',
+            'argv': ['version'],
+          },
+        ),
+        emitEnvelope,
+      );
+
+      expect(
+        emittedEnvelopes.any((e) => e['event'] == RemoteCliCommands.result),
+        isTrue,
+      );
+      final resultEnv = emittedEnvelopes.firstWhere(
+        (e) => e['event'] == RemoteCliCommands.result,
+      );
+      expect(resultEnv['payload']['exit_code'], 0);
+    });
+
+    test('rejects cancel request targeting mismatched device ID with wrong_device', () async {
+      await handler.handleCancel(
+        CanonicalEvent(
+          type: RemoteCliCommands.cancel,
+          payload: const {
+            'request_id': 'cancel-wrong-dev',
+            'device_id': 'other-device-99',
+            'target_request_id': 'any-target',
+          },
+        ),
+        emitEnvelope,
+      );
+
+      expect(emittedEnvelopes, hasLength(1));
+      final env = emittedEnvelopes.first;
+      expect(env['type'], 'error');
+      expect(env['payload']['code'], RemoteCliErrorCodes.wrongDevice);
+    });
+
+    test('accepts --url flag as alias for --gateway-url in CLI runner', () async {
+      final runner = SanadCommandRunner();
+      final results = runner.argParser.parse(['--url', 'ws://localhost:9999/ws', 'version']);
+      expect(results.wasParsed('gateway-url'), isTrue);
+      expect(results['gateway-url'], 'ws://localhost:9999/ws');
     });
   });
 
