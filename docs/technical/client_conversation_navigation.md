@@ -54,7 +54,12 @@ new generation.
 Fresh sessions created locally for their first outgoing turn swap immediately
 without a history round-trip. During an existing-session transition, timeline
 ownership remains with the presented session while composer draft ownership
-moves immediately to the requested session.
+moves immediately to the requested session. Background pagination (`loadOlderHistory`,
+`loadNewerHistory`) and viewport anchor restoration (`loadAnchoredHistory`) on the
+transitional presentation are suspended while `requestedSessionId` or `isHistoryLoading`
+is active, and duplicate session selections for an already-selected target are ignored.
+This prevents secondary requests from bumping the request generation or corrupting
+the pending session hydration in the transport store.
 
 Client restart may initially restore only the selected session identity while
 its authoritative summary and history are still loading. That placeholder does
@@ -147,3 +152,11 @@ returning through Back. External deletion uses the same fallback path.
 GoRouter synchronization compares typed history state before navigation and
 performs presentation-triggered route changes after the current frame. Late
 history responses for deleted or superseded sessions are discarded.
+
+## Sidebar and Workspace Session Synchronization Efficiency
+
+Device sidebar synchronization coordinates with `DeviceCubit` lifecycle transitions:
+- `SessionCubit` retains `_lastRefreshedDeviceId` and skips re-invoking `refreshDeviceSidebar` when peer device inventories update (such as Cloud Gateway authentication discovering remote devices) without changing the active device identity.
+- Explicit user refresh intents (`SessionCubit.refreshSessions`) force a full reload (`force: true`), bypassing debounce guards.
+- `ConversationCacheRepository._runRefreshDeviceSidebar` refreshes conversations only for expanded workspaces (`context.workspaceExpansion[workspace.id] ?? true`). Collapsed workspaces defer conversation queries until explicitly expanded via `SessionSidebarCubit.loadWorkspaceConversationsIfNeeded`, preventing startup duplicate request bursts.
+

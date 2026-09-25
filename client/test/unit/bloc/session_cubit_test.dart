@@ -148,6 +148,40 @@ void main() {
     cacheStore.dispose();
   });
 
+  test('does not duplicate refreshDeviceSidebar when DeviceCubit adds peer devices without changing active device', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final cacheStore = ConversationCacheStore();
+    final cacheRepository = ConversationCacheRepository(
+      cache: cacheStore,
+      transport: conversationRepository,
+    );
+
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      conversationCacheRepository: cacheRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    final initialCalls = client.getSessionsCalls;
+    expect(initialCalls, greaterThan(0));
+
+    // Simulate Cloud Gateway delivering additional peer devices
+    final peerAgent = DeviceConfig(id: 'agent-cloud', name: 'CloudDevice', isOnline: true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent, peerAgent]));
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    // Call count should NOT have increased because the active device did not change
+    expect(client.getSessionsCalls, initialCalls);
+
+    await cubit.close();
+    cacheStore.dispose();
+  });
+
   test('production cache path exposes persisted snapshot while device is offline', () async {
     final offlineAgent = agent.copyWith(isOnline: false);
     final cachedSession = session.copyWith(deviceId: offlineAgent.id);
@@ -535,6 +569,61 @@ void main() {
     expect(messagesCubit.state.messages, retainedMessages);
     expect(messagesCubit.state.olderHistoryError, isNotNull);
     expect(messagesCubit.state.hasOlderHistory, isTrue);
+
+    await messagesCubit.close();
+    await sessionCubit.close();
+  });
+
+  test('SessionMessagesCubit guards against history loads while transition is in flight', () async {
+    socket.setConnected(true);
+    client.historyHasMoreValue = true;
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final sessionCubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+    );
+    final messagesCubit = SessionMessagesCubit(
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      conversationRepository: conversationRepository,
+      preferencesRepository: FakeDevicePreferencesRepository(),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await sessionCubit.selectSession(session);
+    await Future<void>.delayed(Duration.zero);
+    expect(messagesCubit.state.activeSessionId, session.id);
+
+    // Simulate an in-flight history transition to another session
+    final completer = Completer<List<CanonicalEvent>>();
+    client.historyCompleter = completer;
+    final otherSession = Session(
+      id: 'session-2',
+      title: 'Session 2',
+      deviceId: agent.id,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    final selectFuture = sessionCubit.selectSession(otherSession);
+    await Future<void>.delayed(Duration.zero);
+    expect(messagesCubit.state.requestedSessionId, otherSession.id);
+    expect(messagesCubit.state.isHistoryLoading, isTrue);
+
+    // Attempting to load older, newer, or anchored history must be ignored during transition
+    await messagesCubit.loadOlderHistory();
+    await messagesCubit.loadNewerHistory();
+    await messagesCubit.loadAnchoredHistory('anchor-event-1');
+
+    expect(client.loadedOlderHistorySessionIds, isEmpty);
+
+    // Complete the transition
+    completer.complete(const []);
+    await selectFuture;
+    await Future<void>.delayed(Duration.zero);
+
+    expect(messagesCubit.state.activeSessionId, otherSession.id);
+    expect(messagesCubit.state.isHistoryLoading, isFalse);
+    expect(messagesCubit.state.requestedSessionId, isNull);
 
     await messagesCubit.close();
     await sessionCubit.close();
@@ -2321,9 +2410,13 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
     return getSessions(query: query);
   }
 
+  Completer<List<CanonicalEvent>>? historyCompleter;
+
   @override
   Future<List<CanonicalEvent>> loadSessionHistory(String sessionId) async {
     loadedHistorySessionIds.add(sessionId);
+    final completer = historyCompleter;
+    if (completer != null) return completer.future;
     return const [];
   }
 

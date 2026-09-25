@@ -335,7 +335,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   Future<void> loadOlderHistory() async {
     final agent = _currentAgent;
     final sessionId = state.activeSessionId;
-    if (agent == null || sessionId == null || state.isOlderHistoryLoading || !state.hasOlderHistory) {
+    if (agent == null ||
+        sessionId == null ||
+        state.isOlderHistoryLoading ||
+        !state.hasOlderHistory ||
+        state.requestedSessionId != null ||
+        state.isHistoryLoading) {
       return;
     }
     final generation = _requestGeneration;
@@ -381,7 +386,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   Future<void> loadNewerHistory() async {
     final agent = _currentAgent;
     final sessionId = state.activeSessionId;
-    if (agent == null || sessionId == null || state.isNewerHistoryLoading || !state.hasNewerHistory) {
+    if (agent == null ||
+        sessionId == null ||
+        state.isNewerHistoryLoading ||
+        !state.hasNewerHistory ||
+        state.requestedSessionId != null ||
+        state.isHistoryLoading) {
       return;
     }
     final generation = _requestGeneration;
@@ -424,7 +434,11 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   Future<void> loadAnchoredHistory(String anchorEventId) async {
     final agent = _currentAgent;
     final sessionId = state.activeSessionId;
-    if (agent == null || sessionId == null || anchorEventId.trim().isEmpty) {
+    if (agent == null ||
+        sessionId == null ||
+        anchorEventId.trim().isEmpty ||
+        state.requestedSessionId != null ||
+        state.isHistoryLoading) {
       return;
     }
     if (state.messages.any((event) => event.id == anchorEventId)) return;
@@ -490,7 +504,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   ) async {
     try {
       await conversationRepository.loadSessionHistory(agent, sessionId);
-      if (isClosed || generation != _requestGeneration) return;
+      if (isClosed || generation != _requestGeneration) {
+        if (!isClosed && state.requestedSessionId == sessionId && _selectedSessionId != sessionId) {
+          _delayedLoadingTimer?.cancel();
+        }
+        return;
+      }
 
       _delayedLoadingTimer?.cancel();
       final attention = _attentionFor(agent, sessionId);
