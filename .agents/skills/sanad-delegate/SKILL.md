@@ -124,7 +124,8 @@ For CLI-only delegation, the managed runtime needs the Agent daemon only. Do not
 
 4. **Serialized Artifact Coordination:**
    - All disk writes to `result.json` and `events.jsonl` are managed by `RunArtifactCoordinator` via an internal FIFO write queue.
-   - Terminal events (`completed`, `failed`, `timeout`, `interrupted`, `cancelled`) lock the artifact coordinator, ensuring terminal results are never overwritten by late asynchronous events.
+   - Terminal events (`completed`, `failed`, `timeout`, `interrupted`, `cancelled`, `incomplete`, `needs_review`) lock the artifact coordinator, ensuring terminal results are never overwritten by late asynchronous events.
+   - Semantic terminal validation enforces data fidelity: a run completing without a substantive final summary (missing or progress-only text) is tagged `incomplete` with `cause: "missing_final"` and exit code 1, preventing false terminal success.
    - Post-initialization errors always write terminal artifacts and preserve their specific exit codes before process termination.
 
 5. **Scoped Signal & Timeout Termination:**

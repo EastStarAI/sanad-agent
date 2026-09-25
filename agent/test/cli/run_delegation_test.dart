@@ -443,9 +443,7 @@ void main() {
           stderrSink: stderrBuf,
         );
 
-        await waitFor(
-          () => _statusIs(outDir, 'running'),
-        );
+        await waitFor(() => _statusIs(outDir, 'running'));
 
         final store = RunArtifactStore(outDir.path);
         var midResult = await store.readResult();
@@ -496,9 +494,7 @@ void main() {
           stderrSink: stderrBuf,
         );
 
-        await waitFor(
-          () => _statusIs(outDir, 'running'),
-        );
+        await waitFor(() => _statusIs(outDir, 'running'));
 
         // 1. Emit user question
         fakeClient.emitUserQuestion(
@@ -537,13 +533,11 @@ void main() {
           toolName: 'delete_directory',
           sessionId: 'sess-supervise-1',
         );
-        await waitFor(
-          () async {
-            final r = await RunArtifactStore(outDir.path).readResult();
-            return r?.status == 'needs_permission' &&
-                r?.pendingIntervention?['tool_name'] == 'delete_directory';
-          },
-        );
+        await waitFor(() async {
+          final r = await RunArtifactStore(outDir.path).readResult();
+          return r?.status == 'needs_permission' &&
+              r?.pendingIntervention?['tool_name'] == 'delete_directory';
+        });
 
         result = await store.readResult();
         expect(result!.status, equals('needs_permission'));
@@ -606,9 +600,7 @@ void main() {
           question: 'Confirm action?',
           sessionId: 'sess-auto-1',
         );
-        await waitFor(
-          () => _statusIs(outDir, 'needs_input'),
-        );
+        await waitFor(() => _statusIs(outDir, 'needs_input'));
 
         expect(
           fakeClient.permissionResponses.length,
@@ -966,6 +958,159 @@ void main() {
         final resultB = await RunArtifactStore(storeB.path).readResult();
         expect(resultB!.status, equals('failed'));
         expect(resultB.exitCode, equals(1));
+      },
+    );
+
+    test(
+      'run fails closed as incomplete (exit 1, cause missing_final) when turn complete arrives with empty/missing final message',
+      () async {
+        final outDir = Directory(p.join(tempDir.path, 'out-missing-final'))
+          ..createSync();
+        final fakeClient = MockDelegationTurnClient();
+        final oneshot = OneshotRunner(stdinReader: () async => null);
+
+        final runFuture = oneshot.run(
+          prompt: 'Execute task',
+          session: 'sess-missing-final',
+          outDir: outDir.path,
+          client: fakeClient,
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+        );
+
+        await fakeClient.turnDispatched.future;
+        // Turn completes with no assistant chunks and empty finalMessage
+        fakeClient.emitTurnComplete(
+          sessionId: 'sess-missing-final',
+          finalMessage: '',
+        );
+
+        final exitCode = await runFuture;
+        expect(exitCode, equals(1));
+        expect(
+          stderrBuf.toString(),
+          contains(
+            'Turn execution completed without a final summary (missing final).',
+          ),
+        );
+
+        final store = RunArtifactStore(outDir.path);
+        final result = await store.readResult();
+        expect(result, isNotNull);
+        expect(result!.status, equals('incomplete'));
+        expect(result.exitCode, equals(1));
+        expect(result.cause, equals('missing_final'));
+        expect(result.isCompleted, isFalse);
+        expect(result.isIncomplete, isTrue);
+        expect(result.isTerminal, isTrue);
+        expect(result.isSuccess, isFalse);
+        expect(result.error, contains('missing final'));
+
+        final events = await store.readEvents();
+        expect(events.last.type, equals('incomplete'));
+        expect(events.last.data['exit_code'], equals(1));
+        expect(events.last.data['cause'], equals('missing_final'));
+      },
+    );
+
+    test(
+      'run fails closed as incomplete (exit 1, cause missing_final) when output contains only mid-progress text',
+      () async {
+        final outDir = Directory(p.join(tempDir.path, 'out-progress-only'))
+          ..createSync();
+        final fakeClient = MockDelegationTurnClient();
+        final oneshot = OneshotRunner(stdinReader: () async => null);
+
+        final runFuture = oneshot.run(
+          prompt: 'Execute task 97f',
+          session: 'sess-progress-only',
+          outDir: outDir.path,
+          client: fakeClient,
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+        );
+
+        await fakeClient.turnDispatched.future;
+        // Turn emits only a mid-progress message and completes without a final summary
+        fakeClient.emitChunk(
+          'running/task-97f',
+          sessionId: 'sess-progress-only',
+        );
+        fakeClient.emitTurnComplete(
+          sessionId: 'sess-progress-only',
+          finalMessage: '',
+        );
+
+        final exitCode = await runFuture;
+        expect(exitCode, equals(1));
+        expect(
+          stderrBuf.toString(),
+          contains(
+            'Turn execution completed without a final summary (missing final).',
+          ),
+        );
+
+        final store = RunArtifactStore(outDir.path);
+        final result = await store.readResult();
+        expect(result, isNotNull);
+        expect(result!.status, equals('incomplete'));
+        expect(result.exitCode, equals(1));
+        expect(result.cause, equals('missing_final'));
+        expect(result.isCompleted, isFalse);
+        expect(result.isIncomplete, isTrue);
+        expect(result.isTerminal, isTrue);
+        expect(result.isSuccess, isFalse);
+        expect(result.text, equals('running/task-97f'));
+      },
+    );
+
+    test(
+      'run replaces mid-progress text with authoritative final summary when finalMessage is provided',
+      () async {
+        final outDir = Directory(p.join(tempDir.path, 'out-progress-replaced'))
+          ..createSync();
+        final fakeClient = MockDelegationTurnClient();
+        final oneshot = OneshotRunner(stdinReader: () async => null);
+
+        final runFuture = oneshot.run(
+          prompt: 'Execute task 97f with real summary',
+          session: 'sess-progress-replaced',
+          outDir: outDir.path,
+          client: fakeClient,
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+        );
+
+        await fakeClient.turnDispatched.future;
+        // Mid-progress chunk emitted during execution
+        fakeClient.emitChunk(
+          'running/task-97f',
+          sessionId: 'sess-progress-replaced',
+        );
+        // Final message arrives on turnComplete with substantive summary
+        fakeClient.emitTurnComplete(
+          sessionId: 'sess-progress-replaced',
+          finalMessage:
+              'Task 97f completed: event loop unblocked and all tests passed.',
+        );
+
+        final exitCode = await runFuture;
+        expect(exitCode, equals(0));
+
+        final store = RunArtifactStore(outDir.path);
+        final result = await store.readResult();
+        expect(result, isNotNull);
+        expect(result!.status, equals('completed'));
+        expect(result.exitCode, equals(0));
+        expect(result.cause, isNull);
+        expect(result.isCompleted, isTrue);
+        expect(result.isSuccess, isTrue);
+        expect(
+          result.text,
+          equals(
+            'Task 97f completed: event loop unblocked and all tests passed.',
+          ),
+        );
       },
     );
   });

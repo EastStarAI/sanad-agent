@@ -31,6 +31,8 @@ const TERMINAL_STATUSES = new Set([
   'aborted',
   'interrupted',
   'cancelled',
+  'incomplete',
+  'needs_review',
   'agy_unavailable',
   'opencode_unavailable',
 ]);
@@ -1271,7 +1273,7 @@ function resolveSessionDetails(task, manifest) {
 
   const pid = task.pid ?? manifest?.tasks?.[task.id]?.pid ?? null;
   const isAlive = pid ? processIsAlive(pid) : false;
-  const terminalStates = new Set(['completed', 'failed', 'timeout', 'cancelled', 'aborted', 'interrupted']);
+  const terminalStates = new Set(['completed', 'failed', 'timeout', 'cancelled', 'aborted', 'interrupted', 'incomplete', 'needs_review']);
   // Once the supervisor observes process exit, its terminal transition wins
   // over a stale nonterminal result artifact.
   const rawStatus = terminalStates.has(task.status)
@@ -1288,6 +1290,10 @@ function resolveSessionDetails(task, manifest) {
   let sessionState = 'unknown';
   if (rawStatus === 'completed') {
     sessionState = 'completed';
+  } else if (rawStatus === 'incomplete') {
+    sessionState = 'incomplete';
+  } else if (rawStatus === 'needs_review') {
+    sessionState = 'needs review';
   } else if (terminalStates.has(rawStatus)) {
     sessionState = 'stopped';
   } else if (rawStatus === 'needs_input') {
