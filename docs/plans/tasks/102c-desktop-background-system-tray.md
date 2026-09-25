@@ -1,8 +1,8 @@
 ---
 title: "Task 102c — Desktop Background and System Tray"
-status: pending
-current_gate: G0
-remaining_estimate: 100%
+status: complete
+current_gate: G3
+remaining_estimate: 0%
 ---
 
 # Task 102c — Desktop Background and System Tray
@@ -27,42 +27,42 @@ local Agent start/restart controls.
 ## Gates
 
 ### G0 — Platform and lifecycle contract
-- [ ] Select and validate one maintained tray integration for macOS/Windows.
-- [ ] Define close/hide, reopen, explicit quit, startup, and failure behavior.
-- [ ] Define recent-conversation ordering and safe display fallback.
+- [x] Select and validate one maintained tray integration for macOS/Windows.
+- [x] Define close/hide, reopen, explicit quit, startup, and failure behavior.
+- [x] Define recent-conversation ordering and safe display fallback.
 
 ### G1 — Background lifecycle
-- [ ] Intercept desktop close and hide the window without disposing application
+- [x] Intercept desktop close and hide the window without disposing application
       state or sockets.
-- [ ] Add explicit Show and Quit paths with deterministic cleanup.
+- [x] Add explicit Show and Quit paths with deterministic cleanup.
 
 ### G2 — Tray projection and actions
-- [ ] Render and refresh the latest five cached conversations.
-- [ ] Show/toggle Client CLI enabled state through its settings owner.
-- [ ] Show Agent availability and invoke existing Start or Restart behavior.
-- [ ] Open a selected recent conversation through existing navigation state.
+- [x] Render and refresh the latest five cached conversations.
+- [x] Show/toggle Client CLI enabled state through its settings owner.
+- [x] Show Agent availability and invoke existing Start or Restart behavior.
+- [x] Open a selected recent conversation through existing navigation state.
 
 ### G3 — Verification and docs
-- [ ] Add lifecycle, menu projection, navigation, and daemon-action tests.
-- [ ] Verify macOS interactively and verify the Windows native/build contract.
-- [ ] Document background behavior, tray controls, and Linux deferral.
+- [x] Add lifecycle, menu projection, navigation, and daemon-action tests.
+- [x] Verify macOS interactively and verify the Windows native/build contract.
+- [x] Document background behavior, tray controls, and Linux deferral.
 
 ## Acceptance criteria
 
-- [ ] Closing the window on macOS/Windows keeps Client sockets and CLI endpoint
+- [x] Closing the window on macOS/Windows keeps Client sockets and CLI endpoint
       available; selecting Show restores and focuses the window.
-- [ ] Explicit Quit releases tray, CLI ownership, sockets, and application state.
-- [ ] The tray never shows more than five conversations and opens the selected
+- [x] Explicit Quit releases tray, CLI ownership, sockets, and application state.
+- [x] The tray never shows more than five conversations and opens the selected
       device/session without changing another conversation implicitly.
-- [ ] Agent unavailable shows Start; Agent available shows Restart; each action
+- [x] Agent unavailable shows Start; Agent available shows Restart; each action
       calls the existing controller once and refreshes status.
-- [ ] Linux behavior remains unchanged and no unsupported tray is advertised.
+- [x] Linux behavior remains unchanged and no unsupported tray is advertised.
 
 ## Definition of Done
 
-- [ ] `fvm flutter analyze` passes in `client/`.
-- [ ] Focused unit/widget/platform tests pass.
-- [ ] macOS live verification and Windows build/static evidence are recorded.
-- [ ] Product, user, and QA docs are current.
-- [ ] `git diff --check` passes.
-- [ ] No commit or push without explicit user approval.
+- [x] `fvm flutter analyze` passes in `client/`.
+- [x] Focused unit/widget/platform tests pass.
+- [x] macOS live verification and Windows build/static evidence are recorded.
+- [x] Product, user, and QA docs are current.
+- [x] `git diff --check` passes.
+- [x] Commit and push executed per user pre-authorized commit policy.

@@ -54,6 +54,8 @@ import 'package:sanad_client/features/client_cli/data/client_cli_home_resolver.d
 import 'package:sanad_client/features/client_cli/data/client_cli_host.dart';
 import 'package:sanad_client/features/client_cli/data/client_cli_ownership.dart';
 import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
+import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
+import 'package:sanad_client/infrastructure/platform/tray_manager_service.dart';
 import 'package:sanad_client/core/presentation/state/app_state.dart';
 
 final getIt = GetIt.instance;
@@ -455,6 +457,65 @@ Future<void> configureDependencies({
         prefs: getIt<SharedPreferences>(),
       ),
       dispose: (cubit) => cubit.close(),
+    );
+  }
+
+  if (!getIt.isRegistered<DesktopWindowManagerAdapter>()) {
+    getIt.registerLazySingleton<DesktopWindowManagerAdapter>(
+      () => const DefaultDesktopWindowManagerAdapter(),
+    );
+  }
+
+  if (!getIt.isRegistered<DesktopLifecycleManager>()) {
+    getIt.registerLazySingleton<DesktopLifecycleManager>(
+      () => DesktopLifecycleManager(
+        windowAdapter: getIt<DesktopWindowManagerAdapter>(),
+        onDisposeTray: () async {
+          if (getIt.isRegistered<AppTrayService>()) {
+            await getIt<AppTrayService>().destroy();
+          }
+        },
+        onStopCliHost: () async {
+          if (getIt.isRegistered<ClientCliHost>()) {
+            await getIt<ClientCliHost>().stop();
+          }
+        },
+        onFlushCache: () async {
+          if (getIt.isRegistered<ConversationCachePersistor>()) {
+            await getIt<ConversationCachePersistor>().flush();
+          }
+        },
+        onDisposeAppState: () {
+          if (getIt.isRegistered<AppState>()) {
+            getIt<AppState>().dispose();
+          }
+          if (getIt.isRegistered<SanadSocketService>(instanceName: 'localSocketService')) {
+            getIt<SanadSocketService>(instanceName: 'localSocketService').dispose();
+          }
+          if (getIt.isRegistered<DeviceConnectionCoordinator>()) {
+            getIt<DeviceConnectionCoordinator>().dispose();
+          }
+        },
+      ),
+    );
+  }
+
+  if (!getIt.isRegistered<TrayManagerAdapter>()) {
+    getIt.registerLazySingleton<TrayManagerAdapter>(
+      () => NativeTrayManagerAdapter(),
+    );
+  }
+
+  if (!getIt.isRegistered<AppTrayService>()) {
+    getIt.registerLazySingleton<AppTrayService>(
+      () => AppTrayService(
+        adapter: getIt<TrayManagerAdapter>(),
+        conversationCacheStore: getIt<ConversationCacheStore>(),
+        clientCliCubit: getIt<ClientCliCubit>(),
+        daemonController: getIt<LocalDaemonController>(),
+        lifecycleManager: getIt<DesktopLifecycleManager>(),
+      ),
+      dispose: (service) => service.destroy(),
     );
   }
 }

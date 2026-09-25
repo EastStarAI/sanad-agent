@@ -145,6 +145,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [بروتوكولات الاتصال ونظام نقل الأحداث](docs/technical/communication_protocols.md): توثيق بروتوكول Socket.IO ونقل الأحداث والمهام وطلبات التعليق (Suspension) مع العميل.
 - [مواصفات نظام التصميم والمكونات المرئية للمشاريع](docs/technical/design_system.md): توثيق شامل للألوان، الخطوط، الهيكل البنائي والواجهات التفاعلية المشتركة لمشاريع Sanad (التطبيق الرئيسي، صفحة الهبوط، ولوحة التحكم).
 - [Desktop Authentication Exchange](docs/technical/desktop_authentication_exchange.md): Credential-free live authentication reconciliation between a native Flutter client and its local Dart daemon.
+- [Desktop Background Lifecycle and System Tray](docs/technical/desktop_background_and_system_tray.md): Close-to-hide background persistence, macOS/Windows system tray projection, recent conversations, and Agent/CLI lifecycle controls.
 - [Client Multilingual Interface](docs/technical/client_multilanguage.md): English/Arabic localization architecture, `gen_l10n` scaffolding, locale ownership (`LocaleCubit`), RTL rules, and the remaining-string coverage report.
 - [Device Runtime Settings Protocol](docs/technical/device_runtime_settings_protocol.md): Unified local/cloud protocol commands, validation, persistence, and secret-handling rules for device settings.
 - [Flutter VM Driver CLI Architecture](docs/technical/flutter_vm_driver_cli.md): Driver-enabled Client instrumentation, standalone CLI boundaries, deterministic UI selectors, and VM Service safety.

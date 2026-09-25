@@ -11,6 +11,9 @@ import 'package:sanad_client/core/presentation/state/app_state.dart';
 import 'package:sanad_client/features/conversations/data/persistence/conversation_cache_persistor.dart';
 import 'package:sanad_client/core/utils/logger.dart';
 import 'package:sanad_client/infrastructure/platform/window_manager_service.dart';
+import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
+import 'package:sanad_client/infrastructure/platform/tray_manager_service.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_client/utils/windows_scheme_registrar.dart';
 import 'package:sanad_client/utils/inspector_helper.dart';
 import 'package:flutter/foundation.dart';
@@ -77,6 +80,17 @@ class AppBootstrap {
     await _trace('app-state-ready');
     await getIt<ConversationCachePersistor>().hydrate();
     await _trace('cache-ready');
+
+    if (AppPlatform.isDesktop) {
+      final lifecycle = getIt<DesktopLifecycleManager>();
+      WindowManagerService.setCloseRequestHandler(() => lifecycle.handleWindowClose(
+        isLinux: AppPlatform.isLinux,
+      ));
+      if (!AppPlatform.isLinux) {
+        await getIt<AppTrayService>().initialize();
+      }
+    }
+    await _trace('desktop-lifecycle-ready');
 
     return AppBootstrapResult(
       initialTheme: initialTheme,

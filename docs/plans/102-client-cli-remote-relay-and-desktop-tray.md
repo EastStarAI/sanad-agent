@@ -86,10 +86,10 @@ and the remote Agent remains command/runtime authority.
 - [ ] Update `sanad-delegate` with device/workspace discovery and invocation.
 
 ### G3 — Desktop background and tray
-- [ ] Keep Windows/macOS Client alive when its window closes.
-- [ ] Add tray menu behavior, latest five conversations, CLI state, Agent state,
+- [x] Keep Windows/macOS Client alive when its window closes.
+- [x] Add tray menu behavior, latest five conversations, CLI state, Agent state,
       Start Agent, Restart Agent, Show, and Quit.
-- [ ] Reuse existing Client navigation, cache, and daemon lifecycle owners.
+- [x] Reuse existing Client navigation, cache, and daemon lifecycle owners.
 
 ### G4 — Integrated verification and documentation
 - [ ] Verify isolated multi-Home Clients and one CLI owner per Home.
