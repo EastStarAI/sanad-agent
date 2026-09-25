@@ -270,3 +270,118 @@ If request validation or admission fails prior to execution, or if an unexpected
    - Command arguments (`argv`), standard input (`stdin`), prompts, and tool arguments **MUST NEVER** appear in transport logs (`_logger.info`, `_logger.fine`, etc.).
    - Log statements record only metadata: `request_id`, argument count, stdin byte length, and sanitized subcommand name.
    - Credentials (e.g. `--account`, token options) are never logged.
+
+---
+
+## 7. Client CLI Host (`sanad-client` Local Interface)
+
+The desktop Sanad Client optionally exposes a loopback HTTP and WebSocket host to serve invocations from the `sanad-client` command line tool.
+
+### 7.1. Endpoint Ownership and Discovery
+
+- **Runtime Record:** Saved to `<SANAD_HOME>/runtime/client_cli.json` with permissions `0600` on POSIX systems (`CurrentUser:FullControl` on Windows).
+- **Schema:**
+  ```json
+  {
+    "version": 1,
+    "pid": 48192,
+    "port": 54321,
+    "token": "469175e-ephemeral-secret-token",
+    "sanad_home": "/Users/alice/.sanad",
+    "client_version": "1.0.15",
+    "enabled": true,
+    "permission_mode": "default",
+    "updated_at": "2026-09-25T09:00:00.000Z"
+  }
+  ```
+- **Lifecycle Cleanliness:**
+  - One live Client owns the endpoint per Sanad Home.
+  - Stale endpoint records are automatically detected and replaced if the recorded PID is dead or non-responsive.
+  - Ownership is cleanly removed when the Client CLI is disabled in settings, on user logout, or upon Client process shutdown.
+
+### 7.2. Authentication
+
+Requests must supply the ephemeral secret token via either:
+1. HTTP header: `x-sanad-client-token: <token>`
+2. Standard Authorization header: `Authorization: Bearer <token>`
+3. WebSocket query parameter: `ws://127.0.0.1:<port>/ws?token=<token>`
+
+### 7.3. HTTP Endpoints
+
+- `GET /health`: Returns `{ "status": "ok", "version": "1.0.15", "enabled": true, "permission_mode": "default" }`.
+- `GET /devices`: Returns list of remote online devices connected to the Client's account (local inventory device is excluded):
+  ```json
+  {
+    "devices": [
+      {
+        "id": "dev-linux-build-node",
+        "name": "Linux Build Node",
+        "platform": "linux",
+        "status": "online",
+        "is_current": false
+      }
+    ]
+  }
+  ```
+  Returns `403 Forbidden` if Client CLI is disabled.
+
+### 7.4. WebSocket Relay Protocol (`/ws`)
+
+Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
+
+#### Client-to-Host Messages
+
+- **Execute Command (`type: execute`):**
+  ```json
+  {
+    "type": "execute",
+    "request_id": "req-uuid-1",
+    "device_id": "dev-linux-build-node",
+    "argv": ["run", "--workspace", "ws-core", "--brief-file", "..."],
+    "stdin": null,
+    "brief_content": "# Task brief\n...",
+    "timeout_seconds": 300
+  }
+  ```
+- **Cancel Command (`type: cancel`):**
+  ```json
+  {
+    "type": "cancel",
+    "request_id": "req-uuid-1"
+  }
+  ```
+
+#### Host-to-Client Messages
+
+- **Streamed Standard Output (`type: stdout`):**
+  ```json
+  { "type": "stdout", "text": "Starting task execution...\n" }
+  ```
+- **Streamed Standard Error (`type: stderr`):**
+  ```json
+  { "type": "stderr", "text": "Warning: workspace fallback\n" }
+  ```
+- **Streamed NDJSON Event (`type: event`):**
+  ```json
+  { "type": "event", "data": { "type": "tool_start", "tool": "file_write" } }
+  ```
+- **Terminal Execution Result (`type: result`):**
+  ```json
+  {
+    "type": "result",
+    "request_id": "req-uuid-1",
+    "exit_code": 0,
+    "cancelled": false,
+    "timed_out": false,
+    "error": null
+  }
+  ```
+- **Fatal Error (`type: error`):**
+  ```json
+  {
+    "type": "error",
+    "request_id": "req-uuid-1",
+    "code": "device_offline",
+    "message": "Target device \"Linux Build Node\" is currently unreachable."
+  }
+  ```

@@ -49,6 +49,11 @@ import 'package:sanad_client/features/devices/data/device_preferences_repository
 import 'package:sanad_client/features/devices/presentation/state/device_command_handler.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/data/device_command_client.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_approval_coordinator.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_home_resolver.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_host.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_ownership.dart';
+import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
 import 'package:sanad_client/core/presentation/state/app_state.dart';
 
 final getIt = GetIt.instance;
@@ -410,6 +415,46 @@ Future<void> configureDependencies({
         hardwareId: getIt<String>(instanceName: 'hardwareId'),
       ),
       dispose: (state) => state.dispose(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliApprovalCoordinator>()) {
+    getIt.registerLazySingleton<ClientCliApprovalCoordinator>(
+      () => ClientCliApprovalCoordinator(),
+      dispose: (coordinator) => coordinator.dispose(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliOwnership>()) {
+    getIt.registerLazySingleton<ClientCliOwnership>(
+      () => const ClientCliOwnership(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliHost>()) {
+    final home = const ClientCliHomeResolver().resolveSanadHome(
+      explicitHome: AppConfig.sanadHome.isNotEmpty ? AppConfig.sanadHome : null,
+    );
+    getIt.registerLazySingleton<ClientCliHost>(
+      () => ClientCliHost(
+        connectionCoordinator: getIt<DeviceConnectionCoordinator>(),
+        deviceRepository: getIt<IDeviceRepository>(),
+        ownership: getIt<ClientCliOwnership>(),
+        approvalCoordinator: getIt<ClientCliApprovalCoordinator>(),
+        sanadHome: home,
+        clientVersion: '1.0.15',
+      ),
+      dispose: (host) => host.stop(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliCubit>()) {
+    getIt.registerLazySingleton<ClientCliCubit>(
+      () => ClientCliCubit(
+        host: getIt<ClientCliHost>(),
+        prefs: getIt<SharedPreferences>(),
+      ),
+      dispose: (cubit) => cubit.close(),
     );
   }
 }

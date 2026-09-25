@@ -178,3 +178,134 @@ Appended newline-delimited event records:
 {"timestamp":"2026-09-22T04:30:00.000Z","type":"running","session_id":"c1f76d49-4114-4a4b-8e10-c48c48a91f54","data":{"workspace_id":"ws-core-project","execution_root":"worktrees/feature-branch"}}
 {"timestamp":"2026-09-22T04:30:45.000Z","type":"completed","session_id":"c1f76d49-4114-4a4b-8e10-c48c48a91f54","data":{"session_id":"c1f76d49-4114-4a4b-8e10-c48c48a91f54","status":"completed","exit_code":0}}
 ```
+
+---
+
+## 6. Remote Delegation via `sanad-client`
+
+When a task targets a remote machine or worker device rather than the local daemon, external orchestrators drive the installed `sanad-client` CLI tool. `sanad-client` communicates over an authenticated loopback channel with the running desktop Sanad Client, which securely relays commands and streams output to the target remote Agent.
+
+### 6.1. Architectural Topology
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                 External Orchestrator                       │
+│        (delegate-task-supervisor / agy / scripts)           │
+└──────────────┬──────────────────────────────────────────────┘
+               │
+               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                      sanad-client                           │
+│   `sanad-client -d <device-id> run --brief-file <f> ...`    │
+└──────────────┬──────────────────────────────────────────────┘
+               │ Loopback HTTP / WebSocket (auth token via runtime file)
+               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Desktop Sanad Client                      │
+│   - Loopback Host (port dynamic, isolated by SANAD_HOME)    │
+│   - Permission check (Default dialog prompt vs Full Access) │
+│   - Cloud Gateway / Local Socket Relay                      │
+└──────────────┬──────────────────────────────────────────────┘
+               │ End-to-end WebSocket command relay
+               ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Target Remote Agent                      │
+│   - In-memory `SanadCommandRunner` dispatch (no shell eval) │
+│   - Streamed stdout / stderr / events                       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 6.2. Remote Device Discovery
+
+List all connected remote devices registered under the Client's active account:
+
+```bash
+# Human-readable table format
+sanad-client devices
+
+# Machine-readable JSON output
+sanad-client devices --json
+```
+
+Output JSON example:
+```json
+{
+  "devices": [
+    {
+      "id": "dev-linux-build-node",
+      "name": "Linux Build Node",
+      "platform": "linux",
+      "status": "online",
+      "is_current": false
+    }
+  ]
+}
+```
+
+### 6.3. Remote Workspace Discovery
+
+List workspaces on the remote target device:
+
+```bash
+sanad-client -d dev-linux-build-node ws list --json
+```
+
+### 6.4. Remote Task Execution
+
+Delegate a task to the remote device by passing a brief file:
+
+```bash
+sanad-client -d dev-linux-build-node run \
+  --workspace ws-backend-repo \
+  --brief-file briefs/task_migration.md \
+  --events \
+  --json
+```
+
+Key execution guarantees:
+- **Transparent I/O Forwarding:** Standard output, standard error, JSON streams, and exit codes match direct `sanad run` execution.
+- **Brief Transport:** `--brief-file` content is read locally by `sanad-client` and transmitted securely over the authenticated relay, avoiding shell argv size limits or process sniffing on the target host.
+- **Standard Input:** Piped stdin (`cat input.txt | sanad-client -d <device> run ...`) is forwarded to the remote agent.
+
+### 6.5. Remote Session Observation, Intervention, and Cancellation
+
+- **Inspect Running Session:**
+  ```bash
+  sanad-client -d dev-linux-build-node session show <session-id> --json
+  ```
+- **Answer Clarifying Question:**
+  ```bash
+  sanad-client -d dev-linux-build-node session answer <session-id> "Option 2"
+  ```
+- **Stop / Cancel Remote Session:**
+  ```bash
+  # Via session stop command:
+  sanad-client -d dev-linux-build-node session stop <session-id>
+
+  # Via process signal:
+  # Sending SIGINT (Ctrl+C) to `sanad-client` sends a cancellation message
+  # to the Client host, which forwards `device.cli.cancel` to the remote agent.
+  ```
+
+### 6.6. Permission Modes and Configuration
+
+The desktop Sanad Client governs `sanad-client` execution through **Settings > Client CLI**:
+
+1. **Disabled (Default):**
+   `sanad-client` calls fail immediately with exit code 77 (`Client CLI is disabled in Sanad Client settings`).
+2. **Default Mode (Approval Prompt):**
+   Each command invocation displays an approval overlay in the Sanad Client with command arguments, target device, and hotkey choices:
+   - `1`: Allow this time (`allowOnce`)
+   - `2`: Allow for this session (`allowSession`) — subsequent invocations within the same session ID execute without re-prompting.
+   - `3` or `Esc`: Deny (`deny`) — returns non-zero rejected result immediately.
+3. **Full Access Mode:**
+   Commands execute immediately without desktop approval prompts. Recommended for unattended automation and CI environments.
+
+### 6.7. Sanad Home and Client Instance Resolution
+
+`sanad-client` locates the active desktop Client endpoint via the following resolution precedence:
+1. Explicit `--home <path>` flag: `sanad-client --home /path/to/custom_home devices`
+2. Environment variable: `SANAD_HOME`
+3. Default Home: `~/.sanad`
+
+The endpoint record is read from `<SANAD_HOME>/runtime/client_cli.json` and authenticated via the ephemeral token recorded during Client startup. If no live Client is running for that Home, `sanad-client` exits with code 69 (`No live Sanad Client is running for Home ...`).

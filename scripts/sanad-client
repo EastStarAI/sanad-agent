@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+if command -v fvm >/dev/null 2>&1; then
+  cd "$REPO_ROOT/client" && exec fvm dart run bin/sanad_client.dart "$@"
+elif [ -x "$REPO_ROOT/.fvm/flutter_sdk/bin/dart" ]; then
+  exec "$REPO_ROOT/.fvm/flutter_sdk/bin/dart" run "$REPO_ROOT/client/bin/sanad_client.dart" "$@"
+else
+  exec dart run "$REPO_ROOT/client/bin/sanad_client.dart" "$@"
+fi
