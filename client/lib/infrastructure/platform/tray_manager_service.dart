@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:go_router/go_router.dart';
 import 'package:logging/logging.dart';
 import 'package:sanad_client/app.dart';
@@ -11,6 +13,7 @@ import 'package:sanad_client/features/devices/data/daemon/local_daemon_controlle
 import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
 import 'package:sanad_client/infrastructure/platform/tray_menu_builder.dart';
 import 'package:sanad_client/infrastructure/platform/tray_menu_descriptor.dart';
+import 'package:sanad_client/utils/app_platform.dart';
 import 'package:tray_manager/tray_manager.dart' as tm;
 
 abstract class TrayManagerAdapter {
@@ -26,6 +29,8 @@ abstract class TrayManagerAdapter {
 class NativeTrayManagerAdapter implements TrayManagerAdapter {
   static final _logger = Logger('NativeTrayManagerAdapter');
   tm.TrayIcon? _trayIcon;
+  tm.Menu? _currentMenu;
+  List<tm.MenuItem> _currentMenuItems = [];
 
   @override
   Future<void> initialize({
@@ -50,10 +55,21 @@ class NativeTrayManagerAdapter implements TrayManagerAdapter {
         _logger.warning('Could not load tray icon asset: $iconAssetPath', e);
       }
 
+      if (AppPlatform.isWindows) {
+        trayIcon.setContextMenuTrigger(tm.ContextMenuTrigger.rightClicked);
+      } else {
+        if (AppPlatform.isMacOS) {
+          trayIcon.iconSize = const Size(18, 18);
+        }
+        trayIcon.setContextMenuTrigger(tm.ContextMenuTrigger.clicked);
+      }
+
       trayIcon.setTooltip(tooltip);
       trayIcon.addListener((event) {
-        if (event is tm.TrayIconClickedEvent) {
-          onTrayIconClick();
+        if (event is tm.TrayIconClickedEvent || event is tm.TrayIconDoubleClickedEvent) {
+          if (AppPlatform.isWindows) {
+            onTrayIconClick();
+          }
         }
       });
       trayIcon.setVisible(true);
@@ -74,6 +90,7 @@ class NativeTrayManagerAdapter implements TrayManagerAdapter {
         return;
       }
 
+      final newItems = <tm.MenuItem>[];
       for (final item in items) {
         if (item.isSeparator) {
           menu.addSeparator();
@@ -95,9 +112,25 @@ class NativeTrayManagerAdapter implements TrayManagerAdapter {
           });
         }
         menu.addItem(nativeItem);
+        newItems.add(nativeItem);
       }
 
       trayIcon.setContextMenu(menu);
+
+      // Preserve new menu/items in Dart memory while freeing previous instances
+      final oldMenu = _currentMenu;
+      final oldItems = _currentMenuItems;
+      _currentMenu = menu;
+      _currentMenuItems = newItems;
+
+      for (final oldItem in oldItems) {
+        try {
+          oldItem.dispose();
+        } catch (_) {}
+      }
+      try {
+        oldMenu?.dispose();
+      } catch (_) {}
     } catch (e, st) {
       _logger.warning('Failed to set tray context menu', e, st);
     }
@@ -106,6 +139,16 @@ class NativeTrayManagerAdapter implements TrayManagerAdapter {
   @override
   Future<void> destroy() async {
     try {
+      for (final item in _currentMenuItems) {
+        try {
+          item.dispose();
+        } catch (_) {}
+      }
+      _currentMenuItems.clear();
+      try {
+        _currentMenu?.dispose();
+      } catch (_) {}
+      _currentMenu = null;
       _trayIcon?.dispose();
       _trayIcon = null;
     } catch (e, st) {
@@ -126,6 +169,9 @@ class AppTrayService {
 
   StreamSubscription? _cacheSub;
   StreamSubscription? _cliSub;
+  Timer? _refreshDebounceTimer;
+  Timer? _daemonPollTimer;
+  List<TrayMenuItemDescriptor>? _lastMenuItems;
   bool _isInitialized = false;
   bool _isAgentActionInProgress = false;
 
@@ -159,14 +205,25 @@ class AppTrayService {
     );
 
     _cacheSub = _conversationCacheStore.snapshotStream.listen((_) {
-      unawaited(refreshMenu());
+      _scheduleRefresh();
     });
 
     _cliSub = _clientCliCubit.stream.listen((_) {
+      _scheduleRefresh();
+    });
+
+    _daemonPollTimer = Timer.periodic(const Duration(seconds: 30), (_) {
       unawaited(refreshMenu());
     });
 
-    await refreshMenu();
+    await refreshMenu(force: true);
+  }
+
+  void _scheduleRefresh() {
+    _refreshDebounceTimer?.cancel();
+    _refreshDebounceTimer = Timer(const Duration(milliseconds: 200), () {
+      unawaited(refreshMenu());
+    });
   }
 
   List<Session> extractRecentConversations() {
@@ -185,12 +242,23 @@ class AppTrayService {
     }
     final deduped = <String, Session>{};
     for (final session in allSessions) {
-      deduped[session.id] = session;
+      final existing = deduped[session.id];
+      if (existing == null) {
+        deduped[session.id] = session;
+      } else {
+        final existingTime = existing.lastMessageAt ?? existing.updatedAt;
+        final newTime = session.lastMessageAt ?? session.updatedAt;
+        if (newTime.isAfter(existingTime)) {
+          deduped[session.id] = session;
+        }
+      }
     }
     return TrayMenuBuilder.sortRecentConversations(deduped.values);
   }
 
-  Future<void> refreshMenu() async {
+  Future<void> refreshMenu({bool force = false}) async {
+    if (!_isInitialized) return;
+
     bool isRunning = false;
     try {
       isRunning = await _daemonController.isDaemonRunning();
@@ -212,14 +280,26 @@ class AppTrayService {
       onQuit: () => unawaited(_lifecycleManager.quit()),
     );
 
+    if (!force && listEquals(_lastMenuItems, menuItems)) {
+      return;
+    }
+    _lastMenuItems = menuItems;
+
     await _adapter.setContextMenu(menuItems);
   }
 
   void handleSelectConversation(Session session) {
     unawaited(_lifecycleManager.showWindow());
-    final deviceId = session.deviceId ?? _conversationCacheStore.activeDeviceId ?? '';
+    final effectiveDeviceId = (session.deviceId?.isNotEmpty ?? false)
+        ? session.deviceId!
+        : (_conversationCacheStore.activeDeviceId ?? '');
+    if (effectiveDeviceId.isEmpty) {
+      _logger.warning('Cannot navigate to conversation ${session.id}: no valid deviceId');
+      return;
+    }
+
     final destination = ConversationDestination.session(
-      deviceId: deviceId,
+      deviceId: effectiveDeviceId,
       sessionId: session.id,
       workspaceId: session.workspaceId,
     );
@@ -251,7 +331,8 @@ class AppTrayService {
       _logger.warning('Failed to execute daemon lifecycle action', e, st);
     } finally {
       _isAgentActionInProgress = false;
-      await refreshMenu();
+      _refreshDebounceTimer?.cancel();
+      await refreshMenu(force: true);
     }
   }
 
@@ -259,14 +340,20 @@ class AppTrayService {
     final next = !_clientCliCubit.state.enabled;
     _logger.info('Toggling Client CLI enabled state to: $next');
     await _clientCliCubit.setEnabled(next);
-    await refreshMenu();
+    _refreshDebounceTimer?.cancel();
+    await refreshMenu(force: true);
   }
 
   Future<void> destroy() async {
+    _refreshDebounceTimer?.cancel();
+    _refreshDebounceTimer = null;
+    _daemonPollTimer?.cancel();
+    _daemonPollTimer = null;
     await _cacheSub?.cancel();
     _cacheSub = null;
     await _cliSub?.cancel();
     _cliSub = null;
+    _lastMenuItems = null;
     await _adapter.destroy();
     _isInitialized = false;
   }

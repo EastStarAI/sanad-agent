@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
 
@@ -160,6 +162,25 @@ void main() {
 
       expect(cliStopped, isTrue);
       expect(cacheFlushed, isTrue);
+      expect(windowAdapter.destroyCalls, equals(1));
+      expect(exitCalled, isTrue);
+    });
+
+    test('didRequestAppExit executes deterministic quit and returns AppExitResponse.exit', () async {
+      bool trayDisposed = false;
+      bool exitCalled = false;
+
+      final manager = DesktopLifecycleManager(
+        windowAdapter: windowAdapter,
+        onDisposeTray: () async => trayDisposed = true,
+        onExitProcess: () => exitCalled = true,
+      );
+
+      final response = await manager.didRequestAppExit();
+
+      expect(response, equals(AppExitResponse.exit));
+      expect(manager.isQuitting, isTrue);
+      expect(trayDisposed, isTrue);
       expect(windowAdapter.destroyCalls, equals(1));
       expect(exitCalled, isTrue);
     });

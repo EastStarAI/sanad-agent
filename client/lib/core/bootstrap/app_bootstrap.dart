@@ -83,6 +83,7 @@ class AppBootstrap {
 
     if (AppPlatform.isDesktop) {
       final lifecycle = getIt<DesktopLifecycleManager>();
+      WidgetsBinding.instance.addObserver(lifecycle);
       WindowManagerService.setCloseRequestHandler(() => lifecycle.handleWindowClose(
         isLinux: AppPlatform.isLinux,
       ));

@@ -190,5 +190,20 @@ void main() {
       await quitItem.onSelected?.call();
       expect(quitCalled, isTrue);
     });
+
+    test('truncate flattens multiline titles and trims excess whitespace', () {
+      expect(TrayMenuBuilder.truncate('Line 1\nLine 2\r\nLine 3'), equals('Line 1 Line 2 Line 3'));
+      expect(TrayMenuBuilder.truncate('   \n\r\n  '), equals('New Chat'));
+    });
+
+    test('TrayMenuItemDescriptor equality and hashCode match by attributes', () {
+      const item1 = TrayMenuItemDescriptor(key: 'a', label: 'Item A', kind: TrayMenuItemKind.action, isEnabled: true);
+      const item2 = TrayMenuItemDescriptor(key: 'a', label: 'Item A', kind: TrayMenuItemKind.action, isEnabled: true);
+      const item3 = TrayMenuItemDescriptor(key: 'b', label: 'Item A', kind: TrayMenuItemKind.action, isEnabled: true);
+
+      expect(item1, equals(item2));
+      expect(item1.hashCode, equals(item2.hashCode));
+      expect(item1, isNot(equals(item3)));
+    });
   });
 }

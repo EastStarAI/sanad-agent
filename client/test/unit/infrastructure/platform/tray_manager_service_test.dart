@@ -344,5 +344,88 @@ void main() {
       expect(service.isInitialized, isFalse);
       expect(adapter.destroyCalls, equals(1));
     });
+
+    test('refreshMenu with unchanged items does not rebuild menu when force is false', () async {
+      final service = createService();
+      await service.initialize();
+
+      adapter.setMenuHistory.clear();
+      await service.refreshMenu(force: false);
+
+      expect(adapter.setMenuHistory, isEmpty);
+
+      await service.refreshMenu(force: true);
+      expect(adapter.setMenuHistory, hasLength(1));
+
+      await service.destroy();
+    });
+
+    test('snapshotStream triggers debounced refresh and updates menu', () async {
+      final service = createService();
+      await service.initialize();
+
+      adapter.setMenuHistory.clear();
+
+      final now = DateTime.now();
+      final session = Session(
+        id: 'new_streamed_session',
+        title: 'New Streamed Chat',
+        createdAt: now,
+        updatedAt: now,
+      );
+      cacheStore.applySessionCreated('device_1', session);
+
+      // Debounce delay is 200ms
+      await Future<void>.delayed(const Duration(milliseconds: 250));
+
+      expect(adapter.setMenuHistory, isNotEmpty);
+      final latestMenu = adapter.setMenuHistory.last;
+      expect(latestMenu.any((i) => i.key == 'session_new_streamed_session'), isTrue);
+
+      await service.destroy();
+    });
+
+    test('handleSelectConversation with empty deviceId logs and does not navigate', () async {
+      final now = DateTime.now();
+      final session = Session(
+        id: 'orphan_session',
+        title: 'Orphan Chat',
+        deviceId: '',
+        createdAt: now,
+        updatedAt: now,
+      );
+
+      final service = createService();
+      service.handleSelectConversation(session);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(navigatedDestination, isNull);
+    });
+
+    test('extractRecentConversations prefers newer timestamp when duplicate session ids exist', () async {
+      final now = DateTime.now();
+      final older = Session(
+        id: 'dup_session',
+        title: 'Older Session',
+        createdAt: now.subtract(const Duration(hours: 2)),
+        updatedAt: now.subtract(const Duration(hours: 1)),
+      );
+      final newer = Session(
+        id: 'dup_session',
+        title: 'Newer Session',
+        createdAt: now.subtract(const Duration(hours: 2)),
+        updatedAt: now,
+      );
+
+      cacheStore.applySessionCreated('device_old', older);
+      cacheStore.applySessionCreated('device_new', newer);
+
+      final service = createService();
+      final recent = service.extractRecentConversations();
+
+      expect(recent, hasLength(1));
+      expect(recent.first.title, equals('Newer Session'));
+      expect(recent.first.deviceId, equals('device_new'));
+    });
   });
 }

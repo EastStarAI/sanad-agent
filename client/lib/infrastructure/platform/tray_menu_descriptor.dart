@@ -42,4 +42,17 @@ class TrayMenuItemDescriptor {
   }) : kind = TrayMenuItemKind.action;
 
   bool get isSeparator => kind == TrayMenuItemKind.separator;
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is TrayMenuItemDescriptor &&
+        other.key == key &&
+        other.label == label &&
+        other.kind == kind &&
+        other.isEnabled == isEnabled;
+  }
+
+  @override
+  int get hashCode => Object.hash(key, label, kind, isEnabled);
 }

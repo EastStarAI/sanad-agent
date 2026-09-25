@@ -6,10 +6,10 @@ class TrayMenuBuilder {
   static const int maxTitleLength = 35;
 
   static String truncate(String text, {int maxLength = maxTitleLength}) {
-    final trimmed = text.trim();
-    if (trimmed.isEmpty) return 'New Chat';
-    if (trimmed.length <= maxLength) return trimmed;
-    return '${trimmed.substring(0, maxLength - 3)}...';
+    final singleLine = text.replaceAll(RegExp(r'[\r\n]+'), ' ').trim();
+    if (singleLine.isEmpty) return 'New Chat';
+    if (singleLine.length <= maxLength) return singleLine;
+    return '${singleLine.substring(0, maxLength - 3)}...';
   }
 
   static List<Session> sortRecentConversations(

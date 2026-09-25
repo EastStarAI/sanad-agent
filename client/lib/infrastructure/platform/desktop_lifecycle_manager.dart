@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:ui';
 
+import 'package:flutter/widgets.dart';
 import 'package:logging/logging.dart';
 import 'package:sanad_client/infrastructure/platform/window_manager_service.dart';
 import 'package:window_manager/window_manager.dart';
@@ -19,10 +21,10 @@ class DefaultDesktopWindowManagerAdapter implements DesktopWindowManagerAdapter 
   Future<void> hide() => WindowManagerService.hide();
 
   @override
-  Future<void> show() => WindowManagerService.showAndFocus();
+  Future<void> show() => WindowManagerService.show();
 
   @override
-  Future<void> focus() => WindowManagerService.showAndFocus();
+  Future<void> focus() => WindowManagerService.focus();
 
   @override
   Future<void> setPreventClose(bool prevent) => windowManager.setPreventClose(prevent);
@@ -32,7 +34,7 @@ class DefaultDesktopWindowManagerAdapter implements DesktopWindowManagerAdapter 
 }
 
 /// Coordinates desktop application lifecycle (hide to background, restore, and explicit quit).
-class DesktopLifecycleManager {
+class DesktopLifecycleManager with WidgetsBindingObserver {
   static final _logger = Logger('DesktopLifecycleManager');
 
   final DesktopWindowManagerAdapter _windowAdapter;
@@ -83,6 +85,13 @@ class DesktopLifecycleManager {
     }
     _logger.info('Desktop window close intercepted: hiding window without disposing state or sockets');
     await hideWindow();
+  }
+
+  @override
+  Future<AppExitResponse> didRequestAppExit() async {
+    _logger.info('Platform exit requested: performing explicit quit');
+    await quit();
+    return AppExitResponse.exit;
   }
 
   Future<void> quit() async {

@@ -1,6 +1,7 @@
 import 'package:get_it/get_it.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:universal_io/io.dart';
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/devices/data/daemon/local_daemon_controller.dart';
@@ -489,6 +490,9 @@ Future<void> configureDependencies({
           if (getIt.isRegistered<AppState>()) {
             getIt<AppState>().dispose();
           }
+          if (getIt.isRegistered<SanadSocketService>(instanceName: 'cloudSocketService')) {
+            getIt<SanadSocketService>(instanceName: 'cloudSocketService').dispose();
+          }
           if (getIt.isRegistered<SanadSocketService>(instanceName: 'localSocketService')) {
             getIt<SanadSocketService>(instanceName: 'localSocketService').dispose();
           }
@@ -496,6 +500,7 @@ Future<void> configureDependencies({
             getIt<DeviceConnectionCoordinator>().dispose();
           }
         },
+        onExitProcess: () => exit(0),
       ),
     );
   }

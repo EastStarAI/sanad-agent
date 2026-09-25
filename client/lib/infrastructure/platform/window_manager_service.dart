@@ -48,10 +48,22 @@ class WindowManagerService with WindowListener {
     await windowManager.hide();
   }
 
-  static Future<void> showAndFocus() async {
+  static Future<void> show() async {
     if (!AppPlatform.isDesktop || !_isInitialized) return;
+    if (await windowManager.isMinimized()) {
+      await windowManager.restore();
+    }
     await windowManager.show();
+  }
+
+  static Future<void> focus() async {
+    if (!AppPlatform.isDesktop || !_isInitialized) return;
     await windowManager.focus();
+  }
+
+  static Future<void> showAndFocus() async {
+    await show();
+    await focus();
   }
 
   static Future<void> closeOrDestroy() async {
