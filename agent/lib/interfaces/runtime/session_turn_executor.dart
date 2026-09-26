@@ -329,6 +329,9 @@ class SessionTurnExecutor {
                     required bool isError,
                     required bool isStart,
                     String? toolRunId,
+                    DateTime? startedAt,
+                    DateTime? terminalAt,
+                    int? runtimeMs,
                   }) async {
                     await _emitToolEvent(
                       owner: owner,
@@ -340,6 +343,9 @@ class SessionTurnExecutor {
                       isError: isError,
                       isStart: isStart,
                       toolRunId: toolRunId,
+                      startedAt: startedAt,
+                      terminalAt: terminalAt,
+                      runtimeMs: runtimeMs,
                       onResetFullContent: () => fullContent = '',
                     );
                   },
@@ -378,6 +384,9 @@ class SessionTurnExecutor {
                     required bool isError,
                     required bool isStart,
                     String? toolRunId,
+                    DateTime? startedAt,
+                    DateTime? terminalAt,
+                    int? runtimeMs,
                   }) async {
                     await _emitToolEvent(
                       owner: owner,
@@ -389,6 +398,9 @@ class SessionTurnExecutor {
                       isError: isError,
                       isStart: isStart,
                       toolRunId: toolRunId,
+                      startedAt: startedAt,
+                      terminalAt: terminalAt,
+                      runtimeMs: runtimeMs,
                       onResetFullContent: () => fullContent = '',
                     );
                   },
@@ -743,6 +755,9 @@ class SessionTurnExecutor {
     required bool isError,
     required bool isStart,
     String? toolRunId,
+    DateTime? startedAt,
+    DateTime? terminalAt,
+    int? runtimeMs,
     required void Function() onResetFullContent,
   }) async {
     if (!ownsRun(owner) || !owner.cancellationScope.isPublicationOpen) {
@@ -760,7 +775,13 @@ class SessionTurnExecutor {
         GatewayResponse(
           sessionId: event.sessionId,
           platformId: event.platformId,
-          message: Message(role: MessageRole.tool, content: input),
+          message: Message(
+            role: MessageRole.tool,
+            content: input,
+            metadata: {
+              if (startedAt != null) 'started_at': startedAt.toIso8601String(),
+            },
+          ),
           isComplete: false,
           runId: owner.runId,
           turnId: owner.turnId,
@@ -778,7 +799,15 @@ class SessionTurnExecutor {
       GatewayResponse(
         sessionId: event.sessionId,
         platformId: event.platformId,
-        message: Message(role: MessageRole.tool, content: output),
+        message: Message(
+          role: MessageRole.tool,
+          content: output,
+          metadata: {
+            'started_at': ?startedAt?.toIso8601String(),
+            'terminal_at': ?terminalAt?.toIso8601String(),
+            'runtime_ms': ?runtimeMs,
+          },
+        ),
         isComplete: false,
         runId: owner.runId,
         turnId: owner.turnId,

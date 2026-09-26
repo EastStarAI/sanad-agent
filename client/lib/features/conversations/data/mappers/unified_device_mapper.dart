@@ -42,7 +42,14 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
   CanonicalEvent? _historyRowToCanonical(Map<String, dynamic> row) {
     final type = row['type'] as String?;
     final metadata = (row['metadata'] as Map?)?.cast<String, dynamic>() ?? {};
-    final timestamp = _extractTimestamp(row['created_at']) ?? DateTime.now();
+    final startedAtTimestamp = _extractTimestamp(row['started_at'] ?? metadata['started_at']);
+    final terminalAtTimestamp = _extractTimestamp(row['terminal_at'] ?? metadata['terminal_at']);
+    final createdAtTimestamp = _extractTimestamp(row['created_at']);
+    final timestamp = switch (type) {
+      'tool_use' => startedAtTimestamp ?? createdAtTimestamp ?? DateTime.now(),
+      'tool_result' => terminalAtTimestamp ?? createdAtTimestamp ?? DateTime.now(),
+      _ => createdAtTimestamp ?? startedAtTimestamp ?? DateTime.now(),
+    };
     final toolMetadata = (metadata['tool'] is Map) ? (metadata['tool'] as Map).cast<String, dynamic>() : null;
     final canonicalFields = <String, dynamic>{
       'request_id': row['request_id'] ?? metadata['request_id'],
@@ -156,7 +163,8 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         ? LlmUsageSnapshot.fromJson(Map<String, dynamic>.from(rawContextUsage))
         : null;
     final rawRuntimeMs = event['runtime_ms'] is num ? (event['runtime_ms'] as num).toInt() : null;
-    final derivedRuntimeMs = rawRuntimeMs ??
+    final derivedRuntimeMs =
+        rawRuntimeMs ??
         (() {
           final startedAt = DateTime.tryParse(event['started_at']?.toString() ?? '');
           final terminalAt = DateTime.tryParse(event['terminal_at']?.toString() ?? '');
@@ -633,6 +641,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       if (event['reason'] != null) 'reason': event['reason'],
       if (event['started_at'] != null) 'started_at': event['started_at'],
       if (event['terminal_at'] != null) 'terminal_at': event['terminal_at'],
+      if (event['runtime_ms'] != null) 'runtime_ms': event['runtime_ms'],
       if (event['cleanup_outcome'] != null) 'cleanup_outcome': event['cleanup_outcome'],
     };
     return normalized.isEmpty ? null : normalized;
