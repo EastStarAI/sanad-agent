@@ -51,22 +51,19 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
     - السجلات والبيانات الكاملة محفوظة دون اقتطاع في ملفات logs مخصصة (full logs preserved).
     - الحفاظ التام والدقيق على رمز الخروج للعملية (exit code preserved).
   - **حالة البند:** مجدول كدفعة مستقبلية قيد الانتظار (future batch — uncompleted)؛ هذا التوثيق لحصر العائق وتعميم معيار القبول فقط دون تنفيذ أي كود برمجي أو ادعاء قياسات في هذه المرحلة.
-- [ ] **Result data fidelity and semantic terminal validation (future batch — uncompleted):** عائق دقة بيانات نتائج المهام والنجاح الدلالي الزائف (Semantic false success):
-  - **الملاحظة الفعلية والدليل (Observed obstacle & evidence):**
-    - مهمة `97f` أبلغت عن حالة `completed` مع رمز خروج `exit 0`، لكن حقل `finalMessage` احتوى على رسالة تقدم مرحلية فقط (progress: مثل «جاري...») دون أي خلاصة أو نتيجة نهائية فعلية للمهمة.
-  - **الخلل الجذري ومعيار المعالجة المطلوب للدفعة المستقبلية:**
-    - مجرد مطابقة الـ schema شكلياً (`schema-valid`) لا تكفي لضمان صحة النتيجة أو اكتمالها.
-    - الفصل الصارم بين رسائل التقدم المؤقتة (`progress`) والرسالة الختامية (`finalMessage` / final summary).
-    - منع حالات النجاح النهائي الدلالي الناقص (incomplete semantic terminal success)؛ إتمام العملية تقنياً مع مخرجات مبتورة يُعد خللاً في دقة البيانات.
-  - **معيار القبول الصريح (Acceptance Criteria):**
-    - غياب النتيجة أو الخلاصة الختامية (`missing final`) يجب أن يوسم النتيجة كـ `incomplete` أو `needs_review` أو كفشل صريح (`explicit failure`)، ويمنع اعتبارها نجاحاً نهائياً.
-    - إضافة وتطبيق اختبارات تعاقدية (`contract tests`) تمنع النجاح الزائف (`false success`) وتتحقق دلالياً من اكتمال مخرجات النتيجة.
-  - **حالة البند:** مجدول كدفعة مستقبلية قيد الانتظار (future batch — uncompleted)؛ توثيق لحصر العائق وتحديد معيار القبول الدلالي دون تنفيذ إصلاح كود الآن.
-- [ ] **Self-healing `sanad-dev status` setup (future non-blocking batch):**
-  - **الملاحظة الفعلية:** `sanad-dev status` يفشل كثيرًا برسالة تطلب تشغيل `sanad-dev setup` يدويًا بدل إكمال طلب الحالة.
-  - **السلوك المطلوب:** عندما يثبت status أن setup مطلوب وقابل للإصلاح الآمن، يطبع سطر log موجزًا يوضح أن setup مطلوب، يشغّل setup تلقائيًا مرة واحدة، ثم يعيد محاولة status ويعرض مخرجات status الطبيعية فقط؛ لا يعيد payload الطويل الخاص بـsetup في المسار الناجح.
-  - **حدود الأمان:** لا loop أو retry غير مقيد، ولا إخفاء لفشل setup؛ failure يعرض سببًا موجزًا وقابلًا للتنفيذ ويحافظ على exit code. لا source switch أو runtime restart أو إنشاء runtime إضافية، ولا auto-setup لأخطاء ownership/security/explicit-home غير القابلة للإصلاح.
-  - **القبول:** اختبارات تغطي setup-required→setup-success→normal-status، setup failure، repeated failure/no-loop، JSON/text output، ومخرجات bounded؛ يبقى البند متابعة بعد دمج Plan97 ما لم يمنع بوابة حالية مباشرة.
+- [x] **Result data fidelity and semantic terminal validation (batch 5):** عائق دقة بيانات نتائج المهام والنجاح الدلالي الزائف (Semantic false success):
+  - **الملاحظة الفعلية والدليل (Observed obstacle & evidence):** مهمة `97f` أبلغت عن حالة `completed` مع رمز خروج `exit 0`، لكن حقل `finalMessage` احتوى على رسالة تقدم مرحلية فقط (progress: مثل «جاري...» أو «running/...») دون أي خلاصة أو نتيجة نهائية فعلية للمهمة.
+  - **الخلل الجذري ومعيار المعالجة:** مجرد مطابقة الـ schema شكلياً (`schema-valid`) لا تكفي؛ فرض الفصل الصارم بين رسائل التقدم المؤقتة (`progress`) والرسالة الختامية (`finalMessage` / final summary)، ومنع النجاح النهائي الدلالي الناقص (`false success`).
+  - **معيار القبول الصريح المحقق (Acceptance Criteria):**
+    - غياب النتيجة أو الخلاصة الختامية (`missing final` أو مخرجات تقتصر على progress) يوسم النتيجة كـ `incomplete` وسبب `cause: missing_final` مع رمز خروج `exit 1`، ويمنع اعتبارها نجاحاً نهائياً.
+    - استبدال رسائل التقدم المؤقتة تلقائياً بالخلاصة الختامية الحقيقية عند توفر `event.finalMessage`.
+    - تطبيق اختبارات تعاقدية (`contract tests`) تمنع النجاح الزائف (`false success`) وتتحقق دلالياً من اكتمال مخرجات النتيجة في `run_artifacts.dart` و`oneshot_runner.dart` و`supervisor.mjs`.
+- [x] **Self-healing `sanad-dev` runtime auto-setup and deterministic process identity (batch 6):**
+  - **الملاحظة الفعلية:** أمر `sanad-dev status` والأوامر التابعة تفشل برسالة `Project runtime is stale. Run: sanad-dev setup` عند حدوث أي تعديل في الكود. إضافة إلى ذلك، بعد تشغيل `setup`، تفشل محاولات `restart client` ويُصنف الـ runtime كـ `orphaned` مع رسالة `launcher PID was reused or its process identity changed` بسبب عدم استقرار ناتج `ps` لاختلاف الـ locale وتغير عرض الطرفية.
+  - **السلوك المطبق:**
+    - جعل `require_runtime_cli` في `scripts/sanad-dev` و `scripts/sanad-dev.ps1` ذاتية الإصلاح (self-healing): عند اكتشاف أن البيئة `stale`، تطبع سطر log موجزًا وتشغل `setup` تلقائيًا ثم تكمل الأمر بنجاح.
+    - إصلاح `readProcessIdentity` في `scripts/sanad_dev/lib/src/runtime/ownership/runtime_ownership.dart` بتمرير `LC_ALL: C` و `-ww` لمنع اختلاف تنسيق التاريخ والوقت ومنع اقتطاع مسار الأمر بعرض الشاشة.
+  - **القبول:** تغطية اختبارات وحدة وتراجعية في `sanad_dev_bootstrap_test.dart` و `sanad_dev_runtime_ownership_test.dart`، واختبار حي end-to-end بتشغيل وكيل وعميل وتجربة الـ stale والـ restart عبر مختلف الـ locales (`en_GB`, `C.UTF-8`, `ar_EG.UTF-8`) بنجاح تام.
 - [ ] **Supervisor watch-once stalled-error wakeup (batch 4):** إذا كان الأوركستريتور في وضع المراقبة وحدث خطأ داخل محادثة الوكيل الفرعي (`blocked`, provider timeout, invalid request, gateway loss, or stopped/failed) ثم بقيت المحادثة بلا تعافٍ تلقائي لأكثر من 60 ثانية، يجب أن يعود `watch-once` فورًا بحدث قابل للتصرف بدل الاستمرار في الانتظار حتى انتهاء نافذة المراقبة. هذا يمنع حالة مراقبة مضللة حيث يبدو العمل جارياً بينما الوكيل متوقف، كما حدث أثناء مراقبة 97h بعد `provider_timeout`. DoD: regression يثبت أن الأخطاء العابرة الأقصر من 60 ثانية لا توقظ المراقب إذا تعافت، وأن الخطأ المستمر لأكثر من 60 ثانية يوقظ `watch-once` مع task/session/cause/state-since وبدون scheduled polling.
 - [ ] **Future blockers:** أي خلل مثبت في `sanad-dev` أو delegation/supervisor/skills/CI يعطل العمل أو الاختبارات أو logs أو ownership يضاف هنا قبل إصلاحه.
 
@@ -96,6 +93,57 @@ delegated_authority: "user-authorized closure, commit/push, separated PR deliver
 - العوائق المستقبلية تبقى مرئية هنا حتى الإصلاح أو التأجيل المعلل.
 
 ## Evidence
+
+### Batch 6: Self-healing sanad-dev runtime auto-setup and deterministic process identity
+
+- **Obstacle & G0 Triage:**
+  - *Reproduction:*
+    1. Modifying source files or pulling git changes causes `runtime_cli_fingerprint` to drift from `runtime-cli.stamp`. Subcommands like `status`, `restart client`, `logs`, etc., abort with exit 1: `Project runtime is stale. Run: sanad-dev setup`.
+    2. After running `sanad-dev setup`, `readProcessIdentity(pid)` in `scripts/sanad_dev/lib/src/runtime/ownership/runtime_ownership.dart` ran `ps -p $pid -o lstart= -o command=` without standardizing `LC_ALL` or window width. Because macOS `ps` formats `lstart` using the ambient locale (e.g. `Sat 26 Sep` in British/system locale vs `Sat Sep 26` in `C.UTF-8`/`en_US`), and truncates `command` to the screen width (`COLUMNS`), any invocation across different terminals or tool subshells triggered `launcher PID was reused or its process identity changed`, classifying running instances as `orphaned` and aborting `restart client`.
+  - *Impact:* Disrupted developer and orchestrator workflow, prevented client restart/reload from background agents or distinct terminal windows, and required frequent manual `sanad-dev setup` invocations.
+  - *Owning layers:* Developer launcher wrappers (`scripts/sanad-dev`, `scripts/sanad-dev.ps1`) and ownership assessment in `scripts/sanad_dev` package (`runtime_ownership.dart`).
+- **G1 Repair:**
+  - *`scripts/sanad_dev/lib/src/runtime/ownership/runtime_ownership.dart`:* Enforced `environment: const {'LC_ALL': 'C'}` and added `-ww` flag to `ps` in `readProcessIdentity(pid)` to guarantee locale-independent date/time formatting and prevent terminal width truncation.
+  - *`scripts/sanad-dev` & `scripts/sanad-dev.ps1`:* Made `require_runtime_cli` self-healing; when the runtime CLI is stale, it prints a single bounded notice (`[sanad-dev] Project runtime is stale; running auto-setup...`), compiles the runtime cleanly, and proceeds with the requested command without failing.
+  - *`scripts/sanad_dev/test/cli/sanad_dev_bootstrap_test.dart`:* Updated bootstrap test to verify auto-heal execution on stale runtime commands.
+  - *`scripts/sanad_dev/test/runtime/ownership/sanad_dev_runtime_ownership_test.dart`:* Added regression test verifying `readProcessIdentity` returns stable identity across invocations.
+- **G2 Acceptance Evidence:**
+  - *Analyzer:* `fvm dart analyze` in `scripts/sanad_dev` — 0 issues found (clean).
+  - *Package Suite:* `fvm dart test` in `scripts/sanad_dev` — all tests passed.
+  - *Live Multi-Locale & Stale Smoke:* Launched live agent and client in worktree via `sanad-dev run`. Verified `sanad-dev status` showed `Runtime class: managed`. Successfully executed `sanad-dev restart client` under `LC_TIME=en_GB.UTF-8`, `LC_TIME=C.UTF-8`, and `LC_TIME=ar_EG.UTF-8 COLUMNS=80` with zero orphaning. Simulated stale runtime via source touch; confirmed auto-setup triggered cleanly and executed `restart client` with exit code 0.
+
+### Batch 5: Result data fidelity and semantic terminal validation
+
+- **Obstacle & G0 Triage:**
+  - *Reproduction:* Task 97f and similar delegated turns completed technically with exit code 0 and `result.json` status `completed`, but `finalMessage` / `text` contained only an interim mid-progress notification (e.g. `"running/task-97f"`, `"running/..."`, `"جاري..."`), or was empty. Schema-validity alone allowed false terminal success while substantive task conclusions were lost.
+  - *Impact:* Critical data-fidelity defect where orchestrators and supervisors observe successful completion of subagents even when the final output was truncated or aborted before summary generation.
+  - *Owning layers:* Agent CLI run artifacts (`RunResultArtifact`, `RunArtifactCoordinator`), oneshot execution runner (`OneshotRunner`), and supervisor (`supervisor.mjs`).
+  - *Dependencies:* None. Purely contract, artifact, and runner validation.
+- **G1 Repair:**
+  - *`agent/lib/cli/artifacts/run_artifacts.dart`:*
+    - Added `RunResultArtifact.hasSemanticFinalSummary(text)` to validate non-transient, substantive final content, rejecting null, empty, whitespace-only, punctuation/separator-only (`"..."`, `"---"`), and progress-only indicators (English and Arabic: `running/...`, `in progress...`, `working on...`, `processing...`, `جاري...`, `قيد التنفيذ...`).
+    - Added `isIncomplete`, `isNeedsReview`, updated `isTerminal` to include `incomplete` and `needs_review`, and updated `isSuccess` to require `isCompleted && exitCode == 0 && hasSemanticFinalSummary(text)`.
+    - Added cause classification normalization for `'missing_final'` and `'missing final'`.
+    - In `RunArtifactCoordinator.recordTerminal()`: Automatically maps `status: 'completed'` or `exitCode: 0` without a semantic final summary to `status: 'incomplete'`, `exitCode: 1`, `cause: 'missing_final'`, with descriptive error and `incomplete` lifecycle event emission.
+  - *`agent/lib/cli/oneshot/oneshot_runner.dart`:*
+    - On turn completion, if `assistantBuffer` only holds mid-progress chunks, it is replaced with the authoritative `event.finalMessage` when available.
+    - On execution completion with exitStatus 0, validates `hasSemanticFinalSummary(output)`. If missing or progress-only, sets `terminalStatus: 'incomplete'`, `exitStatus: 1`, records `cause: 'missing_final'`, logs error, and returns 1.
+  - *`.agents/skills/delegate-task-supervisor/scripts/supervisor.mjs`:*
+    - Added `'incomplete'` and `'needs_review'` to `TERMINAL_STATUSES` and `terminalStates`.
+    - Mapped `sessionState` to `'incomplete'` and `'needs review'`.
+  - *`.agents/skills/sanad-delegate/SKILL.md`:*
+    - Documented semantic terminal validation, `incomplete` status, and `missing_final` cause.
+- **G2 Acceptance Evidence:**
+  - *Analyzer:* `fvm dart analyze lib/cli test/cli` in `agent/` — 0 issues found (clean).
+  - *Run Artifacts Regressions:* `fvm dart test test/cli/run_artifacts_test.dart` — 12/12 pass (including semantic final validation, `isSuccess` contract, missing text -> `incomplete`, progress-only text -> `incomplete`, and valid summary preservation).
+  - *Delegation Regressions:* `fvm dart test test/cli/run_delegation_test.dart` — 24/24 pass (including missing final message -> exit 1 `incomplete`, mid-progress only -> exit 1 `incomplete`, and mid-progress replaced by valid finalMessage -> exit 0 `completed`).
+  - *CLI Run Regressions:* `fvm dart test test/cli/run_command_test.dart` — 25/25 pass.
+  - *Supervisor Regressions:* `node --test test/supervisor_test.mjs` — 18/18 pass (including test verifying supervisor preserves `incomplete` status and `missing_final` cause without false completion).
+  - *Formatting/Diff Check:* `git diff --check` passes with 0 issues.
+- **Constraints honored:**
+  - No commits, no push, no merge, no branch creation, no sub-worktrees. Changes remain unstaged for orchestrator review.
+  - No new runtime on one Home, no workspace mutation, no source handoff.
+  - JSON consumer compatibility preserved; all existing valid runs remain fully compatible.
 
 ### Batch 4: Deterministic run_delegation nonterminal/allow-all-tools waits (urgent CI fix)
 

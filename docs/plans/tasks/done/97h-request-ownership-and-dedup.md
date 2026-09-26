@@ -1,6 +1,6 @@
 ---
 title: "97h: ملكية الجلب ومنع استدعاءات إعادة البناء"
-status: review
+status: completed
 current_gate: G2
 remaining_estimate: "G0/G1 closed with implementation and proof; G2 verification complete on Windows via deterministic tests; full interactive acceptance remains in 97l"
 platforms: windows-first
