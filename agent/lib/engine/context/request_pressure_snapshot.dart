@@ -144,7 +144,15 @@ int calculateEffectiveInputWindow(
   int outputReservationTokens = 4096,
   int safetyBufferTokens = 1024,
 }) {
+  if (window <= 0) return 0;
   final requestedReservation = outputReservationTokens + safetyBufferTokens;
+  // If the requested reservation would consume 50% or more of the context window
+  // (e.g. default 5,120 reservation on an 8k context window), cap the reservation
+  // to at most 35% of the window to ensure at least 65% is retained for input.
+  if (requestedReservation >= window * 0.5) {
+    final cappedReservation = (window * 0.35).floor();
+    return window - cappedReservation;
+  }
   if (requestedReservation < window) {
     return window - requestedReservation;
   }

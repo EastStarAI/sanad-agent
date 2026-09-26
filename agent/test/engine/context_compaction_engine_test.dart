@@ -224,6 +224,22 @@ void main() {
       expect(snapshot.exceedsThreshold, isTrue);
     });
 
+    test('calculateEffectiveInputWindow bounds reservation for small contexts', () {
+      // Default reservation is 4096 + 1024 = 5120
+      // For window = 8192, 5120 >= 50% (4096), so reservation is capped at 35% (2867)
+      expect(calculateEffectiveInputWindow(8192), 8192 - 2867); // 5325
+
+      // For window = 4000, 5120 >= 50% (2000), capped at 35% (1400)
+      expect(calculateEffectiveInputWindow(4000), 4000 - 1400); // 2600
+
+      // For window = 128000, 5120 < 50%, normal reservation used
+      expect(calculateEffectiveInputWindow(128000), 128000 - 5120); // 122880
+
+      // Non-positive window returns 0
+      expect(calculateEffectiveInputWindow(0), 0);
+      expect(calculateEffectiveInputWindow(-10), 0);
+    });
+
     test('route signature owns the evaluated window and schema cache key', () {
       final cache = <String, int>{};
       final evaluator = RequestPressureEvaluator(toolSchemaTokenCache: cache);

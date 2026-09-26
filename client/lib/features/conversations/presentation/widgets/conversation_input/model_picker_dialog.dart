@@ -237,6 +237,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
                           ),
                           const Spacer(),
                           IconButton(
+                            key: const Key('model_picker_refresh_btn'),
                             tooltip: state.isRefreshing ? 'Refreshing models...' : 'Refresh models',
                             icon: state.isRefreshing
                                 ? const SizedBox(
@@ -253,6 +254,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
                             visualDensity: VisualDensity.compact,
                           ),
                           IconButton(
+                            key: const Key('model_picker_settings_btn'),
                             tooltip: 'Configure providers',
                             icon: const Icon(Icons.settings, size: 18),
                             onPressed: () {
@@ -263,6 +265,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
                             visualDensity: VisualDensity.compact,
                           ),
                           IconButton(
+                            key: const Key('model_picker_close_btn'),
                             icon: const Icon(Icons.close, size: 18),
                             onPressed: () => Navigator.of(context).pop(),
                             visualDensity: VisualDensity.compact,
@@ -308,6 +311,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
                         return KeyEventResult.ignored;
                       },
                       child: TextField(
+                        key: const Key('model_picker_search_input'),
                         controller: _searchController,
                         focusNode: _searchFocusNode,
                         decoration: InputDecoration(
@@ -510,6 +514,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
         child: InkWell(
+          key: Key('model_picker_load_more_$providerId'),
           onTap: () {
             setState(() {
               _expandedProviderIds.add(providerId);
@@ -620,6 +625,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
         _flatVisibleModels[_focusedIndex].model == recent.modelId;
 
     final tile = ListTile(
+      key: Key('recent_model_option_${recent.modelId}'),
       dense: true,
       selected: isSelected,
       leading: Container(
@@ -712,7 +718,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
         _flatVisibleModels[_focusedIndex].model == model;
 
     final tile = ListTile(
-      key: Key('model_item_${group.providerId}_$model'),
+      key: Key('model_option_$model'),
       dense: true,
       selected: isSelected,
       leading: Container(
@@ -731,7 +737,7 @@ class _ModelPickerDialogState extends State<ModelPickerDialog> {
           ),
         ),
       ),
-      title: Text(model, style: const TextStyle(fontSize: 13)),
+      title: Text(model, key: Key('model_title_$model'), style: const TextStyle(fontSize: 13)),
       trailing: isSelected ? const Icon(Icons.check, size: 16) : null,
       onTap: () {
         widget.onSelected(group.providerId, model);

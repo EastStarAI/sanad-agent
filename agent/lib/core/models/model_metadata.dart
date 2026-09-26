@@ -32,19 +32,25 @@ class ModelMetadata {
 
     // Gemma
     'gemma-4': 256000,
+    'gemma4': 256000,
     'gemma-3': 131072,
+    'gemma3': 131072,
     'gemma-2': 8192,
+    'gemma2': 8192,
     'gemma': 8192,
 
     // DeepSeek
     'deepseek-v4-pro': 1000000,
     'deepseek-v4-flash': 1000000,
+    'deepseek-v3': 128000,
     'deepseek-chat': 1000000,
     'deepseek-reasoner': 1000000,
     'deepseek': 128000,
 
     // Llama
+    'llama-3': 131072,
     'llama3': 131072,
+    'llama-2': 4096,
     'llama2': 4096,
     'llama': 131072,
 
@@ -52,6 +58,10 @@ class ModelMetadata {
     'qwen3.6-plus': 1048576,
     'qwen3-coder-plus': 1000000,
     'qwen3-coder': 262144,
+    'qwen3': 131072,
+    'qwen-3': 131072,
+    'qwen2.5': 131072,
+    'qwen2': 131072,
     'qwen': 131072,
 
     // Mistral
@@ -83,16 +93,30 @@ class ModelMetadata {
   static int? getLimitForModel(String modelName) {
     final lowerName = modelName.toLowerCase();
 
-    // Try exact match first
+    // 1. Try exact match first
     if (defaultContextLimits.containsKey(lowerName)) {
       return defaultContextLimits[lowerName];
     }
 
-    // Try substring match (longest first)
+    // 2. Normalized alphanumeric substring match sorted by normalized length descending.
+    // This ensures specific models (e.g. "gemma-4", "gemma4", length 6) always match
+    // before broad prefixes (e.g. "gemma", length 5), regardless of whether the input
+    // uses hyphens, underscores, dots, or colons.
+    final normalizedModel = lowerName.replaceAll(RegExp(r'[^a-z0-9]'), '');
     final sortedKeys = defaultContextLimits.keys.toList()
-      ..sort((a, b) => b.length.compareTo(a.length));
+      ..sort((a, b) {
+        final normA = a.replaceAll(RegExp(r'[^a-z0-9]'), '');
+        final normB = b.replaceAll(RegExp(r'[^a-z0-9]'), '');
+        final cmp = normB.length.compareTo(normA.length);
+        if (cmp != 0) return cmp;
+        return b.length.compareTo(a.length);
+      });
 
     for (final key in sortedKeys) {
+      final normKey = key.replaceAll(RegExp(r'[^a-z0-9]'), '');
+      if (normKey.isNotEmpty && normalizedModel.contains(normKey)) {
+        return defaultContextLimits[key];
+      }
       if (lowerName.contains(key)) {
         return defaultContextLimits[key];
       }

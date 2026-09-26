@@ -1,8 +1,8 @@
 /// Central provider transport watchdog defaults (Plan 50b).
 class ProviderWatchdogConfig {
   const ProviderWatchdogConfig({
-    this.connectTimeout = const Duration(seconds: 30),
-    this.firstByteTimeout = const Duration(seconds: 60),
+    this.connectTimeout = const Duration(seconds: 90),
+    this.firstByteTimeout = const Duration(seconds: 120),
     this.streamIdleTimeout = const Duration(seconds: 120),
     this.totalTimeout,
   });
