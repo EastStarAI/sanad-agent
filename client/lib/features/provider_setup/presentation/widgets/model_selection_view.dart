@@ -150,6 +150,7 @@ class _DiscoveryLoading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Padding(
+      key: Key('model_discovery_loading'),
       padding: EdgeInsets.symmetric(vertical: 32),
       child: Column(
         children: [
@@ -211,9 +212,13 @@ class _ModelList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (models.isEmpty) {
-      return const Text('No models are available. Retry or add one manually.');
+      return const Text(
+        'No models are available. Retry or add one manually.',
+        key: Key('no_models_available_text'),
+      );
     }
     return ListView.separated(
+      key: const Key('model_selection_list'),
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: models.length,
@@ -224,6 +229,7 @@ class _ModelList extends StatelessWidget {
         return Material(
           color: Colors.transparent,
           child: ListTile(
+            key: Key('model_option_$model'),
             shape: RoundedRectangleBorder(
               side: BorderSide(
                 color: isSelected
@@ -235,7 +241,7 @@ class _ModelList extends StatelessWidget {
             leading: Icon(
               isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
             ),
-            title: Text(model),
+            title: Text(model, key: Key('model_title_$model')),
             onTap: () => context.read<ProviderSetupCubit>().selectModel(model),
           ),
         );
