@@ -17,6 +17,7 @@ import 'tagged_reasoning_parser.dart';
 
 class OllamaAdapter extends BaseOpenAIAdapter {
   final _logger = Logger('OllamaAdapter');
+  final Map<String, int> _probedContextLimits = {};
 
   OllamaAdapter(
     super.config,
@@ -49,6 +50,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
 
             final contextLimit =
                 config.contextModelLimit(name) ??
+                _probedContextLimits[name] ??
                 ModelMetadata.getLimitForModel(name);
 
             options.add(
@@ -135,12 +137,16 @@ class OllamaAdapter extends BaseOpenAIAdapter {
   Future<int> getContextLimit([String? modelOverride]) async {
     final resolvedModel = super.resolveModel(modelOverride);
 
+    // 1. Explicit configuration takes top priority
     final configuredLimit = config.contextModelLimit(resolvedModel);
     if (configuredLimit != null) return configuredLimit;
 
-    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
-    if (catalogLimit != null) return catalogLimit;
+    // 2. Return previously probed live limit if cached in memory
+    if (_probedContextLimits.containsKey(resolvedModel)) {
+      return _probedContextLimits[resolvedModel]!;
+    }
 
+    // 3. Probe Ollama live via /api/show to read the exact GGUF context_length
     try {
       final url = Uri.parse('${super.baseUrl}/api/show');
       final response = await (client ?? http.Client()).post(
@@ -156,7 +162,10 @@ class OllamaAdapter extends BaseOpenAIAdapter {
           for (var entry in modelInfo.entries) {
             if (entry.key.contains('context_length')) {
               final parsed = int.tryParse(entry.value.toString());
-              if (parsed != null && parsed > 0) return parsed;
+              if (parsed != null && parsed > 0) {
+                _probedContextLimits[resolvedModel] = parsed;
+                return parsed;
+              }
             }
           }
         }
@@ -165,6 +174,11 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       _logger.warning('Failed to probe Ollama context limit: $e');
     }
 
+    // 4. Fallback to catalog lookup (from model cache DB)
+    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
+    if (catalogLimit != null) return catalogLimit;
+
+    // 5. Fallback to known static model metadata
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
     if (metadataLimit != null) return metadataLimit;
 
