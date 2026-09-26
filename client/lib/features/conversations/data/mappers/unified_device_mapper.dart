@@ -92,7 +92,6 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       'tool_use' => <String, dynamic>{
         'tool': row['tool'] ?? _historyToolName(metadata['tool']) ?? toolMetadata,
         'input': row['input'] ?? metadata['input'] ?? toolMetadata?['input'],
-        'status': row['status'] ?? metadata['status'],
       },
       'tool_result' => <String, dynamic>{
         'tool': row['tool'] ?? _historyToolName(metadata['tool']) ?? toolMetadata,
