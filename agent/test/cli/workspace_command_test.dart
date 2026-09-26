@@ -383,6 +383,36 @@ void main() {
       },
     );
 
+    test(
+      'list command outputs JSON array when --json is provided',
+      () async {
+        final workspaces = await service.listWorkspaces();
+        final betaWs = workspaces.firstWhere((w) => w['name'] == 'BetaProject');
+        await stateStore.setActiveWorkspace(
+          workspaceId: betaWs['id'],
+          workspacePath: betaWs['path'],
+        );
+
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+          workspaceService: service,
+        );
+
+        final exitCode = await runner.run(['workspace', 'list', '--json']);
+        expect(exitCode, 0);
+
+        final output = stdoutBuf.toString().trim();
+        final decoded = jsonDecode(output) as List;
+        expect(decoded, hasLength(2));
+        final betaJson = decoded.firstWhere((w) => w['name'] == 'BetaProject');
+        expect(betaJson['id'], betaWs['id']);
+        expect(betaJson['is_active'], isTrue);
+        final alphaJson = decoded.firstWhere((w) => w['name'] == 'AlphaProject');
+        expect(alphaJson['is_active'], isFalse);
+      },
+    );
+
     test('current command shows active workspace details and policy', () async {
       final workspaces = await service.listWorkspaces();
       final alphaWs = workspaces.firstWhere((w) => w['name'] == 'AlphaProject');

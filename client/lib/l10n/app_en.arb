@@ -341,5 +341,17 @@
   "toolWritingFile": "Writing file...",
   "toolEditingFile": "Editing file...",
   "toolSearchingFiles": "Searching files...",
-  "toolExecuting": "Executing tool..."
+  "toolExecuting": "Executing tool...",
+  "clientCli": "Client CLI",
+  "clientCliDescription": "Allow command-line tools to relay Sanad commands to remote devices through this Client.",
+  "enableClientCli": "Enable Client CLI",
+  "clientCliPermissionMode": "Permission mode",
+  "clientCliDefaultMode": "Default",
+  "clientCliDefaultModeDesc": "Ask for confirmation before executing commands on remote devices.",
+  "clientCliFullAccessMode": "Full access",
+  "clientCliFullAccessModeDesc": "Execute commands directly on remote devices without asking for confirmation.",
+  "clientCliApprovalTitle": "Allow Sanad CLI to run remote command?",
+  "clientCliAllowOnce": "Yes, allow this time",
+  "clientCliAllowSession": "Yes, allow for this session",
+  "clientCliDeny": "No, deny"
 }

@@ -152,6 +152,7 @@ class OneshotRunner {
     String? outDir,
     bool streamEvents = false,
     String? executionRoot,
+    void Function(RunLifecycleEvent event)? eventSink,
   }) async {
     final out = stdoutSink ?? stdout;
     final err = stderrSink ?? stderr;
@@ -190,6 +191,7 @@ class OneshotRunner {
       store: artifactStore,
       streamEvents: streamEvents,
       outSink: out,
+      eventSink: eventSink,
       sessionId: effectiveSessionId,
       workspaceId: effectiveWorkspace,
       executionRoot: effectiveExecutionRoot,
