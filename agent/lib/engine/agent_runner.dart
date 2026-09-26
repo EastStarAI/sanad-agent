@@ -2303,16 +2303,14 @@ class AgentRunner {
     final toolSchemas = registry.allTools
         .map((tool) => tool.schema.toJson())
         .toList();
-    final systemPrompt = contextAssembler.assemble() ?? '';
-    final runtimeContext = runtimeSystemPrompt ?? '';
     RequestPressureSnapshot? preflightPressure;
     if (getIt.isRegistered<ContextCompactionEngine>()) {
       final pressure = RequestPressureEvaluator().evaluate(
         routeSignature: routeSignature,
         contextWindowTokens: contextWindow,
         conversationMessages: prospectiveHistory,
-        systemPrompt: systemPrompt,
-        runtimeContext: runtimeContext,
+        systemPrompt: '',
+        runtimeContext: '',
         toolSchemas: toolSchemas,
         confirmedInputUsage: _confirmedInputUsageBaseline,
         wireEstimatedInputTokens: wireEstimatedInputTokens,
@@ -2324,21 +2322,6 @@ class AgentRunner {
       if (!pressure.exceedsThreshold) {
         return false;
       }
-
-      // If non-compressible fixed overhead (system prompt, runtime context, tool schemas)
-      // already meets or exceeds the effective input budget, compacting history cannot possibly
-      // bring the total request under budget. Skip auto-compaction to avoid guaranteed failures.
-      final fixedOverhead = pressure.components.systemPromptTokens +
-          pressure.components.runtimeContextTokens +
-          pressure.components.toolSchemaTokens;
-      if (fixedOverhead >= pressure.effectiveInputBudget) {
-        _logger.warning(
-          'Auto-compaction skipped: non-compressible overhead ($fixedOverhead tokens) '
-          'meets or exceeds effective input budget (${pressure.effectiveInputBudget} tokens).',
-        );
-        return false;
-      }
-
       final withinCooldown =
           _lastCompactionCompletedAt != null &&
           DateTime.now().toUtc().difference(_lastCompactionCompletedAt!) <
@@ -2357,8 +2340,8 @@ class AgentRunner {
       contextWindowTokens: contextWindow,
       preflightPressure: preflightPressure,
       timeline: timelineEntries,
-      systemPrompt: systemPrompt,
-      runtimeContext: runtimeContext,
+      systemPrompt: contextAssembler.assemble() ?? '',
+      runtimeContext: runtimeSystemPrompt ?? '',
       toolSchemas: toolSchemas,
       providerProjection: prospectiveHistory,
       providerTools: registry.allTools.map((tool) => tool.schema).toList(),
