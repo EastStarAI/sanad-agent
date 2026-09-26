@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
+import 'package:sanad_agent/engine/runtime/tool_execution_coordinator.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
@@ -72,15 +73,7 @@ class LocalRuntimeOrchestrator {
   Stream<String> streamTurn({
     required AgentRunner agentRunner,
     required AgentTurnRequest request,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
@@ -130,15 +123,7 @@ class LocalRuntimeOrchestrator {
   Stream<String> resumeTurn({
     required AgentRunner agentRunner,
     required AgentTurnRequest request,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,

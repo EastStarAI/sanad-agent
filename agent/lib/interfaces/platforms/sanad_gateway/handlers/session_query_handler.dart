@@ -167,6 +167,23 @@ class SessionQueryHandler {
         break;
       }
     }
+    final toolResultByCallId = <String, Message>{};
+    for (final pm in persistedMessages) {
+      final m = pm.message;
+      if (m.role == MessageRole.tool &&
+          m.toolCallId != null &&
+          m.toolCallId!.isNotEmpty) {
+        toolResultByCallId[m.toolCallId!] = m;
+      }
+    }
+    final activeItem = _persistedState?.findActiveWorkItem(sessionId);
+    final activeContinuation = activeItem?.continuationMetadata ?? const {};
+    final executingToolIds = List<String>.from(
+      activeContinuation['currently_executing_tools'] as List? ?? const [],
+    );
+    final activeToolStartedAt = Map<String, dynamic>.from(
+      activeContinuation['tool_started_at'] as Map? ?? const {},
+    );
     for (
       var messageIndex = 0;
       messageIndex < persistedMessages.length;
@@ -264,21 +281,34 @@ class SessionQueryHandler {
         }
 
         for (final toolCall in message.toolCalls!) {
+          final isExecuting = executingToolIds.contains(toolCall.id);
+          final matchingResult = toolResultByCallId[toolCall.id];
+          final startedAt =
+              matchingResult?.metadata?['started_at']?.toString() ??
+              activeToolStartedAt[toolCall.id]?.toString();
+          final toolCreatedAt =
+              startedAt ??
+              baseTime.add(Duration(seconds: index)).toIso8601String();
+          final matchingTerminalAt = matchingResult?.metadata?['terminal_at']
+              ?.toString();
+          final matchingRuntimeMs = matchingResult?.metadata?['runtime_ms'];
+
           historyMessages.add({
             'id': index,
             'sender': 'ai',
             'type': 'tool_use',
             'tool': toolCall.name,
             'input': jsonEncode(toolCall.arguments),
-            'status': 'done',
+            'status': isExecuting ? 'running' : 'done',
             'run_id': ?runId,
             'model_step_id': ?modelStepId,
             'tool_call_id': toolCall.id,
             if (message.metadata?['context_usage'] != null)
               'context_usage': message.metadata!['context_usage'],
-            'created_at': baseTime
-                .add(Duration(seconds: index))
-                .toIso8601String(),
+            'created_at': toolCreatedAt,
+            'started_at': ?startedAt,
+            'terminal_at': ?matchingTerminalAt,
+            'runtime_ms': ?matchingRuntimeMs,
             'session_id': sessionId,
           });
           index++;
@@ -295,6 +325,11 @@ class SessionQueryHandler {
         final isError =
             message.metadata?['is_error'] == true ||
             visibleContent.startsWith('Error:');
+
+        final startedAt = message.metadata?['started_at']?.toString();
+        final terminalAt = message.metadata?['terminal_at']?.toString();
+        final runtimeMs = message.metadata?['runtime_ms'];
+        final resultCreatedAt = terminalAt ?? msgTime;
 
         historyMessages.add({
           'id': msgId,
@@ -318,15 +353,12 @@ class SessionQueryHandler {
             'revision': message.metadata!['revision'],
           if (message.metadata?['reason'] != null)
             'reason': message.metadata!['reason'],
-          if (message.metadata?['started_at'] != null)
-            'started_at': message.metadata!['started_at'],
-          if (message.metadata?['terminal_at'] != null)
-            'terminal_at': message.metadata!['terminal_at'],
-          if (message.metadata?['runtime_ms'] != null)
-            'runtime_ms': message.metadata!['runtime_ms'],
+          'started_at': ?startedAt,
+          'terminal_at': ?terminalAt,
+          'runtime_ms': ?runtimeMs,
           if (message.metadata?['cleanup_outcome'] != null)
             'cleanup_outcome': message.metadata!['cleanup_outcome'],
-          'created_at': msgTime,
+          'created_at': resultCreatedAt,
           'session_id': sessionId,
         });
         final steerMessages = message.metadata?['steer_messages'];
