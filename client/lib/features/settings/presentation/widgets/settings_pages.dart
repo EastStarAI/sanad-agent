@@ -24,6 +24,7 @@ import 'package:sanad_client/features/settings/data/device_control_client.dart';
 import 'package:sanad_client/features/settings/data/device_settings_client.dart';
 import 'package:sanad_client/features/settings/data/device_skills_client.dart';
 import 'package:sanad_client/infrastructure/platform/auto_update_service.dart';
+import 'package:sanad_client/features/client_cli/presentation/widgets/client_cli_settings_card.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 
@@ -280,6 +281,8 @@ class _GeneralPageState extends State<GeneralPage> {
                 ],
               ),
             ),
+            const SizedBox(height: 16),
+            const ClientCliSettingsCard(),
             const SizedBox(height: 16),
           ],
           // Language Card

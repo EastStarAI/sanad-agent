@@ -1,6 +1,7 @@
 import 'package:get_it/get_it.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:package_info_plus/package_info_plus.dart';
+import 'package:universal_io/io.dart';
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
 import 'package:sanad_client/features/devices/data/daemon/local_daemon_controller.dart';
@@ -49,6 +50,13 @@ import 'package:sanad_client/features/devices/data/device_preferences_repository
 import 'package:sanad_client/features/devices/presentation/state/device_command_handler.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/data/device_command_client.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_approval_coordinator.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_home_resolver.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_host.dart';
+import 'package:sanad_client/features/client_cli/data/client_cli_ownership.dart';
+import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
+import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
+import 'package:sanad_client/infrastructure/platform/tray_manager_service.dart';
 import 'package:sanad_client/core/presentation/state/app_state.dart';
 
 final getIt = GetIt.instance;
@@ -410,6 +418,109 @@ Future<void> configureDependencies({
         hardwareId: getIt<String>(instanceName: 'hardwareId'),
       ),
       dispose: (state) => state.dispose(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliApprovalCoordinator>()) {
+    getIt.registerLazySingleton<ClientCliApprovalCoordinator>(
+      () => ClientCliApprovalCoordinator(),
+      dispose: (coordinator) => coordinator.dispose(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliOwnership>()) {
+    getIt.registerLazySingleton<ClientCliOwnership>(
+      () => const ClientCliOwnership(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliHost>()) {
+    final home = const ClientCliHomeResolver().resolveSanadHome(
+      explicitHome: AppConfig.sanadHome.isNotEmpty ? AppConfig.sanadHome : null,
+    );
+    getIt.registerLazySingleton<ClientCliHost>(
+      () => ClientCliHost(
+        connectionCoordinator: getIt<DeviceConnectionCoordinator>(),
+        deviceRepository: getIt<IDeviceRepository>(),
+        ownership: getIt<ClientCliOwnership>(),
+        approvalCoordinator: getIt<ClientCliApprovalCoordinator>(),
+        sanadHome: home,
+        clientVersion: '1.0.15',
+      ),
+      dispose: (host) => host.stop(),
+    );
+  }
+
+  if (!getIt.isRegistered<ClientCliCubit>()) {
+    getIt.registerLazySingleton<ClientCliCubit>(
+      () => ClientCliCubit(
+        host: getIt<ClientCliHost>(),
+        prefs: getIt<SharedPreferences>(),
+      ),
+      dispose: (cubit) => cubit.close(),
+    );
+  }
+
+  if (!getIt.isRegistered<DesktopWindowManagerAdapter>()) {
+    getIt.registerLazySingleton<DesktopWindowManagerAdapter>(
+      () => const DefaultDesktopWindowManagerAdapter(),
+    );
+  }
+
+  if (!getIt.isRegistered<DesktopLifecycleManager>()) {
+    getIt.registerLazySingleton<DesktopLifecycleManager>(
+      () => DesktopLifecycleManager(
+        windowAdapter: getIt<DesktopWindowManagerAdapter>(),
+        onDisposeTray: () async {
+          if (getIt.isRegistered<AppTrayService>()) {
+            await getIt<AppTrayService>().destroy();
+          }
+        },
+        onStopCliHost: () async {
+          if (getIt.isRegistered<ClientCliHost>()) {
+            await getIt<ClientCliHost>().stop();
+          }
+        },
+        onFlushCache: () async {
+          if (getIt.isRegistered<ConversationCachePersistor>()) {
+            await getIt<ConversationCachePersistor>().flush();
+          }
+        },
+        onDisposeAppState: () {
+          if (getIt.isRegistered<AppState>()) {
+            getIt<AppState>().dispose();
+          }
+          if (getIt.isRegistered<SanadSocketService>(instanceName: 'cloudSocketService')) {
+            getIt<SanadSocketService>(instanceName: 'cloudSocketService').dispose();
+          }
+          if (getIt.isRegistered<SanadSocketService>(instanceName: 'localSocketService')) {
+            getIt<SanadSocketService>(instanceName: 'localSocketService').dispose();
+          }
+          if (getIt.isRegistered<DeviceConnectionCoordinator>()) {
+            getIt<DeviceConnectionCoordinator>().dispose();
+          }
+        },
+        onExitProcess: () => exit(0),
+      ),
+    );
+  }
+
+  if (!getIt.isRegistered<TrayManagerAdapter>()) {
+    getIt.registerLazySingleton<TrayManagerAdapter>(
+      () => NativeTrayManagerAdapter(),
+    );
+  }
+
+  if (!getIt.isRegistered<AppTrayService>()) {
+    getIt.registerLazySingleton<AppTrayService>(
+      () => AppTrayService(
+        adapter: getIt<TrayManagerAdapter>(),
+        conversationCacheStore: getIt<ConversationCacheStore>(),
+        clientCliCubit: getIt<ClientCliCubit>(),
+        daemonController: getIt<LocalDaemonController>(),
+        lifecycleManager: getIt<DesktopLifecycleManager>(),
+      ),
+      dispose: (service) => service.destroy(),
     );
   }
 }

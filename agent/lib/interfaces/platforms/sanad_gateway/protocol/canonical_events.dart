@@ -1,5 +1,6 @@
 import '../../../models/delivery/models.dart';
 import '../../../models/device_control.dart';
+import '../../../models/remote_cli.dart';
 
 /// Represents a standard event in the Sanad Unified Protocol.
 class CanonicalEvent {
@@ -301,4 +302,12 @@ class CanonicalEventTypes {
       DeviceControlCommands.runtimeRestart;
   static const String deviceRuntimeRestartAccepted =
       DeviceControlCommands.runtimeRestartAccepted;
+
+  // ── Plan 102: Remote CLI Relay ──────────────────────────────────────
+  static const String deviceCliExecute = RemoteCliCommands.execute;
+  static const String deviceCliCancel = RemoteCliCommands.cancel;
+  static const String deviceCliStdout = RemoteCliCommands.stdout;
+  static const String deviceCliStderr = RemoteCliCommands.stderr;
+  static const String deviceCliEvent = RemoteCliCommands.event;
+  static const String deviceCliResult = RemoteCliCommands.result;
 }
