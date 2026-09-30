@@ -127,6 +127,20 @@ void main() {
       ); // Prompts because it is sensitive and not yet cached/pre-approved
     });
 
+    test('malformed process output cannot crash shell execution', () async {
+      final tool = ShellExecuteTool(workspacePath: workspaceDir.path);
+      final command = Platform.isWindows
+          ? r'''powershell.exe -NoProfile -NonInteractive -Command "$bytes=[byte[]](0xFF,0xFE,0x41); [Console]::OpenStandardOutput().Write($bytes,0,$bytes.Length)"'''
+          : r"printf '\377\376A'";
+
+      final resultString = await tool.execute({'command': command});
+      final result = jsonDecode(resultString) as Map<String, dynamic>;
+
+      expect(result['isError'], isFalse);
+      expect(result['output'], contains('\uFFFD'));
+      expect(result['output'], contains('A'));
+    });
+
     test(
       'Path traversal validation - blocks execution outside workspace',
       () async {
@@ -253,6 +267,37 @@ void main() {
       final result = jsonDecode(resultString);
       expect(result['isError'], isTrue);
       expect(result['output']?.toString(), contains('Command timed out'));
+    });
+
+    test('timeout preserves output produced before termination', () async {
+      final tool = ShellExecuteTool(workspacePath: workspaceDir.path);
+      final progress = <Map<String, dynamic>>[];
+      final command = Platform.isWindows
+          ? 'powershell -NoProfile -Command "Write-Output before-timeout; Start-Sleep -Seconds 5"'
+          : 'printf "before-timeout\\n"; sleep 5';
+
+      final resultString = await tool.execute(
+        {'command': command, 'timeout_ms': 150},
+        context: ToolContext(
+          sessionId: 'timeout-progress',
+          toolCallId: 'shell-timeout-progress',
+          onExecutionProgress: progress.add,
+        ),
+      );
+      final result = jsonDecode(resultString) as Map<String, dynamic>;
+
+      expect(result['isError'], isTrue);
+      expect(result['output'], contains('before-timeout'));
+      expect(result['output'], contains('Command timed out'));
+      expect(result['terminal_reason'], 'timed_out');
+      expect(
+        progress.any(
+          (snapshot) =>
+              snapshot['stdout']?.toString().contains('before-timeout') == true,
+        ),
+        isTrue,
+      );
+      expect(progress.first['process'], isA<Map>());
     });
 
     test(

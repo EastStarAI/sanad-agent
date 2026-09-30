@@ -21,3 +21,5 @@ This contract applies to `agent/lib/capabilities/`.
 - Tool restart replay defaults to unsafe and requires explicit opt-in by the tool contract.
 - Carry tool-call identity through execution context, permission checkpoints, resumed results, persistence, and canonical history.
 - Never infer replay safety from tool name or successful partial output.
+- `ToolContext` may carry `runId`, `generation`, and `RunCancellationScope`; cooperative cancellation is opt-in via `isCooperativelyCancellable`.
+- `shell_execute` owns its process tree through `ProcessTreeController` and must distinguish user cancellation from timeout in terminal output.

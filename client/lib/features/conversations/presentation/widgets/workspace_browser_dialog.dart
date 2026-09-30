@@ -82,6 +82,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
       builder: (dialogContext) => AlertDialog(
         title: Text(title),
         content: TextFormField(
+          key: const Key('workspace_folder_name_input'),
           initialValue: initialValue,
           autofocus: true,
           decoration: InputDecoration(labelText: label),
@@ -98,6 +99,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
             child: const Text('Cancel'),
           ),
           FilledButton(
+            key: const Key('workspace_folder_dialog_confirm_button'),
             onPressed: () => Navigator.pop(dialogContext, value),
             child: Text(actionLabel),
           ),
@@ -169,6 +171,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
             child: const Text('Cancel'),
           ),
           FilledButton(
+            key: const Key('workspace_folder_delete_confirm_button'),
             onPressed: () => Navigator.pop(dialogContext, true),
             style: FilledButton.styleFrom(
               backgroundColor: Theme.of(context).colorScheme.error,
@@ -222,6 +225,7 @@ class _WorkspaceBrowserDialogState extends State<WorkspaceBrowserDialog> {
           const Expanded(child: Text('Choose Workspace')),
           if (canMutateCurrentPath && widget.onCreateFolder != null)
             IconButton(
+              key: const Key('workspace_browser_new_folder_button'),
               icon: const Icon(Icons.create_new_folder_outlined),
               tooltip: 'New Folder',
               onPressed: _isLoading ? null : () => _showCreateFolderDialog(snapshot.path),

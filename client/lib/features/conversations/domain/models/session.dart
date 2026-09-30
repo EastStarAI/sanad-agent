@@ -11,6 +11,7 @@ class Session {
   final String? modelDisplay;
   final String? modelProvider;
   final int? routeRevision;
+  final int historyRevision;
   final String? thinkingMode;
   final ThinkingControlDescriptorDto? thinkingControl;
   final String? reasoningLevel;
@@ -32,6 +33,7 @@ class Session {
     this.modelDisplay,
     this.modelProvider,
     this.routeRevision,
+    this.historyRevision = 0,
     this.thinkingMode,
     this.thinkingControl,
     this.reasoningLevel,
@@ -48,19 +50,32 @@ class Session {
       id: (json['id'] ?? json['session_id'])?.toString() ?? '',
       title: json['title'] ?? 'New Chat',
       deviceId: json['device_id'],
-      createdAt: json['created_at'] != null ? DateTime.parse(json['created_at']) : DateTime.now(),
-      updatedAt: json['updated_at'] != null ? DateTime.parse(json['updated_at']) : DateTime.now(),
+      createdAt: json['created_at'] != null
+          ? DateTime.parse(json['created_at'])
+          : DateTime.now(),
+      updatedAt: json['updated_at'] != null
+          ? DateTime.parse(json['updated_at'])
+          : DateTime.now(),
       lastMessageAt: json['last_user_message_at'] != null
           ? DateTime.parse(json['last_user_message_at'])
-          : (json['last_message_at'] != null ? DateTime.parse(json['last_message_at']) : null),
+          : (json['last_message_at'] != null
+                ? DateTime.parse(json['last_message_at'])
+                : null),
       model: json['model']?.toString(),
       modelDisplay: json['model_display']?.toString(),
       modelProvider: json['provider_instance_id']?.toString(),
-      routeRevision: json['route_revision'] is num ? (json['route_revision'] as num).toInt() : null,
+      routeRevision: json['route_revision'] is num
+          ? (json['route_revision'] as num).toInt()
+          : null,
+      historyRevision: json['history_revision'] is num
+          ? (json['history_revision'] as num).toInt()
+          : 0,
       thinkingMode: _thinkingModeFromJson(json),
       thinkingControl: _thinkingControlFromJson(json['thinking_control']),
       reasoningLevel: json['reasoning_level']?.toString(),
-      contextTokens: json['context_tokens'] is num ? (json['context_tokens'] as num).toInt() : null,
+      contextTokens: json['context_tokens'] is num
+          ? (json['context_tokens'] as num).toInt()
+          : null,
       workspaceId: json['workspace_id']?.toString(),
       workspaceName: json['workspace_name']?.toString(),
       workspacePath: json['workspace_path']?.toString(),
@@ -80,6 +95,7 @@ class Session {
     String? modelDisplay,
     String? modelProvider,
     int? routeRevision,
+    int? historyRevision,
     String? thinkingMode,
     bool clearThinkingMode = false,
     ThinkingControlDescriptorDto? thinkingControl,
@@ -103,7 +119,10 @@ class Session {
       modelDisplay: modelDisplay ?? this.modelDisplay,
       modelProvider: modelProvider ?? this.modelProvider,
       routeRevision: routeRevision ?? this.routeRevision,
-      thinkingMode: clearThinkingMode ? null : (thinkingMode ?? this.thinkingMode),
+      historyRevision: historyRevision ?? this.historyRevision,
+      thinkingMode: clearThinkingMode
+          ? null
+          : (thinkingMode ?? this.thinkingMode),
       thinkingControl: clearThinkingControl
           ? null
           : (thinkingControl ?? this.thinkingControl),

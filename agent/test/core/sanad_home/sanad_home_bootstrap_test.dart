@@ -34,6 +34,48 @@ void main() {
       }
     });
 
+    test('identity prepare creates a non-symlink workspaces root', () async {
+      await SanadHomeBootstrap.identity().prepare();
+      final workspaces = Directory(
+        p.join(
+          tempHome.path,
+          SanadHomeBootstrap.managedWorkspacesDirectoryName,
+        ),
+      );
+      expect(workspaces.existsSync(), isTrue);
+      expect(
+        FileSystemEntity.typeSync(workspaces.path, followLinks: false),
+        FileSystemEntityType.directory,
+      );
+    });
+
+    test('identity prepare rejects a workspaces symlink', () async {
+      if (Platform.isWindows) return;
+      final target = Directory.systemTemp.createTempSync(
+        'sanad-workspaces-link-target-',
+      );
+      addTearDown(() {
+        if (target.existsSync()) target.deleteSync(recursive: true);
+      });
+      Link(
+        p.join(
+          tempHome.path,
+          SanadHomeBootstrap.managedWorkspacesDirectoryName,
+        ),
+      ).createSync(target.path);
+
+      expect(
+        () => SanadHomeBootstrap.identity().prepare(),
+        throwsA(
+          isA<SanadHomeBoundaryViolation>().having(
+            (error) => error.code,
+            'code',
+            'symlink_target',
+          ),
+        ),
+      );
+    });
+
     test('canonicalHome returns the resolved absolute path', () {
       final canonical = SanadHomeBootstrap.canonicalHome();
       expect(canonical, isNotEmpty);

@@ -16,6 +16,7 @@ import 'package:sanad_client/infrastructure/local_tools/sanad_settings_store.dar
 import 'package:sanad_client/infrastructure/web_auth_popup_service_stub.dart'
     if (dart.library.html) 'package:sanad_client/infrastructure/web_auth_popup_service.dart';
 import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
+import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dart';
 import 'package:sanad_client/features/auth/infrastructure/colocated_auth_coupling_client.dart';
 import 'package:sanad_client/features/auth/domain/user_display_name.dart';
@@ -59,10 +60,13 @@ class AuthService {
   final ColocatedAuthCouplingClient _colocatedCoupling;
   final Future<AuthCallbackBinding> Function() _callbackBindingFactory;
   final Future<bool> Function(Uri uri) _authorizationLauncher;
+  final String? _clientInstanceId;
+  final ClientDisplayMetadata? _clientMetadata;
   final _accessTokenController = StreamController<String?>.broadcast();
   final _authenticationExchangeController = StreamController<void>.broadcast();
   final _loginChallengeController = StreamController<AuthLoginChallenge?>.broadcast();
   Future<AuthRefreshResult>? _refreshFuture;
+  Future<void>? _logoutFuture;
 
   String? _backendAccessToken;
   String? _backendRefreshToken;
@@ -93,6 +97,8 @@ class AuthService {
     ColocatedAuthCouplingClient? colocatedCoupling,
     Future<AuthCallbackBinding> Function()? callbackBindingFactory,
     Future<bool> Function(Uri uri)? authorizationLauncher,
+    String? clientInstanceId,
+    ClientDisplayMetadata? clientMetadata,
   }) : _dio =
            dio ??
            (Dio()
@@ -103,7 +109,9 @@ class AuthService {
        _portalAuth = portalAuth ?? PortalAuthClient(),
        _colocatedCoupling = colocatedCoupling ?? ColocatedAuthCouplingClient(),
        _callbackBindingFactory = callbackBindingFactory ?? createAuthCallbackBinding,
-       _authorizationLauncher = authorizationLauncher ?? _launchPortalAuthorization {
+       _authorizationLauncher = authorizationLauncher ?? _launchPortalAuthorization,
+       _clientInstanceId = clientInstanceId,
+       _clientMetadata = clientMetadata {
     _setupInterceptors();
   }
 
@@ -280,9 +288,7 @@ class AuthService {
 
     final fileAccessToken = authDoc['access_token']?.toString();
     final fileRefreshToken = authDoc['refresh_token']?.toString();
-    if (fileAccessToken != null &&
-        fileAccessToken.isNotEmpty &&
-        fileAccessToken != _backendAccessToken) {
+    if (fileAccessToken != null && fileAccessToken.isNotEmpty && fileAccessToken != _backendAccessToken) {
       _backendAccessToken = fileAccessToken;
       _backendRefreshToken = fileRefreshToken;
       final prefs = await _getPrefs();
@@ -403,6 +409,8 @@ class AuthService {
         redirectUri: callback.redirectUri,
         codeChallenge: challenge,
         enrollmentRequestId: enrollment?.requestId,
+        clientInstanceId: _clientInstanceId,
+        metadata: _clientMetadata,
       );
       _setLoginChallenge(
         AuthLoginChallenge(
@@ -493,6 +501,21 @@ class AuthService {
   }
 
   Future<void> logout() async {
+    final existing = _logoutFuture;
+    if (existing != null) return existing;
+
+    final operation = _performLogout();
+    _logoutFuture = operation;
+    try {
+      await operation;
+    } finally {
+      if (identical(_logoutFuture, operation)) {
+        _logoutFuture = null;
+      }
+    }
+  }
+
+  Future<void> _performLogout() async {
     var refreshToken = _backendRefreshToken;
     var accessToken = _backendAccessToken;
 

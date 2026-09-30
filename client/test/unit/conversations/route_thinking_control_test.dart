@@ -35,6 +35,35 @@ void main() {
       recent: [],
     );
 
+    test('reloads snapshot when capabilities become model-scoped', () {
+      expect(
+        RouteThinkingControl.shouldReloadSnapshot(
+          previouslyUsedModelControls: false,
+          usesModelControls: true,
+          previousProviderId: 'provider-1',
+          providerId: 'provider-1',
+          previousModelId: 'o3',
+          modelId: 'o3',
+          previousDeviceId: 'device-1',
+          deviceId: 'device-1',
+        ),
+        isTrue,
+      );
+      expect(
+        RouteThinkingControl.shouldReloadSnapshot(
+          previouslyUsedModelControls: true,
+          usesModelControls: true,
+          previousProviderId: 'provider-1',
+          providerId: 'provider-1',
+          previousModelId: 'o3',
+          modelId: 'o3',
+          previousDeviceId: 'device-1',
+          deviceId: 'device-1',
+        ),
+        isFalse,
+      );
+    });
+
     test('resolves thinking_control from model cache snapshot', () {
       final descriptor = RouteThinkingControl.resolveDescriptor(
         snapshot: snapshot,
@@ -90,27 +119,30 @@ void main() {
       expect(descriptor, isNull);
     });
 
-    test('ignores session descriptor when provider or model no longer match', () {
-      const sessionDescriptor = ThinkingControlDescriptorDto(
-        status: ThinkingCapabilityStatus.supported,
-        options: [
-          ThinkingControlOptionDto(id: 'low', label: 'Low'),
-        ],
-      );
+    test(
+      'ignores session descriptor when provider or model no longer match',
+      () {
+        const sessionDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          options: [
+            ThinkingControlOptionDto(id: 'low', label: 'Low'),
+          ],
+        );
 
-      final descriptor = RouteThinkingControl.resolveDescriptor(
-        snapshot: snapshot,
-        providerInstanceId: 'provider-1',
-        modelId: 'gpt-5',
-        sessionDescriptor: sessionDescriptor,
-        sessionRouteRevision: 4,
-        activeRouteRevision: 4,
-        sessionProviderId: 'provider-1',
-        sessionModelId: 'o3',
-      );
+        final descriptor = RouteThinkingControl.resolveDescriptor(
+          snapshot: snapshot,
+          providerInstanceId: 'provider-1',
+          modelId: 'gpt-5',
+          sessionDescriptor: sessionDescriptor,
+          sessionRouteRevision: 4,
+          activeRouteRevision: 4,
+          sessionProviderId: 'provider-1',
+          sessionModelId: 'o3',
+        );
 
-      expect(descriptor, isNull);
-    });
+        expect(descriptor, isNull);
+      },
+    );
 
     test('uses legacy device list when thinking source is absent', () {
       const capabilities = Capability(
@@ -160,90 +192,99 @@ void main() {
       );
     });
 
-    test('ignores session descriptor when input route differs from session binding', () {
-      const sessionDescriptor = ThinkingControlDescriptorDto(
-        status: ThinkingCapabilityStatus.supported,
-        options: [
-          ThinkingControlOptionDto(id: 'max', label: 'Max'),
-        ],
-      );
+    test(
+      'ignores session descriptor when input route differs from session binding',
+      () {
+        const sessionDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          options: [
+            ThinkingControlOptionDto(id: 'max', label: 'Max'),
+          ],
+        );
 
-      final descriptor = RouteThinkingControl.resolveDescriptor(
-        snapshot: snapshot,
-        providerInstanceId: 'provider-1',
-        modelId: 'gpt-5',
-        sessionDescriptor: sessionDescriptor,
-        sessionRouteRevision: 4,
-        activeRouteRevision: 4,
-        sessionProviderId: 'provider-1',
-        sessionModelId: 'o3',
-      );
+        final descriptor = RouteThinkingControl.resolveDescriptor(
+          snapshot: snapshot,
+          providerInstanceId: 'provider-1',
+          modelId: 'gpt-5',
+          sessionDescriptor: sessionDescriptor,
+          sessionRouteRevision: 4,
+          activeRouteRevision: 4,
+          sessionProviderId: 'provider-1',
+          sessionModelId: 'o3',
+        );
 
-      expect(descriptor, isNull);
-    });
+        expect(descriptor, isNull);
+      },
+    );
 
-    test('falls back to snapshot after route switch when revision matches new model', () {
-      const staleSessionDescriptor = ThinkingControlDescriptorDto(
-        status: ThinkingCapabilityStatus.supported,
-        options: [
-          ThinkingControlOptionDto(id: 'max', label: 'Max'),
-        ],
-      );
-      const switchedSnapshot = ModelCacheSnapshotDto(
-        instances: [
-          ModelCacheInstanceDto(
-            id: 'provider-1',
-            displayName: 'OpenAI',
-            status: 'ready',
-            isDefault: true,
-            cacheStatus: 'fetched',
-            models: [
-              ModelCacheModelDto(
-                id: 'gpt-5',
-                thinkingControl: ThinkingControlDescriptorDto(
-                  status: ThinkingCapabilityStatus.supported,
-                  options: [
-                    ThinkingControlOptionDto(id: 'low', label: 'Low'),
-                  ],
+    test(
+      'falls back to snapshot after route switch when revision matches new model',
+      () {
+        const staleSessionDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          options: [
+            ThinkingControlOptionDto(id: 'max', label: 'Max'),
+          ],
+        );
+        const switchedSnapshot = ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'OpenAI',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'gpt-5',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    options: [
+                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ],
-        recent: [],
-      );
+              ],
+            ),
+          ],
+          recent: [],
+        );
 
-      final descriptor = RouteThinkingControl.resolveDescriptor(
-        snapshot: switchedSnapshot,
-        providerInstanceId: 'provider-1',
-        modelId: 'gpt-5',
-        sessionDescriptor: staleSessionDescriptor,
-        sessionRouteRevision: 2,
-        activeRouteRevision: 2,
-        sessionProviderId: 'provider-1',
-        sessionModelId: 'o3',
-      );
+        final descriptor = RouteThinkingControl.resolveDescriptor(
+          snapshot: switchedSnapshot,
+          providerInstanceId: 'provider-1',
+          modelId: 'gpt-5',
+          sessionDescriptor: staleSessionDescriptor,
+          sessionRouteRevision: 2,
+          activeRouteRevision: 2,
+          sessionProviderId: 'provider-1',
+          sessionModelId: 'o3',
+        );
 
-      expect(descriptor?.options.map((option) => option.id), ['low']);
-    });
+        expect(descriptor?.options.map((option) => option.id), ['low']);
+      },
+    );
   });
 
   group('Session thinking correction', () {
-    test('clears corrected thinking mode when correction payload omits replacement', () {
-      final session = Session.fromJson({
-        'id': 'session-1',
-        'title': 'Test',
-        'created_at': '2026-01-01T00:00:00Z',
-        'updated_at': '2026-01-01T00:00:00Z',
-        'thinking_correction': {
-          'reason': 'thinking_option_unavailable_for_route',
-          'previous_selection_id': 'max',
-          'corrected_at': '2026-01-01T00:00:00Z',
-        },
-      });
+    test(
+      'clears corrected thinking mode when correction payload omits replacement',
+      () {
+        final session = Session.fromJson({
+          'id': 'session-1',
+          'title': 'Test',
+          'created_at': '2026-01-01T00:00:00Z',
+          'updated_at': '2026-01-01T00:00:00Z',
+          'thinking_correction': {
+            'reason': 'thinking_option_unavailable_for_route',
+            'previous_selection_id': 'max',
+            'corrected_at': '2026-01-01T00:00:00Z',
+          },
+        });
 
-      expect(session.thinkingMode, isNull);
-    });
+        expect(session.thinkingMode, isNull);
+      },
+    );
 
     test('keeps replacement thinking mode after correction payload', () {
       final session = Session.fromJson({

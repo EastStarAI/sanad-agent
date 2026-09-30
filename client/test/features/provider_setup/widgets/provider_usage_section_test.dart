@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_usage_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_state.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_usage_section.dart';
+
+const _localDeviceId = 'hardware-1';
 
 /// Stub client used only to satisfy the data-layer contract for the cubit.
 /// The widget tests seed the cubit state directly so this client is never
@@ -69,7 +70,7 @@ void main() {
   late ProviderUsageCubit cubit;
   setUp(() {
     client = _NoopClient();
-    cubit = ProviderUsageCubit(client: client);
+    cubit = ProviderUsageCubit(client: client, localDeviceId: _localDeviceId);
     addTearDown(cubit.close);
   });
 
@@ -88,7 +89,7 @@ void main() {
       // Mark as hidden (unsupported on the daemon).
       cubit.emit(
         cubit.state.upsertEntry(
-          DeviceInventoryIds.localDevice,
+          _localDeviceId,
           'a',
           const ProviderUsageEntry(
             phase: ProviderUsagePhase.hidden,
@@ -107,7 +108,7 @@ void main() {
     (tester) async {
       cubit.emit(
         cubit.state.upsertEntry(
-          DeviceInventoryIds.localDevice,
+          _localDeviceId,
           'a',
           const ProviderUsageEntry(phase: ProviderUsagePhase.loading),
         ),
@@ -132,7 +133,7 @@ void main() {
     (tester) async {
       cubit.emit(
         cubit.state.upsertEntry(
-          DeviceInventoryIds.localDevice,
+          _localDeviceId,
           'a',
           ProviderUsageEntry(
             phase: ProviderUsagePhase.fresh,
@@ -198,7 +199,7 @@ void main() {
     (tester) async {
       cubit.emit(
         cubit.state.upsertEntry(
-          DeviceInventoryIds.localDevice,
+          _localDeviceId,
           'a',
           const ProviderUsageEntry(
             phase: ProviderUsagePhase.needsAttention,
@@ -233,7 +234,7 @@ void main() {
     (tester) async {
       cubit.emit(
         cubit.state.upsertEntry(
-          DeviceInventoryIds.localDevice,
+          _localDeviceId,
           'a',
           const ProviderUsageEntry(
             phase: ProviderUsagePhase.needsAttention,
@@ -265,7 +266,7 @@ void main() {
     (tester) async {
       cubit.emit(
         cubit.state.upsertEntry(
-          DeviceInventoryIds.localDevice,
+          _localDeviceId,
           'a',
           ProviderUsageEntry(
             phase: ProviderUsagePhase.staleRefreshing,
@@ -347,7 +348,7 @@ void main() {
 
     cubit.emit(
       cubit.state.upsertEntry(
-        DeviceInventoryIds.localDevice,
+        _localDeviceId,
         'a',
         entryWithResets(0),
       ),
@@ -364,7 +365,7 @@ void main() {
 
     cubit.emit(
       cubit.state.upsertEntry(
-        DeviceInventoryIds.localDevice,
+        _localDeviceId,
         'a',
         entryWithResets(2),
       ),

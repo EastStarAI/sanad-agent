@@ -28,14 +28,17 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 
+import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
-
-import 'support/local_gateway_test_support.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
+import 'package:sanad_agent/evolution/db/session_db.dart';
 import 'package:sqlite3/sqlite3.dart';
 import 'package:test/test.dart';
+
+import 'support/local_gateway_test_support.dart';
 
 const _template = 'openai';
 const _authMethod = 'api_key';
@@ -513,6 +516,496 @@ void main() {
     },
     timeout: const Timeout(Duration(minutes: 3)),
   );
+
+  test(
+    'F.2.7 provider Stop closes a partial SSE without blocking another session',
+    () async {
+      final h = await _RecoveryHarness.create();
+      try {
+        h.fakeLlm.enqueuePartialHang('partial-before-stop');
+        h.fakeLlmSecondary.enqueueText('independent-session-completed');
+        final client = await h.startFirstDaemon();
+        final cancelledSessionId = 'gate-f-f27-cancel-${_unique()}';
+        final independentSessionId = 'gate-f-f27-other-${_unique()}';
+        try {
+          await client.sendThink(
+            sessionId: cancelledSessionId,
+            requestId: 'f27-cancel-think-${_unique()}',
+            message: 'stream until stopped',
+            providerInstanceId: h.instanceIdPrimary,
+          );
+          await h.fakeLlm.waitForHangStart(
+            timeout: const Duration(seconds: 30),
+          );
+
+          await client.sendThink(
+            sessionId: independentSessionId,
+            requestId: 'f27-other-think-${_unique()}',
+            message: 'finish independently',
+            providerInstanceId: h.instanceIdSecondary,
+          );
+          expect(
+            await client.waitForFinalAnswer(
+              sessionId: independentSessionId,
+              timeout: const Duration(seconds: 30),
+            ),
+            contains('independent-session-completed'),
+          );
+
+          await client.sendStop(
+            sessionId: cancelledSessionId,
+            requestId: 'f27-stop-${_unique()}',
+          );
+          expect(
+            await client.waitForStopped(
+              sessionId: cancelledSessionId,
+              timeout: const Duration(seconds: 30),
+            ),
+            isTrue,
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 250));
+          expect(
+            h.fakeLlm.requestsEqualTo(h.fakeLlm.firstRequestBody),
+            equals(1),
+            reason: 'user cancellation must not retry the provider turn',
+          );
+          expect(
+            h.fakeLlmSecondary.requestsEqualTo(h.fakeLlm.firstRequestBody),
+            equals(0),
+            reason: 'user cancellation must not fail over the provider turn',
+          );
+
+          final history = await client.loadSessionHistory(
+            sessionId: cancelledSessionId,
+            requestId: 'f27-history-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          expect(history['runtime_notice'], isNull);
+        } finally {
+          await client.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'F.2.8 live shell Stop kills descendants and preserves one cancelled terminal after restart',
+    () async {
+      final h = await _RecoveryHarness.create();
+      try {
+        final descendantPidFile = File('${h.workspaceDir.path}/descendant.pid');
+        final toolCallId = 'call-f28-${_unique()}';
+        h.fakeLlm.enqueueToolCall(
+          toolName: 'shell_execute',
+          args: <String, dynamic>{
+            'command':
+                'trap "" TERM; '
+                'sh -c \'trap "" TERM; echo \$\$ > descendant.pid; '
+                'while :; do echo draining; sleep 0.05; done\' & wait',
+            'timeout_ms': 60000,
+          },
+          toolCallId: toolCallId,
+        );
+
+        final client1 = await h.startFirstDaemon();
+        final sessionId = 'gate-f-f28-${_unique()}';
+        try {
+          await client1.sendThink(
+            sessionId: sessionId,
+            requestId: 'f28-think-${_unique()}',
+            message: 'run the scripted shell command',
+            workspaceId: h.workspaceDir.path,
+          );
+          await client1.waitForToolCall(
+            sessionId: sessionId,
+            toolName: 'shell_execute',
+            timeout: const Duration(seconds: 30),
+          );
+          final descendantPid = await _waitForPidFile(
+            descendantPidFile,
+            timeout: const Duration(seconds: 10),
+          );
+          expect(await _processExists(descendantPid), isTrue);
+
+          await client1.sendStop(
+            sessionId: sessionId,
+            requestId: 'f28-stop-${_unique()}',
+          );
+          final reconnectingClient = await _TestClient.connect(
+            port: h.gatewayPort,
+            sanadHomePath: h.sanadHome.path,
+          );
+          late final _CancellationSequence sequence;
+          try {
+            await reconnectingClient.sendStop(
+              sessionId: sessionId,
+              requestId: 'f28-duplicate-stop-${_unique()}',
+            );
+            sequence = await reconnectingClient.waitForCancellationSequence(
+              sessionId: sessionId,
+              toolCallId: toolCallId,
+              timeout: const Duration(seconds: 30),
+            );
+          } finally {
+            await reconnectingClient.close();
+          }
+          expect(sequence.eventOrder, equals(['cancelled', 'stopped', 'idle']));
+          expect(sequence.terminalCount, equals(1));
+          expect(sequence.terminal['status'], equals('cancelled'));
+          expect(sequence.terminal['reason'], equals('user_stop'));
+          expect(sequence.terminal['generation'], isA<int>());
+          expect(sequence.terminal['revision'], isA<int>());
+          expect(sequence.terminal['started_at'], isNotNull);
+          expect(sequence.terminal['terminal_at'], isNotNull);
+          expect(sequence.terminal['cleanup_outcome'], isNotNull);
+          await _waitForProcessExit(
+            descendantPid,
+            timeout: const Duration(seconds: 5),
+          );
+
+          final liveHistory = await client1.loadSessionHistory(
+            sessionId: sessionId,
+            requestId: 'f28-live-history-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          _expectSingleCancelledTerminal(
+            liveHistory,
+            toolCallId: toolCallId,
+            matching: sequence.terminal,
+          );
+
+          // Long cancelled shell output may trigger a compaction request before
+          // the fresh turn. Script both deterministic provider calls.
+          h.fakeLlm.enqueueText('compaction-summary-after-stop');
+          h.fakeLlm.enqueueText('new-turn-after-stop');
+          await client1.sendThink(
+            sessionId: sessionId,
+            requestId: 'f28-next-${_unique()}',
+            message: 'start a fresh turn',
+            workspaceId: h.workspaceDir.path,
+          );
+          expect(
+            await client1.waitForFinalAnswer(
+              sessionId: sessionId,
+              timeout: const Duration(seconds: 30),
+            ),
+            contains('new-turn-after-stop'),
+          );
+        } finally {
+          await client1.close();
+        }
+
+        await h.stopFirstDaemon();
+        final client2 = await h.startSecondDaemon();
+        try {
+          final restartedHistory = await client2.loadSessionHistory(
+            sessionId: sessionId,
+            requestId: 'f28-restart-history-${_unique()}',
+            timeout: const Duration(seconds: 30),
+          );
+          _expectSingleCancelledTerminal(
+            restartedHistory,
+            toolCallId: toolCallId,
+          );
+        } finally {
+          await client2.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+    testOn: 'linux || mac-os',
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'F.2.9 SIGKILL preserves ask-user suspension and resumes once',
+    () async {
+      final h = await _RecoveryHarness.create();
+      try {
+        const toolCallId = 'call-f29-ask-user';
+        h.fakeLlm.enqueueToolCall(
+          toolName: 'system_ask_user',
+          args: const <String, dynamic>{
+            'questions': <Map<String, dynamic>>[
+              <String, dynamic>{
+                'question': 'Continue after the ordinary restart?',
+                'options': <String>['Continue', 'Pause', 'Cancel'],
+              },
+            ],
+          },
+          toolCallId: toolCallId,
+        );
+        h.fakeLlm.enqueueText('ask-user-resumed-after-ordinary-restart');
+        h.fakeLlm.enqueueText('new-turn-admitted-after-suspended-resume');
+
+        final client1 = await h.startFirstDaemon();
+        final sessionId = 'gate-f-f29-${_unique()}';
+        try {
+          await client1.sendThink(
+            sessionId: sessionId,
+            requestId: 'f29-think-${_unique()}',
+            message: 'Ask me before continuing.',
+          );
+
+          final firstRequestId = await client1.waitForPermissionRequest(
+            sessionId: sessionId,
+            toolName: 'system_ask_user',
+            timeout: const Duration(seconds: 30),
+          );
+
+          await h.killFirstDaemon();
+
+          final client2 = await h.startSecondDaemon();
+          try {
+            final historyBeforeAnswer = await client2.loadSessionHistory(
+              sessionId: sessionId,
+              requestId: 'f29-history-${_unique()}',
+              timeout: const Duration(seconds: 30),
+            );
+            final messages = (historyBeforeAnswer['messages'] as List)
+                .whereType<Map>()
+                .map(Map<String, dynamic>.from)
+                .toList(growable: false);
+            expect(
+              messages.any(
+                (message) =>
+                    message['type'] == 'tool_result' &&
+                    message['tool_call_id'] == toolCallId,
+              ),
+              isFalse,
+              reason: 'restart must not fabricate a result for Ask User',
+            );
+
+            await client2.sendPermissionResponse(
+              sessionId: sessionId,
+              requestId: firstRequestId,
+              answer: 'Continue',
+            );
+            expect(
+              await client2.waitForFinalAnswer(
+                sessionId: sessionId,
+                timeout: const Duration(seconds: 30),
+              ),
+              contains('ask-user-resumed-after-ordinary-restart'),
+            );
+
+            await client2.sendThink(
+              sessionId: sessionId,
+              requestId: 'f29-second-think-${_unique()}',
+              message: 'Accept this new turn after the resumed answer.',
+            );
+            expect(
+              await client2.waitForFinalAnswer(
+                sessionId: sessionId,
+                timeout: const Duration(seconds: 30),
+              ),
+              contains('new-turn-admitted-after-suspended-resume'),
+              reason: 'the restored suspension projection must become idle',
+            );
+          } finally {
+            await client2.close();
+          }
+        } finally {
+          await client1.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'F.2.10 SIGKILL during provider stream resumes from predecessor once',
+    () async {
+      final h = await _RecoveryHarness.create();
+      try {
+        h.fakeLlm.enqueuePartialHang('partial-before-sigkill');
+        h.fakeLlm.enqueueText('provider-resumed-after-sigkill');
+        final client1 = await h.startFirstDaemon();
+        final sessionId = 'gate-f-f210-${_unique()}';
+        try {
+          await client1.sendThink(
+            sessionId: sessionId,
+            requestId: 'f210-think-${_unique()}',
+            message: 'survive a provider crash',
+          );
+          await h.fakeLlm.waitForHangStart(
+            timeout: const Duration(seconds: 30),
+          );
+          await h.killFirstDaemon();
+          h.fakeLlm.releaseHang();
+
+          final client2 = await h.startSecondDaemon();
+          try {
+            final history = await client2.loadSessionHistory(
+              sessionId: sessionId,
+              requestId: 'f210-history-${_unique()}',
+              timeout: const Duration(seconds: 30),
+            );
+            expect(
+              jsonEncode(history['messages']),
+              contains('provider-resumed-after-sigkill'),
+              reason:
+                  'startup may finish before the replacement client attaches',
+            );
+            expect(
+              h.fakeLlm.requestsEqualTo(h.fakeLlm.firstRequestBody),
+              equals(2),
+              reason: 'startup must issue exactly one replacement request',
+            );
+          } finally {
+            await client2.close();
+          }
+        } finally {
+          await client1.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'F.2.11 SIGKILL preserves permission wait and approved tool runs once',
+    () async {
+      final h = await _RecoveryHarness.create(
+        permissionMode: WorkspacePermissionMode.defaultMode,
+      );
+      try {
+        const toolCallId = 'call-f211-permission';
+        final output = File('${h.workspaceDir.path}/permission-ran.txt');
+        h.fakeLlm.enqueueToolCall(
+          toolName: 'shell_execute',
+          args: const <String, dynamic>{
+            'command': 'printf permission-ran > permission-ran.txt',
+          },
+          toolCallId: toolCallId,
+        );
+        h.fakeLlm.enqueueText('permission-resumed-after-sigkill');
+        final client1 = await h.startFirstDaemon();
+        final sessionId = 'gate-f-f211-${_unique()}';
+        try {
+          await client1.sendThink(
+            sessionId: sessionId,
+            requestId: 'f211-think-${_unique()}',
+            message: 'run one approved shell action',
+            workspaceId: h.workspaceDir.path,
+          );
+          final permissionRequestId = await client1.waitForPermissionRequest(
+            sessionId: sessionId,
+            toolName: 'shell_execute',
+            timeout: const Duration(seconds: 30),
+          );
+          await h.killFirstDaemon();
+
+          final client2 = await h.startSecondDaemon();
+          try {
+            await client2.sendPermissionResponse(
+              sessionId: sessionId,
+              requestId: permissionRequestId,
+              answer: 'Allow once',
+            );
+            expect(
+              await client2.waitForFinalAnswer(
+                sessionId: sessionId,
+                timeout: const Duration(seconds: 30),
+              ),
+              contains('permission-resumed-after-sigkill'),
+            );
+            expect(await output.readAsString(), equals('permission-ran'));
+          } finally {
+            await client2.close();
+          }
+        } finally {
+          await client1.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
+
+  test(
+    'F.2.12 SIGKILL during a tool records unknown outcome without replay',
+    () async {
+      final h = await _RecoveryHarness.create();
+      try {
+        const toolCallId = 'call-f212-tool';
+        final starts = File('${h.workspaceDir.path}/tool-starts.txt');
+        h.fakeLlm.enqueueToolCall(
+          toolName: 'shell_execute',
+          args: const <String, dynamic>{
+            'command':
+                'echo started >> tool-starts.txt; while :; do sleep 0.1; done',
+            'timeout_ms': 60000,
+          },
+          toolCallId: toolCallId,
+        );
+        h.fakeLlm.enqueueText('compaction-summary-after-tool-crash');
+        h.fakeLlm.enqueueText('tool-unknown-outcome-resumed');
+        final client1 = await h.startFirstDaemon();
+        final sessionId = 'gate-f-f212-${_unique()}';
+        try {
+          await client1.sendThink(
+            sessionId: sessionId,
+            requestId: 'f212-think-${_unique()}',
+            message: 'run the crashable tool once',
+            workspaceId: h.workspaceDir.path,
+          );
+          await client1.waitForToolCall(
+            sessionId: sessionId,
+            toolName: 'shell_execute',
+            timeout: const Duration(seconds: 30),
+          );
+          final deadline = DateTime.now().add(const Duration(seconds: 5));
+          while (!starts.existsSync() && DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 50));
+          }
+          expect(starts.existsSync(), isTrue);
+          await h.killFirstDaemon();
+
+          final client2 = await h.startSecondDaemon();
+          try {
+            var encodedHistory = '';
+            for (var attempt = 0; attempt < 30; attempt++) {
+              final history = await client2.loadSessionHistory(
+                sessionId: sessionId,
+                requestId: 'f212-history-$attempt-${_unique()}',
+                timeout: const Duration(seconds: 30),
+              );
+              encodedHistory = jsonEncode(history['messages']);
+              if (encodedHistory.contains('tool-unknown-outcome-resumed')) {
+                break;
+              }
+              await Future<void>.delayed(const Duration(milliseconds: 200));
+            }
+            expect(encodedHistory, contains('tool-unknown-outcome-resumed'));
+            expect(encodedHistory, contains('unknown'));
+            expect(
+              (await starts.readAsLines()).where((line) => line == 'started'),
+              hasLength(1),
+              reason: 'startup must not execute the interrupted tool again',
+            );
+          } finally {
+            await client2.close();
+          }
+        } finally {
+          await client1.close();
+        }
+      } finally {
+        await h.dispose();
+      }
+    },
+    testOn: 'linux || mac-os',
+    timeout: const Timeout(Duration(minutes: 3)),
+  );
 }
 
 // ─── Test harness ─────────────────────────────────────────────────────────
@@ -527,6 +1020,7 @@ class _RecoveryHarness {
     required this.instanceIdPrimary,
     required this.instanceIdSecondary,
     required this.worktreeDir,
+    required this.workspaceDir,
     required this.autoFailover,
   });
 
@@ -538,6 +1032,7 @@ class _RecoveryHarness {
   final String instanceIdPrimary;
   final String instanceIdSecondary;
   final Directory worktreeDir;
+  final Directory workspaceDir;
   final bool autoFailover;
 
   Process? _firstDaemon;
@@ -545,27 +1040,40 @@ class _RecoveryHarness {
   bool _disposed = false;
 
   static const _baseGatewayPort = 58920;
-  static const _baseFakeLlmPort = 60920;
 
   static Future<_RecoveryHarness> create({
     String templateId = _template,
     bool autoFailover = false,
+    WorkspacePermissionMode permissionMode = WorkspacePermissionMode.fullAccess,
   }) async {
-    final random = Random();
     final worktreeDir = Directory.current;
     final sanadHome = await Directory.systemTemp.createTemp('sanad-f-home-');
     final sanadStateHome = await Directory.systemTemp.createTemp(
       'sanad-f-state-',
     );
+    final workspaceDir = Directory('${sanadHome.path}/workspace')
+      ..createSync(recursive: true);
+    await File(
+      '${workspaceDir.path}/AGENTS.md',
+    ).writeAsString('Workspace owned by the cancellation recovery E2E test.');
+
+    final workspaceState = AgentStateDatabase.atPath(sanadStateHome.path);
+    try {
+      SessionDB.fromState(
+        workspaceState,
+      ).saveWorkspace(path: workspaceDir.path, source: 'test');
+    } finally {
+      workspaceState.dispose();
+    }
+    await const WorkspacePolicyStore().savePermissionMode(
+      workspaceDir.path,
+      permissionMode,
+    );
 
     final gatewayPort =
         _baseGatewayPort + (DateTime.now().microsecondsSinceEpoch % 200);
-    final fakePort =
-        _baseFakeLlmPort + (random.nextInt(200) + DateTime.now().second);
-    final fakePortSecondary = fakePort + 1;
-
-    final fake = await FakeLlmServer.start(port: fakePort);
-    final fakeB = await FakeLlmServer.start(port: fakePortSecondary);
+    final fake = await FakeLlmServer.start(port: 0);
+    final fakeB = await FakeLlmServer.start(port: 0);
 
     final instanceIdPrimary = 'gate-f-inst-primary-${_unique()}';
     final instanceIdSecondary = 'gate-f-inst-secondary-${_unique()}';
@@ -579,13 +1087,14 @@ class _RecoveryHarness {
       instanceIdPrimary: instanceIdPrimary,
       instanceIdSecondary: instanceIdSecondary,
       worktreeDir: worktreeDir,
+      workspaceDir: workspaceDir,
       autoFailover: autoFailover,
     );
 
     await h._writeEnv();
     await h._seedProviderInstances(
-      primaryBaseUrl: 'http://127.0.0.1:$fakePort/v1',
-      secondaryBaseUrl: 'http://127.0.0.1:$fakePortSecondary/v1',
+      primaryBaseUrl: 'http://127.0.0.1:${fake.port}/v1',
+      secondaryBaseUrl: 'http://127.0.0.1:${fakeB.port}/v1',
       primaryId: instanceIdPrimary,
       secondaryId: instanceIdSecondary,
       templateId: templateId,
@@ -770,6 +1279,34 @@ class _RecoveryHarness {
     } catch (_) {}
   }
 
+  Future<Map<String, dynamic>> requestOrdinaryRestart({
+    required Duration timeout,
+  }) async {
+    final proc = _firstDaemon;
+    if (proc == null) {
+      throw StateError('The first daemon is not running.');
+    }
+    final client = HttpClient();
+    try {
+      final request = await client.postUrl(
+        Uri.parse(
+          'http://127.0.0.1:$gatewayPort/restart'
+          '?timeout_seconds=${timeout.inSeconds}',
+        ),
+      );
+      authorizeLocalGatewayTestRequest(request, sanadHome.path);
+      final response = await request.close();
+      final body = await utf8.decoder.bind(response).join();
+      final payload = jsonDecode(body) as Map<String, dynamic>;
+      expect(response.statusCode, equals(HttpStatus.ok), reason: body);
+      await proc.exitCode.timeout(const Duration(seconds: 10));
+      _firstDaemon = null;
+      return payload;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;
@@ -943,7 +1480,8 @@ class _LlmResponse {
       toolArgs = null,
       toolCallId = null,
       isRateLimit = false,
-      retryAfterSeconds = 0;
+      retryAfterSeconds = 0,
+      partialHangContent = null;
   const _LlmResponse.toolCall({
     required String name,
     required Map<String, dynamic> args,
@@ -953,14 +1491,24 @@ class _LlmResponse {
        toolArgs = args,
        toolCallId = id,
        isRateLimit = false,
-       retryAfterSeconds = 0;
+       retryAfterSeconds = 0,
+       partialHangContent = null;
   const _LlmResponse.rateLimit(int seconds)
     : content = null,
       toolName = null,
       toolArgs = null,
       toolCallId = null,
       isRateLimit = true,
-      retryAfterSeconds = seconds;
+      retryAfterSeconds = seconds,
+      partialHangContent = null;
+  const _LlmResponse.partialHang(String content)
+    : content = null,
+      toolName = null,
+      toolArgs = null,
+      toolCallId = null,
+      isRateLimit = false,
+      retryAfterSeconds = 0,
+      partialHangContent = content;
 
   final String? content;
   final String? toolName;
@@ -968,6 +1516,7 @@ class _LlmResponse {
   final String? toolCallId;
   final bool isRateLimit;
   final int retryAfterSeconds;
+  final String? partialHangContent;
 }
 
 class FakeLlmServer {
@@ -976,13 +1525,21 @@ class FakeLlmServer {
   final int port;
   final HttpServer _server;
   final List<_LlmResponse> _responses = [];
+  final List<String> _requestBodies = [];
+  Completer<void>? _hangStarted;
+  Completer<void>? _hangReleased;
   int _requestCount = 0;
 
   int get requestCount => _requestCount;
 
+  String get firstRequestBody => _requestBodies.first;
+
+  int requestsEqualTo(String body) =>
+      _requestBodies.where((candidate) => candidate == body).length;
+
   static Future<FakeLlmServer> start({required int port}) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, port);
-    final fake = FakeLlmServer._(port, server);
+    final fake = FakeLlmServer._(server.port, server);
     unawaited(fake._serve());
     return fake;
   }
@@ -1005,6 +1562,20 @@ class FakeLlmServer {
     _responses.add(_LlmResponse.rateLimit(retryAfterSeconds));
   }
 
+  void enqueuePartialHang(String content) {
+    _hangStarted = Completer<void>();
+    _hangReleased = Completer<void>();
+    _responses.add(_LlmResponse.partialHang(content));
+  }
+
+  Future<void> waitForHangStart({required Duration timeout}) =>
+      _hangStarted!.future.timeout(timeout);
+
+  void releaseHang() {
+    final release = _hangReleased;
+    if (release != null && !release.isCompleted) release.complete();
+  }
+
   Future<void> _serve() async {
     await for (final request in _server) {
       try {
@@ -1016,7 +1587,7 @@ class FakeLlmServer {
         }
         _requestCount++;
         // Drain the request body so the connection can be safely re-used.
-        await utf8.decoder.bind(request).join();
+        _requestBodies.add(await utf8.decoder.bind(request).join());
 
         if (_responses.isEmpty) {
           await _writeError(
@@ -1027,6 +1598,44 @@ class FakeLlmServer {
           continue;
         }
         final next = _responses.removeAt(0);
+        if (next.partialHangContent != null) {
+          request.response.headers.contentType = ContentType(
+            'text',
+            'event-stream',
+          );
+          request.response.write(
+            'data: ${jsonEncode(<String, dynamic>{
+              'id': 'chatcmpl-hang-${_unique()}',
+              'object': 'chat.completion.chunk',
+              'created': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+              'model': 'fake-gate-f',
+              'choices': <Map<String, dynamic>>[
+                <String, dynamic>{
+                  'index': 0,
+                  'delta': <String, dynamic>{'content': next.partialHangContent},
+                  'finish_reason': null,
+                },
+              ],
+            })}\n\n',
+          );
+          await request.response.flush();
+          _hangStarted?.complete();
+          try {
+            while (!(_hangReleased?.isCompleted ?? false)) {
+              await Future.any<void>([
+                Future<void>.delayed(const Duration(milliseconds: 50)),
+                if (_hangReleased != null) _hangReleased!.future,
+              ]);
+              if (_hangReleased?.isCompleted ?? false) break;
+              request.response.write(': connection-probe\n\n');
+              await request.response.flush();
+            }
+            await request.response.close();
+          } catch (_) {
+            // The request-owned client was closed by cancellation.
+          }
+          continue;
+        }
         if (next.isRateLimit) {
           request.response.statusCode = HttpStatus.tooManyRequests;
           request.response.headers.set(
@@ -1258,6 +1867,7 @@ class _TestClient {
     required String message,
     String? providerInstanceId,
     String? model,
+    String? workspaceId,
   }) async {
     final payload = <String, dynamic>{
       'request_id': requestId,
@@ -1265,6 +1875,7 @@ class _TestClient {
       'message': message,
       'model': model ?? 'test-model',
       'provider_instance_id': providerInstanceId,
+      'workspace_id': ?workspaceId,
     };
     _send(<String, dynamic>{
       'type': 'execute_command',
@@ -1315,6 +1926,57 @@ class _TestClient {
         'type': 'session.runtime_stop',
         'session_id': sessionId,
         'payload': {'request_id': requestId},
+      },
+    });
+  }
+
+  Future<String> waitForPermissionRequest({
+    required String sessionId,
+    required String toolName,
+    required Duration timeout,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      final remaining = deadline.difference(DateTime.now());
+      final moved = await frames.moveNext().timeout(remaining);
+      if (!moved) break;
+      final frame =
+          jsonDecode(frames.current as String) as Map<String, dynamic>;
+      if (frame['type'] != 'device_event' ||
+          frame['event'] != 'tool_permission_request') {
+        continue;
+      }
+      final payload = frame['payload'] is Map
+          ? Map<String, dynamic>.from(frame['payload'] as Map)
+          : <String, dynamic>{};
+      final eventSessionId =
+          frame['session_id']?.toString() ?? payload['session_id']?.toString();
+      if (eventSessionId != sessionId || payload['tool_name'] != toolName) {
+        continue;
+      }
+      return payload['request_id'].toString();
+    }
+    throw TimeoutException(
+      'Timed out waiting for permission request $toolName on $sessionId',
+      timeout,
+    );
+  }
+
+  Future<void> sendPermissionResponse({
+    required String sessionId,
+    required String requestId,
+    required String answer,
+  }) async {
+    _send(<String, dynamic>{
+      'type': 'execute_command',
+      'command': 'tool_permission_response',
+      'payload': <String, dynamic>{
+        'session_id': sessionId,
+        'request_id': requestId,
+        'allowed': true,
+        'scope': 'once',
+        'decision': 'allow',
+        'answer': answer,
       },
     });
   }
@@ -1486,14 +2148,83 @@ class _TestClient {
       final payload = frame['payload'] is Map
           ? Map<String, dynamic>.from(frame['payload'] as Map)
           : <String, dynamic>{};
-      if (payload['session_id'] != sessionId) continue;
-      if (payload['tool_name'] == toolName) return;
+      final eventSessionId =
+          frame['session_id']?.toString() ?? payload['session_id']?.toString();
+      if (eventSessionId != sessionId) continue;
+      if (payload['tool'] == toolName || payload['tool_name'] == toolName) {
+        return;
+      }
     }
     throw TimeoutException(
       'Timed out waiting for tool_use($toolName) on $sessionId',
       timeout,
     );
   }
+
+  Future<_CancellationSequence> waitForCancellationSequence({
+    required String sessionId,
+    required String toolCallId,
+    required Duration timeout,
+  }) async {
+    final deadline = DateTime.now().add(timeout);
+    final order = <String>[];
+    Map<String, dynamic>? terminal;
+    var terminalCount = 0;
+    while (DateTime.now().isBefore(deadline)) {
+      final remaining = deadline.difference(DateTime.now());
+      final moved = await frames.moveNext().timeout(remaining);
+      if (!moved) break;
+      final frame =
+          jsonDecode(frames.current as String) as Map<String, dynamic>;
+      if (frame['type'] != 'device_event') continue;
+      final payload = frame['payload'] is Map
+          ? Map<String, dynamic>.from(frame['payload'] as Map)
+          : <String, dynamic>{};
+      final eventSessionId =
+          frame['session_id']?.toString() ?? payload['session_id']?.toString();
+      if (eventSessionId != sessionId) continue;
+
+      if (frame['event'] == 'tool_result' &&
+          payload['tool_call_id'] == toolCallId &&
+          payload['status'] == 'cancelled') {
+        terminal = payload;
+        terminalCount++;
+        order.add('cancelled');
+        continue;
+      }
+      if (frame['event'] == 'stopped') {
+        order.add('stopped');
+        continue;
+      }
+      if (frame['event'] == 'session.execution_state_changed' &&
+          payload['state'] == 'idle') {
+        order.add('idle');
+        if (terminal != null) {
+          return _CancellationSequence(
+            eventOrder: order,
+            terminal: terminal,
+            terminalCount: terminalCount,
+          );
+        }
+      }
+    }
+    throw TimeoutException(
+      'Timed out waiting for cancelled/stopped/idle on $sessionId: $order',
+      timeout,
+    );
+  }
+}
+
+class _CancellationSequence {
+  const _CancellationSequence({
+    required this.eventOrder,
+    required this.terminal,
+    required this.terminalCount,
+  });
+
+  final List<String> eventOrder;
+  final Map<String, dynamic> terminal;
+  final int terminalCount;
 }
 
 class _RuntimeNotice {
@@ -1515,6 +2246,65 @@ class _RuntimeNotice {
 
 int _unique() =>
     DateTime.now().microsecondsSinceEpoch ^ Random().nextInt(1 << 20);
+
+Future<int> _waitForPidFile(File file, {required Duration timeout}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    if (await file.exists()) {
+      final pid = int.tryParse((await file.readAsString()).trim());
+      if (pid != null) return pid;
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+  throw TimeoutException('Timed out waiting for ${file.path}', timeout);
+}
+
+Future<bool> _processExists(int pid) async {
+  final result = await Process.run('kill', ['-0', '$pid']);
+  return result.exitCode == 0;
+}
+
+Future<void> _waitForProcessExit(int pid, {required Duration timeout}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    if (!await _processExists(pid)) return;
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+  }
+  fail('Owned descendant PID $pid survived cancellation cleanup');
+}
+
+void _expectSingleCancelledTerminal(
+  Map<String, dynamic> history, {
+  required String toolCallId,
+  Map<String, dynamic>? matching,
+}) {
+  final terminals = (history['messages'] as List)
+      .whereType<Map>()
+      .map(Map<String, dynamic>.from)
+      .where(
+        (message) =>
+            message['type'] == 'tool_result' &&
+            message['tool_call_id'] == toolCallId,
+      )
+      .toList(growable: false);
+  expect(terminals, hasLength(1));
+  final terminal = terminals.single;
+  expect(terminal['status'], equals('cancelled'));
+  expect(terminal['reason'], equals('user_stop'));
+  for (final field in <String>[
+    'run_id',
+    'generation',
+    'revision',
+    'started_at',
+    'terminal_at',
+    'cleanup_outcome',
+  ]) {
+    expect(terminal[field], isNotNull, reason: 'history must preserve $field');
+    if (matching != null) {
+      expect(terminal[field], equals(matching[field]));
+    }
+  }
+}
 
 Future<void> _waitForHealth(int port, String sanadHomePath) async {
   final client = HttpClient();

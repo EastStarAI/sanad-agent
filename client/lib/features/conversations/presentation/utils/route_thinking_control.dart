@@ -9,6 +9,25 @@ enum RouteThinkingSelectorState { hidden, unavailable, selectable, legacy }
 class RouteThinkingControl {
   RouteThinkingControl._();
 
+  static bool shouldReloadSnapshot({
+    required bool previouslyUsedModelControls,
+    required bool usesModelControls,
+    required String? previousProviderId,
+    required String? providerId,
+    required String? previousModelId,
+    required String? modelId,
+    required String? previousDeviceId,
+    required String? deviceId,
+  }) {
+    if (!usesModelControls) {
+      return false;
+    }
+    return !previouslyUsedModelControls ||
+        previousProviderId != providerId ||
+        previousModelId != modelId ||
+        previousDeviceId != deviceId;
+  }
+
   static String? activeProviderId({
     required Session? session,
     required ConversationInputSlice inputSlice,
@@ -25,8 +44,9 @@ class RouteThinkingControl {
     if (metadataProvider != null && metadataProvider.isNotEmpty) {
       return metadataProvider;
     }
-    final metadataModelProvider =
-        session?.metadata?['model_provider']?.toString().trim();
+    final metadataModelProvider = session?.metadata?['model_provider']
+        ?.toString()
+        .trim();
     if (metadataModelProvider != null && metadataModelProvider.isNotEmpty) {
       return metadataModelProvider;
     }
@@ -170,7 +190,8 @@ class RouteThinkingControl {
     }
     return switch (descriptor.status) {
       ThinkingCapabilityStatus.unsupported => RouteThinkingSelectorState.hidden,
-      ThinkingCapabilityStatus.unknown => RouteThinkingSelectorState.unavailable,
+      ThinkingCapabilityStatus.unknown =>
+        RouteThinkingSelectorState.unavailable,
       ThinkingCapabilityStatus.supported =>
         descriptor.isSelectable
             ? RouteThinkingSelectorState.selectable

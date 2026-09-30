@@ -1,4 +1,5 @@
 import 'package:logging/logging.dart';
+
 import '../../core/models/message.dart';
 
 const String steerMarkerOpen =
@@ -159,7 +160,10 @@ class SteerCoordinator {
       metadata: existingMetadata,
     );
     try {
-      callbacks.saveHistory();
+      callbacks.commitPendingSteerDelivery([
+        for (final steer in pending)
+          PendingSteerPlacement(steer: steer, anchorIndex: targetIdx),
+      ]);
     } catch (_) {
       callbacks.updateMessage(
         targetIdx,
@@ -172,9 +176,6 @@ class SteerCoordinator {
       rethrow;
     }
     _pendingSteers.removeWhere(pending.contains);
-    for (final steer in pending) {
-      callbacks.markPendingSteerDelivered(steer);
-    }
   }
 
   /// Appends all pending steers as user messages and clears the queue.
@@ -184,6 +185,7 @@ class SteerCoordinator {
         .where(callbacks.reservePendingSteer)
         .toList(growable: false);
     if (pending.isEmpty) return;
+    final placements = <PendingSteerPlacement>[];
     for (final steer in pending) {
       callbacks.addUserMessage(
         Message(
@@ -196,9 +198,15 @@ class SteerCoordinator {
           },
         ),
       );
+      placements.add(
+        PendingSteerPlacement(
+          steer: steer,
+          anchorIndex: callbacks.historyLength - 1,
+        ),
+      );
     }
     try {
-      callbacks.saveHistory();
+      callbacks.commitPendingSteerDelivery(placements);
     } catch (_) {
       callbacks.rollbackAddedUserMessages(pending.length);
       for (final steer in pending) {
@@ -207,9 +215,6 @@ class SteerCoordinator {
       rethrow;
     }
     _pendingSteers.removeWhere(pending.contains);
-    for (final steer in pending) {
-      callbacks.markPendingSteerDelivered(steer);
-    }
   }
 
   /// Marks the last assistant message as superseded by a steer.
@@ -244,10 +249,16 @@ abstract class SteerCallbacks {
   void addUserMessage(Message message);
   void rollbackAddedUserMessages(int count);
   int lastAssistantIndex();
-  void saveHistory();
+  void commitPendingSteerDelivery(List<PendingSteerPlacement> placements);
   bool reservePendingSteer(PendingSteer steer);
-  void markPendingSteerDelivered(PendingSteer steer);
   void releasePendingSteerAfterDeliveryFailure(PendingSteer steer);
+}
+
+class PendingSteerPlacement {
+  final PendingSteer steer;
+  final int anchorIndex;
+
+  const PendingSteerPlacement({required this.steer, required this.anchorIndex});
 }
 
 /// A buffered mid-turn user steering message.

@@ -53,9 +53,10 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
   bool _isLoading = true;
   bool _isRefreshingConnections = false;
   bool _refreshConnectionsQueued = false;
+  bool _mutating = false;
   int _connectionRefreshCycle = 0;
 
-  String? _workspacePath;
+  String? _workspaceId;
   String? _workspaceName;
   List<McpServerConfig> _globalServers = const [];
   List<McpServerConfig> _workspaceServers = const [];
@@ -65,21 +66,28 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
   @override
   void initState() {
     super.initState();
+    if (widget.workspaceId != null) {
+      _source = _McpConfigSource.workspace;
+    }
     unawaited(_loadData());
   }
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
 
+    if (!_deviceOnline) {
+      if (mounted) setState(() => _isLoading = false);
+      return;
+    }
+
     try {
       final workspace = _workspaceRuntimeContext.activeWorkspace;
-      _workspacePath =
-          widget.workspaceId ?? (workspace?.path.trim().isNotEmpty == true ? workspace!.path.trim() : null);
+      _workspaceId = widget.workspaceId ?? (workspace?.id.trim().isNotEmpty == true ? workspace!.id.trim() : null);
       _workspaceName = widget.workspaceName ?? workspace?.name;
       _applySnapshot(
         await context.read<McpRuntimeClient>().listServers(
           device: _targetDevice,
-          workspaceId: _workspacePath,
+          workspaceId: _workspaceId,
         ),
       );
 
@@ -114,7 +122,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
 
   void _applySnapshot(McpRuntimeSnapshot snapshot) {
     _snapshot = snapshot;
-    _workspacePath = snapshot.workspaceId ?? _workspacePath;
+    _workspaceId = snapshot.workspaceId ?? _workspaceId;
     _globalServers = snapshot.global.servers.map((entry) => entry.config).toList(growable: false);
     _workspaceServers = snapshot.workspace.servers.map((entry) => entry.config).toList(growable: false);
     _effectiveServers = snapshot.effective.servers.map((entry) => entry.config).toList(growable: false);
@@ -186,7 +194,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
         device: _targetDevice,
         serverName: config.name,
         scope: _currentScope,
-        workspaceId: _workspacePath,
+        workspaceId: _workspaceId,
       );
 
       if (mounted && cycle == _connectionRefreshCycle) {
@@ -264,7 +272,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
   }
 
   Future<void> _deleteServer(McpServerConfig server) async {
-    if (!_canEditCurrentSource) {
+    if (!_canEditCurrentSource || _mutating || !_deviceOnline) {
       return;
     }
 
@@ -286,19 +294,29 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
       ),
     );
 
-    if (confirmed != true) {
+    if (confirmed != true || !mounted) {
       return;
     }
 
-    final snapshot = await context.read<McpRuntimeClient>().deleteServer(
-      device: _targetDevice,
-      scope: _currentScope,
-      workspaceId: _editableWorkspacePath,
-      serverName: server.name,
-    );
-    await _disconnectServer(server.id);
-    if (mounted) {
-      setState(() => _applySnapshot(snapshot));
+    setState(() => _mutating = true);
+    try {
+      final snapshot = await context.read<McpRuntimeClient>().deleteServer(
+        device: _targetDevice,
+        scope: _currentScope,
+        workspaceId: _editableWorkspacePath,
+        serverName: server.name,
+      );
+      await _disconnectServer(server.id);
+      if (mounted) {
+        setState(() => _applySnapshot(snapshot));
+      }
+    } catch (error) {
+      await _loadData();
+      if (mounted) {
+        ToastUtils.showError(context, error.toString());
+      }
+    } finally {
+      if (mounted) setState(() => _mutating = false);
     }
   }
 
@@ -319,7 +337,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
         device: _targetDevice,
         serverNames: [server.name],
         scope: _currentScope,
-        workspaceId: _workspacePath,
+        workspaceId: _workspaceId,
       );
       await Clipboard.setData(ClipboardData(text: result.json));
       if (mounted) {
@@ -338,7 +356,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
         ? _effectiveOrigins[server.name] ?? _McpConfigSource.global
         : _source;
     final scope = source == _McpConfigSource.workspace ? McpConfigScope.workspace : McpConfigScope.global;
-    final workspaceId = source == _McpConfigSource.workspace ? _workspacePath : null;
+    final workspaceId = source == _McpConfigSource.workspace ? _workspaceId : null;
     try {
       final document = await context.read<McpRuntimeClient>().readAdvanced(
         device: _targetDevice,
@@ -451,11 +469,14 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
   }
 
   Future<void> _openAddServer() async {
+    if (!_deviceOnline || _mutating) {
+      return;
+    }
     if (_source == _McpConfigSource.effective) {
-      if (_workspacePath == null) {
+      if (_workspaceId == null) {
         final result = await context.push(
           AppRoutes.addMcpServer,
-          extra: {'scopeLabel': 'Device', 'scope': McpConfigScope.global},
+          extra: _extraForSource(_McpConfigSource.global),
         );
         if (result != null) {
           await _loadData();
@@ -517,7 +538,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
       _McpConfigSource.workspace => {
         'device': _targetDevice,
         'scopeLabel': _workspaceName ?? 'Workspace',
-        'workspacePath': _workspacePath,
+        'workspaceId': _workspaceId,
         'scope': McpConfigScope.workspace,
       },
       _McpConfigSource.effective => {
@@ -532,14 +553,14 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
     if (_source == _McpConfigSource.effective) {
       return false;
     }
-    if (_source == _McpConfigSource.workspace && (_workspacePath == null || _workspacePath!.isEmpty)) {
+    if (_source == _McpConfigSource.workspace && (_workspaceId == null || _workspaceId!.isEmpty)) {
       return false;
     }
     return true;
   }
 
   String? get _editableWorkspacePath {
-    return _source == _McpConfigSource.workspace ? _workspacePath : null;
+    return _source == _McpConfigSource.workspace ? _workspaceId : null;
   }
 
   McpConfigScope get _currentScope {
@@ -558,6 +579,16 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
     throw StateError('Select a device before managing MCP servers.');
   }
 
+  bool get _deviceOnline {
+    try {
+      return _targetDevice.isOnline;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  bool get _canMutate => _deviceOnline && !_mutating && _canEditCurrentSource;
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -575,14 +606,15 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                       alignment: Alignment.centerRight,
                       child: FilledButton.icon(
                         key: const ValueKey('add-mcp-server'),
-                        onPressed: _openAddServer,
+                        onPressed: _deviceOnline && !_mutating ? _openAddServer : null,
                         icon: const Icon(Icons.add),
                         label: const Text('Add server'),
                       ),
                     ),
-                  if (widget.embedded && _workspacePath != null) const SizedBox(height: 12),
-                  if (_workspacePath != null)
+                  if (widget.embedded && _workspaceId != null) const SizedBox(height: 12),
+                  if (_workspaceId != null)
                     SegmentedButton<_McpConfigSource>(
+                      key: const Key('mcp_scope_segment_btn'),
                       segments: [
                         const ButtonSegment(
                           value: _McpConfigSource.global,
@@ -593,7 +625,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                           value: _McpConfigSource.workspace,
                           label: Text(_workspaceName ?? 'Workspace'),
                           icon: const Icon(Icons.workspaces_outline),
-                          enabled: _workspacePath != null,
+                          enabled: _workspaceId != null,
                         ),
                         const ButtonSegment(
                           value: _McpConfigSource.effective,
@@ -653,7 +685,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
         title: const Text('MCP'),
         actions: [
           IconButton(
-            onPressed: _openAddServer,
+            onPressed: _deviceOnline && !_mutating ? _openAddServer : null,
             icon: const Icon(Icons.add),
             tooltip: 'Add MCP Server',
           ),
@@ -664,7 +696,13 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
   }
 
   Widget _buildServerPane(BuildContext context) {
-    if (_source == _McpConfigSource.workspace && _workspacePath == null) {
+    if (!_deviceOnline) {
+      return _buildEmptyMessage(
+        context,
+        'This device is offline. Reconnect to manage MCP servers.',
+      );
+    }
+    if (_source == _McpConfigSource.workspace && _workspaceId == null) {
       return _buildEmptyMessage(
         context,
         'Select a workspace to manage local MCP servers.',
@@ -719,6 +757,7 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
               label: '${isExpanded ? 'Collapse' : 'Expand'} ${server.name} details',
 
               child: InkWell(
+                key: ValueKey('mcp_server_toggle_${server.name}'),
                 excludeFromSemantics: true,
                 onTap: () {
                   setState(() {
@@ -865,13 +904,15 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                       runSpacing: 8,
                       children: [
                         OutlinedButton.icon(
-                          onPressed: () => _connectToServer(server, _connectionRefreshCycle),
+                          onPressed: _deviceOnline && !_mutating
+                              ? () => _connectToServer(server, _connectionRefreshCycle)
+                              : null,
                           icon: const Icon(Icons.wifi_find),
                           label: const Text('Test'),
                         ),
                         if (_source != _McpConfigSource.effective || _effectiveOrigins.containsKey(server.name))
                           OutlinedButton.icon(
-                            onPressed: () => _openEditServer(server),
+                            onPressed: _deviceOnline && !_mutating ? () => _openEditServer(server) : null,
                             icon: const Icon(Icons.edit_outlined),
                             label: const Text('Edit'),
                           ),
@@ -886,8 +927,9 @@ class _McpServerManagementScreenState extends State<McpServerManagementScreen> {
                             PopupMenuItem(value: 'json', child: Text('Edit JSON')),
                           ],
                         ),
-                        if (_canEditCurrentSource)
+                        if (_canMutate)
                           TextButton.icon(
+                            key: ValueKey('mcp_server_remove_${server.name}'),
                             onPressed: () => _deleteServer(server),
                             icon: const Icon(Icons.delete_outline),
                             label: const Text('Remove'),

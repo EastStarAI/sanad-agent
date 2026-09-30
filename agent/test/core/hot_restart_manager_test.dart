@@ -154,4 +154,26 @@ void main() {
       );
     },
   );
+
+  test(
+    'ordinary restart request waits beyond one checkpoint timeout window',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      final handled = server.listen((request) async {
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        request.response.statusCode = HttpStatus.ok;
+        await request.response.close();
+      });
+      addTearDown(handled.cancel);
+
+      final accepted = await requestControlledDaemonRestart(
+        baseUri: Uri.parse('http://127.0.0.1:${server.port}'),
+        credential: 'restart-secret',
+        timeout: const Duration(milliseconds: 20),
+      );
+
+      expect(accepted, isTrue);
+    },
+  );
 }

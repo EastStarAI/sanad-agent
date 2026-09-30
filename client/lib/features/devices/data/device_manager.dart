@@ -14,6 +14,16 @@ import 'device_inventory_source.dart';
 class DeviceManager {
   static const String _activeAgentKey = 'active_device_id';
 
+  static Future<void> normalizeActiveDeviceId(
+    SharedPreferences preferences,
+    String legacyId,
+    String deviceId,
+  ) async {
+    if (preferences.getString(_activeAgentKey) == legacyId) {
+      await preferences.setString(_activeAgentKey, deviceId);
+    }
+  }
+
   final SanadSocketService _socket;
   final DeviceConnectionCoordinator _connectionCoordinator;
   final DeviceInventoryMerger _inventoryMerger;
@@ -57,6 +67,9 @@ class DeviceManager {
       _rebuildInventory();
       _emitAgentsUpdate();
     });
+    if (_isCloudGatewayReady) {
+      unawaited(fetchAgents());
+    }
   }
 
   /// Create an instance of DeviceManager
@@ -271,6 +284,7 @@ class DeviceManager {
 
   void _rebuildInventory() {
     _agents = _inventoryMerger.merge(_cloudAgents);
+    _connectionCoordinator.synchronizeCloudInterests(_cloudAgents);
   }
 
   bool get _isCloudGatewayReady => !_socket.isLocalTransport && _socket.lifecycleState == SocketLifecycleState.ready;
@@ -297,7 +311,7 @@ class DeviceManager {
           if (represented.id != activeId) {
             await setActiveAgent(represented.id);
           }
-        } else if (activeId != DeviceInventoryIds.localDevice) {
+        } else {
           await setActiveAgent(null);
         }
       }
@@ -387,6 +401,12 @@ class DeviceManager {
         ];
         _rebuildInventory();
         _emitAgentsUpdate();
+      } else if (_isCloudGatewayReady) {
+        // A newly paired Agent can publish online status before this Client
+        // receives an inventory row for it. Reconcile authoritatively so the
+        // capabilities owner observes the new DeviceConfig and fetches model /
+        // thinking controls without requiring an Agent restart.
+        unawaited(fetchAgents());
       }
 
       _agentStatusController.add(data);

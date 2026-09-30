@@ -23,6 +23,7 @@ Provide a deterministic, low-noise, development-only control surface through whi
 - The controller selects an isolate by the required advertised extension rather than assuming that the first isolate is the Flutter UI isolate.
 - An action result describes only the action completed by the tool. Callers must verify the expected UI state separately; action responses must not claim an application outcome that was not observed.
 - Batch execution stops on the first failed step unless the recipe explicitly opts into continuation.
+- Authentication URL retrieval uses only the dedicated extension advertised by the explicitly selected Client isolate. It fails when no active challenge exists and never searches another isolate, Client, browser tab, heap object, or persisted runtime surface for a fallback.
 
 ## Output and Context Safety
 
@@ -31,6 +32,7 @@ Provide a deterministic, low-noise, development-only control surface through whi
 - Do not add duplicate framework wrappers, state-management internals, icon-font glyphs, or redundant text rows to snapshots.
 - Consolidate useful tooltip and semantic metadata into the actionable keyed element.
 - Never expose obscured text-field values. Successful text-entry results must not echo the entered value.
+- The active authentication URL is an ephemeral handoff value: human mode prints only that URL to standard output, failures use standard error, and neither the Client extension nor either CLI layer may log, journal, cache, or add it to general UI snapshots.
 - Changes that can increase snapshot volume must add or preserve an explicit bounded-output strategy and truncation metadata; silent truncation is forbidden.
 
 ## Portability

@@ -73,9 +73,10 @@ Future<bool> requestControlledDaemonRestart({
         requesterToolCallId!,
       );
     }
-    final response = await request.close().timeout(
-      timeout + const Duration(seconds: 5),
-    );
+    final responseFuture = request.close();
+    final response = force
+        ? await responseFuture.timeout(timeout + const Duration(seconds: 5))
+        : await responseFuture;
     await response.drain<void>().timeout(timeout);
     return response.statusCode >= 200 && response.statusCode < 300;
   } catch (_) {

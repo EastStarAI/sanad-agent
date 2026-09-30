@@ -8,7 +8,6 @@ import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/conversations/data/persistence/conversation_cache_persistor.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/utils/app_platform.dart';
@@ -144,8 +143,9 @@ class _AppAuthListenerState extends State<AppAuthListener> {
                 .catchError((_) {}),
           );
         } else if (state is AuthUnauthenticated) {
+          final localDeviceId = context.read<DeviceConnectionCoordinator>().currentDeviceId;
           final cloudDeviceIds = widget.conversationCacheRepository.snapshot.contexts.keys
-              .where((deviceId) => deviceId != DeviceInventoryIds.localDevice)
+              .where((deviceId) => deviceId != localDeviceId)
               .toSet();
           widget.conversationCacheRepository.clearCloudUserScope(cloudDeviceIds);
           unawaited(widget.conversationCachePersistor.flush());

@@ -1,6 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/domain/models/llm_usage_snapshot.dart';
 
 void main() {
   test('maps latest context usage and cached input without cache write', () {
@@ -76,5 +77,38 @@ void main() {
 
     expect(events.single.contextUsage!.inputTokens, 500);
     expect(events.single.contextUsage!.cachedTokens, 320);
+  });
+
+  test('latest usage falls back to completed compaction metadata', () {
+    final usage = latestContextUsage([
+      CanonicalEvent(
+        id: 'old-usage',
+        kind: EventKind.finalAnswer,
+        timestamp: DateTime.utc(2026, 8, 31, 8, 0),
+        contextUsage: const LlmUsageSnapshot(
+          inputTokens: 136000,
+          cachedTokens: 135000,
+          contextWindowTokens: 400000,
+          modelId: 'gpt-5.6-sol',
+        ),
+      ),
+      CanonicalEvent(
+        id: 'compaction-1',
+        kind: EventKind.informational,
+        timestamp: DateTime.utc(2026, 8, 31, 8, 30),
+        metadata: const {
+          'compaction_event': true,
+          'compaction_status': 'completed',
+          'context_window_tokens': 128000,
+          'estimated_request_tokens_after': 8977,
+          'model_id': 'gpt-5.6-sol',
+        },
+      ),
+    ]);
+
+    expect(usage?.inputTokens, 8977);
+    expect(usage?.contextWindowTokens, 400000);
+    expect(usage?.cachedTokens, isNull);
+    expect(usage?.modelId, 'gpt-5.6-sol');
   });
 }

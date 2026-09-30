@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import '../../capabilities/models/tool_schema.dart';
 import '../../core/models/agent_response.dart';
@@ -12,7 +14,7 @@ import 'llm_request_options.dart';
 ///
 /// Unlike transport-level fixtures, this adapter runs through AgentRunner and
 /// the normal persistence/event pipeline without contacting an external model.
-class E2eFixtureAdapter implements LLMAdapter {
+class E2eFixtureAdapter implements LLMAdapter, WireInputUsageMeasurer {
   static const providerId = 'e2e-provider';
   static const modelId = 'e2e-model';
   static const responseText = 'e2e-success';
@@ -33,6 +35,16 @@ class E2eFixtureAdapter implements LLMAdapter {
   static const memoryAddToolCallId = 'e2e-memory-add-tool-call';
   static const memoryReadToolCallId = 'e2e-memory-read-tool-call';
   static const memoryEntry = 'User name is Ahmed Memory E2E';
+  static const askUserPrompt = '__SANAD_E2E_ASK_USER_RESTART__';
+  static const askUserToolName = 'system_ask_user';
+  static const askUserToolCallId = 'e2e-ask-user-tool-call';
+  static const askUserResponseText = 'ASK_USER_RESUMED';
+  static const shellCrashPromptPrefix = '__SANAD_E2E_SHELL_CRASH__';
+  static const shellToolName = 'shell_execute';
+  static const shellToolCallId = 'e2e-shell-crash-tool-call';
+  static const shellCrashResponseText = 'SHELL_INTERRUPTED_RESUMED';
+  static const delayedResponsePromptPrefix = '__SANAD_E2E_DELAY__';
+  static const runtimeFailurePrompt = '__SANAD_E2E_RUNTIME_FAILURE__';
 
   const E2eFixtureAdapter();
 
@@ -42,6 +54,49 @@ class E2eFixtureAdapter implements LLMAdapter {
       if (message.role == MessageRole.user) {
         latestUserContent = message.content ?? '';
       }
+    }
+    if (latestUserContent?.contains('The JSON schema version is 1') ?? false) {
+      var latestRequest = 'Continue the current task';
+      String? explicitGoal;
+      for (final message in history.take(history.length - 1)) {
+        if (message.role == MessageRole.user &&
+            (message.content ?? '').trim().isNotEmpty) {
+          latestRequest = message.content!;
+          final goalMatch = RegExp(
+            r'goal:\s*(.+)',
+            caseSensitive: false,
+          ).firstMatch(message.content!);
+          explicitGoal ??= goalMatch?.group(1)?.trim();
+        }
+      }
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: jsonEncode({
+            'schemaVersion': 1,
+            'currentGoal': explicitGoal ?? latestRequest,
+            'latestUserRequest': latestRequest,
+            'successCriteria': 'Complete the requested work safely',
+            'constraints': 'Preserve the active runtime contracts',
+            'completedWork': 'Earlier conversation work is preserved',
+            'activeState': 'Continue from the current checkpoint',
+            'criticalContext': latestRequest,
+            'decisions': 'Use the validated current plan',
+            'blockers': 'None recorded',
+            'filesAndPaths': 'None recorded',
+            'pendingAsks': latestRequest,
+            'remainingWork': 'Complete and verify the latest user request',
+          }),
+        ),
+        usage: const {
+          'prompt_tokens': 1200,
+          'cached_input_tokens': 900,
+          'completion_tokens': 180,
+        },
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
     }
     if (latestUserContent == runtimeContextPrompt) {
       final markerPattern = RegExp(
@@ -61,6 +116,108 @@ class E2eFixtureAdapter implements LLMAdapter {
         message: Message(
           role: MessageRole.assistant,
           content: marker ?? 'MISSING_RUNTIME_MARKER',
+        ),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
+    final hasAskUserTool =
+        tools?.any((tool) => tool.name == askUserToolName) ?? false;
+    if (latestUserContent == askUserPrompt && hasAskUserTool) {
+      final hasResult = history.any(
+        (message) =>
+            message.role == MessageRole.tool &&
+            message.toolCallId == askUserToolCallId,
+      );
+      if (!hasResult) {
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: askUserToolCallId,
+                name: askUserToolName,
+                arguments: const {
+                  'question': 'Should this task continue after restart?',
+                },
+              ),
+            ],
+          ),
+          isToolCall: true,
+          model: modelId,
+          provider: providerId,
+          finishReason: LLMFinishReason.toolCalls,
+        );
+      }
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: askUserResponseText,
+        ),
+        model: modelId,
+        provider: providerId,
+        finishReason: LLMFinishReason.stop,
+      );
+    }
+
+    final isShellCrashScenario =
+        latestUserContent?.startsWith(shellCrashPromptPrefix) ?? false;
+    final hasShellTool =
+        tools?.any((tool) => tool.name == shellToolName) ?? false;
+    if (isShellCrashScenario && hasShellTool) {
+      Message? toolResult;
+      for (final message in history) {
+        if (message.role == MessageRole.tool &&
+            message.toolCallId == shellToolCallId) {
+          toolResult = message;
+        }
+      }
+      if (toolResult == null) {
+        final encodedCommand = latestUserContent!.substring(
+          shellCrashPromptPrefix.length,
+        );
+        return AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: shellToolCallId,
+                name: shellToolName,
+                arguments: {
+                  'command': jsonDecode(encodedCommand).toString(),
+                  'timeout_ms': 60000,
+                },
+              ),
+            ],
+          ),
+          isToolCall: true,
+          model: modelId,
+          provider: providerId,
+          finishReason: LLMFinishReason.toolCalls,
+        );
+      }
+      final truthfulInterruption =
+          (toolResult.content?.contains('CRASH_OUTPUT') ?? false) &&
+          (toolResult.content?.contains('interrupted') ?? false) &&
+          !(toolResult.content?.contains('cancelled by user') ?? false);
+      final hasOriginalToolUse = history.any(
+        (message) =>
+            message.role == MessageRole.assistant &&
+            (message.toolCalls ?? const []).any(
+              (toolCall) =>
+                  toolCall.id == shellToolCallId &&
+                  toolCall.name == shellToolName &&
+                  toolCall.arguments['command'] != null,
+            ),
+      );
+      return AgentResponse(
+        message: Message(
+          role: MessageRole.assistant,
+          content: truthfulInterruption && hasOriginalToolUse
+              ? shellCrashResponseText
+              : 'INVALID_SHELL_INTERRUPTION_RESULT',
         ),
         model: modelId,
         provider: providerId,
@@ -257,13 +414,68 @@ class E2eFixtureAdapter implements LLMAdapter {
     );
   }
 
+  Future<void> _waitForDelayedFixture(
+    List<Message> history,
+    LLMRequestOptions options,
+  ) async {
+    String? prompt;
+    for (final message in history.reversed) {
+      if (message.role == MessageRole.user) {
+        prompt = message.content;
+        break;
+      }
+    }
+    if (prompt == runtimeFailurePrompt) {
+      throw StateError('deterministic E2E provider failure');
+    }
+    if (prompt == null || !prompt.startsWith(delayedResponsePromptPrefix)) {
+      return;
+    }
+    final readyPath = prompt.substring(delayedResponsePromptPrefix.length);
+    if (readyPath.isNotEmpty) File(readyPath).writeAsStringSync('ready');
+    final delay = Future<void>.delayed(const Duration(seconds: 30));
+    final cancellation = options.cancellationScope?.whenCancelled;
+    if (cancellation == null) {
+      await delay;
+    } else {
+      await Future.any<void>([delay, cancellation]);
+    }
+  }
+
   @override
   Future<AgentResponse> generateResponse(
     List<Message> history, {
     List<ToolSchema>? tools,
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
-  }) async => _response(history, tools);
+  }) async {
+    await _waitForDelayedFixture(history, options);
+    return _response(history, tools);
+  }
+
+  @override
+  Future<WireInputMeasurement?> measureInput(
+    List<Message> history, {
+    List<ToolSchema>? tools,
+    String? modelOverride,
+    LLMRequestOptions options = const LLMRequestOptions(),
+  }) async => WireInputMeasurement(
+    estimatedTokens:
+        (jsonEncode({
+                  'history': history
+                      .map((message) => message.toJson())
+                      .toList(),
+                  'tools': tools?.map((tool) => tool.toJson()).toList(),
+                }).length /
+                4)
+            .ceil(),
+    stableMaterialFingerprint: jsonEncode(
+      tools?.map((tool) => tool.toJson()).toList() ?? const [],
+    ),
+    inputItemFingerprints: [
+      for (final message in history) jsonEncode(message.toJson()),
+    ],
+  );
 
   @override
   Stream<AgentResponse> generateStream(
@@ -272,6 +484,7 @@ class E2eFixtureAdapter implements LLMAdapter {
     String? modelOverride,
     LLMRequestOptions options = const LLMRequestOptions(),
   }) async* {
+    await _waitForDelayedFixture(history, options);
     yield _response(history, tools);
   }
 
@@ -286,5 +499,5 @@ class E2eFixtureAdapter implements LLMAdapter {
   ];
 
   @override
-  Future<int> getContextLimit([String? modelOverride]) async => 8192;
+  Future<int> getContextLimit([String? modelOverride]) async => 32_768;
 }

@@ -10,6 +10,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/mcp/data/mcp_runtime_client.dart';
 import 'package:sanad_client/features/mcp/presentation/screens/mcp_server_management_screen.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_tool_runtime_context.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 
 import '../../mocks/mock_socket_service.dart';
 
@@ -68,11 +69,13 @@ void main() {
     Size size = const Size(900, 800),
     bool workspace = false,
     bool embedded = false,
+    DeviceConfig? target,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1;
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
+    final resolved = target ?? device;
     await tester.pumpWidget(
       Provider<McpRuntimeClient>.value(
         value: client,
@@ -80,14 +83,14 @@ void main() {
           home: embedded
               ? Scaffold(
                   body: McpServerManagementScreen(
-                    device: device,
+                    device: resolved,
                     workspaceId: workspace ? '/workspace' : null,
                     workspaceName: workspace ? 'Project Alpha' : null,
                     embedded: true,
                   ),
                 )
               : McpServerManagementScreen(
-                  device: device,
+                  device: resolved,
                   workspaceId: workspace ? '/workspace' : null,
                   workspaceName: workspace ? 'Project Alpha' : null,
                 ),
@@ -123,6 +126,32 @@ void main() {
     expect(tester.widget<FilledButton>(addButton).onPressed, isNotNull);
   });
 
+  testWidgets('offline devices show a reconnect message and disable Add server', (
+    tester,
+  ) async {
+    await pumpManagement(
+      tester,
+      embedded: true,
+      target: DeviceConfig(
+        id: 'agent-1',
+        name: 'Test device',
+        hardwareId: 'device-1',
+        isOnline: false,
+      ),
+    );
+
+    expect(
+      find.text('This device is offline. Reconnect to manage MCP servers.'),
+      findsOneWidget,
+    );
+    final addButton = find.byKey(const ValueKey('add-mcp-server'));
+    expect(tester.widget<FilledButton>(addButton).onPressed, isNull);
+    expect(
+      localSocket.commandsNamed('list_mcp_servers'),
+      isEmpty,
+    );
+  });
+
   testWidgets('exports one redacted server and confirms credentials exclusion', (
     tester,
   ) async {
@@ -142,7 +171,8 @@ void main() {
       find.text('Copied redacted JSON. Credentials were excluded.'),
       findsOneWidget,
     );
-    await tester.pump(const Duration(seconds: 3));
+    await tester.pump(ToastUtils.defaultDuration);
+    await tester.pump(const Duration(milliseconds: 500));
   });
 
   testWidgets('Advanced JSON requires preview before scoped save', (

@@ -12,8 +12,7 @@ class LocalGatewayUriPolicy {
 
   static Uri requireHttp(Uri uri) => _require(uri, expectedScheme: 'http');
 
-  static Uri requireWebSocket(Uri uri) =>
-      _require(uri, expectedScheme: 'ws');
+  static Uri requireWebSocket(Uri uri) => _require(uri, expectedScheme: 'ws');
 
   static Uri _require(Uri uri, {required String expectedScheme}) {
     final host = uri.host.trim().toLowerCase();

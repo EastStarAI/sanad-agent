@@ -15,7 +15,11 @@ import 'package:sanad_client/features/provider_setup/data/models/model_cache_sna
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 
 typedef RouteThinkingModeChipBuilder =
-    Widget Function(BuildContext context, String label, {required bool enabled});
+    Widget Function(
+      BuildContext context,
+      String label, {
+      required bool enabled,
+    });
 
 class RouteThinkingModeSelector extends StatefulWidget {
   final Capability capabilities;
@@ -51,16 +55,18 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
   @override
   void didUpdateWidget(RouteThinkingModeSelector oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!widget.capabilities.usesModelThinkingControls) {
-      return;
-    }
-    final routeChanged =
-        oldWidget.inputSlice.nextMessageProviderId !=
-            widget.inputSlice.nextMessageProviderId ||
-        oldWidget.inputSlice.nextMessageModel !=
-            widget.inputSlice.nextMessageModel ||
-        oldWidget.activeAgent?.id != widget.activeAgent?.id;
-    if (routeChanged) {
+    final shouldReload = RouteThinkingControl.shouldReloadSnapshot(
+      previouslyUsedModelControls:
+          oldWidget.capabilities.usesModelThinkingControls,
+      usesModelControls: widget.capabilities.usesModelThinkingControls,
+      previousProviderId: oldWidget.inputSlice.nextMessageProviderId,
+      providerId: widget.inputSlice.nextMessageProviderId,
+      previousModelId: oldWidget.inputSlice.nextMessageModel,
+      modelId: widget.inputSlice.nextMessageModel,
+      previousDeviceId: oldWidget.activeAgent?.id,
+      deviceId: widget.activeAgent?.id,
+    );
+    if (shouldReload) {
       unawaited(_loadSnapshot(revalidateSelection: true));
     }
   }
@@ -158,10 +164,13 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
 
   @override
   Widget build(BuildContext context) {
-    final session = context.select<SessionCubit, Session?>(
-      (cubit) => cubit.state.selectedSession,
-    );
-    final descriptor = widget.capabilities.usesModelThinkingControls
+    final usesModelControls = widget.capabilities.usesModelThinkingControls;
+    final session = usesModelControls
+        ? context.select<SessionCubit, Session?>(
+            (cubit) => cubit.state.selectedSession,
+          )
+        : null;
+    final descriptor = usesModelControls
         ? _descriptorForSession(session, _snapshot)
         : null;
     final selectorState = RouteThinkingControl.selectorState(

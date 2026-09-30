@@ -81,6 +81,10 @@ exclusive temporary file in the destination directory, applies ownership
 before the first payload byte, flushes the file, replaces the destination
 atomically, and cleans the temporary file on every failure. Existing
 destinations and path components are revalidated before activation.
+Cross-process read-modify-write owners use a stable owner-only lock inode opened
+through the same boundary. The Linux owner-file Agent credential backend uses
+this lock plus the atomic writer; its filesystem mode protects against other
+operating-system accounts but is not encryption.
 
 SQLite is the deliberate exception to routing each byte through the atomic
 writer. The boundary secures the state directory and existing database before
@@ -114,4 +118,8 @@ memories, dumps, launcher records, and client preference namespace remain inside
 that isolation boundary. Owner-only runtime discovery metadata remains in the
 shared developer runtime directory so `sanad-dev` can discover isolated pairs;
 it records each pair's Home without containing the credential. Tests use
-temporary roots and never read or mutate the real user Home.
+temporary roots and never read or mutate the real user Home. The default
+on-disk agent-state constructor detects the Dart test runner and fails before
+filesystem access unless the test has explicitly selected a temporary home or
+state home. Tests that do not need persistence inject an in-memory database;
+tests that exercise persistence use an explicit temporary path.

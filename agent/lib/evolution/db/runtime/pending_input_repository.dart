@@ -158,8 +158,14 @@ class PendingInputRepository {
     required String requestId,
     required String runId,
     required int generation,
+    String? messageId,
+    String? turnId,
+    String? anchorMessageId,
+    String? anchorToolCallId,
+    int? historyRevision,
+    AgentStateTransaction? transaction,
   }) {
-    return _state.transaction((tx) {
+    PendingSteerRecord? commit(AgentStateTransaction tx) {
       final current = find(sessionId, requestId, transaction: tx);
       if (current == null ||
           current.runId != runId ||
@@ -167,8 +173,30 @@ class PendingInputRepository {
           current.state != PendingSteerState.delivering) {
         return null;
       }
-      return _transition(current, PendingSteerState.delivered, tx);
-    });
+      final now = DateTime.now().toUtc().toIso8601String();
+      tx.db.execute(
+        '''UPDATE session_pending_steers
+           SET state = 'delivered', revision = revision + 1, updated_at = ?,
+               message_id = ?, turn_id = ?, anchor_message_id = ?,
+               anchor_tool_call_id = ?, history_revision = ?
+           WHERE session_id = ? AND request_id = ?''',
+        [
+          now,
+          messageId,
+          turnId,
+          anchorMessageId,
+          anchorToolCallId,
+          historyRevision,
+          sessionId,
+          requestId,
+        ],
+      );
+      return find(sessionId, requestId, transaction: tx);
+    }
+
+    return transaction == null
+        ? _state.transaction(commit)
+        : commit(transaction);
   }
 
   PendingSteerRecord? releaseDeliveryAfterFailure({

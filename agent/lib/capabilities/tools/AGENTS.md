@@ -19,6 +19,8 @@ This contract applies to `agent/lib/capabilities/tools/`.
 - Enforce workspace/path and permission policy before execution.
 - Use native Windows command/PATHEXT behavior on Windows and shell behavior on Unix-like systems.
 - Apply `timeout_ms` with a 60-second default and terminate the wrapper plus process group where supported.
+- Preserve bounded stdout/stderr on timeout and non-user interruption. Only an explicit user Stop may report `cancelled_by_user`; timeout reports `timed_out`, while daemon shutdown/crash recovery reports `agent_interrupted` with outcome and cleanup metadata.
+- Persist a redacted shell process fingerprint and bounded output progress while the command runs so startup can verify and reclaim the exact orphan containment without signaling a reused PID.
 - Propagate session and tool-call identity to child processes through the reserved restart-request environment boundary; never expose message content or tool arguments there.
 - Keep command output bounded and free of injected operational instructions.
 

@@ -91,6 +91,16 @@ To inspect the application's interface dynamically without rendering heavy exter
     sanad-dev status
     ```
 
+   **Custom Home continuity:** If launch used `--home <absolute>`, later commands
+   from the same workspace infer the validated active Home and normally omit the
+   selector. Use `sanad-dev status` as the ownership check; pass the same explicit
+   `--home` only as an authoritative diagnostic override or when intentionally
+   managing multiple custom groups from one workspace. If a client-specific
+   `logs` or `ui` command still rejects a client that
+   this status reports as managed, use the status-reported VM endpoint with the
+   standalone driver CLI as a diagnostic fallback; do not infer that the Client
+   is stopped and do not repair or stop it automatically.
+
 4. **Inspect UI Structure:** From the repository root, prefer the worktree-scoped `sanad-dev` entry point. It resolves only the active driver-enabled client recorded for the current worktree:
 
     ```bash
@@ -121,6 +131,7 @@ To inspect the application's interface dynamically without rendering heavy exter
 
     # Scroll scrollable areas
     sanad-dev ui scroll --key device_workspace_sidebar_scroll --dy -300
+    sanad-dev ui scroll --key conversation_timeline_scroll --direction up --json
 
     # Wait for elements to appear/disappear
     sanad-dev ui wait-for --key chat_input --timeout 10
@@ -128,6 +139,13 @@ To inspect the application's interface dynamically without rendering heavy exter
     # Execute a declarative recipe JSON file
     sanad-dev ui batch --file client/test/interactive/sample_recipe.json
     ```
+
+   Driver mode keeps Flutter's real operating-system text channel active so a
+   human can type normally while automation is connected. `enter-text` uses the
+   Sanad text-entry extension rather than globally enabling Flutter Driver's
+   mocked text input. After automated entry, inspect the same keyed field and,
+   when physical-input behavior changed, ask the human tester to type additional
+   characters before closing the live gate.
 
 6. **Visual Layout Verification (Optional):** Capture a screenshot only when layout evidence is needed or explicitly requested:
 
@@ -152,10 +170,12 @@ These general-purpose tools are permanently located in the workspace:
 
 ### C. Non-Negotiable Driver Rules
 
+* **Missing Element Means Inspect the Widget First:** When `sanad-dev ui find` cannot locate an expected button, field, or other interactive element, inspect its Flutter widget source before trying coordinate-based interaction. If the widget has no unique descriptive `Key`, add one, run `sanad-dev reload client`, verify that the key is now discoverable, and then continue the interactive scenario through that key.
 * **Never Abort mid-Driver Run:** Do not cancel a driver script while a tap or text entry operation is active to prevent the UI thread from hanging in a "Guarded" state.
 * **Guarded Recovery:** If a `Guarded function conflict` occurs, immediately trigger a **Hot Restart** using the developer utility: `sanad-dev restart client` to reset the service.
 * **Target Scaffolds over Slivers:** Tapping items inside `CustomScrollView` (Slivers) may hang on macOS. Target outer Scaffolds or static layouts first.
-* **Unsynchronized Operations under Stream Activities:** Always wrap interactive driver actions (such as `tap` or `enterText`) inside `await driver.runUnsynchronized(() async { ... })` when testing fields or screens containing ongoing animations, thinking indicators, progress bars, or active thought streams. Failing to do so will cause the driver to hang indefinitely waiting for the application to reach an idle state.
+* **Conversation Pagination Scrolls:** Target `conversation_timeline_scroll`, not the outer `chat_messages_list` container. Keyed offset scrolls emit user intent, so they exercise pagination, follow opt-out, and saved-anchor persistence. Record the returned offset/min/max, then snapshot visible keyed events after a page settles; compare stable history row ids with a read-only database snapshot when validating first/tail boundaries.
+* **Unsynchronized Legacy Flutter Driver Operations:** Wrap Flutter Driver fallback actions such as legacy `tap`, `enterText`, and scroll-until-visible inside `await driver.runUnsynchronized(() async { ... })` when screens contain ongoing animations, thinking indicators, progress bars, or active thought streams. The primary Sanad `enter-text` path is a VM service extension that updates `EditableTextState` while keeping the operating-system text channel active; do not globally enable Flutter Driver text-entry emulation around it.
 * **No Hardcoded Machine Paths:** Do not hardcode absolute, machine-specific paths in driver interaction scripts for dynamic selector keys such as workspaces. Read paths dynamically or inject them through environment variables to preserve cross-platform compatibility.
 
 ---
@@ -170,6 +190,13 @@ Before running any integration or interactive tests, verify that all backend ser
 
 * **Why?** Parallel agent sessions running in different worktrees clash when they bind the same local gateway or Flutter VM service port, and they can corrupt or duplicate runtime work when they share writable session state.
 * **The Solution:** Use `sanad-dev run` from the current checkout/worktree. Do not infer worktrees from directory naming, modify shared `.env`/JSON files, set `SANAD_STATE_HOME`, or hand-assign ports unless diagnosing the launcher itself. Linked worktrees receive one isolated `SANAD_HOME` containing identity, providers, credentials, databases, memories, dumps, and runtime state; the primary checkout retains the normal user home. Client preferences follow the same home-derived isolation boundary.
+
+When a change affects driver discovery or runtime ownership, verify two managed
+`--driver` runtimes concurrently. From each owning worktree, run `snapshot`,
+`find`, `enter-text`, and `screenshot`; restart or stop one Client and prove the
+other worktree's UI commands still succeed. Automatic selection must use the
+caller worktree's validated lease and exact `lib/driver_main.dart` profile,
+never a newest/global Client.
 
 #### A. Standard Interactive Run
 
@@ -186,6 +213,16 @@ For deterministic local-only verification, disable cloud explicitly:
 ```bash
 sanad-dev run --driver --no-cloud
 ```
+
+For an agent-owned disposable run that must survive a temporary/non-TTY shell,
+use the official detached mode and wait for its managed/failure handshake:
+
+```bash
+sanad-dev run --background --driver --no-cloud
+```
+
+Do not compose `nohup`, `screen`, `script`, or shell `&` wrappers around
+`sanad-dev run`.
 
 #### B. Human Review and Connected Verification
 

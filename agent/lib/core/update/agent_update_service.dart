@@ -46,6 +46,8 @@ class AgentUpdateResult {
     this.availableVersion,
     this.message,
     this.stagedPath,
+    this.manifestTag,
+    this.manifestCommit,
   });
 
   final AgentUpdateStatus status;
@@ -53,6 +55,8 @@ class AgentUpdateResult {
   final String? availableVersion;
   final String? message;
   final String? stagedPath;
+  final String? manifestTag;
+  final String? manifestCommit;
 
   bool get isSuccess => switch (status) {
     AgentUpdateStatus.upToDate ||
@@ -72,6 +76,8 @@ class AgentUpdateResult {
     availableVersion: availableVersion,
     message: message ?? this.message,
     stagedPath: stagedPath ?? this.stagedPath,
+    manifestTag: manifestTag,
+    manifestCommit: manifestCommit,
   );
 
   Map<String, dynamic> toJson() => {
@@ -80,6 +86,8 @@ class AgentUpdateResult {
     'current_version': currentVersion,
     if (availableVersion != null) 'available_version': availableVersion,
     if (message != null) 'message': message,
+    if (manifestTag != null) 'manifest_revision': manifestTag,
+    if (manifestCommit != null) 'manifest_fingerprint': manifestCommit,
   };
 }
 
@@ -135,12 +143,24 @@ class AgentUpdateService {
           status: AgentUpdateStatus.upToDate,
           currentVersion: currentVersion,
           availableVersion: available,
+          manifestTag: manifest.tag,
+          manifestCommit: manifest.commit,
         );
       }
       if (_selectArtifact(manifest) == null) {
-        return _result(AgentUpdateStatus.unsupportedTarget, available);
+        return _result(
+          AgentUpdateStatus.unsupportedTarget,
+          available,
+          manifestTag: manifest.tag,
+          manifestCommit: manifest.commit,
+        );
       }
-      return _result(AgentUpdateStatus.updateAvailable, available);
+      return _result(
+        AgentUpdateStatus.updateAvailable,
+        available,
+        manifestTag: manifest.tag,
+        manifestCommit: manifest.commit,
+      );
     } on FormatException catch (error) {
       return _error(AgentUpdateStatus.manifestInvalid, error.message);
     } on HttpException catch (error) {
@@ -153,10 +173,18 @@ class AgentUpdateService {
     }
   }
 
-  Future<AgentUpdateResult> update({String? targetVersion}) async {
+  Future<AgentUpdateResult> update({
+    String? targetVersion,
+    String? expectedManifestTag,
+    String? expectedManifestCommit,
+  }) async {
     final existing = _inFlightUpdates[executablePath];
     if (existing != null) return existing;
-    final operation = _update(targetVersion: targetVersion);
+    final operation = _update(
+      targetVersion: targetVersion,
+      expectedManifestTag: expectedManifestTag,
+      expectedManifestCommit: expectedManifestCommit,
+    );
     _inFlightUpdates[executablePath] = operation;
     try {
       return await operation;
@@ -167,7 +195,11 @@ class AgentUpdateService {
     }
   }
 
-  Future<AgentUpdateResult> _update({String? targetVersion}) async {
+  Future<AgentUpdateResult> _update({
+    String? targetVersion,
+    String? expectedManifestTag,
+    String? expectedManifestCommit,
+  }) async {
     if (isSourceManaged) return _sourceManaged();
     final targetGate = _targetGate(targetVersion);
     if (targetGate != null) return targetGate;
@@ -178,6 +210,12 @@ class AgentUpdateService {
       final manifest = await _fetchManifest();
       final mismatch = _manifestTargetGate(manifest, targetVersion);
       if (mismatch != null) return mismatch;
+      final revisionMismatch = _manifestRevisionGate(
+        manifest,
+        expectedTag: expectedManifestTag,
+        expectedCommit: expectedManifestCommit,
+      );
+      if (revisionMismatch != null) return revisionMismatch;
       final available = manifest.version.toString();
       final current = ReleaseVersion.parse(currentVersion);
       if (manifest.version.compareTo(current) <= 0) {
@@ -335,6 +373,26 @@ class AgentUpdateService {
     );
   }
 
+  AgentUpdateResult? _manifestRevisionGate(
+    ReleaseManifest manifest, {
+    String? expectedTag,
+    String? expectedCommit,
+  }) {
+    if (expectedTag == null && expectedCommit == null) return null;
+    if (manifest.tag == expectedTag && manifest.commit == expectedCommit) {
+      return null;
+    }
+    return AgentUpdateResult(
+      status: AgentUpdateStatus.targetMismatch,
+      currentVersion: currentVersion,
+      availableVersion: manifest.version.toString(),
+      message:
+          'The release manifest changed after confirmation. Check for updates again.',
+      manifestTag: manifest.tag,
+      manifestCommit: manifest.commit,
+    );
+  }
+
   AgentUpdateResult _sourceManaged() => AgentUpdateResult(
     status: AgentUpdateStatus.sourceManaged,
     currentVersion: currentVersion,
@@ -345,11 +403,15 @@ class AgentUpdateService {
     AgentUpdateStatus status,
     String availableVersion, {
     String? message,
+    String? manifestTag,
+    String? manifestCommit,
   }) => AgentUpdateResult(
     status: status,
     currentVersion: currentVersion,
     availableVersion: availableVersion,
     message: message,
+    manifestTag: manifestTag,
+    manifestCommit: manifestCommit,
   );
 
   AgentUpdateResult _error(AgentUpdateStatus status, String message) =>

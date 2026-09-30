@@ -211,6 +211,10 @@ enum RuntimeFailureReason {
         if (isContentPolicyBody) {
           return RuntimeFailureReason.contentPolicyBlocked;
         }
+        // OpenAI-compatible providers often return 400 for context overflow.
+        if (text.contains('context length') || text.contains('maximum context')) {
+          return RuntimeFailureReason.contextOverflow;
+        }
         return RuntimeFailureReason.invalidRequest;
       case 401:
       case 403:

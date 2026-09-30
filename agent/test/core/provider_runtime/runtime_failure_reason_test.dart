@@ -256,6 +256,13 @@ void main() {
         RuntimeFailureReason.classify(body: 'maximum context length exceeded'),
         equals(RuntimeFailureReason.contextOverflow),
       );
+      expect(
+        RuntimeFailureReason.classify(
+          statusCode: 400,
+          body: 'maximum context length exceeded',
+        ),
+        equals(RuntimeFailureReason.contextOverflow),
+      );
     });
 
     test('timeout → timeout', () {

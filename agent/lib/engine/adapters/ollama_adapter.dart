@@ -1,8 +1,10 @@
 import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/models/model_metadata.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
+
 import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
 import '../../core/models/tool_call.dart';
@@ -12,6 +14,7 @@ import '../../core/provider_thinking/ollama_thinking_wire_codec.dart';
 import 'base_openai_adapter.dart';
 import 'llm_request_options.dart';
 import 'llm_http_exception.dart';
+import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
 
 class OllamaAdapter extends BaseOpenAIAdapter {
@@ -21,6 +24,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     super.config,
     super.profile, {
     super.client,
+    super.modelContextLimitLookup,
     super.baseUrlOverride,
     super.apiKeyOverride,
   });
@@ -43,7 +47,9 @@ class OllamaAdapter extends BaseOpenAIAdapter {
             final supportsReasoning =
                 OllamaThinkingProbe.hasThinkingCapability(metadata) ?? false;
 
-            final contextLimit = ModelMetadata.getLimitForModel(name);
+            final contextLimit =
+                config.contextModelLimit(name) ??
+                ModelMetadata.getLimitForModel(name);
 
             options.add(
               ModelOption(
@@ -95,7 +101,9 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       setLastModelsException(e);
     }
 
-    final contextLimit = ModelMetadata.getLimitForModel(config.llmModel);
+    final contextLimit =
+        config.contextModelLimit(config.llmModel) ??
+        ModelMetadata.getLimitForModel(config.llmModel);
     final metadata = await _probeModelMetadata(config.llmModel);
     return [
       ModelOption(
@@ -133,14 +141,13 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       );
       final parameters = showResponse['parameters']?.toString();
       if (parameters != null && parameters.isNotEmpty) {
-        return {
-          ...metadata,
-          'ollama_parameters': parameters,
-        };
+        return {...metadata, 'ollama_parameters': parameters};
       }
       return metadata;
     } catch (e) {
-      _logger.warning('Failed to probe Ollama model metadata for $modelName: $e');
+      _logger.warning(
+        'Failed to probe Ollama model metadata for $modelName: $e',
+      );
       return const {};
     }
   }
@@ -164,7 +171,11 @@ class OllamaAdapter extends BaseOpenAIAdapter {
   Future<int> getContextLimit([String? modelOverride]) async {
     final resolvedModel = super.resolveModel(modelOverride);
 
-    if (config.contextLimit != 4000) return config.contextLimit;
+    final configuredLimit = config.contextModelLimit(resolvedModel);
+    if (configuredLimit != null) return configuredLimit;
+
+    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
+    if (catalogLimit != null) return catalogLimit;
 
     try {
       final url = Uri.parse('${super.baseUrl}/api/show');
@@ -192,7 +203,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
     if (metadataLimit != null) return metadataLimit;
 
-    return config.contextLimit;
+    return 4000;
   }
 
   Map<String, dynamic> _buildChatBody({
@@ -228,27 +239,29 @@ class OllamaAdapter extends BaseOpenAIAdapter {
   }
 
   List<Map<String, dynamic>> _historyToMessages(List<Message> history) {
-    return history.map((m) {
-      final Map<String, dynamic> data = {
-        'role': super.roleToString(m.role),
-        'content': m.content ?? '',
-      };
+    return history
+        .map((m) {
+          final Map<String, dynamic> data = {
+            'role': super.roleToString(m.role),
+            'content': m.content ?? '',
+          };
 
-      if (m.role == MessageRole.tool && m.toolCallId != null) {
-        data['tool_call_id'] = m.toolCallId;
-      }
-      if (m.toolCalls != null && m.toolCalls!.isNotEmpty) {
-        data['tool_calls'] = m.toolCalls!
-            .map(
-              (tc) => {
-                'type': 'function',
-                'function': {'name': tc.name, 'arguments': tc.arguments},
-              },
-            )
-            .toList(growable: false);
-      }
-      return data;
-    }).toList(growable: false);
+          if (m.role == MessageRole.tool && m.toolCallId != null) {
+            data['tool_call_id'] = m.toolCallId;
+          }
+          if (m.toolCalls != null && m.toolCalls!.isNotEmpty) {
+            data['tool_calls'] = m.toolCalls!
+                .map(
+                  (tc) => {
+                    'type': 'function',
+                    'function': {'name': tc.name, 'arguments': tc.arguments},
+                  },
+                )
+                .toList(growable: false);
+          }
+          return data;
+        })
+        .toList(growable: false);
   }
 
   @override
@@ -269,22 +282,39 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       stream: false,
     );
 
-    var response = await (client ?? http.Client()).post(
-      url,
-      headers: {'Content-Type': 'application/json', ...profile.defaultHeaders},
-      body: jsonEncode(body),
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
     );
+    late http.Response response;
+    try {
+      response = await transport.post(
+        url,
+        headers: {
+          'Content-Type': 'application/json',
+          ...profile.defaultHeaders,
+        },
+        body: jsonEncode(body),
+        operation: 'generateResponse',
+      );
 
-    if (response.statusCode == 400) {
-      final responseBody = response.body;
-      if (responseBody.contains('does not support tools')) {
-        body = Map<String, dynamic>.from(body)..remove('tools');
-        response = await (client ?? http.Client()).post(
-          url,
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode(body),
-        );
+      if (response.statusCode == 400) {
+        final responseBody = response.body;
+        if (responseBody.contains('does not support tools')) {
+          body.remove('tools');
+          response = await transport.post(
+            url,
+            headers: {
+              'Content-Type': 'application/json',
+              ...profile.defaultHeaders,
+            },
+            body: jsonEncode(body),
+            operation: 'generateResponse',
+          );
+        }
       }
+    } finally {
+      await transport.dispose();
     }
 
     if (response.statusCode != 200) {
@@ -333,6 +363,11 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       usage: usage,
       model: resolvedModel,
       provider: profile.name,
+      finishReason: _normalizeOllamaFinishReason(
+        data['done_reason'],
+        isDone: data['done'] == true,
+        hasToolCalls: toolCalls?.isNotEmpty ?? false,
+      ),
     );
   }
 
@@ -347,7 +382,10 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     final resolvedModel = super.resolveModel(modelOverride);
     final messages = _historyToMessages(history);
 
-    final httpClient = client ?? http.Client();
+    final transport = ProviderRequestTransport(
+      options: options,
+      adapterSharedClient: client,
+    );
     final request = http.Request('POST', url);
     request.headers['Content-Type'] = 'application/json';
     profile.defaultHeaders.forEach((k, v) => request.headers[k] = v);
@@ -361,103 +399,136 @@ class OllamaAdapter extends BaseOpenAIAdapter {
     );
 
     request.body = jsonEncode(body);
-    var response = await httpClient.send(request);
+    late http.StreamedResponse response;
+    try {
+      response = await transport.send(request, operation: 'generateStream');
+    } catch (_) {
+      await transport.dispose();
+      rethrow;
+    }
 
-    if (response.statusCode == 400) {
-      final errorBody = await response.stream.bytesToString();
-      if (errorBody.contains('does not support tools')) {
-        body = Map<String, dynamic>.from(body)..remove('tools');
-        final retryRequest = http.Request('POST', url);
-        retryRequest.headers['Content-Type'] = 'application/json';
-        retryRequest.body = jsonEncode(body);
-        response = await httpClient.send(retryRequest);
-      } else {
+    try {
+      if (response.statusCode == 400) {
+        final errorBody = await response.stream.bytesToString();
+        if (errorBody.contains('does not support tools')) {
+          body.remove('tools');
+          final retryRequest = http.Request('POST', url);
+          retryRequest.headers['Content-Type'] = 'application/json';
+          profile.defaultHeaders.forEach(
+            (key, value) => retryRequest.headers[key] = value,
+          );
+          retryRequest.body = jsonEncode(body);
+          response = await transport.send(
+            retryRequest,
+            operation: 'generateStream',
+          );
+        } else {
+          throw LlmHttpException.fromStreamedResponse(
+            response,
+            errorBody,
+            operation: 'generateStream',
+          );
+        }
+      }
+
+      if (response.statusCode != 200) {
+        final errBody = await response.stream.bytesToString();
         throw LlmHttpException.fromStreamedResponse(
           response,
-          errorBody,
+          errBody,
           operation: 'generateStream',
         );
       }
-    }
 
-    if (response.statusCode != 200) {
-      final errBody = await response.stream.bytesToString();
-      throw LlmHttpException.fromStreamedResponse(
-        response,
-        errBody,
+      final taggedReasoning = TaggedReasoningStreamParser();
+      await for (final line in transport.decodeSseLines(
+        response.stream,
         operation: 'generateStream',
-      );
-    }
+      )) {
+        transport.throwIfCancelled(operation: 'generateStream');
+        if (line.trim().isEmpty) continue;
 
-    final taggedReasoning = TaggedReasoningStreamParser();
-    await for (final line
-        in response.stream
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())) {
-      if (line.trim().isEmpty) continue;
+        final data = jsonDecode(line);
+        final choice = data['message'];
+        if (choice == null) continue;
 
-      final data = jsonDecode(line);
-      final choice = data['message'];
-      if (choice == null) continue;
+        final rawContent = choice['content']?.toString() ?? '';
+        final structuredReasoning = choice['thinking']?.toString();
+        final tagged = structuredReasoning?.isNotEmpty == true
+            ? TaggedReasoningText(content: rawContent)
+            : taggedReasoning.add(rawContent);
+        final done = data['done'] ?? false;
 
-      final rawContent = choice['content']?.toString() ?? '';
-      final structuredReasoning = choice['thinking']?.toString();
-      final tagged = structuredReasoning?.isNotEmpty == true
-          ? TaggedReasoningText(content: rawContent)
-          : taggedReasoning.add(rawContent);
-      final done = data['done'] ?? false;
+        List<ToolCall>? toolCalls;
+        if (choice['tool_calls'] != null) {
+          final toolCallsData = choice['tool_calls'] as List;
+          toolCalls = toolCallsData
+              .map(
+                (tc) => ToolCall(
+                  id: tc['id'] ?? '',
+                  name: tc['function']['name'],
+                  arguments:
+                      tc['function']['arguments'] as Map<String, dynamic>,
+                ),
+              )
+              .toList();
+        }
 
-      List<ToolCall>? toolCalls;
-      if (choice['tool_calls'] != null) {
-        final toolCallsData = choice['tool_calls'] as List;
-        toolCalls = toolCallsData
-            .map(
-              (tc) => ToolCall(
-                id: tc['id'] ?? '',
-                name: tc['function']['name'],
-                arguments: tc['function']['arguments'] as Map<String, dynamic>,
-              ),
-            )
-            .toList();
+        Map<String, dynamic>? usage;
+        if (data['prompt_eval_count'] != null || data['eval_count'] != null) {
+          usage = {
+            'prompt_tokens': data['prompt_eval_count'],
+            'completion_tokens': data['eval_count'],
+          };
+        }
+
+        yield AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            content: tagged.content,
+            reasoning: structuredReasoning?.isNotEmpty == true
+                ? structuredReasoning
+                : tagged.reasoning,
+            toolCalls: toolCalls,
+          ),
+          isToolCall: toolCalls != null && toolCalls.isNotEmpty,
+          usage: usage,
+          model: resolvedModel,
+          provider: profile.name,
+        );
+
+        if (done) break;
       }
 
-      Map<String, dynamic>? usage;
-      if (data['prompt_eval_count'] != null || data['eval_count'] != null) {
-        usage = {
-          'prompt_tokens': data['prompt_eval_count'],
-          'completion_tokens': data['eval_count'],
-        };
+      final pending = taggedReasoning.finish();
+      if (pending.content != null || pending.reasoning != null) {
+        yield AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            content: pending.content,
+            reasoning: pending.reasoning,
+          ),
+          model: resolvedModel,
+          provider: profile.name,
+        );
       }
-
-      yield AgentResponse(
-        message: Message(
-          role: MessageRole.assistant,
-          content: tagged.content,
-          reasoning: structuredReasoning?.isNotEmpty == true
-              ? structuredReasoning
-              : tagged.reasoning,
-          toolCalls: toolCalls,
-        ),
-        isToolCall: toolCalls != null && toolCalls.isNotEmpty,
-        usage: usage,
-        model: resolvedModel,
-        provider: profile.name,
-      );
-
-      if (done) break;
-    }
-
-    final pending = taggedReasoning.finish();
-    if (pending.content != null || pending.reasoning != null) {
-      yield AgentResponse(
-        message: Message(
-          role: MessageRole.assistant,
-          content: pending.content,
-          reasoning: pending.reasoning,
-        ),
-        model: resolvedModel,
-        provider: profile.name,
-      );
+    } finally {
+      await transport.dispose();
     }
   }
+}
+
+LLMFinishReason _normalizeOllamaFinishReason(
+  dynamic rawDoneReason, {
+  required bool isDone,
+  required bool hasToolCalls,
+}) {
+  if (hasToolCalls) return LLMFinishReason.toolCalls;
+  switch (rawDoneReason?.toString()) {
+    case 'stop':
+      return LLMFinishReason.stop;
+    case 'length':
+      return LLMFinishReason.length;
+  }
+  return isDone ? LLMFinishReason.stop : LLMFinishReason.incomplete;
 }

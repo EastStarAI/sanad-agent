@@ -8,9 +8,10 @@ import 'package:ffi/ffi.dart';
 
 import '../sanad_home/sanad_home_bootstrap.dart';
 import 'agent_secret_store_contract.dart';
-import 'linux_secret_service.dart';
+import 'linux_auto_secret_store.dart';
 
 export 'agent_secret_store_contract.dart';
+export 'linux_auto_secret_store.dart';
 export 'linux_secret_service.dart';
 
 AgentSecretStore createAgentSecretStore() {
@@ -18,7 +19,7 @@ AgentSecretStore createAgentSecretStore() {
       .convert(utf8.encode(SanadHomeBootstrap.identity().canonicalRoot()))
       .toString();
   if (Platform.isMacOS) return MacOsKeychainAgentSecretStore(scope: scope);
-  if (Platform.isLinux) return LinuxSecretServiceAgentSecretStore(scope: scope);
+  if (Platform.isLinux) return LinuxAutoAgentSecretStore(scope: scope);
   if (Platform.isWindows) return WindowsDpapiAgentSecretStore(scope: scope);
   throw const AgentSecretStoreUnavailable(
     'This operating system has no supported Sanad credential vault.',
@@ -198,86 +199,109 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
       );
 
   late final _kSecClass = _security.lookup<Pointer<Void>>('kSecClass').value;
-  late final _kSecClassGenericPassword =
-      _security.lookup<Pointer<Void>>('kSecClassGenericPassword').value;
-  late final _kSecAttrService =
-      _security.lookup<Pointer<Void>>('kSecAttrService').value;
-  late final _kSecAttrAccount =
-      _security.lookup<Pointer<Void>>('kSecAttrAccount').value;
-  late final _kSecValueData =
-      _security.lookup<Pointer<Void>>('kSecValueData').value;
-  late final _kSecReturnData =
-      _security.lookup<Pointer<Void>>('kSecReturnData').value;
-  late final _kSecMatchLimit =
-      _security.lookup<Pointer<Void>>('kSecMatchLimit').value;
-  late final _kSecMatchLimitOne =
-      _security.lookup<Pointer<Void>>('kSecMatchLimitOne').value;
-  late final _kSecAttrAccessible =
-      _security.lookup<Pointer<Void>>('kSecAttrAccessible').value;
-  late final _kSecAttrAccessibleAfterFirstUnlock =
-      _security.lookup<Pointer<Void>>('kSecAttrAccessibleAfterFirstUnlock').value;
+  late final _kSecClassGenericPassword = _security
+      .lookup<Pointer<Void>>('kSecClassGenericPassword')
+      .value;
+  late final _kSecAttrService = _security
+      .lookup<Pointer<Void>>('kSecAttrService')
+      .value;
+  late final _kSecAttrAccount = _security
+      .lookup<Pointer<Void>>('kSecAttrAccount')
+      .value;
+  late final _kSecValueData = _security
+      .lookup<Pointer<Void>>('kSecValueData')
+      .value;
+  late final _kSecReturnData = _security
+      .lookup<Pointer<Void>>('kSecReturnData')
+      .value;
+  late final _kSecMatchLimit = _security
+      .lookup<Pointer<Void>>('kSecMatchLimit')
+      .value;
+  late final _kSecMatchLimitOne = _security
+      .lookup<Pointer<Void>>('kSecMatchLimitOne')
+      .value;
+  late final _kSecAttrAccessible = _security
+      .lookup<Pointer<Void>>('kSecAttrAccessible')
+      .value;
+  late final _kSecAttrAccessibleAfterFirstUnlock = _security
+      .lookup<Pointer<Void>>('kSecAttrAccessibleAfterFirstUnlock')
+      .value;
 
-  late final _kCFBooleanTrue = _cf.lookup<Pointer<Void>>('kCFBooleanTrue').value;
-  late final _kCFTypeDictionaryKeyCallBacks =
-      _cf.lookup<Void>('kCFTypeDictionaryKeyCallBacks');
-  late final _kCFTypeDictionaryValueCallBacks =
-      _cf.lookup<Void>('kCFTypeDictionaryValueCallBacks');
+  late final _kCFBooleanTrue = _cf
+      .lookup<Pointer<Void>>('kCFBooleanTrue')
+      .value;
+  late final _kCFTypeDictionaryKeyCallBacks = _cf.lookup<Void>(
+    'kCFTypeDictionaryKeyCallBacks',
+  );
+  late final _kCFTypeDictionaryValueCallBacks = _cf.lookup<Void>(
+    'kCFTypeDictionaryValueCallBacks',
+  );
 
-  late final _cfRelease = _cf.lookupFunction<
-    Void Function(Pointer<Void>),
-    void Function(Pointer<Void>)
-  >('CFRelease');
-  late final _cfStringCreate = _cf.lookupFunction<
-    Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>, Uint32),
-    Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>, int)
-  >('CFStringCreateWithCString');
-  late final _cfDataCreate = _cf.lookupFunction<
-    Pointer<Void> Function(Pointer<Void>, Pointer<Uint8>, IntPtr),
-    Pointer<Void> Function(Pointer<Void>, Pointer<Uint8>, int)
-  >('CFDataCreate');
-  late final _cfDataGetBytePtr = _cf.lookupFunction<
-    Pointer<Uint8> Function(Pointer<Void>),
-    Pointer<Uint8> Function(Pointer<Void>)
-  >('CFDataGetBytePtr');
-  late final _cfDataGetLength = _cf.lookupFunction<
-    IntPtr Function(Pointer<Void>),
-    int Function(Pointer<Void>)
-  >('CFDataGetLength');
-  late final _cfDictionaryCreate = _cf.lookupFunction<
-    Pointer<Void> Function(
-      Pointer<Void>,
-      Pointer<Pointer<Void>>,
-      Pointer<Pointer<Void>>,
-      IntPtr,
-      Pointer<Void>,
-      Pointer<Void>,
-    ),
-    Pointer<Void> Function(
-      Pointer<Void>,
-      Pointer<Pointer<Void>>,
-      Pointer<Pointer<Void>>,
-      int,
-      Pointer<Void>,
-      Pointer<Void>,
-    )
-  >('CFDictionaryCreate');
+  late final _cfRelease = _cf
+      .lookupFunction<
+        Void Function(Pointer<Void>),
+        void Function(Pointer<Void>)
+      >('CFRelease');
+  late final _cfStringCreate = _cf
+      .lookupFunction<
+        Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>, Uint32),
+        Pointer<Void> Function(Pointer<Void>, Pointer<Utf8>, int)
+      >('CFStringCreateWithCString');
+  late final _cfDataCreate = _cf
+      .lookupFunction<
+        Pointer<Void> Function(Pointer<Void>, Pointer<Uint8>, IntPtr),
+        Pointer<Void> Function(Pointer<Void>, Pointer<Uint8>, int)
+      >('CFDataCreate');
+  late final _cfDataGetBytePtr = _cf
+      .lookupFunction<
+        Pointer<Uint8> Function(Pointer<Void>),
+        Pointer<Uint8> Function(Pointer<Void>)
+      >('CFDataGetBytePtr');
+  late final _cfDataGetLength = _cf
+      .lookupFunction<
+        IntPtr Function(Pointer<Void>),
+        int Function(Pointer<Void>)
+      >('CFDataGetLength');
+  late final _cfDictionaryCreate = _cf
+      .lookupFunction<
+        Pointer<Void> Function(
+          Pointer<Void>,
+          Pointer<Pointer<Void>>,
+          Pointer<Pointer<Void>>,
+          IntPtr,
+          Pointer<Void>,
+          Pointer<Void>,
+        ),
+        Pointer<Void> Function(
+          Pointer<Void>,
+          Pointer<Pointer<Void>>,
+          Pointer<Pointer<Void>>,
+          int,
+          Pointer<Void>,
+          Pointer<Void>,
+        )
+      >('CFDictionaryCreate');
 
-  late final _secItemAdd = _security.lookupFunction<
-    Int32 Function(Pointer<Void>, Pointer<Pointer<Void>>),
-    int Function(Pointer<Void>, Pointer<Pointer<Void>>)
-  >('SecItemAdd');
-  late final _secItemCopyMatching = _security.lookupFunction<
-    Int32 Function(Pointer<Void>, Pointer<Pointer<Void>>),
-    int Function(Pointer<Void>, Pointer<Pointer<Void>>)
-  >('SecItemCopyMatching');
-  late final _secItemUpdate = _security.lookupFunction<
-    Int32 Function(Pointer<Void>, Pointer<Void>),
-    int Function(Pointer<Void>, Pointer<Void>)
-  >('SecItemUpdate');
-  late final _secItemDelete = _security.lookupFunction<
-    Int32 Function(Pointer<Void>),
-    int Function(Pointer<Void>)
-  >('SecItemDelete');
+  late final _secItemAdd = _security
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Pointer<Void>>),
+        int Function(Pointer<Void>, Pointer<Pointer<Void>>)
+      >('SecItemAdd');
+  late final _secItemCopyMatching = _security
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Pointer<Void>>),
+        int Function(Pointer<Void>, Pointer<Pointer<Void>>)
+      >('SecItemCopyMatching');
+  late final _secItemUpdate = _security
+      .lookupFunction<
+        Int32 Function(Pointer<Void>, Pointer<Void>),
+        int Function(Pointer<Void>, Pointer<Void>)
+      >('SecItemUpdate');
+  late final _secItemDelete = _security
+      .lookupFunction<
+        Int32 Function(Pointer<Void>),
+        int Function(Pointer<Void>)
+      >('SecItemDelete');
 }
 
 final class _DataBlob extends Struct {

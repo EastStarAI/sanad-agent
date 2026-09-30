@@ -41,7 +41,10 @@ void main() {
           return http.Response('Not Found', 404);
         });
 
-        final token = await runCodexDeviceCodeFlow(clientOverride: mockClient);
+        final token = await runCodexDeviceCodeFlow(
+          clientOverride: mockClient,
+          waitForPoll: (_) async {},
+        );
 
         expect(token, equals('secret-access-token-999'));
         expect(requestCount, equals(3));
@@ -83,7 +86,10 @@ void main() {
           return http.Response('Not Found', 404);
         });
 
-        final token = await runCodexDeviceCodeFlow(clientOverride: mockClient);
+        final token = await runCodexDeviceCodeFlow(
+          clientOverride: mockClient,
+          waitForPoll: (_) async {},
+        );
 
         expect(token, equals('secret-access-token-999'));
         expect(requestCount, equals(3));
@@ -125,7 +131,10 @@ void main() {
           return http.Response('Not Found', 404);
         });
 
-        final token = await runCodexDeviceCodeFlow(clientOverride: mockClient);
+        final token = await runCodexDeviceCodeFlow(
+          clientOverride: mockClient,
+          waitForPoll: (_) async {},
+        );
 
         expect(token, equals('secret-access-token-999'));
         expect(requestCount, equals(3));
@@ -137,7 +146,10 @@ void main() {
         return http.Response('Internal Server Error', 500);
       });
 
-      final token = await runCodexDeviceCodeFlow(clientOverride: mockClient);
+      final token = await runCodexDeviceCodeFlow(
+        clientOverride: mockClient,
+        waitForPoll: (_) async {},
+      );
 
       expect(token, isNull);
     });
@@ -170,7 +182,10 @@ void main() {
         return http.Response('Not Found', 404);
       });
 
-      final token = await runCodexDeviceCodeFlow(clientOverride: mockClient);
+      final token = await runCodexDeviceCodeFlow(
+        clientOverride: mockClient,
+        waitForPoll: (_) async {},
+      );
 
       expect(token, isNull);
     });

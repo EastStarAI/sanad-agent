@@ -18,7 +18,7 @@ packages:
     source: hosted
     version: "13.3.0"
   args:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: args
       sha256: d0481093c50b1da8910eb0bb301626d4d8eb7284aa739614d2b394ee09e3ea04
@@ -440,13 +440,20 @@ packages:
       relative: true
     source: path
     version: "1.0.0"
+  sanad_client_identity:
+    dependency: "direct main"
+    description:
+      path: "../shared/client_identity"
+      relative: true
+    source: path
+    version: "1.0.0"
   sanad_release_contract:
     dependency: "direct main"
     description:
       path: "../release/contract"
       relative: true
     source: path
-    version: "1.0.6"
+    version: "1.0.10"
   shelf:
     dependency: transitive
     description:
@@ -680,7 +687,7 @@ packages:
     source: hosted
     version: "6.6.1"
   yaml:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: yaml
       sha256: b9da305ac7c39faa3f030eccd175340f968459dae4af175130b3fc47e40d76ce

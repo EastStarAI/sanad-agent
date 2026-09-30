@@ -53,7 +53,10 @@ environments, `site-packages`, `.next`, `dist`, and `target`. A candidate that p
 decoded as UTF-8 is skipped without failing the whole search. Shell execution
 follows host-native command semantics, enforces workspace/path and permission
 policy, applies a bounded timeout, bounds stdout and stderr while streaming, and
-terminates the command process tree where supported.
+terminates the command process tree where supported. Child processes are not
+trusted to emit valid UTF-8: malformed byte sequences are replaced during
+bounded decoding rather than escaping the tool future and terminating the
+Agent daemon.
 
 ## Tool Output Budgets
 

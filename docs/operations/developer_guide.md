@@ -69,7 +69,8 @@ The command contract is layered and explicit:
 - `sanad-dev install` installs or verifies FVM `4.1.2`, the Flutter version from
   `.fvmrc`, and the checkout-owned user shim, then stops.
 - `sanad-dev setup` ensures the install layer, resolves the shared Release
-  Contract before Agent and Client packages, then stops without a runtime.
+  Contract, standalone `sanad-dev`, Agent, and Client packages in dependency
+  order, then stops without a runtime.
 - `sanad-dev run` ensures only missing or stale install/setup stages, then starts
   the requested runtime target.
 - `sanad-dev switch --runtime current` prepares the invoking target checkout and
@@ -251,9 +252,13 @@ Restore it after the source run:
 sanad service start
 ```
 
-The service command owns the platform-specific launchd, systemd, or Windows
-Scheduled Task integration. Direct operating-system commands are useful only
-when diagnosing a broken service registration.
+The service command owns the platform-specific launchd, systemd, OpenRC, or
+Windows Scheduled Task integration. Direct operating-system commands are useful
+only when diagnosing a broken service registration. Linux status is typed and
+reports the selected manager and scope; a unit file by itself is not considered
+a successful installation. Service registration writes non-secret ownership
+metadata so uninstall cannot remove an unrelated definition, while activation
+failure restores the previous owned definition.
 
 ## Source-build authentication
 
@@ -281,10 +286,12 @@ Each linked worktree run receives:
 
 An independent clone is not a Git linked worktree. If another workspace already
 owns the primary local endpoint, the clone fails closed instead of sharing that
-runtime or the primary Sanad Home. Supply an explicit absolute `--home` to give
-the clone a Home-derived preferences namespace and workspace-hashed agent and
-VM-service ports. The conflict check also applies to dry-run and does not mutate
-process state.
+runtime or the primary Sanad Home. Supply an explicit absolute `--home` on
+`sanad-dev run` to give the clone a Home-derived preferences namespace and
+workspace-hashed agent and VM-service ports. After launch, commands issued from
+the same workspace infer that active Home automatically; an explicit `--home`
+remains available as an authoritative override. The conflict check also applies
+to dry-run and does not mutate process state.
 
 Do not edit tracked environment or Flutter configuration files to allocate
 worktree ports.
@@ -560,6 +567,19 @@ cd client
 fvm flutter analyze
 fvm flutter test
 ```
+
+`sanad-dev` tooling:
+
+```bash
+cd scripts/sanad_dev
+fvm dart analyze
+fvm dart test
+```
+
+The `sanad-dev` package owns its Pure-Dart implementation and tests; they are
+not part of the Client Flutter suite. The shared public endpoint selector under
+`shared/public_service_endpoints/` is also a standalone Pure-Dart package and
+is verified from its own package root.
 
 Run focused tests for the changed behavior before broad suites. E2E or
 integration tests that bind shared ports run sequentially; normal unit and

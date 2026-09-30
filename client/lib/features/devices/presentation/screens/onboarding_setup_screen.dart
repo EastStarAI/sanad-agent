@@ -15,7 +15,6 @@ import 'package:sanad_client/features/provider_setup/data/provider_setup_client.
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_flow.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:go_router/go_router.dart';
 
@@ -202,7 +201,9 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
 
     final state = deviceCubit.state;
     final devices = fetchedDevices.isNotEmpty ? fetchedDevices : _registeredDevicesFromState(state);
-    final hasRegisteredDevice = devices.any((device) => device.id != DeviceInventoryIds.localDevice);
+    final hasRegisteredDevice = devices.any(
+      (device) => device.accountDeviceId != null,
+    );
     if (hasRegisteredDevice) {
       context.go(AppRoutes.home);
     }
@@ -212,6 +213,6 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
     final devices = state is DeviceActive
         ? state.agents
         : (state is DeviceNoActive ? state.agents : const <DeviceConfig>[]);
-    return devices.where((device) => device.id != DeviceInventoryIds.localDevice).toList();
+    return devices.where((device) => device.accountDeviceId != null).toList();
   }
 }

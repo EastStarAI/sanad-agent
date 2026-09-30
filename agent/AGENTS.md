@@ -28,7 +28,7 @@ This contract applies to `agent/`.
 - Final delivery occurs only after a successful idempotent durable terminal commit for the exact owner.
 - Stop invalidates the active owner before awaiting cancellation and atomically releases recovery, durable work, and owned queued state without deleting newer-generation input.
 - Retry, resume, route change, and automatic failover require an atomic claim of the current durable owner; stale or concurrent losers are controlled no-ops.
-- Crash recovery replays only tools whose own persisted contract explicitly marks restart re-execution safe; ambiguous work becomes visible and controllable blocked recovery.
+- Crash recovery never replays a started tool without a durable result. Owned recognized checkpoints receive a neutral unknown-outcome result and continue automatically; only ownerless, malformed, or unrecognized state becomes blocked recovery.
 - A resumable daemon shutdown must cross the global checkpoint drain and exit without session-wide Stop so startup recovery retains safe non-terminal work. Destructive shutdown requires an explicit cancellation mode and terminalizes owned work before exit.
 
 ### Engine and Context Authority
@@ -36,6 +36,7 @@ This contract applies to `agent/`.
 - Engine runtime collaborators mutate history through callbacks and cannot keep parallel history or current-turn state.
 - `AgentContextAssembler` emits one system message ordered stable identity, workspace context, then volatile memory/date/runtime metadata.
 - Provider adapters remain stateless and own wire translation only. Provider-specific endpoint/codec behavior must not leak into the runner.
+- Context-pressure recovery after daemon restart may reuse persisted provider input usage only after the active adapter remeasures the exact historical request prefix; the next request must still prove a strict wire extension on the same route.
 - Visible reasoning, final content, opaque provider continuation state, finish reason, and tool calls remain distinct typed data across streaming and persistence.
 
 ### Protocol and Platform Authority
@@ -48,9 +49,11 @@ This contract applies to `agent/`.
 
 ### Persistence and Identity Authority
 - Durable sessions, work items, notices, pending input, provider metadata, and route transitions use one shared agent-state database connection with one repository owner per table.
+- The daemon and in-process standalone CLI acquire the same exclusive state-root ownership lease before opening the agent-state database; a second runtime fails closed and never competes for SQLite.
 - Admission, terminal commit, failover, stop cleanup, and cross-table execution transitions remain transactional through their aggregate owner.
 - `hardware_id` is persistent local machine identity and is distinct from backend-assigned device ids.
-- `run_id` owns execution, `model_step_id` owns one model invocation, `tool_call_id` pairs tool use/result, raw `request_id` owns command correlation, and opaque `event_id` owns one canonical semantic event. Never substitute these identities.
+- `run_id` owns execution, `model_step_id` owns one model invocation, `tool_call_id` pairs tool use/result, raw `request_id` owns command correlation, and opaque `event_id` owns one canonical semantic event. `message_id` owns one persisted history record, `turn_id` owns one execution attempt's history records, and `history_revision` owns compare-and-swap for active-history mutations. Never substitute these identities for one another, for SQLite row ids, or for hydration indexes.
+- A live root `user_message` is published only after its durable history row commits, and it carries the same message/turn/request identity and replay eligibility that subsequent history hydration exposes.
 - Sanad auth, provider OAuth, provider secrets, durable state, and mutable worktree state remain separate storage concerns.
 
 ### Provider and Capability Authority
@@ -64,11 +67,12 @@ This contract applies to `agent/`.
 - Keep `SANAD_HOME` stable for machine identity, auth, provider credentials, base configuration, and durable user-owned files.
 - `sanad-dev` linked-worktree runs provide one isolated `SANAD_HOME` containing identity, credentials, sessions, memories, and request dumps; they must remove inherited `SANAD_STATE_HOME`.
 - External and test harnesses may still use `SANAD_STATE_HOME` to redirect mutable state without relocating identity or provider credentials.
+- E2E tests that initialize DI/SQLite or launch an agent process must set temporary `SANAD_HOME` and `SANAD_STATE_HOME` roots explicitly; Dart child processes must receive both variables instead of inheriting the caller's values.
 - Source worktrees consume global Sanad configuration and must not create a competing repository-local `.env`.
 - Do not create hidden scratch or temporary directories inside the repository.
 - Missing provider configuration must not prevent daemon startup; fail lazily when an LLM operation actually requires a provider.
 - Local/offline provider configurations remain valid and must not require an OpenAI-style key.
-- Sensitive payloads, tokens, provider secrets, pending steer text, and recovered draft text must not enter logs.
+- Sensitive payloads,tokens,provider secrets,pending steer text,recovered draft text,command payloads,event/final-answer content,custom Client names,and raw Client-instance identity must not enter logs;transport diagnostics are lifecycle/type/count metadata only.
 - Platform failures and asynchronous command failures must be contained so one transport cannot terminate the daemon or other interfaces.
 
 ## Development and Testing Requirements
@@ -77,6 +81,7 @@ This contract applies to `agent/`.
 - Run the full fast suite for broad engine, interface, provider-runtime, persistence, capability-registry, or shared-model changes.
 - Require daemon-backed E2E only when mocks cannot validate the boundary: local/cloud socket contracts, daemon bootstrap/lifecycle, persistent runtime state and restart recovery, provider readiness/model execution, worktree runtime isolation, or end-to-end session execution.
 - When interface/runtime ownership changes affect the local daemon contract, add or update real daemon-backed coverage rather than relying only on mocks.
+- Unit tests for retry, polling, scheduling, or asynchronous delivery inject deterministic wait/control seams or await the exact emitted event; they must not sleep through production backoff, polling intervals, or padded settling windows.
 - Every spawned test daemon uses a unique temporary `SANAD_STATE_HOME`, cleans it after shutdown, and preserves the normal shared identity/configuration boundary.
 - Daemon-backed tests use the deterministic E2E provider and must never inherit the live agent database, invoke the user's configured provider, or mutate user runtime state.
 - Documentation-only contract changes require documentation generation/lint integrity but do not require Dart analysis or runtime tests unless source code also changes.

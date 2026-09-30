@@ -2,6 +2,9 @@
 title: "Provider-Aware Thinking Mode Capability"
 description: "خطة مبنية على أدلة تنفيذية لتوفير تحكم ديناميكي في التفكير بحسب provider instance والنموذج والبروتوكول، مع منع التجاهل الصامت والتحقق من payload النهائي."
 status: "review complete"
+current_gate: "Complete"
+remaining_estimate: "0% (0/10 gates)"
+review_cycle: "2026-09-20 main integration review"
 scope: "agent llm adapters, provider runtime, canonical protocol, client composer"
 evidence_id: "43"
 evidence_fingerprint: "sha256:ee2edb165e9df40967f05dfd8b7997c80524d31a44fb38a0441a4c7a5a5f44e5"
@@ -668,6 +671,16 @@ fallback.
 
 | التاريخ | البوابة | النتيجة | ملاحظات |
 |---|---|---|---|
+| 2026-09-20 | I | مراجعة تكامل `main`: مغلق بعد إصلاح | `null` أصبح يحافظ على provider default بلا instance lookup؛ جُدد mock المتأخر؛ E2E 4/4، Agent suite 1865 ناجحًا و13 متجاوزًا، Client suite 1177/1177، والتحليلان نظيفان. سجل التدقيق `43-main-integration-review-2026-09-20` بلا deviations. Graphify محدّث. المتبقي 0%. |
+| 2026-09-20 | H | مراجعة تكامل `main`: مغلق بعد إصلاح | أُصلح عدم تحميل model snapshot عند انتقال capabilities من legacy إلى model-scoped من دون route change، وأُضيف regression؛ focused tests 23/23 والتحليل نظيف. المتبقي 10% (1/10)، والبوابة الحالية I. |
+| 2026-09-20 | G | مراجعة تكامل `main`: مغلق | aggregator/Gemini/DeepSeek/Ollama وXOR بقيت fail-closed ومحددة بالسياسة؛ focused tests 31/31 والتحليل المحدد نظيف. المتبقي 20% (2/10)، والبوابة الحالية H. |
+| 2026-09-20 | F | مراجعة تكامل `main`: مغلق | Anthropic manual/adaptive/off وshared builder وbudget lowering سليمة؛ focused tests 26/26 والتحليل المحدد نظيف. المتبقي 30% (3/10)، والبوابة الحالية G. |
+| 2026-09-20 | E | مراجعة تكامل `main`: مغلق | Chat/Responses shapes وsync/stream/wrapper forwarding سليمة؛ focused tests 66/66 والتحليل المحدد نظيف. المتبقي 40% (4/10)، والبوابة الحالية F. |
+| 2026-09-20 | D | مراجعة تكامل `main`: مغلق بعد إصلاح | أُصلح race في اختبار runner بانتظار `GetIt.reset()` في setup/teardown؛ resolver/persistence/switch/restore/failover نجحت 15/15 والتحليل نظيف. المتبقي 50% (5/10)، والبوابة الحالية E. |
+| 2026-09-20 | C | مراجعة تكامل `main`: مغلق | protocol وDTOs وroute/session descriptor سليمة؛ Agent 46/46 وClient 24/24 والتحليل المحدد نظيف. المتبقي 60% (6/10)، والبوابة الحالية D. |
+| 2026-09-20 | B | مراجعة تكامل `main`: مغلق | assembly/cache/revisions/stale probe سليمة بعد حل التعارض؛ focused tests 26/26 والتحليل المحدد نظيف. المتبقي 70% (7/10)، والبوابة الحالية C. |
+| 2026-09-20 | A | مراجعة تكامل `main`: مغلق | الأنواع والـregistry والـfail-closed وربط profile بقيت سليمة؛ `provider_thinking_test.dart` 57/57 والتحليل المحدد نظيف. المتبقي 80% (8/10)، والبوابة الحالية B. |
+| 2026-09-20 | R0 | مراجعة تكامل `main`: مغلق | `resolve_packet.sh 43` أعاد `ready`؛ البصمة مطابقة، revisions والتراخيص الثلاثة سليمة، وكل مسارات الفحص الإلزامية موجودة. المتبقي 90% (9/10 بوابات)، والبوابة الحالية A. |
 | 2026-08-29 | R0 | مغلق بعد إصلاح | `resolve_packet.sh 43` كان `refresh_required` (hermes+openclaw drift). حُدّثت pins والمسارات الإلزامية؛ fingerprint الجديد `sha256:ee2edb165e9df40967f05dfd8b7997c80524d31a44fb38a0441a4c7a5a5f44e5`؛ resolver=`ready`. أُغلقت قائمة سياسات الإصدار الأول. |
 | 2026-08-30 | R0 | مراجعة بوابة: مغلق | أُعيد `resolve_packet.sh 43` → `status=ready`. البصمة تطابق frontmatter. Pins: opencode `d2305d4`، hermes `f52feed`، openclaw `2013a4b`. قائمة الإصدار الأول مغلقة في الخطة وفي سجل التشغيل. |
 | 2026-08-30 | A | مراجعة بوابة: مغلق بعد إصلاح | الأنواع/registry/fail-closed/`thinkingPolicyId` وrunner محايد. أُزيلت حلقة placeholders الميتة. اختبارات descriptor تغطي off/default/unsupported. تحقق: analyze على ملفات البوابة نظيف؛ `provider_thinking_test.dart` 56/56. |

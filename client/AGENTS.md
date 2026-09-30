@@ -18,15 +18,20 @@ Do not introduce convenience code that weakens these boundaries.
 - The agent is authoritative for execution, delivery classification, queue/steer/stop recovery, provider readiness, tools, MCP, skills, workspace runtime data, and agent-owned settings.
 - Client state is a typed projection of authoritative runtime/cache events; widgets and cubits must not create competing runtime stores or infer daemon outcomes from presentation flags.
 - Presentation never calls `SanadSocketService`, parses transport envelopes, reads agent-owned files, or selects local/cloud transport directly.
+- Account lifecycle list/revoke uses one application-scoped repository over the authenticated Cloud Socket; Portal HTTP owns OAuth/refresh/logout but no lifecycle inventory routes. Observation is consumer-lazy: opening Sessions & Devices fetches, a closed page never fetches on auth/reconnect, and an open disconnected page retains a stale snapshot until one coalesced reconnect refetch.
 - Device-targeted work carries explicit device identity through repositories/clients and the shared connection coordinator.
 
 ### Device and Endpoint Ownership
 - `DeviceCubit` is the sole presentation authority for the active conversation device. Settings inspection scope cannot change it implicitly.
 - Desktop local inventory survives cloud logout, refresh failure, and cloud socket failure; web and mobile remain cloud-only.
+- Desktop local inventory is keyed by Agent `hardware_id`; a merged row retains Backend `device_id` separately for account/Cloud authority, and `client_instance_id` is never a device identity. Startup may idempotently normalize only legacy Client-owned preferences/cache into `hardware_id`; it must not migrate credentials, Agent/Backend databases, or conversation history.
 - Cold start preserves a persisted cloud device while cloud inventory is pending, and a successful authoritative inventory clears a stale missing cloud id before fallback.
 - Mobile/web cloud interruption, timeout, or `5xx/503` never implies logout. Keep the authenticated cached surface visible and stale/offline until authoritative inventory and active-history resynchronization succeeds.
 - Local daemon health, lifecycle, update, socket, and voice endpoints derive from `AppConfig.localGatewayUrl`; never hardcode the production daemon port.
 - Local Gateway access is desktop-only. Web and mobile remain remote-only and must never read a Local Gateway credential or attempt a local connection.
+- Source-managed linked-worktree runs expose `worktree_runtime_badge` on desktop and compact/mobile layouts; Production builds with no worktree marker render no badge surface.
+- Settings navigation controls used by interactive acceptance expose stable semantic widget keys across wide and compact layouts; `settings_back_to_conversations_btn` returns directly to `AppRoutes.home` instead of unwinding accumulated Settings history.
+- A Gateway `auth_revoked` event is terminal for the authenticated Client family: clear local credentials and let the auth router show login immediately. Ordinary socket disconnects remain recoverable and never imply logout.
 
 ### Conversation Ownership
 - `ConversationCacheStore` is the single client-side owner of conversation cache, device destinations, drafts, pagination resources, and workspace expansion.
@@ -37,7 +42,7 @@ Do not introduce convenience code that weakens these boundaries.
 ### Provider and Configuration Ownership
 - Provider templates, instances, credentials status, model options, readiness, defaults, limits, and failover settings come from the agent provider runtime.
 - Provider setup remains instance-first; the client must not hardcode providers, synthesize instances, or treat cached models as readiness.
-- Never expose raw access, refresh, polling, device, provider, or recovery-owner credentials in logs or UI state.
+- Never expose raw access,refresh,polling,device,provider,or recovery-owner credentials in logs or UI state. Socket and user-visible-error diagnostics must also omit command payloads,event content,custom names,and raw Client-instance identity;log bounded lifecycle/type/count metadata only.
 
 ## Development & Testing Requirements
 Before concluding any task or development iteration in `sanad-agent/client`, choose verification based on the blast radius of the change:
@@ -46,6 +51,7 @@ Before concluding any task or development iteration in `sanad-agent/client`, cho
 3. **Run the Full Fast Suite When Risk Warrants It:** Use `fvm flutter test` for broad UI/state/data-layer changes or when the touched code is shared across multiple features.
 4. **Run E2E Only When Required By Scope:** `fvm flutter test e2e_test/` is required only for changes that affect real socket behavior, local daemon connection states, app/bootstrap runtime integration, worktree port/runtime isolation, or client/daemon contracts. E2E is intentionally expensive and must not be treated as mandatory for isolated UI, widget lifecycle, formatting, copy, or pure unit-level changes.
 5. **Isolate Daemon-Backed E2E State:** Every spawned E2E daemon must receive a unique temporary `SANAD_STATE_HOME`, clean it after shutdown, and use the deterministic E2E provider. Tests must never inherit the live agent database or invoke the user's configured provider.
+6. **Keep Fast Tests Deterministic:** Unit and widget tests await exact events or inject retry/timer policies; they must not wait through production request timeouts, reconnect backoff, polling intervals, or broad settling windows. Pure-Dart developer-tool tests belong to their owning package, not `client/test`.
 
 When interface or runtime ownership changes affect the local daemon contract, prefer adding or updating a real daemon-backed test under `e2e_test/` instead of relying only on mocks.
 

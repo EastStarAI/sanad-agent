@@ -105,6 +105,21 @@ class SessionRecoveryCommandHandler {
           : null,
     );
 
+    if (resumed == ResumeSuspendedResult.unsafeCheckpoint) {
+      _recovery.reportFailure(
+        sessionId: sessionId,
+        reason: RuntimeFailureReason.unknown,
+        requestId: requestId,
+        providerInstanceId: providerInstanceId,
+        title: 'Saved work is not safe to retry',
+        message:
+            'The interrupted provider request has no recognized preceding checkpoint. '
+            'The session remains blocked so you can change provider or stop.',
+        forceBlocked: true,
+      );
+      return;
+    }
+
     if (resumed == ResumeSuspendedResult.missing ||
         (resumed == ResumeSuspendedResult.alreadyResuming &&
             _hasActiveWaitingNotice(sessionId))) {
@@ -211,6 +226,21 @@ class SessionRecoveryCommandHandler {
         emitEnvelope: emitEnvelope,
       ),
     );
+
+    if (resumed == ResumeSuspendedResult.unsafeCheckpoint) {
+      _recovery.reportFailure(
+        sessionId: sessionId,
+        reason: RuntimeFailureReason.unknown,
+        requestId: requestId,
+        providerInstanceId: newProviderInstanceId,
+        title: 'Saved work is not safe to retry',
+        message:
+            'The interrupted provider request has no recognized preceding checkpoint. '
+            'The session remains blocked so you can choose another action or stop.',
+        forceBlocked: true,
+      );
+      return;
+    }
 
     if (resumed == ResumeSuspendedResult.missing ||
         (resumed == ResumeSuspendedResult.alreadyResuming &&

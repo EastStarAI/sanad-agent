@@ -2,6 +2,7 @@ import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'dart:async';
 
 import 'package:sanad_client/features/auth/domain/auth_refresh_result.dart';
+import 'package:sanad_client/features/auth/domain/client_instance_identity.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_callback_contract.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 import 'package:sanad_client/features/auth/infrastructure/colocated_auth_coupling_client.dart';
@@ -68,6 +69,8 @@ class StubPortalAuthClient extends PortalAuthClient {
     required String redirectUri,
     required String codeChallenge,
     String? enrollmentRequestId,
+    String? clientInstanceId,
+    ClientDisplayMetadata? metadata,
   }) async {
     transactionCalls += 1;
     enrollmentRequestIds.add(enrollmentRequestId);
@@ -417,6 +420,29 @@ void main() {
         expect(prefs.getString('backend_refresh_token'), isNull);
       },
     );
+
+    test('concurrent logout triggers share one cleanup operation', () async {
+      final portal = StubPortalAuthClient();
+      authService.dispose();
+      authService = AuthService(
+        dio: MockDio(),
+        prefs: prefs,
+        settingsStore: mockStore,
+        portalAuth: portal,
+        colocatedCoupling: colocatedCoupling,
+      );
+      mockStore.authDocument = {
+        'access_token': 'test_token',
+        'refresh_token': 'test_refresh',
+        'hardware_id': 'test_hardware',
+      };
+
+      await Future.wait([authService.logout(), authService.logout()]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(colocatedCoupling.logoutCalls, 1);
+      expect(portal.logoutCalls, 1);
+    });
 
     test('unreachable Agent does not delay or fail Client logout', () async {
       colocatedCoupling.logoutResult = Completer<void>().future;

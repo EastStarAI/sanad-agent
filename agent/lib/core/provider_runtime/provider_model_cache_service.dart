@@ -1,4 +1,5 @@
 import 'dart:async';
+
 import 'package:logging/logging.dart';
 
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
@@ -132,15 +133,19 @@ class ProviderModelCacheService {
       return active;
     }
 
-    active = _limiter.run(() => _doLiveRefresh(instance));
+    active = _runTrackedRefresh(instance);
     _activeRefreshes[instanceId] = active;
-
-    // Clean up active refreshes when completed
-    active.whenComplete(() {
-      _activeRefreshes.remove(instanceId);
-    });
-
     return active;
+  }
+
+  Future<List<ModelOption>> _runTrackedRefresh(
+    ProviderInstance instance,
+  ) async {
+    try {
+      return await _limiter.run(() => _doLiveRefresh(instance));
+    } finally {
+      _activeRefreshes.remove(instance.id);
+    }
   }
 
   Future<List<ModelOption>> _doLiveRefresh(ProviderInstance instance) async {
@@ -209,8 +214,9 @@ class ProviderModelCacheService {
       // Keep previous model ids but mark thinking controls unknown until a live
       // probe succeeds again (Task 43 Gate B).
       final cached = _repo.readModelCache(instanceId, 'models');
-      if (cached != null) {
-        final staleModels = (cached['models'] as List<dynamic>)
+      final cachedModels = cached?['models'] as List<dynamic>?;
+      if (cached != null && cachedModels != null && cachedModels.isNotEmpty) {
+        final staleModels = cachedModels
             .map(
               (m) => ModelOption.fromJson(Map<String, dynamic>.from(m as Map)),
             )
@@ -236,6 +242,16 @@ class ProviderModelCacheService {
         return probeFailedModels;
       }
 
+      _repo.upsertModelCache(
+        instanceId: instanceId,
+        cacheKey: 'models',
+        models: const [],
+        fetchedAt: DateTime.now(),
+        source: 'failed',
+        configRevision: configRev,
+        credentialRevision: credRev,
+        lastError: e.toString(),
+      );
       rethrow;
     }
   }

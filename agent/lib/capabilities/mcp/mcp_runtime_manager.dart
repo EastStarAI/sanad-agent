@@ -14,10 +14,12 @@ class McpRuntimeManager {
     SanadSettingsStore? settingsStore,
     McpOAuthService? oauthService,
   }) : _settingsStore = settingsStore ?? const SanadSettingsStore(),
-       _oauthService = oauthService ?? McpOAuthService();
+       _oauthService = oauthService ?? McpOAuthService(),
+       _ownsOAuthService = oauthService == null;
 
   final SanadSettingsStore _settingsStore;
   final McpOAuthService _oauthService;
+  final bool _ownsOAuthService;
   final Map<String, DateTime> _refreshedOAuthExpiry = {};
 
   // Active persistent connection instances map: serverName -> client
@@ -291,6 +293,19 @@ class McpRuntimeManager {
     for (final entry in values.entries) entry.key.toString(): entry.value,
   };
 
+  Future<void> dispose() async {
+    final serverNames = _activeClients.keys.toList(growable: false);
+    for (final serverName in serverNames) {
+      await _closeConnection(serverName);
+    }
+    _specsCache.clear();
+    _specsCacheFingerprints.clear();
+    _refreshedOAuthExpiry.clear();
+    if (_ownsOAuthService) {
+      await _oauthService.dispose();
+    }
+  }
+
   Future<void> _closeConnection(String serverName) async {
     final client = _activeClients.remove(serverName);
     _connectedConfigs.remove(serverName);
@@ -348,20 +363,29 @@ class McpRuntimeManager {
       if (config.command == null || config.command!.trim().isEmpty) {
         return (client: null, error: 'STDIO server missing command.');
       }
-      final result = await McpClient.createAndConnect(
-        config: clientConfig,
-        transportConfig: TransportConfig.stdio(
-          command: config.command!,
-          arguments: _settingsStore.resolveArguments(config),
-          environment: _buildSafeEnvironment(
-            resolvedEnvironment ?? _settingsStore.resolveEnvironment(config),
+      try {
+        final result = await McpClient.createAndConnect(
+          config: clientConfig,
+          transportConfig: TransportConfig.stdio(
+            command: config.command!,
+            arguments: _settingsStore.resolveArguments(config),
+            environment: _buildSafeEnvironment(
+              resolvedEnvironment ?? _settingsStore.resolveEnvironment(config),
+            ),
           ),
-        ),
-      ).timeout(const Duration(seconds: 20));
-      return result.fold((client) {
-        _lastConnectedTransport = McpTransportType.stdio;
-        return (client: client, error: null);
-      }, (error) => (client: null, error: error.toString()));
+        ).timeout(const Duration(seconds: 20));
+        final connection = result.fold<({dynamic client, String? error})>((
+          client,
+        ) {
+          _lastConnectedTransport = McpTransportType.stdio;
+          return (client: client, error: null);
+        }, (error) => (client: null, error: error.toString()));
+        return connection;
+      } on TimeoutException {
+        return (client: null, error: 'Connection timed out.');
+      } catch (error) {
+        return (client: null, error: error.toString());
+      }
     }
 
     if (config.serverUrl.trim().isEmpty) {
@@ -398,6 +422,8 @@ class McpRuntimeManager {
         }
       } on TimeoutException {
         lastError = 'Connection timed out.';
+      } catch (error) {
+        lastError = error.toString();
       }
     }
     return (client: null, error: lastError ?? 'MCP connection failed.');

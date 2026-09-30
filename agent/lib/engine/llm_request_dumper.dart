@@ -261,6 +261,14 @@ class LLMRequestDumper {
         } catch (_) {
           // If not valid JSON, keep it as raw string
         }
+      } else if (responsePayload is! Map &&
+          responsePayload is! List &&
+          responsePayload is! num &&
+          responsePayload is! bool &&
+          responsePayload != null) {
+        try {
+          sanitizedResponse = (responsePayload as dynamic).toJson();
+        } catch (_) {}
       }
 
       data['response'] = _sanitizePayload(sanitizedResponse);
@@ -330,6 +338,12 @@ class LLMRequestDumper {
       return value.map(_sanitizePayload).toList();
     } else if (value is String) {
       return _sanitizeString(value);
+    } else if (value != null && value is! num && value is! bool) {
+      try {
+        return _sanitizePayload((value as dynamic).toJson());
+      } catch (_) {
+        return value;
+      }
     }
     return value;
   }

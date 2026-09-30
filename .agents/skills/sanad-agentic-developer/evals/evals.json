@@ -1,0 +1,47 @@
+{
+  "skill_name": "Sanad Agentic Developer",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "From this public Sanad checkout, start one managed Agent with macOS, web, and iOS driver Clients. Keep the normal Production and Cloud defaults, use stable Client slots, show me how to inspect each Client safely, and explain how to stop only the web Client.",
+      "expected_output": "A managed sanad-dev workflow that starts one group, adds device-targeted Clients with unique --client-instance slots, verifies status, uses explicit VM selection for UI commands, and targets only the requested Client for stop.",
+      "files": [],
+      "expectations": [
+        "The response reads references/public-multi-runtime-development.md.",
+        "The first runtime uses sanad-dev run with --background and --driver.",
+        "Additional Clients use sanad-dev run client with unique device-and-slot pairs.",
+        "The response keeps the Production profile and Cloud connection as defaults.",
+        "UI actions use the status-reported VM when multiple Clients exist.",
+        "The stop command targets the web device and its exact Client slot."
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "I need two independent Sanad Agent groups from the same workspace for an isolation test. Give each group a different custom Sanad Home, keep both managed in the background, inspect bounded logs, restart only group A, and then stop only group B.",
+      "expected_output": "A two-group workflow using distinct absolute Homes and repeating the matching --home selector on every run, status, logs, restart, and stop command without manually assigning ports.",
+      "files": [],
+      "expectations": [
+        "The response reads references/public-multi-runtime-development.md.",
+        "Each runtime group uses a distinct absolute Sanad Home.",
+        "Every command for either non-primary group passes its explicit --home selector.",
+        "The response does not claim that setting SANAD_HOME selects sanad-dev ownership.",
+        "Log reads are bounded and no runtime port is hardcoded.",
+        "Restart and stop operations affect only the named group."
+      ]
+    },
+    {
+      "id": 3,
+      "prompt": "Sign the managed macOS Sanad Client out and back in using the automation browser. Three driver Clients are running, the runtime uses a custom Home, and I do not want authorization URLs or credentials shown in the transcript.",
+      "expected_output": "A fresh UI-driven macOS sign-in using the exact VM and explicit Home, command-substitution capture from sanad-dev ui auth-url, immediate agent-browser opening and unset, provider consent with user takeover for secrets, and bounded Client verification.",
+      "files": [],
+      "expectations": [
+        "The response reads references/local-macos-auth-login.md.",
+        "Every sanad-dev command passes the explicit non-primary --home and selected macOS --vm-url.",
+        "Sign out and Sign in are controlled through sanad-dev ui rather than browser-tab guessing or mouse coordinates.",
+        "The active URL is captured through sanad-dev ui auth-url, opened with agent-browser, and immediately unset without being printed.",
+        "The response never proposes saving or transferring Client credentials or browser authentication state.",
+        "Completion is verified in the browser and then independently in the selected Client."
+      ]
+    }
+  ]
+}

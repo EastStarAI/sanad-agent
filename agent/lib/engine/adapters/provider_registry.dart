@@ -133,7 +133,10 @@ class ProviderRegistry {
       apiMode: 'chat_completions',
       thinkingPolicyId: 'aggregator_upstream',
       aliases: ['open-router'],
-      defaultHeaders: {'X-Title': 'Sanad'},
+      defaultHeaders: {
+        'HTTP-Referer': 'https://sanad.eaststarai.com',
+        'X-OpenRouter-Title': 'Sanad Agent',
+      },
       docsUrl: 'https://openrouter.ai/keys',
       apiKeyRequirement: ApiKeyRequirement.required,
       authMethods: [ProviderAuthMethod.apiKey],

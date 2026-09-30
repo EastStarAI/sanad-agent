@@ -1,5 +1,8 @@
 import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
 
+import '../runtime/run_cancellation_scope.dart';
+import 'provider_watchdog_config.dart';
+
 /// Per-call runtime context shared by every LLM adapter.
 ///
 /// Options are immutable and must never be retained by an adapter between
@@ -13,6 +16,8 @@ class LLMRequestOptions {
   final NativeThinkingDirective? thinkingDirective;
   final Duration? timeout;
   final int? maxOutputTokens;
+  final RunCancellationScope? cancellationScope;
+  final ProviderWatchdogConfig watchdogs;
 
   const LLMRequestOptions({
     this.sessionId,
@@ -22,5 +27,7 @@ class LLMRequestOptions {
     this.thinkingDirective,
     this.timeout,
     this.maxOutputTokens,
+    this.cancellationScope,
+    this.watchdogs = ProviderWatchdogConfig.defaults,
   });
 }

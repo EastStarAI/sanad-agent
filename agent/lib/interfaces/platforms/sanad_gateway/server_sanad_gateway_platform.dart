@@ -15,34 +15,39 @@ import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
 
 import 'capabilities_loader.dart';
+import 'delivery_presence_controller.dart';
 import 'sanad_protocol_bridge.dart';
+import 'protocol/authenticated_command_origin.dart';
 import 'protocol/canonical_events.dart';
 import 'channels/cloud_session_channel.dart';
 import 'sanad_gateway_behavior.dart';
 import 'package:sanad_agent/infrastructure/voice/gemini_voice_provider.dart';
 import 'package:sanad_agent/infrastructure/voice/voice_engine.dart';
 import 'package:sanad_agent/infrastructure/voice/voice_transport_channel.dart';
+import 'package:sanad_agent/interfaces/models/device_control.dart';
+import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 
 class ServerSanadGatewayPlatform extends BasePlatform
     with SanadGatewayBehavior {
   static const _remoteWorkspaceManagementCommands = <String>{
+    CanonicalEventTypes.listWorkspaces,
     CanonicalEventTypes.createWorkspace,
+    CanonicalEventTypes.renameWorkspace,
+    CanonicalEventTypes.removeWorkspace,
     CanonicalEventTypes.relocateWorkspace,
     CanonicalEventTypes.browseWorkspaceTree,
     CanonicalEventTypes.createFolder,
     CanonicalEventTypes.renameFolder,
     CanonicalEventTypes.deleteFolder,
   };
-  static const _remoteWorkspaceManagementDisabledCode =
-      'remote_workspace_management_disabled';
-  static const _remoteWorkspaceManagementDisabledMessage =
-      'Remote workspace management is disabled for security reasons.';
+  static const _remoteMcpReplaceCommands = <String>{
+    CanonicalEventTypes.replaceMcpConfig,
+  };
   static const _remoteMcpManagementCommands = <String>{
     CanonicalEventTypes.listMcpServers,
     CanonicalEventTypes.saveMcpServer,
     CanonicalEventTypes.deleteMcpServer,
-    CanonicalEventTypes.replaceMcpConfig,
     CanonicalEventTypes.inspectMcpServer,
     CanonicalEventTypes.previewMcpImport,
     CanonicalEventTypes.exportMcpServers,
@@ -58,16 +63,19 @@ class ServerSanadGatewayPlatform extends BasePlatform
       'remote_mcp_management_disabled';
   static const _remoteMcpManagementDisabledMessage =
       'Remote MCP management is disabled for security reasons.';
+  static const _maxSessionClientTags = 1024;
 
   final _logger = Logger('ServerSanadGatewayPlatform');
   final io.Socket Function(String uri, dynamic options)? socketFactory;
   final Future<DeviceKeyIdentity> Function() identityLoader;
   final http.Client _httpClient;
+  final DeliveryPresenceController? deliveryPresence;
 
   ServerSanadGatewayPlatform({
     this.socketFactory,
     Future<DeviceKeyIdentity> Function()? identityLoader,
     http.Client? httpClient,
+    this.deliveryPresence,
   }) : identityLoader = identityLoader ?? DeviceKeyIdentity.loadOrCreate,
        _httpClient = httpClient ?? http.Client();
 
@@ -78,9 +86,10 @@ class ServerSanadGatewayPlatform extends BasePlatform
   SanadProtocolBridge get protocolBridge => _protocolBridge;
 
   @override
-  String get transportName => 'socket';
+  String get transportName => 'client';
   final _eventController = StreamController<GatewayEvent>.broadcast();
   final _voiceEngines = <String, VoiceEngine>{};
+  final _sessionClientTags = <String, String>{};
 
   io.Socket? _socket;
   String? _registeredDeviceId;
@@ -88,7 +97,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
   Future<void>? _authSynchronizationFuture;
   bool _authSynchronizationPending = false;
 
+  String? get registeredDeviceId => _registeredDeviceId;
+
   io.Socket? get socket => _socket;
+
+  bool get isCloudRegistered =>
+      (_socket?.connected ?? false) && _registeredDeviceId != null;
 
   @visibleForTesting
   set socketForTesting(io.Socket? s) => _socket = s;
@@ -128,7 +142,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
       final config = getIt<Config>();
       final gatewayUrl = config.gatewayUrl;
 
-      _logger.info('Connecting to Sanad Gateway at $gatewayUrl...');
+      _logger.info('Connecting to Sanad Gateway...');
 
       final options = io.OptionBuilder()
           .setTransports(['websocket'])
@@ -150,15 +164,16 @@ class ServerSanadGatewayPlatform extends BasePlatform
       await _register(challengeNonce: nonce);
     });
 
-    _socket!.onDisconnect((reason) {
+    _socket!.onDisconnect((_) {
       _registeredDeviceId = null;
-      _logger.info('🔌 Disconnected from Sanad Gateway (reason: $reason)');
+      deliveryPresence?.clearInterest();
+      _logger.info('🔌 Disconnected from Sanad Gateway');
     });
 
     _socket!.onConnectError(
-      (err) => _logger.severe('❌ Connection Error: $err'),
+      (_) => _logger.severe('❌ Sanad Gateway connection error'),
     );
-    _socket!.onError((err) => _logger.severe('❌ Socket Error: $err'));
+    _socket!.onError((_) => _logger.severe('❌ Sanad Gateway socket error'));
 
     _socket!.on('register_success', (data) async {
       final envelope = toMap(data);
@@ -167,16 +182,24 @@ class ServerSanadGatewayPlatform extends BasePlatform
         await authManager.completeDevicePairing();
       }
       _registeredDeviceId = envelope['device_id']?.toString();
-      _logger.info(
-        '⚡ Successfully registered with Sanad Gateway as device $_registeredDeviceId',
-      );
+      _logger.info('⚡ Successfully registered with Sanad Gateway');
+    });
+
+    _socket!.on('cloud_delivery_interest', (data) {
+      final accepted = deliveryPresence?.acceptInterest(toMap(data)) ?? false;
+      if (accepted) {
+        _socket?.emit('cloud_delivery_interest_ack', {
+          'version': deliveryPresenceVersion,
+          'revision': toMap(data)['revision'],
+        });
+      }
     });
 
     _socket!.on('register_failed', (data) async {
       final envelope = toMap(data);
       final message = envelope['error'] as String? ?? 'Registration failed';
       final code = envelope['code'] as String? ?? '';
-      _logger.severe('❌ Registration failed: $message (code: $code)');
+      _logger.severe('❌ Cloud registration failed');
 
       final authManager = getIt<AuthManager>();
       if (authManager.hasPendingDevicePairing) {
@@ -196,10 +219,10 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
     _socket!.on('execute_tool', (data) {
       final envelope = toMap(data);
-      _logger.info(
-        '⬇️ [socket] Received execute_tool: ${envelope['tool_name']}',
-      );
-      _logger.fine('⬇️ [socket] execute_tool payload: $envelope');
+      final origin = AuthenticatedCommandOrigin.fromEnvelope(envelope);
+      final clientTag = origin.displayTag;
+      _logger.info('⬇️ [$clientTag] Received execute_tool');
+      logFinePayload('⬇️ [$clientTag] execute_tool payload:', envelope);
       // TODO: Implement tool execution mapping to agent tools
     });
 
@@ -212,24 +235,34 @@ class ServerSanadGatewayPlatform extends BasePlatform
           (envelope['device_id'] as String?) ??
           (payload['device_id'] as String?) ??
           '';
+      final origin = AuthenticatedCommandOrigin.fromEnvelope(envelope);
+      final clientTag = origin.displayTag;
+      _rememberSessionClientTag(sessionId, clientTag);
 
       if (command == 'authentication_exchange') {
         _logger.warning('Blocking cloud authentication_exchange command.');
         return;
       }
 
+      final originClient = envelope['origin_client'] is Map
+          ? Map<String, dynamic>.from(envelope['origin_client'] as Map)
+          : null;
+
       if (_isRemoteWorkspaceManagementCommand(command)) {
-        await _rejectRemoteWorkspaceManagement(
+        await _dispatchManagedWorkspace(
           command: command!,
           requestId:
               envelope['request_id']?.toString() ??
               payload['request_id']?.toString(),
           sessionId: sessionId,
           deviceId: deviceId,
+          payload: payload,
+          originClient: originClient,
+          clientTag: clientTag,
         );
         return;
       }
-      if (_isRemoteMcpManagementCommand(command)) {
+      if (_isRemoteMcpReplaceCommand(command)) {
         await _rejectRemoteMcpManagement(
           command: command!,
           requestId:
@@ -237,6 +270,46 @@ class ServerSanadGatewayPlatform extends BasePlatform
               payload['request_id']?.toString(),
           sessionId: sessionId,
           deviceId: deviceId,
+          clientTag: clientTag,
+        );
+        return;
+      }
+      if (_isRemoteMcpManagementCommand(command)) {
+        await _dispatchManagedMcp(
+          command: command!,
+          requestId:
+              envelope['request_id']?.toString() ??
+              payload['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          payload: payload,
+          originClient: originClient,
+          clientTag: clientTag,
+        );
+        return;
+      }
+      if (DeviceCommandAdmission.isDeviceControlCommand(command)) {
+        await _dispatchDeviceControl(
+          command: command!,
+          requestId:
+              envelope['request_id']?.toString() ??
+              payload['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          payload: payload,
+          originClient: originClient,
+          clientTag: clientTag,
+        );
+        return;
+      }
+      if (_isMismatchedCloudDevice(deviceId)) {
+        await _rejectWrongDevice(
+          requestId:
+              envelope['request_id']?.toString() ??
+              payload['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          clientTag: clientTag,
         );
         return;
       }
@@ -244,18 +317,20 @@ class ServerSanadGatewayPlatform extends BasePlatform
       final bridge = getIt<PlatformRuntimeBridge>();
       bridge.registerSessionClient(
         sessionId,
-        CloudSessionChannel(onSend: _emitAgentEvent, deviceId: deviceId),
+        CloudSessionChannel(
+          onSend: (eventEnvelope) =>
+              _emitAgentEvent(eventEnvelope, clientTag: clientTag),
+          deviceId: deviceId,
+        ),
         deviceId: deviceId,
       );
 
       if (command == 'start_voice') {
-        _logger.info(
-          'Starting cloud voice session for session $sessionId, device $deviceId',
-        );
+        _logger.info('Starting cloud voice session');
         await _startVoiceSession(sessionId, deviceId);
         return;
       } else if (command == 'stop_voice') {
-        _logger.info('Stopping cloud voice session for session $sessionId');
+        _logger.info('Stopping cloud voice session');
         await _stopVoiceSession(sessionId);
         return;
       }
@@ -263,7 +338,8 @@ class ServerSanadGatewayPlatform extends BasePlatform
       final handled = await handleIncomingCommand(
         envelope: envelope,
         runtimeBridge: bridge,
-        onResponse: _emitAgentEvent,
+        onResponse: (responseEnvelope) =>
+            _emitAgentEvent(responseEnvelope, clientTag: clientTag),
       );
       if (handled) {
         return;
@@ -273,7 +349,7 @@ class ServerSanadGatewayPlatform extends BasePlatform
         platformId,
       );
       if (gatewayEvent == null) {
-        _logger.warning('Unknown or unhandled command: $command');
+        _logger.warning('Unknown or unhandled cloud command');
         return;
       }
       _eventController.add(gatewayEvent);
@@ -285,24 +361,34 @@ class ServerSanadGatewayPlatform extends BasePlatform
       final sessionId =
           event.sessionId ?? envelope['session_id'] as String? ?? 'default';
       final deviceId = envelope['device_id'] as String? ?? '';
+      final origin = AuthenticatedCommandOrigin.fromEnvelope(envelope);
+      final clientTag = origin.displayTag;
+      _rememberSessionClientTag(sessionId, clientTag);
 
       if (event.type == 'authentication_exchange') {
         _logger.warning('Blocking cloud authentication_exchange event.');
         return;
       }
 
+      final originClient = envelope['origin_client'] is Map
+          ? Map<String, dynamic>.from(envelope['origin_client'] as Map)
+          : null;
+
       if (_isRemoteWorkspaceManagementCommand(event.type)) {
-        await _rejectRemoteWorkspaceManagement(
+        await _dispatchManagedWorkspace(
           command: event.type,
           requestId:
               event.payload['request_id']?.toString() ??
               envelope['request_id']?.toString(),
           sessionId: sessionId,
           deviceId: deviceId,
+          payload: event.payload,
+          originClient: originClient,
+          clientTag: clientTag,
         );
         return;
       }
-      if (_isRemoteMcpManagementCommand(event.type)) {
+      if (_isRemoteMcpReplaceCommand(event.type)) {
         await _rejectRemoteMcpManagement(
           command: event.type,
           requestId:
@@ -310,6 +396,46 @@ class ServerSanadGatewayPlatform extends BasePlatform
               envelope['request_id']?.toString(),
           sessionId: sessionId,
           deviceId: deviceId,
+          clientTag: clientTag,
+        );
+        return;
+      }
+      if (_isRemoteMcpManagementCommand(event.type)) {
+        await _dispatchManagedMcp(
+          command: event.type,
+          requestId:
+              event.payload['request_id']?.toString() ??
+              envelope['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          payload: event.payload,
+          originClient: originClient,
+          clientTag: clientTag,
+        );
+        return;
+      }
+      if (DeviceCommandAdmission.isDeviceControlCommand(event.type)) {
+        await _dispatchDeviceControl(
+          command: event.type,
+          requestId:
+              event.payload['request_id']?.toString() ??
+              envelope['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          payload: event.payload,
+          originClient: originClient,
+          clientTag: clientTag,
+        );
+        return;
+      }
+      if (_isMismatchedCloudDevice(deviceId)) {
+        await _rejectWrongDevice(
+          requestId:
+              event.payload['request_id']?.toString() ??
+              envelope['request_id']?.toString(),
+          sessionId: sessionId,
+          deviceId: deviceId,
+          clientTag: clientTag,
         );
         return;
       }
@@ -318,7 +444,8 @@ class ServerSanadGatewayPlatform extends BasePlatform
       await handleIncomingProtocolEvent(
         event: event,
         runtimeBridge: bridge,
-        onResponse: _emitAgentEvent,
+        onResponse: (responseEnvelope) =>
+            _emitAgentEvent(responseEnvelope, clientTag: clientTag),
         envelope: envelope,
       );
     });
@@ -374,36 +501,94 @@ class ServerSanadGatewayPlatform extends BasePlatform
   bool _isRemoteWorkspaceManagementCommand(String? command) =>
       command != null && _remoteWorkspaceManagementCommands.contains(command);
 
-  Future<void> _rejectRemoteWorkspaceManagement({
+  Future<void> _dispatchManagedWorkspace({
     required String command,
     required String? requestId,
     required String sessionId,
     required String deviceId,
+    required Map<String, dynamic> payload,
+    Map<String, dynamic>? originClient,
+    String? clientTag,
   }) async {
-    _logger.warning('Blocking remote workspace command: $command');
-    await _emitAgentEvent({
-      'device_id': _registeredDeviceId ?? deviceId,
-      'type': 'event',
-      'event': 'error',
+    if (_isMismatchedCloudDevice(deviceId)) {
+      await _rejectWrongDevice(
+        requestId: requestId,
+        sessionId: sessionId,
+        deviceId: deviceId,
+        clientTag: clientTag,
+      );
+      return;
+    }
+    final commandEnvelope = {
+      'command': command,
+      'device_id': deviceId,
+      'origin_client': ?originClient,
       'payload': {
-        'request_id': requestId,
-        'code': _remoteWorkspaceManagementDisabledCode,
-        'message': _remoteWorkspaceManagementDisabledMessage,
+        ...payload,
+        'request_id': ?requestId,
+        'session_id': sessionId,
+        'device_id': deviceId,
+        'managed_remote': true,
       },
-      'session_id': sessionId,
-    });
+    };
+    await handleIncomingCommand(
+      envelope: commandEnvelope,
+      runtimeBridge: getIt<PlatformRuntimeBridge>(),
+      onResponse: (resp) => _emitAgentEvent(resp, clientTag: clientTag),
+    );
   }
+
+  bool _isRemoteMcpReplaceCommand(String? command) =>
+      command != null && _remoteMcpReplaceCommands.contains(command);
 
   bool _isRemoteMcpManagementCommand(String? command) =>
       command != null && _remoteMcpManagementCommands.contains(command);
+
+  Future<void> _dispatchManagedMcp({
+    required String command,
+    required String? requestId,
+    required String sessionId,
+    required String deviceId,
+    required Map<String, dynamic> payload,
+    Map<String, dynamic>? originClient,
+    String? clientTag,
+  }) async {
+    if (_isMismatchedCloudDevice(deviceId)) {
+      await _rejectWrongDevice(
+        requestId: requestId,
+        sessionId: sessionId,
+        deviceId: deviceId,
+        clientTag: clientTag,
+      );
+      return;
+    }
+    final commandEnvelope = {
+      'command': command,
+      'device_id': deviceId,
+      'origin_client': ?originClient,
+      'payload': {
+        ...payload,
+        'request_id': ?requestId,
+        'session_id': sessionId,
+        'device_id': deviceId,
+        'cloud_admitted': true,
+      },
+    };
+    await handleIncomingCommand(
+      envelope: commandEnvelope,
+      runtimeBridge: getIt<PlatformRuntimeBridge>(),
+      onResponse: (resp) => _emitAgentEvent(resp, clientTag: clientTag),
+    );
+  }
 
   Future<void> _rejectRemoteMcpManagement({
     required String command,
     required String? requestId,
     required String sessionId,
     required String deviceId,
+    String? clientTag,
   }) async {
-    _logger.warning('Blocking remote MCP command: $command');
+    _logger.warning('Blocking remote MCP command');
     await _emitAgentEvent({
       'device_id': _registeredDeviceId ?? deviceId,
       'type': 'event',
@@ -414,7 +599,70 @@ class ServerSanadGatewayPlatform extends BasePlatform
         'message': _remoteMcpManagementDisabledMessage,
       },
       'session_id': sessionId,
-    });
+    }, clientTag: clientTag);
+  }
+
+  Future<void> _dispatchDeviceControl({
+    required String command,
+    required String? requestId,
+    required String sessionId,
+    required String deviceId,
+    required Map<String, dynamic> payload,
+    Map<String, dynamic>? originClient,
+    String? clientTag,
+  }) async {
+    if (_isMismatchedCloudDevice(deviceId)) {
+      await _rejectWrongDevice(
+        requestId: requestId,
+        sessionId: sessionId,
+        deviceId: deviceId,
+        clientTag: clientTag,
+      );
+      return;
+    }
+    final commandEnvelope = {
+      'command': command,
+      'device_id': deviceId,
+      'origin_client': ?originClient,
+      'payload': {
+        ...payload,
+        'request_id': ?requestId,
+        'session_id': sessionId,
+      },
+    };
+    await handleIncomingCommand(
+      envelope: commandEnvelope,
+      runtimeBridge: getIt<PlatformRuntimeBridge>(),
+      onResponse: (resp) => _emitAgentEvent(resp, clientTag: clientTag),
+    );
+  }
+
+  bool _isMismatchedCloudDevice(String deviceId) {
+    final registered = _registeredDeviceId?.trim() ?? '';
+    final requested = deviceId.trim();
+    return registered.isNotEmpty &&
+        requested.isNotEmpty &&
+        requested != registered;
+  }
+
+  Future<void> _rejectWrongDevice({
+    required String? requestId,
+    required String sessionId,
+    required String deviceId,
+    String? clientTag,
+  }) async {
+    await _emitAgentEvent({
+      'device_id': _registeredDeviceId ?? deviceId,
+      'type': 'event',
+      'event': 'error',
+      'payload': DeviceControlError(
+        code: DeviceControlErrorCodes.wrongDevice,
+        message: 'The command targeted a different device.',
+        requestId: requestId,
+        deviceId: deviceId,
+      ).toPayload(),
+      'session_id': sessionId,
+    }, clientTag: clientTag);
   }
 
   Future<void> _startVoiceSession(String sessionId, String deviceId) async {
@@ -433,8 +681,8 @@ class ServerSanadGatewayPlatform extends BasePlatform
       unawaited(
         engine
             .start({'session_id': sessionId, 'device_id': deviceId})
-            .catchError((Object err) {
-              _logger.severe('Failed to start cloud VoiceEngine: $err');
+            .catchError((Object _) {
+              _logger.severe('Failed to start cloud VoiceEngine');
               if (_voiceEngines[sessionId] == engine) {
                 _voiceEngines.remove(sessionId);
               }
@@ -447,15 +695,15 @@ class ServerSanadGatewayPlatform extends BasePlatform
         'event': 'voice_session_started',
         'payload': {'session_id': sessionId},
       });
-    } catch (e, stack) {
-      _logger.severe('Error starting cloud voice session: $e', e, stack);
+    } catch (_) {
+      _logger.severe('Error starting cloud voice session');
     }
   }
 
   Future<void> _stopVoiceSession(String sessionId) async {
     final engine = _voiceEngines.remove(sessionId);
     if (engine != null) {
-      _logger.info('Closing active voice engine for session $sessionId');
+      _logger.info('Closing active voice engine');
       await engine.close();
     }
   }
@@ -520,17 +768,33 @@ class ServerSanadGatewayPlatform extends BasePlatform
       'hardware_id': authManager.hardwareId,
       'platform': _getPlatformName(),
       ...capabilities.toJson(),
+      'transport_capabilities': const [deliveryPresenceCapability],
     };
 
-    _logger.info(
-      '⬆️ [socket] Registering device with hardware_id: ${authManager.hardwareId}',
+    _logger.info('⬆️ [gateway] Registering Agent device');
+    _logger.fine(
+      '⬆️ [gateway] Registration fields: ${payload.keys.join(', ')}',
     );
-    _logger.fine('⬆️ [socket] Registration fields: ${payload.keys.join(', ')}');
 
     targetSocket.emit('register_device', payload);
   }
 
-  Future<void> _emitAgentEvent(Map<String, dynamic> envelope) async {
+  void _rememberSessionClientTag(String sessionId, String clientTag) {
+    if (sessionId.isEmpty) return;
+    _sessionClientTags.remove(sessionId);
+    _sessionClientTags[sessionId] = clientTag;
+    while (_sessionClientTags.length > _maxSessionClientTags) {
+      _sessionClientTags.remove(_sessionClientTags.keys.first);
+    }
+  }
+
+  Future<void> _emitAgentEvent(
+    Map<String, dynamic> envelope, {
+    bool egressClaimed = false,
+    Set<String> localDeliveryExclusions = const <String>{},
+    String? clientTag,
+  }) async {
+    if (!egressClaimed && deliveryPresence?.claimCloudEgress() == false) return;
     if (_socket == null || !_socket!.connected) {
       return;
     }
@@ -548,15 +812,33 @@ class ServerSanadGatewayPlatform extends BasePlatform
       ...envelope,
       'device_id': deviceId,
       'hardware_id': authManager.hardwareId,
+      if (localDeliveryExclusions.isNotEmpty)
+        'local_delivery_client_instance_ids': (localDeliveryExclusions.toList()
+          ..sort()),
     };
     final eventType =
         canonicalEnvelope['event'] ?? canonicalEnvelope['type'] ?? 'unknown';
+    final sessionId =
+        (envelope['session_id'] ?? canonicalEnvelope['session_id'])?.toString();
+    final deliveryScope = toMap(
+      canonicalEnvelope['delivery'],
+    )['scope']?.toString();
+    final correlatedClientTag =
+        clientTag ?? (sessionId != null ? _sessionClientTags[sessionId] : null);
+    final resolvedClientTag = switch (deliveryScope) {
+      'platform_family' || 'hardware' => 'clients',
+      'origin' => correlatedClientTag ?? transportName,
+      _ => correlatedClientTag ?? transportName,
+    };
     if (eventType == 'thought_stream' || eventType == 'reasoning_stream') {
-      _logger.fine('⬆️ [socket] Emitting device_event: $eventType');
+      _logger.fine('⬆️ [$resolvedClientTag] Emitting device_event: $eventType');
     } else {
-      _logger.info('⬆️ [socket] Emitting device_event: $eventType');
+      _logger.info('⬆️ [$resolvedClientTag] Emitting device_event: $eventType');
     }
-    _logger.fine('⬆️ [socket] Device event payload: $canonicalEnvelope');
+    logFinePayload(
+      '⬆️ [$resolvedClientTag] Device event payload:',
+      canonicalEnvelope,
+    );
 
     _socket!.emit('device_event', canonicalEnvelope);
   }
@@ -570,9 +852,16 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
   @override
   Future<void> sendResponse(GatewayResponse response) async {
+    final localDeliveryExclusions =
+        deliveryPresence?.takeLocalDelivery(response.eventId) ??
+        const <String>{};
+    // The interest gate precedes canonical translation/serialization.
+    if (deliveryPresence?.claimCloudEgress() == false) return;
     final canonicalEvent = _protocolBridge.translateResponse(response);
     await _emitAgentEvent(
       _protocolBridge.buildAgentEventEnvelope(canonicalEvent),
+      egressClaimed: true,
+      localDeliveryExclusions: localDeliveryExclusions,
     );
   }
 

@@ -7,7 +7,7 @@ description: "Security, form, import/export, OAuth, lifecycle, and regression ch
 
 ## Authority and security
 
-- Device and Workspace management commands succeed only through the authenticated local gateway; every import, export, Advanced JSON, inspection, and OAuth command remains rejected on the cloud management path.
+- Device and Workspace management commands succeed through the authenticated local or cloud gateway using `DeviceCommandClient`. Cloud save/delete/Advanced save/STDIO inspect/OAuth complete require a daemon confirmation ticket. Root-document `replace_mcp_config` remains rejected on cloud. Hosted `/api/mcp` is not used.
 - Device and Workspace snapshots preserve same-name Workspace precedence and contain configured markers only, never bearer, header, environment, OAuth access/refresh, or client-secret values.
 - Draft inspection uses entered credentials ephemerally and leaves neither configuration nor secret-store files behind.
 - Every sensitive discovered MCP tool requests canonical permission before server execution. Denial produces no MCP call and no persisted deny rule, so a later invocation asks again; approval executes once, and repeated exact input honors session/workspace grants and full-access bypass.

@@ -45,6 +45,9 @@ class SlashSuggestionSurface extends StatelessWidget {
                   .entries
                   .map(
                     (item) => InkWell(
+                      key: ValueKey(
+                        'slash_suggestion_${item.value.type.type}_${item.value.command}',
+                      ),
                       onTap: () => onSelected(item.value),
                       onHover: (hovering) {
                         if (hovering) {

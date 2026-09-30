@@ -41,4 +41,3 @@ extension DeviceConfigUI on DeviceConfig {
 
   Color iconBackground(BuildContext context) => color(context).withValues(alpha: 0.2);
 }
-

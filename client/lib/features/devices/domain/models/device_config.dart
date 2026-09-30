@@ -27,12 +27,15 @@ class DeviceConfig {
   bool get isLocalReachable => metadata?['is_local_reachable'] == true;
   bool get isLocalCandidate => metadata?['is_local_candidate'] == true;
 
+  /// A desktop-local inventory row is keyed directly by the Agent hardware id.
+  bool get isLocalInventoryDevice => hardwareId != null && hardwareId!.isNotEmpty && id == hardwareId;
+
   /// Cloud inventory identity represented by this device after a same-hardware
   /// cloud/local entry is merged into the canonical local entry.
   String? get cloudDeviceId => metadata?['cloud_device_id'] as String?;
 
   /// The account-owned id that can be used for inventory mutations.
-  String? get accountDeviceId => cloudDeviceId ?? (id == 'local-agent' ? null : id);
+  String? get accountDeviceId => cloudDeviceId ?? (isLocalInventoryDevice ? null : id);
 
   bool representsDeviceId(String deviceId) => id == deviceId || cloudDeviceId == deviceId;
 

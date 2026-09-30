@@ -33,6 +33,13 @@ route أو إعدادات الدور صراحةً. لا يخمن adapter الق�
 `supportsReasoning`/`supportsReasoningOutput` وحده؛ وضع الحقول السلكية يتم فقط
 من `NativeThinkingDirective` عبر wire codecs الخاصة بالسياسة.
 
+تستخدم طلبات OpenCode هوية `sessionId` كقيمة opaque للهيدر
+`x-opencode-session` في كل استدعاء محادثة متزامن أو متدفق. تبني policy مشتركة
+داخل طبقة adapters هذا الهيدر ديناميكيًا للمزود الرسمي أو للـendpoint المخصص
+ذي المضيف المطابق تمامًا `opencode.ai`؛ ولا تضعه في `defaultHeaders` الثابتة ولا
+ترسله إلى مزود آخر. وبذلك تبقى القيمة ثابتة طوال المحادثة من دون أن يحتفظ
+adapter بحالة جلسة.
+
 ## Adapter Reasoning Parity
 
 | Adapter family | Structured reasoning | Tagged fallback | Streaming separation |

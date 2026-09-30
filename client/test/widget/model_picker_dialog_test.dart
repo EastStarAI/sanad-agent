@@ -53,41 +53,86 @@ class _FakeProviderSetupClient extends ProviderSetupClient {
   }) async {}
 
   @override
-  Future<ProviderReadinessDto> setupStatus({DeviceConfig? agent}) async => const ProviderReadinessDto(hasProvider: false, runtimeReady: false);
+  Future<ProviderReadinessDto> setupStatus({DeviceConfig? agent}) async =>
+      const ProviderReadinessDto(hasProvider: false, runtimeReady: false);
   @override
-  Future<ProviderReadinessDto> runtimeCheck({DeviceConfig? agent}) async => const ProviderReadinessDto(hasProvider: false, runtimeReady: false);
+  Future<ProviderReadinessDto> runtimeCheck({DeviceConfig? agent}) async =>
+      const ProviderReadinessDto(hasProvider: false, runtimeReady: false);
   @override
-  Future<AuthSessionDto> authStart({required String providerId, String? providerInstanceId, String? templateId, String? authMethod, DeviceConfig? agent}) async => const AuthSessionDto(sessionId: '1');
+  Future<AuthSessionDto> authStart({
+    required String providerId,
+    String? providerInstanceId,
+    String? templateId,
+    String? authMethod,
+    DeviceConfig? agent,
+  }) async => const AuthSessionDto(sessionId: '1');
   @override
-  Future<AuthPollDto> authPoll({required String sessionId, DeviceConfig? agent}) async => const AuthPollDto(status: AuthPollStatus.pending);
+  Future<AuthPollDto> authPoll({required String sessionId, DeviceConfig? agent}) async =>
+      const AuthPollDto(status: AuthPollStatus.pending);
   @override
-  Future<AuthPollDto> authSubmit({required String sessionId, required String code, DeviceConfig? agent}) async => const AuthPollDto(status: AuthPollStatus.pending);
+  Future<AuthPollDto> authSubmit({required String sessionId, required String code, DeviceConfig? agent}) async =>
+      const AuthPollDto(status: AuthPollStatus.pending);
   @override
   Future<void> authCancel({required String sessionId, DeviceConfig? agent}) async {}
   @override
-  Future<String> authStatus({required String providerId, String? providerInstanceId, DeviceConfig? agent}) async => 'missing';
+  Future<String> authStatus({required String providerId, String? providerInstanceId, DeviceConfig? agent}) async =>
+      'missing';
   @override
-  Future<List<ModelOptionsDto>> modelOptions({String? providerId, bool fetchLive = false, DeviceConfig? agent}) async => [];
+  Future<List<ModelOptionsDto>> modelOptions({String? providerId, bool fetchLive = false, DeviceConfig? agent}) async =>
+      [];
   @override
   Future<List<ProviderTemplateDto>> listTemplates({DeviceConfig? agent}) async => [];
   @override
   Future<List<ProviderInstanceDto>> listInstances({DeviceConfig? agent}) async => [];
   @override
-  Future<ProviderInstanceDto> createInstance({required String templateId, required String displayName, required String authMethod, String? protocol, String? baseUrl, String? defaultModel, int? requestsPerMinute, bool? allowAutoFailover, bool isDefault = false, DeviceConfig? agent}) async => throw UnimplementedError();
+  Future<ProviderInstanceDto> createInstance({
+    required String templateId,
+    required String displayName,
+    required String authMethod,
+    String? protocol,
+    String? baseUrl,
+    String? defaultModel,
+    int? requestsPerMinute,
+    bool? allowAutoFailover,
+    bool isDefault = false,
+    DeviceConfig? agent,
+  }) async => throw UnimplementedError();
   @override
-  Future<ProviderInstanceDto> updateInstance({required String providerInstanceId, String? displayName, String? defaultModel, String? baseUrl, String? protocol, int? requestsPerMinute, bool? allowAutoFailover, DeviceConfig? agent}) async => throw UnimplementedError();
+  Future<ProviderInstanceDto> updateInstance({
+    required String providerInstanceId,
+    String? displayName,
+    String? defaultModel,
+    String? baseUrl,
+    String? protocol,
+    int? requestsPerMinute,
+    bool? allowAutoFailover,
+    DeviceConfig? agent,
+  }) async => throw UnimplementedError();
   @override
-  Future<ProviderInstanceDto> renameInstance({required String providerInstanceId, required String displayName, DeviceConfig? agent}) async => throw UnimplementedError();
+  Future<ProviderInstanceDto> renameInstance({
+    required String providerInstanceId,
+    required String displayName,
+    DeviceConfig? agent,
+  }) async => throw UnimplementedError();
   @override
   Future<void> removeInstance({required String providerInstanceId, DeviceConfig? agent}) async {}
   @override
   Future<void> setInstanceDefault({required String providerInstanceId, DeviceConfig? agent}) async {}
   @override
-  Future<Map<String, dynamic>> testInstanceConnection({required String providerInstanceId, DeviceConfig? agent}) async => {};
+  Future<Map<String, dynamic>> testInstanceConnection({
+    required String providerInstanceId,
+    DeviceConfig? agent,
+  }) async => {};
   @override
-  Future<CredentialSummaryDto> updateCredential({required String providerInstanceId, required String action, String? apiKey, DeviceConfig? agent}) async => throw UnimplementedError();
+  Future<CredentialSummaryDto> updateCredential({
+    required String providerInstanceId,
+    required String action,
+    String? apiKey,
+    DeviceConfig? agent,
+  }) async => throw UnimplementedError();
   @override
-  Future<AuthSessionDto> authReconnect({required String providerInstanceId, DeviceConfig? agent}) async => const AuthSessionDto(sessionId: '1');
+  Future<AuthSessionDto> authReconnect({required String providerInstanceId, DeviceConfig? agent}) async =>
+      const AuthSessionDto(sessionId: '1');
   @override
   Future<void> authDisconnect({required String providerInstanceId, DeviceConfig? agent}) async {}
 }
@@ -100,7 +145,7 @@ void main() {
     await getIt.reset();
     fakeClient = _FakeProviderSetupClient();
     getIt.registerSingleton<ProviderSetupClient>(fakeClient);
-    usageCubit = ProviderUsageCubit(client: fakeClient);
+    usageCubit = ProviderUsageCubit(localDeviceId: 'hardware-1', client: fakeClient);
     getIt.registerSingleton<ProviderUsageCubit>(usageCubit);
   });
 
@@ -253,7 +298,9 @@ void main() {
     expect(mainModelTexts, ['model-b2', 'model-b1', 'model-a2', 'model-a1']);
   });
 
-  testWidgets('displays matching search results completely without limits or toggle buttons, and updates count', (tester) async {
+  testWidgets('displays matching search results completely without limits or toggle buttons, and updates count', (
+    tester,
+  ) async {
     final models = List.generate(8, (i) => ModelCacheModelDto(id: 'gpt-${i + 1}'));
     fakeClient.snapshotResult = ModelCacheSnapshotDto(
       instances: [
@@ -372,7 +419,9 @@ void main() {
     await usageCubit.onInstancesLoaded(instanceIds: ['provider-1'], agent: null);
     await tester.pumpAndSettle();
 
-    final tooltipFinder = find.byWidgetPredicate((w) => w is Tooltip && w.message != null && w.message!.contains('Requests limit'));
+    final tooltipFinder = find.byWidgetPredicate(
+      (w) => w is Tooltip && w.message != null && w.message!.contains('Requests limit'),
+    );
     expect(tooltipFinder, findsOneWidget);
 
     final tooltip = tester.widget<Tooltip>(tooltipFinder);

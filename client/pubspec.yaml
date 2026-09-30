@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 1.0.6+7
+version: 1.0.10+11
 
 environment:
   sdk: ^3.10.7
@@ -42,6 +42,8 @@ dependencies:
   socket_io_client: ^3.1.4
   http: ^1.3.0
   crypto: ^3.0.7
+  sanad_client_identity:
+    path: ../shared/client_identity
   app_links: ^7.0.0
   provider: ^6.1.2
   url_launcher: ^6.3.1
@@ -67,10 +69,12 @@ dependencies:
     path: ../release/contract
   sanad_auth_lock:
     path: ../shared/auth_lock
+  sanad_public_service_endpoints:
+    path: ../shared/public_service_endpoints
 
   flutter_highlight: ^0.7.0
   highlight: ^0.7.0
-  flutter_markdown: ^0.7.7+1
+  flutter_markdown_plus: ^1.0.12
   flutter_svg: ^2.0.17
   code_forge: ^5.1.0
   re_highlight: ^0.0.3

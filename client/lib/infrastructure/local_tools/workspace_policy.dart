@@ -1,7 +1,6 @@
 enum WorkspacePermissionMode {
   defaultMode('default'),
-  fullAccess('full_access')
-  ;
+  fullAccess('full_access');
 
   const WorkspacePermissionMode(this.value);
 

@@ -22,6 +22,48 @@ void main() {
     socket.dispose();
   });
 
+  test('does not cache a correlated null response before a device is online', () async {
+    final cloudSocket = FakeSanadSocketService()..setConnected(true);
+    final localSocket = FakeSanadSocketService()..setConnected(true);
+    final resolver = createTestResolver(
+      cloudSocket: cloudSocket,
+      localSocket: localSocket,
+    );
+    final capabilities = DeviceCapabilitiesStore(resolver);
+    final remoteAgent = DeviceConfig(
+      id: 'newly-paired-device',
+      name: 'Remote',
+      isOnline: false,
+    );
+
+    cloudSocket.autoCapabilitiesPayload = null;
+    final beforeOnline = await capabilities.ensureFreshForAgent(remoteAgent);
+
+    expect(beforeOnline, const Capability());
+    expect(capabilities.capabilitiesByAgentId, isNot(contains(remoteAgent.id)));
+
+    cloudSocket.autoCapabilitiesPayload = const {
+      'supports_model_change': true,
+      'supports_thinking_mode_change': true,
+    };
+    final afterOnline = await capabilities.ensureFreshForAgent(
+      remoteAgent.copyWith(isOnline: true),
+    );
+
+    expect(afterOnline.supportsModelChange, isTrue);
+    expect(afterOnline.supportsThinkingModeChange, isTrue);
+    expect(capabilities.capabilitiesByAgentId, contains(remoteAgent.id));
+    expect(
+      cloudSocket.capturedCommands.where((command) => command['event'] == 'get_capabilities'),
+      hasLength(2),
+    );
+
+    capabilities.dispose();
+    resolver.dispose();
+    cloudSocket.dispose();
+    localSocket.dispose();
+  });
+
   test('stores capabilities per agent id without overwriting siblings', () async {
     final cloudSocket = FakeSanadSocketService()..setConnected(true);
     final localSocket = FakeSanadSocketService()..setConnected(true);

@@ -68,8 +68,8 @@ void main() {
   late SessionManager sessionManager;
   late ToolsRegistry registry;
 
-  setUp(() {
-    GetIt.I.reset();
+  setUp(() async {
+    await GetIt.I.reset();
     SessionManager.resetForTesting();
     state = AgentStateDatabase.inMemory();
     GetIt.I.registerSingleton<AgentStateDatabase>(state);
@@ -131,8 +131,8 @@ void main() {
     );
   });
 
-  tearDown(() {
-    GetIt.I.reset();
+  tearDown(() async {
+    await GetIt.I.reset();
     SessionManager.resetForTesting();
     state.dispose();
   });
@@ -164,59 +164,94 @@ void main() {
     expect(adapter.callCount, 0);
   });
 
-  test('supported explicit thinking selection reaches adapter directive', () async {
-    repo.upsertModelCache(
-      instanceId: 'inst-1',
-      cacheKey: 'models',
-      models: [
-        {
-          'value': 'o3',
-          'supports_reasoning_output': true,
-          'thinking_control': {
-            'status': 'supported',
-            'kind': 'effort',
-            'options': [
-              {'id': 'low', 'label': 'Low'},
-              {'id': 'medium', 'label': 'Medium'},
-              {'id': 'high', 'label': 'High'},
-            ],
-            'capability_revision': 'rev-supported',
-            'source': 'profile',
+  test(
+    'absent thinking selection preserves provider default without instance lookup',
+    () async {
+      final adapter = _CountingAdapter();
+      final session = sessionManager.createSession(
+        'fixture-model',
+        providerId: 'deterministic-fixture',
+      );
+      final runner = AgentRunner(
+        adapter,
+        registry,
+        sessionManager,
+        existingSessionId: session.sessionId,
+      );
+
+      final response = await runner.sendMessage(
+        'Hello',
+        providerId: 'deterministic-fixture',
+        model: 'fixture-model',
+      );
+
+      expect(response.content, 'ok');
+      expect(adapter.callCount, 1);
+      expect(adapter.lastOptions?.thinkingMode, isNull);
+      expect(adapter.lastOptions?.thinkingDirective, isNull);
+    },
+  );
+
+  test(
+    'supported explicit thinking selection reaches adapter directive',
+    () async {
+      repo.upsertModelCache(
+        instanceId: 'inst-1',
+        cacheKey: 'models',
+        models: [
+          {
+            'value': 'o3',
+            'supports_reasoning_output': true,
+            'thinking_control': {
+              'status': 'supported',
+              'kind': 'effort',
+              'options': [
+                {'id': 'low', 'label': 'Low'},
+                {'id': 'medium', 'label': 'Medium'},
+                {'id': 'high', 'label': 'High'},
+              ],
+              'capability_revision': 'rev-supported',
+              'source': 'profile',
+            },
           },
-        },
-      ],
-      fetchedAt: DateTime.now(),
-      source: 'live',
-      configRevision: 1,
-      credentialRevision: 1,
-    );
+        ],
+        fetchedAt: DateTime.now(),
+        source: 'live',
+        configRevision: 1,
+        credentialRevision: 1,
+      );
 
-    final adapter = _CountingAdapter();
-    final session = sessionManager.createSession(
-      'o3',
-      providerId: 'inst-1',
-      thinkingMode: 'high',
-    );
-    final runner = AgentRunner(
-      adapter,
-      registry,
-      sessionManager,
-      existingSessionId: session.sessionId,
-    );
+      final adapter = _CountingAdapter();
+      final session = sessionManager.createSession(
+        'o3',
+        providerId: 'inst-1',
+        thinkingMode: 'high',
+      );
+      final runner = AgentRunner(
+        adapter,
+        registry,
+        sessionManager,
+        existingSessionId: session.sessionId,
+      );
 
-    final response = await runner.sendMessage(
-      'Hello',
-      providerId: 'inst-1',
-      model: 'o3',
-      thinkingMode: 'high',
-    );
+      final response = await runner.sendMessage(
+        'Hello',
+        providerId: 'inst-1',
+        model: 'o3',
+        thinkingMode: 'high',
+      );
 
-    expect(response.content, 'ok');
-    expect(adapter.callCount, 1);
-    expect(adapter.lastOptions?.thinkingDirective, isA<OpenAiEffortDirective>());
-    expect(
-      (adapter.lastOptions!.thinkingDirective! as OpenAiEffortDirective).effort,
-      'high',
-    );
-  });
+      expect(response.content, 'ok');
+      expect(adapter.callCount, 1);
+      expect(
+        adapter.lastOptions?.thinkingDirective,
+        isA<OpenAiEffortDirective>(),
+      );
+      expect(
+        (adapter.lastOptions!.thinkingDirective! as OpenAiEffortDirective)
+            .effort,
+        'high',
+      );
+    },
+  );
 }

@@ -19,4 +19,7 @@ This contract applies to `agent/lib/interfaces/models/`.
 ## Model Safety
 - Models crossing protocol or persistence boundaries remain typed and JSON-safe.
 - Optional fields are omitted when absent where the protocol requires absence semantics; do not emit null as a substitute.
+- Device-control command, result, and error models use canonical protocol names. Do not parse UI labels, and do not accept client artifact URLs or checksums as update authority.
+- Workspace-control models carry managed-remote admission errors and mutation
+  preview payloads. Do not treat a client path as the remote workspace root.
 - Extend delivery and origin types without coupling model definitions to concrete platform implementations.

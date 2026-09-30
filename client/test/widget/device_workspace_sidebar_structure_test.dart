@@ -675,6 +675,41 @@ void main() {
     await gesture.removePointer();
     await capsCubit.close();
   });
+
+  testWidgets('double-clicking a session title opens the rename dialog', (tester) async {
+    final capsCubit = _FakeDeviceCapabilitiesCubit(
+      DeviceCapabilitiesState(
+        capabilitiesByAgentId: {
+          device.id: const Capability(supportsUpdateSessionName: true),
+        },
+      ),
+    );
+
+    await pumpTestApp(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionSidebarCubit: sessionSidebarCubit,
+      deviceCapabilitiesCubit: capsCubit,
+      conversationCacheRepository: cacheRepository,
+      conversationRepository: conversationRepository,
+      child: const DeviceWorkspaceSidebar(showChrome: false, key: Key('sidebar')),
+    );
+    await tester.pumpAndSettle();
+
+    final title = find.byKey(const ValueKey('sidebar_session_title:s-scoped'));
+    await tester.tap(title);
+    await tester.pump(kDoubleTapMinTime);
+    await tester.tap(title);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Rename Session'), findsOneWidget);
+    expect(find.text('Scoped chat'), findsWidgets);
+
+    await tester.tap(find.text('Cancel'));
+    await tester.pumpAndSettle();
+    await capsCubit.close();
+  });
 }
 
 class _FakeDeviceCapabilitiesCubit extends Cubit<DeviceCapabilitiesState> implements DeviceCapabilitiesCubit {

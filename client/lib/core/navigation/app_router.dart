@@ -165,7 +165,7 @@ class AppRouter {
                 final payload = extra is Map ? Map<String, dynamic>.from(extra) : const <String, dynamic>{};
                 return AddMcpServerScreen(
                   device: payload['device'] as DeviceConfig?,
-                  workspacePath: payload['workspacePath']?.toString(),
+                  workspaceId: payload['workspaceId']?.toString(),
                   scopeLabel: payload['scopeLabel']?.toString(),
                   scope: payload['scope'] is McpConfigScope
                       ? payload['scope'] as McpConfigScope

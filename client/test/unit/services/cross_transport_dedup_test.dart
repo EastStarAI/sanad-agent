@@ -10,6 +10,44 @@ import '../../mocks/mock_socket_service.dart';
 /// to the shared `EventDeduplicator` keyed by `event_id`.
 void main() {
   test(
+    'same-id compaction reconciliation is delivered once after initial completion',
+    () async {
+      final service = FakeSanadSocketService(hardwareId: 'hw-1');
+      service.eventDeduplicator = EventDeduplicator();
+      final events = <Map<String, dynamic>>[];
+      service.events.listen(events.add);
+      final initial = <String, dynamic>{
+        'type': 'device_event',
+        'event': 'context_compaction.completed',
+        'event_id': 'compaction_done_1',
+        'payload': {
+          'status': 'completed',
+          'estimated_request_tokens_after': 57_630,
+        },
+      };
+      final reconciled = <String, dynamic>{
+        ...initial,
+        'payload': {
+          ...(initial['payload']! as Map<String, dynamic>),
+          'provider_confirmed_request_tokens_after': 34_922,
+        },
+      };
+
+      service.debugEmitDeviceEvent(initial);
+      service.debugEmitDeviceEvent(reconciled);
+      service.debugEmitDeviceEvent(reconciled);
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      expect(events, hasLength(2));
+      expect(
+        (events.last['payload'] as Map)['provider_confirmed_request_tokens_after'],
+        34_922,
+      );
+      service.dispose();
+    },
+  );
+
+  test(
     'the same event_id over cloud and local is delivered once',
     () async {
       final cloud = FakeSanadSocketService(hardwareId: 'hw-1');

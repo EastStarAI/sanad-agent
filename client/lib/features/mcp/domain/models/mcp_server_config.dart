@@ -4,8 +4,7 @@ enum McpAuthType {
   none('None'),
   bearer('Bearer token'),
   oauth('OAuth'),
-  customHeaders('Custom headers')
-  ;
+  customHeaders('Custom headers');
 
   const McpAuthType(this.displayName);
   final String displayName;
@@ -15,8 +14,7 @@ enum McpTransportType {
   auto('Auto-detect'),
   streamableHttp('Streamable HTTP'),
   sse('SSE'),
-  stdio('STDIO')
-  ;
+  stdio('STDIO');
 
   const McpTransportType(this.displayName);
   final String displayName;

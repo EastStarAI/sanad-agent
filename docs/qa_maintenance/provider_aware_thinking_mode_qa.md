@@ -16,7 +16,9 @@ routes, and never silently ignore an explicit unsupported selection.
 |---|---|
 | OpenAI reasoning model (`o3`) with selection `high` | Chat Completions body includes top-level `reasoning_effort=high`; sync/stream parity for non-stream fields |
 | OpenAI non-control model with explicit selection | Typed rejection before HTTP; zero provider requests |
-| Null / cleared selection | Provider default by omission; no invented `balanced` |
+| Null / cleared selection | Provider default by omission; no invented `balanced`, and no provider-instance capability lookup is required for deterministic/standalone routes |
+| Capabilities switch from legacy to `thinking_mode_source=model` on an unchanged route | Composer reloads the model snapshot immediately instead of remaining `Unavailable` |
+| Legacy thinking controls in an isolated composer | Legacy list remains renderable without requiring model-scoped `SessionCubit` context |
 | Legacy `fast`/`balanced`/`deep` when mapped option exists | Migrates to `low`/`medium`/`high` only when present in descriptor |
 | Legacy alias when mapped option missing | Cleared with correction reason `thinking_option_unavailable_for_route` |
 | Anthropic manual vs adaptive model | Manual emits `budget_tokens`; adaptive emits `thinking.type=adaptive` + effort; never both |

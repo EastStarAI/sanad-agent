@@ -43,11 +43,13 @@ class ComposerSlashCommandsCubit extends Cubit<ComposerSlashCommandsState> {
     }
 
     _lastWorkspaceId = normalizedWorkspaceId;
+    _searchEpoch += 1;
     emit(state.copyWith(availableEntries: const []));
   }
 
   void clear() {
     _debounceTimer?.cancel();
+    _searchEpoch += 1;
     emit(
       state.copyWith(
         visibleEntries: const [],
@@ -91,7 +93,10 @@ class ComposerSlashCommandsCubit extends Cubit<ComposerSlashCommandsState> {
       return;
     }
 
-    final query = SkillComposerUtils.detectSlashQuery(_lastComposerValue);
+    final runtimeQuery = SkillComposerUtils.detectRuntimeSlashQuery(
+      _lastComposerValue,
+    );
+    final query = runtimeQuery ?? SkillComposerUtils.detectSlashQuery(_lastComposerValue);
     if (query == null) {
       emit(
         state.copyWith(
@@ -112,11 +117,17 @@ class ComposerSlashCommandsCubit extends Cubit<ComposerSlashCommandsState> {
       return;
     }
 
+    final eligibleMatches = matches
+        .where(
+          (entry) => runtimeQuery != null || entry.type.placement == SlashCommandPlacement.anywhere,
+        )
+        .toList(growable: false);
+
     emit(
       state.copyWith(
-        availableEntries: matches,
+        availableEntries: eligibleMatches,
         activeQuery: query,
-        visibleEntries: matches.take(6).toList(growable: false),
+        visibleEntries: eligibleMatches.take(6).toList(growable: false),
         highlightedIndex: 0,
       ),
     );

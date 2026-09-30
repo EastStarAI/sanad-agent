@@ -96,6 +96,25 @@ void main() {
     expect(snapshot.effective.servers.single.config.serverUrl, 'https://example.com/mcp');
   });
 
+  test('requires a real selected device instead of fabricating a local target', () async {
+    final unresolvedClient = McpRuntimeClient(
+      connectionCoordinator: coordinator,
+    );
+
+    await expectLater(
+      unresolvedClient.listServers(),
+      throwsA(
+        isA<StateError>().having(
+          (error) => error.message,
+          'message',
+          'Select a device before managing MCP servers.',
+        ),
+      ),
+    );
+    expect(socket.capturedCommands, isEmpty);
+    expect(cloudSocket.capturedCommands, isEmpty);
+  });
+
   test('saveServer sends runtime mutation command', () async {
     final future = client.saveServer(
       scope: McpConfigScope.workspace,
@@ -262,5 +281,88 @@ void main() {
     final inspection = await future;
     expect(inspection.success, isTrue);
     expect(inspection.tools.single.name, 'create_issue');
+  });
+
+  test('saveServer auto-confirms a cloud preview ticket', () async {
+    cloudSocket.setConnected(true);
+    final future = client.saveServer(
+      device: DeviceConfig(
+        id: 'cloud-device',
+        name: 'Remote agent',
+        hardwareId: 'other-hardware',
+        isOnline: true,
+      ),
+      scope: McpConfigScope.global,
+      config: McpServerConfig(
+        name: 'docs',
+        serverUrl: 'https://example.test/mcp',
+      ),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    var saveCommands = cloudSocket.capturedCommands.where((entry) => entry['command'] == 'save_mcp_server').toList();
+    expect(saveCommands, hasLength(1));
+    final previewPayload = saveCommands.single['payload'] as Map<String, dynamic>;
+    cloudSocket.debugEmitEvent({
+      'type': 'device_event',
+      'event': 'mcp.server.save.preview',
+      'payload': {
+        'request_id': previewPayload['request_id'],
+        'confirmation_token': 'ticket-1',
+        'confirmation_fingerprint': 'fp-1',
+      },
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    saveCommands = cloudSocket.capturedCommands.where((entry) => entry['command'] == 'save_mcp_server').toList();
+    expect(saveCommands, hasLength(2));
+    final confirmPayload = saveCommands.last['payload'] as Map<String, dynamic>;
+    expect(confirmPayload['confirmation_token'], 'ticket-1');
+    expect(confirmPayload['confirmation_fingerprint'], 'fp-1');
+    cloudSocket.debugEmitEvent({
+      'type': 'device_event',
+      'event': 'mcp_server_saved',
+      'payload': {
+        'request_id': confirmPayload['request_id'],
+        'global': {
+          'scope': 'global',
+          'document': {
+            'mcpServers': {
+              'docs': {'url': 'https://example.test/mcp'},
+            },
+          },
+          'servers': [
+            {
+              'name': 'docs',
+              'source': 'global',
+              'config': {'name': 'docs', 'url': 'https://example.test/mcp'},
+            },
+          ],
+        },
+        'workspace': {
+          'scope': 'workspace',
+          'document': {'mcpServers': {}},
+          'servers': [],
+        },
+        'effective': {
+          'scope': 'effective',
+          'document': {
+            'mcpServers': {
+              'docs': {'url': 'https://example.test/mcp'},
+            },
+          },
+          'servers': [
+            {
+              'name': 'docs',
+              'source': 'global',
+              'config': {'name': 'docs', 'url': 'https://example.test/mcp'},
+            },
+          ],
+        },
+      },
+    });
+
+    final snapshot = await future;
+    expect(snapshot.effective.servers.single.name, 'docs');
   });
 }
