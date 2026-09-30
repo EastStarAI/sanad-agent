@@ -1,0 +1,45 @@
+{
+  "skill_name": "Sanad Client Tester",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "I changed one conversation widget. Select the smallest analyzer and widget-test verification without launching a runtime.",
+      "expected_reference": "references/automated-testing.md",
+      "expected_output": "Analyze first, run focused widget coverage, and avoid unnecessary E2E or live runtime work."
+    },
+    {
+      "id": 2,
+      "prompt": "Open a driver-enabled Sanad Client, inspect the current screen, tap one keyed Settings target, and verify the destination.",
+      "expected_reference": "references/interactive-ui-testing.md",
+      "additional_reference": "references/runtime-and-worktrees.md",
+      "expected_output": "Prove runtime ownership, snapshot, act once through a stable key, and verify the transition."
+    },
+    {
+      "id": 3,
+      "prompt": "Start two isolated worktree Clients and prove restarting one does not affect UI control of the other.",
+      "expected_reference": "references/runtime-and-worktrees.md",
+      "expected_output": "Use managed driver runtimes, worktree-scoped ownership, and independent post-restart UI checks."
+    },
+    {
+      "id": 4,
+      "prompt": "Send one prompt through a named remote Sanad device with an exact model, verify the semantic response with Jev, then return to my original conversation.",
+      "expected_reference": "references/jev-conversation-automation.md",
+      "expected_first_command": "python3 .agents/skills/sanad-client-tester/scripts/sanad_conversation_workflow.py",
+      "forbidden_preflight": ["sanad-dev status", "sanad-dev ui snapshot", "sanad-dev logs", "load jev-dual-brain-automation"],
+      "expected_output": "Load one focused reference, invoke the canonical runner directly, and rely on its one-shot send, event evidence, narrow Jev verification, and origin restoration."
+    },
+    {
+      "id": 5,
+      "prompt": "Verify that the running Client moves from its local daemon to cloud fallback without restarting Flutter.",
+      "expected_reference": "references/connection-switching.md",
+      "additional_reference": "references/runtime-and-worktrees.md",
+      "expected_output": "Exercise the local/cloud transition with owned runtime control, keyed badge evidence, rendered response evidence, and bounded logs."
+    },
+    {
+      "id": 6,
+      "prompt": "Test a three-question system.ask_user card, including back navigation and preservation of prior answers.",
+      "expected_reference": "references/multi-question-ui.md",
+      "expected_output": "Verify root-level payload parsing, deterministic keys, sequential navigation, state preservation, and final submission."
+    }
+  ]
+}
