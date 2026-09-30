@@ -97,21 +97,9 @@ Load and follow the `agent-browser` skill for browser mechanics.
 
 Use `scripts/dual_brain_browser.py` as the thin observation/action adapter. Never derive a fill value from the last word of a goal or infer an action type from vague label keywords.
 
-## Sanad variant
+## Sanad integration
 
-Load and follow the `Sanad Client Tester` skill. Use a driver-enabled, worktree-owned runtime.
-
-1. Run `sanad-dev ui snapshot --interactive --compact --json` before every action decision.
-2. Prefer exact stable keys. Do not degrade to coordinates while a keyed target exists.
-3. Run `sanad-dev ui tap --key <key>` or `enter-text --key <key> --text <value>` exactly once.
-4. Verify the transition with `snapshot` or `find` after the action.
-5. For messages, reserve conversation creation and send as irreversible phases. Enter text once, verify `chat_input`, send once, then wait on response lifecycle events without Jev polling.
-6. Inspect message evidence directly:
-   - `user_message_body:<eventId>`
-   - `assistant_message_body:<eventId>`
-7. Compare exact expected response text in code. Do not use clipboard as the primary verification path.
-
-Use `scripts/dual_brain_sanad_ui.py` only for exact observations and actions. The workflow engine owns phase and retry policy.
+For Sanad Client work, load the `Sanad Client Tester` skill and its focused `references/jev-conversation-automation.md` section. Client Tester owns Sanad selectors, runtime rules, the `sanad-dev ui` adapter, and the canonical conversation runner. This skill continues to own only the reusable Jev judgment, confidence, monotonic-phase, circuit-breaker, and System 2 escalation model.
 
 ## Confidence and risk
 
@@ -155,7 +143,6 @@ Escalation context should include only bounded, non-secret evidence: reason code
 - `scripts/jev_client.py` — typed Choice, Score, and Noul HTTP responses.
 - `scripts/workflow_engine.py` — confidence gates, phase ledger, circuit breaker, event waiter, and escalation contract.
 - `scripts/dual_brain_browser.py` — thin `agent-browser` adapter.
-- `scripts/dual_brain_sanad_ui.py` — thin `sanad-dev ui` adapter.
 - `references/api_reference.md` — verified TypeSafe request/response semantics.
 - `references/failure_modes_and_recovery.md` — failure taxonomy and System 2 recovery boundary.
 - `evals/evals.json` — browser and Sanad acceptance scenarios.

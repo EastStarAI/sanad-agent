@@ -418,7 +418,7 @@ void main() {
     await pumpSidebar(tester, router: router);
     expect(conversationRepository.createdSessionRequests.length, 0);
     expect(conversationRepository.beginNewSessionCalls, 0);
-    final plusButton = find.byKey(const Key('sidebar_new_conversation_btn'));
+    final plusButton = find.byKey(const Key('sidebar_new_conversation_btn:ws-1'));
     expect(plusButton, findsOneWidget);
     await tester.tap(plusButton);
     await tester.pump();
@@ -510,7 +510,7 @@ void main() {
     await tester.pump();
 
     expect(tester.getSize(find.byKey(const Key('sidebar_create_workspace_btn'))).height, greaterThanOrEqualTo(44));
-    expect(tester.getSize(find.byKey(const Key('sidebar_new_conversation_btn'))).height, greaterThanOrEqualTo(44));
+    expect(tester.getSize(find.byKey(const Key('sidebar_new_conversation_btn:ws-1'))).height, greaterThanOrEqualTo(44));
   });
 
   testWidgets('offline stale banner keeps cached sessions visible with retry affordance', (tester) async {
