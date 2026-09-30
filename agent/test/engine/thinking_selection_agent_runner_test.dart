@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:get_it/get_it.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/message.dart';
@@ -63,12 +66,19 @@ class _CountingAdapter implements LLMAdapter {
 }
 
 void main() {
+  late Directory tempDir;
   late AgentStateDatabase state;
   late ProviderInstanceRepository repo;
   late SessionManager sessionManager;
   late ToolsRegistry registry;
 
   setUp(() async {
+    tempDir = Directory.systemTemp.createTempSync('thinking_runner_test_');
+    Directory(
+      '${tempDir.path}${Platform.pathSeparator}memories',
+    ).createSync(recursive: true);
+    setSanadHomeOverride(tempDir.path);
+
     await GetIt.I.reset();
     SessionManager.resetForTesting();
     state = AgentStateDatabase.inMemory();
@@ -135,6 +145,12 @@ void main() {
     await GetIt.I.reset();
     SessionManager.resetForTesting();
     state.dispose();
+    setSanadHomeOverride(null);
+    if (tempDir.existsSync()) {
+      try {
+        tempDir.deleteSync(recursive: true);
+      } catch (_) {}
+    }
   });
 
   test('unsupported explicit thinking selection skips adapter call', () async {
