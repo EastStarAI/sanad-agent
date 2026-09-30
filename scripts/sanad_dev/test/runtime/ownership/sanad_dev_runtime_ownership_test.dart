@@ -133,4 +133,15 @@ void main() {
     expect(validate(identity: 'reused-pid'), contains('PID was reused'));
     expect(validate(nonce: 'wrong'), contains('nonce'));
   });
+
+  test(
+    'readProcessIdentity returns stable non-empty identity for current process',
+    () async {
+      final first = await readProcessIdentity(pid);
+      final second = await readProcessIdentity(pid);
+      expect(first, isNotNull);
+      expect(first, isNotEmpty);
+      expect(first, equals(second));
+    },
+  );
 }

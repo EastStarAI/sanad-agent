@@ -53,6 +53,7 @@ abstract interface class CliTurnClient {
     String? decision,
     String? answer,
     String? comment,
+    String? sessionId,
   });
 
   Future<void> dispose();

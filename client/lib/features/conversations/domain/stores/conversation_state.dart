@@ -379,15 +379,21 @@ class ConversationState {
         incoming.tool?.forEach((k, v) {
           if (v != null) merged[k] = v;
         });
+        final derivedRuntimeMs = incoming.runtimeMs ??
+            existing.runtimeMs ??
+            (incoming.timestamp.isAfter(existing.timestamp)
+                ? incoming.timestamp.difference(existing.timestamp).inMilliseconds
+                : null);
         return existing.copyWith(
           tool: merged,
           status: _mergedToolStatus(existing, incoming),
-          timestamp: incoming.timestamp,
+          timestamp: existing.timestamp,
           sessionId: incoming.sessionId ?? existing.sessionId,
           runId: incoming.runId ?? existing.runId,
           modelStepId: incoming.modelStepId ?? existing.modelStepId,
           toolCallId: incoming.toolCallId ?? existing.toolCallId,
           eventId: incoming.eventId ?? existing.eventId,
+          runtimeMs: derivedRuntimeMs,
           metadata: incoming.metadata != null ? {...?existing.metadata, ...incoming.metadata!} : existing.metadata,
         );
 
@@ -507,7 +513,6 @@ class ConversationState {
     if (existingText.isEmpty) return incomingText;
     if (incomingText == existingText) return existingText;
     if (incomingText.startsWith(existingText)) return incomingText;
-    if (existingText.startsWith(incomingText)) return existingText;
     return existingText + incomingText;
   }
 

@@ -272,7 +272,12 @@ void main() {
           final sentFuture = mockSocket.nextSentMessageWhere(
             (message) => message.contains('"think"'),
           );
-          final runFuture = runner.run(['-p', 'Calculate 40 + 2']);
+          final runFuture = runner.run([
+            '-p',
+            'Calculate 40 + 2',
+            '--execution-root',
+            tempHome.path,
+          ]);
 
           final sent = jsonDecode(await sentFuture) as Map<String, dynamic>;
           expect(sent['command'], 'think');
@@ -324,7 +329,12 @@ void main() {
           final sentFuture = mockSocket.nextSentMessageWhere(
             (message) => message.contains('"think"'),
           );
-          final runFuture = runner.run(['run', 'Analyze stacktrace:']);
+          final runFuture = runner.run([
+            'run',
+            'Analyze stacktrace:',
+            '--execution-root',
+            tempHome.path,
+          ]);
 
           final sent = jsonDecode(await sentFuture) as Map<String, dynamic>;
           expect(
@@ -368,7 +378,13 @@ void main() {
           final sentFuture = mockSocket.nextSentMessageWhere(
             (message) => message.contains('"think"'),
           );
-          final runFuture = runner.run(['run', 'Inspect project', '--json']);
+          final runFuture = runner.run([
+            'run',
+            'Inspect project',
+            '--json',
+            '--execution-root',
+            tempHome.path,
+          ]);
 
           final sent = jsonDecode(await sentFuture) as Map<String, dynamic>;
           final sessionId = sent['payload']['session_id'] as String;
@@ -454,7 +470,13 @@ void main() {
           final sentFuture = mockSocket.nextSentMessageWhere(
             (message) => message.contains('"think"'),
           );
-          final runFuture = runner.run(['run', 'Quick ping', '--quiet']);
+          final runFuture = runner.run([
+            'run',
+            'Quick ping',
+            '--quiet',
+            '--execution-root',
+            tempHome.path,
+          ]);
 
           final sent = jsonDecode(await sentFuture) as Map<String, dynamic>;
           final sessionId = sent['payload']['session_id'] as String;
@@ -796,7 +818,7 @@ void main() {
           expect(match, isNotNull);
           expect(match!.workspace['id'], 'ws-parent');
           expect(match.isExact, isFalse);
-          expect(match.relativeSubpath, 'src/features');
+          expect(match.relativeSubpath, p.join('src', 'features'));
         },
       );
 

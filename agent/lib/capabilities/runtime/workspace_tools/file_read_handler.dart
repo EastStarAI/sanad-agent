@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 import 'package:path/path.dart' as p;
 import '../workspace_path_resolver.dart';
 import 'workspace_tools_utils.dart';
@@ -23,14 +24,16 @@ class FileReadHandler {
         WorkspaceToolsUtils.asNonNegativeInt(arguments['offset']) ?? 0;
     final limit = WorkspaceToolsUtils.asPositiveInt(arguments['limit']);
 
-    final workspaceRoot = _pathResolver.normalizeWorkspaceRoot(workspacePath);
-    final resolvedPath = _pathResolver.resolveExistingPath(
+    final workspaceRoot = await _pathResolver.normalizeWorkspaceRootAsync(
+      workspacePath,
+    );
+    final resolvedPath = await _pathResolver.resolveExistingPathAsync(
       workspaceRoot: workspaceRoot,
       inputPath: path,
       authorizedExternalRoot: authorizedExternalRoot,
     );
 
-    if (FileSystemEntity.isDirectorySync(resolvedPath)) {
+    if (await FileSystemEntity.isDirectory(resolvedPath)) {
       return _handleDirectory(resolvedPath, workspaceRoot, offset, limit);
     }
 
@@ -60,7 +63,7 @@ class FileReadHandler {
         list.add('$name/');
       } else if (entity is Link) {
         try {
-          final targetType = FileSystemEntity.typeSync(
+          final targetType = await FileSystemEntity.type(
             entity.path,
             followLinks: true,
           );
@@ -134,6 +137,28 @@ class FileReadHandler {
     }
 
     final content = await file.readAsString();
+    final result = content.length > 65536
+        ? await Isolate.run(() => _extractLines(content, offset, limit))
+        : _extractLines(content, offset, limit);
+
+    return WorkspaceToolsUtils.encode({
+      'type': 'text',
+      'file': {
+        'filePath': _pathResolver.relativeToWorkspace(
+          workspaceRoot: workspaceRoot,
+          resolvedPath: resolvedPath,
+        ),
+        'content': result.selectedLines.join('\n'),
+        'numLines': result.selectedLines.length,
+        'startLine': result.startIndex + 1,
+        'totalLines': result.totalLines,
+        'truncated': result.truncated,
+        if (result.truncated) 'nextOffset': result.nextOffset,
+      },
+    });
+  }
+
+  static _LinesResult _extractLines(String content, int offset, int? limit) {
     final lines = const LineSplitter().convert(content);
     final startIndex = offset.clamp(0, lines.length);
     final pageLimit = (limit ?? _maxLines).clamp(1, _maxLines);
@@ -154,21 +179,28 @@ class FileReadHandler {
     }
     final endIndex = startIndex + selectedLines.length;
     final truncated = endIndex < lines.length;
-
-    return WorkspaceToolsUtils.encode({
-      'type': 'text',
-      'file': {
-        'filePath': _pathResolver.relativeToWorkspace(
-          workspaceRoot: workspaceRoot,
-          resolvedPath: resolvedPath,
-        ),
-        'content': selectedLines.join('\n'),
-        'numLines': selectedLines.length,
-        'startLine': startIndex + 1,
-        'totalLines': lines.length,
-        'truncated': truncated,
-        if (truncated) 'nextOffset': endIndex,
-      },
-    });
+    return _LinesResult(
+      selectedLines: selectedLines,
+      startIndex: startIndex,
+      totalLines: lines.length,
+      truncated: truncated,
+      nextOffset: endIndex,
+    );
   }
+}
+
+class _LinesResult {
+  final List<String> selectedLines;
+  final int startIndex;
+  final int totalLines;
+  final bool truncated;
+  final int nextOffset;
+
+  _LinesResult({
+    required this.selectedLines,
+    required this.startIndex,
+    required this.totalLines,
+    required this.truncated,
+    required this.nextOffset,
+  });
 }

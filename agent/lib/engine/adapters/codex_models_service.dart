@@ -116,16 +116,27 @@ class CodexModelsService {
   }) {
     final ordered = List<ModelOption>.of(models);
     final seen = models.map((model) => model.value).toSet();
+    final modelByValue = {for (final m in models) m.value: m};
 
     for (final rule in _forwardCompatRules) {
       if (seen.contains(rule.model) || !rule.templates.any(seen.contains)) {
         continue;
       }
+      final matchedTemplate = rule.inheritTemplateContextWindow
+          ? rule.templates.cast<String?>().firstWhere(
+              (template) => seen.contains(template),
+              orElse: () => null,
+            )
+          : null;
+
       ordered.add(
         ModelOption(
           value: rule.model,
           label: _formatLabel(rule.model),
           provider: provider,
+          contextWindow: matchedTemplate == null
+              ? null
+              : modelByValue[matchedTemplate]?.contextWindow,
           supportsReasoning: true,
         ),
       );
@@ -151,6 +162,18 @@ class CodexModelsService {
     _ForwardCompatRule('gpt-5.6-terra-pro', ['gpt-5.5', 'gpt-5.4']),
     _ForwardCompatRule('gpt-5.6-luna', ['gpt-5.5', 'gpt-5.4']),
     _ForwardCompatRule('gpt-5.6-luna-pro', ['gpt-5.5', 'gpt-5.4']),
+    _ForwardCompatRule('gpt-6-astra', [
+      'gpt-6-luna',
+    ], inheritTemplateContextWindow: true),
+    _ForwardCompatRule('gpt-6-sol', [
+      'gpt-6-luna',
+    ], inheritTemplateContextWindow: true),
+    _ForwardCompatRule('gpt-6-sol-pro', [
+      'gpt-6-luna',
+    ], inheritTemplateContextWindow: true),
+    _ForwardCompatRule('gpt-6-luna-pro', [
+      'gpt-6-luna',
+    ], inheritTemplateContextWindow: true),
     _ForwardCompatRule('gpt-5.5', ['gpt-5.4', 'gpt-5.4-mini', 'gpt-5.3-codex']),
     _ForwardCompatRule('gpt-5.4-mini', ['gpt-5.3-codex']),
     _ForwardCompatRule('gpt-5.4', ['gpt-5.3-codex']),
@@ -184,6 +207,11 @@ class _CodexModelRecord {
 class _ForwardCompatRule {
   final String model;
   final List<String> templates;
+  final bool inheritTemplateContextWindow;
 
-  const _ForwardCompatRule(this.model, this.templates);
+  const _ForwardCompatRule(
+    this.model,
+    this.templates, {
+    this.inheritTemplateContextWindow = false,
+  });
 }

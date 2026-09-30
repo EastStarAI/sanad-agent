@@ -80,18 +80,21 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
       ),
     );
     try {
-      final templates = await _client.listTemplates(agent: agent);
-      final instances = await _client.listInstances(agent: agent);
-      final readiness = await _client.runtimeCheck(agent: agent);
+      // templates/instances/readiness are independent read-only provider
+      // queries handled ~concurrently by the agent; issue them in parallel so
+      // their transport round-trip latencies overlap instead of summing
+      // (Windows provider-list path, plan 97g). Readiness ordering is
+      // preserved: the snapshot is emitted only after all three succeed.
+      final snapshot = await _loadProviderSnapshot();
       final targetStatus = _targetStatusFor(
-        instances: instances,
-        readiness: readiness,
+        instances: snapshot.instances,
+        readiness: snapshot.readiness,
         forcePicker: forcePicker,
       );
       _emitSnapshot(
-        templates: templates,
-        instances: instances,
-        readiness: readiness,
+        templates: snapshot.templates,
+        instances: snapshot.instances,
+        readiness: snapshot.readiness,
         status: targetStatus,
       );
     } catch (error) {
@@ -588,19 +591,17 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
   Future<void> _refreshInstances({
     required Map<String, String> feedback,
   }) async {
-    final templates = await _client.listTemplates(agent: agent);
-    final instances = await _client.listInstances(agent: agent);
-    final readiness = await _client.runtimeCheck(agent: agent);
-    final mappedProviders = _mapProviders(templates, instances);
+    final snapshot = await _loadProviderSnapshot();
+    final mappedProviders = _mapProviders(snapshot.templates, snapshot.instances);
     emit(
       state.copyWith(
         status: ProviderSetupStatus.instancesList,
-        templates: templates,
-        instances: instances,
+        templates: snapshot.templates,
+        instances: snapshot.instances,
         providers: mappedProviders,
-        activeProvider: readiness.activeProvider,
-        activeModel: readiness.activeModel,
-        readiness: readiness,
+        activeProvider: snapshot.readiness.activeProvider,
+        activeModel: snapshot.readiness.activeModel,
+        readiness: snapshot.readiness,
         selectedTemplate: null,
         selectedInstance: null,
         provisionalInstanceId: null,
@@ -950,17 +951,15 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
       ),
     );
     try {
-      final readiness = await _client.runtimeCheck(agent: agent);
-      final templates = await _client.listTemplates(agent: agent);
-      final instances = await _client.listInstances(agent: agent);
+      final snapshot = await _loadProviderSnapshot();
       _emitSnapshot(
-        templates: templates,
-        instances: instances,
-        readiness: readiness,
-        status: readiness.runtimeReady && showReadyState
+        templates: snapshot.templates,
+        instances: snapshot.instances,
+        readiness: snapshot.readiness,
+        status: snapshot.readiness.runtimeReady && showReadyState
             ? ProviderSetupStatus.ready
             : ProviderSetupStatus.instancesList,
-        error: readiness.runtimeReady ? null : (readiness.reason ?? 'Default provider is not ready.'),
+        error: snapshot.readiness.runtimeReady ? null : (snapshot.readiness.reason ?? 'Default provider is not ready.'),
       );
     } catch (error) {
       emit(
@@ -978,6 +977,33 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
   Future<void> close() async {
     _stopPolling();
     return super.close();
+  }
+
+  /// Fetches the three independent read-only provider snapshots in parallel.
+  ///
+  /// Templates, instances, and readiness are independent provider queries the
+  /// agent resolves ~concurrently. Issuing them together (rather than awaiting
+  /// each in sequence) overlaps their transport round-trips on the Windows
+  /// provider-list path so latencies no longer sum (plan 97g). Callers still
+  /// await the completed snapshot before emitting state, preserving readiness
+  /// ordering and freshness.
+  ///
+  /// The record `.wait` helper attaches an error handler to every future
+  /// immediately at issue time and only completes after **all** reads settle,
+  /// so a failure inside any single read is always captured as the aggregation
+  /// error (never as an unhandled async error) and no partial snapshot can be
+  /// emitted.
+  Future<ProviderSnapshot> _loadProviderSnapshot() async {
+    final (templates, instances, readiness) = await (
+      _client.listTemplates(agent: agent),
+      _client.listInstances(agent: agent),
+      _client.runtimeCheck(agent: agent),
+    ).wait;
+    return ProviderSnapshot(
+      templates: templates,
+      instances: instances,
+      readiness: readiness,
+    );
   }
 
   ProviderSetupStatus _targetStatusFor({
@@ -1028,8 +1054,16 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
   }
 
   String _friendlyError(Object error, String fallback) {
-    if (error is ArgumentError) {
-      return error.message?.toString() ?? fallback;
+    Object candidate = error;
+    // The parallel record wait aggregates failures into [ParallelWaitError];
+    // surface the first underlying failure so diagnostics stay specific.
+    if (candidate is ParallelWaitError) {
+      final errors = candidate.errors as (AsyncError?, AsyncError?, AsyncError?);
+      final first = errors.$1 ?? errors.$2 ?? errors.$3;
+      if (first != null) candidate = first.error;
+    }
+    if (candidate is ArgumentError) {
+      return candidate.message?.toString() ?? fallback;
     }
     return fallback;
   }
@@ -1066,4 +1100,17 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
       ),
     );
   }
+}
+
+/// Immutable result of the three independent read-only provider queries.
+class ProviderSnapshot {
+  const ProviderSnapshot({
+    required this.templates,
+    required this.instances,
+    required this.readiness,
+  });
+
+  final List<ProviderTemplateDto> templates;
+  final List<ProviderInstanceDto> instances;
+  final ProviderReadinessDto readiness;
 }

@@ -1,5 +1,27 @@
 part of '../../../sanad_dev_cli.dart';
 
+typedef BackgroundChildStarter =
+    Future<int> Function({
+      required String executable,
+      required List<String> arguments,
+      required String workingDirectory,
+      required String callerDirectory,
+    });
+
+typedef StartupAttemptLocatorReader =
+    Future<SanadDevStartupAttempt?> Function({
+      required String runtimeDirectory,
+      required String workspaceHash,
+    });
+
+typedef BackgroundComponentsManagedChecker =
+    Future<bool> Function({
+      required SanadDevRuntime runtime,
+      required SanadDevComponentTarget target,
+      required String device,
+      required String? clientInstanceSlot,
+    });
+
 Future<void> handleBackgroundRun({
   required List<String> originalArguments,
   required SanadDevComponentTarget target,
@@ -8,6 +30,14 @@ Future<void> handleBackgroundRun({
   required String? sanadHomePath,
   Duration timeout = sanadDevComponentControlTimeout,
   Duration pollInterval = const Duration(milliseconds: 100),
+  Duration publicationGrace = const Duration(seconds: 2),
+  BackgroundChildStarter startChild = startSanadDevBackgroundChild,
+  StartupAttemptLocatorReader readAttempt = readLocatedSanadDevStartupAttempt,
+  BackgroundComponentsManagedChecker componentsManagedChecker =
+      _backgroundRequestedComponentsAreManaged,
+  Future<bool> Function(int? pid) processRunning = isProcessRunning,
+  void Function(String message)? printMessage,
+  void Function(String message)? printError,
 }) async {
   final runtime = await discoverSanadDevRuntime(
     callerDirectory: _callerDirectory,
@@ -16,7 +46,7 @@ Future<void> handleBackgroundRun({
   final workspaceHash = runtime.worktreeId.split('-').last;
   String? previousAttemptId;
   try {
-    previousAttemptId = (await readLocatedSanadDevStartupAttempt(
+    previousAttemptId = (await readAttempt(
       runtimeDirectory: runtime.runtimeDirectory,
       workspaceHash: workspaceHash,
     ))?.attemptId;
@@ -24,30 +54,32 @@ Future<void> handleBackgroundRun({
     // A stale diagnostic cannot block a new launch attempt.
   }
 
+  void log(String message) => (printMessage ?? print)(message);
+  void logError(String message) => (printError ?? stderr.writeln)(message);
+
+  final scriptPath = Platform.script.toFilePath();
   final childArguments = sanadDevBackgroundChildArguments(
-    Platform.script.toFilePath(),
+    scriptPath,
     originalArguments,
+    nativeExecutable: sanadDevUsesNativeRuntimeExecutable(
+      executablePath: Platform.resolvedExecutable,
+      scriptPath: scriptPath,
+    ),
   );
-  final process = await Process.start(
-    Platform.resolvedExecutable,
-    childArguments,
+  final childPid = await startChild(
+    executable: Platform.resolvedExecutable,
+    arguments: childArguments,
     workingDirectory: Directory.current.path,
-    environment: {
-      ...Platform.environment,
-      'SANAD_DEV_CALLER_DIR': _callerDirectory,
-    },
-    mode: ProcessStartMode.detached,
+    callerDirectory: _callerDirectory,
   );
-  print(
-    'Starting ${target.name} in the background for ${runtime.worktreeId}...',
-  );
+  log('Starting ${target.name} in the background for ${runtime.worktreeId}...');
 
   final deadline = DateTime.now().add(timeout);
   DateTime? childExitedAt;
   while (DateTime.now().isBefore(deadline)) {
     SanadDevStartupAttempt? attempt;
     try {
-      attempt = await readLocatedSanadDevStartupAttempt(
+      attempt = await readAttempt(
         runtimeDirectory: runtime.runtimeDirectory,
         workspaceHash: workspaceHash,
       );
@@ -55,15 +87,8 @@ Future<void> handleBackgroundRun({
       // The child may be atomically replacing the locator.
     }
     if (attempt != null && attempt.attemptId != previousAttemptId) {
-      if (attempt.outcome == SanadDevStartupOutcome.managed) {
-        print(
-          '✓ Background runtime is managed. '
-          'Use "sanad-dev status" or bounded "sanad-dev logs" commands.',
-        );
-        return;
-      }
       if (attempt.outcome == SanadDevStartupOutcome.failed) {
-        stderr.writeln(
+        logError(
           'Background startup failed at ${attempt.stage.name}: '
           '${attempt.failureReason ?? 'unknown failure'} '
           '(exit ${attempt.exitStatus ?? 1}).',
@@ -73,22 +98,32 @@ Future<void> handleBackgroundRun({
       }
     }
 
-    if (await _backgroundRequestedComponentsAreManaged(
+    final componentsManaged = await componentsManagedChecker(
       runtime: runtime,
       target: target,
       device: device,
       clientInstanceSlot: clientInstanceSlot,
-    )) {
-      print(
-        '✓ Requested background components are managed. '
-        'Use "sanad-dev status" or bounded "sanad-dev logs" commands.',
-      );
-      return;
+    );
+    if (componentsManaged) {
+      final childRunning = await processRunning(childPid);
+      final isNewAttempt =
+          attempt != null && attempt.attemptId != previousAttemptId;
+      if (!isNewAttempt || childRunning) {
+        log(
+          '✓ Background runtime is managed. '
+          'Use "sanad-dev status" or bounded "sanad-dev logs" commands.',
+        );
+        return;
+      }
     }
-    if (!await isProcessRunning(process.pid)) {
+
+    if (!await processRunning(childPid)) {
       childExitedAt ??= DateTime.now();
-      if (!isSanadDevBackgroundPublicationGraceActive(childExitedAt)) {
-        stderr.writeln(
+      if (!isSanadDevBackgroundPublicationGraceActive(
+        childExitedAt,
+        grace: publicationGrace,
+      )) {
+        logError(
           'Background launcher exited before publishing a managed or failed '
           'startup result. Run "sanad-dev status" for diagnostics.',
         );
@@ -100,7 +135,7 @@ Future<void> handleBackgroundRun({
     }
     await Future<void>.delayed(pollInterval);
   }
-  stderr.writeln(
+  logError(
     'Background startup did not reach a terminal state within '
     '${timeout.inSeconds} seconds. Run "sanad-dev status" for diagnostics.',
   );

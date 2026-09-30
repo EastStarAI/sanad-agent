@@ -18,6 +18,9 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Invalid authentication URL | Non-HTTP(S) values are rejected without echoing the rejected value |
 | Authentication URL output | Human mode writes only the URL to stdout; the value is absent from general snapshots and persisted runtime surfaces |
 | Element query | Matches key, tooltip, type suffix, and free-text query deterministically |
+| Rich text extraction | `Text.rich`, `RichText`, and `SelectableText.rich` expose their rendered plain text rather than an empty `Text.data` value |
+| Message body identity | User and assistant Markdown each render exactly one event-scoped `*_message_body:<eventId>` key |
+| Markdown consolidation | Multi-block Markdown text is joined in display order on the keyed message-body row without duplicate descendant rows |
 | Analyzer and formatter | All changed Client and script sources pass |
 
 ## Managed Runtime Coverage
@@ -48,6 +51,9 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Scroll until visible | Repeats through Flutter Driver until the target is visible or times out |
 | Driver starts before any automation command | Flutter Driver text emulation is disabled; clicking an editable field accepts normal physical-keyboard characters and system IME input. |
 | Keyed automated text entry | `sanad-dev ui enter-text` focuses the exact field and updates its `EditableTextState` through the Sanad extension; follow-up inspection shows the new value without echoing it in the action result. |
+| User message inspection | After one send, exact-key `find` returns one `user_message_body:<eventId>` element whose `text` contains the rendered message without clipboard access. |
+| Assistant Markdown inspection | After response completion, exact-key `find` returns one `assistant_message_body:<eventId>` element whose `text` contains every displayed Markdown block once and omits footer metadata. |
+| Message key disambiguation | Two mounted user or assistant messages remain independently addressable by event id; a lookup never resolves a generic kind-only key. |
 | Automated entry followed by physical typing | The system text channel was never mocked, so physical typing remains functional after the automated command. |
 | Older instrumented Client without the Sanad text extension | Controller falls back to legacy Flutter Driver `enterText` and reports both bounded errors if neither path succeeds. |
 | Text entry during animation/streaming | Runs unsynchronized where legacy fallback is required and remains responsive. |

@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/llm_usage_snapshot.dart';
+import 'package:sanad_client/features/conversations/domain/stores/canonical_timeline_reconciler.dart';
 
 void main() {
   test('maps latest context usage and cached input without cache write', () {
@@ -110,5 +111,50 @@ void main() {
     expect(usage?.contextWindowTokens, 400000);
     expect(usage?.cachedTokens, isNull);
     expect(usage?.modelId, 'gpt-5.6-sol');
+  });
+
+  test('mapHistory preserves authoritative tool timing across tool_use and tool_result merge', () {
+    final mapper = UnifiedDeviceMapper();
+    final events = mapper.mapHistory([
+      {
+        'id': 1,
+        'type': 'tool_use',
+        'tool': 'shell_execute',
+        'input': '{"command": "curl api"}',
+        'status': 'done',
+        'started_at': '2026-07-02T10:00:05.100Z',
+        'created_at': '2026-07-02T10:00:01.000Z', // synthetic baseTime
+        'tool_call_id': 'call-123',
+      },
+      {
+        'id': 2,
+        'type': 'tool_result',
+        'tool': 'shell_execute',
+        'output': '200 OK',
+        'status': 'done',
+        'started_at': '2026-07-02T10:00:05.100Z',
+        'terminal_at': '2026-07-02T10:00:13.600Z',
+        'runtime_ms': 8500,
+        'created_at': '2026-07-02T10:00:13.600Z',
+        'tool_call_id': 'call-123',
+      },
+    ]);
+
+    expect(events.length, 2);
+    final toolUse = events[0];
+    final toolResult = events[1];
+
+    expect(toolUse.timestamp, DateTime.parse('2026-07-02T10:00:05.100Z'));
+    expect(toolResult.timestamp, DateTime.parse('2026-07-02T10:00:13.600Z'));
+    expect(toolResult.runtimeMs, 8500);
+
+    // When client merges tool_result into tool_use:
+    final merged = toolUse.merge(toolResult);
+    expect(merged.runtimeMs, 8500);
+
+    // When folded via CanonicalTimelineReconciler:
+    final folded = CanonicalTimelineReconciler.fold(events);
+    expect(folded.length, 1);
+    expect(folded.first.runtimeMs, 8500);
   });
 }

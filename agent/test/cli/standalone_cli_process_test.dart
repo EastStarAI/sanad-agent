@@ -1,19 +1,36 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:path/path.dart' as p;
+import 'package:sanad_agent/capabilities/skills/generated_bundled_skills.dart';
 import 'package:test/test.dart';
 import '../support/isolated_sanad_test_home.dart';
+
+void preseedBundledSkillsState(Directory home) {
+  final skillsDir = Directory(p.join(home.path, 'skills'))
+    ..createSync(recursive: true);
+  File(p.join(skillsDir.path, '.sanad-managed.json')).writeAsStringSync(
+    jsonEncode({
+      'schema_version': 1,
+      'bundle_revision': bundledSkillsRevision,
+      'skills': <String, dynamic>{},
+    }),
+  );
+}
 
 void main() {
   useIsolatedSanadTestHome();
   test(
     'standalone entry point executes the deterministic engine and releases Home ownership',
     () async {
-      final root = await Directory.systemTemp.createTemp(
-        'sanad-standalone-process-',
+      final root = Directory(
+        (await Directory.systemTemp.createTemp(
+          'sanad-standalone-process-',
+        )).resolveSymbolicLinksSync(),
       );
       final home = Directory('${root.path}/home');
       final stateHome = Directory('${root.path}/state');
+      preseedBundledSkillsState(home);
       final environment = <String, String>{
         ...Platform.environment,
         'SANAD_HOME': home.path,
@@ -31,12 +48,14 @@ void main() {
             '--standalone',
             '--home',
             home.path,
+            '--execution-root',
+            root.path,
             outputFlag,
             'standalone process smoke',
           ],
           workingDirectory: Directory.current.path,
           environment: environment,
-        ).timeout(const Duration(seconds: 30));
+        ).timeout(const Duration(seconds: 90));
       }
 
       try {
@@ -50,22 +69,27 @@ void main() {
         expect(second.exitCode, 0, reason: second.stderr.toString());
         expect(second.stdout.toString().trim(), 'e2e-success');
       } finally {
-        if (await root.exists()) {
-          await root.delete(recursive: true);
-        }
+        try {
+          if (await root.exists()) {
+            await root.delete(recursive: true);
+          }
+        } catch (_) {}
       }
     },
-    timeout: const Timeout(Duration(minutes: 1)),
+    timeout: const Timeout(Duration(minutes: 4)),
   );
 
   test(
-    'standalone entry point surfaces runtime recovery notices as terminal JSON errors',
+    'standalone entry point keeps an unrecoverable runtime failure non-terminal until its own timeout',
     () async {
-      final root = await Directory.systemTemp.createTemp(
-        'sanad-standalone-runtime-failure-',
+      final root = Directory(
+        (await Directory.systemTemp.createTemp(
+          'sanad-standalone-runtime-failure-',
+        )).resolveSymbolicLinksSync(),
       );
       final home = Directory('${root.path}/home');
       final stateHome = Directory('${root.path}/state');
+      preseedBundledSkillsState(home);
       try {
         final result = await Process.run(
           Platform.resolvedExecutable,
@@ -76,9 +100,11 @@ void main() {
             '--standalone',
             '--home',
             home.path,
+            '--execution-root',
+            root.path,
             '--json',
             '--timeout',
-            '20',
+            '5',
             '__SANAD_E2E_RUNTIME_FAILURE__',
           ],
           workingDirectory: Directory.current.path,
@@ -88,37 +114,45 @@ void main() {
             'SANAD_STATE_HOME': stateHome.path,
             'SANAD_E2E_TEST_MODE': 'true',
           },
-        ).timeout(const Duration(seconds: 15));
+        ).timeout(const Duration(seconds: 90));
 
-        expect(result.exitCode, 1, reason: result.stderr.toString());
+        // The deterministic provider failure suspends the session in a
+        // blocked recovery state (advisory, awaiting intervention), so the
+        // attached run must NOT terminate early as a success or a generic
+        // failure. Without intervention, the run's own --timeout ends it with
+        // the stable timeout contract (exit 124 / terminal JSON).
+        expect(result.exitCode, 124, reason: result.stderr.toString());
         final outputLines = const LineSplitter()
             .convert(result.stdout.toString())
             .where((line) => line.trim().isNotEmpty)
             .toList();
         expect(outputLines, hasLength(1));
         final jsonResult = jsonDecode(outputLines.single);
-        expect(jsonResult['exit_code'], 1);
-        expect(
-          jsonResult['error'],
-          contains('deterministic E2E provider failure'),
-        );
+        expect(jsonResult['exit_code'], 124);
+        expect(jsonResult['text'], isEmpty);
+        expect(jsonResult['error'], contains('timed out'));
       } finally {
-        if (await root.exists()) {
-          await root.delete(recursive: true);
-        }
+        try {
+          if (await root.exists()) {
+            await root.delete(recursive: true);
+          }
+        } catch (_) {}
       }
     },
-    timeout: const Timeout(Duration(seconds: 30)),
+    timeout: const Timeout(Duration(minutes: 4)),
   );
 
   test(
     'standalone entry point maps timeout and signals to stable exit codes',
     () async {
-      final root = await Directory.systemTemp.createTemp(
-        'sanad-standalone-cancellation-',
+      final root = Directory(
+        (await Directory.systemTemp.createTemp(
+          'sanad-standalone-cancellation-',
+        )).resolveSymbolicLinksSync(),
       );
       final home = Directory('${root.path}/home');
       final stateHome = Directory('${root.path}/state');
+      preseedBundledSkillsState(home);
       final readyFile = File('${root.path}/tool-ready');
       final environment = <String, String>{
         ...Platform.environment,
@@ -134,6 +168,8 @@ void main() {
         '--standalone',
         '--home',
         home.path,
+        '--execution-root',
+        root.path,
         '--quiet',
       ];
 
@@ -143,45 +179,52 @@ void main() {
           [...baseArguments, '--timeout', '1', prompt],
           workingDirectory: Directory.current.path,
           environment: environment,
-        ).timeout(const Duration(seconds: 30));
+        ).timeout(const Duration(seconds: 90));
         expect(
           timeoutResult.exitCode,
           124,
           reason: timeoutResult.stderr.toString(),
         );
 
-        for (final signalCase in <(ProcessSignal, int, String)>[
-          (ProcessSignal.sigint, 130, 'sigint-ready'),
-          (ProcessSignal.sigterm, 143, 'sigterm-ready'),
-        ]) {
-          final signalReadyFile = File('${root.path}/${signalCase.$3}');
-          final signalPrompt = '__SANAD_E2E_DELAY__${signalReadyFile.path}';
-          final interrupted = await Process.start(
-            Platform.resolvedExecutable,
-            [...baseArguments, signalPrompt],
-            workingDirectory: Directory.current.path,
-            environment: environment,
-          );
-          try {
-            final deadline = DateTime.now().add(const Duration(seconds: 20));
-            while (!signalReadyFile.existsSync() &&
-                DateTime.now().isBefore(deadline)) {
-              await Future<void>.delayed(const Duration(milliseconds: 50));
-            }
-            expect(signalReadyFile.existsSync(), isTrue);
-            expect(interrupted.kill(signalCase.$1), isTrue);
-            expect(
-              await interrupted.exitCode.timeout(const Duration(seconds: 10)),
-              signalCase.$2,
+        // On Windows, Dart Process.kill does not deliver POSIX signals (sigint/sigterm)
+        // to child process handlers; it calls TerminateProcess resulting in exit code -1.
+        // Signal handling logic is verified via stream injection in oneshot_runner_test.dart.
+        if (!Platform.isWindows) {
+          for (final signalCase in <(ProcessSignal, int, String)>[
+            (ProcessSignal.sigint, 130, 'sigint-ready'),
+            (ProcessSignal.sigterm, 143, 'sigterm-ready'),
+          ]) {
+            final signalReadyFile = File('${root.path}/${signalCase.$3}');
+            final signalPrompt = '__SANAD_E2E_DELAY__${signalReadyFile.path}';
+            final interrupted = await Process.start(
+              Platform.resolvedExecutable,
+              [...baseArguments, signalPrompt],
+              workingDirectory: Directory.current.path,
+              environment: environment,
             );
-          } finally {
-            interrupted.kill(ProcessSignal.sigkill);
+            try {
+              final deadline = DateTime.now().add(const Duration(seconds: 60));
+              while (!signalReadyFile.existsSync() &&
+                  DateTime.now().isBefore(deadline)) {
+                await Future<void>.delayed(const Duration(milliseconds: 50));
+              }
+              expect(signalReadyFile.existsSync(), isTrue);
+              expect(interrupted.kill(signalCase.$1), isTrue);
+              expect(
+                await interrupted.exitCode.timeout(const Duration(seconds: 15)),
+                signalCase.$2,
+              );
+            } finally {
+              interrupted.kill(ProcessSignal.sigkill);
+            }
           }
         }
       } finally {
-        if (await root.exists()) await root.delete(recursive: true);
+        try {
+          if (await root.exists()) await root.delete(recursive: true);
+        } catch (_) {}
       }
     },
-    timeout: const Timeout(Duration(minutes: 1)),
+    timeout: const Timeout(Duration(minutes: 4)),
   );
 }

@@ -8,8 +8,8 @@ import 'package:sanad_client/features/conversations/presentation/bloc/session_cu
 class EventMetadataFormatter {
   EventMetadataFormatter._();
 
-  static String responseMetaText(CanonicalEvent event, BuildContext context) {
-    if (event.kind != EventKind.finalAnswer) return '';
+  static List<String> responseMetaParts(CanonicalEvent event, BuildContext context) {
+    if (event.kind != EventKind.finalAnswer) return const [];
 
     final model = event.model?.trim();
     final modelDisplay = event.modelDisplay?.trim();
@@ -25,7 +25,7 @@ class EventMetadataFormatter {
     }
     final contextTokens = event.contextTokens ?? selectedSession?.contextTokens;
 
-    final parts = <String>[];
+    final tokenParts = <String>[];
     final inputTokens = _readUsageNumber(usage, [
       'input',
       'inputTokens',
@@ -47,16 +47,21 @@ class EventMetadataFormatter {
     ]);
     final contextPercent = _formatContextPercent(inputTokens, contextTokens);
     if (inputTokens != null && inputTokens > 0) {
-      parts.add('↑${_formatCompactNumber(inputTokens)}');
+      tokenParts.add('↑${_formatCompactNumber(inputTokens)}');
     }
     if (outputTokens != null && outputTokens > 0) {
-      parts.add('↓${_formatCompactNumber(outputTokens)}');
+      tokenParts.add('↓${_formatCompactNumber(outputTokens)}');
     }
     if (cacheReadTokens != null && cacheReadTokens > 0) {
-      parts.add('R${_formatCompactNumber(cacheReadTokens)}');
+      tokenParts.add('R${_formatCompactNumber(cacheReadTokens)}');
     }
     if (contextPercent.isNotEmpty) {
-      parts.add(contextPercent);
+      tokenParts.add(contextPercent);
+    }
+
+    final parts = <String>[];
+    if (tokenParts.isNotEmpty) {
+      parts.add(tokenParts.join(' '));
     }
     final resolvedModel = (modelDisplay != null && modelDisplay.isNotEmpty) ? modelDisplay : _formatInlineModel(model);
     if (resolvedModel.isNotEmpty) {
@@ -66,26 +71,43 @@ class EventMetadataFormatter {
     if (durationText.isNotEmpty) {
       parts.add(durationText);
     }
-    return parts.join('  •  ');
+    return parts;
+  }
+
+  static String responseMetaText(CanonicalEvent event, BuildContext context) {
+    return responseMetaParts(event, context).join('  •  ');
   }
 
   static String timestampText(DateTime timestamp, BuildContext context) {
-    return MaterialLocalizations.of(context).formatTimeOfDay(
-      TimeOfDay.fromDateTime(timestamp.toLocal()),
+    final localTimestamp = timestamp.toLocal();
+    final loc = MaterialLocalizations.of(context);
+    return loc.formatTimeOfDay(
+      TimeOfDay.fromDateTime(localTimestamp),
       alwaysUse24HourFormat: false,
     );
+  }
+
+  static String dateTooltip(DateTime timestamp, BuildContext context) {
+    final localTimestamp = timestamp.toLocal();
+    final loc = MaterialLocalizations.of(context);
+    return loc.formatFullDate(localTimestamp);
   }
 
   static String formatRuntime(dynamic runtimeMs) {
     if (runtimeMs is! num) return '';
     final milliseconds = runtimeMs.round();
-    if (milliseconds < 1000) return '${milliseconds}ms';
-    final seconds = milliseconds / 1000;
-    if (seconds < 60) {
-      return '${seconds.toStringAsFixed(seconds >= 10 ? 0 : 1)}s';
+    if (milliseconds <= 0) return '0s';
+    if (milliseconds < 1000) {
+      final s = (milliseconds / 1000).toStringAsFixed(1);
+      if (s == '1.0' || s == '1') return '1s';
+      return '${s}s';
     }
 
     final totalSeconds = (milliseconds / 1000).round();
+    if (totalSeconds < 60) {
+      return '${totalSeconds}s';
+    }
+
     final hours = totalSeconds ~/ 3600;
     final minutes = (totalSeconds % 3600) ~/ 60;
     final remainingSeconds = totalSeconds % 60;

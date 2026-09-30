@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -56,6 +57,8 @@ class _NoopClient implements ProviderSetupClient {
 
 Widget _wrap(ProviderUsageCubit cubit, Widget child) {
   return MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: const [Locale('en'), Locale('ar')],
     home: Scaffold(
       body: BlocProvider.value(
         value: cubit,

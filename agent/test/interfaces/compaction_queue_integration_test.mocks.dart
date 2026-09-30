@@ -844,6 +844,11 @@ class MockSessionManager extends _i1.Mock implements _i4.SessionManager {
           as _i12.SessionState?);
 
   @override
+  _i12.SessionState? getSessionRecord(String? sessionId) =>
+      (super.noSuchMethod(Invocation.method(#getSessionRecord, [sessionId]))
+          as _i12.SessionState?);
+
+  @override
   List<_i12.SessionState> getAllSessions() =>
       (super.noSuchMethod(
             Invocation.method(#getAllSessions, []),

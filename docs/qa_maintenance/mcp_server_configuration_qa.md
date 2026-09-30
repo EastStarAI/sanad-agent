@@ -11,6 +11,7 @@ description: "Security, form, import/export, OAuth, lifecycle, and regression ch
 - Device and Workspace snapshots preserve same-name Workspace precedence and contain configured markers only, never bearer, header, environment, OAuth access/refresh, or client-secret values.
 - Draft inspection uses entered credentials ephemerally and leaves neither configuration nor secret-store files behind.
 - Every sensitive discovered MCP tool requests canonical permission before server execution. Denial produces no MCP call and no persisted deny rule, so a later invocation asks again; approval executes once, and repeated exact input honors session/workspace grants and full-access bypass.
+- On Windows, a STDIO server receives the cached Machine+User system PATH even when the daemon inherited stale `Path` casing/content. The safe-key allowlist remains intact, only one canonical PATH key is emitted, and an explicit server PATH still overrides the system value. Resolver unit coverage proves success, fallback, TTL, sync injection, and concurrent-read coalescing without requiring the host registry.
 - Legacy STDIO credential arguments following recognized flags migrate idempotently to `McpSecretStore`; configuration and snapshots never retain or expose the value, while runtime launch resolves the original argument.
 - Export and Advanced initial JSON omit every credential shape. Errors and OAuth status snapshots do not echo response bodies or tokens.
 

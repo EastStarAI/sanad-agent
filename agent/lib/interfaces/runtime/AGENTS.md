@@ -21,7 +21,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 ## Runtime Collaborators
 - `SessionQueueCoordinator` owns queue projection, FIFO drain, and non-terminal route rewrites.
 - `SessionTurnExecutor` owns active stream subscriptions, turn callbacks, tool event emission, exception routing, and post-terminal title scheduling.
-- `SessionRecoveryRestorer` owns startup reconstruction and classification of queued, waiting, blocked, running, and resuming durable work.
+- `SessionRecoveryRestorer` owns startup reconstruction and classification of queued, waiting, blocked, running, and resuming durable work. Recovery queries join live sessions so legacy orphan work is ignored without a startup delete pass; the restorer must not run general `state.db` maintenance or retention deletes.
 - Shared request-id and route helpers remain stateless and must not import the orchestrator.
 - `DeviceCommandAdmission` owns device-control admission: correlation against
   the daemon's registered cloud id or local hardware id, cross-transport
@@ -57,6 +57,7 @@ This contract applies to `agent/lib/interfaces/runtime/`.
 - Controlled restart drains every active session in caller-selected observation windows. An ordinary restart keeps waiting across provider-only timeout windows until the in-flight provider request completes and persists a safe checkpoint; it never cancels that request. Only explicit force restart may interrupt the exact still-current work-item/run/generation owner and proceed with an unknown provider outcome. Other ordinary unsafe timeouts never exit.
 - Once an active run reaches its first safe checkpoint under restart drain, it is parked there. The safety scan may accept restart only while every next provider admission is closed; an active run must not consume another provider request or invalidate the accepted checkpoint before exit.
 - While restart drain owns admission, queue new work durably and do not promote queued, restored, retry, or auto-resume work until cancellation or the next process restores it.
+- A pending full database vacuum may run only after a controlled restart is safe and its single response has flushed, immediately before process exit. Its failure is contained and cannot cancel the accepted restart.
 - A tool-origin restart may exempt only its exact requester identity before the single response and must await that tool's durable post-response checkpoint before normal exit.
 - A requester-bound deferred result is a valid post-response checkpoint only
   when its typed descriptor is durable; recovery must resolve its terminal

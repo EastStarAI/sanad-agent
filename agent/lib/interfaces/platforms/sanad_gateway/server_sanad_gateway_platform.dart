@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'package:meta/meta.dart';
 
 import 'package:logging/logging.dart';
@@ -64,19 +65,23 @@ class ServerSanadGatewayPlatform extends BasePlatform
   static const _remoteMcpManagementDisabledMessage =
       'Remote MCP management is disabled for security reasons.';
   static const _maxSessionClientTags = 1024;
+  static const _registrationLockRetryDelay = Duration(milliseconds: 250);
 
   final _logger = Logger('ServerSanadGatewayPlatform');
   final io.Socket Function(String uri, dynamic options)? socketFactory;
   final Future<DeviceKeyIdentity> Function() identityLoader;
+  final Future<void> Function(Duration) _registrationRetryDelay;
   final http.Client _httpClient;
   final DeliveryPresenceController? deliveryPresence;
 
   ServerSanadGatewayPlatform({
     this.socketFactory,
     Future<DeviceKeyIdentity> Function()? identityLoader,
+    Future<void> Function(Duration)? registrationRetryDelay,
     http.Client? httpClient,
     this.deliveryPresence,
   }) : identityLoader = identityLoader ?? DeviceKeyIdentity.loadOrCreate,
+       _registrationRetryDelay = registrationRetryDelay ?? Future<void>.delayed,
        _httpClient = httpClient ?? http.Client();
 
   @override
@@ -96,6 +101,9 @@ class ServerSanadGatewayPlatform extends BasePlatform
   StreamSubscription<void>? _authChangeSubscription;
   Future<void>? _authSynchronizationFuture;
   bool _authSynchronizationPending = false;
+  Future<void>? _registrationFuture;
+  bool _registrationPending = false;
+  String? _pendingRegistrationChallengeNonce;
 
   String? get registeredDeviceId => _registeredDeviceId;
 
@@ -155,13 +163,13 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
     _socket!.onConnect((_) async {
       _logger.info('⚡ Connected to Sanad Gateway');
-      await _register();
+      await _requestRegistration();
     });
 
     _socket!.on('device_challenge', (data) async {
       final nonce = toMap(data)['nonce']?.toString();
       if (nonce == null || nonce.isEmpty) return;
-      await _register(challengeNonce: nonce);
+      await _requestRegistration(challengeNonce: nonce);
     });
 
     _socket!.onDisconnect((_) {
@@ -730,6 +738,64 @@ class ServerSanadGatewayPlatform extends BasePlatform
     } on Object {
       // A missing calibration response does not replace the normal signed
       // registration failure path or authorize an untrusted time source.
+    }
+  }
+
+  Future<void> _requestRegistration({String? challengeNonce}) {
+    final active = _registrationFuture;
+    if (active != null) {
+      _registrationPending = true;
+      if (challengeNonce != null) {
+        _pendingRegistrationChallengeNonce = challengeNonce;
+      }
+      return active;
+    }
+
+    late final Future<void> operation;
+    operation = (() async {
+      try {
+        await _drainRegistrationRequests(challengeNonce);
+      } finally {
+        if (identical(_registrationFuture, operation)) {
+          _registrationFuture = null;
+        }
+      }
+    })();
+    _registrationFuture = operation;
+    return operation;
+  }
+
+  Future<void> _drainRegistrationRequests(String? challengeNonce) async {
+    var nextChallengeNonce = challengeNonce;
+    while (true) {
+      _registrationPending = false;
+      try {
+        await _register(challengeNonce: nextChallengeNonce);
+      } on AuthFileLockTimeout {
+        final targetSocket = _socket;
+        if (targetSocket == null || !targetSocket.connected) return;
+        _logger.warning('Authentication is busy; retrying cloud registration.');
+        await _registrationRetryDelay(_registrationLockRetryDelay);
+        if (!identical(_socket, targetSocket) || !targetSocket.connected) {
+          return;
+        }
+
+        // Any challenge received before or during the lock timeout may expire.
+        // Restart from a credential-only registration to obtain a fresh nonce.
+        _registrationPending = false;
+        _pendingRegistrationChallengeNonce = null;
+        nextChallengeNonce = null;
+        continue;
+      } catch (error) {
+        _logger.severe(
+          'Cloud registration attempt failed: ${error.runtimeType}',
+        );
+        return;
+      }
+
+      if (!_registrationPending) return;
+      nextChallengeNonce = _pendingRegistrationChallengeNonce;
+      _pendingRegistrationChallengeNonce = null;
     }
   }
 

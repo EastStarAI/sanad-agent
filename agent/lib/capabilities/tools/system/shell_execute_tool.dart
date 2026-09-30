@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
+import 'package:sanad_windows_path/windows_path.dart';
 
 import '../../models/local_tool_spec.dart';
 import '../../permissions/permission_manager.dart';
@@ -18,11 +19,15 @@ class ShellExecuteTool extends SpecBackedTool {
 
   final String workspacePath;
   final PermissionManager? _permissionManager;
+  final WindowsSystemPath _windowsSystemPath;
 
   ShellExecuteTool({
     required this.workspacePath,
     PermissionManager? permissionManager,
-  }) : _permissionManager = permissionManager;
+    WindowsSystemPath? windowsSystemPath,
+  }) : _permissionManager = permissionManager,
+       _windowsSystemPath =
+           windowsSystemPath ?? sharedWindowsSystemPathResolver;
 
   @override
   bool get isCooperativelyCancellable => true;
@@ -43,8 +48,13 @@ class ShellExecuteTool extends SpecBackedTool {
               'Optional subdirectory relative to workspace root. Do not use for root.',
         },
         'timeout_ms': {'type': 'integer'},
+        'description': {
+          'type': 'string',
+          'description':
+              'A concise sentence of no more than seven words that explains to the user, in their own language, the purpose or goal of executing this command.',
+        },
       },
-      'required': ['command'],
+      'required': ['command', 'description'],
       'additionalProperties': false,
     },
     source: {'type': 'builtin_local', 'id': 'sanad-agent.system'},
@@ -129,6 +139,8 @@ class ShellExecuteTool extends SpecBackedTool {
     Map<String, dynamic> args, {
     ToolContext? context,
   }) async {
+    final stopwatch = Stopwatch()..start();
+
     if (_permissionManager != null && context != null) {
       await _permissionManager.ensureAuthorized(
         tool: toolSpec,
@@ -224,8 +236,9 @@ class ShellExecuteTool extends SpecBackedTool {
       String? terminalReason,
     }) async {
       final payload = <String, dynamic>{
-        'isError': isError,
+        if (isError) 'isError': true,
         'output': output,
+        'duration_ms': stopwatch.elapsedMilliseconds,
         'cleanup_outcome': ?cleanup?.outcome.name,
         'terminal_reason': ?terminalReason,
       };
@@ -233,21 +246,28 @@ class ShellExecuteTool extends SpecBackedTool {
     }
 
     try {
+      var childEnvironment = Map<String, String>.from(Platform.environment);
+      if (_windowsSystemPath.isWindows) {
+        final path = await _windowsSystemPath.resolve(
+          inheritedPathFromEnvironment(childEnvironment),
+        );
+        childEnvironment = replaceEnvironmentPath(childEnvironment, path);
+      }
+      childEnvironment.addAll({
+        'GIT_TERMINAL_PROMPT': '0',
+        'GCM_INTERACTIVE': 'false',
+        'SSH_ASKPASS_REQUIRE': 'never',
+        if (context?.sessionId.isNotEmpty == true)
+          'SANAD_REQUESTER_SESSION_ID': context!.sessionId,
+        if (context?.toolCallId?.isNotEmpty == true)
+          'SANAD_REQUESTER_TOOL_CALL_ID': context!.toolCallId!,
+      });
       process = await Process.start(
         shell.executable,
         shell.arguments,
         workingDirectory: workingDir,
         runInShell: false,
-        environment: {
-          ...Platform.environment,
-          'GIT_TERMINAL_PROMPT': '0',
-          'GCM_INTERACTIVE': 'false',
-          'SSH_ASKPASS_REQUIRE': 'never',
-          if (context?.sessionId.isNotEmpty == true)
-            'SANAD_REQUESTER_SESSION_ID': context!.sessionId,
-          if (context?.toolCallId?.isNotEmpty == true)
-            'SANAD_REQUESTER_TOOL_CALL_ID': context!.toolCallId!,
-        },
+        environment: childEnvironment,
       );
       tree = ProcessTreeController.attach(
         process,

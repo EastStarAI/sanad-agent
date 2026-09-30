@@ -253,6 +253,7 @@ sealed class CliEvent {
               payload['code']?.toString() ??
               'runtime_notice',
           message: effMsg,
+          status: payload['status']?.toString(),
           sessionId: sessionId,
           runId: runId,
           eventId: eventId,
@@ -270,6 +271,18 @@ sealed class CliEvent {
               json['code']?.toString() ??
               'unknown_error',
           isFatal: payload['is_fatal'] as bool? ?? false,
+          sessionId: sessionId,
+          runId: runId,
+          eventId: eventId,
+          raw: json,
+        );
+
+      case 'stopped':
+        return CliTurnCancelledEvent(
+          reason:
+              payload['reason']?.toString() ??
+              payload['message']?.toString() ??
+              'Session execution stopped',
           sessionId: sessionId,
           runId: runId,
           eventId: eventId,
@@ -444,15 +457,26 @@ class CliTurnCompleteEvent extends CliEvent {
 class CliRuntimeNoticeEvent extends CliEvent {
   final String code;
   final String message;
+  final String? status;
 
   CliRuntimeNoticeEvent({
     required this.code,
     required this.message,
+    this.status,
     super.sessionId,
     super.runId,
     super.eventId,
     super.raw,
   }) : super(type: 'runtime_notice');
+
+  /// Runtime states that can still continue under daemon ownership are
+  /// advisory for an attached CLI, not terminal failures. `blocked` may await
+  /// an explicit retry/route intervention before later emitting `resuming`.
+  bool get isRecovering =>
+      status == 'waiting' ||
+      status == 'blocked' ||
+      status == 'resuming' ||
+      status == 'cleared';
 }
 
 /// Error received from gateway.
@@ -470,6 +494,19 @@ class CliErrorEvent extends CliEvent {
     super.eventId,
     super.raw,
   }) : super(type: 'error');
+}
+
+/// Dispatched when an execution turn or session is cancelled or stopped externally.
+class CliTurnCancelledEvent extends CliEvent {
+  final String reason;
+
+  CliTurnCancelledEvent({
+    this.reason = 'Session execution stopped',
+    super.sessionId,
+    super.runId,
+    super.eventId,
+    super.raw,
+  }) : super(type: 'turn_cancelled');
 }
 
 /// Fallback event for unrecognized or domain query events.

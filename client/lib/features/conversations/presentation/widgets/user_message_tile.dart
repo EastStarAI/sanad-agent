@@ -1,6 +1,8 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:sanad_client/utils/format_utils.dart';
 import 'package:sanad_client/utils/link_utils.dart';
@@ -42,7 +44,8 @@ class UserMessageTile extends StatefulWidget {
   State<UserMessageTile> createState() => _UserMessageTileState();
 }
 
-class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProviderStateMixin {
+class _UserMessageTileState extends State<UserMessageTile>
+    with SingleTickerProviderStateMixin {
   bool _isExpanded = false;
 
   void _toggleExpanded() {
@@ -53,13 +56,17 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
 
   @override
   Widget build(BuildContext context) {
-    final timestampText = EventMetadataFormatter.timestampText(widget.event.timestamp, context);
-    final pendingState = widget.event.metadata?['pending_steer_state']?.toString();
+    final timestampText = EventMetadataFormatter.timestampText(
+      widget.event.timestamp,
+      context,
+    );
+    final pendingState = widget.event.metadata?['pending_steer_state']
+        ?.toString();
     final requestId = widget.event.requestId;
     final isPending = pendingState == 'pending';
 
     final textDirection = TextUtils.getTextDirection(widget.event.text);
-    final textStyle = GoogleFonts.roboto(
+    final textStyle = (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
       color: Theme.of(context).colorScheme.onSurface,
       fontSize: 14,
       height: 1.5,
@@ -69,10 +76,7 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
     final maxBubbleWidth = (screenWidth - 88).clamp(100.0, double.infinity);
 
     final span = TextSpan(text: widget.event.text, style: textStyle);
-    final tp = TextPainter(
-      text: span,
-      textDirection: textDirection,
-    );
+    final tp = TextPainter(text: span, textDirection: textDirection);
     tp.layout(maxWidth: maxBubbleWidth);
 
     final lines = tp.computeLineMetrics();
@@ -83,13 +87,10 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
 
     final markdownWidget = MarkdownBody(
       data: widget.event.text,
-      styleSheet: MarkdownStyleHelper.getStyleSheet(context).copyWith(
-        p: textStyle,
-      ),
+      styleSheet: MarkdownStyleHelper.getStyleSheet(context)
+          .copyWith(p: textStyle),
       onTapLink: (text, href, title) => unawaited(openExternalUrl(href)),
-      builders: {
-        'code': AppInlineCodeBuilder(context),
-      },
+      builders: {'code': AppInlineCodeBuilder(context)},
     );
 
     return Align(
@@ -98,11 +99,21 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Container(
-            margin: const EdgeInsets.only(left: 48, right: 16, top: 12, bottom: 8),
+            margin: const EdgeInsets.only(
+              left: 48,
+              right: 16,
+              top: 12,
+              bottom: 8,
+            ),
             decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(16).copyWith(topRight: Radius.zero),
-              border: Border.all(color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.3)),
+              color: Theme.of(context).colorScheme.primary
+                  .withValues(alpha: 0.15),
+              borderRadius: BorderRadius.circular(16)
+                  .copyWith(topRight: Radius.zero),
+              border: Border.all(
+                color: Theme.of(context).colorScheme.primary
+                    .withValues(alpha: 0.3),
+              ),
             ),
             child: widget.isEditing
                 ? Padding(
@@ -111,7 +122,8 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                   )
                 : InkWell(
                     onTap: isOverflowing ? _toggleExpanded : null,
-                    borderRadius: BorderRadius.circular(16).copyWith(topRight: Radius.zero),
+                    borderRadius: BorderRadius.circular(16)
+                        .copyWith(topRight: Radius.zero),
                     child: Padding(
                       padding: const EdgeInsets.all(12),
                       child: Column(
@@ -121,23 +133,28 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                           SelectionArea(
                             child: Directionality(
                               textDirection: textDirection,
-                              child: AnimatedSize(
-                                duration: const Duration(milliseconds: 250),
-                                curve: Curves.easeInOut,
-                                alignment: Alignment.topCenter,
-                                child: (isOverflowing && !_isExpanded)
-                                    ? SizedBox(
-                                        height: maxCollapsedHeight,
-                                        child: ClipRect(
-                                          child: OverflowBox(
-                                            minHeight: 0,
-                                            maxHeight: double.infinity,
-                                            alignment: Alignment.topCenter,
-                                            child: markdownWidget,
+                              child: KeyedSubtree(
+                                key: Key(
+                                  'user_message_body:${widget.event.id}',
+                                ),
+                                child: AnimatedSize(
+                                  duration: const Duration(milliseconds: 250),
+                                  curve: Curves.easeInOut,
+                                  alignment: Alignment.topCenter,
+                                  child: (isOverflowing && !_isExpanded)
+                                      ? SizedBox(
+                                          height: maxCollapsedHeight,
+                                          child: ClipRect(
+                                            child: OverflowBox(
+                                              minHeight: 0,
+                                              maxHeight: double.infinity,
+                                              alignment: Alignment.topCenter,
+                                              child: markdownWidget,
+                                            ),
                                           ),
-                                        ),
-                                      )
-                                    : markdownWidget,
+                                        )
+                                      : markdownWidget,
+                                ),
                               ),
                             ),
                           ),
@@ -149,14 +166,18 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                                 Text(
                                   _isExpanded ? 'See less' : 'Read more',
                                   style: GoogleFonts.roboto(
-                                    color: Theme.of(context).colorScheme.primary,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .primary,
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
                                   ),
                                 ),
                                 const SizedBox(width: 2),
                                 Icon(
-                                  _isExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                                  _isExpanded
+                                      ? Icons.keyboard_arrow_up
+                                      : Icons.keyboard_arrow_down,
                                   size: 14,
                                   color: Theme.of(context).colorScheme.primary,
                                 ),
@@ -175,11 +196,18 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
                 if (timestampText.isNotEmpty) ...[
-                  Text(
-                    timestampText,
-                    style: GoogleFonts.roboto(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
-                      fontSize: 11,
+                  Tooltip(
+                    message: EventMetadataFormatter.dateTooltip(
+                      widget.event.timestamp,
+                      context,
+                    ),
+                    child: Text(
+                      timestampText,
+                      style: GoogleFonts.roboto(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.8),
+                        fontSize: 11,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -195,19 +223,28 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                   ),
                   const SizedBox(width: 4),
                   if (widget.isCancellingPendingSteer)
-                    const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: AppProgressIndicator(strokeWidth: 2),
+                    )
                   else
                     Semantics(
                       label: 'Delete pending message',
                       child: IconButton(
                         tooltip: 'Delete pending message',
+                        style: ConversationActionStyle.buttonStyle,
                         visualDensity: VisualDensity.compact,
-                        constraints: const BoxConstraints.tightFor(width: 28, height: 28),
+                        constraints: ConversationActionStyle.constraints,
                         padding: EdgeInsets.zero,
-                        onPressed: requestId == null || widget.onCancelPendingSteer == null
+                        onPressed:
+                            requestId == null ||
+                                widget.onCancelPendingSteer == null
                             ? null
                             : () {
-                                unawaited(widget.onCancelPendingSteer!(requestId));
+                                unawaited(
+                                  widget.onCancelPendingSteer!(requestId),
+                                );
                               },
                         icon: const Icon(Icons.delete_outline, size: 15),
                       ),
@@ -220,10 +257,13 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                     child: IconButton(
                       key: const Key('edit_message_button'),
                       tooltip: 'Edit message',
+                      style: ConversationActionStyle.buttonStyle,
                       visualDensity: VisualDensity.compact,
                       constraints: ConversationActionStyle.constraints,
                       padding: EdgeInsets.zero,
-                      onPressed: widget.isReplayPending ? null : widget.onBeginEdit,
+                      onPressed: widget.isReplayPending
+                          ? null
+                          : widget.onBeginEdit,
                       icon: Icon(
                         Icons.edit_outlined,
                         size: ConversationActionStyle.iconSize,
@@ -236,17 +276,19 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                     child: IconButton(
                       key: const Key('retry_message_button'),
                       tooltip: 'Retry message',
+                      style: ConversationActionStyle.buttonStyle,
                       visualDensity: VisualDensity.compact,
                       constraints: ConversationActionStyle.constraints,
                       padding: EdgeInsets.zero,
-                      onPressed: widget.isReplayPending || widget.onRetry == null
+                      onPressed:
+                          widget.isReplayPending || widget.onRetry == null
                           ? null
                           : () => unawaited(widget.onRetry!()),
                       icon: widget.isReplayPending
                           ? const SizedBox(
                               width: 14,
                               height: 14,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: AppProgressIndicator(strokeWidth: 2),
                             )
                           : Icon(
                               Icons.refresh,
@@ -256,7 +298,10 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                     ),
                   ),
                 ],
-                CopyButton(text: widget.event.text, successMessage: 'Message copied to clipboard'),
+                CopyButton(
+                  text: widget.event.text,
+                  successMessage: 'Message copied to clipboard',
+                ),
               ],
             ),
           ),
@@ -305,7 +350,7 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                   ? const SizedBox(
                       width: 16,
                       height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
+                      child: AppProgressIndicator(strokeWidth: 2),
                     )
                   : const Text('Send'),
             ),

@@ -33,6 +33,54 @@ void main() {
     expect(retrieved.model, equals('test-model'));
   });
 
+  test('revision mismatch invalidates the bounded history snapshot', () {
+    final sessionManager = SessionManager();
+    final session = sessionManager.createSession('test-model');
+    sessionManager.saveSessionHistory(session.sessionId, [
+      Message(
+        role: MessageRole.user,
+        content: 'first',
+        metadata: const {'request_id': 'request-1'},
+      ),
+    ]);
+    expect(
+      sessionManager.getSession(session.sessionId)!.messages,
+      hasLength(1),
+    );
+
+    sessionManager.db.appendRootUserMessage(
+      session.sessionId,
+      Message(
+        role: MessageRole.user,
+        content: 'external mutation',
+        metadata: const {'request_id': 'request-2'},
+      ),
+    );
+
+    final refreshed = sessionManager.getSession(session.sessionId)!;
+    expect(refreshed.messages, hasLength(2));
+    expect(refreshed.messages.last.content, 'external mutation');
+  });
+
+  test('history snapshots evict the least recently used ninth session', () {
+    final sessionManager = SessionManager();
+    final sessions = List.generate(
+      9,
+      (_) => sessionManager.createSession('test-model'),
+    );
+
+    for (final session in sessions) {
+      sessionManager.getSession(session.sessionId);
+    }
+
+    expect(sessionManager.historySnapshotCount, 8);
+    expect(
+      sessionManager.hasHistorySnapshot(sessions.first.sessionId),
+      isFalse,
+    );
+    expect(sessionManager.hasHistorySnapshot(sessions.last.sessionId), isTrue);
+  });
+
   test('SessionManager saves and replaces message history', () {
     final sessionManager = SessionManager();
     final session = sessionManager.createSession('test-model');

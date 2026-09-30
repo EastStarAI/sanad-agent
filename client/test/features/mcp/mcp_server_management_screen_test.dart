@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:provider/provider.dart';
@@ -80,6 +81,8 @@ void main() {
       Provider<McpRuntimeClient>.value(
         value: client,
         child: MaterialApp(
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: const [Locale('en'), Locale('ar')],
           home: embedded
               ? Scaffold(
                   body: McpServerManagementScreen(

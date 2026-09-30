@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/app_error_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/connection/connection_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/debug_panel_cubit.dart';
@@ -30,13 +31,20 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:provider/provider.dart';
 import 'package:toastification/toastification.dart';
 
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
+
 class AppProviders extends StatelessWidget {
   final ThemeMode initialTheme;
+  final Locale initialLocale;
+  final AppearanceState initialAppearance;
   final Widget child;
 
   const AppProviders({
     super.key,
     required this.initialTheme,
+    required this.initialLocale,
+    this.initialAppearance = const AppearanceState(),
     required this.child,
   });
 
@@ -52,7 +60,14 @@ class AppProviders extends StatelessWidget {
 
     return MultiBlocProvider(
       providers: [
+        BlocProvider(
+          create: (_) => AppearanceCubit(
+            initialAppearance,
+            connectionCoordinator: connectionCoordinator,
+          ),
+        ),
         BlocProvider(create: (_) => ThemeCubit(initialTheme)),
+        BlocProvider(create: (_) => LocaleCubit(initialLocale)),
         BlocProvider(create: (_) => AppErrorCubit()),
         BlocProvider(create: (_) => DebugPanelCubit()),
         BlocProvider(

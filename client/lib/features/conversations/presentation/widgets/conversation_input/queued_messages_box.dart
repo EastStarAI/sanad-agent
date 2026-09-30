@@ -1,5 +1,6 @@
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 
 class QueuedMessagesBox extends StatelessWidget {
   final List<CanonicalEvent> messages;
@@ -98,7 +99,7 @@ class QueuedMessagesBox extends StatelessWidget {
                             const SizedBox(
                               width: 18,
                               height: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2),
+                              child: AppProgressIndicator(strokeWidth: 2),
                             )
                           else ...[
                             TextButton.icon(

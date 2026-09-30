@@ -195,15 +195,15 @@ class ReleasePreparation {
     }
 
     final notes = _file('release/release-notes.md').readAsStringSync();
-    if (!notes.startsWith('# Sanad $version\n') ||
+    if (!RegExp('^# Sanad ${RegExp.escape(version)}\r?\n').hasMatch(notes) ||
         !notes.contains('Client `$version` artifacts') ||
         !notes.contains('Build number `$build`') ||
         notes.contains('TODO')) {
       throw const FormatException('Release notes are stale or unfinished.');
     }
     final changelog = _file('agent/CHANGELOG.md').readAsStringSync();
-    final firstSection = changelog.split(RegExp(r'\n## ')).first;
-    if (!firstSection.startsWith('## $version\n') ||
+    final firstSection = changelog.split(RegExp(r'\r?\n## ')).first;
+    if (!RegExp('^## ${RegExp.escape(version)}\r?\n').hasMatch(firstSection) ||
         firstSection.contains('TODO')) {
       throw const FormatException('Agent changelog is stale or unfinished.');
     }
@@ -266,11 +266,17 @@ String _replacePathPackageVersion(
   required String from,
   required String to,
 }) {
-  final start = text.indexOf('  $package:\n');
-  if (start < 0) throw FormatException('Missing path package $package.');
+  final packageMatch = RegExp(
+    r'^  ' + RegExp.escape(package) + r':\r?$',
+    multiLine: true,
+  ).firstMatch(text);
+  if (packageMatch == null) {
+    throw FormatException('Missing path package $package.');
+  }
+  final start = packageMatch.start;
   var blockEnd = text.length;
   for (final match in RegExp(
-    r'^  [A-Za-z0-9_]+:$',
+    r'^  [A-Za-z0-9_]+:\r?$',
     multiLine: true,
   ).allMatches(text)) {
     if (match.start > start) {

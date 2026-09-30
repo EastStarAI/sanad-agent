@@ -1,3 +1,30 @@
+## 1.0.15
+
+- Prevented redundant capabilities fetching and restored sidebar hover trigger (#186).
+
+## 1.0.14
+
+- Ensured appearance synchronization works across both local and cloud gateway transports (#183).
+- Guarded PlatformRuntimeBridge resolution in LocalDaemonServerPlatform against test teardown GetIt race (#184).
+
+## 1.0.13
+
+- Hardened child process test execution timeouts and CI latency tolerance for constrained virtual runners (#181).
+- Resolved symbolic links on temporary test directories for macOS runtime parity (#179).
+
+## 1.0.12
+
+- Resolved symbolic links on temporary test directories for macOS runtime parity (#179).
+
+## 1.0.11
+
+- Added native `sanad run` CLI delegation with OpenCode compatibility and automatic session recovery (#148, #149, #150).
+- Raised default context-compaction threshold to 90% and hardened model context limit resolution (#163).
+- Hardened agent state database concurrency and added automated database maintenance (#153).
+- Added Windows-first headless background daemon launching without console allocation (#156).
+- Implemented local turn request deduplication and concurrent turn serialization (#168).
+- Reduced long-session turn startup latency and improved child process execution safety (#168).
+
 ## 1.0.10
 
 - Added account session and device lifecycle management with secure remote revocation and immediate cross-transport disconnect.

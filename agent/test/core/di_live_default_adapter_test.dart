@@ -32,9 +32,11 @@ void main() {
     SessionManager.resetForTesting();
     setSanadHomeOverride(null);
     setSanadStateHomeOverride(null);
-    if (sanadHome.existsSync()) {
-      await sanadHome.delete(recursive: true);
-    }
+    try {
+      if (sanadHome.existsSync()) {
+        await sanadHome.delete(recursive: true);
+      }
+    } catch (_) {}
   });
 
   test(

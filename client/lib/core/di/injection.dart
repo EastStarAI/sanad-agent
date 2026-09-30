@@ -296,6 +296,7 @@ Future<void> configureDependencies({
         cache: getIt<ConversationCacheStore>(),
         transport: getIt<ConversationRepository>(),
         flushPersistence: getIt<ConversationCachePersistor>().flush,
+        debounceDuration: const Duration(milliseconds: 500),
       ),
     );
   }

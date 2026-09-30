@@ -102,15 +102,15 @@ void main() {
       );
     });
 
-    when(mockSessionManager.getSession(any)).thenReturn(
-      SessionState(
-        sessionId: 'session-compact-queue',
-        model: 'gpt-4o',
-        createdAt: DateTime.utc(2026, 8, 29),
-        updatedAt: DateTime.utc(2026, 8, 29),
-        lastUserMessageAt: DateTime.utc(2026, 8, 29),
-      ),
+    final testSession = SessionState(
+      sessionId: 'session-compact-queue',
+      model: 'gpt-4o',
+      createdAt: DateTime.utc(2026, 8, 29),
+      updatedAt: DateTime.utc(2026, 8, 29),
+      lastUserMessageAt: DateTime.utc(2026, 8, 29),
     );
+    when(mockSessionManager.getSession(any)).thenReturn(testSession);
+    when(mockSessionManager.getSessionRecord(any)).thenReturn(testSession);
     when(mockSessionManager.getMessages(any)).thenReturn(const []);
     when(
       mockSessionManager.recordCanonicalUserMessageAccepted(any, any),

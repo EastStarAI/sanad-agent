@@ -42,6 +42,48 @@ class AppColorScheme {
     surfaceContainerHigh: Color(0xFF1E1E1E), // Matches main app background
     surfaceContainerHighest: Color(0xFF222222),
   );
+
+  static const ColorScheme midnight = ColorScheme(
+    brightness: Brightness.dark,
+    primary: Color(0xFF60A5FA),
+    onPrimary: Color(0xFF0A0A0A),
+    primaryContainer: Color(0xFF141414),
+    onPrimaryContainer: Colors.white,
+    secondary: Color(0xFF03DAC6),
+    onSecondary: Colors.black,
+    error: Color(0xFFCF6679),
+    onError: Colors.black,
+    surface: Color(0xFF000000), // Pure OLED black
+    onSurface: Colors.white,
+    onSurfaceVariant: Color(0xFFA1A1AA),
+    outline: Color(0xFF1E1E1E),
+    surfaceContainerLowest: Color(0xFF000000),
+    surfaceContainerLow: Color(0xFF080808),
+    surfaceContainer: Color(0xFF121212),
+    surfaceContainerHigh: Color(0xFF000000),
+    surfaceContainerHighest: Color(0xFF181818),
+  );
+
+  static const ColorScheme sepia = ColorScheme(
+    brightness: Brightness.light,
+    primary: Color(0xFFB45309),
+    onPrimary: Colors.white,
+    primaryContainer: Color(0xFFF3E5D0),
+    onPrimaryContainer: Color(0xFF2C2416),
+    secondary: Color(0xFF78350F),
+    onSecondary: Colors.white,
+    error: Color(0xFFB00020),
+    onError: Colors.white,
+    surface: Color(0xFFF5E8D3),
+    onSurface: Color(0xFF2D2319),
+    onSurfaceVariant: Color(0xFF6E5843),
+    outline: Color(0xFFD8C5A8),
+    surfaceContainerLowest: Color(0xFFFFFDF8),
+    surfaceContainerLow: Color(0xFFFBF2E3),
+    surfaceContainer: Color(0xFFF2E2C8),
+    surfaceContainerHigh: Color(0xFFF7ECDA),
+    surfaceContainerHighest: Color(0xFFE8D4B4),
+  );
 }
 
 extension AppColorSchemeX on ColorScheme {

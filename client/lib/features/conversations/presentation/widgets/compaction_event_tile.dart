@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 
 class CompactionEventTile extends StatefulWidget {
@@ -22,7 +23,7 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
       CompactionLifecycleStatus.started => SizedBox(
         width: 14,
         height: 14,
-        child: CircularProgressIndicator(
+        child: AppProgressIndicator(
           strokeWidth: 2,
           color: colorScheme.primary,
         ),

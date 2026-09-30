@@ -1359,6 +1359,39 @@ void main() {
     expect(controller.offset, moreOrLessEquals(controller.position.maxScrollExtent, epsilon: 1));
     expect(controller.position.isScrollingNotifier.value, isFalse);
   });
+
+  testWidgets('renders fixed conversation activity bar above composer when activityEligible is true', (
+    tester,
+  ) async {
+    final messages = [
+      _event('user-1', EventKind.userMessage, 'run something'),
+      CanonicalEvent(
+        id: 'tool-shell',
+        kind: EventKind.toolCall,
+        status: EventStatus.running,
+        tool: {
+          'name': 'shell_execute',
+          'input': {'command': 'ls', 'description': 'Listing directory content'},
+        },
+        timestamp: DateTime(2026, 1, 1),
+      ),
+    ];
+
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: messages,
+      activityEligible: true,
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('fixed_conversation_activity_bar')), findsOneWidget);
+    expect(find.text('Listing directory content'), findsOneWidget);
+  });
 }
 
 Future<void> _pumpBrainActivityView(
@@ -1370,6 +1403,8 @@ Future<void> _pumpBrainActivityView(
   required StreamController<List<CanonicalEvent>> messagesController,
   required List<CanonicalEvent> initialMessages,
   String sessionId = 'session-1',
+  String? composerSessionId,
+  bool activityEligible = false,
   String? initialViewportAnchorEventId,
   bool followLatestOnOpen = false,
   ValueChanged<String>? onViewportAnchorChanged,
@@ -1385,6 +1420,8 @@ Future<void> _pumpBrainActivityView(
     initialMessages: messages,
     onSendMessage: (_, {intent = MessageDeliveryIntent.auto}) {},
     sessionId: sessionId,
+    composerSessionId: composerSessionId ?? sessionId,
+    activityEligible: activityEligible,
     initialViewportAnchorEventId: initialViewportAnchorEventId,
     followLatestOnOpen: followLatestOnOpen,
     onViewportAnchorChanged: onViewportAnchorChanged,

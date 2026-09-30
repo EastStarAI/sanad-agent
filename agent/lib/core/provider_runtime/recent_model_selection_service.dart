@@ -9,7 +9,11 @@ class RecentModelSelectionService {
   RecentModelSelectionService(this._repo);
 
   /// Records (or bumps) a model selection.
-  void selectModel({required String instanceId, required String modelId}) {
+  void selectModel({
+    required String instanceId,
+    required String modelId,
+    DateTime? selectedAt,
+  }) {
     if (instanceId.trim().isEmpty || modelId.trim().isEmpty) return;
     final instance = _repo.findById(instanceId);
     final normalizedModelId = instance == null
@@ -22,7 +26,7 @@ class RecentModelSelectionService {
     _repo.recordRecentSelection(
       instanceId: instanceId,
       modelId: normalizedModelId,
-      selectedAt: DateTime.now(),
+      selectedAt: selectedAt ?? DateTime.now(),
     );
   }
 

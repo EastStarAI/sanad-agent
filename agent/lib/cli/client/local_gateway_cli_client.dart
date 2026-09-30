@@ -261,14 +261,16 @@ class LocalGatewayCliClient implements CliTurnClient {
     return think(
       sessionId: request.sessionId,
       message: request.message,
-      workspaceId: request.workspaceId,
+      workspaceId: request.effectiveWorkspaceId,
       model: request.model,
       providerInstanceId: request.providerInstanceId,
       providerId: request.providerId,
       thinkingMode: request.thinkingMode,
       requestId: request.requestId,
       deliveryIntent: request.deliveryIntent.name,
-      sessionMetadata: request.metadata.isNotEmpty ? request.metadata : null,
+      sessionMetadata: request.effectiveMetadata.isNotEmpty
+          ? request.effectiveMetadata
+          : null,
       platformTools: request.platformTools.isNotEmpty
           ? request.platformTools
           : null,
@@ -296,15 +298,56 @@ class LocalGatewayCliClient implements CliTurnClient {
     return reqId;
   }
 
-  /// Dispatches a `stop` command to interrupt the active session turn.
+  /// Dispatches a `stop` command and waits for authoritative session state.
   @override
   Future<void> stop({required String sessionId, String? runId}) async {
+    final stopped = Completer<void>();
+    final subscription = eventStream
+        .where((event) => event is CliTurnCancelledEvent)
+        .cast<CliTurnCancelledEvent>()
+        .where((event) => event.sessionId == sessionId)
+        .listen((_) {
+          if (!stopped.isCompleted) stopped.complete();
+        });
+    final requestId = _uuid.v4();
     final payload = <String, dynamic>{
       'session_id': sessionId,
       'run_id': ?runId,
+      'request_id': requestId,
     };
 
-    await sendCommand(command: 'stop', payload: payload);
+    try {
+      await sendCommand(
+        command: 'stop',
+        payload: payload,
+        requestId: requestId,
+      );
+
+      // The history query is an ordered transport barrier. It keeps this
+      // short-lived CLI connection alive until the daemon has received the
+      // preceding stop command, while also preserving idempotent idle stops.
+      final history = await getSessionHistory(
+        sessionId: sessionId,
+        timeout: requestTimeout,
+      );
+      final historyPayload = history['payload'] is Map
+          ? Map<String, dynamic>.from(history['payload'] as Map)
+          : history;
+      final isIdle =
+          historyPayload['in_flight'] == null &&
+          historyPayload['pending_permission_request'] == null;
+      if (isIdle || stopped.isCompleted) return;
+
+      await stopped.future.timeout(
+        requestTimeout,
+        onTimeout: () => throw CliClientException(
+          'Timed out waiting for session $sessionId to stop.',
+          code: 'stop_timeout',
+        ),
+      );
+    } finally {
+      await subscription.cancel();
+    }
   }
 
   /// Responds to an interactive tool permission or clarification request.
@@ -316,6 +359,7 @@ class LocalGatewayCliClient implements CliTurnClient {
     String? decision,
     String? answer,
     String? comment,
+    String? sessionId,
   }) async {
     final payload = <String, dynamic>{
       'request_id': requestId,
@@ -324,6 +368,7 @@ class LocalGatewayCliClient implements CliTurnClient {
       'decision': ?decision,
       'answer': ?answer,
       'comment': ?comment,
+      'session_id': ?sessionId,
     };
 
     await sendCommand(
@@ -331,6 +376,58 @@ class LocalGatewayCliClient implements CliTurnClient {
       payload: payload,
       requestId: requestId,
     );
+  }
+
+  /// Submits an answer to a clarification question (`system_ask_user`) and awaits gateway confirmation.
+  Future<Map<String, dynamic>> respondAnswer({
+    required String sessionId,
+    required String requestId,
+    required String answer,
+    Duration? timeout,
+  }) async {
+    final payload = <String, dynamic>{
+      'session_id': sessionId,
+      'request_id': requestId,
+      'answer': answer,
+      'allowed': true,
+      'decision': 'allow',
+    };
+
+    final result = await query(
+      command: 'tool_permission_response',
+      payload: payload,
+      timeout: timeout,
+    );
+    _throwIfError(result);
+    return result;
+  }
+
+  /// Submits a tool permission decision and awaits gateway confirmation.
+  Future<Map<String, dynamic>> respondToolPermission({
+    required String sessionId,
+    required String requestId,
+    required bool allowed,
+    String scope = 'once',
+    String? decision,
+    String? comment,
+    Duration? timeout,
+  }) async {
+    final payload = <String, dynamic>{
+      'session_id': sessionId,
+      'request_id': requestId,
+      'allowed': allowed,
+      'scope': scope,
+      'decision': decision ?? (allowed ? 'allow' : 'deny'),
+      'comment': ?comment,
+    };
+
+    final result = await query(
+      command: 'tool_permission_response',
+      payload: payload,
+      timeout: timeout,
+    );
+    _throwIfError(result);
+    return result;
   }
 
   /// Sends a request-response query to the gateway and awaits the matching response.
@@ -629,7 +726,8 @@ class LocalGatewayCliClient implements CliTurnClient {
   }
 
   static void _throwIfError(Map<String, dynamic> result) {
-    final type = result['type'] ?? result['event']?['type'];
+    final type =
+        result['message_type'] ?? result['type'] ?? result['event']?['type'];
     if (type == 'error') {
       final payload = result['payload'] ?? result['event']?['payload'];
       final message = payload is Map ? payload['message']?.toString() : null;

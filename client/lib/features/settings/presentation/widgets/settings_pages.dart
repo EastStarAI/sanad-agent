@@ -1,9 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
+import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/theme/theme_cubit.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -29,8 +36,8 @@ class ProfilePage extends StatelessWidget {
   Widget build(BuildContext context) {
     final auth = context.watch<AuthCubit>().state;
     return PageFrame(
-      title: 'Profile',
-      subtitle: 'Your Sanad account and session.',
+      title: AppLocalizations.of(context)!.profile,
+      subtitle: AppLocalizations.of(context)!.profileSubtitle,
       child: SettingsCard(
         child: auth is AuthAuthenticated
             ? Column(
@@ -57,7 +64,7 @@ class ProfilePage extends StatelessWidget {
                   OutlinedButton.icon(
                     onPressed: () => context.read<AuthCubit>().logout(),
                     icon: const Icon(Icons.logout),
-                    label: const Text('Sign out'),
+                    label: Text(AppLocalizations.of(context)!.signOut),
                   ),
                 ],
               )
@@ -65,18 +72,18 @@ class ProfilePage extends StatelessWidget {
             ? const Center(
                 child: Padding(
                   padding: EdgeInsets.all(16),
-                  child: CircularProgressIndicator(),
+                  child: AppProgressIndicator(),
                 ),
               )
             : Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Sign in to manage your Sanad account.'),
+                  Text(AppLocalizations.of(context)!.signInPrompt),
                   const SizedBox(height: 16),
                   OutlinedButton.icon(
                     onPressed: () => unawaited(context.read<AuthCubit>().login()),
                     icon: const Icon(Icons.login),
-                    label: const Text('Sign in'),
+                    label: Text(AppLocalizations.of(context)!.signIn),
                   ),
                 ],
               ),
@@ -136,111 +143,662 @@ class _GeneralPageState extends State<GeneralPage> {
           result.message ??
           switch (result.status) {
             ClientUpdateStatus.updateOpened =>
-              'The official Linux release was opened. Download, replace, and restart Sanad manually.',
-            ClientUpdateStatus.upToDate => 'Sanad Client is up to date.',
-            ClientUpdateStatus.sourceManaged => 'This source build is updated from its developer checkout.',
+              AppLocalizations.of(context)!.linuxUpdateManual,
+            ClientUpdateStatus.upToDate => AppLocalizations.of(context)!.upToDate,
+            ClientUpdateStatus.sourceManaged => AppLocalizations.of(context)!.sourceManagedUpdate,
             ClientUpdateStatus.artifactUnavailable =>
-              'A newer release exists, but no matching Linux package is available.',
-            ClientUpdateStatus.launchFailed => 'The official release was found, but the browser could not be opened.',
-            _ => 'The update check has started.',
+              AppLocalizations.of(context)!.updateNoPackage,
+            ClientUpdateStatus.launchFailed => AppLocalizations.of(context)!.updateLaunchFailed,
+            _ => AppLocalizations.of(context)!.updateStarted,
           };
     });
   }
 
+  Future<void> _exportAppearance() async {
+    final l10n = AppLocalizations.of(context)!;
+    try {
+      final appearance = context.read<AppearanceCubit>().state;
+      final activeDeviceId = context.read<AppearanceCubit>().activeDeviceId;
+      final fileName = activeDeviceId != null && activeDeviceId.isNotEmpty
+          ? 'sanad-appearance-$activeDeviceId.json'
+          : 'sanad-appearance.json';
+
+      final saveLocation = await getSaveLocation(
+        suggestedName: fileName,
+        acceptedTypeGroups: const [
+          XTypeGroup(label: 'JSON', extensions: ['json']),
+        ],
+      );
+      if (saveLocation == null) return;
+
+      final jsonContent = const JsonEncoder.withIndent('  ').convert(appearance.toJson());
+      final xFile = XFile.fromData(
+        utf8.encode(jsonContent),
+        mimeType: 'application/json',
+        name: fileName,
+      );
+      await xFile.saveTo(saveLocation.path);
+      if (mounted) {
+        ToastUtils.showSuccess(context, l10n.appearanceExported);
+      }
+    } catch (e) {
+      if (mounted) {
+        ToastUtils.showError(context, e.toString());
+      }
+    }
+  }
+
+  Future<void> _importAppearance() async {
+    final l10n = AppLocalizations.of(context)!;
+    try {
+      const typeGroup = XTypeGroup(
+        label: 'JSON',
+        extensions: ['json'],
+      );
+      final file = await openFile(acceptedTypeGroups: const [typeGroup]);
+      if (file == null) return;
+
+      final content = await file.readAsString();
+      final decoded = jsonDecode(content);
+      if (decoded is! Map) {
+        if (mounted) {
+          ToastUtils.showError(context, l10n.appearanceImportFailed);
+        }
+        return;
+      }
+      final map = Map<String, dynamic>.from(decoded);
+      if (mounted) {
+        await context.read<AppearanceCubit>().importAppearance(map);
+        ToastUtils.showSuccess(context, l10n.appearanceImported);
+      }
+    } catch (_) {
+      if (mounted) {
+        ToastUtils.showError(context, l10n.appearanceImportFailed);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final mode = context.watch<ThemeCubit>().state;
+    final appearance = context.watch<AppearanceCubit>().state;
+    final l10n = AppLocalizations.of(context)!;
     return PageFrame(
-      title: 'General',
-      subtitle: 'Preferences for this Sanad app.',
-      child: SettingsCard(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Appearance',
-              style: Theme.of(
-                context,
-              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 6),
-            Text(
-              'Choose how Sanad looks on this device.',
-              style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+      title: l10n.general,
+      subtitle: l10n.settings,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (AppPlatform.isDesktop) ...[
+            // Updates Card
+            SettingsCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    AppLocalizations.of(context)!.updates,
+                    style: Theme.of(
+                      context,
+                    ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    AppPlatform.isLinux
+                        ? AppLocalizations.of(context)!.updatesLinuxNote
+                        : AppLocalizations.of(context)!.updatesAutoNote,
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_currentVersion != null) ...[
+                        Text(
+                          AppLocalizations.of(context)!.currentVersion(_currentVersion!),
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                        const SizedBox(width: 16),
+                      ],
+                      OutlinedButton.icon(
+                        onPressed: _checking ? null : _checkForUpdates,
+                        icon: _checking
+                            ? const SizedBox.square(
+                                dimension: 16,
+                                child: AppProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.system_update_alt),
+                        label: Text(AppLocalizations.of(context)!.checkForUpdates),
+                      ),
+                    ],
+                  ),
+                  if (_updateMessage != null) ...[
+                    const SizedBox(height: 10),
+                    Text(_updateMessage!),
+                  ],
+                ],
               ),
             ),
             const SizedBox(height: 16),
-            SegmentedButton<ThemeMode>(
-              segments: const [
-                ButtonSegment(
-                  value: ThemeMode.system,
-                  label: Text('System'),
-                  icon: Icon(Icons.settings_brightness_outlined),
+          ],
+          // Language Card
+          SettingsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  AppLocalizations.of(context)!.language,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
                 ),
-                ButtonSegment(
-                  value: ThemeMode.light,
-                  label: Text('Light'),
-                  icon: Icon(Icons.light_mode_outlined),
+                const SizedBox(height: 6),
+                Text(
+                  AppLocalizations.of(context)!.selectLanguage,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
-                ButtonSegment(
-                  value: ThemeMode.dark,
-                  label: Text('Dark'),
-                  icon: Icon(Icons.dark_mode_outlined),
+                const SizedBox(height: 14),
+                BlocBuilder<LocaleCubit, Locale>(
+                  builder: (context, locale) => SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<Locale>(
+                      key: const Key('language_selector'),
+                      segments: const [
+                        ButtonSegment(
+                          value: Locale('en'),
+                          label: Text('English'),
+                          icon: Icon(Icons.language_outlined),
+                        ),
+                        ButtonSegment(
+                          value: Locale('ar'),
+                          label: Text('العربية'),
+                          icon: Icon(Icons.translate_outlined),
+                        ),
+                      ],
+                      selected: {locale},
+                      onSelectionChanged: (selection) =>
+                          context.read<LocaleCubit>().updateLocale(selection.first),
+                    ),
+                  ),
                 ),
               ],
-              selected: {mode},
-              onSelectionChanged: (selection) => context.read<ThemeCubit>().updateTheme(selection.first),
             ),
-            if (AppPlatform.isDesktop) ...[
-              const Divider(height: 40),
-              Text(
-                'Updates',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 6),
-              Text(
-                AppPlatform.isLinux
-                    ? 'Linux updates are manual. Sanad only opens a newer official package after validating its release manifest.'
-                    : 'Automatic update checks run in the background. Use this action to check the signed update feed now.',
-              ),
-              const SizedBox(height: 16),
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (_currentVersion != null) ...[
+          ),
+          const SizedBox(height: 16),
+          // Appearance & Typography
+          SettingsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
                     Text(
-                      'Current Version: $_currentVersion',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w500,
-                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      l10n.appearance,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
+                      children: [
+                        OutlinedButton.icon(
+                          key: const Key('appearance_export_btn'),
+                          onPressed: _exportAppearance,
+                          icon: const Icon(Icons.file_upload_outlined, size: 16),
+                          label: Text(l10n.exportAppearance),
+                        ),
+                        OutlinedButton.icon(
+                          key: const Key('appearance_import_btn'),
+                          onPressed: _importAppearance,
+                          icon: const Icon(Icons.file_download_outlined, size: 16),
+                          label: Text(l10n.importAppearance),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  l10n.theme,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<AppThemeStyle>(
+                    key: const Key('theme_style_selector'),
+                    segments: [
+                      ButtonSegment(
+                        value: AppThemeStyle.light,
+                        label: Text(l10n.themeLight, key: const Key('theme_style_light_btn')),
+                        icon: const Icon(Icons.light_mode_outlined),
+                      ),
+                      ButtonSegment(
+                        value: AppThemeStyle.dark,
+                        label: Text(l10n.themeDark, key: const Key('theme_style_dark_btn')),
+                        icon: const Icon(Icons.dark_mode_outlined),
+                      ),
+                      ButtonSegment(
+                        value: AppThemeStyle.midnight,
+                        label: Text(l10n.themeMidnight, key: const Key('theme_style_midnight_btn')),
+                        icon: const Icon(Icons.nightlight_round),
+                      ),
+                      ButtonSegment(
+                        value: AppThemeStyle.sepia,
+                        label: Text(l10n.themeSepia, key: const Key('theme_style_sepia_btn')),
+                        icon: const Icon(Icons.menu_book_outlined),
+                      ),
+                    ],
+                    selected: {appearance.themeStyle},
+                    onSelectionChanged: (selection) {
+                      final style = selection.first;
+                      unawaited(context.read<AppearanceCubit>().updateThemeStyle(style));
+                      unawaited(context.read<ThemeCubit>().updateTheme(style.themeMode));
+                    },
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  l10n.primaryColor,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  l10n.selectPrimaryColor,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<AppPrimaryColor>(
+                    key: const Key('primary_color_selector_row1'),
+                    showSelectedIcon: false,
+                    emptySelectionAllowed: true,
+                    segments: [
+                      ButtonSegment(
+                        value: AppPrimaryColor.blue,
+                        label: Text(l10n.colorDefaultBlue, key: const Key('primary_color_blue_btn')),
+                        icon: _ColorDot(color: AppPrimaryColor.blue.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.teal,
+                        label: Text(l10n.colorTeal, key: const Key('primary_color_teal_btn')),
+                        icon: _ColorDot(color: AppPrimaryColor.teal.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.green,
+                        label: Text(l10n.colorGreen, key: const Key('primary_color_green_btn')),
+                        icon: _ColorDot(color: AppPrimaryColor.green.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.cyan,
+                        label: Text(l10n.colorCyan, key: const Key('primary_color_cyan_btn')),
+                        icon: _ColorDot(color: AppPrimaryColor.cyan.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                    ],
+                    selected: const {
+                      AppPrimaryColor.blue,
+                      AppPrimaryColor.teal,
+                      AppPrimaryColor.green,
+                      AppPrimaryColor.cyan,
+                    }.contains(appearance.primaryColor)
+                        ? {appearance.primaryColor}
+                        : <AppPrimaryColor>{},
+                    onSelectionChanged: (selection) {
+                      if (selection.isNotEmpty) {
+                        unawaited(context.read<AppearanceCubit>().updatePrimaryColor(selection.first));
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<AppPrimaryColor>(
+                    key: const Key('primary_color_selector_row2'),
+                    showSelectedIcon: false,
+                    emptySelectionAllowed: true,
+                    segments: [
+                      ButtonSegment(
+                        value: AppPrimaryColor.purple,
+                        label: Text(l10n.colorPurple, key: const Key('primary_color_purple_btn')),
+                        icon: _ColorDot(color: AppPrimaryColor.purple.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.magenta,
+                        label: Text(l10n.colorMagenta, key: const Key('primary_color_magenta_btn')),
+                        icon: _ColorDot(color: AppPrimaryColor.magenta.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.orange,
+                        label: Text(l10n.colorOrange, key: const Key('primary_color_orange_btn')),
+                        icon: _ColorDot(color: AppPrimaryColor.orange.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                      ButtonSegment(
+                        value: AppPrimaryColor.rose,
+                        label: Text(l10n.colorRose, key: const Key('primary_color_rose_btn')),
+                        icon: _ColorDot(color: AppPrimaryColor.rose.colorForBrightness(Theme.of(context).brightness)),
+                      ),
+                    ],
+                    selected: const {
+                      AppPrimaryColor.purple,
+                      AppPrimaryColor.magenta,
+                      AppPrimaryColor.orange,
+                      AppPrimaryColor.rose,
+                    }.contains(appearance.primaryColor)
+                        ? {appearance.primaryColor}
+                        : <AppPrimaryColor>{},
+                    onSelectionChanged: (selection) {
+                      if (selection.isNotEmpty) {
+                        unawaited(context.read<AppearanceCubit>().updatePrimaryColor(selection.first));
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  l10n.fontFamily,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  l10n.selectFontFamily,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<AppFontFamily>(
+                    key: const Key('font_family_selector'),
+                    segments: const [
+                      ButtonSegment(
+                        value: AppFontFamily.system,
+                        label: Text('System'),
+                      ),
+                      ButtonSegment(
+                        value: AppFontFamily.cairo,
+                        label: Text('Cairo'),
+                      ),
+                      ButtonSegment(
+                        value: AppFontFamily.inter,
+                        label: Text('Inter'),
+                      ),
+                      ButtonSegment(
+                        value: AppFontFamily.roboto,
+                        label: Text('Roboto'),
+                      ),
+                    ],
+                    selected: {appearance.fontFamily},
+                    onSelectionChanged: (selection) =>
+                        unawaited(context.read<AppearanceCubit>().updateFontFamily(selection.first)),
+                  ),
+                ),
+                const SizedBox(height: 20),
+                Text(
+                  l10n.fontSize,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  l10n.fontSizeDescription,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: SegmentedButton<AppFontSizeScale>(
+                    key: const Key('font_size_selector'),
+                    segments: [
+                      ButtonSegment(
+                        value: AppFontSizeScale.small,
+                        label: Text(l10n.fontSizeSmall),
+                      ),
+                      ButtonSegment(
+                        value: AppFontSizeScale.normal,
+                        label: Text(l10n.fontSizeNormal),
+                      ),
+                      ButtonSegment(
+                        value: AppFontSizeScale.large,
+                        label: Text(l10n.fontSizeLarge),
+                      ),
+                      ButtonSegment(
+                        value: AppFontSizeScale.extraLarge,
+                        label: Text(l10n.fontSizeExtraLarge),
+                      ),
+                    ],
+                    selected: {appearance.fontSizeScale},
+                    onSelectionChanged: (selection) =>
+                        unawaited(context.read<AppearanceCubit>().updateFontSizeScale(selection.first)),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context)
+                        .colorScheme
+                        .surfaceContainerHighest
+                        .withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: Theme.of(context)
+                          .colorScheme
+                          .outline
+                          .withValues(alpha: 0.15),
+                    ),
+                  ),
+                  child: Text(
+                    l10n.previewText,
+                    style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          // Background Selection Card
+          SettingsCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  l10n.background,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  l10n.backgroundDescription,
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                _BackgroundSelectionGrid(
+                  selected: appearance.backgroundOption,
+                  themeStyle: appearance.themeStyle,
+                  onSelected: (option) =>
+                      unawaited(context.read<AppearanceCubit>().updateBackgroundOption(option)),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _BackgroundSelectionGrid extends StatelessWidget {
+  final AppBackgroundOption selected;
+  final AppThemeStyle themeStyle;
+  final ValueChanged<AppBackgroundOption> onSelected;
+
+  const _BackgroundSelectionGrid({
+    required this.selected,
+    required this.themeStyle,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final options = AppBackgroundOption.values;
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        const crossAxisCount = 3;
+        const spacing = 12.0;
+        final totalSpacing = spacing * (crossAxisCount - 1);
+        final itemWidth = ((constraints.maxWidth - totalSpacing) / crossAxisCount).floorToDouble();
+
+        return Wrap(
+          spacing: spacing,
+          runSpacing: spacing,
+          children: options.map((option) {
+            final isSelected = option == selected;
+            final label = switch (option) {
+              AppBackgroundOption.defaultTheme => l10n.backgroundDefault,
+              AppBackgroundOption.solidSlate => l10n.backgroundSlate,
+              AppBackgroundOption.solidNavy => l10n.backgroundNavy,
+              AppBackgroundOption.natureForest => l10n.backgroundForest,
+              AppBackgroundOption.natureMountain => l10n.backgroundMountain,
+              AppBackgroundOption.natureLake => l10n.backgroundLake,
+            };
+
+            return InkWell(
+              key: Key('background_option_${option.name}'),
+              borderRadius: BorderRadius.circular(12),
+              onTap: () => onSelected(option),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: itemWidth,
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: isSelected
+                        ? Theme.of(context).colorScheme.primary
+                        : Theme.of(context).colorScheme.outline.withValues(alpha: 0.25),
+                    width: isSelected ? 2 : 1,
+                  ),
+                  color: isSelected
+                      ? Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.15)
+                      : Colors.transparent,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: SizedBox(
+                        height: 70,
+                        width: double.infinity,
+                        child: _buildThumbnail(context, option),
                       ),
                     ),
-                    const SizedBox(width: 16),
+                    const SizedBox(height: 8),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        if (isSelected) ...[
+                          Icon(
+                            Icons.check_circle,
+                            size: 14,
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                          const SizedBox(width: 4),
+                        ],
+                        Flexible(
+                          child: Text(
+                            label,
+                            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                  fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+                                ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ],
+                    ),
                   ],
-                  OutlinedButton.icon(
-                    onPressed: _checking ? null : _checkForUpdates,
-                    icon: _checking
-                        ? const SizedBox.square(
-                            dimension: 16,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
-                        : const Icon(Icons.system_update_alt),
-                    label: const Text('Check for Updates'),
-                  ),
-                ],
+                ),
               ),
-              if (_updateMessage != null) ...[
-                const SizedBox(height: 10),
-                Text(_updateMessage!),
-              ],
-            ],
-          ],
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+
+  Widget _buildThumbnail(BuildContext context, AppBackgroundOption option) {
+    final theme = Theme.of(context);
+    final isDark = themeStyle == AppThemeStyle.dark || themeStyle == AppThemeStyle.midnight;
+
+    if (option == AppBackgroundOption.defaultTheme) {
+      return Container(
+        color: theme.scaffoldBackgroundColor,
+        child: Center(
+          child: Icon(
+            Icons.format_paint_outlined,
+            color: theme.colorScheme.onSurfaceVariant,
+            size: 24,
+          ),
         ),
-      ),
+      );
+    }
+
+    if (!option.isWallpaper) {
+      final solidColor = switch (option) {
+        AppBackgroundOption.solidSlate =>
+          isDark ? const Color(0xFF20262E) : const Color(0xFFE5E9EE),
+        AppBackgroundOption.solidNavy =>
+          isDark ? const Color(0xFF0B132B) : const Color(0xFFE0E7F5),
+        _ => theme.scaffoldBackgroundColor,
+      };
+      return Container(color: solidColor);
+    }
+
+    // Wallpaper thumbnail with theme-adaptive barrier representation
+    final scrimColor = switch (themeStyle) {
+      AppThemeStyle.light => Colors.white.withValues(alpha: 0.70),
+      AppThemeStyle.sepia => const Color(0xFFFBF0D9).withValues(alpha: 0.72),
+      AppThemeStyle.dark => const Color(0xFF181818).withValues(alpha: 0.72),
+      AppThemeStyle.midnight => const Color(0xFF000000).withValues(alpha: 0.78),
+    };
+
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        Image.asset(
+          option.assetPath!,
+          fit: BoxFit.cover,
+          errorBuilder: (_, __, ___) => Container(color: theme.scaffoldBackgroundColor),
+        ),
+        ColoredBox(color: scrimColor),
+      ],
     );
   }
 }
@@ -255,9 +813,9 @@ class EmptyDevicePage extends StatelessWidget {
       children: [
         const Icon(Icons.devices_other_outlined, size: 52),
         const SizedBox(height: 12),
-        Text('Select a device', style: Theme.of(context).textTheme.titleLarge),
+        Text(AppLocalizations.of(context)!.selectADevice, style: Theme.of(context).textTheme.titleLarge),
         const SizedBox(height: 6),
-        const Text('Device settings will appear here.'),
+        Text(AppLocalizations.of(context)!.deviceSettingsPlaceholder),
       ],
     ),
   );
@@ -327,7 +885,7 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
     if (_runtimeBusy || !widget.device.isOnline) return;
     setState(() {
       _runtimeBusy = true;
-      _runtimeStatus = 'Checking for updates…';
+      _runtimeStatus = AppLocalizations.of(context)!.checkingForUpdates;
       _error = null;
     });
     try {
@@ -358,7 +916,7 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
     if (check.sourceManaged) {
       ToastUtils.showError(
         context,
-        check.message ?? 'This agent runs from source and stays developer-managed.',
+        check.message ?? AppLocalizations.of(context)!.sourceManagedAgent,
       );
       return;
     }
@@ -529,8 +1087,12 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
                     '${widget.device.isOnline ? 'Online' : 'Offline'} · ${route == ConnectionScope.local ? 'Local connection' : 'Sanad Gateway'}',
                   ),
                   trailing: widget.isActive
-                      ? const Chip(label: Text('Active'))
+                      ? const Chip(
+                          key: Key('device_active_chip'),
+                          label: Text('Active'),
+                        )
                       : FilledButton.tonal(
+                          key: const Key('device_set_active_btn'),
                           onPressed: () => context.read<DeviceCubit>().setActiveAgent(widget.device.id),
                           child: const Text('Set as active'),
                         ),
@@ -962,7 +1524,7 @@ class _DeviceRenameDialogState extends State<DeviceRenameDialog> {
           child: _saving
               ? const SizedBox.square(
                   dimension: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: AppProgressIndicator(strokeWidth: 2),
                 )
               : const Text('Rename'),
         ),
@@ -1143,7 +1705,7 @@ class WorkspacePage extends StatelessWidget {
     child: Column(
       children: [
         Material(
-          color: Theme.of(context).colorScheme.surface,
+          color: Colors.transparent,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -1287,3 +1849,26 @@ class WorkspaceRemovalButton extends StatelessWidget {
     label: const Text('Remove workspace'),
   );
 }
+
+class _ColorDot extends StatelessWidget {
+  const _ColorDot({required this.color});
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 14,
+      height: 14,
+      margin: const EdgeInsetsDirectional.only(end: 4),
+      decoration: BoxDecoration(
+        color: color,
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.5),
+          width: 1.5,
+        ),
+      ),
+    );
+  }
+}
+

@@ -88,6 +88,69 @@ void main() {
       ]);
     });
 
+    test(
+      'adds gpt-6 forward-compatible models with context windows when gpt-6-luna is present',
+      () async {
+        final service = CodexModelsService(clientVersion: '1.2.3');
+        final models = await service.fetch(
+          client: MockClient(
+            (_) async => http.Response(
+              jsonEncode({
+                'models': [
+                  {
+                    'slug': 'gpt-6-luna',
+                    'visibility': 'list',
+                    'priority': 1,
+                    'context_window': 1050000,
+                  },
+                ],
+              }),
+              200,
+            ),
+          ),
+          baseUrl: 'https://chatgpt.com/backend-api/codex',
+          accessToken: 'access-token',
+        );
+
+        final modelValues = models.map((model) => model.value).toList();
+        expect(modelValues, contains('gpt-6-luna'));
+        expect(modelValues, contains('gpt-6-astra'));
+        expect(modelValues, contains('gpt-6-sol'));
+
+        final astra = models.firstWhere((m) => m.value == 'gpt-6-astra');
+        expect(astra.contextWindow, 1050000);
+        expect(astra.supportsReasoning, isTrue);
+      },
+    );
+
+    test(
+      'does not invent a window when the gpt-6 template omits one',
+      () async {
+        final service = CodexModelsService(clientVersion: '1.2.3');
+        final models = await service.fetch(
+          client: MockClient(
+            (_) async => http.Response(
+              jsonEncode({
+                'models': [
+                  {'slug': 'gpt-6-luna', 'visibility': 'list', 'priority': 1},
+                ],
+              }),
+              200,
+            ),
+          ),
+          baseUrl: 'https://chatgpt.com/backend-api/codex',
+          accessToken: 'access-token',
+        );
+
+        expect(
+          models
+              .firstWhere((model) => model.value == 'gpt-6-astra')
+              .contextWindow,
+          isNull,
+        );
+      },
+    );
+
     test('rejects unsuccessful or malformed catalogs', () async {
       final service = CodexModelsService(clientVersion: '1.2.3');
 

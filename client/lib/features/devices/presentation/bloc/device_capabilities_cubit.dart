@@ -42,7 +42,7 @@ class DeviceCapabilitiesCubit extends Cubit<DeviceCapabilitiesState> {
       unawaited(
         ensureFreshForAgent(
           agent,
-          force: agent.isLocalReachable || becameOnline,
+          force: becameOnline,
         ),
       );
     }

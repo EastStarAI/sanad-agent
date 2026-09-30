@@ -24,6 +24,12 @@ This contract applies to `agent/lib/engine/runtime/`.
 - A missing checkpoint may be repaired as `initial_model_request` only when the owned user message is durable and there is no provider-in-flight, executing-tool, completed-result, or deferred-result evidence. Persist the repair marker so retry cannot reinterpret an ambiguous boundary repeatedly.
 - Tools that support crash diagnostics may persist bounded, redacted execution progress under the active checkpoint. Progress is evidence for terminal recovery, never permission to replay an unsafe tool.
 - Persist sequential tool completion and executing-marker removal together.
+- A completed checkpoint tool result is reused only when its causal model step,
+  tool name, and structured arguments match the invocation that recorded it (each
+  persisted output record carries its owning `model_step_id`); a genuinely new
+  call that reuses a provider tool-call id across model steps or turns executes once. Legacy untagged durable records fall back to
+  durable id-based reuse. A freshly re-executed id purges its prior-step result at
+  the moment it is marked executing so a crash is never masked by an older outcome.
 - A typed deferred tool result may keep one non-idempotent tool executing only
   when its requester-bound descriptor is durable. Startup resolves that
   descriptor exactly once into the original tool result; it never replays the

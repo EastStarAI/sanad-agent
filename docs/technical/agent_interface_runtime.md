@@ -32,6 +32,14 @@ waiting, blocked, and interrupted work after daemon startup. Shared request and
 route helpers remain stateless so collaborators do not depend back on the
 orchestrator.
 
+Normal admission reads the session record once and carries that metadata through
+workspace fallback, routing, title ownership, and queue admission. It does not
+hydrate message rows for those decisions. After durable work admission, the
+runner accepts the root user message through the idempotent append transaction;
+the live user echo therefore still uses the committed message/turn/request
+identity, while retries with the same raw request id reuse that row. Queued and
+steer paths retain their own ordering and aggregate-commit ownership.
+
 Final delivery follows a successful idempotent terminal commit for the exact
 owner. Automatic failover is bounded to one model invocation: every instance
 that fails before streaming is excluded from the remainder of that invocation,

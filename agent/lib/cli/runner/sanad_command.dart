@@ -7,6 +7,20 @@ import 'package:args/command_runner.dart';
 import '../../core/constants.dart';
 import 'sanad_command_runner.dart';
 
+const cliThinkingModes = [
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'fast',
+  'balanced',
+  'normal',
+  'deep',
+];
+
 /// Base command for all Sanad CLI commands.
 abstract class SanadCommand extends Command<int> {
   /// Optional custom action callback for testing and custom injection.
@@ -128,6 +142,7 @@ abstract class SanadCommand extends Command<int> {
   String? get provider => getOption('provider');
   String? get timeoutSeconds => getOption('timeout');
   bool get thinking => getFlag('thinking');
+  String? get thinkingMode => getOption('thinking-mode');
   bool get quiet => getFlag('quiet');
   bool get json => getFlag('json');
   String? get account => getOption('account');

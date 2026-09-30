@@ -13,6 +13,7 @@ import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -178,7 +179,7 @@ void main() {
 
     expect(find.byKey(const Key('send_message_acceptance_indicator')), findsOneWidget);
     expect(find.byKey(const Key('send_message_btn')), findsNothing);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(AppProgressIndicator), findsOneWidget);
     expect(
       tester.widget<IconButton>(find.byKey(const Key('send_message_acceptance_indicator'))).onPressed,
       isNull,
@@ -570,10 +571,10 @@ void main() {
     expect(progress, findsOneWidget);
     expect(
       tester
-          .widget<CircularProgressIndicator>(
+          .widget<AppProgressIndicator>(
             find.descendant(
               of: progress,
-              matching: find.byType(CircularProgressIndicator),
+              matching: find.byType(AppProgressIndicator),
             ),
           )
           .color,

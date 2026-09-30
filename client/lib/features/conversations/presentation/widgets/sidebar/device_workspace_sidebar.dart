@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:go_router/go_router.dart';
@@ -23,6 +24,7 @@ import '../../bloc/session_cubit.dart';
 import '../../bloc/session_sidebar_cubit.dart';
 import '../../bloc/session_sidebar_state.dart';
 import 'sidebar_composition.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'sidebar_device_header_bar.dart';
 import 'sidebar_sections.dart';
 import 'sidebar_workspace_group_tile.dart';
@@ -149,7 +151,7 @@ class DeviceWorkspaceSidebar extends StatelessWidget {
                             return const SizedBox.shrink();
                           }
                           if (sidebar.showInitialLoading && !sidebar.hasSnapshot) {
-                            return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+                            return const Center(child: AppProgressIndicator(strokeWidth: 2));
                           }
                           return _SidebarBody(
                             device: activeDevice,
@@ -362,7 +364,7 @@ class _SidebarBody extends StatelessWidget {
 
   Session _fallbackSession(String id) => Session(
     id: id,
-    title: 'Loading…',
+    title: '…',
     deviceId: device.id,
     createdAt: DateTime.now(),
     updatedAt: DateTime.now(),
@@ -536,7 +538,7 @@ class _NewSessionButton extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'New Session',
+                    AppLocalizations.of(context)!.newSession,
                     style: TextStyle(
                       color: theme.colorScheme.onSurface,
                       fontSize: 12,

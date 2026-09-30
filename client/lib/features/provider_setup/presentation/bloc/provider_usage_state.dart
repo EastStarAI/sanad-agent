@@ -118,7 +118,9 @@ class ProviderUsageSupportState extends Equatable {
     return map != null && (map[instanceId] ?? false);
   }
 
-  ProviderUsageSupportState copyWith({Map<String, Map<String, bool>>? byDevice}) {
+  ProviderUsageSupportState copyWith({
+    Map<String, Map<String, bool>>? byDevice,
+  }) {
     return ProviderUsageSupportState(byDevice: byDevice ?? this.byDevice);
   }
 
@@ -135,10 +137,27 @@ class ProviderUsageState extends Equatable {
   /// Per-device capability support map cached from `provider.usage.support`.
   final ProviderUsageSupportState support;
 
+  /// Per-device provider display-name catalog resolved from
+  /// `model.snapshot` (fallback `provider.instances.list`), owned by the
+  /// cubit so rebuilds/remounts of consuming widgets never re-issue the
+  /// request. Key structure: `{ deviceId: { instanceId: displayName } }`.
+  final Map<String, Map<String, String>> providerDisplayNames;
+
   const ProviderUsageState({
     this.entries = const {},
     this.support = const ProviderUsageSupportState(),
+    this.providerDisplayNames = const {},
   });
+
+  /// Display names for [deviceId], or an empty map when not yet resolved.
+  Map<String, String> displayNamesFor(String deviceId) => providerDisplayNames[deviceId] ?? const <String, String>{};
+
+  /// Whether [instanceId] has a resolved support answer (either direction) on
+  /// [deviceId], i.e. the daemon has answered for it at least once.
+  bool hasSupportAnswer(String deviceId, String instanceId) {
+    final map = support.byDevice[deviceId];
+    return map != null && map.containsKey(instanceId);
+  }
 
   /// The entry for [deviceId] + [instanceId], or `null` when none exists.
   ProviderUsageEntry? entry(String deviceId, String instanceId) {
@@ -148,10 +167,12 @@ class ProviderUsageState extends Equatable {
   ProviderUsageState copyWith({
     Map<String, Map<String, ProviderUsageEntry>>? entries,
     ProviderUsageSupportState? support,
+    Map<String, Map<String, String>>? providerDisplayNames,
   }) {
     return ProviderUsageState(
       entries: entries ?? this.entries,
       support: support ?? this.support,
+      providerDisplayNames: providerDisplayNames ?? this.providerDisplayNames,
     );
   }
 
@@ -195,5 +216,5 @@ class ProviderUsageState extends Equatable {
   }
 
   @override
-  List<Object?> get props => [entries, support];
+  List<Object?> get props => [entries, support, providerDisplayNames];
 }

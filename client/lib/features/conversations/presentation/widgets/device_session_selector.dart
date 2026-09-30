@@ -1,6 +1,7 @@
 import 'package:logging/logging.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
@@ -209,7 +210,7 @@ class _SessionSelectorState extends State<SessionSelector> {
                           child: SizedBox(
                             width: 14,
                             height: 14,
-                            child: CircularProgressIndicator(
+                            child: AppProgressIndicator(
                               strokeWidth: 2,
                               color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.38),
                             ),

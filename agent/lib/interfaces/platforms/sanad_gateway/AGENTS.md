@@ -95,6 +95,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 
 ## Cloud Device Authentication
 - A key-bound `sanad_agent` Device Credential never registers by bearer possession alone. Request a one-use Gateway challenge, then send an ES256 proof over `SOCKET`, the canonical Gateway registration target, nonce, bounded issue time, and fresh JTI.
+- Authentication-lock timeout during reconnect registration is transient and contained within the cloud adapter. Retry only while the socket remains connected, coalesce concurrent registration callbacks, and obtain a fresh challenge instead of replaying a nonce observed before or during contention.
 - Agent registration preserves the device-runtime `capabilities` object and negotiates transport features separately through `transport_capabilities`; delivery-presence advertisement must never replace or change the runtime capability schema.
 - The registration proof uses the same Agent-owned P-256 key approved during Device Authorization. Never send the private key, device code, or proof through logs or durable protocol state.
 - One-command pairing is a separate provisioning grant but has the same final possession boundary: request a challenge before claim, send pairing token plus public JWK and proof, and retain the same key/credential for fresh-proof lost-response recovery.

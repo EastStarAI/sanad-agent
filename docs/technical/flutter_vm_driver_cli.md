@@ -40,6 +40,8 @@ The controller selects the isolate that advertises the required extension rather
 
 Snapshot output is a flat list of typed elements with optional key, text, hint, tooltip, semantic label/role/selection state, and global bounds. Framework wrappers and icon-font glyphs may be suppressed, while tooltips and actionable semantics are consolidated into the keyed element. Obscured text-field values are never exposed. JSON mode emits one machine-parseable result object.
 
+Rendered conversation bodies expose event-scoped keys: `user_message_body:<eventId>` and `assistant_message_body:<eventId>`. The inspector reads plain text from `Text.data`, `Text.textSpan`, `RichText`, and `SelectableText`; for these message-body containers it joins rendered Markdown text leaves in display order and emits one consolidated keyed row rather than duplicate framework descendants. Callers can therefore use exact-key `find` or a filtered `snapshot` to verify message content without clipboard access. The event id remains the durable selector boundary, so a generic final-answer key must not be used when several messages are mounted.
+
 ## Safety and Portability
 
 The interface is available only in driver builds and is not shipped as a production remote-control endpoint. VM Service access is equivalent to development-process control and must remain local or explicitly tunneled by the operator. No Local Gateway credential is sent to the VM Service.

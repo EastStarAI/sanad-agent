@@ -144,6 +144,7 @@ int calculateEffectiveInputWindow(
   int outputReservationTokens = 4096,
   int safetyBufferTokens = 1024,
 }) {
+  if (window <= 0) return 0;
   final requestedReservation = outputReservationTokens + safetyBufferTokens;
   if (requestedReservation < window) {
     return window - requestedReservation;

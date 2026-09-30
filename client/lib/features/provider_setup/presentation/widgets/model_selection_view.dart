@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_state.dart';
@@ -113,7 +114,7 @@ class _ModelSelectionViewState extends State<ModelSelectionView> {
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2),
+                          child: AppProgressIndicator(strokeWidth: 2),
                         )
                       : const Icon(Icons.check),
                   label: Text(
@@ -149,10 +150,11 @@ class _DiscoveryLoading extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return const Padding(
+      key: Key('model_discovery_loading'),
       padding: EdgeInsets.symmetric(vertical: 32),
       child: Column(
         children: [
-          CircularProgressIndicator(),
+          AppProgressIndicator(),
           SizedBox(height: 12),
           Text('Loading models from the provider...'),
         ],
@@ -210,9 +212,13 @@ class _ModelList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (models.isEmpty) {
-      return const Text('No models are available. Retry or add one manually.');
+      return const Text(
+        'No models are available. Retry or add one manually.',
+        key: Key('no_models_available_text'),
+      );
     }
     return ListView.separated(
+      key: const Key('model_selection_list'),
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: models.length,
@@ -223,6 +229,7 @@ class _ModelList extends StatelessWidget {
         return Material(
           color: Colors.transparent,
           child: ListTile(
+            key: Key('model_option_$model'),
             shape: RoundedRectangleBorder(
               side: BorderSide(
                 color: isSelected
@@ -234,7 +241,7 @@ class _ModelList extends StatelessWidget {
             leading: Icon(
               isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
             ),
-            title: Text(model),
+            title: Text(model, key: Key('model_title_$model')),
             onTap: () => context.read<ProviderSetupCubit>().selectModel(model),
           ),
         );

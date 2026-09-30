@@ -129,17 +129,11 @@ void main() {
     () async {
       final home = await Directory.systemTemp.createTemp('sanad-managed-home');
       addTearDown(() => home.delete(recursive: true));
-      final runtime = runtime_context.SanadDevRuntime(
-        workspaceRoot: '/repo',
-        repositoryRoot: '/repo',
-        worktreeId: 'task-$testWorkspaceHash',
-        isLinkedWorktree: true,
-        usesPrimaryResources: false,
-        agentPort: 58092,
+      final runtime = createTestRuntime(
         vmServicePort: 51084,
         sanadHome: home.path,
-        runtimeDirectory: '${home.path}/runtime',
-        branch: 'codex/task',
+        runtimeDirectory: '${home.path}${Platform.pathSeparator}runtime',
+        platformNeutral: true,
       );
       final agent = sanad_dev.AgentInstance(
         58092,
@@ -169,7 +163,7 @@ void main() {
           launcherPid: 999,
           launcherProcessIdentity: 'process-999',
           workspaceHash: testWorkspaceHash,
-          sourceRoot: '/repo',
+          sourceRoot: runtime.repositoryRoot,
           agentPort: 58092,
           sanadHome: home.path,
           preferencesPrefix: runtime_context.deriveSanadDevPreferencesPrefix(
@@ -203,17 +197,11 @@ void main() {
         'sanad-managed-with-manual-',
       );
       addTearDown(() => home.delete(recursive: true));
-      final runtime = runtime_context.SanadDevRuntime(
-        workspaceRoot: '/repo',
-        repositoryRoot: '/repo',
-        worktreeId: 'task-$testWorkspaceHash',
-        isLinkedWorktree: true,
-        usesPrimaryResources: false,
-        agentPort: 58092,
+      final runtime = createTestRuntime(
         vmServicePort: 51084,
         sanadHome: home.path,
-        runtimeDirectory: '${home.path}/runtime',
-        branch: 'codex/task',
+        runtimeDirectory: '${home.path}${Platform.pathSeparator}runtime',
+        platformNeutral: true,
       );
       final managed = sanad_dev.ClientInstance(
         51084,
@@ -252,7 +240,7 @@ void main() {
           launcherPid: 999,
           launcherProcessIdentity: 'process-999',
           workspaceHash: testWorkspaceHash,
-          sourceRoot: '/repo',
+          sourceRoot: runtime.repositoryRoot,
           agentPort: 58092,
           sanadHome: home.path,
           preferencesPrefix: runtime_context.deriveSanadDevPreferencesPrefix(

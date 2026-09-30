@@ -31,6 +31,7 @@ Provide a deterministic, low-noise, development-only control surface through whi
 - Inspection output must remain filterable by scope and query and support compact, key-only, and interactive-only projections.
 - Do not add duplicate framework wrappers, state-management internals, icon-font glyphs, or redundant text rows to snapshots.
 - Consolidate useful tooltip and semantic metadata into the actionable keyed element.
+- Rendered conversation bodies use exact event-scoped keys and consolidate their supported Markdown text leaves into one message-body row; internal Flutter text keys and duplicate Text/RichText descendants remain suppressed.
 - Never expose obscured text-field values. Successful text-entry results must not echo the entered value.
 - The active authentication URL is an ephemeral handoff value: human mode prints only that URL to standard output, failures use standard error, and neither the Client extension nor either CLI layer may log, journal, cache, or add it to general UI snapshots.
 - Changes that can increase snapshot volume must add or preserve an explicit bounded-output strategy and truncation metadata; silent truncation is forbidden.

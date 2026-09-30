@@ -1,0 +1,9 @@
+name: sanad_workflow_guards
+description: "Bounded, tested Sanad workflow guard tooling: PR-check monitoring with fail-fast and the fail-closed merge artifact validator."
+publish_to: none
+
+environment:
+  sdk: ^3.10.7
+
+dev_dependencies:
+  test: ^1.25.0

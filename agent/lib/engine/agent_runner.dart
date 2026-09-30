@@ -558,27 +558,16 @@ class AgentRunner {
     sessionManager.saveSessionHistory(sessionId, history);
   }
 
-  void _reloadPersistedHistory() {
-    final session = sessionManager.getSession(sessionId);
-    if (session != null) {
-      history = session.messages.toList();
-    }
-  }
-
-  int _appendOrReuseUserMessage(Message userMessage, String? requestId) {
-    final existingIndex = _persistedUserMessageIndex(requestId);
-    if (existingIndex != -1) return existingIndex;
-    history.add(userMessage);
-    return history.length - 1;
-  }
-
   int _persistedUserMessageIndex(String? requestId) {
     if (requestId == null || requestId.isEmpty || history.isEmpty) return -1;
-    final last = history.last;
-    return last.role == MessageRole.user &&
-            last.metadata?['request_id']?.toString() == requestId
-        ? history.length - 1
-        : -1;
+    for (var index = history.length - 1; index >= 0; index--) {
+      final message = history[index];
+      if (message.role == MessageRole.user &&
+          message.metadata?['request_id']?.toString() == requestId) {
+        return index;
+      }
+    }
+    return -1;
   }
 
   /// Commits one root user input before any live event exposes it to clients.
@@ -589,34 +578,31 @@ class AgentRunner {
     String? requestId,
     DateTime? receivedAt,
   }) async {
-    _reloadPersistedHistory();
+    final candidate = Message(
+      role: MessageRole.user,
+      content: userContent ?? '',
+      metadata: {
+        if (requestId != null && requestId.isNotEmpty) 'request_id': requestId,
+        'received_at': (receivedAt ?? DateTime.now()).toUtc().toIso8601String(),
+      },
+    );
+    final commit = sessionManager.appendRootUserMessage(sessionId, candidate);
     var index = _persistedUserMessageIndex(requestId);
-    if (index == -1) {
-      index = _appendOrReuseUserMessage(
-        Message(
-          role: MessageRole.user,
-          content: userContent ?? '',
-          metadata: {
-            if (requestId != null && requestId.isNotEmpty)
-              'request_id': requestId,
-            'received_at': (receivedAt ?? DateTime.now())
-                .toUtc()
-                .toIso8601String(),
-          },
-        ),
-        requestId,
-      );
-      await pluginManager.notifyMessage(history[index]);
-      _saveHistory();
-      _reloadPersistedHistory();
-      index = requestId == null || requestId.isEmpty
-          ? history.length - 1
-          : _persistedUserMessageIndex(requestId);
-      if (index < 0 || index >= history.length) {
-        throw StateError(
-          'Committed user message is missing from session history.',
-        );
+    if (commit.inserted) {
+      history.add(commit.message);
+      index = history.length - 1;
+      await pluginManager.notifyMessage(commit.message);
+    } else if (index == -1) {
+      final session = sessionManager.getSession(sessionId);
+      if (session != null) {
+        history = session.messages.toList();
+        index = _persistedUserMessageIndex(requestId);
       }
+    }
+    if (index < 0 || index >= history.length) {
+      throw StateError(
+        'Committed user message is missing from session history.',
+      );
     }
     _currentTurnStartIndex = index;
     return history[index];
@@ -689,15 +675,7 @@ class AgentRunner {
   Future<void> executeToolCalls(
     List<ToolCall> toolCalls, {
     required bool parallel,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
   }) => _toolExecutionCoordinator.executeToolCalls(
     toolCalls,
     parallel: parallel,
@@ -1194,7 +1172,7 @@ class AgentRunner {
           final contextWindow = await getContextTokens() ?? 128_000;
           final policy = getIt.isRegistered<Config>()
               ? getIt<Config>().compactionPolicyForModel(modelId ?? '')
-              : const CompactionPolicy(threshold: 0.80, targetRatio: 0.10);
+              : const CompactionPolicy(threshold: 0.90, targetRatio: 0.10);
           final targetRequestTokens =
               (_effectiveInputWindow(contextWindow) * policy.targetRatio)
                   .round();
@@ -1597,15 +1575,7 @@ class AgentRunner {
     String? model,
     String? thinkingMode,
     DateTime? receivedAt,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
@@ -1665,15 +1635,7 @@ class AgentRunner {
     String? providerId,
     String? model,
     String? thinkingMode,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
@@ -1731,15 +1693,7 @@ class AgentRunner {
 
   Stream<String> _streamNextResponse({
     String? runtimeSystemPrompt,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     bool preserveModelStepId = false,
     ResponseContinuationCoordinator? continuation,
@@ -2048,15 +2002,7 @@ class AgentRunner {
     String? runtimeSystemPrompt,
     String? forcedOutput,
     bool forcedIsError = false,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
   }) async* {
@@ -2375,7 +2321,7 @@ class AgentRunner {
     final contextWindow = await getContextTokens() ?? 128_000;
     final policy = getIt.isRegistered<Config>()
         ? getIt<Config>().compactionPolicyForModel(routing.model ?? '')
-        : const CompactionPolicy(threshold: 0.80, targetRatio: 0.10);
+        : const CompactionPolicy(threshold: 0.90, targetRatio: 0.10);
     final turnAdapter = _wireMeasurementAdapter(_turnRoute.adapterForTurn());
     final wireMeasurement = turnAdapter is WireInputUsageMeasurer
         ? await (turnAdapter as WireInputUsageMeasurer).measureInput(
@@ -2646,6 +2592,9 @@ class _RunnerToolCallbacks implements ToolExecutionCallbacks {
     ToolCall toolCall,
     String result, {
     required bool isError,
+    DateTime? startedAt,
+    DateTime? terminalAt,
+    int? runtimeMs,
   }) async {
     final toolMessage = Message(
       role: MessageRole.tool,
@@ -2658,6 +2607,9 @@ class _RunnerToolCallbacks implements ToolExecutionCallbacks {
         if (_runner.currentModelStepId != null)
           'model_step_id': _runner.currentModelStepId,
         'is_error': isError,
+        'started_at': ?startedAt?.toIso8601String(),
+        'terminal_at': ?terminalAt?.toIso8601String(),
+        'runtime_ms': ?runtimeMs,
       },
     );
     _runner.history.add(toolMessage);

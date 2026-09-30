@@ -1,4 +1,8 @@
+import 'dart:ui';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 
 class PageFrame extends StatelessWidget {
   const PageFrame({
@@ -14,26 +18,22 @@ class PageFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final double horizontalPadding = 28;
     final TextStyle? titleStyle = Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.w700);
 
     return SingleChildScrollView(
-      padding: EdgeInsets.symmetric(horizontal: horizontalPadding, vertical: 24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 900),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: titleStyle),
-            const SizedBox(height: 6),
-            Text(
-              subtitle,
-              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
-            ),
-            const SizedBox(height: 28),
-            child,
-          ],
-        ),
+      padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(title, style: titleStyle),
+          const SizedBox(height: 4),
+          Text(
+            subtitle,
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 20),
+          child,
+        ],
       ),
     );
   }
@@ -44,14 +44,37 @@ class SettingsCard extends StatelessWidget {
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => Card(
-    elevation: 0,
-    color: Theme.of(context).cardTheme.color ?? Theme.of(context).colorScheme.surfaceContainerLow,
-    shape: RoundedRectangleBorder(
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final appearance = context.watch<AppearanceCubit?>()?.state;
+    final isCustomBg = appearance != null && appearance.backgroundOption != AppBackgroundOption.defaultTheme;
+
+    final cardColor = isCustomBg
+        ? (theme.cardTheme.color ?? theme.colorScheme.surface).withValues(alpha: 0.60)
+        : (theme.cardTheme.color ?? theme.colorScheme.surfaceContainerLow);
+
+    return ClipRRect(
       borderRadius: BorderRadius.circular(16),
-    ),
-    child: Padding(padding: const EdgeInsets.all(20), child: child),
-  );
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+        child: Material(
+          color: cardColor,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: theme.colorScheme.outline.withValues(alpha: isCustomBg ? 0.25 : 0.15),
+              ),
+            ),
+            padding: const EdgeInsets.all(20),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class DetailRow extends StatelessWidget {

@@ -194,7 +194,7 @@ class SessionQueueCoordinator {
           'run_${DateTime.now().millisecondsSinceEpoch}',
       providerInstanceId: request.effectiveProviderInstanceId,
       modelId: request.model,
-      workspaceId: request.workspaceId,
+      workspaceId: request.effectiveWorkspaceId,
       payload: _secretsRedactor.redactMap({
         'message': event.message.content,
         'eventMetadata': event.metadata,

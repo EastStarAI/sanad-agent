@@ -130,54 +130,55 @@ class ConversationAppBar extends StatelessWidget implements PreferredSizeWidget 
   Widget _buildMobileLayout(ThemeData theme) {
     final titleDirection = TextUtils.getTextDirection(sessionTitle);
     final workspaceDirection = workspace != null ? TextUtils.getTextDirection(workspace!.name) : TextDirection.ltr;
-    final isRtl = titleDirection == TextDirection.rtl || workspaceDirection == TextDirection.rtl;
 
-    return Row(
+    return Directionality(
       textDirection: TextDirection.ltr,
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        ConversationHeaderActions(
-          onMenuPressed: onMenuPressed,
-          onMenuHoverEnter: onMenuHoverEnter,
-          onMenuHoverExit: onMenuHoverExit,
-        ),
-        const SizedBox(width: 4),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: isRtl ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                sessionTitle ?? 'Conversation',
-                textDirection: titleDirection,
-                textAlign: titleDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
-                style: theme.textTheme.titleSmall?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: theme.colorScheme.onSurface,
-                ),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              if (workspace != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 1),
-                  child: Text(
-                    workspace!.name,
-                    textDirection: workspaceDirection,
-                    textAlign: workspaceDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
-                    style: theme.textTheme.bodySmall?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant.withValues(
-                        alpha: 0.8,
-                      ),
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          ConversationHeaderActions(
+            onMenuPressed: onMenuPressed,
+            onMenuHoverEnter: onMenuHoverEnter,
+            onMenuHoverExit: onMenuHoverExit,
           ),
-        ),
-      ],
+          const SizedBox(width: 4),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  sessionTitle ?? 'Conversation',
+                  textDirection: titleDirection,
+                  textAlign: TextAlign.left,
+                  style: theme.textTheme.titleSmall?.copyWith(
+                    fontWeight: FontWeight.w600,
+                    color: theme.colorScheme.onSurface,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (workspace != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 1),
+                    child: Text(
+                      workspace!.name,
+                      textDirection: workspaceDirection,
+                      textAlign: TextAlign.left,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant.withValues(
+                          alpha: 0.8,
+                        ),
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 

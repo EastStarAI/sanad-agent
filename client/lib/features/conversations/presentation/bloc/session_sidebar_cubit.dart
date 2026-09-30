@@ -145,18 +145,23 @@ class SessionSidebarCubit extends Cubit<SessionSidebarState> {
 
   /// Request a background refresh of all sidebar resources for the active
   /// device. Does not clear cache; the store applies stale-while-revalidate.
-  Future<void> refreshDevice(DeviceConfig device) => _cacheRepository.refreshDeviceSidebar(device);
+  Future<void> refreshDevice(DeviceConfig device, {bool force = false}) =>
+      _cacheRepository.refreshDeviceSidebar(device, force: force);
 
   /// Refresh the workspaces list for the active device.
-  Future<void> refreshWorkspaces(DeviceConfig device) => _cacheRepository.refreshWorkspaces(device);
+  Future<void> refreshWorkspaces(DeviceConfig device, {bool force = false}) =>
+      _cacheRepository.refreshWorkspaces(device, force: force);
 
   /// Refresh the unscoped conversations section.
-  Future<void> refreshUnscopedConversations(DeviceConfig device) =>
-      _cacheRepository.refreshUnscopedConversations(device);
+  Future<void> refreshUnscopedConversations(DeviceConfig device, {bool force = false}) =>
+      _cacheRepository.refreshUnscopedConversations(device, force: force);
 
   /// Refresh a workspace-scoped conversations section.
-  Future<void> refreshWorkspaceConversations(DeviceConfig device, String workspaceId) =>
-      _cacheRepository.refreshWorkspaceConversations(device, workspaceId);
+  Future<void> refreshWorkspaceConversations(
+    DeviceConfig device,
+    String workspaceId, {
+    bool force = false,
+  }) => _cacheRepository.refreshWorkspaceConversations(device, workspaceId, force: force);
 
   /// Load the next page for a section (unscoped if [workspaceId] is null).
   Future<void> loadMore(DeviceConfig device, {required String? workspaceId}) =>

@@ -282,14 +282,19 @@ Future<String?> readProcessIdentity(int pid) async {
     final value = result.stdout.toString().trim();
     return result.exitCode == 0 && value.isNotEmpty ? value : null;
   }
-  final result = await Process.run('ps', [
-    '-p',
-    '$pid',
-    '-o',
-    'lstart=',
-    '-o',
-    'command=',
-  ]);
+  final result = await Process.run(
+    'ps',
+    [
+      '-ww',
+      '-p',
+      '$pid',
+      '-o',
+      'lstart=',
+      '-o',
+      'command=',
+    ],
+    environment: const {'LC_ALL': 'C'},
+  );
   final value = result.stdout.toString().trim();
   return result.exitCode == 0 && value.isNotEmpty ? value : null;
 }

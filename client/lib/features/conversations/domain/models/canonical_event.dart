@@ -183,6 +183,11 @@ class CanonicalEvent {
 
   /// Merges another event into this one (e.g. tool_result into tool_use)
   CanonicalEvent merge(CanonicalEvent other) {
+    final derivedRuntimeMs = other.runtimeMs ??
+        runtimeMs ??
+        (other.timestamp.isAfter(timestamp)
+            ? other.timestamp.difference(timestamp).inMilliseconds
+            : null);
     return copyWith(
       text: other.text.isNotEmpty ? other.text : text,
       status: _terminalStatusPrecedence(status, other.status),
@@ -193,7 +198,7 @@ class CanonicalEvent {
       provider: other.provider ?? provider,
       usage: other.usage ?? usage,
       contextUsage: other.contextUsage ?? contextUsage,
-      runtimeMs: other.runtimeMs ?? runtimeMs,
+      runtimeMs: derivedRuntimeMs,
       contextTokens: other.contextTokens ?? contextTokens,
       thinkingMode: other.thinkingMode ?? thinkingMode,
       reasoningLevel: other.reasoningLevel ?? reasoningLevel,

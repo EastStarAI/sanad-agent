@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:mcp_client/mcp_client.dart';
+import 'package:sanad_windows_path/windows_path.dart';
 
 import '../models/local_tool_spec.dart';
 import 'mcp_oauth_service.dart';
@@ -13,12 +14,16 @@ class McpRuntimeManager {
   McpRuntimeManager({
     SanadSettingsStore? settingsStore,
     McpOAuthService? oauthService,
+    WindowsSystemPath? windowsSystemPath,
   }) : _settingsStore = settingsStore ?? const SanadSettingsStore(),
        _oauthService = oauthService ?? McpOAuthService(),
+       _windowsSystemPath =
+           windowsSystemPath ?? sharedWindowsSystemPathResolver,
        _ownsOAuthService = oauthService == null;
 
   final SanadSettingsStore _settingsStore;
   final McpOAuthService _oauthService;
+  final WindowsSystemPath _windowsSystemPath;
   final bool _ownsOAuthService;
   final Map<String, DateTime> _refreshedOAuthExpiry = {};
 
@@ -369,7 +374,7 @@ class McpRuntimeManager {
           transportConfig: TransportConfig.stdio(
             command: config.command!,
             arguments: _settingsStore.resolveArguments(config),
-            environment: _buildSafeEnvironment(
+            environment: await buildSafeEnvironment(
               resolvedEnvironment ?? _settingsStore.resolveEnvironment(config),
             ),
           ),
@@ -504,24 +509,36 @@ class McpRuntimeManager {
     return 'error';
   }
 
-  Map<String, String> _buildSafeEnvironment(Map<String, String>? userEnv) {
-    const safeKeys = {
-      'PATH',
-      'HOME',
-      'USER',
-      'LANG',
-      'TERM',
-      'SHELL',
-      'TMPDIR',
-    };
-    final env = <String, String>{};
-    for (final key in Platform.environment.keys) {
-      if (safeKeys.contains(key) || key.startsWith('XDG_')) {
-        env[key] = Platform.environment[key]!;
+  /// Builds the allowlisted environment used by MCP stdio children.
+  ///
+  /// Public for focused boundary tests; callers should normally connect through
+  /// [connectToClient]. Explicit server PATH configuration remains authoritative.
+  Future<Map<String, String>> buildSafeEnvironment(
+    Map<String, String>? userEnv, {
+    Map<String, String>? platformEnvironment,
+  }) async {
+    const safeKeys = {'HOME', 'USER', 'LANG', 'TERM', 'SHELL', 'TMPDIR'};
+    final source = platformEnvironment ?? Platform.environment;
+    var env = <String, String>{};
+    for (final entry in source.entries) {
+      if (safeKeys.contains(entry.key) ||
+          entry.key.startsWith('XDG_') ||
+          entry.key.toLowerCase() == 'path') {
+        env[entry.key] = entry.value;
       }
     }
+    if (_windowsSystemPath.isWindows) {
+      final path = await _windowsSystemPath.resolve(
+        inheritedPathFromEnvironment(source),
+      );
+      env = replaceEnvironmentPath(env, path);
+    }
     if (userEnv != null) {
+      final configuredPath = inheritedPathFromEnvironment(userEnv);
       env.addAll(userEnv);
+      if (configuredPath.isNotEmpty) {
+        env = replaceEnvironmentPath(env, configuredPath);
+      }
     }
     return env;
   }

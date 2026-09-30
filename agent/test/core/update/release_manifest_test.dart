@@ -520,7 +520,7 @@ void main() {
           receivedScript,
           contains(r'Move-Item -LiteralPath $staged -Destination $target'),
         );
-        expect(receivedScript, contains(r'& $target service start'));
+        expect(receivedScript, contains(r'& $target service install'));
         expect(staged.existsSync(), isTrue);
       },
     );
@@ -598,8 +598,8 @@ void main() {
         expect(script, contains("Write-UpdateResult 'started'"));
         expect(script, contains("Write-UpdateResult 'rollback_completed'"));
         expect(script, contains(r'Remove-Item -LiteralPath $staged -Force'));
-        expect(script, contains(r'& $target service start'));
-        expect(r'& $target service start'.allMatches(script).length, 2);
+        expect(script, contains(r'& $target service install'));
+        expect(r'& $target service install'.allMatches(script).length, 2);
         expect(script, contains(r'Remove-Item -LiteralPath $staged -Force'));
       },
     );

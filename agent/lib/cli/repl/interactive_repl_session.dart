@@ -286,6 +286,7 @@ class InteractiveReplSession {
                 allowed: true,
                 answer: answer,
                 decision: 'allow',
+                sessionId: effectiveSessionId,
               );
               stdoutSink.writeln(
                 enableAnsi
@@ -309,6 +310,7 @@ class InteractiveReplSession {
                 scope: perm.scope,
                 decision: perm.decision,
                 comment: perm.comment,
+                sessionId: effectiveSessionId,
               );
               final statusColor = perm.allowed ? '\x1b[32m' : '\x1b[31m';
               stdoutSink.writeln(

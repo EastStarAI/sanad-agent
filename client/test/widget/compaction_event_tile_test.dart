@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/compaction_event_tile.dart';
 
@@ -23,7 +24,7 @@ void main() {
     );
 
     expect(find.text('Context compacting'), findsOneWidget);
-    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.byType(AppProgressIndicator), findsOneWidget);
   });
 
   testWidgets('shows auto completed label with check icon', (tester) async {

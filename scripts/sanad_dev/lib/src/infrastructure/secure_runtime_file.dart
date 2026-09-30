@@ -1,6 +1,14 @@
 import 'dart:io';
 import 'dart:math';
 
+import 'package:path/path.dart' as p;
+
+import 'windows_secure_runtime_backend.dart';
+
+WindowsSecureRuntimeBackend? _windowsBackendInstance;
+WindowsSecureRuntimeBackend get _windowsBackend =>
+    _windowsBackendInstance ??= WindowsSecureRuntimeBackend();
+
 class SecureRuntimeFileException implements Exception {
   const SecureRuntimeFileException(this.code);
 
@@ -61,45 +69,17 @@ Future<void> _replaceRuntimeFile(File source, File destination) async {
     await source.rename(destination.path);
     return;
   }
-  const script = r'''
-$ErrorActionPreference = 'Stop'
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class SanadAtomicMove {
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  public static extern bool MoveFileExW(
-    string existingFile,
-    string newFile,
-    int flags
-  );
-}
-'@
-$source = $env:SANAD_ATOMIC_SOURCE
-$destination = $env:SANAD_ATOMIC_DESTINATION
-$replaceExisting = 0x1
-$writeThrough = 0x8
-if (-not [SanadAtomicMove]::MoveFileExW(
-  $source,
-  $destination,
-  ($replaceExisting -bor $writeThrough)
-)) {
-  throw [ComponentModel.Win32Exception]::new(
-    [Runtime.InteropServices.Marshal]::GetLastWin32Error()
-  )
-}
-''';
-  final result = await Process.run(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', script],
-    environment: {
-      'SANAD_ATOMIC_SOURCE': source.path,
-      'SANAD_ATOMIC_DESTINATION': destination.path,
-    },
-  );
-  if (result.exitCode != 0) {
-    throw const SecureRuntimeFileException('atomic_replace_failed');
+  for (var attempt = 0; attempt < 5; attempt++) {
+    try {
+      _windowsBackend.replaceFile(source.path, destination.path);
+      return;
+    } catch (_) {
+      if (attempt < 4) {
+        await Future<void>.delayed(const Duration(milliseconds: 25));
+      }
+    }
   }
+  throw const SecureRuntimeFileException('atomic_replace_failed');
 }
 
 Future<File> secureRuntimeAppendFile(String sanadHome, String path) async {
@@ -123,7 +103,7 @@ Future<String> secureRuntimeReadText(String root, String path) async {
 }
 
 Future<Directory> _validatedDirectory(String sanadHome, String path) async {
-  final root = Directory(sanadHome).absolute;
+  final root = Directory(p.normalize(p.absolute(sanadHome)));
   final rootType = await FileSystemEntity.type(root.path, followLinks: false);
   if (rootType == FileSystemEntityType.link ||
       (rootType != FileSystemEntityType.notFound &&
@@ -135,18 +115,14 @@ Future<Directory> _validatedDirectory(String sanadHome, String path) async {
   }
   await _restrictRuntimePath(root.path, directory: true);
   final canonicalRoot = await root.resolveSymbolicLinks();
-  final absolute = Directory(path).absolute.path;
+  final absolute = p.normalize(p.absolute(path));
   final configuredRoot = root.path;
-  final rootPrefix = configuredRoot.endsWith(Platform.pathSeparator)
-      ? configuredRoot
-      : '$configuredRoot${Platform.pathSeparator}';
-  if (configuredRoot != absolute && !absolute.startsWith(rootPrefix)) {
+  final isRoot = p.equals(configuredRoot, absolute);
+  if (!isRoot && !p.isWithin(configuredRoot, absolute)) {
     throw const SecureRuntimeFileException('outside_home');
   }
   var current = canonicalRoot;
-  final relative = configuredRoot == absolute
-      ? ''
-      : absolute.substring(rootPrefix.length);
+  final relative = isRoot ? '' : p.relative(absolute, from: configuredRoot);
   if (relative.isNotEmpty) {
     for (final segment in relative.split(Platform.pathSeparator)) {
       current = '$current${Platform.pathSeparator}$segment';
@@ -194,37 +170,9 @@ Future<void> _restrictRuntimePath(String path, {bool directory = false}) async {
     }
     return;
   }
-  const script = r'''
-$ErrorActionPreference = 'Stop'
-$path = $env:SANAD_SECURE_PATH
-$kind = $env:SANAD_SECURE_KIND
-$sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-$ace = if ($kind -eq 'directory') { "(A;OICI;FA;;;$sid)" } else { "(A;;FA;;;$sid)" }
-$sddl = "D:P${ace}"
-$acl = if ($kind -eq 'directory') {
-  [IO.Directory]::GetAccessControl($path)
-} else {
-  [IO.File]::GetAccessControl($path)
-}
-$acl.SetSecurityDescriptorSddlForm(
-  $sddl,
-  [System.Security.AccessControl.AccessControlSections]::Access
-)
-if ($kind -eq 'directory') {
-  [IO.Directory]::SetAccessControl($path, $acl)
-} else {
-  [IO.File]::SetAccessControl($path, $acl)
-}
-''';
-  final result = await Process.run(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', script],
-    environment: {
-      'SANAD_SECURE_PATH': path,
-      'SANAD_SECURE_KIND': directory ? 'directory' : 'file',
-    },
-  );
-  if (result.exitCode != 0) {
+  try {
+    _windowsBackend.restrictPath(path, directory: directory);
+  } catch (_) {
     throw const SecureRuntimeFileException('ownership_failed');
   }
 }

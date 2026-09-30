@@ -147,13 +147,22 @@ To inspect the application's interface dynamically without rendering heavy exter
    when physical-input behavior changed, ask the human tester to type additional
    characters before closing the live gate.
 
-6. **Visual Layout Verification (Optional):** Capture a screenshot only when layout evidence is needed or explicitly requested:
+6. **Verify Conversation Messages Without Clipboard Access:** Treat conversation creation and send as one-shot actions. After verifying the entered `chat_input`, tap `send_message_btn` once, then wait on the response lifecycle/event boundary rather than repeatedly polling snapshots or invoking a semantic model. When the user and assistant event ids are known, inspect their exact stable keys:
+
+    ```bash
+    sanad-dev ui find --key "user_message_body:<eventId>" --json
+    sanad-dev ui find --key "assistant_message_body:<eventId>" --json
+    ```
+
+   Each result must contain one keyed element and its rendered Markdown text. Multi-block assistant Markdown is consolidated in display order without footer metadata or duplicate descendant rows. Compare exact sentinel responses in code. Use Copy/clipboard only as a diagnostic fallback for an older Client that lacks these keys; it is not acceptance evidence. If event identity is not yet known, take one filtered snapshot after the lifecycle completion event, obtain the event-scoped key, and continue with exact-key lookup.
+
+7. **Visual Layout Verification (Optional):** Capture a screenshot only when layout evidence is needed or explicitly requested:
 
     ```bash
     sanad-dev ui screenshot --out client/test/interactive/screenshots/my_screen.png
     ```
 
-7. **Clean Up Only a Runtime Launched for This Test:** Do not stop the active current-checkout daemon during live in-place self-development. When this procedure launched a disposable matched runtime, stop it from the same worktree:
+8. **Clean Up Only a Runtime Launched for This Test:** Do not stop the active current-checkout daemon during live in-place self-development. When this procedure launched a disposable matched runtime, stop it from the same worktree:
 
     ```bash
     sanad-dev stop

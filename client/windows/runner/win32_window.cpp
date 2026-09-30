@@ -1,5 +1,6 @@
 #include "win32_window.h"
 
+#include <algorithm>
 #include <dwmapi.h>
 #include <flutter_windows.h>
 
@@ -136,10 +137,39 @@ bool Win32Window::Create(const std::wstring& title,
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   double scale_factor = dpi / 96.0;
 
+  int window_x = Scale(origin.x, scale_factor);
+  int window_y = Scale(origin.y, scale_factor);
+  int window_width = Scale(size.width, scale_factor);
+  int window_height = Scale(size.height, scale_factor);
+
+  MONITORINFO monitor_info = {};
+  monitor_info.cbSize = sizeof(MONITORINFO);
+  if (GetMonitorInfo(monitor, &monitor_info)) {
+    RECT work_area = monitor_info.rcWork;
+    int work_width = work_area.right - work_area.left;
+    int work_height = work_area.bottom - work_area.top;
+
+    int min_width = Scale(kMinimumWindowWidth, scale_factor);
+    int min_height = Scale(kMinimumWindowHeight, scale_factor);
+
+    // Keep safe margin from work area edges so window never overflows taskbar or screen edges
+    int margin = static_cast<int>(Scale(16, scale_factor));
+    int max_safe_width = (std::max)(min_width, work_width - margin);
+    int max_safe_height = (std::max)(min_height, work_height - margin);
+
+    window_width = (std::min)(window_width, max_safe_width);
+    window_height = (std::min)(window_height, max_safe_height);
+
+    if (window_x + window_width > work_area.right || window_y + window_height > work_area.bottom) {
+      window_x = work_area.left + (work_width - window_width) / 2;
+      window_y = work_area.top + (work_height - window_height) / 2;
+    }
+  }
+
   HWND window = CreateWindow(
       window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
-      Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
-      Scale(size.width, scale_factor), Scale(size.height, scale_factor),
+      window_x, window_y,
+      window_width, window_height,
       nullptr, nullptr, GetModuleHandle(nullptr), this);
 
   if (!window) {

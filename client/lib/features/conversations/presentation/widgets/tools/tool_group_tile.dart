@@ -111,9 +111,12 @@ class _ToolGroupTileState extends State<ToolGroupTile> with SingleTickerProvider
   @override
   Widget build(BuildContext context) {
     final summary = widget.item.toolSummary!;
+    final textDirection = Directionality.of(context);
 
-    return Column(
-      children: [
+    return Directionality(
+      textDirection: textDirection,
+      child: Column(
+        children: [
         InkWell(
           key: Key('tool_group_header_${widget.item.id}'),
           onTap: _toggleExpanded,
@@ -214,6 +217,7 @@ class _ToolGroupTileState extends State<ToolGroupTile> with SingleTickerProvider
               : const SizedBox.shrink(),
         ),
       ],
+    ),
     );
   }
 
@@ -311,7 +315,8 @@ class _ToolGroupTileState extends State<ToolGroupTile> with SingleTickerProvider
           )
         else if (hasLineImpact)
           buildLineImpact(),
-        if (metrics.isEmpty && !hasLineImpact) Text('Tools', style: baseStyle),
+        if (metrics.isEmpty && !hasLineImpact)
+          Text(Directionality.of(context) == TextDirection.rtl ? 'أدوات' : 'Tools', style: baseStyle),
       ],
     );
   }

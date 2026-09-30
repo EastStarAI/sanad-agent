@@ -275,8 +275,8 @@ Use the review skill.''',
       );
     });
 
-    // Stub getSession to return an existing session by default
-    when(mockSessionManager.getSession(any)).thenAnswer((invocation) {
+    // Stub session reads to return an existing session by default.
+    SessionState existingSession(Invocation invocation) {
       final sessionId = invocation.positionalArguments[0] as String;
       return SessionState(
         sessionId: sessionId,
@@ -284,7 +284,14 @@ Use the review skill.''',
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       );
-    });
+    }
+
+    when(mockSessionManager.getSession(any)).thenAnswer(existingSession);
+    // The generated override accepts nullable matcher placeholders even though
+    // the production API is non-nullable.
+    when(
+      (mockSessionManager as dynamic).getSessionRecord(any),
+    ).thenAnswer(existingSession);
     when(mockSessionManager.getMessages(any)).thenReturn(const []);
 
     when(mockSessionManager.saveSessionMetadata(any, any)).thenReturn(null);
@@ -1288,6 +1295,7 @@ Use the review skill.''',
       final mockSessionManager = getIt<SessionManager>();
       // Override getSession to return null (new session)
       when(mockSessionManager.getSession('new-session')).thenReturn(null);
+      when(mockSessionManager.getSessionRecord('new-session')).thenReturn(null);
 
       final eventController = StreamController<GatewayEvent>();
       when(mockPlatform.initialize()).thenAnswer((_) async => {});
@@ -1348,6 +1356,7 @@ Use the review skill.''',
     'GatewayManager should preserve the requested title when handling create_session',
     () async {
       when(mockSessionManager.getSession('new-thread')).thenReturn(null);
+      when(mockSessionManager.getSessionRecord('new-thread')).thenReturn(null);
 
       final eventController = StreamController<GatewayEvent>();
       when(mockPlatform.initialize()).thenAnswer((_) async => {});
@@ -1418,6 +1427,9 @@ Use the review skill.''',
       when(
         mockSessionManager.getSession('placeholder-thread'),
       ).thenReturn(null);
+      when(
+        mockSessionManager.getSessionRecord('placeholder-thread'),
+      ).thenReturn(null);
 
       final eventController = StreamController<GatewayEvent>();
       when(mockPlatform.initialize()).thenAnswer((_) async => {});
@@ -1460,6 +1472,9 @@ Use the review skill.''',
     'GatewayManager should attach workspace context to session_created for pre-created sessions',
     () async {
       when(mockSessionManager.getSession('workspace-thread')).thenReturn(null);
+      when(
+        mockSessionManager.getSessionRecord('workspace-thread'),
+      ).thenReturn(null);
 
       final eventController = StreamController<GatewayEvent>();
       when(mockPlatform.initialize()).thenAnswer((_) async => {});
@@ -1526,6 +1541,9 @@ Use the review skill.''',
       // Mock new session (getSession returns null)
       when(
         mockSessionManager.getSession('intelligent-session'),
+      ).thenReturn(null);
+      when(
+        mockSessionManager.getSessionRecord('intelligent-session'),
       ).thenReturn(null);
 
       final eventController = StreamController<GatewayEvent>();

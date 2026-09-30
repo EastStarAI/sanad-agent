@@ -13,7 +13,7 @@ import 'service.dart' as service_cmd;
 final String version = loadAgentVersion();
 
 void main(List<String> arguments) async {
-  if (_handleDaemonHelpOrInvalidArguments(arguments)) return;
+  if (_handleEarlyHelpOrInvalidArguments(arguments)) return;
 
   // A supervised daemon parent must remain a lightweight process owner. Its
   // child prepares the secure Home roots before any daemon dependency is
@@ -67,8 +67,19 @@ void main(List<String> arguments) async {
   await _executeCommand(cleanArgs);
 }
 
-bool _handleDaemonHelpOrInvalidArguments(List<String> arguments) {
-  return SanadCommandRunner.handleEarlyDaemonHelpOrInvalidArguments(arguments);
+bool _handleEarlyHelpOrInvalidArguments(List<String> arguments) {
+  if (SanadCommandRunner.handleEarlyDaemonHelpOrInvalidArguments(arguments)) {
+    return true;
+  }
+  if (arguments.isNotEmpty && arguments.first.toLowerCase() == 'service') {
+    final remaining = arguments.sublist(1);
+    if (remaining.isEmpty ||
+        const {'help', '-h', '--help'}.contains(remaining.first.toLowerCase())) {
+      service_cmd.main(remaining);
+      return true;
+    }
+  }
+  return false;
 }
 
 Future<void> _executeCommand(List<String> arguments) async {
@@ -77,10 +88,7 @@ Future<void> _executeCommand(List<String> arguments) async {
       await daemon.main(args);
       return 0;
     },
-    onService: (args) async {
-      await service_cmd.main(args);
-      return 0;
-    },
+    onService: service_cmd.main,
     onSetup: (args) async {
       await setup.main(args);
       return 0;
@@ -93,10 +101,7 @@ Future<void> _executeCommand(List<String> arguments) async {
       await login_cmd.runLogout();
       return 0;
     },
-    onRestart: () async {
-      await service_cmd.main(['restart']);
-      return 0;
-    },
+    onRestart: () => service_cmd.main(['restart']),
   );
 
   final isDaemon = arguments.contains('daemon');

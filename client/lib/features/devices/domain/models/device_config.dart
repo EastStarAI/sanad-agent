@@ -37,7 +37,10 @@ class DeviceConfig {
   /// The account-owned id that can be used for inventory mutations.
   String? get accountDeviceId => cloudDeviceId ?? (isLocalInventoryDevice ? null : id);
 
-  bool representsDeviceId(String deviceId) => id == deviceId || cloudDeviceId == deviceId;
+  bool representsDeviceId(String deviceId) =>
+      id == deviceId ||
+      cloudDeviceId == deviceId ||
+      (hardwareId != null && hardwareId!.isNotEmpty && hardwareId == deviceId);
 
   /// Display/debug metadata populated by DeviceConnectionCoordinator.
   /// Do not use this as the source of truth for transport selection.

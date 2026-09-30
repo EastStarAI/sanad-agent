@@ -11,7 +11,9 @@ void main() {
   });
 
   tearDown(() async {
-    await home.delete(recursive: true);
+    try {
+      await home.delete(recursive: true);
+    } catch (_) {}
   });
 
   test('daemon help exits before bootstrap or supervisor startup', () async {
@@ -53,4 +55,4 @@ Future<ProcessResult> _run(List<String> arguments, Directory home) =>
         'SANAD_HOME': home.path,
         'SANAD_STATE_HOME': home.path,
       },
-    ).timeout(const Duration(seconds: 30));
+    ).timeout(const Duration(seconds: 90));

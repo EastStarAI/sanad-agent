@@ -55,6 +55,7 @@ refrence_projects/
 
 # Graphify files
 graphify-out/
+.graphify/
 
 # Interactive driver evidence
 client/test/interactive/screenshots/
@@ -80,3 +81,8 @@ sanad-12-windows-evidence/
 *.mobileprovision
 *.provisionprofile
 key.properties
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/

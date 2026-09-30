@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -12,7 +13,9 @@ import 'package:sanad_client/features/provider_setup/data/models/provider_usage_
 import 'package:sanad_client/features/provider_setup/data/models/credential_summary_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/model_picker_dialog.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/model_brand_icon.dart';
 
 class _FakeProviderSetupClient extends ProviderSetupClient {
   ModelCacheSnapshotDto snapshotResult = const ModelCacheSnapshotDto(instances: [], recent: []);
@@ -426,5 +429,148 @@ void main() {
 
     final tooltip = tester.widget<Tooltip>(tooltipFinder);
     expect(tooltip.message, contains('Requests limit: 70% remaining (resets in '));
+  });
+
+  test('getProviderIconData correctly identifies various providers and model names', () {
+    expect(
+      ModelPickerDialog.getProviderIconData('provider-1', displayName: 'OpenCode Go', modelName: 'deepseek-v4-flash'),
+      equals(Symbols.terminal),
+    );
+    expect(
+      ModelPickerDialog.getProviderIconData('custom-id', displayName: 'ChatGPT', modelName: 'gpt-5.5'),
+      equals(Symbols.smart_toy),
+    );
+    expect(
+      ModelPickerDialog.getProviderIconData('instance-ds', displayName: 'DeepSeek API', modelName: 'deepseek-chat'),
+      equals(Symbols.explore),
+    );
+    expect(
+      ModelPickerDialog.getProviderIconData('qwen-inst', displayName: 'Qwen Cloud', modelName: 'qwen3.8-max'),
+      equals(Symbols.psychology_alt),
+    );
+    expect(
+      ModelPickerDialog.getProviderIconData('kimi-inst', displayName: 'Moonshot AI', modelName: 'kimi-k3'),
+      equals(Symbols.dark_mode),
+    );
+  });
+
+  testWidgets('holding arrow down does not crash and handles navigation', (tester) async {
+    final models = List.generate(4, (i) => ModelCacheModelDto(id: 'model-${i + 1}'));
+    fakeClient.snapshotResult = ModelCacheSnapshotDto(
+      instances: [
+        ModelCacheInstanceDto(
+          id: 'provider-1',
+          displayName: 'Provider One',
+          status: 'ready',
+          isDefault: true,
+          cacheStatus: 'fetched',
+          models: models,
+        ),
+      ],
+      recent: const [],
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) {
+              return ElevatedButton(
+                onPressed: () async {
+                  await showDialog(
+                    context: context,
+                    builder: (context) => ModelPickerDialog(
+                      onSelected: (_, __) {},
+                    ),
+                  );
+                },
+                child: const Text('Open'),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    // Verify repeated down arrow navigation does not crash or throw assertion error
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowDown);
+    await tester.sendKeyEvent(LogicalKeyboardKey.arrowUp);
+    await tester.pumpAndSettle();
+  });
+
+  test('ModelBrandIcon.resolveBrandKey accurately identifies zai, openai, meta, and nvidia', () {
+    expect(ModelBrandIcon.resolveBrandKey(providerId: 'z-ai', modelName: 'glm-5'), equals('zai'));
+    expect(ModelBrandIcon.resolveBrandKey(providerId: 'z.ai', modelName: 'glm-4-flash'), equals('zai'));
+    expect(ModelBrandIcon.resolveBrandKey(providerId: 'custom', modelName: 'zhipu-glm-4'), equals('zai'));
+
+    expect(ModelBrandIcon.resolveBrandKey(providerId: 'openai', modelName: 'gpt-4o'), equals('openai'));
+    expect(ModelBrandIcon.resolveBrandKey(providerId: 'open ai', modelName: 'chatgpt-4'), equals('openai'));
+    expect(ModelBrandIcon.resolveBrandKey(providerId: 'custom', modelName: 'o3-mini'), equals('openai'));
+
+    expect(ModelBrandIcon.resolveBrandKey(providerId: 'meta', modelName: 'llama-3.3-70b'), equals('meta'));
+    expect(ModelBrandIcon.resolveBrandKey(providerId: 'custom', modelName: 'meta-llama-3'), equals('meta'));
+
+    expect(ModelBrandIcon.resolveBrandKey(providerId: 'nvidia', modelName: 'nemotron-70b'), equals('nvidia'));
+    expect(ModelBrandIcon.resolveBrandKey(providerId: 'nvidia nim', modelName: 'nvlm-1'), equals('nvidia'));
+    expect(ModelBrandIcon.resolveBrandKey(providerId: 'custom', displayName: 'NVIDIA NIM'), equals('nvidia'));
+  });
+
+  testWidgets('Recently Used section renders history icon in header and only brand icon in tile', (tester) async {
+    fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+      instances: [
+        ModelCacheInstanceDto(
+          id: 'provider-1',
+          displayName: 'Provider One',
+          status: 'ready',
+          isDefault: true,
+          cacheStatus: 'fetched',
+          models: [ModelCacheModelDto(id: 'model-1')],
+        ),
+      ],
+      recent: [
+        RecentModelDto(
+          instanceId: 'provider-1',
+          instanceDisplayName: 'Provider One',
+          modelId: 'model-1',
+          selectedAt: '2026-09-24T00:00:00Z',
+        ),
+      ],
+    );
+    fakeClient.recentListResult = fakeClient.snapshotResult.recent;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (context) {
+              return ElevatedButton(
+                onPressed: () async {
+                  await showDialog(
+                    context: context,
+                    builder: (context) => ModelPickerDialog(
+                      onSelected: (_, __) {},
+                    ),
+                  );
+                },
+                child: const Text('Open'),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+
+    await tester.tap(find.text('Open'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Recently Used'), findsOneWidget);
+    // There should only be one Icons.history icon (in the header), not in the tile
+    expect(find.byIcon(Icons.history), findsOneWidget);
+    // Brand icon is present for the item
+    expect(find.byType(ModelBrandIcon), findsWidgets);
   });
 }

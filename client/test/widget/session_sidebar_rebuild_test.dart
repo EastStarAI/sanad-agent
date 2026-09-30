@@ -16,6 +16,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/sidebar
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_sections.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/core/theme/activity_animation_policy.dart';
 
 import '../helpers/fake_device_repository.dart';
 import '../helpers/fake_conversation_repository.dart';
@@ -303,6 +304,82 @@ void main() {
 
     expect(workspaceBuilds, 0);
   });
+
+  testWidgets(
+    'sidebar busy dot renders static green circle when continuous motion is disabled',
+    (tester) async {
+      await ActivityAnimationPolicy.withContinuousActivityAnimationOverrideAsync(false, () async {
+        await pumpTestApp(
+          tester,
+          agentCubit: agentCubit,
+          sessionCubit: sessionCubit,
+          sessionSidebarCubit: sessionSidebarCubit,
+          capabilities: capabilities,
+          conversationCacheRepository: cacheRepository,
+          conversationRepository: conversationRepository,
+          child: const SessionSidebar(showChrome: false),
+        );
+        await tester.pump();
+
+        sessionCubit.emitState(const SessionState());
+        await tester.pump();
+        sessionCubit.emitState(
+          SessionState(
+            attentionStates: {
+              agent.id: {
+                firstSession.id: _attention(firstSession.id, SessionExecutionState.running),
+              },
+            },
+          ),
+        );
+        await tester.pump();
+
+        expect(find.byKey(const Key('sidebar_session_busy_indicator')), findsOneWidget);
+        expect(find.byKey(const Key('sidebar_busy_dot_static')), findsOneWidget);
+        expect(find.byKey(const Key('sidebar_busy_dot_animated')), findsNothing);
+
+        final container = tester.widget<Container>(find.byKey(const Key('sidebar_busy_dot_static')));
+        final boxDecoration = container.decoration as BoxDecoration;
+        expect(boxDecoration.color, equals(const Color(0xFF22C55E)));
+      });
+    },
+  );
+
+  testWidgets(
+    'sidebar busy dot renders animated dot when continuous motion is allowed',
+    (tester) async {
+      await ActivityAnimationPolicy.withContinuousActivityAnimationOverrideAsync(true, () async {
+        await pumpTestApp(
+          tester,
+          agentCubit: agentCubit,
+          sessionCubit: sessionCubit,
+          sessionSidebarCubit: sessionSidebarCubit,
+          capabilities: capabilities,
+          conversationCacheRepository: cacheRepository,
+          conversationRepository: conversationRepository,
+          child: const SessionSidebar(showChrome: false),
+        );
+        await tester.pump();
+
+        sessionCubit.emitState(const SessionState());
+        await tester.pump();
+        sessionCubit.emitState(
+          SessionState(
+            attentionStates: {
+              agent.id: {
+                firstSession.id: _attention(firstSession.id, SessionExecutionState.running),
+              },
+            },
+          ),
+        );
+        await tester.pump();
+
+        expect(find.byKey(const Key('sidebar_session_busy_indicator')), findsOneWidget);
+        expect(find.byKey(const Key('sidebar_busy_dot_animated')), findsOneWidget);
+        expect(find.byKey(const Key('sidebar_busy_dot_static')), findsNothing);
+      });
+    },
+  );
 }
 
 SessionAttentionState _attention(

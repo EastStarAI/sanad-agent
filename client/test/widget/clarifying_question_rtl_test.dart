@@ -52,6 +52,16 @@ void main() {
     expect(TextUtils.getTextDirection(englishFirst), TextDirection.ltr);
   });
 
+  test('resolves to RTL when multi-line response is predominantly Arabic despite English intro', () {
+    const mixedAssistantMessage = 'Note:\nمرحبا بك في المساعد الذكي.\nتم إنجاز كافة المهام بنجاح وبدقة عالية وفق الشروط المحددة.';
+    expect(TextUtils.getTextDirection(mixedAssistantMessage), TextDirection.rtl);
+  });
+
+  test('resolves to RTL for single-line text starting with English tag or commit like 99x', () {
+    const taggedArabic = '99x مسح نظيف — لا شيء فُقد (الفرع كان عند الأساس، لا commits جديدة)';
+    expect(TextUtils.getTextDirection(taggedArabic), TextDirection.rtl);
+  });
+
   test('defaults to LTR for empty, whitespace, and neutral punctuation/numbers', () {
     expect(TextUtils.getTextDirection(null), TextDirection.ltr);
     expect(TextUtils.getTextDirection(''), TextDirection.ltr);

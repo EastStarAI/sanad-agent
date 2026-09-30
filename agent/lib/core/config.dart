@@ -414,7 +414,7 @@ class ModelAwareRuntimePolicy {
   static const defaults = ModelAwareRuntimePolicy(
     contextModelLimits: {},
     compaction: ModelAwareCompactionPolicy(
-      threshold: 0.80,
+      threshold: 0.90,
       targetRatio: 0.10,
       models: {},
     ),
@@ -469,7 +469,7 @@ class ModelAwareRuntimePolicy {
     }, 'compaction');
     final threshold = _ratio(
       rawCompaction['threshold'],
-      0.80,
+      0.90,
       'compaction.threshold',
     );
     final targetRatio = _ratio(

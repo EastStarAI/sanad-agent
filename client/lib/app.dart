@@ -12,6 +12,7 @@ import 'package:sanad_client/core/presentation/utils/external_paste_manager.dart
 import 'package:sanad_client/features/conversations/data/persistence/conversation_cache_persistor.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
@@ -20,7 +21,15 @@ final appNavigatorKey = GlobalKey<NavigatorState>();
 
 class SanadAgentApp extends StatefulWidget {
   final ThemeMode initialTheme;
-  const SanadAgentApp({super.key, required this.initialTheme});
+  final Locale initialLocale;
+  final AppearanceState initialAppearance;
+
+  const SanadAgentApp({
+    super.key,
+    required this.initialTheme,
+    required this.initialLocale,
+    this.initialAppearance = const AppearanceState(),
+  });
 
   @override
   State<SanadAgentApp> createState() => _SanadAgentAppState();
@@ -86,6 +95,8 @@ class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserv
 
     return AppProviders(
       initialTheme: widget.initialTheme,
+      initialLocale: widget.initialLocale,
+      initialAppearance: widget.initialAppearance,
       child: AppAuthListener(
         authService: appState.authService,
         socketService: appState.brainSocketController,

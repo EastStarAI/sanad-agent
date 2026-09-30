@@ -12,6 +12,13 @@ abstract final class ConversationActionStyle {
     width: buttonSize,
     height: buttonSize,
   );
+  static final ButtonStyle buttonStyle = IconButton.styleFrom(
+    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+    minimumSize: const Size(buttonSize, buttonSize),
+    maximumSize: const Size(buttonSize, buttonSize),
+    padding: EdgeInsets.zero,
+    visualDensity: VisualDensity.compact,
+  );
 
   static Color iconColor(BuildContext context) => Theme.of(
     context,
@@ -113,6 +120,7 @@ class _CopyButtonState extends State<CopyButton> {
       label: _isCopied ? 'Copied' : 'Copy to clipboard',
       child: IconButton(
         tooltip: _isCopied ? 'Copied' : 'Copy',
+        style: ConversationActionStyle.buttonStyle,
         visualDensity: VisualDensity.compact,
         constraints: ConversationActionStyle.constraints,
         padding: EdgeInsets.zero,

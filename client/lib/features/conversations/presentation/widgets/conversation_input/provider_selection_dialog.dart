@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -49,7 +50,7 @@ class ProviderSelectionDialog extends StatelessWidget {
                   child: BlocBuilder<ProviderRuntimeCubit, ProviderRuntimeState>(
                     builder: (context, state) {
                       if (state.loading && state.groups.isEmpty) {
-                        return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+                        return const Center(child: AppProgressIndicator(strokeWidth: 2));
                       }
                       if (state.error != null && state.groups.isEmpty) {
                         return Center(child: Text(state.error!));

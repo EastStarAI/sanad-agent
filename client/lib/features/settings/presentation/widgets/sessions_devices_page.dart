@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -37,7 +38,7 @@ class _SessionsDevicesPageState extends State<SessionsDevicesPage> {
       builder: (context, state) {
         final snapshot = state.snapshot;
         if (snapshot == null && state.loading) {
-          return const Center(child: CircularProgressIndicator());
+          return const Center(child: AppProgressIndicator());
         }
         if (snapshot == null) {
           return _CenteredMessage(
@@ -145,7 +146,7 @@ class _SectionTitle extends StatelessWidget {
   Widget build(BuildContext context) => Row(
     children: [
       Expanded(child: Text(title, style: Theme.of(context).textTheme.titleLarge)),
-      if (loading) const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2)),
+      if (loading) const SizedBox.square(dimension: 18, child: AppProgressIndicator(strokeWidth: 2)),
     ],
   );
 }
@@ -183,7 +184,7 @@ class _PrincipalCard extends StatelessWidget {
               tooltip: principal.isCurrent ? 'Sign out current Client' : 'Revoke Client session',
               onPressed: busy ? null : onRevoke,
               icon: busy
-                  ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox.square(dimension: 18, child: AppProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.logout_outlined),
             ),
           ],
@@ -231,7 +232,7 @@ class _AgentCard extends StatelessWidget {
               tooltip: 'Revoke Agent device',
               onPressed: busy ? null : onRevoke,
               icon: busy
-                  ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox.square(dimension: 18, child: AppProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.link_off_outlined),
             ),
         ],
