@@ -208,9 +208,51 @@ class RouteThinkingControl {
       return true;
     }
     if (descriptor == null || !descriptor.isSelectable) {
-      return false;
+      return true;
     }
     return descriptor.options.any((option) => option.id == trimmed);
+  }
+
+  static String? effectiveSelectionId({
+    required ThinkingControlDescriptorDto? descriptor,
+    required String? selectionId,
+    required List<String> legacyModes,
+  }) {
+    final trimmed = selectionId?.trim();
+    if (trimmed != null && trimmed.isNotEmpty) {
+      return trimmed;
+    }
+    if (descriptor != null && descriptor.options.isNotEmpty) {
+      final defaultOptionId = descriptor.defaultOptionId?.trim();
+      if (defaultOptionId != null && defaultOptionId.isNotEmpty) {
+        final option = descriptor.options
+            .where((o) => o.id == defaultOptionId)
+            .firstOrNull;
+        if (option != null) {
+          return option.id;
+        }
+      }
+      final providerDefault = descriptor.options
+          .where((o) => o.isProviderDefault)
+          .firstOrNull;
+      if (providerDefault != null) {
+        return providerDefault.id;
+      }
+      final mediumOption = descriptor.options
+          .where((o) => o.id.toLowerCase() == 'medium')
+          .firstOrNull;
+      if (mediumOption != null) {
+        return mediumOption.id;
+      }
+      return descriptor.options.first.id;
+    }
+    if (legacyModes.isNotEmpty) {
+      if (legacyModes.contains('balanced')) {
+        return 'balanced';
+      }
+      return legacyModes.first;
+    }
+    return 'medium';
   }
 
   static String labelForSelection({
@@ -218,27 +260,25 @@ class RouteThinkingControl {
     required String? selectionId,
     required List<String> legacyModes,
   }) {
-    final trimmed = selectionId?.trim();
-    if (trimmed != null && trimmed.isNotEmpty) {
+    final effectiveId = effectiveSelectionId(
+      descriptor: descriptor,
+      selectionId: selectionId,
+      legacyModes: legacyModes,
+    );
+    if (effectiveId != null && effectiveId.isNotEmpty) {
       final fromDescriptor = descriptor?.options
-          .where((option) => option.id == trimmed)
+          .where((option) => option.id == effectiveId)
           .map((option) => option.label)
           .firstOrNull;
       if (fromDescriptor != null && fromDescriptor.isNotEmpty) {
         return fromDescriptor;
       }
-      return trimmed;
-    }
-    if (legacyModes.isNotEmpty) {
-      if (trimmed != null && trimmed.isNotEmpty) {
-        return trimmed;
+      if (effectiveId.toLowerCase() == 'medium') {
+        return 'Medium';
       }
-      if (legacyModes.contains('balanced')) {
-        return 'balanced';
-      }
-      return legacyModes.first;
+      return effectiveId;
     }
-    return 'Default';
+    return 'Medium';
   }
 
   static String _normalizeModelId(String modelId, String providerInstanceId) {

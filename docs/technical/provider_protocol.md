@@ -211,6 +211,10 @@ Gemini templates use `google_thinking`: budget models map to `extra_body.google.
 
 DeepSeek templates use `deepseek_thinking`: only fixed chat fixtures advertise toggle/effort controls; unresolved models stay `unknown`, reasoner models stay `unsupported`, and the wire codec keeps toggle off and effort mutually exclusive.
 
+OpenCode Go explicitly opts into the OpenAI Chat effort policy, but selectable controls remain limited to recognized reasoning model families; `supports_reasoning_output` alone never proves control support. OpenAI-family effort descriptors expose `medium` as the display default while a null/cleared persisted selection still means provider default by wire omission. General recognized models expose `low | medium | high | xhigh`; models with verified maximum effort support additionally expose `max`, while `o1` remains limited to `medium | high`.
+
+`update_session_preferences` may update provider/model and `thinking_mode` together or update thinking alone. New clients send the canonical `provider_instance_id`; the daemon also accepts legacy `provider_id` input for compatibility but does not require both. Presence of `thinking_mode` is significant: a non-empty value persists the normalized selection, while an empty or null value clears it and the resulting session event includes `thinking_mode: null`. Omitting the key leaves the stored thinking selection unchanged.
+
 ### Provisional setup ownership (Task 57)
 
 The client wizard records the UUID returned by the first `provider.instance.create` as `provisionalInstanceId`. Back keeps that identity and local details, including the in-memory credential input, and a later Continue updates the same row rather than creating another instance. The credential input remains controller-owned memory and must not enter logs or Equatable string output.

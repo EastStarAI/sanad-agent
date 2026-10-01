@@ -2166,6 +2166,8 @@ void main() {
       expect(profile.envModelName, equals('OPENCODE_GO_MODEL'));
       expect(profile.envBaseUrlName, equals('OPENCODE_GO_BASE_URL'));
       expect(profile.apiMode, equals('chat_completions'));
+      expect(profile.thinkingPolicyId, equals('openai_chat_effort'));
+      expect(profile.effectiveThinkingPolicyId, equals('openai_chat_effort'));
       expect(profile.aliases, contains('opencode_go'));
       expect(profile.aliases, contains('go'));
       expect(profile.aliases, contains('opencode-go-sub'));

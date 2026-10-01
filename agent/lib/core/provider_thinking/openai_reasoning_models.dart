@@ -8,6 +8,8 @@ const openAiEffortTierLabels = <String, String>{
   'low': 'Low',
   'medium': 'Medium',
   'high': 'High',
+  'xhigh': 'Extra High',
+  'max': 'Max',
 };
 
 class OpenAiReasoningModels {
@@ -24,7 +26,17 @@ class OpenAiReasoningModels {
     if (normalized.startsWith('o1')) {
       return const ['medium', 'high'];
     }
-    return const ['low', 'medium', 'high'];
+    if (_supportsMaxEffort(normalized)) {
+      return const ['low', 'medium', 'high', 'xhigh', 'max'];
+    }
+    return const ['low', 'medium', 'high', 'xhigh'];
+  }
+
+  static bool _supportsMaxEffort(String normalized) {
+    return normalized.contains('gpt-5.6') ||
+        normalized.contains('gpt-6') ||
+        normalized.contains('astra') ||
+        normalized.contains('daybreak');
   }
 
   static String labelForEffortId(String effortId) {
@@ -50,8 +62,19 @@ class OpenAiReasoningModels {
         normalized.contains('o4') ||
         normalized.contains('gpt-5') ||
         normalized.contains('gpt-6') ||
+        normalized.contains('astra') ||
+        normalized.contains('daybreak') ||
         normalized.contains('reasoning') ||
         normalized.contains('deepseek-r') ||
+        normalized.contains('deepseek-v') ||
+        normalized.contains('deepseek-flash') ||
+        normalized.contains('kimi') ||
+        normalized.contains('glm') ||
+        normalized.contains('qwen') ||
+        normalized.contains('minimax') ||
+        normalized.contains('mimo') ||
+        normalized.contains('hy') ||
+        normalized.contains('longcat') ||
         normalized.contains('codex');
   }
 }

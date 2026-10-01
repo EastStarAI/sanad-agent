@@ -84,17 +84,10 @@ class ThinkingControlCacheResolver {
         continue;
       }
       final thinkingControl = map['thinking_control'];
-      if (thinkingControl is Map<String, dynamic>) {
-        return ThinkingControlCacheEntry(
-          descriptor: ThinkingControlDescriptor.fromMap(thinkingControl),
-          fetchedAt: fetchedAt,
-          cacheSource: cacheSource,
-        );
-      }
       if (thinkingControl is Map) {
         return ThinkingControlCacheEntry(
           descriptor: ThinkingControlDescriptor.fromMap(
-            thinkingControl.map((key, value) => MapEntry(key.toString(), value)),
+            Map<String, dynamic>.from(thinkingControl),
           ),
           fetchedAt: fetchedAt,
           cacheSource: cacheSource,

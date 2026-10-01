@@ -30,9 +30,11 @@ abstract class OpenAiEffortThinkingPolicyBase implements ProviderThinkingPolicy 
             (id) => ThinkingControlOption(
               id: id,
               label: OpenAiReasoningModels.labelForEffortId(id),
+              isProviderDefault: id == 'medium',
             ),
           )
           .toList(growable: false),
+      defaultOptionId: 'medium',
       capabilityRevision: context.capabilityRevision,
       source: 'profile',
     );

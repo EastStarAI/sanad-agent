@@ -108,7 +108,47 @@ void main() {
         ),
         'low',
       );
+      expect(
+        migrateLegacyThinkingSelectionId(
+          selectionId: 'light',
+          descriptor: descriptor,
+        ),
+        'low',
+      );
       expect(isLegacyThinkingSelectionId('balanced'), isTrue);
+      expect(isLegacyThinkingSelectionId('ultra'), isTrue);
+      expect(isLegacyThinkingSelectionId('light'), isTrue);
+      expect(isLegacyThinkingSelectionId('extra-high'), isTrue);
+    });
+
+    test('clamps ultra to nearest supported level', () {
+      final descriptorXHigh = ThinkingControlDescriptor(
+        status: ThinkingCapabilityStatus.supported,
+        kind: ThinkingControlKind.effort,
+        options: const [
+          ThinkingControlOption(id: 'low', label: 'Low'),
+          ThinkingControlOption(id: 'medium', label: 'Medium'),
+          ThinkingControlOption(id: 'high', label: 'High'),
+          ThinkingControlOption(id: 'xhigh', label: 'Extra High'),
+        ],
+        capabilityRevision: 'rev-1',
+        source: 'profile',
+      );
+
+      expect(
+        migrateLegacyThinkingSelectionId(
+          selectionId: 'ultra',
+          descriptor: descriptorXHigh,
+        ),
+        'xhigh',
+      );
+      expect(
+        migrateLegacyThinkingSelectionId(
+          selectionId: 'extra-high',
+          descriptor: descriptorXHigh,
+        ),
+        'xhigh',
+      );
     });
 
     test('returns null when mapped option is unavailable', () {
@@ -291,6 +331,9 @@ void main() {
       final deepSeek = ProviderRegistry.profiles.firstWhere(
         (profile) => profile.name == 'deepseek',
       );
+      final openCodeGo = ProviderRegistry.profiles.firstWhere(
+        (profile) => profile.name == 'opencode-go',
+      );
       final kimi = ProviderRegistry.profiles.firstWhere(
         (profile) => profile.name == 'kimi',
       );
@@ -307,6 +350,7 @@ void main() {
       expect(openRouter.effectiveThinkingPolicyId, 'aggregator_upstream');
       expect(gemini.effectiveThinkingPolicyId, 'google_thinking');
       expect(deepSeek.effectiveThinkingPolicyId, 'deepseek_thinking');
+      expect(openCodeGo.effectiveThinkingPolicyId, 'openai_chat_effort');
       // Ambiguous chat_completions templates fail closed until a dedicated
       // first-release policy is opted in (Task 43 Gate R0/A).
       expect(kimi.effectiveThinkingPolicyId, 'unknown');
@@ -943,7 +987,51 @@ void main() {
 
       final descriptor = chatPolicy.resolveCapability(context);
       expect(descriptor.status, ThinkingCapabilityStatus.supported);
-      expect(descriptor.options.map((option) => option.id), ['low', 'medium', 'high']);
+      expect(descriptor.options.map((option) => option.id), [
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+      ]);
+      expect(descriptor.options.map((option) => option.label), [
+        'Low',
+        'Medium',
+        'High',
+        'Extra High',
+      ]);
+      expect(descriptor.defaultOptionId, 'medium');
+      expect(
+        descriptor.options.firstWhere((option) => option.id == 'medium').isProviderDefault,
+        isTrue,
+      );
+    });
+
+    test('advertises max effort for gpt-5.6 and astra models', () {
+      const gpt56Context = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'openai-codex',
+        protocol: 'openai_compatible',
+        apiMode: 'codex_responses',
+        modelId: 'gpt-5.6',
+        capabilityRevision: 'rev-1',
+      );
+
+      final descriptor = codexPolicy.resolveCapability(gpt56Context);
+      expect(descriptor.status, ThinkingCapabilityStatus.supported);
+      expect(descriptor.options.map((option) => option.id), [
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ]);
+      expect(descriptor.options.map((option) => option.label), [
+        'Low',
+        'Medium',
+        'High',
+        'Extra High',
+        'Max',
+      ]);
     });
 
     test('reasoning output alone does not advertise thinking controls', () {
@@ -959,6 +1047,41 @@ void main() {
 
       final descriptor = chatPolicy.resolveCapability(context);
       expect(descriptor.status, ThinkingCapabilityStatus.unsupported);
+    });
+
+    test('OpenCode Go reasoning output alone does not advertise controls', () {
+      const context = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'opencode-go',
+        protocol: 'openai_compatible',
+        apiMode: 'chat_completions',
+        modelId: 'future-unknown-model',
+        supportsReasoningOutput: true,
+        capabilityRevision: 'rev-1',
+      );
+
+      final descriptor = chatPolicy.resolveCapability(context);
+      expect(descriptor.status, ThinkingCapabilityStatus.unsupported);
+    });
+
+    test('OpenCode Go recognized model advertises effort controls', () {
+      const context = ThinkingPolicyContext(
+        providerInstanceId: 'instance-1',
+        templateId: 'opencode-go',
+        protocol: 'openai_compatible',
+        apiMode: 'chat_completions',
+        modelId: 'kimi-k2.7-code',
+        capabilityRevision: 'rev-1',
+      );
+
+      final descriptor = chatPolicy.resolveCapability(context);
+      expect(descriptor.status, ThinkingCapabilityStatus.supported);
+      expect(descriptor.options.map((option) => option.id), [
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+      ]);
     });
 
     test('restricts o1 models to medium and high', () {

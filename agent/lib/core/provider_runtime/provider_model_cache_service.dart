@@ -173,7 +173,6 @@ class ProviderModelCacheService {
         instance: instance,
         models: liveModels,
         observedAt: fetchedAt,
-        evidenceSource: source == 'live' ? 'live' : 'profile',
       );
 
       if (enrichedModels.isEmpty) {

@@ -28,6 +28,9 @@ routes, and never silently ignore an explicit unsupported selection.
 | Ollama without live thinking capability | Descriptor `unknown`; no invented options from model name |
 | Ollama with live `thinking` capability | Options from probe; `off` → `think: false` |
 | Custom / Kimi / generic chat_completions without opt-in | `unknown` policy; no selector inventing OpenAI effort |
+| OpenCode Go recognized reasoning family | Selector uses the OpenAI Chat effort descriptor and supported ordered tiers |
+| OpenCode Go unknown model with `supports_reasoning_output=true` | Control remains unavailable; reasoning output alone does not invent selectable effort |
+| Explicit empty `thinking_mode` session preference | Client transmits the present empty field; daemon clears persistence and emits `thinking_mode: null` |
 | Client `thinking_mode_source=model` | Composer uses model/`thinking_control` options only; empty list does not fall back to `balanced` |
 | Client unsupported descriptor | Thinking chip hidden |
 | Client unknown descriptor | Chip disabled with `Unavailable` |

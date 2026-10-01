@@ -96,6 +96,9 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
   Future<void> _revalidateSelection(ModelCacheSnapshotDto snapshot) async {
     final session = context.read<SessionCubit>().state.selectedSession;
     final descriptor = _descriptorForSession(session, snapshot);
+    if (descriptor == null || !descriptor.isSelectable) {
+      return;
+    }
     final currentSelection = _currentSelectionId(session);
     if (RouteThinkingControl.isValidSelection(
       descriptor: descriptor,
@@ -133,7 +136,8 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
 
   String? _currentSelectionId(Session? session) {
     if (widget.capabilities.thinkingModeScope == CapabilityValueScope.message) {
-      return widget.inputSlice.nextMessageThinkingMode;
+      return widget.inputSlice.nextMessageThinkingMode ??
+          session?.thinkingMode?.trim();
     }
     final sessionMode = session?.thinkingMode?.trim();
     if (sessionMode != null && sessionMode.isNotEmpty) {
@@ -179,7 +183,9 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
     );
 
     if (selectorState == RouteThinkingSelectorState.hidden) {
-      return const SizedBox.shrink();
+      return const SizedBox(
+        key: Key('route_thinking_mode_hidden'),
+      );
     }
 
     final currentSelection = _currentSelectionId(session);
@@ -192,8 +198,17 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
           );
 
     if (selectorState == RouteThinkingSelectorState.unavailable) {
-      return widget.chipBuilder(context, label, enabled: false);
+      return KeyedSubtree(
+        key: const Key('route_thinking_mode_unavailable'),
+        child: widget.chipBuilder(context, label, enabled: false),
+      );
     }
+
+    final effectiveSelection = RouteThinkingControl.effectiveSelectionId(
+      descriptor: descriptor,
+      selectionId: currentSelection,
+      legacyModes: widget.capabilities.thinkingModesList,
+    );
 
     final menuEntries = _menuEntries(
       selectorState: selectorState,
@@ -201,17 +216,52 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
     );
 
     return PopupMenuButton<String>(
+      key: const Key('route_thinking_mode_selector_button'),
       tooltip: 'Select Thinking Mode',
       child: widget.chipBuilder(context, label, enabled: true),
-      itemBuilder: (context) => menuEntries
-          .map(
-            (entry) => PopupMenuItem<String>(
-              value: entry.id,
-              height: 32,
-              child: Text(entry.label, style: const TextStyle(fontSize: 12)),
-            ),
-          )
-          .toList(growable: false),
+      itemBuilder: (context) {
+        final theme = Theme.of(context);
+        return menuEntries
+            .map(
+              (entry) {
+                final isSelected = entry.id == effectiveSelection;
+                return PopupMenuItem<String>(
+                  key: Key('thinking_mode_option_${entry.id}'),
+                  value: entry.id,
+                  height: 32,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (isSelected)
+                        Icon(
+                          Icons.check,
+                          key: Key('thinking_mode_check_${entry.id}'),
+                          size: 14,
+                          color: theme.colorScheme.primary,
+                        )
+                      else
+                        const SizedBox(
+                          key: Key('thinking_mode_check_placeholder'),
+                          width: 14,
+                        ),
+                      const SizedBox(width: 8),
+                      Text(
+                        entry.label,
+                        key: Key('thinking_mode_title_${entry.id}'),
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight:
+                              isSelected ? FontWeight.w600 : FontWeight.w400,
+                          color: isSelected ? theme.colorScheme.primary : null,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            )
+            .toList(growable: false);
+      },
       onSelected: (value) {
         unawaited(
           context.read<ConversationInputCubit>().selectThinkingMode(

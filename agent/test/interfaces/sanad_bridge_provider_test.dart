@@ -944,6 +944,66 @@ OPENROUTER_API_KEY=sk-or-test
     );
 
     test(
+      'update_session_preferences updates and persists thinking mode and emits sessionUpdated',
+      () async {
+        final sessionManager = getIt<SessionManager>();
+        final session = sessionManager.createSession('gpt-5.4');
+
+        final envelopes = <Map<String, dynamic>>[];
+        await getIt<SanadProtocolBridge>().handleProtocolEvent(
+          CanonicalEvent(
+            type: CanonicalEventTypes.updateSessionPreferences,
+            sessionId: session.sessionId,
+            payload: {'request_id': 'req-thinking', 'thinking_mode': 'xhigh'},
+          ),
+          (envelope) async => envelopes.add(envelope),
+        );
+
+        expect(envelopes, hasLength(1));
+        final envelope = envelopes.single;
+        expect(envelope['event'], CanonicalEventTypes.sessionUpdated);
+        expect(envelope['payload']['session_id'], session.sessionId);
+        expect(envelope['payload']['thinking_mode'], 'xhigh');
+
+        final updatedSession = sessionManager.getSessionRecord(
+          session.sessionId,
+        );
+        expect(updatedSession?.thinkingMode, 'xhigh');
+      },
+    );
+
+    test(
+      'update_session_preferences clears thinking mode when the field is empty',
+      () async {
+        final sessionManager = getIt<SessionManager>();
+        final session = sessionManager.createSession(
+          'gpt-5.4',
+          thinkingMode: 'high',
+        );
+
+        final envelopes = <Map<String, dynamic>>[];
+        await getIt<SanadProtocolBridge>().handleProtocolEvent(
+          CanonicalEvent(
+            type: CanonicalEventTypes.updateSessionPreferences,
+            sessionId: session.sessionId,
+            payload: {'request_id': 'req-thinking-clear', 'thinking_mode': ''},
+          ),
+          (envelope) async => envelopes.add(envelope),
+        );
+
+        expect(envelopes, hasLength(1));
+        expect(
+          envelopes.single['payload'],
+          containsPair('thinking_mode', null),
+        );
+        expect(
+          sessionManager.getSessionRecord(session.sessionId)?.thinkingMode,
+          isNull,
+        );
+      },
+    );
+
+    test(
       'auto-failover history notice snapshots provider display names and position',
       () async {
         final state = getIt<AgentStateDatabase>();

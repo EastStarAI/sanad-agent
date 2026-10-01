@@ -216,6 +216,7 @@ class ProviderRegistry {
       envBaseUrlName: 'OPENCODE_GO_BASE_URL',
       authType: 'api_key',
       apiMode: 'chat_completions',
+      thinkingPolicyId: 'openai_chat_effort',
       aliases: ['opencode_go', 'go', 'opencode-go-sub'],
       fallbackModels: [
         'kimi-k2.7-code',
