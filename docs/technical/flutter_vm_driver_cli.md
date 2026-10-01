@@ -24,7 +24,7 @@ Desktop worktree discovery belongs to `sanad-dev ui`. Standalone, mobile, and we
 
 ## Interaction Contract
 
-The public primitives are snapshot, find, tap, enter-text, scroll, wait-for, screenshot, and batch. Selectors use widget keys, exact text, widget types, explicit indexes, coordinates, and optional subtree scope.
+The public primitives are snapshot, find, tap, enter-text, scroll, wait-for, screenshot, and batch. Selectors use widget keys, exact text, widget types, explicit indexes, coordinates, and optional subtree scope. Batch recipes also expose a bounded `message_bodies` evidence step that returns at most the latest 50 event-scoped user and assistant message bodies, with total count and explicit truncation metadata, before the shared Driver connection closes.
 
 `enter-text` first focuses the requested field, then calls the Sanad
 `ext.sanad_client.enter_text` extension. The extension resolves an exact keyed

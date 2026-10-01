@@ -32,6 +32,21 @@ void main() {
       );
     });
 
+    test('batch message-body evidence is bounded and event-scoped', () {
+      final controllerSource = File(
+        '../scripts/flutter_driver_cli/flutter_vm_controller.dart',
+      ).readAsStringSync();
+
+      expect(controllerSource, contains("case 'message_bodies':"));
+      expect(controllerSource, contains('const maxMessageBodies = 50;'));
+      expect(controllerSource, contains("startsWith('user_message_body:')"));
+      expect(
+        controllerSource,
+        contains("startsWith('assistant_message_body:')"),
+      );
+      expect(controllerSource, contains("'truncated':"));
+    });
+
     test('scroll rejects contradictory terminal targets before connecting', () async {
       expect(
         await CliRunner(const [

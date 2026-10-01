@@ -107,7 +107,7 @@ class SidebarWorkspaceGroupTile extends StatelessWidget {
                       ),
                     ),
                     IconButton(
-                      key: const Key('sidebar_new_conversation_btn'),
+                      key: Key('sidebar_new_conversation_btn:${group.workspaceId}'),
                       tooltip: isWorkspaceAvailable ? 'New conversation' : 'Reconnect the workspace folder first',
                       icon: const Icon(Icons.add, size: 14),
                       onPressed: isWorkspaceAvailable ? onNewConversation : null,
