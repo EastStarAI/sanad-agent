@@ -114,6 +114,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Plan 50 Cancellation Regression Matrix](docs/qa_maintenance/plan50_cancellation_regression_matrix.md): Verified cancellation, cleanup, delivery-order, and restart-hydration regression coverage for Plan 50.
 - [OpenRouter App Attribution QA](docs/qa_maintenance/openrouter_app_attribution_qa.md): Regression matrix for exact attribution headers, sync/stream forwarding, authentication preservation, and provider isolation.
 - [Provider Account Usage Limits QA Matrix](docs/qa_maintenance/provider_account_usage_limits_qa.md): Regression coverage for provider-instance usage parsing, protocol isolation, freshness, stale responses, and card presentation.
+- [Provider-Aware Thinking Mode QA](docs/qa_maintenance/provider_aware_thinking_mode_qa.md): Focused matrix for model-scoped thinking controls, fail-closed unknown routes, sync/stream payload parity, and composer selector states.
 - [Plan 29 Provider Setup Regression Matrix](docs/qa_maintenance/provider_setup_plan29_regression_matrix.md): Regression coverage targets for the instance-first provider setup runtime.
 - [Release Verification Matrix](docs/qa_maintenance/release_verification.md): Required local and hosted evidence for Sanad release, signing, installation, update, and rollback.
 - [Remote Device Control QA](docs/qa_maintenance/remote_device_control_qa.md): Gate-linked pass/fail coverage for remote Agent update, restart, managed workspaces, and redacted MCP management.

@@ -2,6 +2,10 @@ import 'dart:convert';
 
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/core/provider_thinking/session_route_thinking_control.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
+import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/evolution/models/session_query.dart';
 import 'package:sanad_agent/evolution/models/session_history_page.dart';
 import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
@@ -39,6 +43,8 @@ class SessionQueryHandler {
   final PersistedRuntimeStateRepository? _persistedState;
   final SessionRouteMutationCoordinator? _routeCoordinator;
   final SessionRouteTransitionRepository? _routeTransitions;
+  final ThinkingSelectionResolver? _thinkingSelectionResolver;
+  final ThinkingRoutePreferenceStore? _thinkingPreferenceStore;
   final CompactionBoundaryRepository? _compactionBoundaries;
 
   SessionQueryHandler({
@@ -49,6 +55,8 @@ class SessionQueryHandler {
     PersistedRuntimeStateRepository? persistedState,
     SessionRouteMutationCoordinator? routeCoordinator,
     SessionRouteTransitionRepository? routeTransitions,
+    ThinkingSelectionResolver? thinkingSelectionResolver,
+    ThinkingRoutePreferenceStore? thinkingPreferenceStore,
     CompactionBoundaryRepository? compactionBoundaries,
   }) : _sessionManager = sessionManager,
        _bridge = bridge,
@@ -57,7 +65,32 @@ class SessionQueryHandler {
        _persistedState = persistedState,
        _routeCoordinator = routeCoordinator,
        _routeTransitions = routeTransitions,
+       _thinkingSelectionResolver = thinkingSelectionResolver,
+       _thinkingPreferenceStore = thinkingPreferenceStore,
        _compactionBoundaries = compactionBoundaries;
+
+  Map<String, dynamic> _sessionPayloadFor({
+    required SessionState session,
+    Map<String, dynamic>? sessionMetadata,
+    Map<String, dynamic>? metadataOverrides,
+  }) {
+    final resolver = _thinkingSelectionResolver;
+    final correction = _thinkingPreferenceStore
+        ?.readCorrection(session.sessionId)
+        ?.toMap();
+    return buildSessionPayload(
+      session: session,
+      sessionMetadata: sessionMetadata,
+      metadataOverrides: metadataOverrides,
+      thinkingControl: resolver == null
+          ? null
+          : resolveSessionRouteThinkingControl(
+              resolver: resolver,
+              session: session,
+            ),
+      thinkingCorrection: correction,
+    );
+  }
 
   Map<String, dynamic> buildHistoryEnvelope(CanonicalEvent event) {
     try {
@@ -689,7 +722,7 @@ class SessionQueryHandler {
           if (includesRuntimeState) ...{
             'execution_snapshot': _executionSnapshot(sessionId).toPayload(),
             if (session != null)
-              ...buildSessionPayload(
+              ..._sessionPayloadFor(
                 session: session,
                 sessionMetadata: sessionMetadata,
                 metadataOverrides: {'context_usage': ?latestContextUsage},
@@ -797,7 +830,7 @@ class SessionQueryHandler {
 
       final serializedSessions = result.sessions.map((session) {
         final runtimeNotice = _runtimeRecovery?.activeNotice(session.sessionId);
-        final payload = buildSessionPayload(
+        final payload = _sessionPayloadFor(
           session: session,
           sessionMetadata: _sessionManager.getSessionMetadata(
             session.sessionId,
@@ -900,10 +933,17 @@ class SessionQueryHandler {
   Map<String, dynamic>? buildSessionPreferencesEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId;
     final model = event.payload['model'] as String?;
-    final requestedProvider = event.payload['provider_instance_id'] as String?;
+    final requestedProvider =
+        (event.payload['provider_instance_id'] ?? event.payload['provider_id'])
+            as String?;
+    final thinkingMode = event.payload['thinking_mode'] as String?;
+    final hasThinkingModeKey = event.payload.containsKey('thinking_mode');
     final requestId = event.payload['request_id'] as String?;
 
-    if (sessionId == null || model == null) {
+    if (sessionId == null) {
+      return null;
+    }
+    if (model == null && !hasThinkingModeKey && requestedProvider == null) {
       return null;
     }
 
@@ -912,9 +952,25 @@ class SessionQueryHandler {
       return null;
     }
 
+    String? effectiveThinkingMode;
+    if (hasThinkingModeKey) {
+      final normalizedThinking = thinkingMode?.trim();
+      final clearThinking =
+          normalizedThinking == null || normalizedThinking.isEmpty;
+      effectiveThinkingMode = clearThinking ? null : normalizedThinking;
+      _sessionManager.updateSessionModeling(
+        sessionId,
+        thinkingMode: effectiveThinkingMode,
+        clearThinkingMode: clearThinking,
+      );
+    }
+
     final coordinator = _routeCoordinator;
     final provider = requestedProvider ?? session.providerId;
-    if (coordinator != null && provider != null && provider.isNotEmpty) {
+    if (model != null &&
+        coordinator != null &&
+        provider != null &&
+        provider.isNotEmpty) {
       final route = coordinator.mutate(
         sessionId: sessionId,
         providerInstanceId: provider,
@@ -923,29 +979,42 @@ class SessionQueryHandler {
         reason: 'preferences_updated',
         requestId: requestId,
       );
-      if (!route.changed || route.eventId == null) return null;
-      return _bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: CanonicalEventTypes.sessionPreferencesUpdated,
-          sessionId: sessionId,
-          payload: route.toPayload(),
-          eventId: route.eventId!,
-          delivery: const DeliveryPolicy.platformFamily(
-            PlatformFamily.sanadClient,
+      if (route.changed && route.eventId != null) {
+        return _bridge.buildAgentEventEnvelope(
+          CanonicalEvent(
+            type: CanonicalEventTypes.sessionPreferencesUpdated,
+            sessionId: sessionId,
+            payload: {
+              ...route.toPayload(),
+              if (hasThinkingModeKey) 'thinking_mode': effectiveThinkingMode,
+            },
+            eventId: route.eventId!,
+            delivery: const DeliveryPolicy.platformFamily(
+              PlatformFamily.sanadClient,
+            ),
           ),
-        ),
-      );
+        );
+      }
+    } else {
+      if (model != null) {
+        _sessionManager.updateSessionModel(sessionId, model);
+      }
+      if (requestedProvider != null) {
+        _sessionManager.updateSessionProviderId(sessionId, requestedProvider);
+      }
     }
 
-    _sessionManager.updateSessionModel(sessionId, model);
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(
-        type: CanonicalEventTypes.sessionPreferencesUpdated,
+        type: CanonicalEventTypes.sessionUpdated,
         sessionId: sessionId,
         payload: {
           'request_id': requestId,
           'session_id': sessionId,
-          'model': model,
+          'model': ?model,
+          'provider_id': ?requestedProvider,
+          'provider_instance_id': ?requestedProvider,
+          if (hasThinkingModeKey) 'thinking_mode': effectiveThinkingMode,
         },
       ),
     );

@@ -442,4 +442,45 @@ void main() {
       expect(completed.message, 'done');
     },
   );
+
+  test(
+    'switched agent environment updates workspace hash and worktree markers',
+    () {
+      final current = <String, String>{
+        'ENABLE_LOCAL_GATEWAY': 'true',
+        'LOCAL_GATEWAY_PORT': '58091',
+        'SANAD_DEV_LAUNCHER_ID': 'launcher-1',
+        'SANAD_DEV_RUNTIME_NONCE': 'nonce-1',
+        'SANAD_DEV_WORKSPACE_HASH': 'oldhash',
+        'SANAD_DEV_WORKTREE_NAME': 'old-tree',
+        'SANAD_DEV_WORKTREE_BRANCH': 'old-branch',
+      };
+
+      final switched = buildSwitchedAgentEnvironment(
+        currentEnvironment: current,
+        targetWorkspaceHash: 'newhash',
+        targetWorktreeName: 'new-tree',
+        targetBranch: 'feature/new',
+        targetIsLinkedWorktree: true,
+      );
+
+      expect(current['SANAD_DEV_WORKSPACE_HASH'], 'oldhash');
+      expect(current['SANAD_DEV_WORKTREE_NAME'], 'old-tree');
+      expect(switched['SANAD_DEV_WORKSPACE_HASH'], 'newhash');
+      expect(switched['SANAD_DEV_WORKTREE_NAME'], 'new-tree');
+      expect(switched['SANAD_DEV_WORKTREE_BRANCH'], 'feature/new');
+      expect(switched['LOCAL_GATEWAY_PORT'], '58091');
+      expect(switched['SANAD_DEV_LAUNCHER_ID'], 'launcher-1');
+
+      final switchedPrimary = buildSwitchedAgentEnvironment(
+        currentEnvironment: switched,
+        targetWorkspaceHash: 'primaryhash',
+        targetIsLinkedWorktree: false,
+      );
+
+      expect(switchedPrimary['SANAD_DEV_WORKSPACE_HASH'], 'primaryhash');
+      expect(switchedPrimary.containsKey('SANAD_DEV_WORKTREE_NAME'), isFalse);
+      expect(switchedPrimary.containsKey('SANAD_DEV_WORKTREE_BRANCH'), isFalse);
+    },
+  );
 }

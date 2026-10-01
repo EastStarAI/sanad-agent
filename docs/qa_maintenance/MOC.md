@@ -33,6 +33,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Account Sessions and Devices QA](account_sessions_devices_qa.md): Account Client-session and Agent inventory presentation, hardware/account identity boundaries, cancellation, revocation, compact layout, and restart coverage.
 - [Device Name Editing QA](device_name_editing_qa.md): Device rename validation, synchronization, and failure coverage.
 - [Provider Account Usage Limits QA](provider_account_usage_limits_qa.md): Regression coverage for instance isolation, capability discovery, freshness, stale responses, and usage-card presentation.
+- [Provider-Aware Thinking Mode QA](provider_aware_thinking_mode_qa.md): Model-scoped thinking controls, fail-closed unknown routes, payload parity, and composer selector states (Task 43).
 - [OpenRouter App Attribution QA](openrouter_app_attribution_qa.md): Exact app-attribution headers, sync/stream propagation, bearer-auth preservation, and provider-isolation coverage.
 - [Message Edit and Retry QA](message_edit_retry_qa.md): Coverage for inline editing, idle-boundary ordering, side-effect and steer-drop confirmation, root-turn identity, navigation cancellation, and current route selection.
 - [Conversation Fork QA](conversation_fork_qa.md): Coverage for materialized fork, lineage, parent/child independence, and delete behavior.

@@ -387,8 +387,9 @@ class ConversationCommands {
     final nextModel = model?.trim();
     final nextThinkingMode = thinkingMode?.trim();
     final nextProviderId = providerId?.trim();
+    final hasThinkingModeUpdate = thinkingMode != null;
     if ((nextModel == null || nextModel.isEmpty) &&
-        (nextThinkingMode == null || nextThinkingMode.isEmpty) &&
+        !hasThinkingModeUpdate &&
         (nextProviderId == null || nextProviderId.isEmpty)) {
       return;
     }
@@ -400,8 +401,8 @@ class ConversationCommands {
         'request_id': requestId,
         'session_id': sessionId,
         if (nextModel != null && nextModel.isNotEmpty) 'model': nextModel,
-        if (nextProviderId != null && nextProviderId.isNotEmpty) 'provider_id': nextProviderId,
-        if (nextThinkingMode != null && nextThinkingMode.isNotEmpty) 'thinking_mode': nextThinkingMode,
+        if (nextProviderId != null && nextProviderId.isNotEmpty) 'provider_instance_id': nextProviderId,
+        if (hasThinkingModeUpdate) 'thinking_mode': nextThinkingMode ?? '',
       },
       requestId: requestId,
     );
