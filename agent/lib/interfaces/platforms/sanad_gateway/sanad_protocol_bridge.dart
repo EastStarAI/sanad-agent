@@ -265,6 +265,11 @@ class SanadProtocolBridge {
           type: CanonicalEventTypes.getSessions,
           payload: payload,
         );
+      case 'search_sessions':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.searchSessions,
+          payload: payload,
+        );
       case 'get_session_history':
         event = CanonicalEvent(
           type: CanonicalEventTypes.getSessionHistory,
@@ -776,6 +781,9 @@ class SanadProtocolBridge {
         return;
       case CanonicalEventTypes.getSessions:
         await emitEnvelope(_sessionQueryHandler.buildThreadsEnvelope(event));
+        return;
+      case CanonicalEventTypes.searchSessions:
+        await emitEnvelope(_sessionQueryHandler.buildSearchEnvelope(event));
         return;
       case CanonicalEventTypes.updateSessionTitle:
         final envelope = _sessionQueryHandler.buildUpdateSessionTitleEnvelope(
