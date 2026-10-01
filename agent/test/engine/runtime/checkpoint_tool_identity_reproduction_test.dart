@@ -61,6 +61,9 @@ class _TestToolCallbacks implements ToolExecutionCallbacks {
     ToolCall toolCall,
     String result, {
     required bool isError,
+    DateTime? startedAt,
+    DateTime? terminalAt,
+    int? runtimeMs,
   }) async {
     results[toolCall.id] = result;
     receivedOutputs.add(result);

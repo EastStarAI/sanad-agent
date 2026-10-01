@@ -1226,6 +1226,68 @@ void main() {
       }
     });
 
+    test(
+      'prioritizes live /api/show context_length over catalog lookup and caches result',
+      () async {
+        var callCount = 0;
+        final mockClient = MockClient((request) async {
+          callCount++;
+          if (request.url.path.endsWith('/api/show')) {
+            return http.Response(
+              jsonEncode({
+                'model_info': {'gemma4.context_length': 131072},
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 404);
+        });
+
+        final adapter = OllamaAdapter(
+          config,
+          profile,
+          client: mockClient,
+          modelContextLimitLookup: (model) => 8192, // Lower stale catalog limit
+        );
+
+        // First call probes live /api/show and gets 131072, ignoring the 8192 catalog limit
+        final limit1 = await adapter.getContextLimit('gemma4:e2b');
+        expect(limit1, 131072);
+        expect(callCount, 1);
+
+        // Second call uses in-memory cached probe without network call
+        final limit2 = await adapter.getContextLimit('gemma4:e2b');
+        expect(limit2, 131072);
+        expect(callCount, 1);
+      },
+    );
+
+    test('falls back to catalog and ModelMetadata when /api/show fails', () async {
+      final mockClient = MockClient((request) async {
+        return http.Response('Internal Server Error', 500);
+      });
+
+      // With catalog lookup available
+      final adapterWithCatalog = OllamaAdapter(
+        config,
+        profile,
+        client: mockClient,
+        modelContextLimitLookup: (model) => 32768,
+      );
+      expect(await adapterWithCatalog.getContextLimit('some-model'), 32768);
+
+      // Without catalog lookup, falls back to ModelMetadata
+      final adapterWithoutCatalog = OllamaAdapter(
+        config,
+        profile,
+        client: mockClient,
+      );
+      expect(
+        await adapterWithoutCatalog.getContextLimit('gemma4:e2b'),
+        256000,
+      );
+    });
+
     test('maps Ollama length termination to finishReason', () async {
       final mockClient = MockClient((request) async {
         return http.Response(

@@ -259,6 +259,9 @@ class SuspendedResumeService {
               required bool isError,
               required bool isStart,
               String? toolRunId,
+              DateTime? startedAt,
+              DateTime? terminalAt,
+              int? runtimeMs,
             }) async {
               if (!canPublish()) return;
               await emitResponse(
@@ -267,6 +270,11 @@ class SuspendedResumeService {
                   message: Message(
                     role: MessageRole.tool,
                     content: isStart ? input : output,
+                    metadata: {
+                      'started_at': ?startedAt?.toIso8601String(),
+                      'terminal_at': ?terminalAt?.toIso8601String(),
+                      'runtime_ms': ?runtimeMs,
+                    },
                   ),
                   isComplete: false,
                   runId: ownerRunId,

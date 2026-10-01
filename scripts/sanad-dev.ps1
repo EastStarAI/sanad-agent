@@ -292,8 +292,14 @@ function Require-RuntimeCli {
     throw 'Project runtime is not ready. Run: sanad-dev setup'
   }
   $fingerprint = Get-RuntimeCliFingerprint
-  if ((Get-Content -Raw $stamp) -ne $fingerprint) {
-    throw 'Project runtime is stale. Run: sanad-dev setup'
+  if ((Get-Content -Raw $stamp).Trim() -ne $fingerprint) {
+    [Console]::Error.WriteLine('[sanad-dev] Project runtime is stale; running auto-setup...')
+    try {
+      Invoke-Setup $true | Out-Null
+    } catch {
+      throw "Project runtime setup failed: $_"
+    }
+    $fingerprint = Get-RuntimeCliFingerprint
   }
   $artifact = Join-Path $artifactRoot "sanad-dev-runtime-$fingerprint.exe"
   if (-not (Test-Path $artifact)) {

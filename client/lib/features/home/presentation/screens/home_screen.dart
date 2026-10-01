@@ -281,6 +281,9 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
       }
 
       if (dest.isSession && dest.sessionId != null) {
+        if (context.read<SessionCubit>().state.selectedSession?.id == dest.sessionId) {
+          return;
+        }
         final knownSessions = context.read<SessionCubit>().state.agentSessions[dest.deviceId];
         final selectedSessionId = context.read<SessionCubit>().state.selectedSession?.id;
         if (knownSessions != null &&
@@ -741,12 +744,18 @@ class _MainContent extends StatelessWidget {
       hasOlderHistory: messagesState.hasOlderHistory,
       isOlderHistoryLoading: messagesState.isOlderHistoryLoading,
       olderHistoryError: messagesState.olderHistoryError,
-      onLoadOlderHistory: messagesCubit.loadOlderHistory,
+      onLoadOlderHistory: messagesState.isHistoryLoading || messagesState.requestedSessionId != null
+          ? null
+          : messagesCubit.loadOlderHistory,
       hasNewerHistory: messagesState.hasNewerHistory,
       isNewerHistoryLoading: messagesState.isNewerHistoryLoading,
       newerHistoryError: messagesState.newerHistoryError,
-      onLoadNewerHistory: messagesCubit.loadNewerHistory,
-      onLoadAnchoredHistory: messagesCubit.loadAnchoredHistory,
+      onLoadNewerHistory: messagesState.isHistoryLoading || messagesState.requestedSessionId != null
+          ? null
+          : messagesCubit.loadNewerHistory,
+      onLoadAnchoredHistory: messagesState.isHistoryLoading || messagesState.requestedSessionId != null
+          ? null
+          : messagesCubit.loadAnchoredHistory,
       onSendMessage: (text, {intent = MessageDeliveryIntent.auto}) async {
         await inputCubit.sendMessage(text, intent: intent);
       },

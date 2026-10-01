@@ -45,13 +45,19 @@ so they do not load release-only procedure tokens.
 4. Stop after a bounded repair loop and report the unresolved blocker rather than churning.
 5. Fork-origin jobs must work without signing, deployment, or repository secrets.
 
-For long waits on CI, use the bounded `pr-checks` monitor instead of hand-rolled shell loops:
+When waiting for GitHub CI checks, never perform manual periodic polling loops in the conversation. Instead, run a single terminal command that watches the checks until completion and wait for its result. Use `gh pr checks` with `--watch`, `--interval 5`, and `--fail-fast` (specifying `timeout_ms: 420000` in `shell_execute` for a cross-platform 7-minute timeout guard):
+
+```bash
+gh pr checks <pr-number> --watch --interval 5 --fail-fast
+```
+
+Alternatively, use the repository's bounded monitor:
 
 ```bash
 fvm dart run scripts/workflow_guards/bin/pr_checks_watch.dart <pr-number>
 ```
 
-It polls `gh pr checks --json` every 5 seconds, stops on the first failed check (fail-fast), enforces a 7-minute maximum, prints bounded per-poll summaries, and preserves its exit status (0 success, 1 first failure, 124 timeout). It is Windows-safe (no `for /f` parsing) and cross-platform; see `scripts/workflow_guards/README.md` for flags and exit codes.
+`pr_checks_watch.dart` polls `gh pr checks --json` every 5 seconds, stops on the first failed check (fail-fast), enforces a 7-minute maximum, prints bounded per-poll summaries, and preserves its exit status (0 success, 1 first failure, 124 timeout). It is Windows-safe (no `for /f` parsing) and cross-platform; see `scripts/workflow_guards/README.md` for flags and exit codes.
 
 ## Merge, Rebase, and Conflict Safety
 

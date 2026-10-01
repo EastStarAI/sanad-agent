@@ -134,9 +134,8 @@ class ConversationCacheRepository {
     final workspaceIds =
         context?.workspaces.workspaces
             .where((workspace) {
-              final page = context.workspaceConversationPages[workspace.id];
               final isExpanded = context.workspaceExpansion[workspace.id] ?? true;
-              return isExpanded || (page != null && page.state != ConversationResourceState.notLoaded);
+              return isExpanded;
             })
             .map((workspace) => workspace.id)
             .toList(growable: false) ??

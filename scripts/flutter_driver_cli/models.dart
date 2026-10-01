@@ -149,8 +149,7 @@ class DriverActionResult {
 
 /// Represents a single step in a declarative batch test/interaction sequence.
 class BatchStep {
-  final String
-  action; // tap, enter_text, scroll, wait_for, screenshot, sleep, snapshot
+  final String action; // tap, enter_text, scroll, wait_for, screenshot, sleep, snapshot, message_bodies
   final String? key;
   final String? text;
   final String? type;

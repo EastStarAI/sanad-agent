@@ -1373,6 +1373,56 @@ test('legacy timeout footer and logs use honest causes and timestamps', () => {
   assert.match(logs, /\[unknown time\]\s+legacy line without time/);
 });
 
+test('supervisor preserves incomplete status and missing_final cause from result.json without false completion', () => {
+  const root = mkdtempSync(join(tmpdir(), 'incomplete-observability-test-'));
+  const runDir = join(root, 'run');
+  const out = join(root, 'out');
+  mkdirSync(runDir, { recursive: true });
+  mkdirSync(out, { recursive: true });
+  const resultPath = join(out, 'result.json');
+  const stdoutPath = join(runDir, 'inc.stdout.log');
+  const stderrPath = join(runDir, 'inc.stderr.log');
+  writeFileSync(resultPath, JSON.stringify({
+    status: 'incomplete',
+    exit_code: 1,
+    cause: 'missing_final',
+    error: 'Execution finished without a final summary (missing final).',
+    state_since: '2026-09-24T04:00:00.000Z',
+  }), 'utf8');
+  writeFileSync(stdoutPath, 'running/...\n', 'utf8');
+  writeFileSync(stderrPath, 'Error: Turn execution completed without a final summary (missing final).\n', 'utf8');
+  writeFileSync(join(runDir, 'events.jsonl'), '', 'utf8');
+  writeFileSync(join(runDir, 'manifest.json'), JSON.stringify({
+    version: 'delegate-supervisor.v1',
+    runDir,
+    supervisorPid: process.pid,
+    status: 'running',
+    closed: false,
+    seq: 1,
+    tasks: {
+      task97f: {
+        id: 'task97f',
+        implementer: 'sanad',
+        workspace: root,
+        status: 'incomplete',
+        cause: 'missing_final',
+        pid: 2147483647,
+        startedAt: '2026-09-24T03:50:00.000Z',
+        finishedAt: '2026-09-24T04:00:00.000Z',
+        resultPath,
+        timelinePath: null,
+        stdoutPath,
+        stderrPath,
+      },
+    },
+  }), 'utf8');
+
+  const status = runNode(SUPERVISOR, ['status', '--run', runDir, '--task', 'task97f']);
+  assert.match(status, /Session State:\s+incomplete/);
+  assert.match(status, /Cause:\s+missing_final/);
+  assert.doesNotMatch(status, /Session State:\s+completed/);
+});
+
 test('observer records start timing and cancellation without manufacturing durations', async () => {
   const root = mkdtempSync(join(tmpdir(), 'observer-timing-test-'));
   const runDir = join(root, 'run');

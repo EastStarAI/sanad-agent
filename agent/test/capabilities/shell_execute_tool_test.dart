@@ -119,8 +119,10 @@ void main() {
         'command': 'echo hello from shell',
       }, context: context);
 
-      final result = jsonDecode(resultString);
-      expect(result['isError'], isFalse);
+      final result = jsonDecode(resultString) as Map<String, dynamic>;
+      expect(result.containsKey('isError'), isFalse);
+      expect(result['duration_ms'], isA<int>());
+      expect(result['duration_ms'] as int, greaterThanOrEqualTo(0));
       expect(result['output']?.toString().trim(), equals('hello from shell'));
       expect(
         bridge.requestCount,
@@ -148,7 +150,8 @@ void main() {
           jsonDecode(await tool.execute({'command': 'echo %PATH%'}))
               as Map<String, dynamic>;
 
-      expect(first['isError'], isFalse);
+      expect(first.containsKey('isError'), isFalse);
+      expect(first['duration_ms'], isA<int>());
       expect(first['output']?.toString().trim(), r'C:\resolved\bin');
       expect(second['output']?.toString().trim(), r'C:\resolved\bin');
       expect(reads, 1);
@@ -163,7 +166,8 @@ void main() {
       final resultString = await tool.execute({'command': command});
       final result = jsonDecode(resultString) as Map<String, dynamic>;
 
-      expect(result['isError'], isFalse);
+      expect(result.containsKey('isError'), isFalse);
+      expect(result['duration_ms'], isA<int>());
       expect(result['output'], contains('\uFFFD'));
       expect(result['output'], contains('A'));
     });
@@ -224,8 +228,9 @@ void main() {
         'cwd': 'subdir',
       }, context: context);
 
-      final result = jsonDecode(resultString);
-      expect(result['isError'], isFalse);
+      final result = jsonDecode(resultString) as Map<String, dynamic>;
+      expect(result.containsKey('isError'), isFalse);
+      expect(result['duration_ms'], isA<int>());
       expect(result['output']?.toString().trim(), equals('subdir test'));
     });
 
@@ -240,9 +245,10 @@ void main() {
         final resultString = await tool.execute({
           'command': r'local-fvm .\scripts\sanad_dev.dart status',
         });
-        final result = jsonDecode(resultString);
+        final result = jsonDecode(resultString) as Map<String, dynamic>;
 
-        expect(result['isError'], isFalse);
+        expect(result.containsKey('isError'), isFalse);
+        expect(result['duration_ms'], isA<int>());
         expect(
           result['output']?.toString().trim(),
           equals(r'batch command found:.\scripts\sanad_dev.dart status'),
@@ -342,10 +348,11 @@ void main() {
           'timeout_ms': 5000,
         });
 
-        final result = jsonDecode(resultString);
+        final result = jsonDecode(resultString) as Map<String, dynamic>;
         // With stdin closed, `read` gets EOF immediately → exit code 0,
         // empty value. The key assertion is that it returns at all (no hang).
-        expect(result['isError'], isFalse);
+        expect(result.containsKey('isError'), isFalse);
+        expect(result['duration_ms'], isA<int>());
       },
       skip: Platform.isWindows,
     );
@@ -386,6 +393,34 @@ void main() {
         );
       },
       skip: !Platform.isLinux,
+    );
+
+    test('result includes duration_ms and omits isError on success', () async {
+      final tool = ShellExecuteTool(workspacePath: workspaceDir.path);
+      final resultString = await tool.execute({
+        'command': 'echo timing_success',
+      });
+      final result = jsonDecode(resultString) as Map<String, dynamic>;
+
+      expect(result.containsKey('isError'), isFalse);
+      expect(result['duration_ms'], isA<int>());
+      expect(result['duration_ms'] as int, greaterThanOrEqualTo(0));
+      expect(result['output']?.toString().trim(), equals('timing_success'));
+    });
+
+    test(
+      'result includes isError: true and duration_ms on non-zero exit',
+      () async {
+        final tool = ShellExecuteTool(workspacePath: workspaceDir.path);
+        final resultString = await tool.execute({
+          'command': Platform.isWindows ? 'cmd /c exit 1' : 'exit 1',
+        });
+        final result = jsonDecode(resultString) as Map<String, dynamic>;
+
+        expect(result['isError'], isTrue);
+        expect(result['duration_ms'], isA<int>());
+        expect(result['duration_ms'] as int, greaterThanOrEqualTo(0));
+      },
     );
   });
 }

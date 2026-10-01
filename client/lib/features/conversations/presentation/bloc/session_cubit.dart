@@ -46,6 +46,7 @@ class SessionCubit extends Cubit<SessionState> {
   String? _newConversationWorkspaceId;
   final StreamController<DeletedSessionIdentity> _deletedSessionsController =
       StreamController<DeletedSessionIdentity>.broadcast();
+  String? _lastRefreshedDeviceId;
 
   Stream<DeletedSessionIdentity> get deletedSessions => _deletedSessionsController.stream;
 
@@ -90,12 +91,16 @@ class SessionCubit extends Cubit<SessionState> {
       conversationCacheRepository?.selectDevice(activeAgent.id);
     }
     if (activeAgent != null && _canRefreshConversations(activeAgent)) {
-      unawaited(conversationCacheRepository?.refreshDeviceSidebar(activeAgent));
+      if (_lastRefreshedDeviceId != activeAgent.id) {
+        _lastRefreshedDeviceId = activeAgent.id;
+        unawaited(conversationCacheRepository?.refreshDeviceSidebar(activeAgent));
+      }
     }
     _listenToClientSessionStreams(agentState);
   }
 
   void _resetForEmptyAgents() {
+    _lastRefreshedDeviceId = null;
     processingStore.clear();
     _cancelClientSessionSubscriptions();
     emit(const SessionState());
@@ -267,7 +272,7 @@ class SessionCubit extends Cubit<SessionState> {
     _setDeviceLoading(activeAgent.id, true);
     try {
       if (conversationCacheRepository != null) {
-        await conversationCacheRepository!.refreshDeviceSidebar(activeAgent);
+        await conversationCacheRepository!.refreshDeviceSidebar(activeAgent, force: true);
       } else {
         await conversationRepository.refreshSessions(activeAgent);
       }

@@ -65,7 +65,9 @@ void main() {
     expect(find.text('0.4s'), findsOneWidget);
   });
 
-  testWidgets('displays and updates running timer in tool header via ConversationClockScope without decimals', (tester) async {
+  testWidgets('displays and updates running timer in tool header via ConversationClockScope without decimals', (
+    tester,
+  ) async {
     final startTime = DateTime(2026, 1, 1, 12, 0, 0);
     final clockNotifier = ValueNotifier<DateTime>(startTime.add(const Duration(seconds: 3)));
 
@@ -126,5 +128,41 @@ void main() {
 
     expect(find.text('pwd'), findsOneWidget);
     expect(find.text('/workspace'), findsOneWidget);
+  });
+
+  testWidgets('running tool header timer uses started_at from metadata when event timestamp differs', (tester) async {
+    final sessionStartTime = DateTime(2026, 1, 1, 11, 0, 0); // 1 hour ago
+    final toolStartedAt = DateTime(2026, 1, 1, 12, 0, 0); // 5 seconds ago
+    final clockNotifier = ValueNotifier<DateTime>(toolStartedAt.add(const Duration(seconds: 5)));
+
+    final event = CanonicalEvent(
+      id: 'tool-running-started-at',
+      kind: EventKind.toolCall,
+      status: EventStatus.running,
+      text: '',
+      timestamp: sessionStartTime, // old synthetic baseTime
+      metadata: {
+        'started_at': toolStartedAt.toIso8601String(),
+      },
+      tool: {
+        'name': 'shell_execute',
+        'input': {'command': 'sleep 10'},
+      },
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ConversationClockScope(
+            clock: clockNotifier,
+            child: EventTile(event: event),
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const Key('tool_header_timer')), findsOneWidget);
+    // Should display 5s from toolStartedAt, NOT 1h+ from sessionStartTime!
+    expect(find.text('5s'), findsOneWidget);
   });
 }

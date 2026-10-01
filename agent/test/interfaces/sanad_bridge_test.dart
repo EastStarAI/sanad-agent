@@ -1631,6 +1631,151 @@ void main() {
         expect(messages[2]['request_id'], 'steer-late-history-1');
       },
     );
+
+    test(
+      'get_session_history restores authoritative started_at, terminal_at, and runtime_ms for completed tools and sets tool_use started_at',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-tool-timing-history';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'sanad-agent',
+            createdAt: DateTime.parse('2026-07-02T10:00:00Z'),
+            updatedAt: DateTime.parse('2026-07-02T10:06:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Run command'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'tool-call-timing-1',
+                name: 'run_command',
+                arguments: {'command': 'sleep 5'},
+              ),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'tool-call-timing-1',
+            content: 'done',
+            metadata: {
+              'started_at': '2026-07-02T10:00:05.100Z',
+              'terminal_at': '2026-07-02T10:00:10.550Z',
+              'runtime_ms': 5450,
+            },
+          ),
+          Message(role: MessageRole.assistant, content: 'Finished command'),
+        ]);
+
+        Map<String, dynamic>? emitted;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-tool-timing-history',
+            'session_id': sessionId,
+          },
+        }, (envelope) async => emitted = envelope);
+
+        expect(emitted, isNotNull);
+        final messages = (emitted!['payload']['messages'] as List)
+            .cast<Map<String, dynamic>>();
+
+        final toolUse = messages.firstWhere((m) => m['type'] == 'tool_use');
+        final toolResult = messages.firstWhere(
+          (m) => m['type'] == 'tool_result',
+        );
+
+        expect(toolUse['status'], 'done');
+        expect(toolUse['started_at'], '2026-07-02T10:00:05.100Z');
+        expect(toolUse['created_at'], '2026-07-02T10:00:05.100Z');
+
+        expect(toolResult['started_at'], '2026-07-02T10:00:05.100Z');
+        expect(toolResult['terminal_at'], '2026-07-02T10:00:10.550Z');
+        expect(toolResult['runtime_ms'], 5450);
+        expect(toolResult['created_at'], '2026-07-02T10:00:10.550Z');
+      },
+    );
+
+    test(
+      'get_session_history marks actively executing tool calls as running with their started_at from continuation metadata',
+      () async {
+        final sessionManager = getIt<SessionManager>();
+        final state = AgentStateDatabase.inMemory();
+        addTearDown(state.dispose);
+        final repo = PersistedRuntimeStateRepository.fromState(state);
+        getIt.registerSingleton<PersistedRuntimeStateRepository>(repo);
+        final bridge = SanadProtocolBridge();
+        const sessionId = 'session-tool-active-running';
+        state.db.execute(
+          '''
+          INSERT INTO sessions (session_id, model, created_at, updated_at)
+          VALUES (?, ?, ?, ?)
+          ''',
+          [
+            sessionId,
+            'sanad-agent',
+            '2026-07-02T10:00:00Z',
+            '2026-07-02T10:00:00Z',
+          ],
+        );
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'sanad-agent',
+            createdAt: DateTime.parse('2026-07-02T10:00:00Z'),
+            updatedAt: DateTime.parse('2026-07-02T10:06:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Long running task'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'tool-call-running-1',
+                name: 'long_task',
+                arguments: {'duration': 120},
+              ),
+            ],
+          ),
+        ]);
+
+        repo.workItems.enqueueWorkItem(
+          workItemId: 'work-item-running-1',
+          sessionId: sessionId,
+          requestId: 'req-tool-active-running',
+          state: SessionWorkState.running,
+          continuationMetadata: {
+            'currently_executing_tools': ['tool-call-running-1'],
+            'tool_started_at': {
+              'tool-call-running-1': '2026-07-02T10:01:02.000Z',
+            },
+          },
+        );
+
+        Map<String, dynamic>? emitted;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-tool-active-running',
+            'session_id': sessionId,
+          },
+        }, (envelope) async => emitted = envelope);
+
+        expect(emitted, isNotNull);
+        final messages = (emitted!['payload']['messages'] as List)
+            .cast<Map<String, dynamic>>();
+
+        final toolUse = messages.firstWhere((m) => m['type'] == 'tool_use');
+        expect(toolUse['status'], 'running');
+        expect(toolUse['started_at'], '2026-07-02T10:01:02.000Z');
+        expect(toolUse['created_at'], '2026-07-02T10:01:02.000Z');
+      },
+    );
   });
 
   group('Workspace Policy Commands', () {

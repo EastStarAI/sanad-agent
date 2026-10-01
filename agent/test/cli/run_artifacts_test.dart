@@ -486,7 +486,11 @@ void main() {
         expect(events[3].type, 'resumed');
 
         // 4. Terminal completion latches
-        await coordinator.recordTerminal(exitCode: 0, status: 'completed');
+        await coordinator.recordTerminal(
+          exitCode: 0,
+          status: 'completed',
+          text: 'Task completed successfully.',
+        );
         current = (await store.readResult())!;
         expect(current.status, 'completed');
         expect(current.isCompleted, isTrue);
@@ -500,6 +504,268 @@ void main() {
         );
         current = (await store.readResult())!;
         expect(current.status, 'completed');
+      },
+    );
+
+    test(
+      'hasSemanticFinalSummary validates substantive content and rejects empty or progress-only text',
+      () {
+        // Null, empty, whitespace, and punctuation-only
+        expect(RunResultArtifact.hasSemanticFinalSummary(null), isFalse);
+        expect(RunResultArtifact.hasSemanticFinalSummary(''), isFalse);
+        expect(RunResultArtifact.hasSemanticFinalSummary('   \n\t  '), isFalse);
+        expect(RunResultArtifact.hasSemanticFinalSummary('...'), isFalse);
+        expect(RunResultArtifact.hasSemanticFinalSummary('---'), isFalse);
+        expect(RunResultArtifact.hasSemanticFinalSummary('///'), isFalse);
+        expect(RunResultArtifact.hasSemanticFinalSummary('.. / ..'), isFalse);
+
+        // English progress indicators
+        expect(RunResultArtifact.hasSemanticFinalSummary('running'), isFalse);
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('running...'),
+          isFalse,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('running/...'),
+          isFalse,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('running/task-97f'),
+          isFalse,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('running tests...'),
+          isFalse,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('in progress'),
+          isFalse,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('in_progress...'),
+          isFalse,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('working...'),
+          isFalse,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('working on it...'),
+          isFalse,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('processing...'),
+          isFalse,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('executing...'),
+          isFalse,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('pending...'),
+          isFalse,
+        );
+
+        // Arabic progress indicators
+        expect(RunResultArtifact.hasSemanticFinalSummary('جاري...'), isFalse);
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('جاري التنفيذ...'),
+          isFalse,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('قيد التنفيذ'),
+          isFalse,
+        );
+        expect(RunResultArtifact.hasSemanticFinalSummary('يعمل...'), isFalse);
+
+        // Multi-line progress-only text
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary(
+            'running/...\nrunning/step2\nجاري العمل...',
+          ),
+          isFalse,
+        );
+
+        // Substantive final summaries (positive cases)
+        expect(RunResultArtifact.hasSemanticFinalSummary('Done'), isTrue);
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('Completed successfully.'),
+          isTrue,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary('All 15 tests passed.'),
+          isTrue,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary(
+            'Refactored file_tools.dart and verified event loop lag.',
+          ),
+          isTrue,
+        );
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary(
+            'تم إنجاز المهمة واجتياز جميع الفحوصات بنجاح.',
+          ),
+          isTrue,
+        );
+
+        // Mixed progress lines followed by a substantive final summary
+        expect(
+          RunResultArtifact.hasSemanticFinalSummary(
+            'running/...\nFinished all tasks. Output written to build.',
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test('RunResultArtifact semantic getters and isSuccess contract', () {
+      const incompleteArtifact = RunResultArtifact(
+        sessionId: 'sess-inc',
+        status: 'incomplete',
+        exitCode: 1,
+        startedAt: '2026-09-24T00:00:00.000Z',
+        cause: 'missing_final',
+      );
+      expect(incompleteArtifact.isIncomplete, isTrue);
+      expect(incompleteArtifact.isCompleted, isFalse);
+      expect(incompleteArtifact.isTerminal, isTrue);
+      expect(incompleteArtifact.isSuccess, isFalse);
+
+      const needsReviewArtifact = RunResultArtifact(
+        sessionId: 'sess-rev',
+        status: 'needs_review',
+        exitCode: 1,
+        startedAt: '2026-09-24T00:00:00.000Z',
+        cause: 'missing_final',
+      );
+      expect(needsReviewArtifact.isNeedsReview, isTrue);
+      expect(needsReviewArtifact.isIncomplete, isTrue);
+      expect(needsReviewArtifact.isCompleted, isFalse);
+      expect(needsReviewArtifact.isTerminal, isTrue);
+      expect(needsReviewArtifact.isSuccess, isFalse);
+
+      // Completed status without semantic final summary cannot claim isSuccess
+      const falseSuccessArtifact = RunResultArtifact(
+        sessionId: 'sess-false',
+        status: 'completed',
+        exitCode: 0,
+        text: 'running/...',
+        startedAt: '2026-09-24T00:00:00.000Z',
+      );
+      expect(falseSuccessArtifact.isCompleted, isTrue);
+      expect(falseSuccessArtifact.isSuccess, isFalse);
+
+      // Legitimate completed artifact with final summary
+      const realSuccessArtifact = RunResultArtifact(
+        sessionId: 'sess-real',
+        status: 'completed',
+        exitCode: 0,
+        text: 'Task finished successfully.',
+        startedAt: '2026-09-24T00:00:00.000Z',
+      );
+      expect(realSuccessArtifact.isCompleted, isTrue);
+      expect(realSuccessArtifact.isSuccess, isTrue);
+    });
+
+    test(
+      'RunArtifactCoordinator prevents false success on missing or progress-only final summary',
+      () async {
+        final store = RunArtifactStore(tempDir.path);
+
+        // 1. Missing final text (null) -> converted to incomplete
+        final coord1 = RunArtifactCoordinator(
+          store: store,
+          sessionId: 'sess-no-text',
+        );
+        await coord1.recordInitial();
+        await coord1.recordTerminal(
+          exitCode: 0,
+          status: 'completed',
+          text: null,
+        );
+        await coord1.drain();
+
+        var result = (await store.readResult())!;
+        expect(result.status, equals('incomplete'));
+        expect(result.exitCode, equals(1));
+        expect(result.cause, equals('missing_final'));
+        expect(result.isCompleted, isFalse);
+        expect(result.isIncomplete, isTrue);
+        expect(result.isTerminal, isTrue);
+        expect(result.isSuccess, isFalse);
+        expect(
+          result.error,
+          contains(
+            'Execution finished without a final summary (missing final).',
+          ),
+        );
+        expect(result.terminalOutput?['status'], equals('incomplete'));
+        expect(result.terminalOutput?['cause'], equals('missing_final'));
+
+        var events = await store.readEvents();
+        expect(events.last.type, equals('incomplete'));
+        expect(events.last.data['exit_code'], equals(1));
+        expect(events.last.data['cause'], equals('missing_final'));
+
+        // 2. Progress-only text ("running/task-97f") -> converted to incomplete
+        final coord2 = RunArtifactCoordinator(
+          store: store,
+          sessionId: 'sess-progress-only',
+        );
+        await coord2.recordInitial();
+        await coord2.recordTerminal(
+          exitCode: 0,
+          status: 'completed',
+          text: 'running/task-97f',
+        );
+        await coord2.drain();
+
+        result = (await store.readResult())!;
+        expect(result.status, equals('incomplete'));
+        expect(result.exitCode, equals(1));
+        expect(result.cause, equals('missing_final'));
+        expect(result.isSuccess, isFalse);
+
+        // 3. Arabic progress-only text ("جاري...") -> converted to incomplete
+        final coord3 = RunArtifactCoordinator(
+          store: store,
+          sessionId: 'sess-arabic-progress',
+        );
+        await coord3.recordInitial();
+        await coord3.recordTerminal(
+          exitCode: 0,
+          status: 'completed',
+          text: 'جاري...',
+        );
+        await coord3.drain();
+
+        result = (await store.readResult())!;
+        expect(result.status, equals('incomplete'));
+        expect(result.exitCode, equals(1));
+        expect(result.cause, equals('missing_final'));
+        expect(result.isSuccess, isFalse);
+
+        // 4. Substantive final summary -> preserved as completed exit 0
+        final coord4 = RunArtifactCoordinator(
+          store: store,
+          sessionId: 'sess-real-complete',
+        );
+        await coord4.recordInitial();
+        await coord4.recordTerminal(
+          exitCode: 0,
+          status: 'completed',
+          text: 'Fixed issue and verified with 15 passing tests.',
+        );
+        await coord4.drain();
+
+        result = (await store.readResult())!;
+        expect(result.status, equals('completed'));
+        expect(result.exitCode, equals(0));
+        expect(result.cause, isNull);
+        expect(result.isCompleted, isTrue);
+        expect(result.isSuccess, isTrue);
+        expect(result.terminalOutput?['status'], equals('completed'));
       },
     );
   });

@@ -671,15 +671,7 @@ class AgentRunner {
   Future<void> executeToolCalls(
     List<ToolCall> toolCalls, {
     required bool parallel,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
   }) => _toolExecutionCoordinator.executeToolCalls(
     toolCalls,
     parallel: parallel,
@@ -1525,15 +1517,7 @@ class AgentRunner {
     String? model,
     String? thinkingMode,
     DateTime? receivedAt,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
@@ -1593,15 +1577,7 @@ class AgentRunner {
     String? providerId,
     String? model,
     String? thinkingMode,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
@@ -1659,15 +1635,7 @@ class AgentRunner {
 
   Stream<String> _streamNextResponse({
     String? runtimeSystemPrompt,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     bool preserveModelStepId = false,
     ResponseContinuationCoordinator? continuation,
@@ -1976,15 +1944,7 @@ class AgentRunner {
     String? runtimeSystemPrompt,
     String? forcedOutput,
     bool forcedIsError = false,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
   }) async* {
@@ -2574,6 +2534,9 @@ class _RunnerToolCallbacks implements ToolExecutionCallbacks {
     ToolCall toolCall,
     String result, {
     required bool isError,
+    DateTime? startedAt,
+    DateTime? terminalAt,
+    int? runtimeMs,
   }) async {
     final toolMessage = Message(
       role: MessageRole.tool,
@@ -2586,6 +2549,9 @@ class _RunnerToolCallbacks implements ToolExecutionCallbacks {
         if (_runner.currentModelStepId != null)
           'model_step_id': _runner.currentModelStepId,
         'is_error': isError,
+        'started_at': ?startedAt?.toIso8601String(),
+        'terminal_at': ?terminalAt?.toIso8601String(),
+        'runtime_ms': ?runtimeMs,
       },
     );
     _runner.history.add(toolMessage);

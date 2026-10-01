@@ -1032,6 +1032,9 @@ void main() {
                     required isError,
                     required isStart,
                     toolRunId,
+                    startedAt,
+                    terminalAt,
+                    runtimeMs,
                   }) async {
                     if (!isStart && !drainStarted.isCompleted) {
                       runner.beginControlledRestartDrain();
@@ -2031,6 +2034,9 @@ void main() {
                   required isError,
                   required isStart,
                   toolRunId,
+                  startedAt,
+                  terminalAt,
+                  runtimeMs,
                 }) async {
                   events.add({
                     'tool_name': toolName,

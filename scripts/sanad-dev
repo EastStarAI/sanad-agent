@@ -254,10 +254,19 @@ require_runtime_cli() {
       return 1
     }
   fingerprint="$(runtime_cli_fingerprint)"
-  [ "$(cat "$stamp")" = "$fingerprint" ] || {
-    echo 'Project runtime is stale. Run: sanad-dev setup' >&2
-    return 1
-  }
+  if [ "$(cat "$stamp")" != "$fingerprint" ]; then
+    echo '[sanad-dev] Project runtime is stale; running auto-setup...' >&2
+    local setup_output setup_status
+    if setup_output="$(run_setup false true 2>&1)"; then
+      :
+    else
+      setup_status=$?
+      echo "$setup_output" >&2
+      echo 'Project runtime setup failed.' >&2
+      return $setup_status
+    fi
+    fingerprint="$(runtime_cli_fingerprint)"
+  fi
   RUNTIME_CLI="$artifact_root/sanad-dev-runtime-$fingerprint"
   [ -x "$RUNTIME_CLI" ] || {
     echo 'Project runtime is not ready. Run: sanad-dev setup' >&2
