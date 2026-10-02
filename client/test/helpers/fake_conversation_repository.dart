@@ -41,6 +41,12 @@ class FakeConversationRepository implements ConversationRepository {
   final Map<String, Map<String, SessionRouteSnapshot>> _routesByAgentId = {};
   final Map<String, StreamController<Map<String, SessionRouteSnapshot>>> _routeControllers = {};
   final StreamController<StopDraftRecovery> _stopRecoveriesController = StreamController.broadcast();
+  int acknowledgeStopRecoveryCalls = 0;
+  final List<Map<String, String?>> acknowledgedStopRecoveries = [];
+
+  void emitStopRecovery(StopDraftRecovery recovery) {
+    _stopRecoveriesController.add(recovery);
+  }
 
   final List<String> activatedSessionIds = [];
   final List<String> loadedHistorySessionIds = [];
@@ -344,7 +350,15 @@ class FakeConversationRepository implements ConversationRepository {
     required String stopRequestId,
     String? claimantId,
     String? recoveryOwnerToken,
-  }) async {}
+  }) async {
+    acknowledgeStopRecoveryCalls++;
+    acknowledgedStopRecoveries.add({
+      'sessionId': sessionId,
+      'stopRequestId': stopRequestId,
+      'claimantId': claimantId,
+      'recoveryOwnerToken': recoveryOwnerToken,
+    });
+  }
 
   @override
   Future<TurnReplayResult> replayTurn(
