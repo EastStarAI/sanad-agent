@@ -67,6 +67,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   final Set<String> _freshSessionIdsAwaitingFirstTurn = {};
   final Set<String> _initiatedStopRequestIds = {};
   final Map<String, String> _stopRecoveryClaimIds = {};
+  final Set<String> _inFlightStopRecoveryAckIds = {};
   int _requestGeneration = 0;
   Timer? _delayedLoadingTimer;
 
@@ -150,6 +151,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       unawaited(_queuedMessagesSubscription?.cancel());
       unawaited(_attentionSubscription?.cancel());
       unawaited(_stopRecoverySubscription?.cancel());
+      _inFlightStopRecoveryAckIds.clear();
       _selectedSessionId = null;
       emit(const SessionMessagesState());
     }
@@ -584,6 +586,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     unawaited(_queuedMessagesSubscription?.cancel());
     unawaited(_attentionSubscription?.cancel());
     unawaited(_workspacePolicySubscription?.cancel());
+    unawaited(_stopRecoverySubscription?.cancel());
 
     _currentAgent = agent;
 
@@ -997,16 +1000,23 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     final alreadyApplied = draft?.appliedStopRecoveryIds.contains(recovery.stopRequestId) == true;
     final isOwned = recovery.recoveryReason == 'daemon_restart'
         ? claimedByThisClient || alreadyApplied
-        : recoveryOwnerToken != null && recoveryOwnerToken.isNotEmpty;
+        : (recoveryOwnerToken != null && recoveryOwnerToken.isNotEmpty && !alreadyApplied);
     if (!isOwned) return;
+    if (_inFlightStopRecoveryAckIds.contains(recovery.stopRequestId)) return;
+    _inFlightStopRecoveryAckIds.add(recovery.stopRequestId);
     try {
-      await cache.prependStopRecoveryAndFlush(
+      final changed = await cache.prependStopRecoveryAndFlush(
         agent.id,
         recovery.sessionId,
         stopRequestId: recovery.stopRequestId,
         texts: recovery.inputs.map((input) => input.text),
       );
+      if (!changed && !alreadyApplied) {
+        _inFlightStopRecoveryAckIds.remove(recovery.stopRequestId);
+        return;
+      }
     } catch (_) {
+      _inFlightStopRecoveryAckIds.remove(recovery.stopRequestId);
       return;
     }
     await conversationRepository.acknowledgeStopRecovery(
@@ -1872,6 +1882,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   @override
   Future<void> close() async {
     _delayedLoadingTimer?.cancel();
+    _inFlightStopRecoveryAckIds.clear();
     await _agentStateSubscription?.cancel();
     await _cacheSubscription?.cancel();
     await _sessionStateSubscription?.cancel();
