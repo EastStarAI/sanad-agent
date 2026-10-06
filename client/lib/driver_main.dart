@@ -189,17 +189,21 @@ void main() {
       final widget = element.widget;
       final widgetType = widget.runtimeType.toString();
 
-      // Skip layout noise widgets
+      // Skip layout noise widgets unless explicitly keyed
       if (ignoredNoiseTypes.contains(widgetType)) {
-        element.visitChildren(
-          (child) => walk(
-            child,
-            parentElement: element,
-            insideConsolidatedRow: insideConsolidatedRow,
-            inheritedTooltip: inheritedTooltip,
-          ),
-        );
-        return;
+        final key = widget.key;
+        final rawKey = key is ValueKey ? key.value.toString() : key?.toString();
+        if (rawKey == null || isIgnoredKey(rawKey)) {
+          element.visitChildren(
+            (child) => walk(
+              child,
+              parentElement: element,
+              insideConsolidatedRow: insideConsolidatedRow,
+              inheritedTooltip: inheritedTooltip,
+            ),
+          );
+          return;
+        }
       }
 
       // Skip internal state management wrappers

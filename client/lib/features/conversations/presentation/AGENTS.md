@@ -72,6 +72,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
 ## Device Switch and Sidebar
 - Missing workspaces remain visible with historical sessions; disable new workspace conversation intent and route hover-only workspace settings actions with explicit device and workspace ids.
 - `SessionSidebarCubit` is a pure projection of `ConversationCacheRepository.snapshotStream`; it owns no cache maps, cursors, or drafts.
+- `SessionSearchCubit` owns only transient debounced search state, generations, and search cursors. Search results never mutate or masquerade as the sidebar cache, and anchored result intent must enter the existing atomic history-swap path.
 - Device selection comes from `DeviceCubit`; session/workspace data comes from the conversation cache repository.
 - Project cached workspace mutations into the composer selector immediately. Opening a popup must never be required to refresh state, and a newly created workspace must be present on the selector's first opening.
 - Invalidate a selected session from another device before restoring the new active device's last destination.

@@ -15,6 +15,7 @@ import 'package:sanad_client/features/conversations/domain/models/session_fork_r
 import 'package:sanad_client/features/conversations/domain/models/device_suspended_request.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
@@ -184,6 +185,13 @@ class _TestConversationClient implements ConversationClient {
   Future<void> deleteSession(String sessionId) {
     throw UnimplementedError();
   }
+
+  @override
+  Future<SessionSearchPage> searchSessions({
+    required String query,
+    int limit = 20,
+    String? cursor,
+  }) async => const SessionSearchPage(hits: [], hasMore: false);
 
   @override
   Future<SessionQueryResult> getSessions({SessionQueryRequest? query}) async {
