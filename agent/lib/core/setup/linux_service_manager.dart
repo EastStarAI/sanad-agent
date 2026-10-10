@@ -50,6 +50,7 @@ class LinuxServiceManager {
     LinuxServiceIdentity? identity,
     this.dedicatedHomePath = dedicatedHome,
     this.postActivationVerification,
+    this.userScope = false,
   }) : _paths = paths,
        _identityOverride = identity;
 
@@ -65,8 +66,10 @@ class LinuxServiceManager {
   final ServiceProcessRunner runner;
   final String dedicatedHomePath;
   final Future<String?> Function()? postActivationVerification;
+  final bool userScope;
   final LinuxServicePaths _paths;
   final LinuxServiceIdentity? _identityOverride;
+  String? _userScopeFailureReason;
 
   String get _metadataPath => p.join(sanadHome, 'service.json');
   String get _userUnitPath =>
@@ -80,17 +83,23 @@ class LinuxServiceManager {
       final current = await _currentIdentity();
       final selection = await _selectBackend(current);
       if (selection == null) {
+        final error = userScope
+            ? (_userScopeFailureReason ??
+                  'The systemd user service manager is unavailable.')
+            : 'No supported Linux init manager is available.';
         return _failure(
-          const ServiceStatus(
+          ServiceStatus(
             state: ServiceState.managerUnavailable,
-            scope: ServiceScope.unavailable,
-            backend: 'none',
+            scope: userScope
+                ? ServiceScope.systemdUser
+                : ServiceScope.unavailable,
+            backend: userScope ? ServiceScope.systemdUser.wireName : 'none',
             installed: false,
             enabled: false,
             running: false,
-            error: 'No supported Linux init manager is available.',
+            error: error,
           ),
-          'No supported Linux init manager is available.',
+          error,
         );
       }
 
@@ -397,6 +406,17 @@ class LinuxServiceManager {
   Future<_BackendSelection?> _selectBackend(
     LinuxServiceIdentity current,
   ) async {
+    if (userScope) {
+      if (current.isRoot) {
+        _userScopeFailureReason =
+            'User-scoped service cannot be installed as root.';
+        return null;
+      }
+      if (await _prepareUserScopeManager(current)) {
+        return _BackendSelection(ServiceScope.systemdUser, current);
+      }
+      return null;
+    }
     if (Directory(_paths.systemdRuntimeDirectory).existsSync()) {
       if (!current.isRoot && await _prepareUserManager(current)) {
         return _BackendSelection(ServiceScope.systemdUser, current);
@@ -415,6 +435,30 @@ class LinuxServiceManager {
       );
     }
     return null;
+  }
+
+  Future<bool> _prepareUserScopeManager(LinuxServiceIdentity identity) async {
+    if (!Directory(_paths.systemdRuntimeDirectory).existsSync()) {
+      _userScopeFailureReason =
+          'The systemd user service manager is unavailable.';
+      return false;
+    }
+    final runtime = p.join(_paths.userRuntimeDirectory, '${identity.uid}');
+    if (!File(p.join(runtime, 'bus')).existsSync()) {
+      _userScopeFailureReason = 'The systemd user bus is unavailable.';
+      return false;
+    }
+    final probe = await runner('systemctl', const [
+      '--user',
+      'show-environment',
+    ], _userManagerEnvironment(identity));
+    if (!probe.succeeded) {
+      _userScopeFailureReason = probe.conciseError.isNotEmpty
+          ? probe.conciseError
+          : 'The systemd user service manager is unavailable.';
+      return false;
+    }
+    return true;
   }
 
   Future<bool> _prepareUserManager(LinuxServiceIdentity identity) async {

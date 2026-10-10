@@ -26,7 +26,7 @@ and rollback remain in the core service layer.
 
 ## Linux backend selection
 
-Selection is capability-based and ordered:
+Default selection is capability-based and ordered:
 
 1. A user systemd service is selected only when the user bus exists, linger is
    enabled and reverified, and `systemctl --user show-environment` succeeds with
@@ -39,6 +39,23 @@ Selection is capability-based and ordered:
 3. OpenRC is selected only when systemd is absent and native OpenRC commands are
    available. Unsupported init systems return `ManagerUnavailable` before a
    service definition is installed.
+
+### Explicit user scope (`--user-scope`)
+
+When invoked with `--user-scope` (used by Client-initiated bootstrap), the
+selector explicitly targets a systemd user unit without privilege escalation:
+
+- It never invokes `sudo`, `pkexec`, or `loginctl enable-linger`.
+- It never falls back to a system systemd unit or OpenRC.
+- An active user bus (requiring the `/run/user/<uid>/bus` socket and supplying
+  the derived environment) and a successful `systemctl --user show-environment`
+  probe are sufficient, even when `Linger=no`. It does not accept an arbitrary
+  `DBUS_SESSION_BUS_ADDRESS` independently.
+- Because linger is not modified, the service operates within the active user
+  session and requires an interactive user login to restart after logout or reboot.
+- If the user bus or systemd user manager probe fails, or if invoked as root,
+  installation fails immediately with typed `ManagerUnavailable` and a concise
+  actionable failure message rather than attempting elevation or fallback.
 
 The systemd unit fixes `HOME`, `SANAD_HOME`, working directory, user/group for
 system scope, `UMask=0077`, cgroup kill behavior, a 90-second stop timeout,

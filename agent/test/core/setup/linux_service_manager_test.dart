@@ -327,6 +327,120 @@ void main() {
     expect(result.error, contains('not owned'));
     expect(unit.existsSync(), isTrue);
   });
+
+  test(
+    'explicit user scope installs systemd user service even when Linger=no without sudo or altering linger',
+    () async {
+      Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+      final runtime = Directory(p.join(paths.userRuntimeDirectory, '1000'))
+        ..createSync(recursive: true);
+      File(p.join(runtime.path, 'bus')).createSync();
+      host.linger = false;
+      final manager = _manager(
+        host: host,
+        paths: paths,
+        loginHome: loginHome.path,
+        sanadHome: sanadHome.path,
+        identity: _user(loginHome.path),
+        userScope: true,
+      );
+
+      final result = await manager.install();
+
+      expect(result.success, isTrue, reason: result.error);
+      expect(result.status.scope, ServiceScope.systemdUser);
+      expect(result.status.state, ServiceState.running);
+      expect(host.linger, isFalse);
+      expect(host.commands, isNot(contains(contains('loginctl'))));
+      expect(host.commands, isNot(contains(contains('sudo'))));
+      final unit = File(
+        p.join(loginHome.path, '.config/systemd/user/sanad-agent.service'),
+      ).readAsStringSync();
+      expect(unit, isNot(contains('User=')));
+      expect(File(p.join(sanadHome.path, 'service.json')).existsSync(), isTrue);
+    },
+  );
+
+  test(
+    'explicit user scope fails with managerUnavailable without system/OpenRC fallback when bus is missing',
+    () async {
+      Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+      host.openRcAvailable = true;
+      final manager = _manager(
+        host: host,
+        paths: paths,
+        loginHome: loginHome.path,
+        sanadHome: sanadHome.path,
+        identity: _user(loginHome.path),
+        userScope: true,
+      );
+
+      final result = await manager.install();
+
+      expect(result.success, isFalse);
+      expect(result.status.state, ServiceState.managerUnavailable);
+      expect(result.status.scope, ServiceScope.systemdUser);
+      expect(result.error, contains('user bus is unavailable'));
+      expect(host.commands, isNot(contains(contains('sudo'))));
+      expect(host.commands, isNot(contains(contains('rc-service'))));
+      expect(
+        File(
+          p.join(paths.systemUnitDirectory, 'sanad-agent.service'),
+        ).existsSync(),
+        isFalse,
+      );
+    },
+  );
+
+  test(
+    'explicit user scope fails with concise error when systemctl probe fails',
+    () async {
+      Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+      final runtime = Directory(p.join(paths.userRuntimeDirectory, '1000'))
+        ..createSync(recursive: true);
+      File(p.join(runtime.path, 'bus')).createSync();
+      host.managerUnavailable = true;
+      final manager = _manager(
+        host: host,
+        paths: paths,
+        loginHome: loginHome.path,
+        sanadHome: sanadHome.path,
+        identity: _user(loginHome.path),
+        userScope: true,
+      );
+
+      final result = await manager.install();
+
+      expect(result.success, isFalse);
+      expect(result.status.state, ServiceState.managerUnavailable);
+      expect(result.error, contains('Failed to connect to bus'));
+      expect(host.commands, isNot(contains(contains('sudo'))));
+    },
+  );
+
+  test('explicit user scope fails when attempted as root', () async {
+    Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+    final manager = _manager(
+      host: host,
+      paths: paths,
+      loginHome: '/root',
+      sanadHome: sanadHome.path,
+      identity: const LinuxServiceIdentity(
+        userName: 'root',
+        groupName: 'root',
+        uid: 0,
+        home: '/root',
+        isRoot: true,
+      ),
+      userScope: true,
+    );
+
+    final result = await manager.install();
+
+    expect(result.success, isFalse);
+    expect(result.status.state, ServiceState.managerUnavailable);
+    expect(result.error, contains('root'));
+  });
 }
 
 LinuxServiceManager _manager({
@@ -336,6 +450,7 @@ LinuxServiceManager _manager({
   required String sanadHome,
   required LinuxServiceIdentity identity,
   String? dedicatedHome,
+  bool userScope = false,
 }) => LinuxServiceManager(
   serviceName: 'sanad-agent.service',
   executable: '/opt/sanad/bin/sanad',
@@ -347,6 +462,7 @@ LinuxServiceManager _manager({
   paths: paths,
   identity: identity,
   dedicatedHomePath: dedicatedHome ?? '/var/lib/sanad-agent',
+  userScope: userScope,
 );
 
 LinuxServiceIdentity _user(String home) => LinuxServiceIdentity(
@@ -440,7 +556,15 @@ class _FakeServiceHost {
       return _result(true);
     }
     if (executable == 'systemctl') {
-      if (arguments.contains('show-environment')) return _result(true);
+      if (arguments.contains('show-environment')) {
+        if (managerUnavailable) {
+          return const ServiceProcessResult(
+            exitCode: 1,
+            stderr: 'Failed to connect to bus',
+          );
+        }
+        return _result(true);
+      }
       if (arguments.contains('daemon-reload')) return _result(true);
       if (arguments.contains('enable')) {
         if (activationFails) {
