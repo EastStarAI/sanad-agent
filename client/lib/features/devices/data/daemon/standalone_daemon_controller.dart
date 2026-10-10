@@ -15,10 +15,26 @@ class StandaloneDaemonController implements LocalDaemonController {
   const StandaloneDaemonController({
     this.sanadHomePath,
     this.environment,
+    this.processRunner,
+    this.platformOverride,
   });
 
   final String? sanadHomePath;
   final Map<String, String>? environment;
+  final Future<ProcessResult> Function(String executable, List<String> arguments)? processRunner;
+  final String? platformOverride;
+
+  bool get _isLinux => platformOverride == 'linux' || (platformOverride == null && Platform.isLinux);
+
+  bool get _isWindows => platformOverride == 'windows' || (platformOverride == null && Platform.isWindows);
+
+  bool get _isMacOS => platformOverride == 'macos' || (platformOverride == null && Platform.isMacOS);
+
+  List<String> get serviceInstallArguments => [
+    'service',
+    'install',
+    if (_isLinux) '--user-scope',
+  ];
 
   LocalGatewayHttpClient get _gatewayClient => const LocalGatewayHttpClient();
 
@@ -28,7 +44,7 @@ class StandaloneDaemonController implements LocalDaemonController {
 
   String getHomeDirectory() {
     final environment = this.environment ?? Platform.environment;
-    if (Platform.isWindows) {
+    if (_isWindows) {
       return environment['USERPROFILE'] ?? '';
     }
     return environment['HOME'] ?? '';
@@ -56,7 +72,7 @@ class StandaloneDaemonController implements LocalDaemonController {
 
   String getExecutablePath() {
     final binDir = p.join(getSanadHome(), 'bin');
-    if (Platform.isWindows) {
+    if (_isWindows) {
       return p.join(binDir, 'sanad.exe');
     }
     return p.join(binDir, 'sanad');
@@ -65,10 +81,10 @@ class StandaloneDaemonController implements LocalDaemonController {
   String getServiceConfigPath() {
     final home = getHomeDirectory();
     final instance = _serviceInstance();
-    if (Platform.isMacOS) {
+    if (_isMacOS) {
       final label = instance.isEmpty ? 'com.eaststarai.sanad.agent' : 'com.eaststarai.sanad.agent.$instance';
       return p.join(home, 'Library', 'LaunchAgents', '$label.plist');
-    } else if (Platform.isLinux) {
+    } else if (_isLinux) {
       final name = instance.isEmpty ? 'sanad-agent.service' : 'sanad-agent-$instance.service';
       return p.join(home, '.config', 'systemd', 'user', name);
     }
@@ -133,7 +149,8 @@ class StandaloneDaemonController implements LocalDaemonController {
   Future<bool> startDaemon() async {
     try {
       final execPath = getExecutablePath();
-      final result = await Process.run(execPath, ['service', 'start']);
+      final runner = processRunner ?? Process.run;
+      final result = await runner(execPath, ['service', 'start']);
       _logger.info('Started daemon service: exitCode=${result.exitCode}');
       return result.exitCode == 0;
     } catch (e) {
@@ -146,7 +163,8 @@ class StandaloneDaemonController implements LocalDaemonController {
   Future<bool> stopDaemon() async {
     try {
       final execPath = getExecutablePath();
-      final result = await Process.run(execPath, ['service', 'stop']);
+      final runner = processRunner ?? Process.run;
+      final result = await runner(execPath, ['service', 'stop']);
       _logger.info('Stopped daemon service: exitCode=${result.exitCode}');
       return result.exitCode == 0;
     } catch (e) {
@@ -203,10 +221,14 @@ class StandaloneDaemonController implements LocalDaemonController {
     if (health == null) {
       final executableExists = File(getExecutablePath()).existsSync();
       if (executableExists) {
-        if (!isServiceInstalled() && !await install()) {
-          return const AgentLifecycleResult(
-            AgentLifecycleStatus.serviceRegistrationFailed,
-          );
+        if (!isServiceInstalled()) {
+          final registration = await registerService();
+          if (!registration.succeeded) {
+            return AgentLifecycleResult(
+              AgentLifecycleStatus.serviceRegistrationFailed,
+              message: registration.failureMessage,
+            );
+          }
         }
         if (!await startDaemon()) {
           return const AgentLifecycleResult(AgentLifecycleStatus.startFailed);
@@ -230,10 +252,14 @@ class StandaloneDaemonController implements LocalDaemonController {
           onProgress: onProgress,
         );
         if (!bootstrap.isSuccess) return _bootstrapResult(bootstrap);
-        if ((!isServiceInstalled() || Platform.isWindows) && !await install()) {
-          return const AgentLifecycleResult(
-            AgentLifecycleStatus.serviceRegistrationFailed,
-          );
+        if (!isServiceInstalled() || _isWindows) {
+          final registration = await registerService();
+          if (!registration.succeeded) {
+            return AgentLifecycleResult(
+              AgentLifecycleStatus.serviceRegistrationFailed,
+              message: registration.failureMessage,
+            );
+          }
         }
         if (!await startDaemon()) {
           return const AgentLifecycleResult(AgentLifecycleStatus.startFailed);
@@ -361,10 +387,10 @@ class StandaloneDaemonController implements LocalDaemonController {
 
   @override
   bool isServiceInstalled() {
-    if (Platform.environment.containsKey('FLUTTER_TEST')) {
+    if (Platform.environment.containsKey('FLUTTER_TEST') && platformOverride == null) {
       return false;
     }
-    if (Platform.isWindows) {
+    if (_isWindows) {
       try {
         final result = Process.runSync('schtasks', [
           '/Query',
@@ -388,26 +414,143 @@ class StandaloneDaemonController implements LocalDaemonController {
   @override
   bool get shouldAutoStart => isServiceInstalled();
 
-  @override
-  Future<bool> install() async {
+  Future<ServiceRegistrationResult> registerService() async {
     try {
       final execPath = getExecutablePath();
       if (!File(execPath).existsSync()) {
         _logger.info(
           'Agent executable is not present yet; service registration is deferred.',
         );
-        return true;
+        return const ServiceRegistrationResult(succeeded: true);
       }
-      final result = await Process.run(execPath, ['service', 'install']);
-      _logger.info('Installed daemon service: exitCode=${result.exitCode}');
+      final runner = processRunner ?? Process.run;
+      final result = await runner(execPath, serviceInstallArguments);
       if (result.exitCode != 0) {
-        _logger.severe('Service install stdout: ${result.stdout}');
-        _logger.severe('Service install stderr: ${result.stderr}');
+        final detail = sanitizeServiceRegistrationOutput(
+          stderr: result.stderr.toString(),
+          stdout: result.stdout.toString(),
+        );
+        _logger.warning(
+          'Daemon service registration failed (exitCode=${result.exitCode}, hasDiagnostic=${detail != null})',
+        );
+        return ServiceRegistrationResult(
+          succeeded: false,
+          diagnostic: detail,
+        );
       }
-      return result.exitCode == 0;
+      _logger.info('Installed daemon service: exitCode=0');
+      return const ServiceRegistrationResult(succeeded: true);
     } catch (e) {
-      _logger.severe('Failed to install service config: $e');
+      final detail = sanitizeServiceRegistrationText(e.toString());
+      _logger.warning(
+        'Failed to install service config (hasDiagnostic=${detail != null})',
+      );
+      return ServiceRegistrationResult(
+        succeeded: false,
+        diagnostic: detail,
+      );
     }
-    return false;
+  }
+
+  @override
+  Future<bool> install() async {
+    final result = await registerService();
+    return result.succeeded;
+  }
+
+  static String? sanitizeServiceRegistrationOutput({
+    String? stderr,
+    String? stdout,
+  }) {
+    final raw = (stderr != null && stderr.trim().isNotEmpty)
+        ? stderr
+        : (stdout != null && stdout.trim().isNotEmpty)
+        ? stdout
+        : null;
+    if (raw == null) return null;
+    return sanitizeServiceRegistrationText(raw);
+  }
+
+  static String? sanitizeServiceRegistrationText(String raw) {
+    final noAnsi = raw.replaceAll(
+      RegExp(r'\x1B\[[0-9;]*[a-zA-Z]|\x1B[@-Z\\-_]'),
+      '',
+    );
+    final noControl = noAnsi.replaceAll(
+      RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]'),
+      ' ',
+    );
+    final lines = noControl.split('\n').map((l) => l.trim()).where((l) => l.isNotEmpty).toList();
+    if (lines.isEmpty) return null;
+
+    String candidate = lines.first;
+    for (final line in lines) {
+      if (line.toLowerCase().startsWith('service operation failed:')) {
+        candidate = line;
+        break;
+      }
+    }
+
+    if (candidate.toLowerCase().startsWith('service operation failed:')) {
+      candidate = candidate.substring(candidate.indexOf(':') + 1).trim();
+    }
+
+    if (RegExp(
+      r'(#\d+\s+|dart:|package:|Unhandled exception:|Exception:|Traceback|at\s+[\w\.]+)',
+      caseSensitive: false,
+    ).hasMatch(candidate)) {
+      return null;
+    }
+    if (RegExp(
+      r'(token|bearer|password|secret|private[_-]?key)',
+      caseSensitive: false,
+    ).hasMatch(candidate)) {
+      return null;
+    }
+    if (RegExp(
+      r'(sudo\s|systemctl\s|rc-service\s|powershell|launchctl|install\s+-m|useradd\s|chown\s|chmod\s)',
+      caseSensitive: false,
+    ).hasMatch(candidate)) {
+      return null;
+    }
+    if (candidate.startsWith('{') ||
+        candidate.startsWith('[') ||
+        candidate.startsWith('<') ||
+        candidate.contains('```')) {
+      return null;
+    }
+
+    candidate = candidate.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (candidate.isEmpty) return null;
+
+    if (candidate.length > 120) {
+      candidate = candidate.substring(0, 120).trim();
+    }
+    return candidate;
+  }
+}
+
+class ServiceRegistrationResult {
+  const ServiceRegistrationResult({
+    required this.succeeded,
+    this.diagnostic,
+  });
+
+  static const String defaultFailureMessage =
+      'The agent was downloaded but its background service could not be registered.';
+
+  final bool succeeded;
+  final String? diagnostic;
+
+  String get failureMessage {
+    final diag = diagnostic?.trim();
+    if (diag != null && diag.isNotEmpty) {
+      final base = defaultFailureMessage.endsWith('.')
+          ? defaultFailureMessage.substring(0, defaultFailureMessage.length - 1)
+          : defaultFailureMessage;
+      final cleanDiag = diag.endsWith('.') ? diag.substring(0, diag.length - 1) : diag;
+      return '$base: $cleanDiag.';
+    }
+    return defaultFailureMessage;
   }
 }

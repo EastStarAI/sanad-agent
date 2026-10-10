@@ -24,6 +24,30 @@ When the daemon is installed, update requests are delegated to its local
 The client uses the shared verified bootstrap installer only when no standalone
 daemon executable exists yet. Later updates never use that bootstrap path.
 
+### Service Registration and Error Diagnostics
+
+During bootstrap, the Client installs and registers the background daemon
+service. On Linux, `StandaloneDaemonController` explicitly passes `--user-scope`
+to `sanad service install`, guaranteeing unprivileged registration in the
+user's systemd session without attempting `sudo`, `pkexec`, or system fallback.
+The explicit path requires the host `/run/user/<uid>/bus` socket (and supplies
+the derived environment) rather than accepting `DBUS_SESSION_BUS_ADDRESS`
+independently. On macOS and Windows, standard `sanad service install` is
+invoked without extra flags.
+
+When service registration fails (exiting with a nonzero code), the controller
+sanitizes the process output before surfacing it:
+- ANSI escape sequences and non-printable control characters are stripped.
+- The most concise, actionable diagnostic line is extracted from stderr,
+  stdout, or exit messages, and bounded to at most 120 characters.
+- Unsuitable content (such as stack traces, JSON objects, internal shell command
+  payloads, and tokens/credentials) is rejected.
+- When a valid diagnostic is extracted, it is appended to the user-visible
+  `AgentLifecycleResult.message` (for example,
+  `The agent was downloaded but its background service could not be registered: The systemd user service manager is unavailable.`).
+- If registration output is empty or unsuitable, the controller cleanly falls
+  back to the generic message (`The agent was downloaded but its background service could not be registered.`).
+
 ## Source Runtime
 
 `SourceDaemonController` represents a daemon launched externally from source by
