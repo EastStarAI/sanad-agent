@@ -351,6 +351,7 @@ class RunArtifactCoordinator {
   final RunArtifactStore? store;
   final bool streamEvents;
   final StringSink? outSink;
+  final void Function(RunLifecycleEvent event)? eventSink;
   final String sessionId;
   final String? workspaceId;
   final String? executionRoot;
@@ -367,6 +368,7 @@ class RunArtifactCoordinator {
     this.store,
     this.streamEvents = false,
     this.outSink,
+    this.eventSink,
     required this.sessionId,
     this.workspaceId,
     this.executionRoot,
@@ -645,6 +647,11 @@ class RunArtifactCoordinator {
     );
     if (streamEvents && outSink != null) {
       outSink!.writeln(jsonEncode(event.toJson()));
+    }
+    if (eventSink != null) {
+      try {
+        eventSink!(event);
+      } catch (_) {}
     }
     if (store != null) {
       await store!.appendEvent(event);

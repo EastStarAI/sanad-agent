@@ -33,6 +33,7 @@ This directory owns the technical specifications of "HOW" the system is structur
 - **[Multimodal Tool Results and View Image](multimodal_tool_results_and_view_image.md):** Typed tool results, secure user attachments, tool-chosen image inspection, local/remote conversation media, provider translation, durability, and binary-safety boundaries.
 - **[Background Terminal Task Runtime](background_terminal_task_runtime.md):** Durable task ownership, atomic shell handoff, PTY supervision, cursor replay, typed wake admission, secure input, and lifecycle recovery.
 - **[Remote Device Control Protocol](remote_device_control_protocol.md):** Typed remote update, restart, admission errors, and correlation rules shared by local and cloud transports.
+- **[Remote CLI Relay Protocol](remote_cli_relay_protocol.md):** Typed protocol commands, streamed output, execution seam, and boundaries for remote Sanad CLI relay.
 - **[Remote Device Control Threat Model](remote_device_control_threat_model.md):** Trust boundaries, hosted ownership evidence, MCP payload handling, managed workspace roots, and gate-linked pass/fail tests for remote update, restart, workspaces, and MCP.
 - **[Remote Workspace Folder Mutation Protocol](workspace_folder_mutation_protocol.md):** Managed-root remote workspace create, constrained browse, and confirmation-gated folder mutations.
 - **[Workspace Identity, Rename, and Change Path Protocol](workspace_identity_protocol.md):** Stable UUID identity, missing-folder projection, scoped Settings routing, display rename, and path repair.
