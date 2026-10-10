@@ -1,8 +1,8 @@
 ---
 title: "Task 105 — Linux user-service installation and actionable errors"
-status: active
-current_gate: G5
-remaining_estimate: 10%
+status: completed
+current_gate: complete
+remaining_estimate: 0%
 ---
 
 # Task 105 — Linux user-service installation and actionable errors
@@ -59,13 +59,13 @@ Make packaged Linux Client bootstrap register a usable systemd user service with
 
 ### G5 — Ubuntu real-host acceptance
 
-- [ ] On the Ubuntu device, create a fresh worktree from `origin/fix/105-linux-user-service-install-errors`; do not switch or modify the source of any existing runtime.
-- [ ] Run the Agent and Client analyzers plus the focused service/controller tests from that worktree with bounded output.
-- [ ] Confirm the test account has an active systemd user bus and record `Linger` before testing; never change a pre-existing `Linger=yes` account merely to force the scenario.
-- [ ] Using only a worktree-scoped Sanad Home and isolated service instance, exercise real `--user-scope` install/status/stop/start/restart/uninstall against the Ubuntu user manager.
-- [ ] Prove the user unit is enabled and running under the user unit directory, no new system unit is created, no `sudo`/`pkexec` path is invoked, and `Linger` is unchanged.
-- [ ] Exercise the matched branch Client bootstrap path on Linux when the isolated runtime permits it, and verify successful local readiness; also preserve automated evidence for the sanitized detailed failure and generic fallback paths.
-- [ ] Clean only the isolated test service/Home, confirm the pre-existing Sanad runtime remains healthy, and return concise command/evidence results in the conversation. Do not commit or push from the Ubuntu device unless explicitly requested.
+- [x] On the Ubuntu device, create a fresh worktree from `origin/fix/105-linux-user-service-install-errors`; do not switch or modify the source of any existing runtime.
+- [x] Run the Agent and Client analyzers plus the focused service/controller tests from that worktree with bounded output.
+- [x] Confirm the test account has an active systemd user bus and record `Linger` before testing; never change a pre-existing `Linger=yes` account merely to force the scenario.
+- [x] Using only a worktree-scoped Sanad Home and isolated service instance, exercise real `--user-scope` install/status/stop/start/restart/uninstall against the Ubuntu user manager.
+- [x] Prove the user unit is enabled and running under the user unit directory, no new system unit is created, no `sudo`/`pkexec` path is invoked, and `Linger` is unchanged.
+- [x] Exercise the matched branch Client bootstrap path on Linux when the isolated runtime permits it, and verify successful local readiness; also preserve automated evidence for the sanitized detailed failure and generic fallback paths.
+- [x] Clean only the isolated test service/Home, confirm the pre-existing Sanad runtime remains healthy, and return concise command/evidence results in the conversation. Do not commit or push from the Ubuntu device unless explicitly requested.
 
 ## Acceptance Criteria
 
@@ -75,8 +75,8 @@ Make packaged Linux Client bootstrap register a usable systemd user service with
 - [x] Given registration output is empty or unsuitable, when the Client reports failure, then it uses the existing generic service-registration message.
 - [x] Existing default `sanad service install` durable selection, macOS behavior, and Windows behavior remain covered and unchanged.
 - [x] No failure message exposes credentials, full command payloads, ANSI/control characters, or unbounded output.
-- [ ] On the real Ubuntu host, the isolated user-scoped service completes its lifecycle without elevation, system-unit creation, linger mutation, or impact on the pre-existing runtime.
-- [ ] The Ubuntu run provides bounded analyzer/test output and Client-bootstrap evidence, or records a precise environmental blocker without weakening the earlier automated coverage.
+- [x] On the real Ubuntu host, the isolated user-scoped service completes its lifecycle without elevation, system-unit creation, linger mutation, or impact on the pre-existing runtime.
+- [x] The Ubuntu run provides bounded analyzer/test output and Client-bootstrap evidence, or records a precise environmental blocker without weakening the earlier automated coverage.
 
 ## Definition of Done
 
@@ -85,4 +85,4 @@ Make packaged Linux Client bootstrap register a usable systemd user service with
 - [x] The task status, closed gates, and remaining estimate reflect actual verification evidence.
 - [x] Graphify is updated.
 - [x] Local changes passed orchestrator review.
-- [ ] G5 Ubuntu real-host evidence is reviewed and the task status/remaining estimate is closed accurately.
+- [x] G5 Ubuntu real-host evidence is reviewed and the task status/remaining estimate is closed accurately.
