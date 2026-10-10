@@ -90,6 +90,33 @@ void main() {
     expect(payload['thinking_mode'], 'precise');
   });
 
+  test('updateSessionPreferences sends an explicit empty thinking mode to clear it', () async {
+    final future = commands.updateSessionPreferences(
+      sessionId: 'session-1',
+      providerId: 'provider-1',
+      thinkingMode: '',
+    );
+
+    final command = socket.capturedCommands.single;
+    expect(command['command'], 'update_session_preferences');
+    final payload = command['payload'] as Map<String, dynamic>;
+    expect(payload, containsPair('provider_instance_id', 'provider-1'));
+    expect(payload.containsKey('provider_id'), isFalse);
+    expect(payload, containsPair('thinking_mode', ''));
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_updated',
+      'payload': {
+        'request_id': payload['request_id'],
+        'session_id': 'session-1',
+        'thinking_mode': null,
+      },
+    });
+
+    await future;
+  });
+
   test('replayTurn sends the current route and explicit safety confirmation', () async {
     final future = commands.replayTurn(
       sessionId: 'session-1',

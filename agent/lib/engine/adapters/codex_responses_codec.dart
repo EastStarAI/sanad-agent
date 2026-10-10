@@ -5,6 +5,7 @@ import '../../core/models/agent_response.dart';
 import '../../core/models/llm_provider_state.dart';
 import '../../core/models/message.dart';
 import '../../core/models/tool_call.dart';
+import '../../core/provider_thinking/openai_thinking_wire_codec.dart';
 import 'llm_request_options.dart';
 
 class CodexResponsesException implements Exception {
@@ -66,9 +67,11 @@ class CodexResponsesCodec {
         .where((content) => content.isNotEmpty)
         .join('\n\n');
     final input = _historyToInput(history);
-    final reasoning = <String, dynamic>{'summary': 'auto'};
-    final effort = _reasoningEffort(options.thinkingMode);
-    if (effort != null) reasoning['effort'] = effort;
+    final reasoning = <String, dynamic>{};
+    OpenAiThinkingWireCodec.applyResponsesReasoning(
+      reasoning,
+      options.thinkingDirective,
+    );
     final body = <String, dynamic>{
       'model': model.trim(),
       'instructions': instructions.isEmpty
@@ -667,27 +670,6 @@ class CodexResponsesCodec {
     final value = raw?.toString().trim().toLowerCase();
     if (value == null || value.isEmpty) return null;
     return value.replaceAll('-', '_').replaceAll(' ', '_');
-  }
-
-  static String? _reasoningEffort(String? thinkingMode) {
-    switch (_normalizedToken(thinkingMode)) {
-      case 'fast':
-        return 'low';
-      case 'balanced':
-      case 'normal':
-        return 'medium';
-      case 'deep':
-        return 'high';
-      case 'none':
-      case 'minimal':
-      case 'low':
-      case 'medium':
-      case 'high':
-      case 'xhigh':
-        return _normalizedToken(thinkingMode);
-      default:
-        return null;
-    }
   }
 
   static void _requireNonEmpty(

@@ -671,10 +671,17 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       }
       if (!_nextMessageThinkingByAgentId.containsKey(agent.id)) {
         final savedThinking = preferencesRepository.getLastThinkingMode(agent.id)?.trim();
-        final thinkingMode = savedThinking?.isNotEmpty == true ? savedThinking! : defaultThinkingMode;
-        _nextMessageThinkingByAgentId[agent.id] = thinkingMode;
-        if (savedThinking == null || savedThinking.isEmpty) {
-          unawaited(preferencesRepository.setLastThinkingMode(agent.id, thinkingMode));
+        final caps = capabilitiesStore?.getForAgent(agent.id);
+        if (caps?.usesModelThinkingControls == true) {
+          if (savedThinking != null && savedThinking.isNotEmpty) {
+            _nextMessageThinkingByAgentId[agent.id] = savedThinking;
+          }
+        } else {
+          final thinkingMode = savedThinking?.isNotEmpty == true ? savedThinking! : defaultThinkingMode;
+          _nextMessageThinkingByAgentId[agent.id] = thinkingMode;
+          if (savedThinking == null || savedThinking.isEmpty) {
+            unawaited(preferencesRepository.setLastThinkingMode(agent.id, thinkingMode));
+          }
         }
       }
 
@@ -887,6 +894,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         thinkingMode: _nextMessageThinkingByAgentId[agent.id],
         intent: intent,
       );
+      if (targetSessionId.isNotEmpty) {
+        final currentThinking = _nextMessageThinkingByAgentId[agent.id];
+        sessionCubit.applyThinkingMode(targetSessionId, currentThinking);
+      }
       if (requestId != null && targetSessionId.isNotEmpty) {
         sessionCubit.markSessionDraftAwaitingAcceptance(
           agent.id,
@@ -1240,18 +1251,46 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     }
 
     try {
-      await conversationRepository.updateSessionPreferences(
-        agent,
-        sessionId: sessionId,
-        providerId: providerId,
-        model: model,
-        thinkingMode: thinkingMode,
+      final trimmedProviderId = providerId?.trim();
+      final trimmedModel = model?.trim();
+      final trimmedThinkingMode = thinkingMode?.trim();
+
+      // 1. Immediately update SessionCubit state & cache
+      sessionCubit.applySessionRoutePreferences(
+        sessionId,
+        providerId: trimmedProviderId,
+        model: trimmedModel,
+        thinkingMode: thinkingMode != null ? (trimmedThinkingMode ?? '') : null,
       );
 
-      // Persist these as the last selected values for this agent
+      // 2. Persist device-level last preferences and in-memory nextMessage maps
+      if (trimmedProviderId != null) {
+        if (trimmedProviderId.isEmpty) {
+          _nextMessageProviderByAgentId.remove(agent.id);
+        } else {
+          _nextMessageProviderByAgentId[agent.id] = trimmedProviderId;
+          unawaited(preferencesRepository.setLastProvider(agent.id, trimmedProviderId));
+        }
+      }
+
+      if (trimmedModel != null) {
+        if (trimmedModel.isEmpty) {
+          _nextMessageModelByAgentId.remove(agent.id);
+          unawaited(preferencesRepository.clearPreferences(agent.id));
+        } else {
+          _nextMessageModelByAgentId[agent.id] = trimmedModel;
+          unawaited(preferencesRepository.setLastModel(agent.id, trimmedModel));
+        }
+      }
+
       if (thinkingMode != null) {
-        _nextMessageThinkingByAgentId[agent.id] = thinkingMode;
-        unawaited(preferencesRepository.setLastThinkingMode(agent.id, thinkingMode));
+        if (trimmedThinkingMode == null || trimmedThinkingMode.isEmpty) {
+          _nextMessageThinkingByAgentId.remove(agent.id);
+          unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
+        } else {
+          _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
+          unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
+        }
       }
 
       emit(
@@ -1260,6 +1299,14 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           nextMessageModel: _nextMessageModelByAgentId[agent.id],
           nextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id],
         ),
+      );
+
+      await conversationRepository.updateSessionPreferences(
+        agent,
+        sessionId: sessionId,
+        providerId: providerId,
+        model: model,
+        thinkingMode: thinkingMode,
       );
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
@@ -1305,10 +1352,15 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         final trimmedThinkingMode = thinkingMode.trim();
         if (trimmedThinkingMode.isEmpty) {
           _nextMessageThinkingByAgentId.remove(agent.id);
+          unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
         } else {
           _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
           unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
         }
+        sessionCubit.applyThinkingMode(
+          activeSessionId,
+          trimmedThinkingMode.isEmpty ? null : trimmedThinkingMode,
+        );
       }
       emit(
         state.copyWith(
@@ -1348,9 +1400,17 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     if (trimmedThinkingMode != null) {
       if (trimmedThinkingMode.isEmpty) {
         _nextMessageThinkingByAgentId.remove(agent.id);
+        unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
       } else {
         _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
         unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
+      }
+      final activeSessionId = state.activeSessionId;
+      if (activeSessionId != null && activeSessionId.isNotEmpty) {
+        sessionCubit.applyThinkingMode(
+          activeSessionId,
+          trimmedThinkingMode.isEmpty ? null : trimmedThinkingMode,
+        );
       }
     }
 

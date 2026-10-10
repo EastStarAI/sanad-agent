@@ -451,7 +451,8 @@ void main() {
       expect(json['display_name'], equals('Test Agent'));
       expect(json['protocol_version'], equals('v1'));
       expect(json['capabilities'].containsKey('models'), isFalse);
-      expect(json['capabilities']['thinking_modes_list'], contains('fast'));
+      expect(json['capabilities']['thinking_modes_list'], isEmpty);
+      expect(json['capabilities']['thinking_mode_source'], equals('model'));
       expect(json['capabilities']['supports_stop'], isTrue);
       expect(json['capabilities']['supports_workspaces'], isTrue);
       expect(json['capabilities']['supports_local_tool_runtime'], isTrue);

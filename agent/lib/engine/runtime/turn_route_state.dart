@@ -1,6 +1,7 @@
 import '../../core/config.dart';
 import '../../core/di.dart';
 import '../../core/agent_runtime_service.dart';
+import '../../core/provider_thinking/thinking_route_session_sync.dart';
 import '../adapters/llm_adapter.dart';
 import '../adapters/missing_provider_adapter.dart';
 import '../agent_context_assembler.dart';
@@ -94,6 +95,10 @@ class TurnRouteState {
     // Invalidate any cached resolved route so the next resolution re-resolves
     // from AgentRuntimeService with the updated ids.
     _resolvedTurnRoute = null;
+  }
+
+  void updateTurnThinkingMode(String? thinkingMode) {
+    _turnThinkingMode = thinkingMode;
   }
 
   /// Clears the cached resolved route, forcing re-resolution on next call.
@@ -231,12 +236,29 @@ class TurnRouteState {
 
     final newProvider = _turnProviderId ?? sessionProviderId();
     final newModel = _turnModel ?? session.model;
-    final newThinking = _turnThinkingMode ?? session.thinkingMode;
+    var newThinking = _turnThinkingMode ?? session.thinkingMode;
 
     final providerChanged =
         newProvider != null && newProvider != session.providerId;
     final modelChanged = newModel != session.model;
+
+    if ((providerChanged || modelChanged) &&
+        newProvider != null &&
+        newProvider.isNotEmpty &&
+        newModel.isNotEmpty &&
+        getIt.isRegistered<ThinkingRouteSessionSync>()) {
+      final revalidated = getIt<ThinkingRouteSessionSync>().revalidateAndApplySession(
+        sessionId: sessionId,
+        providerInstanceId: newProvider,
+        modelId: newModel,
+        selectionId: newThinking,
+      );
+      newThinking = revalidated.selectionId;
+      _turnThinkingMode = newThinking;
+    }
+
     final thinkingChanged = newThinking != session.thinkingMode;
+
     if (!providerChanged && !modelChanged && !thinkingChanged) {
       return null;
     }
@@ -263,6 +285,7 @@ class TurnRouteState {
         sessionManager.updateSessionModeling(
           sessionId,
           thinkingMode: newThinking,
+          clearThinkingMode: newThinking == null,
         );
       }
     } else {
@@ -273,6 +296,7 @@ class TurnRouteState {
         providerId: newProvider,
         model: newModel,
         thinkingMode: newThinking,
+        clearThinkingMode: newThinking == null,
       );
     }
     contextAssembler.invalidateVolatile();

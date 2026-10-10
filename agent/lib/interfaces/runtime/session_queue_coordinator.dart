@@ -1,3 +1,5 @@
+import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
 import 'package:sanad_agent/core/secrets_redactor.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
@@ -134,16 +136,20 @@ class SessionQueueCoordinator {
     final queue = _pendingEvents[sessionId];
     if (queue != null && queue.isNotEmpty) {
       _pendingEvents[sessionId] = queue
-          .map(
-            (queuedRun) => queuedRun.copyWith(
-              request: overrideTurnRoute(
-                queuedRun.request,
-                providerInstanceId: providerInstanceId,
-                modelId: modelId,
-                defaultModelForProvider: _defaultModelForProvider,
-              ),
-            ),
-          )
+          .map((queuedRun) {
+            var request = overrideTurnRoute(
+              queuedRun.request,
+              providerInstanceId: providerInstanceId,
+              modelId: modelId,
+              defaultModelForProvider: _defaultModelForProvider,
+            );
+            if (getIt.isRegistered<ThinkingRouteSessionSync>()) {
+              request = getIt<ThinkingRouteSessionSync>().revalidateTurnRequest(
+                request,
+              );
+            }
+            return queuedRun.copyWith(request: request);
+          })
           .toList();
     }
     if (!persist) return;

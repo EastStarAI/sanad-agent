@@ -1,9 +1,11 @@
 import 'dart:async';
+
 import 'package:logging/logging.dart';
 
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
 import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
@@ -41,6 +43,7 @@ class ProviderModelCacheService {
   final _logger = Logger('ProviderModelCacheService');
   final ProviderInstanceRepository _repo;
   final AgentRuntimeService _runtime;
+  final ThinkingCapabilityAssembler _thinkingAssembler;
   final ConcurrencyLimiter _limiter;
   final Duration _cooldown;
 
@@ -52,7 +55,8 @@ class ProviderModelCacheService {
 
   ProviderModelCacheService(
     this._repo,
-    this._runtime, {
+    this._runtime,
+    this._thinkingAssembler, {
     int maxConcurrency = 3,
     Duration cooldown = const Duration(minutes: 5),
   }) : _limiter = ConcurrencyLimiter(maxConcurrency),
@@ -82,15 +86,7 @@ class ProviderModelCacheService {
     if (modelsList == null) return null;
 
     return modelsList
-        .map(
-          (m) => ModelOption(
-            value: m['value'] as String,
-            label: m['label'] as String,
-            provider: m['provider'] as String?,
-            contextWindow: m['context_window'] as int?,
-            supportsReasoning: m['supports_reasoning'] as bool? ?? false,
-          ),
-        )
+        .map((m) => ModelOption.fromJson(Map<String, dynamic>.from(m as Map)))
         .toList();
   }
 
@@ -119,13 +115,8 @@ class ProviderModelCacheService {
             return Future.value(
               modelsList
                   .map(
-                    (m) => ModelOption(
-                      value: m['value'] as String,
-                      label: m['label'] as String,
-                      provider: m['provider'] as String?,
-                      contextWindow: m['context_window'] as int?,
-                      supportsReasoning:
-                          m['supports_reasoning'] as bool? ?? false,
+                    (m) => ModelOption.fromJson(
+                      Map<String, dynamic>.from(m as Map),
                     ),
                   )
                   .toList(),
@@ -172,13 +163,19 @@ class ProviderModelCacheService {
       final adapter = _runtime.adapterFor(signature);
 
       final liveModels = await adapter.getAvailableModels();
+      final fetchedAt = DateTime.now().toUtc();
       final source = switch (adapter) {
         BaseOpenAIAdapter adapter => adapter.availableModelsSource,
         BaseAnthropicAdapter adapter => adapter.availableModelsSource,
         _ => 'live',
       };
+      final enrichedModels = _thinkingAssembler.enrichAll(
+        instance: instance,
+        models: liveModels,
+        observedAt: fetchedAt,
+      );
 
-      if (liveModels.isEmpty) {
+      if (enrichedModels.isEmpty) {
         throw StateError('Empty model list returned from provider');
       }
 
@@ -197,7 +194,7 @@ class ProviderModelCacheService {
       _repo.upsertModelCache(
         instanceId: instanceId,
         cacheKey: 'models',
-        models: liveModels.map((m) => m.toJson()).toList(),
+        models: enrichedModels.map((m) => m.toJson()).toList(),
         fetchedAt: DateTime.now(),
         source: source,
         configRevision: configRev,
@@ -209,18 +206,29 @@ class ProviderModelCacheService {
         'Live model cache refresh succeeded for instance $instanceId',
       );
       _eventController.add(instanceId);
-      return liveModels;
+      return enrichedModels;
     } catch (e) {
       _logger.warning('Failed to refresh models for instance $instanceId: $e');
 
-      // Keep previous success in DB but update last_error metadata
+      // Keep previous model ids but mark thinking controls unknown until a live
+      // probe succeeds again (Task 43 Gate B).
       final cached = _repo.readModelCache(instanceId, 'models');
       final cachedModels = cached?['models'] as List<dynamic>?;
       if (cached != null && cachedModels != null && cachedModels.isNotEmpty) {
+        final staleModels = cachedModels
+            .map(
+              (m) => ModelOption.fromJson(Map<String, dynamic>.from(m as Map)),
+            )
+            .toList(growable: false);
+        final probeFailedModels = _thinkingAssembler.markProbeFailed(
+          instance: instance,
+          models: staleModels,
+        );
+
         _repo.upsertModelCache(
           instanceId: instanceId,
           cacheKey: 'models',
-          models: cachedModels,
+          models: probeFailedModels.map((m) => m.toJson()).toList(),
           fetchedAt: cached['fetched_at'] != null
               ? DateTime.parse(cached['fetched_at'] as String)
               : DateTime.now(),
@@ -230,17 +238,7 @@ class ProviderModelCacheService {
           lastError: e.toString(),
         );
 
-        return cachedModels
-            .map(
-              (m) => ModelOption(
-                value: m['value'] as String,
-                label: m['label'] as String,
-                provider: m['provider'] as String?,
-                contextWindow: m['context_window'] as int?,
-                supportsReasoning: m['supports_reasoning'] as bool? ?? false,
-              ),
-            )
-            .toList();
+        return probeFailedModels;
       }
 
       _repo.upsertModelCache(

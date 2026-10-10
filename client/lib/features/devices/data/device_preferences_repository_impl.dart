@@ -55,6 +55,11 @@ class DevicePreferencesRepositoryImpl implements IDevicePreferencesRepository {
   }
 
   @override
+  Future<void> clearLastThinkingMode(String deviceId) async {
+    await _prefs.remove(_thinkingKey(deviceId));
+  }
+
+  @override
   Future<void> clearPreferences(String deviceId) async {
     await _prefs.remove(_providerKey(deviceId));
     await _prefs.remove(_modelKey(deviceId));

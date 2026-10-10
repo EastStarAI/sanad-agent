@@ -269,7 +269,12 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
         return;
       }
 
-      switch (scope) {
+      final activeSessionId = messagesCubit.state.activeSessionId;
+      final effectiveScope = (activeSessionId != null && activeSessionId.isNotEmpty)
+          ? CapabilityValueScope.session
+          : scope;
+
+      switch (effectiveScope) {
         case CapabilityValueScope.session:
           messagesCubit.stagePendingRouteSelection(
             providerId: providerId,
@@ -287,6 +292,10 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
           );
           break;
         case CapabilityValueScope.none:
+          messagesCubit.setNextMessagePreferences(
+            providerId: providerId,
+            model: model,
+          );
           break;
       }
     } catch (e) {
@@ -299,18 +308,16 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
     String? thinkingMode,
   }) async {
     try {
-      // Always update local preference first (for UI and persistence)
-      messagesCubit.setNextMessagePreferences(thinkingMode: thinkingMode);
+      // Null/empty means provider default (Task 43 Gate H). Pass an empty
+      // string so setNextMessagePreferences clears local + persisted preference.
+      final normalized = thinkingMode?.trim() ?? '';
+      messagesCubit.setNextMessagePreferences(thinkingMode: normalized);
 
-      switch (scope) {
-        case CapabilityValueScope.session:
-          await messagesCubit.updateSessionPreferences(thinkingMode: thinkingMode);
-          break;
-        case CapabilityValueScope.message:
-          // Already handled by setNextMessagePreferences
-          break;
-        case CapabilityValueScope.none:
-          break;
+      final activeSessionId = messagesCubit.state.activeSessionId;
+      if (activeSessionId != null && activeSessionId.isNotEmpty) {
+        await messagesCubit.updateSessionPreferences(
+          thinkingMode: normalized,
+        );
       }
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
