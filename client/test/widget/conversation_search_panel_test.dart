@@ -2,13 +2,28 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart'
+    show kSupportedLocales;
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_search_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/conversation_search_panel.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 import '../helpers/fake_conversation_repository.dart';
+
+Widget _localizedApp({
+  required Widget home,
+  Locale locale = const Locale('en'),
+}) {
+  return MaterialApp(
+    locale: locale,
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: kSupportedLocales,
+    home: Scaffold(body: home),
+  );
+}
 
 void main() {
   final device = DeviceConfig(id: 'device-1', name: 'Device', isOnline: true);
@@ -32,17 +47,15 @@ void main() {
     required ValueChanged<SessionSearchHit> onSelected,
   }) async {
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: BlocProvider(
-            create: (_) => SessionSearchCubit(repository: repository),
-            child: SizedBox(
-              width: 600,
-              height: 700,
-              child: ConversationSearchPanel(
-                device: device,
-                onSelected: onSelected,
-              ),
+      _localizedApp(
+        home: BlocProvider(
+          create: (_) => SessionSearchCubit(repository: repository),
+          child: SizedBox(
+            width: 600,
+            height: 700,
+            child: ConversationSearchPanel(
+              device: device,
+              onSelected: onSelected,
             ),
           ),
         ),
@@ -54,15 +67,13 @@ void main() {
   testWidgets('button opens a dialog on wide layout', (tester) async {
     final repository = FakeConversationRepository();
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: BlocProvider(
-            create: (_) => SessionSearchCubit(repository: repository),
-            child: ConversationSearchButton(
-              device: device,
-              isDrawerMode: false,
-              onSelected: (_) {},
-            ),
+      _localizedApp(
+        home: BlocProvider(
+          create: (_) => SessionSearchCubit(repository: repository),
+          child: ConversationSearchButton(
+            device: device,
+            isDrawerMode: false,
+            onSelected: (_) {},
           ),
         ),
       ),
@@ -78,15 +89,13 @@ void main() {
   testWidgets('button opens a bottom sheet in drawer mode', (tester) async {
     final repository = FakeConversationRepository();
     await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: BlocProvider(
-            create: (_) => SessionSearchCubit(repository: repository),
-            child: ConversationSearchButton(
-              device: device,
-              isDrawerMode: true,
-              onSelected: (_) {},
-            ),
+      _localizedApp(
+        home: BlocProvider(
+          create: (_) => SessionSearchCubit(repository: repository),
+          child: ConversationSearchButton(
+            device: device,
+            isDrawerMode: true,
+            onSelected: (_) {},
           ),
         ),
       ),
@@ -196,5 +205,33 @@ void main() {
     final textField = tester.widget<TextField>(field);
     expect(textField.controller?.text, isEmpty);
     expect(clearButton, findsNothing);
+  });
+
+  testWidgets('button and panel follow the Arabic locale', (tester) async {
+    final repository = FakeConversationRepository();
+    await tester.pumpWidget(
+      _localizedApp(
+        locale: const Locale('ar'),
+        home: BlocProvider(
+          create: (_) => SessionSearchCubit(repository: repository),
+          child: ConversationSearchButton(
+            device: device,
+            isDrawerMode: false,
+            onSelected: (_) {},
+          ),
+        ),
+      ),
+    );
+    await tester.pump();
+
+    expect(find.text('ابحث في المحادثات'), findsOneWidget);
+    expect(find.text('Search conversations'), findsNothing);
+
+    await tester.tap(find.byKey(const Key('conversation_search_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('ابحث في العناوين والرسائل'), findsOneWidget);
+    expect(find.byTooltip('إغلاق البحث'), findsOneWidget);
+    expect(find.text('ابحث في سجل محادثات هذا الجهاز.'), findsOneWidget);
   });
 }

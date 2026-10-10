@@ -11,7 +11,6 @@ class SessionSearchState extends Equatable {
   final List<SessionSearchHit> hits;
   final String? nextCursor;
   final bool hasMore;
-  final String? errorMessage;
 
   const SessionSearchState({
     this.query = '',
@@ -20,7 +19,6 @@ class SessionSearchState extends Equatable {
     this.hits = const [],
     this.nextCursor,
     this.hasMore = false,
-    this.errorMessage,
   });
 
   SessionSearchState copyWith({
@@ -31,8 +29,6 @@ class SessionSearchState extends Equatable {
     String? nextCursor,
     bool clearCursor = false,
     bool? hasMore,
-    String? errorMessage,
-    bool clearError = false,
   }) {
     return SessionSearchState(
       query: query ?? this.query,
@@ -41,7 +37,6 @@ class SessionSearchState extends Equatable {
       hits: hits ?? this.hits,
       nextCursor: clearCursor ? null : nextCursor ?? this.nextCursor,
       hasMore: hasMore ?? this.hasMore,
-      errorMessage: clearError ? null : errorMessage ?? this.errorMessage,
     );
   }
 
@@ -53,6 +48,5 @@ class SessionSearchState extends Equatable {
     hits,
     nextCursor,
     hasMore,
-    errorMessage,
   ];
 }
