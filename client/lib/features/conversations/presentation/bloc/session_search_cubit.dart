@@ -54,7 +54,6 @@ class SessionSearchCubit extends Cubit<SessionSearchState> {
         hits: const [],
         clearCursor: true,
         hasMore: false,
-        clearError: true,
       ),
     );
     await _searchFirstPage(device, state.query, generation);
@@ -68,7 +67,7 @@ class SessionSearchCubit extends Cubit<SessionSearchState> {
     }
     final generation = _generation;
     final query = state.query;
-    emit(state.copyWith(status: SessionSearchStatus.loadingMore, clearError: true));
+    emit(state.copyWith(status: SessionSearchStatus.loadingMore));
     try {
       final page = await _repository.searchSessions(
         device,
@@ -87,12 +86,7 @@ class SessionSearchCubit extends Cubit<SessionSearchState> {
       );
     } catch (_) {
       if (!_isCurrent(generation, device.id, query)) return;
-      emit(
-        state.copyWith(
-          status: SessionSearchStatus.failure,
-          errorMessage: 'Could not load more results.',
-        ),
-      );
+      emit(state.copyWith(status: SessionSearchStatus.failure));
     }
   }
 
@@ -121,7 +115,6 @@ class SessionSearchCubit extends Cubit<SessionSearchState> {
           query: query,
           deviceId: device.id,
           status: SessionSearchStatus.failure,
-          errorMessage: 'Conversation search failed. Try again.',
         ),
       );
     }

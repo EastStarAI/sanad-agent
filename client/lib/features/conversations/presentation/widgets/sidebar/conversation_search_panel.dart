@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:material_symbols_icons/symbols.dart';
 
+import '../../../../../l10n/app_localizations.dart';
 import '../../../../devices/domain/models/device_config.dart';
 import '../../../domain/models/session_search.dart';
 import '../../bloc/session_search_cubit.dart';
@@ -57,6 +58,7 @@ class ConversationSearchButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context)!;
     return Material(
       key: const Key('conversation_search_button'),
       color: Colors.transparent,
@@ -77,7 +79,7 @@ class ConversationSearchButton extends StatelessWidget {
               const SizedBox(width: 8),
               Expanded(
                 child: Text(
-                  'Search conversations',
+                  l10n.searchConversations,
                   style: TextStyle(
                     color: theme.colorScheme.onSurface,
                     fontSize: 12,
@@ -167,6 +169,7 @@ class _ConversationSearchPanelState extends State<ConversationSearchPanel> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return Focus(
       onKeyEvent: _onKey,
       child: Column(
@@ -188,7 +191,7 @@ class _ConversationSearchPanelState extends State<ConversationSearchPanel> {
                     },
                     onSubmitted: (_) => _submit(),
                     decoration: InputDecoration(
-                      hintText: 'Search titles and messages',
+                      hintText: l10n.searchTitlesAndMessages,
                       prefixIcon: const Icon(Symbols.search_rounded),
                       suffixIcon: ValueListenableBuilder<TextEditingValue>(
                         valueListenable: _controller,
@@ -197,7 +200,7 @@ class _ConversationSearchPanelState extends State<ConversationSearchPanel> {
                             return const SizedBox.shrink();
                           }
                           return IconButton(
-                            tooltip: 'Clear search',
+                            tooltip: l10n.clearSearch,
                             onPressed: () {
                               _controller.clear();
                               context.read<SessionSearchCubit>().queryChanged(widget.device, '');
@@ -226,7 +229,7 @@ class _ConversationSearchPanelState extends State<ConversationSearchPanel> {
                 ),
                 IconButton(
                   key: const Key('conversation_search_close_btn'),
-                  tooltip: 'Close search',
+                  tooltip: l10n.closeSearch,
                   padding: EdgeInsets.zero,
                   constraints: const BoxConstraints(minWidth: 24, minHeight: 24),
                   onPressed: () => Navigator.of(context).pop(),
@@ -269,22 +272,23 @@ class _SearchResults extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     if (state.status == SessionSearchStatus.idle) {
-      return const Center(child: Text('Search this device’s conversation history.'));
+      return Center(child: Text(l10n.searchHistoryHint));
     }
     if (state.status == SessionSearchStatus.loading) {
       return const Center(child: CircularProgressIndicator());
     }
     if (state.status == SessionSearchStatus.empty) {
-      return const Center(
+      return Center(
         child: Text(
-          'No conversations found.',
-          key: Key('conversation_search_empty'),
+          l10n.noConversationsFound,
+          key: const Key('conversation_search_empty'),
         ),
       );
     }
     if (state.status == SessionSearchStatus.failure && state.hits.isEmpty) {
-      return _SearchError(message: state.errorMessage, onRetry: onRetry);
+      return _SearchError(onRetry: onRetry);
     }
     return ListView.builder(
       key: const Key('conversation_search_results'),
@@ -301,16 +305,16 @@ class _SearchResults extends StatelessWidget {
             padding: const EdgeInsets.all(12),
             child: OutlinedButton(
               onPressed: state.status == SessionSearchStatus.failure ? onRetry : onLoadMore,
-              child: Text(state.status == SessionSearchStatus.failure ? 'Retry' : 'Load more'),
+              child: Text(state.status == SessionSearchStatus.failure ? l10n.retry : l10n.loadMore),
             ),
           );
         }
         final hit = state.hits[index];
         final workspace = hit.session.workspaceName;
         final kind = switch (hit.matchKind) {
-          SessionSearchMatchKind.title => 'Title match',
-          SessionSearchMatchKind.content => 'Message match',
-          SessionSearchMatchKind.titleAndContent => 'Title and message match',
+          SessionSearchMatchKind.title => l10n.titleMatch,
+          SessionSearchMatchKind.content => l10n.messageMatch,
+          SessionSearchMatchKind.titleAndContent => l10n.titleAndMessageMatch,
         };
         return ListTile(
           key: ValueKey('conversation_search_result:${hit.session.id}'),
@@ -345,22 +349,22 @@ String _formatSearchDate(DateTime value) {
 }
 
 class _SearchError extends StatelessWidget {
-  final String? message;
   final VoidCallback onRetry;
 
-  const _SearchError({required this.message, required this.onRetry});
+  const _SearchError({required this.onRetry});
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(message ?? 'Conversation search failed.', textAlign: TextAlign.center),
+            Text(l10n.conversationSearchFailed, textAlign: TextAlign.center),
             const SizedBox(height: 12),
-            FilledButton(onPressed: onRetry, child: const Text('Retry')),
+            FilledButton(onPressed: onRetry, child: Text(l10n.retry)),
           ],
         ),
       ),
