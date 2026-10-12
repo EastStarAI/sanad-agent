@@ -10,6 +10,7 @@ import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart'
 import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/deferred_tool_result.dart';
@@ -1510,7 +1511,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       event,
       fallback: existingSession?.workspaceId,
     );
-    final turnRequest = _buildTurnRequest(
+    var turnRequest = _buildTurnRequest(
       event,
       requestedWorkspaceId: requestedWorkspaceId,
     );
@@ -1574,6 +1575,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     } else if (payloadModel != null && payloadModel.isNotEmpty) {
       final provider =
           turnRequest.effectiveProviderInstanceId ?? existingSession.providerId;
+      final priorModel = existingSession.model;
       if (provider != null &&
           provider.isNotEmpty &&
           getIt.isRegistered<SessionRouteMutationCoordinator>()) {
@@ -1588,6 +1590,24 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         );
       } else {
         sessionManager.updateSessionModel(event.sessionId, payloadModel);
+      }
+
+      if (provider != null &&
+          provider.isNotEmpty &&
+          getIt.isRegistered<ThinkingRouteSessionSync>() &&
+          (priorModel != payloadModel ||
+              provider != existingSession.providerId)) {
+        final corrected = getIt<ThinkingRouteSessionSync>()
+            .revalidateAndApplySession(
+              sessionId: event.sessionId,
+              providerInstanceId: provider,
+              modelId: payloadModel,
+              selectionId:
+                  turnRequest.thinkingMode ?? existingSession.thinkingMode,
+            );
+        turnRequest = turnRequest.copyWith(
+          thinkingMode: corrected.selectionId,
+        );
       }
     }
 

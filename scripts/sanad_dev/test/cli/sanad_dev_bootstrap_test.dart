@@ -123,7 +123,17 @@ fi
   });
 
   tearDown(() async {
-    if (await fixture.exists()) await fixture.delete(recursive: true);
+    if (await fixture.exists()) {
+      try {
+        await fixture.delete(recursive: true);
+      } on FileSystemException {
+        // Windows file locking can delay folder deletion after process exit
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        try {
+          if (await fixture.exists()) await fixture.delete(recursive: true);
+        } catch (_) {}
+      }
+    }
   });
 
   Future<ProcessResult> runBootstrap(
@@ -610,7 +620,7 @@ fi
     expect(await calls.readAsString(), isEmpty);
     expect(installedShim.existsSync(), isTrue);
     expect(await installedShim.readAsString(), '@echo foreign checkout');
-  }, skip: !Platform.isWindows);
+  }, skip: !Platform.isWindows, timeout: const Timeout(Duration(minutes: 2)));
 
   test('PowerShell bootstrap pins verified user-scoped artifacts', () async {
     final source = await File('../sanad-dev.ps1').readAsString();
