@@ -44,6 +44,7 @@ This contract applies to `agent/`.
 - `GatewayManager` routes typed delivery policy; it does not inspect event names to infer delivery or runtime meaning.
 - `SanadProtocolBridge` dispatches/translates shared local/cloud canonical protocol. Focused handlers own workflows and receive dependencies explicitly rather than resolving hidden runtime owners.
 - Local and cloud Sanad transports remain independent adapters. Failure of one cannot stop the other or terminate the daemon event loop.
+- Hosted attachment/media admission requires `supports_attachments=true`; each relay envelope independently requires `version: "v1"`. Binary bytes travel only in bounded relay chunks and never in canonical commands/events, logs, or durable public state.
 - The cloud path is outbound; the local daemon path is an inbound loopback server on a configured dynamic port.
 - Runtime-rich turn input enters through typed interface models with explicit device, session, request, workspace, provider/model, thinking, origin, and delivery intent.
 - Workspace browsing, MCP, skills, slash commands, provider runtime, device settings, and session queries are daemon-owned services; clients render results but never become their source of truth.

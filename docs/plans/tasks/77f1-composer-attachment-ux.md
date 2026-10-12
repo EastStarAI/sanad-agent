@@ -68,7 +68,7 @@ evidence_fingerprint: "sha256:1f92463d390f35c6731087bc335672a612766e50a396b08131
 - Status transition: `pending/R0` → `in_progress/G1`.
 - Packet `77e` is ready at the pinned clean revisions.
 - Confirmed `ConversationInputCubit` as the single transient controller, `ConversationCacheStore` as the device/session draft owner, and `ConversationBottomActions` as the position owner immediately left of Permission Mode.
-- The existing client has `desktop_drop`; picker abstraction must remain injectable and platform-neutral rather than coupling presentation to transport. Capability parsing must consume `attachment_media_v1`, not legacy `supports_attachments` inference.
+- The existing client has `desktop_drop`; picker abstraction remains injectable and platform-neutral rather than coupling presentation to transport. Final hosted compatibility uses `supports_attachments=true` for admission; optional `attachment_media_v1` metadata refines limits only.
 - Remaining estimate: `75%` for 77f1 and approximately `23%` for Plan 77.
 - Next gate: `G1 — Entry points`.
 
@@ -77,7 +77,7 @@ evidence_fingerprint: "sha256:1f92463d390f35c6731087bc335672a612766e50a396b08131
 - Status transition: `in_progress/G1` → `in_progress/G2`.
 - Added one accessible `composer_add_attachment` picker control immediately left of Permission Mode; the picker is invoked once per press.
 - Picker files, desktop drops, and focused image paste events now converge on `ConversationInputCubit.addDraftAttachment`; ordinary text paste remains untouched.
-- The controller validates the negotiated `attachment_media_v1` limits and preserves composer text/focus. Focused analyzer for the four edited Dart files reports no errors (one unnecessary-import info was removed immediately).
+- The controller validates negotiated attachment limits (or canonical safe defaults when optional metadata is absent) and preserves composer text/focus. Focused analyzer for the four edited Dart files reports no errors (one unnecessary-import info was removed immediately).
 - Remaining estimate: `50%` for 77f1 and approximately `22%` for Plan 77.
 - Next gate: `G2 — Rail and state`.
 

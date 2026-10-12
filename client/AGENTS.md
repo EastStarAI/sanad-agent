@@ -43,7 +43,7 @@ Do not introduce convenience code that weakens these boundaries.
 - `ConversationCacheStore` is the single client-side owner of conversation cache, device destinations, drafts, pagination resources, and workspace expansion.
 - Conversation delivery, execution, attention, suspension, queue, steer, stop, replay, and recovery change only from matching authoritative outcomes.
 - Session, draft, processing, and recovery state remain isolated by device/session identity; a selected session from another device cannot survive a device switch.
-- Composer attachment picker, focused image paste, and desktop drop converge on `ConversationInputCubit`; widgets never stage files or invoke socket transport directly. Support and limits come only from the negotiated `attachment_media_v1` capability, drafts stay device/session scoped, and send remains unavailable while any retained item is not `ready`.
+- Composer attachment picker, focused image paste, and desktop drop converge on `ConversationInputCubit`; widgets never stage files or invoke socket transport directly. Attachment admission is enabled only by `supports_attachments=true`; optional versioned attachment metadata may refine limits, otherwise the canonical safe limits apply. Drafts stay device/session scoped, and send remains unavailable while any retained item is not `ready`.
 - Raw request id is transport identity. Display ids, timestamps, and optimistic UI rows cannot replace it.
 
 ### Localization Ownership

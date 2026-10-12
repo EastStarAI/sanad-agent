@@ -104,24 +104,36 @@ class ConversationCommands {
       );
     }
     final requestId = generateConversationRequestId();
-    final response = await _gateway.request(
-      command: 'attachment.admit',
-      requestId: requestId,
-      timeout: const Duration(seconds: 30),
-      payload: {
-        'request_id': requestId,
-        'session_id': sessionId,
-        'attachments': attachments,
-      },
-    );
-    final responsePayload = response?['payload'] is Map
-        ? Map<String, dynamic>.from(response!['payload'] as Map)
-        : const <String, dynamic>{};
-    final rawIds = responsePayload['attachment_ids'];
-    final attachmentIds = rawIds is List
-        ? rawIds.whereType<String>().where((id) => id.isNotEmpty).toList(growable: false)
-        : const <String>[];
-    if (responsePayload['outcome'] != 'accepted' || attachmentIds.length != attachments.length) {
+    final List<String> attachmentIds;
+    if (_gateway.isLocalTransport) {
+      final response = await _gateway.request(
+        command: 'attachment.admit',
+        requestId: requestId,
+        timeout: const Duration(seconds: 30),
+        payload: {
+          'request_id': requestId,
+          'session_id': sessionId,
+          'attachments': attachments,
+        },
+      );
+      final responsePayload = response?['payload'] is Map
+          ? Map<String, dynamic>.from(response!['payload'] as Map)
+          : const <String, dynamic>{};
+      final rawIds = responsePayload['attachment_ids'];
+      attachmentIds = rawIds is List
+          ? rawIds.whereType<String>().where((id) => id.isNotEmpty).toList(growable: false)
+          : const <String>[];
+      if (responsePayload['outcome'] != 'accepted') {
+        throw StateError('Attachment admission failed.');
+      }
+    } else {
+      attachmentIds = await _gateway.admitHostedAttachments(
+        sessionId: sessionId,
+        requestId: requestId,
+        attachments: attachments,
+      );
+    }
+    if (attachmentIds.length != attachments.length) {
       throw StateError('Attachment admission failed.');
     }
 

@@ -61,11 +61,11 @@ evidence_fingerprint: "sha256:1f92463d390f35c6731087bc335672a612766e50a396b08131
 
 ## Locked protocol contract
 
-- Capability: `attachment_media_v1` advertises ordered attachment references, upload admission, and authenticated media retrieval independently from provider vision support.
+- Admission capability: `supports_attachments=true`. Optional `attachment_media_v1` metadata advertises ordered-reference limits but is not a separate admission flag; relay envelopes independently require `version: "v1"`.
 - Upload operations use typed create/write/commit/cancel requests and closed ACK/error results. Upload/request identity is idempotent; retry returns the prior terminal result and never promotes twice.
 - Canonical `think` carries an ordered `attachment_ids` list only after all uploads commit. IDs are opaque Agent-owned references; filenames, paths, bytes, and base64 are forbidden in the turn command.
 - The Agent resolves every ID against the exact session, reconstructs canonical metadata from its repository, and atomically persists that immutable ordered list with the user message before execution admission.
-- Local and cloud transports map the same typed contract. A remote route lacking `attachment_media_v1` returns `attachment_capability_unavailable`; no optimistic user message is created, and the client retains its draft.
+- Local and cloud transports map the same typed contract. A remote route without `supports_attachments=true` returns `attachment_capability_unavailable`; no optimistic user message is created, and the client retains its draft.
 
 ## Progress log
 

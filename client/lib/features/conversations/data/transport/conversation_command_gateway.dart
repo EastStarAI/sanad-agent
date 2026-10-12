@@ -5,11 +5,18 @@ import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 
 abstract class ConversationCommandGateway {
   bool get isConnected;
+  bool get isLocalTransport;
   Stream<Map<String, dynamic>> get events;
 
   void sendCommand({
     required String command,
     Map<String, dynamic>? payload,
+  });
+
+  Future<List<String>> admitHostedAttachments({
+    required String sessionId,
+    required String requestId,
+    required List<Map<String, dynamic>> attachments,
   });
 
   Future<Map<String, dynamic>?> request({
@@ -40,6 +47,9 @@ class SocketConversationCommandGateway implements ConversationCommandGateway {
   bool get isConnected => _controller.isConnected;
 
   @override
+  bool get isLocalTransport => _controller.isLocalTransport;
+
+  @override
   Stream<Map<String, dynamic>> get events => _controller.eventRouter.forDevices({
     _config.id,
     if (_config.cloudDeviceId case final cloudDeviceId?) cloudDeviceId,
@@ -60,6 +70,18 @@ class SocketConversationCommandGateway implements ConversationCommandGateway {
       payload: payload,
     );
   }
+
+  @override
+  Future<List<String>> admitHostedAttachments({
+    required String sessionId,
+    required String requestId,
+    required List<Map<String, dynamic>> attachments,
+  }) => _controller.admitHostedAttachments(
+    deviceId: _config.accountDeviceId ?? _config.id,
+    sessionId: sessionId,
+    requestId: requestId,
+    attachments: attachments,
+  );
 
   @override
   Future<Map<String, dynamic>?> request({

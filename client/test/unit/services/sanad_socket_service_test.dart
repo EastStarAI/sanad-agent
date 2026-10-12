@@ -10,7 +10,12 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
 import 'package:logging/logging.dart';
+import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
@@ -28,6 +33,58 @@ class _CountingCredentialProvider extends LocalGatewayCredentialProvider {
     reads++;
     return const {LocalGatewayCredentialProvider.headerName: 'unused'};
   }
+}
+
+final class _RelaySocket implements socket_io.Socket {
+  final listeners = <String, List<Function>>{};
+  final emitted = <(String, dynamic)>[];
+  final _emitWaiters = <String, List<Completer<dynamic>>>{};
+
+  @override
+  Function() on(String event, Function fn) {
+    listeners.putIfAbsent(event, () => []).add(fn);
+    return () {};
+  }
+
+  @override
+  socket_io.Socket onAny(dynamic Function(String, dynamic) handler) => this;
+
+  @override
+  void emit(String event, [dynamic data]) {
+    emitted.add((event, data));
+    final waiters = _emitWaiters[event];
+    if (waiters != null && waiters.isNotEmpty) {
+      waiters.removeAt(0).complete(data);
+    }
+  }
+
+  Future<dynamic> nextEmit(String event) {
+    final completer = Completer<dynamic>();
+    _emitWaiters.putIfAbsent(event, () => []).add(completer);
+    return completer.future.timeout(const Duration(seconds: 2));
+  }
+
+  Future<void> receive(String event, dynamic data) async {
+    for (final listener in listeners[event] ?? const <Function>[]) {
+      final result = Function.apply(listener, [data]);
+      if (result is Future) await result;
+    }
+  }
+
+  @override
+  socket_io.Socket connect() {
+    scheduleMicrotask(() async {
+      await receive('connect', null);
+      await receive('auth_success', <String, dynamic>{});
+    });
+    return this;
+  }
+
+  @override
+  bool get connected => true;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
 }
 
 void main() {
@@ -61,6 +118,175 @@ void main() {
     expect(provider.reads, 0);
     expect(service.isConnected, isFalse);
   });
+  group('hosted attachment and media relay', () {
+    late _RelaySocket socket;
+    late SanadSocketService service;
+
+    setUp(() async {
+      socket = _RelaySocket();
+      service = SanadSocketService(
+        url: 'https://gateway.invalid',
+        hardwareId: 'client-hardware',
+        startToken: 'test-token',
+        cloudSocketFactory: (_, _) => socket,
+      );
+      await service.connect();
+    });
+
+    tearDown(() => service.dispose());
+
+    test('waits for authoritative terminal ACK before returning IDs', () async {
+      final bytes = Uint8List.fromList(utf8.encode('hosted payload'));
+      final startEmission = socket.nextEmit('attachment_upload_start');
+      final admission = service.admitHostedAttachments(
+        deviceId: 'remote-device',
+        sessionId: 'session-a',
+        requestId: 'request-a',
+        attachments: [
+          {
+            'name': 'private-name.txt',
+            'mime_type': 'text/plain',
+            'size_bytes': bytes.length,
+            'sha256': sha256.convert(bytes).toString(),
+            'data_base64': base64Encode(bytes),
+          },
+        ],
+      );
+      final start = await startEmission as Map;
+      expect(start['turn_total_bytes'], bytes.length);
+      expect(start.containsKey('data'), isFalse);
+
+      final chunkEmission = socket.nextEmit('attachment_upload_chunk');
+      await socket.receive('attachment_upload_ack', {
+        'version': 'v1',
+        'upload_id': 'request-a_0',
+        'state': 'started',
+        'next_index': 0,
+      });
+      final chunk = await chunkEmission as Map;
+      expect(chunk['data'], bytes);
+      expect(
+        socket.emitted.where((entry) => entry.$1 == 'device_command'),
+        isEmpty,
+      );
+
+      final commitEmission = socket.nextEmit('attachment_upload_commit');
+      await socket.receive('attachment_upload_ack', {
+        'version': 'v1',
+        'upload_id': 'request-a_0',
+        'state': 'chunk',
+        'index': 0,
+        'next_index': 1,
+        'duplicate': false,
+      });
+      await commitEmission;
+      var completed = false;
+      unawaited(admission.whenComplete(() => completed = true));
+      await Future<void>.delayed(Duration.zero);
+      expect(completed, isFalse);
+
+      await socket.receive('attachment_upload_ack', {
+        'version': 'v1',
+        'upload_id': 'request-a_0',
+        'state': 'terminal',
+        'outcome': 'accepted',
+        'attachment_id': 'opaque-attachment',
+      });
+      expect(await admission, ['opaque-attachment']);
+    });
+
+    test('reassembles and verifies exact remote media bytes', () async {
+      final bytes = Uint8List.fromList(utf8.encode('image bytes'));
+      final fetchEmission = socket.nextEmit('conversation_media_fetch');
+      final fetched = service.fetchHostedConversationMedia(
+        deviceId: 'remote-device',
+        sessionId: 'session-a',
+        mediaId: 'opaque-media',
+        purpose: 'view',
+      );
+      final fetch = await fetchEmission as Map;
+      final routeId = fetch['route_id'];
+      await socket.receive('conversation_media_start', {
+        'version': 'v1',
+        'route_id': routeId,
+        'session_id': 'session-a',
+        'size_bytes': bytes.length,
+        'sha256': sha256.convert(bytes).toString(),
+        'mime_type': 'image/png',
+        'chunk_count': 1,
+      });
+      await socket.receive('conversation_media_chunk', {
+        'version': 'v1',
+        'route_id': routeId,
+        'index': 0,
+        'sha256': sha256.convert(bytes).toString(),
+        'data': bytes,
+      });
+      await socket.receive('conversation_media_complete', {
+        'version': 'v1',
+        'route_id': routeId,
+      });
+
+      final result = await fetched;
+      expect(result.bytes, bytes);
+      expect(result.mimeType, 'image/png');
+    });
+
+    test('consumer cancellation cancels the media route', () async {
+      final fetchEmission = socket.nextEmit('conversation_media_fetch');
+      late void Function() cancel;
+      final fetched = service.fetchHostedConversationMedia(
+        deviceId: 'remote-device',
+        sessionId: 'session-a',
+        mediaId: 'opaque-media',
+        purpose: 'view',
+        registerCancel: (callback) => cancel = callback,
+      );
+      final fetch = await fetchEmission as Map;
+      final cancelEmission = socket.nextEmit('conversation_media_cancel');
+
+      cancel();
+
+      await expectLater(fetched, throwsA(isA<StateError>()));
+      expect(
+        await cancelEmission,
+        containsPair('route_id', fetch['route_id']),
+      );
+    });
+
+    test('hash failure cancels the media route', () async {
+      final fetchEmission = socket.nextEmit('conversation_media_fetch');
+      final fetched = service.fetchHostedConversationMedia(
+        deviceId: 'remote-device',
+        sessionId: 'session-a',
+        mediaId: 'opaque-media',
+        purpose: 'thumbnail',
+      );
+      final fetch = await fetchEmission as Map;
+      final routeId = fetch['route_id'];
+      await socket.receive('conversation_media_start', {
+        'version': 'v1',
+        'route_id': routeId,
+        'session_id': 'session-a',
+        'size_bytes': 1,
+        'sha256': sha256.convert([1]).toString(),
+        'mime_type': 'image/png',
+        'chunk_count': 1,
+      });
+      final cancelEmission = socket.nextEmit('conversation_media_cancel');
+      await socket.receive('conversation_media_chunk', {
+        'version': 'v1',
+        'route_id': routeId,
+        'index': 0,
+        'sha256': sha256.convert([2]).toString(),
+        'data': Uint8List.fromList([1]),
+      });
+
+      await expectLater(fetched, throwsA(isA<FormatException>()));
+      expect(await cancelEmission, containsPair('route_id', routeId));
+    });
+  });
+
   // ──────────────────────────────────────────────────────────────────────────
   // C1-1 / C1-2 — observable state & streams
   // ──────────────────────────────────────────────────────────────────────────

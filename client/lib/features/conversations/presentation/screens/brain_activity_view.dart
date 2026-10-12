@@ -65,6 +65,8 @@ class BrainActivityView extends StatefulWidget {
   final Future<void> Function()? onLoadNewerHistory;
   final Future<void> Function(String eventId)? onLoadAnchoredHistory;
   final Future<List<InlineEditAttachmentSelection>> Function()? pickEditAttachmentFiles;
+  final ViewImageMediaLoader? viewImageMediaLoader;
+  final UserAttachmentMediaLoader? userAttachmentMediaLoader;
 
   const BrainActivityView({
     super.key,
@@ -91,6 +93,8 @@ class BrainActivityView extends StatefulWidget {
     this.onLoadNewerHistory,
     this.onLoadAnchoredHistory,
     this.pickEditAttachmentFiles,
+    this.viewImageMediaLoader,
+    this.userAttachmentMediaLoader,
   });
 
   @override
@@ -1458,6 +1462,8 @@ class _BrainActivityViewState extends State<BrainActivityView> {
                 isExpanded: _isToolGroupExpanded(item),
                 onToggleExpanded: (expanded) => _onToolGroupToggleExpanded(item, expanded),
                 expandedChildEventIds: _expandedEventIds,
+                viewImageMediaLoader: widget.viewImageMediaLoader,
+                userAttachmentMediaLoader: widget.userAttachmentMediaLoader,
                 onChildToggleExpanded: (eventId, expanded) {
                   if (expanded) {
                     _expandedEventIds.add(eventId);
@@ -1482,6 +1488,8 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       builder: (context, pendingToolName) => EventTile(
         key: ValueKey(event.id),
         event: event,
+        viewImageMediaLoader: widget.viewImageMediaLoader,
+        userAttachmentMediaLoader: widget.userAttachmentMediaLoader,
         waitingIndicator: event.status == EventStatus.running && pendingToolName == event.toolName
             ? (event.toolName == 'system_ask_user' ? ToolWaitingIndicator.question : ToolWaitingIndicator.permission)
             : ToolWaitingIndicator.none,

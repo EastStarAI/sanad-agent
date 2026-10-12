@@ -235,6 +235,33 @@ final class AttachmentStore {
     );
   }
 
+  /// Resolves a durable private reference inside this store and revalidates
+  /// its immutable size and digest before any authenticated media transport.
+  Future<Uint8List?> readVerifiedAttachment(
+    UserAttachment attachment, {
+    int maximumBytes = UserAttachmentPolicy.maxFileBytes,
+  }) async {
+    if (attachment.status != UserAttachmentStatus.available ||
+        attachment.agentLocalReference.trim().isEmpty ||
+        attachment.sizeBytes > maximumBytes) {
+      return null;
+    }
+    final candidate = p.normalize(
+      p.join(p.dirname(_root.path), attachment.agentLocalReference),
+    );
+    if (!p.isWithin(_root.path, candidate)) return null;
+    try {
+      final bytes = await File(candidate).readAsBytes();
+      if (bytes.length != attachment.sizeBytes ||
+          sha256.convert(bytes).toString() != attachment.sha256) {
+        return null;
+      }
+      return Uint8List.fromList(bytes);
+    } on Object {
+      return null;
+    }
+  }
+
   Future<void> cancel(AttachmentUpload upload) async {
     final pending = _pending.remove(upload.id);
     if (pending != null) await _deleteIfPresent(pending.file);

@@ -11,6 +11,10 @@ enum WorkspaceScope { session, none }
 enum LocalToolRuntimeScope { workspace, device, none }
 
 class Capability {
+  static const int defaultAttachmentMaxFileBytes = 5 * 1024 * 1024;
+  static const int defaultAttachmentMaxFilesPerMessage = 4;
+  static const int defaultAttachmentMaxTotalBytesPerMessage = 20 * 1024 * 1024;
+
   final bool supportsModelChange;
   final bool supportsThinkingModeChange;
   final bool supportsVoiceMessage;
@@ -89,7 +93,20 @@ class Capability {
         ? Map<String, dynamic>.from(attachmentMedia)
         : const <String, dynamic>{};
     final attachmentVersion = attachmentContract['version'];
-    final supportsAttachmentMedia = attachmentVersion == 1 && attachmentContract['ordered_references'] == true;
+    final explicitAttachmentSupport = caps['supports_attachments'];
+    final supportsAttachmentMedia = explicitAttachmentSupport is bool
+        ? explicitAttachmentSupport
+        : attachmentVersion == 1 && attachmentContract['ordered_references'] == true;
+    final maxFileBytes = supportsAttachmentMedia
+        ? (attachmentContract['max_file_bytes'] as num?)?.toInt() ?? defaultAttachmentMaxFileBytes
+        : 0;
+    final maxFilesPerMessage = supportsAttachmentMedia
+        ? (attachmentContract['max_files_per_message'] as num?)?.toInt() ?? defaultAttachmentMaxFilesPerMessage
+        : 0;
+    final maxTotalBytesPerMessage = supportsAttachmentMedia
+        ? (attachmentContract['max_total_bytes_per_message'] as num?)?.toInt() ??
+              defaultAttachmentMaxTotalBytesPerMessage
+        : 0;
     final appearanceMap = json['appearance'] is Map
         ? Map<String, dynamic>.from(json['appearance'] as Map)
         : (caps['appearance'] is Map ? Map<String, dynamic>.from(caps['appearance'] as Map) : null);
@@ -102,9 +119,9 @@ class Capability {
       supportsStop: caps['supports_stop'] ?? false,
       supportsWorkplace: caps['supports_workplace'] ?? false,
       supportsAttachments: supportsAttachmentMedia,
-      attachmentMaxFileBytes: (attachmentContract['max_file_bytes'] as num?)?.toInt() ?? 0,
-      attachmentMaxFilesPerMessage: (attachmentContract['max_files_per_message'] as num?)?.toInt() ?? 0,
-      attachmentMaxTotalBytesPerMessage: (attachmentContract['max_total_bytes_per_message'] as num?)?.toInt() ?? 0,
+      attachmentMaxFileBytes: maxFileBytes,
+      attachmentMaxFilesPerMessage: maxFilesPerMessage,
+      attachmentMaxTotalBytesPerMessage: maxTotalBytesPerMessage,
       supportsUpdateSessionName: caps['supports_update_session_name'] ?? false,
       supportsDeleteSession: caps['supports_delete_session'] ?? false,
       supportsSlashCommands: caps['supports_slash_commands'] ?? false,

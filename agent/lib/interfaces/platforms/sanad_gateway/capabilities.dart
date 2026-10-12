@@ -192,6 +192,7 @@ class AgentCapabilities {
       'supports_local_tool_runtime': supportsLocalToolRuntime,
       'supports_slash_commands': supportsSlashCommands,
       'delivery_presence_v1': true,
+      'supports_attachments': true,
       'attachment_media_v1': {
         'version': 1,
         'ordered_references': true,

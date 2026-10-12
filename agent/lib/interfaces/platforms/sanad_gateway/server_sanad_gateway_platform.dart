@@ -28,6 +28,10 @@ import 'package:sanad_agent/infrastructure/voice/voice_transport_channel.dart';
 import 'package:sanad_agent/interfaces/models/device_control.dart';
 import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
+import 'package:sanad_agent/evolution/session_manager.dart';
+
+import 'hosted_binary_relay.dart';
 
 class ServerSanadGatewayPlatform extends BasePlatform
     with SanadGatewayBehavior {
@@ -104,6 +108,8 @@ class ServerSanadGatewayPlatform extends BasePlatform
   Future<void>? _registrationFuture;
   bool _registrationPending = false;
   String? _pendingRegistrationChallengeNonce;
+  HostedBinaryRelay? _binaryRelay;
+  io.Socket? _binaryRelaySocket;
 
   String? get registeredDeviceId => _registeredDeviceId;
 
@@ -159,6 +165,18 @@ class ServerSanadGatewayPlatform extends BasePlatform
       _socket =
           socketFactory?.call(gatewayUrl, options) ??
           io.io(gatewayUrl, options);
+    }
+
+    if (!identical(_binaryRelaySocket, _socket)) {
+      if (getIt.isRegistered<AttachmentStore>() &&
+          getIt.isRegistered<SessionManager>()) {
+        _binaryRelay ??= HostedBinaryRelay(
+          store: getIt<AttachmentStore>(),
+          historyLoader: getIt<SessionManager>().getMessages,
+        );
+        _binaryRelay!.bind(_socket!);
+        _binaryRelaySocket = _socket;
+      }
     }
 
     _socket!.onConnect((_) async {
