@@ -51,12 +51,13 @@ jobs:
           printf '%s' "$CERTIFICATE_BASE64" | base64 -D > "$RUNNER_TEMP/distribution.p12"
           printf '%s' "$PROFILE_BASE64" | base64 -D > "$RUNNER_TEMP/sanad.mobileprovision"
           security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
           security default-keychain -s "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           security import "$RUNNER_TEMP/distribution.p12" -k "$keychain" \
             -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security list-keychains -d user -s "$keychain"
-          security set-key-partition-list -S apple-tool:,apple: \
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$keychain_password" "$keychain"
           uuid="$(security cms -D -i "$RUNNER_TEMP/sanad.mobileprovision" |
             plutil -extract UUID raw -o - -)"
