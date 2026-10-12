@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/appearance/appearance_store.dart';
 import 'package:sanad_agent/core/app_config.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/config.dart';
@@ -22,6 +23,8 @@ import 'package:sanad_agent/core/provider_runtime/provider_state_service.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
 import 'package:sanad_agent/core/provider_usage/provider_usage_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
@@ -36,6 +39,7 @@ import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/device_settings_service.dart';
 import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 
+import 'handlers/appearance_command_handler.dart';
 import 'handlers/device_settings_command_handler.dart';
 import 'handlers/device_control_command_handler.dart';
 import 'handlers/provider_command_handler.dart';
@@ -64,6 +68,7 @@ class SanadProtocolBridge {
   SessionForkCommandHandler? __forkHandler;
   DeviceSettingsCommandHandler? __deviceSettingsHandler;
   DeviceControlCommandHandler? __deviceControlHandler;
+  AppearanceCommandHandler? __appearanceHandler;
 
   /// Lazy accessors so optional runtime services registered after
   /// construction (e.g. in tests or deferred daemon startup) are only
@@ -109,6 +114,14 @@ class SanadProtocolBridge {
         routeTransitions: getIt.isRegistered<SessionRouteTransitionRepository>()
             ? getIt<SessionRouteTransitionRepository>()
             : null,
+        thinkingSelectionResolver:
+            getIt.isRegistered<ThinkingSelectionResolver>()
+            ? getIt<ThinkingSelectionResolver>()
+            : null,
+        thinkingPreferenceStore:
+            getIt.isRegistered<ThinkingRoutePreferenceStore>()
+            ? getIt<ThinkingRoutePreferenceStore>()
+            : null,
         compactionBoundaries: getIt.isRegistered<CompactionBoundaryRepository>()
             ? getIt<CompactionBoundaryRepository>()
             : null,
@@ -133,6 +146,14 @@ class SanadProtocolBridge {
   DeviceSettingsCommandHandler get _deviceSettingsHandler =>
       __deviceSettingsHandler ??= DeviceSettingsCommandHandler(
         settings: getIt<DeviceSettingsService>(),
+        bridge: this,
+      );
+
+  AppearanceCommandHandler get _appearanceHandler =>
+      __appearanceHandler ??= AppearanceCommandHandler(
+        store: getIt.isRegistered<AppearanceStore>()
+            ? getIt<AppearanceStore>()
+            : const AppearanceStore(),
         bridge: this,
       );
 
@@ -272,6 +293,11 @@ class SanadProtocolBridge {
       case 'get_sessions':
         event = CanonicalEvent(
           type: CanonicalEventTypes.getSessions,
+          payload: payload,
+        );
+      case 'search_sessions':
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.searchSessions,
           payload: payload,
         );
       case 'get_session_history':
@@ -431,6 +457,16 @@ class SanadProtocolBridge {
       case 'device.settings.update':
         event = CanonicalEvent(
           type: CanonicalEventTypes.deviceSettingsUpdate,
+          payload: payload,
+        );
+      case CanonicalEventTypes.getAppearance:
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.getAppearance,
+          payload: payload,
+        );
+      case CanonicalEventTypes.updateAppearance:
+        event = CanonicalEvent(
+          type: CanonicalEventTypes.updateAppearance,
           payload: payload,
         );
       case CanonicalEventTypes.deviceUpdateCheck:
@@ -782,6 +818,9 @@ class SanadProtocolBridge {
       case CanonicalEventTypes.getSessions:
         await emitEnvelope(_sessionQueryHandler.buildThreadsEnvelope(event));
         return;
+      case CanonicalEventTypes.searchSessions:
+        await emitEnvelope(_sessionQueryHandler.buildSearchEnvelope(event));
+        return;
       case CanonicalEventTypes.updateSessionTitle:
         final envelope = _sessionQueryHandler.buildUpdateSessionTitleEnvelope(
           event,
@@ -938,6 +977,14 @@ class SanadProtocolBridge {
         if (result.restartRequired) {
           getIt<DaemonRestartCoordinator>().scheduleRestart();
         }
+        return;
+      case CanonicalEventTypes.getAppearance:
+        await emitEnvelope(
+          await _appearanceHandler.buildSnapshotEnvelope(event),
+        );
+        return;
+      case CanonicalEventTypes.updateAppearance:
+        await emitEnvelope(await _appearanceHandler.buildUpdateEnvelope(event));
         return;
       case CanonicalEventTypes.deviceUpdateCheck:
       case CanonicalEventTypes.deviceUpdateApply:

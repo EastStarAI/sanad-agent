@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
+import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_failure_reason.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
@@ -60,7 +62,6 @@ class SessionRecoveryRestorer {
   Future<void> restorePersistedState() async {
     final store = _getPersistedState();
     if (store == null) return;
-    store.cleanupOrphanedWorkItems();
     _deleteOrphanedRuntimeNotices(store);
 
     final awaitingSuspensions = await _listAwaitingSuspensions();
@@ -89,6 +90,23 @@ class SessionRecoveryRestorer {
     int restoredQueuedCount = 0;
 
     for (final sessionId in sessionIds) {
+      if (getIt.isRegistered<ThinkingRouteSessionSync>()) {
+        final session = getIt<SessionManager>().getSession(sessionId);
+        final providerId = session?.providerId?.trim();
+        final modelId = session?.model.trim();
+        if (session != null &&
+            providerId != null &&
+            providerId.isNotEmpty &&
+            modelId != null &&
+            modelId.isNotEmpty) {
+          getIt<ThinkingRouteSessionSync>().revalidateAndApplySession(
+            sessionId: sessionId,
+            providerInstanceId: providerId,
+            modelId: modelId,
+          );
+        }
+      }
+
       final allItems = store.findRestorableWorkItems(sessionId);
       if (allItems.isEmpty) continue;
       final resumableWorkItemIds = <String>{};

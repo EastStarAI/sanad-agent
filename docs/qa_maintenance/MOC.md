@@ -16,7 +16,9 @@ This directory owns the specifications of test cases, manual validation flows, t
 ## Active Specifications
 
 - [Test Suite Performance and Ownership QA](test_suite_performance_qa.md): Package boundaries, deterministic timer/event testing, hotspot thresholds, and subprocess/port integration classification for Agent, Client, and `sanad-dev` suites.
+- [Agent Turn Startup Performance QA](agent_turn_startup_performance_qa.md): Metadata-only admission, atomic root-message append, revision-validated history reuse, and Windows long-session latency coverage.
 - [Flutter VM Driver CLI QA](flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
+- [Jev Sanad UI Automation](jev_sanad_ui_automation.md): Safety boundary and verification matrix for the Client Tester-owned conversation runner with narrow Jev verification.
 - [Bundled Product Skills QA](bundled_product_skills_qa.md): Deterministic one-file embedding, SANAD_HOME install/update/remove, customization safety, fast startup, and release-artifact coverage.
 - [Local Gateway and Sanad Home Security QA](local_gateway_and_sanad_home_security_qa.md): Authentication, Host/Origin rejection, secure writes, legacy migration, restart, Windows ACL, and worktree isolation coverage.
 - [Memory Tool Reliability QA](memory_tool_reliability.md): Regression coverage for compact results, atomic batches, drift recovery, bounded retries, content safety, and frozen snapshots.
@@ -31,6 +33,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Account Sessions and Devices QA](account_sessions_devices_qa.md): Account Client-session and Agent inventory presentation, hardware/account identity boundaries, cancellation, revocation, compact layout, and restart coverage.
 - [Device Name Editing QA](device_name_editing_qa.md): Device rename validation, synchronization, and failure coverage.
 - [Provider Account Usage Limits QA](provider_account_usage_limits_qa.md): Regression coverage for instance isolation, capability discovery, freshness, stale responses, and usage-card presentation.
+- [Provider-Aware Thinking Mode QA](provider_aware_thinking_mode_qa.md): Model-scoped thinking controls, fail-closed unknown routes, payload parity, and composer selector states (Task 43).
 - [OpenRouter App Attribution QA](openrouter_app_attribution_qa.md): Exact app-attribution headers, sync/stream propagation, bearer-auth preservation, and provider-isolation coverage.
 - [Message Edit and Retry QA](message_edit_retry_qa.md): Coverage for inline editing, idle-boundary ordering, side-effect and steer-drop confirmation, root-turn identity, navigation cancellation, and current route selection.
 - [Conversation Fork QA](conversation_fork_qa.md): Coverage for materialized fork, lineage, parent/child independence, and delete behavior.
@@ -49,3 +52,5 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Plan 50 Cancellation Regression Matrix](plan50_cancellation_regression_matrix.md): Provider interruption, shell process-tree cleanup, durable cancelled terminals, and client live/history parity for Stop.
 - [Task 31 Authoritative Session State QA Matrix](task31_authoritative_session_state_matrix.md): Coverage for the seven durable execution states, per-session attention isolation, reconnect ordering, stop/run races, and visible route failover deduplication.
 - [Task 36 Authoritative Steer, Queue, and Stop Recovery QA Matrix](task36_authoritative_steer_queue_stop_recovery_matrix.md): Coverage for daemon-owned delivery classification, raw request-id parity, pending-steer cancellation races, queue mutations, lossless Stop draft recovery, and first-writer restart claims.
+- [Agent State Database Maintenance QA](agent_state_database_maintenance_qa.md): Run/skip/fail matrix for startup orphan cleanup, 14-day terminal work-item prune, and thresholded VACUUM of state.db.
+- [CLI Session Observability & Safe Intervention QA](cli_session_observability_intervention_qa.md): Regression and verification coverage for daemon-backed CLI session listing, authoritative inspection, explicit question answering, ordinary tool permission decisions, cross-session safety, and scoped termination.

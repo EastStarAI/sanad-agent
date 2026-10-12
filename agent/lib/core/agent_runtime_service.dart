@@ -300,6 +300,7 @@ class AgentRuntimeService {
         return CodexResponsesAdapter(
           _config,
           profile,
+          modelsDevService: _modelsDevService,
           modelContextLimitLookup: modelContextLimitLookup,
           baseUrlOverride: signature.normalizedBaseUrl,
           apiKeyOverride: resolvedApiKey,

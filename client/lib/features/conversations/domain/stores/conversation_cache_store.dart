@@ -431,6 +431,7 @@ class ConversationCacheStore {
     final page = existing.copyWith(
       sessions: merged,
       nextCursor: nextCursor,
+      clearCursor: nextCursor == null,
       hasMore: hasMore,
       state: ConversationResourceState.ready,
       lastRefreshedAt: DateTime.now(),

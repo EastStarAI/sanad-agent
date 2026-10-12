@@ -13,6 +13,7 @@ import 'package:sanad_client/features/conversations/domain/models/session_execut
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_visual_state.dart';
 import 'package:sanad_client/features/home/presentation/widgets/new_chat_view.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input_panel.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_activity_bar.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_activity_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/event_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
@@ -26,6 +27,7 @@ import 'package:sanad_client/features/conversations/presentation/bloc/conversati
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/conversation_clock_scope.dart';
 import '../widgets/sidebar/sidebar_composition.dart';
 
 /// Displays the live conversation timeline as a stream of `CanonicalEvent`s
@@ -120,6 +122,9 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   List<ConversationTimelineItem> _timelineItems = [];
   StreamSubscription<List<CanonicalEvent>>? _messagesSubscription;
   final Set<String> _expandedEventIds = {};
+  final Set<String> _explicitlyInteractedToolGroupIds = {};
+  late final ValueNotifier<DateTime> _clockNotifier = ValueNotifier<DateTime>(DateTime.now());
+  Timer? _clockTimer;
   final Set<String> _pendingEntranceEventIds = {};
   TextEditingController? _editController;
   String? _editingEventId;
@@ -149,10 +154,12 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     _timelineItems = projectConversationTimeline(
       _messages,
       activityEligible: widget.activityEligible,
+      includeActivityItem: false,
     );
     _prepareInitialSessionPosition();
     _isOpeningSession = _timelineItems.isEmpty;
     _subscribeToMessages();
+    _syncClockTimer();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _updateComposerHeight();
       _requestMissingSavedAnchor();
@@ -162,6 +169,8 @@ class _BrainActivityViewState extends State<BrainActivityView> {
 
   @override
   void dispose() {
+    _clockTimer?.cancel();
+    _clockNotifier.dispose();
     unawaited(_messagesSubscription?.cancel());
     _editController?.dispose();
     _scrollController.dispose();
@@ -376,6 +385,51 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         oldWidget.newerHistoryError != widget.newerHistoryError) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoFillHistory());
     }
+    _syncClockTimer();
+  }
+
+  bool get _activityEligible =>
+      widget.activityEligible &&
+      widget.sessionId != null &&
+      widget.sessionId == widget.composerSessionId;
+
+  void _syncClockTimer() {
+    final hasRunningWork = _activityEligible || _messages.any((m) => m.status == EventStatus.running);
+    if (hasRunningWork) {
+      if (_clockTimer == null || !_clockTimer!.isActive) {
+        _clockTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+          if (!mounted) return;
+          _clockNotifier.value = DateTime.now();
+        });
+      }
+    } else {
+      _clockTimer?.cancel();
+      _clockTimer = null;
+    }
+  }
+
+  bool _isToolGroupExpanded(ConversationTimelineItem item) {
+    final id = _toolGroupExpansionId(item);
+    if (_explicitlyInteractedToolGroupIds.contains(id)) {
+      return _expandedEventIds.contains(id);
+    }
+    final firstEventId = item.events.firstOrNull?.id;
+    if (firstEventId != null) {
+      return _expandedEventIds.contains(firstEventId);
+    }
+    return false;
+  }
+
+  void _onToolGroupToggleExpanded(ConversationTimelineItem item, bool expanded) {
+    setState(() {
+      final id = _toolGroupExpansionId(item);
+      _explicitlyInteractedToolGroupIds.add(id);
+      if (expanded) {
+        _expandedEventIds.add(id);
+      } else {
+        _expandedEventIds.remove(id);
+      }
+    });
   }
 
   // ── Scroll helpers ───────────────────────────────────────────────────────
@@ -413,6 +467,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       messages,
       previousItems: _timelineItems,
       activityEligible: widget.activityEligible,
+      includeActivityItem: false,
     );
     final previousAnchorEventIds = _openAnchorIndex >= 0 && _openAnchorIndex < _timelineItems.length
         ? _timelineItems[_openAnchorIndex].events.map((event) => event.id).toSet()
@@ -455,6 +510,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         _isFollowingTail = false;
       }
     });
+    _syncClockTimer();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _requestMissingSavedAnchor();
       _maybeAutoFillHistory();
@@ -1194,7 +1250,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
 
     if (widget.visualState.isNewConversation) {
       return Container(
-        color: Theme.of(context).scaffoldBackgroundColor,
+        color: Colors.transparent,
         child: Center(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: SidebarBreakpoints.maxConversationWidth),
@@ -1207,8 +1263,10 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       );
     }
 
-    return Container(
-      color: Theme.of(context).scaffoldBackgroundColor,
+    return ConversationClockScope(
+      clock: _clockNotifier,
+      child: Container(
+        color: Colors.transparent,
       padding: const EdgeInsets.symmetric(horizontal: 8.0),
       child: Stack(
         children: [
@@ -1320,10 +1378,45 @@ class _BrainActivityViewState extends State<BrainActivityView> {
                 },
                 child: Container(
                   key: _composerKey,
-                  child: ConversationInputPanel(
-                    onSendMessage: _handleSendMessage,
-                    onStop: widget.onStop,
-                    sessionId: widget.composerSessionId ?? widget.sessionId,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(
+                        maxWidth: SidebarBreakpoints.maxConversationWidth,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_activityEligible)
+                            SizedBox(
+                              height: 38,
+                              child: OverflowBox(
+                                minHeight: 52,
+                                maxHeight: 52,
+                                alignment: Alignment.topCenter,
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                                  child: ConversationActivityBar(
+                                    key: const Key('fixed_conversation_activity_bar'),
+                                    clock: _clockNotifier,
+                                    activity: resolveCurrentActivity(
+                                      _messages,
+                                      activityEligible: _activityEligible,
+                                    ),
+                                    latestDescription: resolveLatestToolDescription(_messages),
+                                    executionSnapshot: widget.executionSnapshot,
+                                    isRtl: resolveConversationIsRtl(_messages),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ConversationInputPanel(
+                            onSendMessage: _handleSendMessage,
+                            onStop: widget.onStop,
+                            sessionId: widget.composerSessionId ?? widget.sessionId,
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ),
@@ -1331,7 +1424,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
           ),
         ],
       ),
-    );
+    ));
   }
 
   Widget _buildViewportTrackedItem(ConversationTimelineItem item) {
@@ -1362,19 +1455,8 @@ class _BrainActivityViewState extends State<BrainActivityView> {
             ? ToolGroupTile(
                 key: ValueKey('tool-group:${item.id}'),
                 item: item,
-                isExpanded: _expandedEventIds.contains(
-                  _toolGroupExpansionId(item),
-                ),
-                onToggleExpanded: (expanded) {
-                  setState(() {
-                    final id = _toolGroupExpansionId(item);
-                    if (expanded) {
-                      _expandedEventIds.add(id);
-                    } else {
-                      _expandedEventIds.remove(id);
-                    }
-                  });
-                },
+                isExpanded: _isToolGroupExpanded(item),
+                onToggleExpanded: (expanded) => _onToolGroupToggleExpanded(item, expanded),
                 expandedChildEventIds: _expandedEventIds,
                 onChildToggleExpanded: (eventId, expanded) {
                   if (expanded) {

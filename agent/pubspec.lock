@@ -464,13 +464,27 @@ packages:
       relative: true
     source: path
     version: "1.0.0"
+  sanad_client_identity:
+    dependency: "direct main"
+    description:
+      path: "../shared/client_identity"
+      relative: true
+    source: path
+    version: "1.0.0"
   sanad_release_contract:
     dependency: "direct main"
     description:
       path: "../release/contract"
       relative: true
     source: path
-    version: "1.0.10"
+    version: "1.0.16"
+  sanad_windows_path:
+    dependency: "direct main"
+    description:
+      path: "../shared/windows_path"
+      relative: true
+    source: path
+    version: "1.0.0"
   shelf:
     dependency: transitive
     description:

@@ -17,6 +17,7 @@ class MockSanadSettingsStore extends Fake implements SanadSettingsStore {
   Map<String, dynamic> authDocument = {};
   Future<void> Function()? beforeNextLock;
   Object? nextLockError;
+  bool lockHeld = false;
 
   @override
   Future<T> withAuthFileLock<T>(Future<T> Function() operation) async {
@@ -26,7 +27,12 @@ class MockSanadSettingsStore extends Fake implements SanadSettingsStore {
     final beforeLock = beforeNextLock;
     beforeNextLock = null;
     await beforeLock?.call();
-    return operation();
+    lockHeld = true;
+    try {
+      return await operation();
+    } finally {
+      lockHeld = false;
+    }
   }
 
   @override
@@ -44,10 +50,26 @@ class MockSanadSettingsStore extends Fake implements SanadSettingsStore {
 }
 
 class MockDio extends Fake implements Dio {
+  void Function()? onGet;
+
   @override
   BaseOptions options = BaseOptions();
   @override
   final interceptors = Interceptors();
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) {
+    if (invocation.memberName == #get) {
+      onGet?.call();
+      return Future<Response<dynamic>>.value(
+        Response<dynamic>(
+          requestOptions: RequestOptions(path: '/profile'),
+          data: <String, dynamic>{'user': <String, dynamic>{}},
+        ),
+      );
+    }
+    return super.noSuchMethod(invocation);
+  }
 }
 
 class StubPortalAuthClient extends PortalAuthClient {
@@ -201,6 +223,7 @@ void main() {
 
   late AuthService authService;
   late MockSanadSettingsStore mockStore;
+  late MockDio dio;
   late SharedPreferences prefs;
   late StubColocatedAuthCouplingClient colocatedCoupling;
 
@@ -209,9 +232,10 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     prefs = await SharedPreferences.getInstance();
     mockStore = MockSanadSettingsStore();
+    dio = MockDio();
     colocatedCoupling = StubColocatedAuthCouplingClient();
     authService = AuthService(
-      dio: MockDio(),
+      dio: dio,
       prefs: prefs,
       settingsStore: mockStore,
       colocatedCoupling: colocatedCoupling,
@@ -266,6 +290,26 @@ void main() {
         await subscription.cancel();
       },
     );
+
+    test('external profile retrieval starts after auth lock release', () async {
+      mockStore.authDocument = {'hardware_id': 'device-1'};
+      await authService.init();
+      var profileRequested = false;
+      dio.onGet = () {
+        profileRequested = true;
+        expect(mockStore.lockHeld, isFalse);
+      };
+
+      mockStore.authDocument = {
+        'access_token': 'external-access',
+        'refresh_token': 'external-refresh',
+        'hardware_id': 'device-1',
+      };
+      await authService.synchronizeDesktopAuthFile();
+
+      expect(profileRequested, isTrue);
+      expect(authService.accessToken, 'external-access');
+    });
 
     test(
       'atomic auth session value overrides legacy credential mirrors',

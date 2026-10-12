@@ -18,6 +18,7 @@ This contract applies to `agent/lib/engine/adapters/`.
 
 ## Request Consistency
 - Sync and stream for one protocol reuse the same request builder and final normalization.
+- Diagnostic response dumps use the same aggregated normalized assistant message, tool calls, finish reason, and usage exposed by the adapter; interrupted streams may record a bounded partial projection plus the error, never raw SSE lines.
 - Structured reasoning fields take precedence over textual thought tags.
 - Codex Responses transport reuses its codec, SSE accumulator, policy, and model service; do not implement parallel contracts in the adapter.
 - Adapter-owned wire measurement fingerprints instructions, tools, and ordered input items. When a later request is a strict wire extension, provider-confirmed input remains authoritative and only the appended wire suffix is estimated.

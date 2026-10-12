@@ -935,6 +935,11 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
           as _i13.SessionState?);
 
   @override
+  _i13.SessionState? getSessionRecord(String? sessionId) =>
+      (super.noSuchMethod(Invocation.method(#getSessionRecord, [sessionId]))
+          as _i13.SessionState?);
+
+  @override
   List<_i13.SessionState> getAllSessions() =>
       (super.noSuchMethod(
             Invocation.method(#getAllSessions, []),
@@ -1013,11 +1018,17 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
     String? providerId,
     String? model,
     String? thinkingMode,
+    bool clearThinkingMode = false,
   }) => super.noSuchMethod(
     Invocation.method(
       #updateSessionModeling,
       [sessionId],
-      {#providerId: providerId, #model: model, #thinkingMode: thinkingMode},
+      {
+        #providerId: providerId,
+        #model: model,
+        #thinkingMode: thinkingMode,
+        #clearThinkingMode: clearThinkingMode,
+      },
     ),
     returnValueForMissingStub: null,
   );

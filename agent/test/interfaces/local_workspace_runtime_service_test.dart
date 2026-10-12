@@ -28,7 +28,11 @@ void main() {
     });
 
     tearDown(() async {
-      await tempDir.delete(recursive: true);
+      try {
+        if (tempDir.existsSync()) {
+          await tempDir.delete(recursive: true);
+        }
+      } catch (_) {}
     });
 
     test('returns system roots when path is empty', () async {
@@ -221,9 +225,11 @@ void main() {
     });
 
     tearDown(() async {
-      if (tempDir.existsSync()) {
-        await tempDir.delete(recursive: true);
-      }
+      try {
+        if (tempDir.existsSync()) {
+          await tempDir.delete(recursive: true);
+        }
+      } catch (_) {}
     });
 
     test('creates a name-based workspace under the managed root', () async {
@@ -312,7 +318,9 @@ void main() {
         'sanad-unregistered-workspace-test',
       );
       addTearDown(() async {
-        if (outside.existsSync()) await outside.delete(recursive: true);
+        try {
+          if (outside.existsSync()) await outside.delete(recursive: true);
+        } catch (_) {}
       });
       await File('${outside.path}/secret.txt').writeAsString('private');
 

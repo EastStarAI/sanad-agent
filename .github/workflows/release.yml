@@ -163,13 +163,16 @@ jobs:
           fvm dart run tool/generate_bundled_skills.dart --check
           fvm dart analyze
           fvm dart test test/core/update/release_manifest_test.dart
-      - name: Compile Windows agent
+      - name: Compile Windows agent and no-console launcher
         if: matrix.platform == 'windows'
         working-directory: agent
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path ../dist -Force | Out-Null
+          cmake -S windows/launcher -B build/windows-launcher -A x64
+          cmake --build build/windows-launcher --config Release
           fvm dart compile exe "-DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }}" bin/sanad_agent.dart -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
+          fvm dart run tool/package_windows_launcher.dart --agent "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe" --launcher "build/windows-launcher/out/sanad-launcher.exe"
       - name: Smoke-test embedded skills
         if: matrix.platform != 'windows'
         shell: bash

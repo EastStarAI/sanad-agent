@@ -50,7 +50,14 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [AGENTS](./client/lib/infrastructure/AGENTS.md): Rules governing ./client/lib/infrastructure.
 - [AGENTS](./scripts/flutter_driver_cli/AGENTS.md): Rules governing ./scripts/flutter_driver_cli.
 - [AGENTS](./scripts/sanad_dev/AGENTS.md): Rules governing ./scripts/sanad_dev.
+- [AGENTS](./scripts/sanad_dev/lib/AGENTS.md): Rules governing ./scripts/sanad_dev/lib.
+- [AGENTS](./scripts/sanad_dev/lib/src/cli/AGENTS.md): Rules governing ./scripts/sanad_dev/lib/src/cli.
+- [AGENTS](./scripts/sanad_dev/lib/src/developer/AGENTS.md): Rules governing ./scripts/sanad_dev/lib/src/developer.
+- [AGENTS](./scripts/sanad_dev/lib/src/discovery/AGENTS.md): Rules governing ./scripts/sanad_dev/lib/src/discovery.
+- [AGENTS](./scripts/sanad_dev/lib/src/infrastructure/AGENTS.md): Rules governing ./scripts/sanad_dev/lib/src/infrastructure.
+- [AGENTS](./scripts/sanad_dev/lib/src/runtime/AGENTS.md): Rules governing ./scripts/sanad_dev/lib/src/runtime.
 - [AGENTS](./shared/auth_lock/AGENTS.md): Rules governing ./shared/auth_lock.
+- [AGENTS](./shared/client_identity/AGENTS.md): Rules governing privacy-safe Client display references shared by Agent and Client.
 
 ## Functional Features & Architecture Guides
 
@@ -65,17 +72,9 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Develop Sanad Agent](docs/operations/developer_guide.md): Set up the public repository, run the Dart agent and Flutter client, test changes, and use isolated development runtimes.
 - [Release, Signing, and Deployment Architecture](docs/operations/release_and_signing.md): The stable release pipeline, protected signing boundaries, artifact publication, and live-release handoff.
 - [Install and Use Sanad Agent](docs/operations/user_guide.md): Install the Sanad client and agent, connect local or remote devices, configure providers, manage the service, and update Sanad.
-- [المهمة 81 — تثبيت Linux بضغطة واحدة وخدمة دائمة على Desktop وHeadless](docs/plans/tasks/81-linux-headless-one-command-install-and-durable-service.md): خطة التنفيذ المعتمدة للاكتشاف التلقائي لمخزن الاعتماد والخدمة، والتثبيت الذري، ودورة الإصلاح على Linux، والاختبار النهائي على سيرفر نظيف قبل PR والإصدار.
-- [المهمة 82 — التحكم الآمن بالجهاز البعيد واستعادة Workspaces وMCP](docs/plans/tasks/82-secure-remote-device-control-workspaces-and-mcp.md): خطة فحص/تحديث/Restart Agent البعيد بأمان، وإنشاء وإدارة Workspaces داخل جذور محددة، واستعادة إدارة MCP المنقحة عبر Sanad Gateway دون كشف أسرار أو فتح filesystem عام.
-- [Task 85 — Workspace Removal Stale Refresh Race](docs/plans/tasks/85-workspace-removal-stale-refresh-race.md): إصلاح يمنع استجابة قديمة لقائمة Workspaces من إعادة Workspace بعد نجاح الحذف أو الكتابة الأحدث.
-- [المهمة 53i — ضغط سياق متعدد اللغات عبر المزود](docs/plans/tasks/53i-cache-preserving-provider-backed-context-compaction.md): خطة استبدال الملخص المحلي القالبي بطلب user عادي إلى مزود المحادثة، مع الأدوات والإعدادات المعتادة ودعم العربية والضغط المتكرر والتحقق الآمن.
-- [Task 90 — OpenCode Conversation Session Affinity](docs/plans/tasks/90-opencode-conversation-session-affinity.md): Ensure every OpenCode model request carries one stable conversation-scoped affinity header.
-- [Task 91 — OpenRouter App Attribution](docs/plans/tasks/91-openrouter-app-attribution.md): Attribute Sanad Agent requests to the canonical project identity in OpenRouter.
-- [المهمة 87 — تكافؤ هوية وترتيب المحادثة بين البث والتاريخ والعملاء](docs/plans/tasks/87-live-turn-identity-and-steer-ordering.md): خطة مصالحة هوية الدور الحية، وترتيب الـsteer، واستجابة Edit/Retry، والتحقق الآلي والحي الشامل عبر العملاء.
-- [Automated Release Preparation and Single Final Publication Approval](docs/plans/tasks/release-single-final-approval.md): خطة أمر تحضير الإصدار الحتمي، وPR البيانات المقيد، ومهارة إدارة الإصدار حتى موافقة النشر النهائية الواحدة.
 - [خارطة متطلبات المنتج والأعمال](docs/product/MOC.md): فهرس وخارطة وثائق متطلبات المنتج، تجربة المستخدم، والأعمال الاستراتيجية للمشروع.
 - [Sanad Client Interface](docs/product/client_interface.md): Current user experience for devices, workspaces, conversations, attachments, View Image media, providers, permissions, and active agent interactions.
-- [Conversation Navigation UX Spec](docs/product/conversation_navigation_ux_spec.md): UX specifications for conversation navigation destinations, history, deletion, and restart recovery.
+- [Conversation Navigation UX Spec](docs/product/conversation_navigation_ux_spec.md): UX specifications for device-scoped conversation search, anchored result opening, navigation destinations, history, deletion, and restart recovery.
 - [Sanad Agent Features](docs/product/features.md): A user-facing guide to Sanad Agent's local, remote, provider, workspace, tool, and interaction capabilities.
 - [Message Edit and Retry UX](docs/product/message_edit_retry_ux.md): Specification for inline edit, attachment restoration, and retry of the latest root user turn without deleting original history.
 - [Conversation Fork UX](docs/product/conversation_fork_ux.md): Specification for forking a conversation from a durable final answer into an independent child session.
@@ -85,6 +84,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Settings Hub](docs/product/settings_hub.md): Information architecture, scope semantics, and device-management UX for Sanad's unified Settings destination.
 - [خارطة الجودة والدعم والصيانة](docs/qa_maintenance/MOC.md): فهرس وخارطة خطط الفحص وحالات الاختبار، أدلة حل المشكلات التقنية، ودعم التشغيل وصيانة المنصة.
 - [Account Sessions and Devices QA](docs/qa_maintenance/account_sessions_devices_qa.md): Verification matrix for Client sessions, Agent inventory, hardware/account identity boundaries, cancellation, revocation, compact layout, and restart continuity.
+- [Agent Turn Startup Performance QA](docs/qa_maintenance/agent_turn_startup_performance_qa.md): Regression matrix for metadata-only admission, atomic root-message append, revision-validated history reuse, and Windows long-session latency.
 - [Bundled Product Skills QA](docs/qa_maintenance/bundled_product_skills_qa.md): Regression matrix for deterministic one-file skill embedding, SANAD_HOME installation, update, removal, customization safety, startup performance, and release artifacts.
 - [Clarifying Question RTL QA](docs/qa_maintenance/clarifying_question_rtl_qa.md): Verification matrix for Arabic directionality and platform-aware multiline behavior in clarifying questions.
 - [Community Governance QA](docs/qa_maintenance/community_governance_qa.md): Static and live verification matrix for labels, templates, contribution skills, protected CI, Discord routing, and public-repository governance.
@@ -96,6 +96,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Desktop Authentication Exchange QA](docs/qa_maintenance/desktop_authentication_exchange_qa.md): Regression matrix for credential-free client-daemon authentication reconciliation.
 - [External Workspace File Access QA](docs/qa_maintenance/external_workspace_file_access_qa.md): Regression matrix for canonical external-path classification, permission scopes, full-access bypass, and sanitized approval payloads.
 - [Flutter VM Driver CLI QA Matrix](docs/qa_maintenance/flutter_vm_driver_cli_qa.md): Static, managed-runtime, live interaction, and platform compatibility coverage for agent-driven Flutter control.
+- [Jev Sanad UI Automation](docs/qa_maintenance/jev_sanad_ui_automation.md): Safety boundary and verification matrix for the Client Tester-owned conversation runner with narrow Jev verification.
 - [Device Name Editing QA](docs/qa_maintenance/device_name_editing_qa.md): QA scenarios and test matrices for verifying device renaming.
 - [Device Workspace Sidebar QA](docs/qa_maintenance/device_workspace_sidebar_qa.md): Focused QA coverage for the Plan 32c device-scoped sidebar, including pagination, cache-first rendering, responsive layout, accessibility, and live ordering.
 - [Live Context Usage Indicator QA](docs/qa_maintenance/live_context_usage_indicator_qa.md): Regression matrix for latest provider usage, cached-input visibility, tool-loop updates, and history restoration.
@@ -113,6 +114,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Plan 50 Cancellation Regression Matrix](docs/qa_maintenance/plan50_cancellation_regression_matrix.md): Verified cancellation, cleanup, delivery-order, and restart-hydration regression coverage for Plan 50.
 - [OpenRouter App Attribution QA](docs/qa_maintenance/openrouter_app_attribution_qa.md): Regression matrix for exact attribution headers, sync/stream forwarding, authentication preservation, and provider isolation.
 - [Provider Account Usage Limits QA Matrix](docs/qa_maintenance/provider_account_usage_limits_qa.md): Regression coverage for provider-instance usage parsing, protocol isolation, freshness, stale responses, and card presentation.
+- [Provider-Aware Thinking Mode QA](docs/qa_maintenance/provider_aware_thinking_mode_qa.md): Focused matrix for model-scoped thinking controls, fail-closed unknown routes, sync/stream payload parity, and composer selector states.
 - [Plan 29 Provider Setup Regression Matrix](docs/qa_maintenance/provider_setup_plan29_regression_matrix.md): Regression coverage targets for the instance-first provider setup runtime.
 - [Release Verification Matrix](docs/qa_maintenance/release_verification.md): Required local and hosted evidence for Sanad release, signing, installation, update, and rollback.
 - [Remote Device Control QA](docs/qa_maintenance/remote_device_control_qa.md): Gate-linked pass/fail coverage for remote Agent update, restart, managed workspaces, and redacted MCP management.
@@ -122,6 +124,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Session Title Generation QA](docs/qa_maintenance/session_title_generation_qa.md): Regression coverage for first-exchange background title generation, stale-result rejection, and client synchronization.
 - [Task 31 Authoritative Session State QA Matrix](docs/qa_maintenance/task31_authoritative_session_state_matrix.md): Regression coverage for durable execution snapshots, per-session attention isolation, reconnect recovery, and authoritative route failover UX.
 - [Task 36 Authoritative Steer, Queue, and Stop Recovery QA Matrix](docs/qa_maintenance/task36_authoritative_steer_queue_stop_recovery_matrix.md): Regression coverage for daemon-owned delivery classification, pending-steer cancellation, queue mutations, lossless Stop draft recovery, and first-writer restart claims.
+- [Agent State Database Maintenance QA](docs/qa_maintenance/agent_state_database_maintenance_qa.md): Run/skip/fail matrix for startup orphan cleanup, 14-day terminal work-item prune, and thresholded VACUUM of state.db.
 - [Test Suite Performance and Ownership QA](docs/qa_maintenance/test_suite_performance_qa.md): Package boundaries, deterministic timer/event testing, hotspot thresholds, and subprocess/port integration classification for Agent, Client, and `sanad-dev` suites.
 - [View Image Tool QA](docs/qa_maintenance/view_image_tool_qa.md): Regression matrix for typed results, user attachments, View Image conversation media, local/remote security, recovery, and pruning.
 - [Windows Release Clean-Machine Validation](docs/qa_maintenance/windows_release_clean_machine.md): Windows 11 release-gate evidence and reusable Windows clean-machine procedure for the unsigned Sanad 1.0.0 candidate.
@@ -138,11 +141,12 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Background Terminal Task Runtime](docs/technical/background_terminal_task_runtime.md): العقد التقني للمهام الطرفية الخلفية المملوكة، والنقل الذري من الجولة، والـPTY والمخرجات، والإيقاظ، والتفاعل الآمن، والتعافي.
 - [Bound Client and Agent Authentication](docs/technical/client_authentication.md): PKCE-bound Flutter login and P-256-bound Headless Agent authorization through Sanad Portal.
 - [Client Conversation Cache Schema](docs/technical/client_conversation_cache_schema.md): Ownership, persistence schema, pagination rules, draft correlation, and stable consumer APIs for the Flutter conversation cache.
-- [Client Conversation Navigation Runtime](docs/technical/client_conversation_navigation.md): Technical design for device-scoped sidebar projection, atomic history swaps, deletion fallback, and route synchronization.
+- [Client Conversation Navigation Runtime](docs/technical/client_conversation_navigation.md): Technical design for authoritative conversation search, stale-safe pagination, anchored atomic history swaps, sidebar projection, deletion fallback, and route synchronization.
 - [Client Local Daemon Control](docs/technical/client_local_daemon_control.md): Architecture for source and standalone daemon lifecycle control from the Flutter desktop client.
 - [بروتوكولات الاتصال ونظام نقل الأحداث](docs/technical/communication_protocols.md): توثيق بروتوكول Socket.IO ونقل الأحداث والمهام وطلبات التعليق (Suspension) مع العميل.
 - [مواصفات نظام التصميم والمكونات المرئية للمشاريع](docs/technical/design_system.md): توثيق شامل للألوان، الخطوط، الهيكل البنائي والواجهات التفاعلية المشتركة لمشاريع Sanad (التطبيق الرئيسي، صفحة الهبوط، ولوحة التحكم).
 - [Desktop Authentication Exchange](docs/technical/desktop_authentication_exchange.md): Credential-free live authentication reconciliation between a native Flutter client and its local Dart daemon.
+- [Client Multilingual Interface](docs/technical/client_multilanguage.md): English/Arabic localization architecture, `gen_l10n` scaffolding, locale ownership (`LocaleCubit`), RTL rules, and the remaining-string coverage report.
 - [Device Runtime Settings Protocol](docs/technical/device_runtime_settings_protocol.md): Unified local/cloud protocol commands, validation, persistence, and secret-handling rules for device settings.
 - [Flutter VM Driver CLI Architecture](docs/technical/flutter_vm_driver_cli.md): Driver-enabled Client instrumentation, standalone CLI boundaries, deterministic UI selectors, and VM Service safety.
 - [Hosted Services Boundary](docs/technical/hosted_services_boundary.md): Ownership and compatibility boundary between the open-source Sanad Agent clients and EastStar AI hosted services.
@@ -164,6 +168,8 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Web Search Runtime](docs/technical/web_search_runtime.md): Daemon-owned search providers, DuckDuckGo redirect normalization, fallback behavior, and SSRF filtering.
 - [Remote Workspace Folder Mutation Protocol](docs/technical/workspace_folder_mutation_protocol.md): Managed-root remote workspace create, constrained browse, and confirmation-gated folder mutations.
 - [Workspace Identity, Rename, and Change Path Protocol](docs/technical/workspace_identity_protocol.md): Stable workspace UUID, availability projection, rename, path repair, and client routing contract.
+- [Windows-first Performance Plan](docs/plans/97-windows-first-agent-client-performance.md): Reviewed coordinated Windows-first Agent/Client responsiveness, recovery, request ownership, static activity UI, and final platform verification.
+- [Windows-first Performance QA](docs/qa_maintenance/windows_first_performance_qa.md): Before/after metrics, request-count and rendering regressions, test-cost budgets, and final interactive acceptance.
 - [Implementation Plans](docs/plans/): Architectural blueprints, milestones, and step-by-step implementation plans for project development phases.
 
 ## Reference Projects

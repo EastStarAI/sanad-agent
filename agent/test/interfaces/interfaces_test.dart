@@ -275,8 +275,8 @@ Use the review skill.''',
       );
     });
 
-    // Stub getSession to return an existing session by default
-    when(mockSessionManager.getSession(any)).thenAnswer((invocation) {
+    // Stub session reads to return an existing session by default.
+    SessionState existingSession(Invocation invocation) {
       final sessionId = invocation.positionalArguments[0] as String;
       return SessionState(
         sessionId: sessionId,
@@ -284,7 +284,14 @@ Use the review skill.''',
         createdAt: DateTime.now(),
         updatedAt: DateTime.now(),
       );
-    });
+    }
+
+    when(mockSessionManager.getSession(any)).thenAnswer(existingSession);
+    // The generated override accepts nullable matcher placeholders even though
+    // the production API is non-nullable.
+    when(
+      (mockSessionManager as dynamic).getSessionRecord(any),
+    ).thenAnswer(existingSession);
     when(mockSessionManager.getMessages(any)).thenReturn(const []);
 
     when(mockSessionManager.saveSessionMetadata(any, any)).thenReturn(null);
@@ -1288,6 +1295,7 @@ Use the review skill.''',
       final mockSessionManager = getIt<SessionManager>();
       // Override getSession to return null (new session)
       when(mockSessionManager.getSession('new-session')).thenReturn(null);
+      when(mockSessionManager.getSessionRecord('new-session')).thenReturn(null);
 
       final eventController = StreamController<GatewayEvent>();
       when(mockPlatform.initialize()).thenAnswer((_) async => {});
@@ -1348,6 +1356,7 @@ Use the review skill.''',
     'GatewayManager should preserve the requested title when handling create_session',
     () async {
       when(mockSessionManager.getSession('new-thread')).thenReturn(null);
+      when(mockSessionManager.getSessionRecord('new-thread')).thenReturn(null);
 
       final eventController = StreamController<GatewayEvent>();
       when(mockPlatform.initialize()).thenAnswer((_) async => {});
@@ -1418,6 +1427,9 @@ Use the review skill.''',
       when(
         mockSessionManager.getSession('placeholder-thread'),
       ).thenReturn(null);
+      when(
+        mockSessionManager.getSessionRecord('placeholder-thread'),
+      ).thenReturn(null);
 
       final eventController = StreamController<GatewayEvent>();
       when(mockPlatform.initialize()).thenAnswer((_) async => {});
@@ -1460,6 +1472,9 @@ Use the review skill.''',
     'GatewayManager should attach workspace context to session_created for pre-created sessions',
     () async {
       when(mockSessionManager.getSession('workspace-thread')).thenReturn(null);
+      when(
+        mockSessionManager.getSessionRecord('workspace-thread'),
+      ).thenReturn(null);
 
       final eventController = StreamController<GatewayEvent>();
       when(mockPlatform.initialize()).thenAnswer((_) async => {});
@@ -1526,6 +1541,9 @@ Use the review skill.''',
       // Mock new session (getSession returns null)
       when(
         mockSessionManager.getSession('intelligent-session'),
+      ).thenReturn(null);
+      when(
+        mockSessionManager.getSessionRecord('intelligent-session'),
       ).thenReturn(null);
 
       final eventController = StreamController<GatewayEvent>();
@@ -2960,6 +2978,211 @@ Use the review skill.''',
       verify(mockAgentRunner.requestStop()).called(2);
     },
   );
+
+  group('Managed Stop Interactive-Wait Preservation', () {
+    const sessionId = 'session-parked-ask';
+    const workItemId = 'work-parked-ask';
+    const toolCallId = 'call-parked-ask';
+
+    Future<PersistedRuntimeStateRepository> seedParkedInteractiveWait({
+      required SessionWorkState workItemState,
+      String checkpointStatus = 'awaiting_permission',
+    }) async {
+      final stateDb = AgentStateDatabase.inMemory();
+      final repo = PersistedRuntimeStateRepository(stateDb.db);
+      GetIt.I.registerSingleton<AgentStateDatabase>(stateDb);
+      GetIt.I.registerSingleton<PersistedRuntimeStateRepository>(repo);
+      final recoveryService = RuntimeRecoveryService(
+        MockProviderInstanceRepository(),
+        ProviderRateLimiter(),
+      );
+      recoveryService.attachPersistedState(repo);
+      GetIt.I.registerSingleton<RuntimeRecoveryService>(recoveryService);
+
+      final now = DateTime.now();
+      final checkpoint = SuspendedCheckpoint(
+        checkpointId: 'checkpoint-parked-ask',
+        sessionId: sessionId,
+        requestId: 'ask-parked-request',
+        toolCallId: toolCallId,
+        toolName: 'system_ask_user',
+        status: checkpointStatus,
+        toolArguments: const {'questions': []},
+        permissionPayload: const {'questions': []},
+        createdAt: now,
+        updatedAt: now,
+      );
+      when(
+        mockSessionManager.listSuspendedCheckpoints(
+          status: 'awaiting_permission',
+        ),
+      ).thenReturn([
+        if (checkpointStatus == 'awaiting_permission') checkpoint,
+      ]);
+      when(
+        mockSessionManager.listSuspendedCheckpoints(),
+      ).thenReturn([checkpoint]);
+      GetIt.I.registerSingleton<SuspendedCheckpointStore>(
+        SuspendedCheckpointStore(sessionManager: mockSessionManager),
+      );
+
+      addTearDown(() {
+        GetIt.I.unregister<SuspendedCheckpointStore>();
+        GetIt.I.unregister<AgentStateDatabase>();
+        GetIt.I.unregister<PersistedRuntimeStateRepository>();
+        GetIt.I.unregister<RuntimeRecoveryService>();
+        stateDb.dispose();
+      });
+
+      stateDb.db.execute(
+        "INSERT INTO sessions (session_id, model, created_at, updated_at) VALUES ('$sessionId', 'gpt-4o', '2026-07-11', '2026-07-11')",
+      );
+      repo.insertWorkItem(
+        SessionWorkItem(
+          workItemId: workItemId,
+          sessionId: sessionId,
+          requestId: 'turn-parked-request',
+          sequence: 1,
+          state: workItemState,
+          attempt: 0,
+          payload: const {'message': 'build the site'},
+          continuationMetadata: const {
+            'owner_run_id': 'run-parked-ask',
+            'owner_generation': 1,
+            'currently_executing_tools': [toolCallId],
+            'tool_replay_safety': {toolCallId: false},
+          },
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      return repo;
+    }
+
+    test(
+      'managed stopAll preserves a parked ask-user wait without synthetic results',
+      () async {
+        final repo = await seedParkedInteractiveWait(
+          workItemState: SessionWorkState.running,
+        );
+        final orchestrator = SessionRunOrchestrator();
+        await orchestrator.restorePersistedState();
+        expect(
+          repo.findWorkItem(workItemId)?.state,
+          SessionWorkState.waiting,
+        );
+        expect(orchestrator.hasSuspendedEvent(sessionId), isTrue);
+
+        final responses = <GatewayResponse>[];
+        final subscription = orchestrator.responses.listen(responses.add);
+        addTearDown(subscription.cancel);
+
+        await orchestrator.requestStopAll(preserveInteractiveWaits: true);
+
+        expect(
+          repo.findWorkItem(workItemId)?.state,
+          SessionWorkState.waiting,
+        );
+        expect(repo.findActiveWorkItem(sessionId), isNotNull);
+        expect(
+          responses.where(
+            (response) =>
+                response.message.metadata?['canonical_event_type'] ==
+                'stopped',
+          ),
+          isEmpty,
+        );
+        expect(
+          responses.where((response) => response.isToolResult),
+          isEmpty,
+        );
+        verifyNever(
+          mockSessionManager.deleteSuspendedCheckpointByRequestId(any),
+        );
+        verifyNever(mockAgentRunner.requestStop());
+        // The in-memory run projection is dropped, but the durable waiting
+        // work item intentionally survives so startup recovery can restore it.
+        expect(orchestrator.hasSuspendedEvent(sessionId), isFalse);
+        expect(orchestrator.isSessionBusy(sessionId), isTrue);
+      },
+    );
+
+    test(
+      'managed stop converts a live running interactive wait to durable waiting',
+      () async {
+        final repo = await seedParkedInteractiveWait(
+          workItemState: SessionWorkState.running,
+        );
+        final orchestrator = SessionRunOrchestrator();
+
+        // No startup restore: the parked turn is live, so its work item is
+        // still `running` when the managed stop arrives.
+        await orchestrator.requestStop(
+          sessionId,
+          preserveInteractiveWait: true,
+        );
+
+        expect(
+          repo.findWorkItem(workItemId)?.state,
+          SessionWorkState.waiting,
+        );
+        verifyNever(mockAgentRunner.requestStop());
+        verifyNever(
+          mockSessionManager.deleteSuspendedCheckpointByRequestId(any),
+        );
+      },
+    );
+
+    test(
+      'explicit user stop still cancels a parked ask-user wait',
+      () async {
+        final repo = await seedParkedInteractiveWait(
+          workItemState: SessionWorkState.running,
+        );
+        final orchestrator = SessionRunOrchestrator();
+        await orchestrator.restorePersistedState();
+        expect(
+          repo.findWorkItem(workItemId)?.state,
+          SessionWorkState.waiting,
+        );
+
+        final responses = <GatewayResponse>[];
+        final subscription = orchestrator.responses.listen(responses.add);
+        addTearDown(subscription.cancel);
+
+        await orchestrator.requestStop(sessionId);
+
+        expect(repo.findActiveWorkItem(sessionId), isNull);
+        expect(
+          responses.where(
+            (response) =>
+                response.message.metadata?['canonical_event_type'] ==
+                'stopped',
+          ),
+          hasLength(1),
+        );
+        expect(orchestrator.hasSuspendedEvent(sessionId), isFalse);
+      },
+    );
+
+    test(
+      'managed stop does not preserve an approved decision already executing',
+      () async {
+        final repo = await seedParkedInteractiveWait(
+          workItemState: SessionWorkState.running,
+          checkpointStatus: 'executing_tool',
+        );
+        final orchestrator = SessionRunOrchestrator();
+
+        await orchestrator.requestStop(
+          sessionId,
+          preserveInteractiveWait: true,
+        );
+
+        expect(repo.findActiveWorkItem(sessionId), isNull);
+      },
+    );
+  });
 
   group('Gate E: Runtime Restoration and FIFO', () {
     test(

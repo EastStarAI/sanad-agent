@@ -48,6 +48,34 @@ class _FakeProviderSetupClient extends ProviderSetupClient {
   final List<String> testConnectionCalls = [];
   final List<String> removeInstanceCalls = [];
 
+  /// Deterministic concurrency proof for the parallel provider-load path.
+  int _activeLoadReads = 0;
+  int maxConcurrentLoadReads = 0;
+  void _enterLoadRead() {
+    _activeLoadReads++;
+    if (_activeLoadReads > maxConcurrentLoadReads) {
+      maxConcurrentLoadReads = _activeLoadReads;
+    }
+  }
+
+  void _leaveLoadRead() {
+    _activeLoadReads--;
+  }
+
+  /// When set, [listInstances] waits on this completer before returning,
+  /// letting tests assert that other reads proceed meanwhile (parallelism).
+  Completer<void>? instancesGate;
+
+  /// When set, [runtimeCheck] waits on this completer before returning.
+  Completer<void>? readinessGate;
+
+  /// When set, [runtimeCheck] throws it before returning.
+  Object? runtimeCheckFailure;
+
+  int listTemplatesCalls = 0;
+  int listInstancesCalls = 0;
+  int runtimeCheckCalls = 0;
+
   @override
   Future<ProviderReadinessDto> setupStatus({DeviceConfig? agent}) async => ProviderReadinessDto(
     hasProvider: runtimeReady,
@@ -55,10 +83,26 @@ class _FakeProviderSetupClient extends ProviderSetupClient {
   );
 
   @override
-  Future<ProviderReadinessDto> runtimeCheck({DeviceConfig? agent}) async => ProviderReadinessDto(
-    hasProvider: runtimeReady,
-    runtimeReady: runtimeReady,
-  );
+  Future<ProviderReadinessDto> runtimeCheck({DeviceConfig? agent}) async {
+    runtimeCheckCalls++;
+    _enterLoadRead();
+    try {
+      final gate = readinessGate;
+      if (gate != null) {
+        await gate.future;
+      }
+      final failure = runtimeCheckFailure;
+      if (failure != null) {
+        throw failure;
+      }
+      return ProviderReadinessDto(
+        hasProvider: runtimeReady,
+        runtimeReady: runtimeReady,
+      );
+    } finally {
+      _leaveLoadRead();
+    }
+  }
 
   @override
   Future<AuthSessionDto> authStart({
@@ -114,34 +158,50 @@ class _FakeProviderSetupClient extends ProviderSetupClient {
 
   @override
   Future<List<ProviderTemplateDto>> listTemplates({DeviceConfig? agent}) async {
-    return providers
-        .map(
-          (p) => ProviderTemplateDto(
-            name: p.id,
-            displayName: p.displayName,
-            description: p.description,
-            defaultBaseUrl: p.defaultBaseUrl,
-            keyEnv: p.keyEnv,
-            envModelName: p.envModelName,
-            envBaseUrlName: p.envBaseUrlName,
-            authType: p.authType,
-            authFlow: p.authFlow,
-            apiMode: p.apiMode,
-            docsUrl: p.docsUrl,
-            supportsModelFetch: p.supportsModelFetch,
-            disconnectable: p.disconnectable,
-            fallbackModels: p.fallbackModels,
-            aliases: p.aliases,
-            authMethods: _authMethodsForFlow(p.authFlow),
-          ),
-        )
-        .toList();
+    listTemplatesCalls++;
+    _enterLoadRead();
+    try {
+      return providers
+          .map(
+            (p) => ProviderTemplateDto(
+              name: p.id,
+              displayName: p.displayName,
+              description: p.description,
+              defaultBaseUrl: p.defaultBaseUrl,
+              keyEnv: p.keyEnv,
+              envModelName: p.envModelName,
+              envBaseUrlName: p.envBaseUrlName,
+              authType: p.authType,
+              authFlow: p.authFlow,
+              apiMode: p.apiMode,
+              docsUrl: p.docsUrl,
+              supportsModelFetch: p.supportsModelFetch,
+              disconnectable: p.disconnectable,
+              fallbackModels: p.fallbackModels,
+              aliases: p.aliases,
+              authMethods: _authMethodsForFlow(p.authFlow),
+            ),
+          )
+          .toList();
+    } finally {
+      _leaveLoadRead();
+    }
   }
 
   @override
-  Future<List<ProviderInstanceDto>> listInstances({
-    DeviceConfig? agent,
-  }) async => instances;
+  Future<List<ProviderInstanceDto>> listInstances({DeviceConfig? agent}) async {
+    listInstancesCalls++;
+    _enterLoadRead();
+    try {
+      final gate = instancesGate;
+      if (gate != null) {
+        await gate.future;
+      }
+      return instances;
+    } finally {
+      _leaveLoadRead();
+    }
+  }
 
   @override
   Future<ProviderInstanceDto> createInstance({
@@ -458,6 +518,132 @@ void main() {
         final cubit = ProviderSetupCubit(client: fake);
         await cubit.load();
         expect(cubit.state.status, ProviderSetupStatus.instancesList);
+        await cubit.close();
+      },
+    );
+
+    test(
+      'load issues templates/instances/readiness in parallel and each exactly once',
+      () async {
+        final gate = Completer<void>();
+        final fake = _FakeProviderSetupClient(
+          providers: [_apiKeyProvider(configured: true)],
+          instances: [
+            const ProviderInstanceDto(
+              id: 'inst-openai',
+              templateId: 'openai',
+              displayName: 'OpenAI',
+              protocol: 'openai_compatible',
+              authMethod: 'api_key',
+              status: 'draft',
+              isDefault: true,
+              configRevision: 1,
+              credentialRevision: 1,
+            ),
+          ],
+          runtimeReady: false,
+        )..instancesGate = gate;
+        final cubit = ProviderSetupCubit(client: fake);
+
+        // Start load. The slowest read (instances) is gated; the other two
+        // independent reads must already be in flight while it resolves. This
+        // proves parallel overlap without any timing assertion.
+        final loading = cubit.load();
+        await Future<void>.delayed(Duration.zero);
+        expect(fake.maxConcurrentLoadReads, greaterThanOrEqualTo(2));
+
+        // Release the gate; the snapshot only completes after all reads.
+        gate.complete();
+        await loading;
+        expect(cubit.state.status, ProviderSetupStatus.instancesList);
+        expect(cubit.state.instances.length, 1);
+        // Each independent read is issued exactly once per load: no repeated
+        // hydration/DB/credential reads or duplicate requests (plan 97g).
+        expect(fake.listTemplatesCalls, 1);
+        expect(fake.listInstancesCalls, 1);
+        expect(fake.runtimeCheckCalls, 1);
+        await cubit.close();
+      },
+    );
+
+    test(
+      'load surfaces error and never emits a partial snapshot when a read fails',
+      () async {
+        final fake = _FakeProviderSetupClient(
+          providers: [_apiKeyProvider()],
+          runtimeReady: false,
+        )..runtimeCheckFailure = StateError('boom');
+        final cubit = ProviderSetupCubit(client: fake);
+        // The cubit must absorb the failure into the typed error state
+        // (never letting a partial snapshot leak), and the returned future
+        // must NOT rethrow.
+        await expectLater(
+          cubit.load(forcePicker: true),
+          completes,
+        );
+        expect(cubit.state.status, ProviderSetupStatus.error);
+        expect(cubit.state.error, isNotNull);
+        // No partial snapshot: templates/instances must not be populated.
+        expect(cubit.state.providers, isEmpty);
+        expect(cubit.state.instances, isEmpty);
+        await cubit.close();
+      },
+    );
+
+    test(
+      'a read failing while another is still pending is captured, not '
+      'an unhandled async error',
+      () async {
+        // Instances is held open while readiness fails immediately. Every
+        // future must have its error handler attached at issue time (record
+        // `.wait` [+ _FutureResult._waitAll]) so the mid-flight failure is
+        // aggregated into the typed error state. Under a serial await, this
+        // error would be delivered with no handler attached and the test
+        // framework would report it as unhandled.
+        final gate = Completer<void>();
+        final fake =
+            _FakeProviderSetupClient(
+                providers: [_apiKeyProvider()],
+                runtimeReady: false,
+              )
+              ..instancesGate = gate
+              ..runtimeCheckFailure = StateError('late boom');
+        final cubit = ProviderSetupCubit(client: fake);
+
+        final loading = cubit.load(forcePicker: true);
+        await Future<void>.delayed(Duration.zero);
+        // Readiness already failed while instances is still gated.
+        gate.complete();
+        await expectLater(loading, completes);
+        expect(cubit.state.status, ProviderSetupStatus.error);
+        expect(cubit.state.error, isNotNull);
+        expect(cubit.state.instances, isEmpty);
+        await cubit.close();
+      },
+    );
+
+    test(
+      'a late-arriving failure is captured after the other reads completed',
+      () async {
+        // templates/instances resolve normally; readiness only fails when its
+        // gate opens, so the failure arrives after the other reads settled.
+        final gate = Completer<void>();
+        final fake =
+            _FakeProviderSetupClient(
+                providers: [_apiKeyProvider()],
+                runtimeReady: false,
+              )
+              ..readinessGate = gate
+              ..runtimeCheckFailure = StateError('late boom');
+        final cubit = ProviderSetupCubit(client: fake);
+
+        final loading = cubit.load(forcePicker: true);
+        await Future<void>.delayed(Duration.zero);
+        gate.complete();
+        await expectLater(loading, completes);
+        expect(cubit.state.status, ProviderSetupStatus.error);
+        expect(cubit.state.error, isNotNull);
+        expect(cubit.state.instances, isEmpty);
         await cubit.close();
       },
     );

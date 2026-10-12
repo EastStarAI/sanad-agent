@@ -3,7 +3,12 @@ import 'dart:convert';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/core/provider_thinking/session_route_thinking_control.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
+import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/evolution/models/session_query.dart';
+import 'package:sanad_agent/evolution/models/session_search.dart';
 import 'package:sanad_agent/evolution/models/session_history_page.dart';
 import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/db/message_history_identity.dart';
@@ -48,6 +53,8 @@ class SessionQueryHandler {
   final PersistedRuntimeStateRepository? _persistedState;
   final SessionRouteMutationCoordinator? _routeCoordinator;
   final SessionRouteTransitionRepository? _routeTransitions;
+  final ThinkingSelectionResolver? _thinkingSelectionResolver;
+  final ThinkingRoutePreferenceStore? _thinkingPreferenceStore;
   final CompactionBoundaryRepository? _compactionBoundaries;
 
   SessionQueryHandler({
@@ -58,6 +65,8 @@ class SessionQueryHandler {
     PersistedRuntimeStateRepository? persistedState,
     SessionRouteMutationCoordinator? routeCoordinator,
     SessionRouteTransitionRepository? routeTransitions,
+    ThinkingSelectionResolver? thinkingSelectionResolver,
+    ThinkingRoutePreferenceStore? thinkingPreferenceStore,
     CompactionBoundaryRepository? compactionBoundaries,
   }) : _sessionManager = sessionManager,
        _bridge = bridge,
@@ -66,7 +75,32 @@ class SessionQueryHandler {
        _persistedState = persistedState,
        _routeCoordinator = routeCoordinator,
        _routeTransitions = routeTransitions,
+       _thinkingSelectionResolver = thinkingSelectionResolver,
+       _thinkingPreferenceStore = thinkingPreferenceStore,
        _compactionBoundaries = compactionBoundaries;
+
+  Map<String, dynamic> _sessionPayloadFor({
+    required SessionState session,
+    Map<String, dynamic>? sessionMetadata,
+    Map<String, dynamic>? metadataOverrides,
+  }) {
+    final resolver = _thinkingSelectionResolver;
+    final correction = _thinkingPreferenceStore
+        ?.readCorrection(session.sessionId)
+        ?.toMap();
+    return buildSessionPayload(
+      session: session,
+      sessionMetadata: sessionMetadata,
+      metadataOverrides: metadataOverrides,
+      thinkingControl: resolver == null
+          ? null
+          : resolveSessionRouteThinkingControl(
+              resolver: resolver,
+              session: session,
+            ),
+      thinkingCorrection: correction,
+    );
+  }
 
   Map<String, dynamic> buildHistoryEnvelope(CanonicalEvent event) {
     try {
@@ -176,6 +210,23 @@ class SessionQueryHandler {
         break;
       }
     }
+    final toolResultByCallId = <String, Message>{};
+    for (final pm in persistedMessages) {
+      final m = pm.message;
+      if (m.role == MessageRole.tool &&
+          m.toolCallId != null &&
+          m.toolCallId!.isNotEmpty) {
+        toolResultByCallId[m.toolCallId!] = m;
+      }
+    }
+    final activeItem = _persistedState?.findActiveWorkItem(sessionId);
+    final activeContinuation = activeItem?.continuationMetadata ?? const {};
+    final executingToolIds = List<String>.from(
+      activeContinuation['currently_executing_tools'] as List? ?? const [],
+    );
+    final activeToolStartedAt = Map<String, dynamic>.from(
+      activeContinuation['tool_started_at'] as Map? ?? const {},
+    );
     for (
       var messageIndex = 0;
       messageIndex < persistedMessages.length;
@@ -277,21 +328,34 @@ class SessionQueryHandler {
         }
 
         for (final toolCall in message.toolCalls!) {
+          final isExecuting = executingToolIds.contains(toolCall.id);
+          final matchingResult = toolResultByCallId[toolCall.id];
+          final startedAt =
+              matchingResult?.metadata?['started_at']?.toString() ??
+              activeToolStartedAt[toolCall.id]?.toString();
+          final toolCreatedAt =
+              startedAt ??
+              baseTime.add(Duration(seconds: index)).toIso8601String();
+          final matchingTerminalAt = matchingResult?.metadata?['terminal_at']
+              ?.toString();
+          final matchingRuntimeMs = matchingResult?.metadata?['runtime_ms'];
+
           historyMessages.add({
             'id': index,
             'sender': 'ai',
             'type': 'tool_use',
             'tool': toolCall.name,
             'input': _visibleToolInput(toolCall.name, toolCall.arguments),
-            'status': 'done',
+            'status': isExecuting ? 'running' : 'done',
             'run_id': ?runId,
             'model_step_id': ?modelStepId,
             'tool_call_id': toolCall.id,
             if (message.metadata?['context_usage'] != null)
               'context_usage': message.metadata!['context_usage'],
-            'created_at': baseTime
-                .add(Duration(seconds: index))
-                .toIso8601String(),
+            'created_at': toolCreatedAt,
+            'started_at': ?startedAt,
+            'terminal_at': ?matchingTerminalAt,
+            'runtime_ms': ?matchingRuntimeMs,
             'session_id': sessionId,
           });
           index++;
@@ -314,6 +378,11 @@ class SessionQueryHandler {
           toolCallId: resolvedToolContext.toolCallId,
           result: message.toolResult,
         );
+
+        final startedAt = message.metadata?['started_at']?.toString();
+        final terminalAt = message.metadata?['terminal_at']?.toString();
+        final runtimeMs = message.metadata?['runtime_ms'];
+        final resultCreatedAt = terminalAt ?? msgTime;
 
         historyMessages.add({
           'id': msgId,
@@ -338,13 +407,12 @@ class SessionQueryHandler {
             'revision': message.metadata!['revision'],
           if (message.metadata?['reason'] != null)
             'reason': message.metadata!['reason'],
-          if (message.metadata?['started_at'] != null)
-            'started_at': message.metadata!['started_at'],
-          if (message.metadata?['terminal_at'] != null)
-            'terminal_at': message.metadata!['terminal_at'],
+          'started_at': ?startedAt,
+          'terminal_at': ?terminalAt,
+          'runtime_ms': ?runtimeMs,
           if (message.metadata?['cleanup_outcome'] != null)
             'cleanup_outcome': message.metadata!['cleanup_outcome'],
-          'created_at': msgTime,
+          'created_at': resultCreatedAt,
           'session_id': sessionId,
         });
         final steerMessages = message.metadata?['steer_messages'];
@@ -675,7 +743,7 @@ class SessionQueryHandler {
           if (includesRuntimeState) ...{
             'execution_snapshot': _executionSnapshot(sessionId).toPayload(),
             if (session != null)
-              ...buildSessionPayload(
+              ..._sessionPayloadFor(
                 session: session,
                 sessionMetadata: sessionMetadata,
                 metadataOverrides: {'context_usage': ?latestContextUsage},
@@ -783,7 +851,7 @@ class SessionQueryHandler {
 
       final serializedSessions = result.sessions.map((session) {
         final runtimeNotice = _runtimeRecovery?.activeNotice(session.sessionId);
-        final payload = buildSessionPayload(
+        final payload = _sessionPayloadFor(
           session: session,
           sessionMetadata: _sessionManager.getSessionMetadata(
             session.sessionId,
@@ -840,6 +908,68 @@ class SessionQueryHandler {
     }
   }
 
+  Map<String, dynamic> buildSearchEnvelope(CanonicalEvent event) {
+    final requestId = event.payload['request_id'];
+    try {
+      final request = SessionSearchRequest.fromMap(event.payload);
+      final result = _sessionManager.searchSessions(request);
+      final hits = result.hits.map((hit) {
+        return {
+          'session': buildSessionPayload(
+            session: hit.session,
+            sessionMetadata: _sessionManager.getSessionMetadata(
+              hit.session.sessionId,
+            ),
+          ),
+          'match_kind': hit.matchKind.wireValue,
+          'snippet': hit.snippet,
+          'anchor_event_id': hit.anchorEventId,
+        };
+      }).toList();
+      return _bridge.buildAgentEventEnvelope(
+        CanonicalEvent(
+          type: CanonicalEventTypes.sessionSearchResults,
+          payload: {
+            'request_id': requestId,
+            'results': hits,
+            'next_cursor': result.nextCursor,
+            'has_more': result.hasMore,
+          },
+        ),
+      );
+    } on ArgumentError catch (error) {
+      return _buildSearchErrorEnvelope(
+        requestId,
+        'invalid_search_request',
+        error.message?.toString() ?? 'Invalid search request.',
+      );
+    } catch (_) {
+      return _buildSearchErrorEnvelope(
+        requestId,
+        'session_search_failed',
+        'Conversation search failed.',
+      );
+    }
+  }
+
+  Map<String, dynamic> _buildSearchErrorEnvelope(
+    Object? requestId,
+    String code,
+    String message,
+  ) {
+    return _bridge.buildAgentEventEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.sessionSearchResults,
+        payload: {
+          'request_id': requestId,
+          'results': const <Object>[],
+          'has_more': false,
+          'error': {'code': code, 'message': message},
+        },
+      ),
+    );
+  }
+
   Map<String, dynamic>? buildUpdateSessionTitleEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId;
     final title = event.payload['title'] as String?;
@@ -886,10 +1016,17 @@ class SessionQueryHandler {
   Map<String, dynamic>? buildSessionPreferencesEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId;
     final model = event.payload['model'] as String?;
-    final requestedProvider = event.payload['provider_instance_id'] as String?;
+    final requestedProvider =
+        (event.payload['provider_instance_id'] ?? event.payload['provider_id'])
+            as String?;
+    final thinkingMode = event.payload['thinking_mode'] as String?;
+    final hasThinkingModeKey = event.payload.containsKey('thinking_mode');
     final requestId = event.payload['request_id'] as String?;
 
-    if (sessionId == null || model == null) {
+    if (sessionId == null) {
+      return null;
+    }
+    if (model == null && !hasThinkingModeKey && requestedProvider == null) {
       return null;
     }
 
@@ -898,9 +1035,25 @@ class SessionQueryHandler {
       return null;
     }
 
+    String? effectiveThinkingMode;
+    if (hasThinkingModeKey) {
+      final normalizedThinking = thinkingMode?.trim();
+      final clearThinking =
+          normalizedThinking == null || normalizedThinking.isEmpty;
+      effectiveThinkingMode = clearThinking ? null : normalizedThinking;
+      _sessionManager.updateSessionModeling(
+        sessionId,
+        thinkingMode: effectiveThinkingMode,
+        clearThinkingMode: clearThinking,
+      );
+    }
+
     final coordinator = _routeCoordinator;
     final provider = requestedProvider ?? session.providerId;
-    if (coordinator != null && provider != null && provider.isNotEmpty) {
+    if (model != null &&
+        coordinator != null &&
+        provider != null &&
+        provider.isNotEmpty) {
       final route = coordinator.mutate(
         sessionId: sessionId,
         providerInstanceId: provider,
@@ -909,29 +1062,42 @@ class SessionQueryHandler {
         reason: 'preferences_updated',
         requestId: requestId,
       );
-      if (!route.changed || route.eventId == null) return null;
-      return _bridge.buildAgentEventEnvelope(
-        CanonicalEvent(
-          type: CanonicalEventTypes.sessionPreferencesUpdated,
-          sessionId: sessionId,
-          payload: route.toPayload(),
-          eventId: route.eventId!,
-          delivery: const DeliveryPolicy.platformFamily(
-            PlatformFamily.sanadClient,
+      if (route.changed && route.eventId != null) {
+        return _bridge.buildAgentEventEnvelope(
+          CanonicalEvent(
+            type: CanonicalEventTypes.sessionPreferencesUpdated,
+            sessionId: sessionId,
+            payload: {
+              ...route.toPayload(),
+              if (hasThinkingModeKey) 'thinking_mode': effectiveThinkingMode,
+            },
+            eventId: route.eventId!,
+            delivery: const DeliveryPolicy.platformFamily(
+              PlatformFamily.sanadClient,
+            ),
           ),
-        ),
-      );
+        );
+      }
+    } else {
+      if (model != null) {
+        _sessionManager.updateSessionModel(sessionId, model);
+      }
+      if (requestedProvider != null) {
+        _sessionManager.updateSessionProviderId(sessionId, requestedProvider);
+      }
     }
 
-    _sessionManager.updateSessionModel(sessionId, model);
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(
-        type: CanonicalEventTypes.sessionPreferencesUpdated,
+        type: CanonicalEventTypes.sessionUpdated,
         sessionId: sessionId,
         payload: {
           'request_id': requestId,
           'session_id': sessionId,
-          'model': model,
+          'model': ?model,
+          'provider_id': ?requestedProvider,
+          'provider_instance_id': ?requestedProvider,
+          if (hasThinkingModeKey) 'thinking_mode': effectiveThinkingMode,
         },
       ),
     );

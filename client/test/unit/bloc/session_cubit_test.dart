@@ -8,6 +8,7 @@ import 'package:sanad_client/core/navigation/navigation_history_controller.dart'
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/conversation_draft.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/devices/domain/device_client_registry.dart';
 import 'package:sanad_client/features/devices/domain/device_repository.dart';
 import 'package:sanad_client/features/conversations/domain/conversation_client.dart';
@@ -143,6 +144,40 @@ void main() {
     cacheRepository.applySessionDeleted(agent.id, session.id);
     await Future<void>.delayed(Duration.zero);
     expect(cubit.state.agentSessions[agent.id], isEmpty);
+
+    await cubit.close();
+    cacheStore.dispose();
+  });
+
+  test('does not duplicate refreshDeviceSidebar when DeviceCubit adds peer devices without changing active device', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final cacheStore = ConversationCacheStore();
+    final cacheRepository = ConversationCacheRepository(
+      cache: cacheStore,
+      transport: conversationRepository,
+    );
+
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      conversationCacheRepository: cacheRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    final initialCalls = client.getSessionsCalls;
+    expect(initialCalls, greaterThan(0));
+
+    // Simulate Cloud Gateway delivering additional peer devices
+    final peerAgent = DeviceConfig(id: 'agent-cloud', name: 'CloudDevice', isOnline: true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent, peerAgent]));
+    await Future<void>.delayed(Duration.zero);
+    await Future<void>.delayed(Duration.zero);
+
+    // Call count should NOT have increased because the active device did not change
+    expect(client.getSessionsCalls, initialCalls);
 
     await cubit.close();
     cacheStore.dispose();
@@ -535,6 +570,61 @@ void main() {
     expect(messagesCubit.state.messages, retainedMessages);
     expect(messagesCubit.state.olderHistoryError, isNotNull);
     expect(messagesCubit.state.hasOlderHistory, isTrue);
+
+    await messagesCubit.close();
+    await sessionCubit.close();
+  });
+
+  test('SessionMessagesCubit guards against history loads while transition is in flight', () async {
+    socket.setConnected(true);
+    client.historyHasMoreValue = true;
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final sessionCubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+    );
+    final messagesCubit = SessionMessagesCubit(
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      conversationRepository: conversationRepository,
+      preferencesRepository: FakeDevicePreferencesRepository(),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await sessionCubit.selectSession(session);
+    await Future<void>.delayed(Duration.zero);
+    expect(messagesCubit.state.activeSessionId, session.id);
+
+    // Simulate an in-flight history transition to another session
+    final completer = Completer<List<CanonicalEvent>>();
+    client.historyCompleter = completer;
+    final otherSession = Session(
+      id: 'session-2',
+      title: 'Session 2',
+      deviceId: agent.id,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    final selectFuture = sessionCubit.selectSession(otherSession);
+    await Future<void>.delayed(Duration.zero);
+    expect(messagesCubit.state.requestedSessionId, otherSession.id);
+    expect(messagesCubit.state.isHistoryLoading, isTrue);
+
+    // Attempting to load older, newer, or anchored history must be ignored during transition
+    await messagesCubit.loadOlderHistory();
+    await messagesCubit.loadNewerHistory();
+    await messagesCubit.loadAnchoredHistory('anchor-event-1');
+
+    expect(client.loadedOlderHistorySessionIds, isEmpty);
+
+    // Complete the transition
+    completer.complete(const []);
+    await selectFuture;
+    await Future<void>.delayed(Duration.zero);
+
+    expect(messagesCubit.state.activeSessionId, otherSession.id);
+    expect(messagesCubit.state.isHistoryLoading, isFalse);
+    expect(messagesCubit.state.requestedSessionId, isNull);
 
     await messagesCubit.close();
     await sessionCubit.close();
@@ -1387,6 +1477,54 @@ void main() {
     await cubit.close();
   });
 
+  test('session_updated with thinking_correction clears invalid thinking mode', () async {
+    final thinkingSession = session.copyWith(thinkingMode: 'max');
+    final thinkingClient = _FakeDeviceClient(
+      config: agent,
+      controller: socket,
+      initialSessions: [thinkingSession],
+    );
+    agentCubit.registerClient(agent.id, thinkingClient);
+
+    socket.setConnected(true);
+    localSocket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final resolver = DeviceConnectionCoordinator(
+      cloudSocketService: socket,
+      localSocketService: localSocket,
+      currentDeviceId: 'test-device-id',
+    );
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+      connectionCoordinator: resolver,
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    expect(cubit.state.agentSessions[agent.id]?.single.thinkingMode, 'max');
+
+    localSocket.debugEmitEvent({
+      'type': 'device_event',
+      'event': 'session_updated',
+      'device_id': agent.id,
+      'payload': {
+        'session_id': session.id,
+        'thinking_correction': {
+          'reason': 'thinking_option_unavailable_for_route',
+          'previous_selection_id': 'max',
+          'corrected_at': '2026-01-01T00:00:00Z',
+        },
+      },
+    });
+    await Future<void>.delayed(Duration.zero);
+
+    expect(cubit.state.agentSessions[agent.id]?.single.thinkingMode, isNull);
+
+    resolver.dispose();
+    await cubit.close();
+  });
+
   test('startNewChat for another agent clears that agent previous visible messages', () async {
     final secondAgent = DeviceConfig(id: 'agent-2', name: 'Computer');
     final oldMessage = CanonicalEvent(
@@ -1947,6 +2085,129 @@ void main() {
     await cubit.close();
     cacheStore.dispose();
   });
+
+  test('applyThinkingMode updates and clears session projections synchronously', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final sessionWithMode = Session(
+      id: 'session-thinking',
+      title: 'Thinking Session',
+      deviceId: agent.id,
+      createdAt: DateTime(2026, 1, 1),
+      updatedAt: DateTime(2026, 1, 1),
+      thinkingMode: 'low',
+    );
+
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    client.emitSessions([sessionWithMode]);
+    await Future<void>.delayed(Duration.zero);
+    await cubit.selectSession(sessionWithMode);
+
+    cubit.applyThinkingMode(sessionWithMode.id, 'xhigh');
+    expect(cubit.state.selectedSession?.thinkingMode, 'xhigh');
+    expect(
+      cubit.state.agentSessions[agent.id]?.firstWhere((s) => s.id == sessionWithMode.id).thinkingMode,
+      'xhigh',
+    );
+
+    cubit.applyThinkingMode(sessionWithMode.id, null);
+    expect(cubit.state.selectedSession?.thinkingMode, isNull);
+    expect(
+      cubit.state.agentSessions[agent.id]?.firstWhere((s) => s.id == sessionWithMode.id).thinkingMode,
+      isNull,
+    );
+
+    await cubit.close();
+  });
+
+  test('session_preferences_updated global event updates session thinkingMode', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final sessionWithMode = Session(
+      id: 'session-pref',
+      title: 'Pref Session',
+      deviceId: agent.id,
+      createdAt: DateTime(2026, 1, 1),
+      updatedAt: DateTime(2026, 1, 1),
+      thinkingMode: 'low',
+    );
+
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    client.emitSessions([sessionWithMode]);
+    await Future<void>.delayed(Duration.zero);
+    await cubit.selectSession(sessionWithMode);
+
+    cubit.handleGlobalSessionEventForTesting({
+      'event': 'session_preferences_updated',
+      'device_id': agent.id,
+      'payload': {
+        'session_id': sessionWithMode.id,
+        'thinking_mode': 'high',
+      },
+    });
+
+    expect(cubit.state.selectedSession?.thinkingMode, 'high');
+    expect(
+      cubit.state.agentSessions[agent.id]?.firstWhere((s) => s.id == sessionWithMode.id).thinkingMode,
+      'high',
+    );
+
+    await cubit.close();
+  });
+
+  test('applySessionRoutePreferences updates model, provider, and thinkingMode synchronously', () async {
+    socket.setConnected(true);
+    agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+    final testSession = Session(
+      id: 'session-route-pref',
+      title: 'Route Pref Session',
+      deviceId: agent.id,
+      createdAt: DateTime(2026, 1, 1),
+      updatedAt: DateTime(2026, 1, 1),
+      modelProvider: 'initial-provider',
+      model: 'initial-model',
+      thinkingMode: 'low',
+    );
+
+    final cubit = SessionCubit(
+      agentCubit: agentCubit,
+      socketService: socket,
+      conversationRepository: conversationRepository,
+    );
+    await Future<void>.delayed(Duration.zero);
+    client.emitSessions([testSession]);
+    await Future<void>.delayed(Duration.zero);
+    await cubit.selectSession(testSession);
+
+    cubit.applySessionRoutePreferences(
+      testSession.id,
+      providerId: 'opencode-go',
+      model: 'kimi-k2.7-code',
+      thinkingMode: 'high',
+    );
+
+    expect(cubit.state.selectedSession?.model, 'kimi-k2.7-code');
+    expect(cubit.state.selectedSession?.modelProvider, 'opencode-go');
+    expect(cubit.state.selectedSession?.thinkingMode, 'high');
+    final storedInAgent = cubit.state.agentSessions[agent.id]?.firstWhere(
+      (s) => s.id == testSession.id,
+    );
+    expect(storedInAgent?.model, 'kimi-k2.7-code');
+    expect(storedInAgent?.modelProvider, 'opencode-go');
+    expect(storedInAgent?.thinkingMode, 'high');
+
+    await cubit.close();
+  });
 }
 
 class _TestDeviceCubit extends DeviceCubit {
@@ -2307,6 +2568,13 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
   }) async {}
 
   @override
+  Future<SessionSearchPage> searchSessions({
+    required String query,
+    int limit = 20,
+    String? cursor,
+  }) async => const SessionSearchPage(hits: [], hasMore: false);
+
+  @override
   Future<SessionQueryResult> getSessions({SessionQueryRequest? query}) async {
     if (!controller.isConnected) {
       return SessionQueryResult(sessions: initialSessions, hasMore: false);
@@ -2321,9 +2589,17 @@ class _FakeDeviceClient extends DeviceClient implements ConversationClient {
     return getSessions(query: query);
   }
 
+  void emitSessions(List<Session> sessions) {
+    _sessionsController.add(List<Session>.from(sessions));
+  }
+
+  Completer<List<CanonicalEvent>>? historyCompleter;
+
   @override
   Future<List<CanonicalEvent>> loadSessionHistory(String sessionId) async {
     loadedHistorySessionIds.add(sessionId);
+    final completer = historyCompleter;
+    if (completer != null) return completer.future;
     return const [];
   }
 

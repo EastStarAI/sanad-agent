@@ -61,7 +61,7 @@ class CompactionEngineRequest {
     this.previousSummary,
     this.previousSourceRange,
     required this.targetRequestTokens,
-    this.thresholdRatio = 0.80,
+    this.thresholdRatio = 0.90,
   });
 }
 

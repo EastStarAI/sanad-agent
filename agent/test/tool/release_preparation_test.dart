@@ -48,7 +48,11 @@ void main() {
   });
 
   tearDown(() async {
-    if (fixture.existsSync()) await fixture.delete(recursive: true);
+    if (fixture.existsSync()) {
+      try {
+        await fixture.delete(recursive: true);
+      } catch (_) {}
+    }
   });
 
   String readFixture(String path) =>

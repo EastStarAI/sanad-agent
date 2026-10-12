@@ -1,3 +1,5 @@
+import 'package:sanad_client_identity/sanad_client_identity.dart';
+
 /// Gateway-authored, display-only identity for an authenticated command sender.
 ///
 /// This metadata is correlation context only. It never grants permission or
@@ -40,20 +42,34 @@ final class AuthenticatedCommandOrigin {
       clientSessionId: _boundedReference(origin['client_session_id']),
       clientInstanceId: _boundedReference(origin['client_instance_id']),
       clientKind: _allowed(origin['client_kind'], _clientKinds),
-      platformFamily: _allowed(
-        origin['platform_family'],
-        _platformFamilies,
-      ),
+      platformFamily: _allowed(origin['platform_family'], _platformFamilies),
     );
   }
 
-  factory AuthenticatedCommandOrigin.unknown() => const AuthenticatedCommandOrigin(
-    version: 1,
-    clientSessionId: null,
-    clientInstanceId: null,
-    clientKind: 'unknown',
-    platformFamily: 'unknown',
-  );
+  factory AuthenticatedCommandOrigin.fromLocalHello(
+    Map<String, dynamic> envelope,
+  ) {
+    final rawMetadata = envelope['metadata'];
+    final metadata = rawMetadata is Map
+        ? Map<String, dynamic>.from(rawMetadata)
+        : const <String, dynamic>{};
+    return AuthenticatedCommandOrigin(
+      version: 1,
+      clientSessionId: null,
+      clientInstanceId: _boundedReference(envelope['client_instance_id']),
+      clientKind: _allowed(metadata['client_kind'], _clientKinds),
+      platformFamily: _allowed(metadata['platform_family'], _platformFamilies),
+    );
+  }
+
+  factory AuthenticatedCommandOrigin.unknown() =>
+      const AuthenticatedCommandOrigin(
+        version: 1,
+        clientSessionId: null,
+        clientInstanceId: null,
+        clientKind: 'unknown',
+        platformFamily: 'unknown',
+      );
 
   /// A bounded label that intentionally excludes ids and free-form metadata.
   String get safeDisplay {
@@ -64,6 +80,21 @@ final class AuthenticatedCommandOrigin {
     return platformFamily == 'unknown'
         ? 'authenticated $kind'
         : 'authenticated $kind on $platformFamily';
+  }
+
+  /// A compact, privacy-safe identifier for lifecycle logs.
+  String get displayTag {
+    final reference = clientDisplayReference(
+      clientInstanceId: clientInstanceId,
+      clientSessionId: clientSessionId,
+    );
+    final kind = clientKind == 'unknown'
+        ? (reference == null ? 'client' : 'legacy-client')
+        : clientKind;
+    final platform = platformFamily == 'unknown' || platformFamily == kind
+        ? ''
+        : '/$platformFamily';
+    return '$kind$platform${reference == null ? '' : '#$reference'}';
   }
 
   static String _allowed(Object? value, Set<String> allowed) {

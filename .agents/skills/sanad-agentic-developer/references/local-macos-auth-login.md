@@ -20,7 +20,7 @@ This is a fresh sign-in procedure only. Do not save, copy, restore, export, or d
    ```
 
 4. Identify the intended macOS Client's VM Service URL. If more than one managed driver Client is running, pass that URL explicitly to every `sanad-dev ui` command. Never select the newest process or first global VM.
-5. If the runtime uses a non-primary Sanad Home, set a shell placeholder to its absolute path and pass it explicitly to every command:
+5. If the runtime uses a non-primary Sanad Home, later commands from the owning workspace normally infer it from the validated launch locator. Keep its absolute path available only for an authoritative diagnostic override:
 
    ```bash
    sanad_home=<absolute-sanad-home>
@@ -30,7 +30,7 @@ This is a fresh sign-in procedure only. Do not save, copy, restore, export, or d
    Setting `SANAD_HOME` in the environment does not select that runtime for `sanad-dev` discovery or ownership checks.
 6. Connect `agent-browser` to a user-approved automation browser session. Do not take over an unrelated personal browser window.
 
-The examples below show `--home "$sanad_home"` because an explicit non-primary Home is the safest reusable form. When the selected runtime uses the primary Home, use the matching `--home user` selector instead.
+The examples below retain `--home "$sanad_home"` to demonstrate an explicit override; it may be omitted for the single active group inferred from the owning workspace. When explicitly selecting the primary Home, use `--home user`.
 
 ## Inspect and navigate without coordinates
 

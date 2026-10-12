@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 import 'package:http/http.dart' as http;
@@ -8,6 +9,7 @@ import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/core/models/llm_provider_state.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/models/model_metadata.dart';
 import 'package:sanad_agent/core/models/tool_call.dart';
 import 'package:sanad_agent/core/models/tool_execution_result.dart';
 import 'package:sanad_agent/core/models/llm_finish_reason.dart';
@@ -18,6 +20,9 @@ import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
 import 'package:sanad_agent/engine/adapters/ollama_adapter.dart';
 import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
+import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
+import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/engine/llm_request_dumper.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 
 class MockConfig extends Config {
@@ -128,6 +133,20 @@ void main() {
         expect(adapter.lastModelsException, isNotNull);
       },
     );
+
+    test('keeps unknown model context fallback conservative', () async {
+      final adapter = BaseOpenAIAdapter(config, profile);
+
+      for (final model in [
+        'unknown-small-local-model',
+        'gpt-6-unlisted-small-variant',
+      ]) {
+        expect(
+          await adapter.getContextLimit(model),
+          ModelMetadata.unknownContextLimit,
+        );
+      }
+    });
 
     test('strips copied config prefixes before model discovery', () async {
       final mockClient = MockClient((request) async {
@@ -366,7 +385,7 @@ void main() {
           client: mockClient,
         );
         const options = LLMRequestOptions(
-          thinkingMode: 'deep',
+          thinkingDirective: OpenAiEffortDirective('high'),
           maxOutputTokens: 4096,
         );
 
@@ -384,7 +403,11 @@ void main() {
             .toList();
 
         expect(capturedBodies, hasLength(2));
-        expect(capturedBodies[0]['reasoning_effort'], 'high');
+        expect(capturedBodies[0]['reasoning'], {
+          'enabled': true,
+          'effort': 'high',
+        });
+        expect(capturedBodies[0].containsKey('reasoning_effort'), isFalse);
         expect(capturedBodies[0]['max_completion_tokens'], 4096);
         final streamOnlyKeys = {'stream', 'stream_options'};
         expect(
@@ -392,6 +415,117 @@ void main() {
             ..removeWhere((key, _) => streamOnlyKeys.contains(key)),
           capturedBodies[0],
         );
+      },
+    );
+
+    test(
+      'uses top-level reasoning_effort for OpenAI Chat sync and stream',
+      () async {
+        final capturedBodies = <Map<String, dynamic>>[];
+        final mockClient = StreamingTestClient((request) {
+          final body = jsonDecode((request as http.Request).body);
+          capturedBodies.add((body as Map).cast<String, dynamic>());
+          final isStream = body['stream'] == true;
+          final payload = isStream
+              ? [
+                  'data: ${jsonEncode({
+                    'choices': [
+                      {
+                        'delta': {'content': 'Hello'},
+                        'finish_reason': 'stop',
+                      },
+                    ],
+                  })}',
+                  'data: [DONE]',
+                ].join('\n')
+              : jsonEncode({
+                  'choices': [
+                    {
+                      'message': {'content': 'Hello'},
+                      'finish_reason': 'stop',
+                    },
+                  ],
+                });
+          return http.StreamedResponse(
+            Stream.value(utf8.encode(payload)),
+            200,
+            headers: {
+              'content-type': isStream
+                  ? 'text/event-stream'
+                  : 'application/json',
+            },
+          );
+        });
+        final adapter = BaseOpenAIAdapter(config, profile, client: mockClient);
+        const options = LLMRequestOptions(
+          thinkingDirective: OpenAiEffortDirective('medium'),
+        );
+
+        await adapter.generateResponse(
+          [Message(role: MessageRole.user, content: 'Hi')],
+          modelOverride: 'o3',
+          options: options,
+        );
+        await adapter
+            .generateStream(
+              [Message(role: MessageRole.user, content: 'Hi')],
+              modelOverride: 'o3',
+              options: options,
+            )
+            .toList();
+
+        expect(capturedBodies, hasLength(2));
+        expect(capturedBodies[0]['reasoning_effort'], 'medium');
+        expect(capturedBodies[0].containsKey('reasoning'), isFalse);
+        final streamOnlyKeys = {'stream', 'stream_options'};
+        expect(
+          Map.of(capturedBodies[1])
+            ..removeWhere((key, _) => streamOnlyKeys.contains(key)),
+          capturedBodies[0],
+        );
+      },
+    );
+
+    test(
+      'uses nested google thinking_config for Gemini profile requests',
+      () async {
+        late Map<String, dynamic> requestBody;
+        final geminiProfile = ProviderRegistry.findByNameOrAlias('gemini')!;
+        final mockClient = MockClient((request) async {
+          requestBody = (jsonDecode(request.body) as Map)
+              .cast<String, dynamic>();
+          return http.Response(
+            jsonEncode({
+              'choices': [
+                {
+                  'message': {'content': 'Hello'},
+                  'finish_reason': 'stop',
+                },
+              ],
+            }),
+            200,
+          );
+        });
+        final adapter = BaseOpenAIAdapter(
+          config,
+          geminiProfile,
+          client: mockClient,
+        );
+
+        await adapter.generateResponse(
+          [Message(role: MessageRole.user, content: 'Hi')],
+          modelOverride: 'gemini-2.5-flash',
+          options: const LLMRequestOptions(
+            thinkingDirective: GoogleBudgetDirective(8192),
+          ),
+        );
+
+        expect(requestBody['extra_body'], {
+          'google': {
+            'thinking_config': {'thinking_budget': 8192},
+          },
+        });
+        expect(requestBody.containsKey('reasoning_effort'), isFalse);
       },
     );
 
@@ -437,6 +571,10 @@ void main() {
           reasoningDetails,
         );
         expect(
+          first.message.providerState?.data['reasoning_content'],
+          'Structured thought',
+        );
+        expect(
           first.message.providerState?.issuer,
           'provider-1|openai_compatible|https://api.test.com',
         );
@@ -446,6 +584,10 @@ void main() {
           (requestBody['messages'] as List).single['reasoning_details'],
           reasoningDetails,
         );
+        expect(
+          (requestBody['messages'] as List).single['reasoning_content'],
+          'Structured thought',
+        );
 
         await adapter.generateResponse([
           first.message,
@@ -453,6 +595,10 @@ void main() {
         expect(
           (requestBody['messages'] as List).single,
           isNot(contains('reasoning_details')),
+        );
+        expect(
+          (requestBody['messages'] as List).single,
+          isNot(contains('reasoning_content')),
         );
 
         final endpointChangedAdapter = BaseOpenAIAdapter(
@@ -467,6 +613,10 @@ void main() {
         expect(
           (requestBody['messages'] as List).single,
           isNot(contains('reasoning_details')),
+        );
+        expect(
+          (requestBody['messages'] as List).single,
+          isNot(contains('reasoning_content')),
         );
       },
     );
@@ -560,6 +710,91 @@ void main() {
           'provider-stream|openai_compatible|https://api.test.com',
         );
         expect(state.data['reasoning_details'], hasLength(1));
+        expect(state.data['reasoning_content'], 'Think ');
+      },
+    );
+
+    test(
+      'preserves empty streamed reasoning content for tool-call replay',
+      () async {
+        final streamEvent = {
+          'choices': [
+            {
+              'delta': {
+                'reasoning_content': '',
+                'tool_calls': [
+                  {
+                    'index': 0,
+                    'id': 'call-1',
+                    'function': {'name': 'test_tool', 'arguments': '{}'},
+                  },
+                ],
+              },
+              'finish_reason': 'tool_calls',
+            },
+          ],
+        };
+        final streamClient = StreamingTestClient(
+          (_) => http.StreamedResponse(
+            Stream.value(
+              utf8.encode(
+                ['data: ${jsonEncode(streamEvent)}', 'data: [DONE]'].join('\n'),
+              ),
+            ),
+            200,
+            headers: {'content-type': 'text/event-stream'},
+          ),
+        );
+        final adapter = BaseOpenAIAdapter(
+          config,
+          profile,
+          client: streamClient,
+        );
+        const options = LLMRequestOptions(
+          providerInstanceId: 'provider-stream',
+        );
+
+        final responses = await adapter
+            .generateStream([], options: options)
+            .toList();
+        final toolMessage = responses
+            .map((response) => response.message)
+            .singleWhere((message) => message.toolCalls?.isNotEmpty ?? false);
+
+        expect(toolMessage.providerState, isNotNull);
+        expect(
+          toolMessage.providerState!.data,
+          containsPair('reasoning_content', ''),
+        );
+
+        late Map<String, dynamic> replayBody;
+        final replayClient = MockClient((request) async {
+          replayBody = (jsonDecode(request.body) as Map)
+              .cast<String, dynamic>();
+          return http.Response(
+            jsonEncode({
+              'choices': [
+                {
+                  'message': {'content': 'done'},
+                  'finish_reason': 'stop',
+                },
+              ],
+            }),
+            200,
+          );
+        });
+        final replayAdapter = BaseOpenAIAdapter(
+          config,
+          profile,
+          client: replayClient,
+        );
+
+        await replayAdapter.generateResponse([toolMessage], options: options);
+
+        expect(
+          (replayBody['messages'] as List).single,
+          containsPair('reasoning_content', ''),
+        );
       },
     );
 
@@ -824,6 +1059,7 @@ void main() {
             'choices': [
               {
                 'delta': {
+                  'reasoning_content': 'Plan the search',
                   'tool_calls': [
                     {
                       'index': 0,
@@ -888,6 +1124,111 @@ void main() {
           toolResponse.message.toolCalls!.single.arguments,
           equals({'q': 'hello'}),
         );
+        expect(
+          toolResponse.message.providerState?.data['reasoning_content'],
+          'Plan the search',
+        );
+      },
+    );
+
+    test(
+      'should dump partial_message and error when streamed tool arguments are malformed',
+      () async {
+        final tempDir = Directory.systemTemp.createTempSync(
+          'sanad_malformed_tool_',
+        );
+        setSanadHomeOverride(tempDir.path);
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        try {
+          final dumpPath = await LLMRequestDumper.dumpRequest(
+            sessionId: 'test-malformed-tool-session',
+            history: [],
+            tools: [],
+          );
+          expect(dumpPath, isNotNull);
+
+          final streamEvents = [
+            {
+              'choices': [
+                {
+                  'delta': {
+                    'content': 'Attempting tool: ',
+                    'tool_calls': [
+                      {
+                        'index': 0,
+                        'id': 'call_bad',
+                        'function': {
+                          'name': 'calculator',
+                          'arguments': '{"invalid": unquoted_val}',
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+            {
+              'choices': [
+                {'delta': {}, 'finish_reason': 'tool_calls'},
+              ],
+            },
+          ];
+          final streamedBody = [
+            for (final event in streamEvents) 'data: ${jsonEncode(event)}',
+            'data: [DONE]',
+          ].join('\n');
+
+          final mockClient = StreamingTestClient((request) {
+            return http.StreamedResponse(
+              Stream.value(utf8.encode(streamedBody)),
+              200,
+              headers: {'content-type': 'text/event-stream'},
+            );
+          });
+
+          final adapter = BaseOpenAIAdapter(
+            config,
+            profile,
+            client: mockClient,
+          );
+
+          await expectLater(
+            adapter.generateStream([
+              Message(role: MessageRole.user, content: 'calc'),
+            ]).toList(),
+            throwsA(isA<FormatException>()),
+          );
+
+          final file = File(dumpPath!);
+          expect(file.existsSync(), isTrue);
+
+          final fileContent =
+              jsonDecode(await file.readAsString()) as Map<String, dynamic>;
+          expect(fileContent['response'], isNotNull);
+          final responseData = fileContent['response'] as Map<String, dynamic>;
+          expect(responseData['status_code'], 200);
+          expect(
+            responseData['error'],
+            contains('Malformed arguments for streamed tool calculator'),
+          );
+          expect(responseData['partial_message'], isNotNull);
+          final partialMsg =
+              responseData['partial_message'] as Map<String, dynamic>;
+          expect(partialMsg['role'], 'assistant');
+          expect(partialMsg['content'], 'Attempting tool: ');
+          expect(partialMsg['partial_tool_calls'], isA<List>());
+          final partialCalls = partialMsg['partial_tool_calls'] as List;
+          expect(partialCalls.length, 1);
+          expect(partialCalls.first['name'], 'calculator');
+          expect(partialCalls.first['arguments'], '{"invalid": unquoted_val}');
+        } finally {
+          setSanadHomeOverride(null);
+          LLMRequestDumper.environmentOverride = null;
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        }
       },
     );
 
@@ -980,6 +1321,93 @@ void main() {
       expect(response.finishReason, LLMFinishReason.stop);
     });
 
+    test('ignores invalid Ollama context metadata and fails closed', () async {
+      for (final invalidLimit in ['invalid', 0, -1]) {
+        final adapter = OllamaAdapter(
+          config,
+          profile,
+          client: MockClient(
+            (_) async => http.Response(
+              jsonEncode({
+                'model_info': {'llama.context_length': invalidLimit},
+              }),
+              200,
+            ),
+          ),
+        );
+
+        expect(
+          await adapter.getContextLimit('unknown-small-local-model'),
+          ModelMetadata.unknownContextLimit,
+        );
+      }
+    });
+
+    test(
+      'prioritizes live /api/show context_length over catalog lookup and caches result',
+      () async {
+        var callCount = 0;
+        final mockClient = MockClient((request) async {
+          callCount++;
+          if (request.url.path.endsWith('/api/show')) {
+            return http.Response(
+              jsonEncode({
+                'model_info': {'gemma4.context_length': 131072},
+              }),
+              200,
+            );
+          }
+          return http.Response('{}', 404);
+        });
+
+        final adapter = OllamaAdapter(
+          config,
+          profile,
+          client: mockClient,
+          modelContextLimitLookup: (model) => 8192, // Lower stale catalog limit
+        );
+
+        // First call probes live /api/show and gets 131072, ignoring the 8192 catalog limit
+        final limit1 = await adapter.getContextLimit('gemma4:e2b');
+        expect(limit1, 131072);
+        expect(callCount, 1);
+
+        // Second call uses in-memory cached probe without network call
+        final limit2 = await adapter.getContextLimit('gemma4:e2b');
+        expect(limit2, 131072);
+        expect(callCount, 1);
+      },
+    );
+
+    test(
+      'falls back to catalog and ModelMetadata when /api/show fails',
+      () async {
+        final mockClient = MockClient((request) async {
+          return http.Response('Internal Server Error', 500);
+        });
+
+        // With catalog lookup available
+        final adapterWithCatalog = OllamaAdapter(
+          config,
+          profile,
+          client: mockClient,
+          modelContextLimitLookup: (model) => 32768,
+        );
+        expect(await adapterWithCatalog.getContextLimit('some-model'), 32768);
+
+        // Without catalog lookup, falls back to ModelMetadata
+        final adapterWithoutCatalog = OllamaAdapter(
+          config,
+          profile,
+          client: mockClient,
+        );
+        expect(
+          await adapterWithoutCatalog.getContextLimit('gemma4:e2b'),
+          256000,
+        );
+      },
+    );
+
     test('maps Ollama length termination to finishReason', () async {
       final mockClient = MockClient((request) async {
         return http.Response(
@@ -1060,6 +1488,49 @@ void main() {
         'Answer',
       );
     });
+
+    test(
+      'uses one request builder for sync and stream Ollama think directives',
+      () async {
+        final capturedBodies = <Map<String, dynamic>>[];
+        final mockClient = StreamingTestClient((request) {
+          final body = jsonDecode((request as http.Request).body);
+          capturedBodies.add((body as Map).cast<String, dynamic>());
+          final isStream = body['stream'] == true;
+          final payload = isStream
+              ? jsonEncode({
+                  'message': {'content': 'Hello'},
+                  'done': true,
+                })
+              : jsonEncode({
+                  'message': {'content': 'Hello'},
+                  'done': true,
+                });
+          return http.StreamedResponse(Stream.value(utf8.encode(payload)), 200);
+        });
+        final adapter = OllamaAdapter(config, profile, client: mockClient);
+        const options = LLMRequestOptions(
+          thinkingDirective: OllamaThinkLevelDirective('medium'),
+        );
+
+        await adapter.generateResponse(
+          [Message(role: MessageRole.user, content: 'Hi')],
+          modelOverride: 'qwen3:8b',
+          options: options,
+        );
+        await adapter
+            .generateStream(
+              [Message(role: MessageRole.user, content: 'Hi')],
+              modelOverride: 'qwen3:8b',
+              options: options,
+            )
+            .toList();
+
+        expect(capturedBodies, hasLength(2));
+        expect(capturedBodies[0]['think'], 'medium');
+        expect(capturedBodies[1]['think'], 'medium');
+      },
+    );
   });
 
   group('BaseAnthropicAdapter (Native Anthropic)', () {
@@ -1099,6 +1570,112 @@ void main() {
       expect(response.usage?['cache_creation_input_tokens'], 2);
       expect(response.usage, isNot(contains('total_tokens')));
     });
+
+    test(
+      'uses one request builder for sync and stream manual thinking directives',
+      () async {
+        final capturedBodies = <Map<String, dynamic>>[];
+        final mockClient = StreamingTestClient((request) {
+          final body = jsonDecode((request as http.Request).body);
+          capturedBodies.add((body as Map).cast<String, dynamic>());
+          final isStream = body['stream'] == true;
+          final payload = isStream
+              ? [
+                  'event: message_start\ndata: ${jsonEncode({
+                    'type': 'message_start',
+                    'message': {
+                      'content': [],
+                      'usage': {'input_tokens': 1, 'output_tokens': 0},
+                    },
+                  })}\n',
+                  'event: content_block_delta\ndata: ${jsonEncode({
+                    'type': 'content_block_delta',
+                    'delta': {'type': 'text_delta', 'text': 'Hello'},
+                  })}\n',
+                  'event: message_stop\ndata: ${jsonEncode({'type': 'message_stop'})}\n',
+                ].join()
+              : jsonEncode({
+                  'content': [
+                    {'type': 'text', 'text': 'Hello'},
+                  ],
+                });
+          return http.StreamedResponse(
+            Stream.value(utf8.encode(payload)),
+            200,
+            headers: {
+              'content-type': isStream
+                  ? 'text/event-stream'
+                  : 'application/json',
+            },
+          );
+        });
+        final adapter = BaseAnthropicAdapter(
+          config,
+          profile,
+          client: mockClient,
+        );
+        const options = LLMRequestOptions(
+          maxOutputTokens: 16384,
+          thinkingDirective: AnthropicBudgetDirective(8192),
+        );
+
+        await adapter.generateResponse(
+          [Message(role: MessageRole.user, content: 'Hi')],
+          modelOverride: 'claude-sonnet-4-5',
+          options: options,
+        );
+        await adapter
+            .generateStream(
+              [Message(role: MessageRole.user, content: 'Hi')],
+              modelOverride: 'claude-sonnet-4-5',
+              options: options,
+            )
+            .toList();
+
+        expect(capturedBodies, hasLength(2));
+        expect(capturedBodies[0]['thinking'], {
+          'type': 'enabled',
+          'budget_tokens': 8192,
+        });
+        expect(capturedBodies[0].containsKey('output_config'), isFalse);
+        expect(Map.of(capturedBodies[1])..remove('stream'), capturedBodies[0]);
+      },
+    );
+
+    test(
+      'uses adaptive thinking shape for opus models without manual budget',
+      () async {
+        late Map<String, dynamic> requestBody;
+        final mockClient = MockClient((request) async {
+          requestBody = (jsonDecode(request.body) as Map)
+              .cast<String, dynamic>();
+          return http.Response(
+            jsonEncode({
+              'content': [
+                {'type': 'text', 'text': 'Hello'},
+              ],
+            }),
+            200,
+          );
+        });
+        final adapter = BaseAnthropicAdapter(
+          config,
+          profile,
+          client: mockClient,
+        );
+        await adapter.generateResponse(
+          [Message(role: MessageRole.user, content: 'Hi')],
+          modelOverride: 'claude-opus-4-7',
+          options: const LLMRequestOptions(
+            thinkingDirective: AnthropicAdaptiveDirective('high'),
+          ),
+        );
+
+        expect(requestBody['thinking'], {'type': 'adaptive'});
+        expect(requestBody['output_config'], {'effort': 'high'});
+        expect(requestBody['thinking'], isNot(contains('budget_tokens')));
+      },
+    );
 
     test(
       'should fetch live model list from anthropic-compatible /models',
@@ -1478,40 +2055,50 @@ void main() {
         // History with:
         // - assistant message with 2 tool_use blocks (both answered)
         // - assistant message with 1 orphan tool_use (no matching tool_result)
-        await adapter.generateResponse([
-          Message(role: MessageRole.user, content: 'Search for two things'),
-          Message(
-            role: MessageRole.assistant,
-            content: 'Let me search',
-            toolCalls: [
-              ToolCall(id: 'tool_1', name: 'search', arguments: {'q': 'a'}),
-              ToolCall(id: 'tool_2', name: 'search', arguments: {'q': 'b'}),
-            ],
+        await adapter.generateResponse(
+          [
+            Message(role: MessageRole.user, content: 'Search for two things'),
+            Message(
+              role: MessageRole.assistant,
+              content: 'Let me search',
+              toolCalls: [
+                ToolCall(id: 'tool_1', name: 'search', arguments: {'q': 'a'}),
+                ToolCall(id: 'tool_2', name: 'search', arguments: {'q': 'b'}),
+              ],
+            ),
+            Message(
+              role: MessageRole.tool,
+              toolCallId: 'tool_1',
+              content: 'result A',
+            ),
+            Message(
+              role: MessageRole.tool,
+              toolCallId: 'tool_2',
+              content: 'result B',
+            ),
+            Message(
+              role: MessageRole.assistant,
+              content: 'Now an orphan',
+              toolCalls: [
+                ToolCall(
+                  id: 'orphan_tool',
+                  name: 'search',
+                  arguments: {'q': 'orphan'},
+                ),
+              ],
+            ),
+          ],
+          options: const LLMRequestOptions(
+            maxOutputTokens: 16384,
+            thinkingDirective: AnthropicBudgetDirective(8192),
           ),
-          Message(
-            role: MessageRole.tool,
-            toolCallId: 'tool_1',
-            content: 'result A',
-          ),
-          Message(
-            role: MessageRole.tool,
-            toolCallId: 'tool_2',
-            content: 'result B',
-          ),
-          Message(
-            role: MessageRole.assistant,
-            content: 'Now an orphan',
-            toolCalls: [
-              ToolCall(
-                id: 'orphan_tool',
-                name: 'search',
-                arguments: {'q': 'orphan'},
-              ),
-            ],
-          ),
-        ]);
+        );
 
         final messages = capturedBody['messages'] as List;
+        expect(capturedBody['thinking'], {
+          'type': 'enabled',
+          'budget_tokens': 8192,
+        });
 
         // The orphan tool_use must not appear in the wire body.
         final allToolUseIds = <String>[];
@@ -1566,6 +2153,46 @@ void main() {
 
       expect(capturedBody['max_tokens'], equals(8192));
     });
+
+    test(
+      'lowers manual thinking budget when maxOutputTokens is smaller',
+      () async {
+        late Map<String, dynamic> capturedBody;
+        final mockClient = MockClient((request) async {
+          capturedBody = (jsonDecode(request.body) as Map)
+              .cast<String, dynamic>();
+          return http.Response(
+            jsonEncode({
+              'content': [
+                {'type': 'text', 'text': 'Done'},
+              ],
+              'stop_reason': 'end_turn',
+            }),
+            200,
+          );
+        });
+
+        final adapter = BaseAnthropicAdapter(
+          config,
+          profile,
+          client: mockClient,
+        );
+        await adapter.generateResponse(
+          [Message(role: MessageRole.user, content: 'Hi')],
+          modelOverride: 'claude-sonnet-4-5',
+          options: const LLMRequestOptions(
+            maxOutputTokens: 4096,
+            thinkingDirective: AnthropicBudgetDirective(16384),
+          ),
+        );
+
+        expect(capturedBody['max_tokens'], equals(4096));
+        expect(capturedBody['thinking'], {
+          'type': 'enabled',
+          'budget_tokens': 4095,
+        });
+      },
+    );
 
     test('should parse stop_reason into finishReason', () async {
       final mockClient = MockClient((request) async {
@@ -1689,6 +2316,8 @@ void main() {
       expect(profile.envModelName, equals('OPENCODE_GO_MODEL'));
       expect(profile.envBaseUrlName, equals('OPENCODE_GO_BASE_URL'));
       expect(profile.apiMode, equals('chat_completions'));
+      expect(profile.thinkingPolicyId, equals('openai_chat_effort'));
+      expect(profile.effectiveThinkingPolicyId, equals('openai_chat_effort'));
       expect(profile.aliases, contains('opencode_go'));
       expect(profile.aliases, contains('go'));
       expect(profile.aliases, contains('opencode-go-sub'));

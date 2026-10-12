@@ -52,11 +52,14 @@ class DaemonRestartPreparation {
 class DaemonRestartCoordinator {
   DaemonRestartCoordinator({
     SessionRunOrchestrator? sessionOrchestrator,
+    Future<void> Function()? beforeControlledExit,
     DaemonExit? exitDaemon,
   }) : _sessionOrchestrator = sessionOrchestrator,
+       _beforeControlledExit = beforeControlledExit,
        _exitDaemon = exitDaemon ?? exit;
 
   final SessionRunOrchestrator? _sessionOrchestrator;
+  final Future<void> Function()? _beforeControlledExit;
   final DaemonExit _exitDaemon;
   final Logger _logger = Logger('DaemonRestartCoordinator');
   bool _restartInProgress = false;
@@ -237,6 +240,15 @@ class DaemonRestartCoordinator {
       if (!identical(_activePreparation, preparation)) {
         return;
       }
+      try {
+        await _beforeControlledExit?.call();
+      } on Object catch (error, stackTrace) {
+        _logger.warning(
+          'Controlled-exit maintenance failed; restart will continue.',
+          error,
+          stackTrace,
+        );
+      }
       _logger.info(
         preparation.outcome == 'forced'
             ? 'Exiting daemon for forced supervised restart...'
@@ -320,7 +332,10 @@ class DaemonRestartCoordinator {
       _sessionOrchestrator?.cancelControlledRestartDrain();
       _restartInProgress = false;
     }
-    await _sessionOrchestrator?.requestStopAll();
+    // Sessions parked on ask_user/permission survive the managed stop with
+    // their durable checkpoint intact; startup recovery restores the exact
+    // wait instead of recording an unknown tool outcome.
+    await _sessionOrchestrator?.requestStopAll(preserveInteractiveWaits: true);
     await Future<void>.delayed(acknowledgementDelay);
     _logger.info('Exiting daemon permanently...');
     _exitDaemon(123);

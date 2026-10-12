@@ -23,6 +23,7 @@ import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_session_channel.dart';
+import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'package:socket_io_client/socket_io_client.dart' as socket_io;
 import 'package:socket_io_client/src/manager.dart';
 import 'package:test/test.dart';
@@ -44,6 +45,7 @@ class FakeManager implements Manager {
 class FakeSocket implements socket_io.Socket {
   final Map<String, List<Function>> listeners = {};
   final List<Map<String, dynamic>> emittedEvents = [];
+  Future<void>? pendingConnect;
   bool isConnected = false;
 
   @override
@@ -61,7 +63,7 @@ class FakeSocket implements socket_io.Socket {
   @override
   socket_io.Socket connect() {
     isConnected = true;
-    unawaitedTrigger('connect', null);
+    pendingConnect = trigger('connect', null);
     return this;
   }
 
@@ -107,6 +109,8 @@ class FakeAuthManager extends AuthManager {
   bool authenticated = true;
   bool cloudAuthorized = true;
   int refreshAttempts = 0;
+  int reloadAttempts = 0;
+  final reloadErrors = <Object>[];
   String? token;
   String? pairing;
   String? pending;
@@ -136,7 +140,11 @@ class FakeAuthManager extends AuthManager {
   String get hardwareId => 'test-device-id';
 
   @override
-  Future<bool> reload({bool notifyIfChanged = false}) async => false;
+  Future<bool> reload({bool notifyIfChanged = false}) async {
+    reloadAttempts += 1;
+    if (reloadErrors.isNotEmpty) throw reloadErrors.removeAt(0);
+    return false;
+  }
 
   @override
   Future<bool> refreshAccessToken(String portalUrl) async {
@@ -336,6 +344,8 @@ void main() {
   late ServerSanadGatewayPlatform platform;
   late DeliveryPresenceController deliveryPresence;
   late MemoryAgentSecretStore secrets;
+  late List<Completer<void>> registrationRetryDelays;
+  late Completer<void> registrationRetryRequested;
 
   setUp(() async {
     getIt.allowReassignment = true;
@@ -343,6 +353,8 @@ void main() {
     setSanadHomeOverride(tempDir.path);
     socket = FakeSocket();
     secrets = MemoryAgentSecretStore();
+    registrationRetryDelays = <Completer<void>>[];
+    registrationRetryRequested = Completer<void>();
     deliveryPresence = DeliveryPresenceController();
     runtimeBridge = TrackingPlatformRuntimeBridge();
     workspaceRuntime = TrackingWorkspaceRuntimeService(
@@ -387,6 +399,14 @@ void main() {
       deliveryPresence: deliveryPresence,
       identityLoader: () =>
           DeviceKeyIdentity.loadOrCreate(secretStore: secrets),
+      registrationRetryDelay: (_) {
+        final delay = Completer<void>();
+        registrationRetryDelays.add(delay);
+        if (!registrationRetryRequested.isCompleted) {
+          registrationRetryRequested.complete();
+        }
+        return delay.future;
+      },
       httpClient: MockClient(
         (_) async => http.Response(
           '',
@@ -396,6 +416,7 @@ void main() {
       ),
     );
     await platform.initialize();
+    await socket.pendingConnect;
     await socket.trigger('register_success', {'device_id': 'test-device-id'});
     socket.emittedEvents.clear();
   });
@@ -514,6 +535,37 @@ void main() {
     expect(authManager.refreshAttempts, 0);
     expect(socket.emittedEvents, isEmpty);
   });
+
+  test(
+    'auth lock timeout is contained and registration requests a fresh challenge',
+    () async {
+      authManager.token = 'sanad_device_synthetic-credential';
+      authManager.reloadErrors.add(
+        const AuthFileLockTimeout(Duration(seconds: 15)),
+      );
+      socket.emittedEvents.clear();
+      final attemptsBefore = authManager.reloadAttempts;
+
+      final registration = socket.trigger('device_challenge', {
+        'nonce': 'stale-before-lock-timeout',
+      });
+      await registrationRetryRequested.future;
+
+      expect(registrationRetryDelays, hasLength(1));
+      expect(socket.emittedEvents, isEmpty);
+      final concurrentRegistration = socket.trigger('device_challenge', {
+        'nonce': 'also-stale-during-lock-timeout',
+      });
+
+      registrationRetryDelays.single.complete();
+      await Future.wait([registration, concurrentRegistration]);
+
+      expect(authManager.reloadAttempts, attemptsBefore + 2);
+      expect(socket.emittedEvents, [
+        {'event': 'request_device_challenge', 'data': null},
+      ]);
+    },
+  );
 
   test(
     'key-bound registration requires and signs a Gateway challenge',

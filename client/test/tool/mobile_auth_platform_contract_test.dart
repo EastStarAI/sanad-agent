@@ -53,7 +53,9 @@ void main() {
       'CODE_SIGN_ENTITLEMENTS = Runner/Runner.entitlements;'.allMatches(xcodeProject),
       hasLength(3),
     );
-    final infoPlist = File('ios/Runner/Info.plist').readAsStringSync();
+    final infoPlist = File(
+      'ios/Runner/Info.plist',
+    ).readAsStringSync().replaceAll('\r\n', '\n');
     expect(infoPlist, contains('<key>FlutterDeepLinkingEnabled</key>'));
     expect(
       infoPlist,

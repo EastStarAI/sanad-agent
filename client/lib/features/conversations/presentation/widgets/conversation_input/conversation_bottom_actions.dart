@@ -6,10 +6,10 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
-import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/provider_route_label.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/route_thinking_mode_selector.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/model_picker_dialog.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
@@ -44,33 +44,26 @@ class ConversationBottomActions extends StatefulWidget {
 }
 
 class _ConversationBottomActionsState extends State<ConversationBottomActions> {
-  static const Duration _emptyProviderDisplayRetryCooldown = Duration(
-    seconds: 30,
-  );
-
-  final Map<String, Map<String, String>> _providerDisplayNamesByAgent = {};
-  final Set<String> _providerDisplayLoadsInFlight = <String>{};
-  final Set<String> _providerDisplayLookupAttempts = <String>{};
-  final Map<String, DateTime> _emptyProviderDisplayFetchUntilByAgent = {};
-  bool _didLoadInitialProviderDisplayNames = false;
-  String? _lastLoadedProviderId;
-  String? _lastLoadedAgentId;
+  // (97h) No provider display-name fetch lives in this widget anymore. The
+  // resource owner (`ProviderUsageCubit`) resolves `model.snapshot` and
+  // `provider.usage.support` once per (device, query) and shares in-flight
+  // requests; widget lifecycle only asks the owner to ensure the logical
+  // resource it consumes, which is a no-op when unchanged. This keeps
+  // rebuild/theme/responsive remounts at zero extra Agent requests.
+  bool _didSyncInitialResource = false;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_ensureProviderDisplayNamesLoaded());
+    _syncProviderResource();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_didLoadInitialProviderDisplayNames) {
-      return;
-    }
-    _didLoadInitialProviderDisplayNames = true;
-    final selectedSession = context.read<SessionCubit>().state.selectedSession;
-    unawaited(_ensureProviderDisplayNamesLoaded(selectedSession: selectedSession));
+    if (_didSyncInitialResource) return;
+    _didSyncInitialResource = true;
+    _syncProviderResource(selectedSession: context.read<SessionCubit>().state.selectedSession);
   }
 
   @override
@@ -79,9 +72,27 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
     final agentChanged = oldWidget.activeAgent?.id != widget.activeAgent?.id;
     final providerChanged = oldWidget.inputSlice.nextMessageProviderId != widget.inputSlice.nextMessageProviderId;
     if (agentChanged || providerChanged) {
-      _providerDisplayLookupAttempts.clear();
-      unawaited(_ensureProviderDisplayNamesLoaded());
+      _syncProviderResource();
     }
+  }
+
+  /// Asks the resource owner to ensure the catalog and the active provider's
+  /// usage/support are loaded for the current device. The owner dedupes by
+  /// (device, query) and shares in-flight requests, so repeated calls from
+  /// rebuilds and remounts cost zero Agent requests after the first load.
+  void _syncProviderResource({Session? selectedSession}) {
+    if (!getIt.isRegistered<ProviderUsageCubit>()) return;
+    final cubit = getIt<ProviderUsageCubit>();
+    final resolved = selectedSession ?? (mounted ? context.read<SessionCubit>().state.selectedSession : null);
+    final activeProviderId = _activeProviderId(resolved);
+    if (activeProviderId == null || activeProviderId.isEmpty) return;
+    unawaited(cubit.ensureProviderDisplayNames(agent: widget.activeAgent));
+    unawaited(
+      cubit.ensureInstanceUsage(
+        agent: widget.activeAgent,
+        instanceId: activeProviderId,
+      ),
+    );
   }
 
   @override
@@ -112,9 +123,19 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
           const SizedBox(width: 12),
           _buildModelSelector(context),
         ],
-        if (capabilities.supportsThinkingModeChange) ...[
+        if (inputSlice.pendingSuspendedRequest == null) ...[
           const SizedBox(width: 12),
-          _buildThinkingModeSelector(context),
+          RouteThinkingModeSelector(
+            capabilities: capabilities,
+            inputSlice: inputSlice,
+            activeAgent: widget.activeAgent,
+            chipBuilder: (context, label, {required enabled}) {
+              return Opacity(
+                opacity: enabled ? 1 : 0.55,
+                child: _buildActionText(label),
+              );
+            },
+          ),
         ],
       ],
     );
@@ -122,18 +143,20 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
 
   Widget _buildModelSelector(BuildContext context) {
     final selectedSession = context.select<SessionCubit, Session?>((cubit) => cubit.state.selectedSession);
-    final providerDisplayNames =
-        _providerDisplayNamesByAgent[_providerLookupKey(widget.activeAgent)] ?? const <String, String>{};
-
-    final currentModel = _currentModelLabel(
-      selectedSession,
-      nextMessageModel: widget.inputSlice.nextMessageModel,
-      providerDisplayNames: providerDisplayNames,
-    );
 
     final showProgress = getIt.isRegistered<ProviderUsageCubit>();
 
-    Widget buildButton(BuildContext context, double? progress, Color? progressColor) {
+    Widget buildButton(
+      BuildContext context,
+      Map<String, String> providerDisplayNames,
+      double? progress,
+      Color? progressColor,
+    ) {
+      final currentModel = _currentModelLabel(
+        selectedSession,
+        nextMessageModel: widget.inputSlice.nextMessageModel,
+        providerDisplayNames: providerDisplayNames,
+      );
       return ClipRRect(
         borderRadius: BorderRadius.circular(6),
         child: Stack(
@@ -178,20 +201,20 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
     return BlocListener<SessionCubit, SessionState>(
       listenWhen: (previous, current) => previous.selectedSession != current.selectedSession,
       listener: (context, state) {
-        _providerDisplayLookupAttempts.clear();
-        unawaited(_ensureProviderDisplayNamesLoaded(selectedSession: state.selectedSession));
+        _syncProviderResource(selectedSession: state.selectedSession);
       },
       child: showProgress
           ? BlocBuilder<ProviderUsageCubit, ProviderUsageState>(
               bloc: getIt<ProviderUsageCubit>(),
               builder: (context, usageState) {
                 final theme = Theme.of(context);
+                final deviceId = widget.activeAgent?.id ?? getIt<ProviderUsageCubit>().localDeviceId;
+                final providerDisplayNames = usageState.displayNamesFor(deviceId);
                 final activeProviderId = _activeProviderId(selectedSession);
                 double? progress;
                 Color? progressColor;
 
                 if (activeProviderId != null && activeProviderId.isNotEmpty) {
-                  final deviceId = widget.activeAgent?.id ?? getIt<ProviderUsageCubit>().localDeviceId;
                   final entry = usageState.entry(deviceId, activeProviderId);
                   final supports = usageState.support.supports(deviceId, activeProviderId);
 
@@ -219,125 +242,13 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
                   }
                 }
 
-                return buildButton(context, progress, progressColor);
+                return buildButton(context, providerDisplayNames, progress, progressColor);
               },
             )
           : Builder(
-              builder: (context) => buildButton(context, null, null),
+              builder: (context) => buildButton(context, const {}, null, null),
             ),
     );
-  }
-
-  String _providerLookupKey(DeviceConfig? agent) => agent?.id ?? '__local__';
-
-  String _providerDisplayLookupAttemptKey(String agentKey, String providerId) => '$agentKey::$providerId';
-
-  Future<void> _ensureProviderDisplayNamesLoaded({Session? selectedSession}) async {
-    final resolvedSession = selectedSession ?? (mounted ? context.read<SessionCubit>().state.selectedSession : null);
-    final key = _providerLookupKey(widget.activeAgent);
-    final activeProviderId = _activeProviderId(resolvedSession);
-    if (activeProviderId == null || activeProviderId.isEmpty) {
-      return;
-    }
-
-    final activeAgentId = widget.activeAgent?.id;
-    if (activeProviderId != _lastLoadedProviderId || activeAgentId != _lastLoadedAgentId) {
-      _lastLoadedProviderId = activeProviderId;
-      _lastLoadedAgentId = activeAgentId;
-      if (getIt.isRegistered<ProviderUsageCubit>()) {
-        unawaited(
-          getIt<ProviderUsageCubit>().onInstancesLoaded(
-            agent: widget.activeAgent,
-            instanceIds: [activeProviderId],
-          ),
-        );
-      }
-    }
-
-    final knownDisplays = _providerDisplayNamesByAgent[key];
-    if (knownDisplays != null && knownDisplays.isNotEmpty && knownDisplays.containsKey(activeProviderId)) {
-      return;
-    }
-
-    final retryAfter = _emptyProviderDisplayFetchUntilByAgent[key];
-    if (retryAfter != null && DateTime.now().isBefore(retryAfter)) {
-      return;
-    }
-    if (_providerDisplayLoadsInFlight.contains(key)) {
-      return;
-    }
-
-    final attemptKey = _providerDisplayLookupAttemptKey(key, activeProviderId);
-    if (_providerDisplayLookupAttempts.contains(attemptKey)) {
-      return;
-    }
-    _providerDisplayLookupAttempts.add(attemptKey);
-    _providerDisplayLoadsInFlight.add(key);
-    try {
-      final client = getIt<ProviderSetupClient>();
-      final names = <String, String>{};
-
-      final snapshot = await client.modelSnapshot(agent: widget.activeAgent);
-      for (final instance in snapshot.instances) {
-        final id = instance.id.trim();
-        final displayName = instance.displayName.trim();
-        if (id.isNotEmpty && displayName.isNotEmpty) {
-          names[id] = displayName;
-        }
-      }
-
-      if (names.isEmpty) {
-        final instances = await client.listInstances(agent: widget.activeAgent);
-        for (final instance in instances) {
-          final id = instance.id.trim();
-          final displayName = instance.displayName.trim();
-          if (id.isNotEmpty && displayName.isNotEmpty) {
-            names[id] = displayName;
-          }
-        }
-      }
-
-      if (!mounted) {
-        return;
-      }
-
-      final previousNames = _providerDisplayNamesByAgent[key] ?? const <String, String>{};
-      if (names.isEmpty) {
-        _emptyProviderDisplayFetchUntilByAgent[key] = DateTime.now().add(
-          _emptyProviderDisplayRetryCooldown,
-        );
-        _providerDisplayLookupAttempts.remove(attemptKey);
-        if (previousNames.isEmpty) {
-          return;
-        }
-      } else if (_sameProviderDisplayNames(previousNames, names)) {
-        return;
-      }
-
-      setState(() {
-        _providerDisplayNamesByAgent[key] = names;
-        if (names.isNotEmpty) {
-          _emptyProviderDisplayFetchUntilByAgent.remove(key);
-        }
-      });
-    } catch (_) {
-      _providerDisplayLookupAttempts.remove(attemptKey);
-      // Keep the chip functional even if the provider-name lookup fails.
-    } finally {
-      _providerDisplayLoadsInFlight.remove(key);
-    }
-  }
-
-  bool _sameProviderDisplayNames(Map<String, String> a, Map<String, String> b) {
-    if (a.length != b.length) {
-      return false;
-    }
-    for (final entry in a.entries) {
-      if (b[entry.key] != entry.value) {
-        return false;
-      }
-    }
-    return true;
   }
 
   void _openModelPicker(BuildContext context) {
@@ -378,35 +289,6 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
           },
         ),
       ),
-    );
-  }
-
-  Widget _buildThinkingModeSelector(BuildContext context) {
-    final selectedSession = context.select<SessionCubit, Session?>((cubit) => cubit.state.selectedSession);
-    final currentMode = _currentThinkingModeLabel(
-      selectedSession,
-      nextMessageThinkingMode: widget.inputSlice.nextMessageThinkingMode,
-    );
-    return PopupMenuButton<String>(
-      tooltip: 'Select Thinking Mode',
-      child: _buildActionText(currentMode),
-      itemBuilder: (context) => widget.capabilities.thinkingModesList
-          .map(
-            (m) => PopupMenuItem(
-              value: m,
-              height: 32,
-              child: Text(m, style: const TextStyle(fontSize: 12)),
-            ),
-          )
-          .toList(),
-      onSelected: (value) {
-        unawaited(
-          context.read<ConversationInputCubit>().selectThinkingMode(
-            scope: widget.capabilities.thinkingModeScope,
-            thinkingMode: value,
-          ),
-        );
-      },
     );
   }
 
@@ -521,42 +403,8 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
     return null;
   }
 
-  String _currentThinkingModeLabel(
-    Session? session, {
-    String? nextMessageThinkingMode,
-  }) {
-    if (widget.capabilities.thinkingModeScope == CapabilityValueScope.message) {
-      final mode = nextMessageThinkingMode?.trim();
-      if (mode != null && mode.isNotEmpty) {
-        return mode;
-      }
-      return _firstThinkingMode();
-    }
-
-    final mode = session?.thinkingMode;
-    if (mode != null && mode.isNotEmpty) {
-      return mode;
-    }
-
-    final savedMode = nextMessageThinkingMode?.trim();
-    if (savedMode != null && savedMode.isNotEmpty) {
-      return savedMode;
-    }
-
-    return _firstThinkingMode();
-  }
-
   String _firstModelLabel() {
     return 'Select model';
-  }
-
-  String _firstThinkingMode() {
-    final modes = widget.capabilities.thinkingModesList;
-    if (modes.contains(SessionMessagesCubit.defaultThinkingMode)) {
-      return SessionMessagesCubit.defaultThinkingMode;
-    }
-    if (modes.isNotEmpty) return modes.first;
-    return SessionMessagesCubit.defaultThinkingMode;
   }
 
   String _permissionModeLabel(WorkspacePermissionMode mode) {

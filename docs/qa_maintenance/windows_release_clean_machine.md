@@ -219,6 +219,52 @@ This is focused current-machine regression evidence. It does not replace the
 protected clean-snapshot Defender, SmartScreen, signing, reboot, or release
 candidate gate above.
 
+## No-console launcher regression gate
+
+A later Windows candidate replaces the long-running hidden PowerShell task host
+with an Agent-owned native GUI-subsystem launcher embedded in the existing
+single Agent artifact. This does not alter the Client download contract. Before
+that candidate can ship, a clean Windows 11 run must prove:
+
+- immediate first install, manual start/restart, logon, and reboot create no
+  visible console window;
+- the task action targets the extracted hash-versioned launcher directly;
+- the launcher redirects Agent output to Sanad Home logs and keeps the complete
+  supervised process tree owned until task stop;
+- closing the Client leaves authenticated Agent health available;
+- replacement installs the new launcher/task definition, while failed
+  replacement restores and reinstalls the previous Agent;
+- interactive `sanad.exe` CLI and source/FVM terminals remain visible and
+  functional.
+
+The historical Gate E evidence above remains accurate for its older candidate;
+it is not evidence for this new launcher until the clean-machine gate runs.
+
+### Focused local launcher evidence — 2026-09-20
+
+A release-shaped Agent and native launcher were built on Windows 11 Pro build
+26200 and exercised with an isolated Sanad Home, service instance, task, and
+loopback port. The embedded Agent retained normal `--version` output; service
+installation extracted a hash-versioned launcher and registered the task action
+directly against it. Authenticated health returned `ok` at Agent version
+`1.0.10`. The launcher, supervisor, and daemon child formed one three-process
+tree, and Win32 top-level-window enumeration reported zero visible windows after
+install and after stop/start. Stop, start, and restart all returned the expected
+typed task state. A staged Agent with a deliberately corrupted launcher bundle
+then caused `service install` to return nonzero; the detached replacement
+restored the prior `1.0.10` executable, reinstalled its launcher/task, recorded
+`rollback_completed`, and returned authenticated health on the isolated port. A
+subsequent valid packaged `1.0.11` replacement recorded `started`, returned
+authenticated `1.0.11` health, and retained a three-process tree with zero
+visible windows. A real reboot then started the isolated task automatically
+about twelve seconds after boot; authenticated `1.0.13` health returned on port
+`59194` while the primary runtime remained independently available on `58085`,
+and the post-logon three-process tree still owned zero visible windows. Final
+uninstall stopped the launcher-owned job tree before unregistering the task; the
+command returned `Missing`, no matching process or listener remained, and the
+isolated Home was removed. This focused current-machine reboot evidence does not
+replace the protected clean-snapshot release-candidate gate.
+
 ## Acceptance criteria
 
 The Windows target passes only when:

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:equatable/equatable.dart';
 import 'package:go_router/go_router.dart';
@@ -16,13 +17,17 @@ import '../../../data/repositories/conversation_cache_repository.dart';
 import '../../../domain/models/conversation_resource_state.dart';
 import '../../../domain/models/device_workspace.dart';
 import '../../../domain/models/session.dart';
+import '../../../domain/models/session_search.dart';
 import '../../../domain/models/sidebar_conversation_group.dart';
 import '../../../../../utils/toast_utils.dart';
 import '../../../../../utils/workspace_picker_helper.dart';
 import '../../bloc/session_cubit.dart';
+import '../../bloc/session_messages_cubit.dart';
 import '../../bloc/session_sidebar_cubit.dart';
 import '../../bloc/session_sidebar_state.dart';
+import 'conversation_search_panel.dart';
 import 'sidebar_composition.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'sidebar_device_header_bar.dart';
 import 'sidebar_sections.dart';
 import 'sidebar_workspace_group_tile.dart';
@@ -149,7 +154,7 @@ class DeviceWorkspaceSidebar extends StatelessWidget {
                             return const SizedBox.shrink();
                           }
                           if (sidebar.showInitialLoading && !sidebar.hasSnapshot) {
-                            return const Center(child: CircularProgressIndicator(strokeWidth: 2));
+                            return const Center(child: AppProgressIndicator(strokeWidth: 2));
                           }
                           return _SidebarBody(
                             device: activeDevice,
@@ -222,6 +227,31 @@ class _SidebarBody extends StatelessWidget {
     final sidebarCubit = context.read<SessionSidebarCubit>();
     final sessionCubit = context.read<SessionCubit>();
     final cacheRepository = context.read<ConversationCacheRepository>();
+    Future<void> selectSearchHit(SessionSearchHit hit) async {
+      final messagesCubit = context.read<SessionMessagesCubit>();
+      final anchor = hit.anchorEventId;
+      if (anchor != null && anchor.isNotEmpty) {
+        messagesCubit.requestHistoryAnchor(
+          deviceId: device.id,
+          sessionId: hit.session.id,
+          anchorEventId: anchor,
+        );
+        cacheRepository.recordSessionViewportAnchor(
+          device.id,
+          hit.session.id,
+          anchor,
+        );
+      }
+      if (sessionCubit.state.selectedSession?.id == hit.session.id && anchor != null && anchor.isNotEmpty) {
+        await messagesCubit.loadAnchoredHistory(anchor, forceReopen: true);
+      } else {
+        await sessionCubit.selectSession(hit.session);
+      }
+      if (!context.mounted) return;
+      context.go(AppRoutes.sessionLocation(device.id, hit.session.id));
+      if (isDrawerMode && onClose != null) onClose!();
+    }
+
     void selectSession(SessionRef ref) {
       final sessions = cacheRepository.sessionsForDevice(device.id);
       Session? found;
@@ -289,6 +319,13 @@ class _SidebarBody extends StatelessWidget {
           ),
         ),
         SliverToBoxAdapter(child: SizedBox(height: 8)),
+        SliverToBoxAdapter(
+          child: ConversationSearchButton(
+            device: device,
+            isDrawerMode: isDrawerMode,
+            onSelected: selectSearchHit,
+          ),
+        ),
         SliverToBoxAdapter(
           child: _NewSessionButton(
             device: device,
@@ -362,7 +399,7 @@ class _SidebarBody extends StatelessWidget {
 
   Session _fallbackSession(String id) => Session(
     id: id,
-    title: 'Loading…',
+    title: '…',
     deviceId: device.id,
     createdAt: DateTime.now(),
     updatedAt: DateTime.now(),
@@ -536,7 +573,7 @@ class _NewSessionButton extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    'New Session',
+                    AppLocalizations.of(context)!.newSession,
                     style: TextStyle(
                       color: theme.colorScheme.onSurface,
                       fontSize: 12,

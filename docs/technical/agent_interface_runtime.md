@@ -32,6 +32,14 @@ waiting, blocked, and interrupted work after daemon startup. Shared request and
 route helpers remain stateless so collaborators do not depend back on the
 orchestrator.
 
+Normal admission reads the session record once and carries that metadata through
+workspace fallback, routing, title ownership, and queue admission. It does not
+hydrate message rows for those decisions. After durable work admission, the
+runner accepts the root user message through the idempotent append transaction;
+the live user echo therefore still uses the committed message/turn/request
+identity, while retries with the same raw request id reuse that row. Queued and
+steer paths retain their own ordering and aggregate-commit ownership.
+
 Final delivery follows a successful idempotent terminal commit for the exact
 owner. Automatic failover is bounded to one model invocation: every instance
 that fails before streaming is excluded from the remainder of that invocation,
@@ -111,6 +119,19 @@ A forced timeout deliberately preserves ambiguous durable tool state for
 startup recovery. Automatic startup remains fail-closed. Any later manual
 recovery uses cause-neutral interruption text because the runtime may not be
 able to distinguish forced restart, crash, process termination, or power loss.
+
+### Managed Daemon Stop Interactive-Wait Preservation
+
+A managed daemon stop (`DaemonRestartCoordinator.stop()` / `requestStopAll(preserveInteractiveWaits: true)`)
+preserves unresolved interactive user-input waits (`system_ask_user` and tool-permission decisions)
+with their durable checkpoints intact, mirroring restart safety. When every currently executing
+tool in an active work item is covered by an unresolved checkpoint for that session whose status is
+not `executing_tool`, the active work item transitions to durable `waiting`, in-memory run projections
+are dropped without emitting synthetic cancellation or tool-result events, and the durable checkpoints
+survive so subsequent startup recovery restores the pending decision. Explicit user Stop requests
+(`requestStop` without `preserveInteractiveWait`) continue to terminalize interactive waits and emit
+`stopped`. Checkpoints already in `executing_tool` status (decision approved, side effect potentially
+commenced) are not preserved and follow existing interrupted-tool recovery.
 
 ## Gateway Delivery
 

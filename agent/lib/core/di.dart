@@ -24,6 +24,7 @@ import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/db/agent_state_maintenance_service.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
@@ -73,6 +74,14 @@ import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service
 import 'package:sanad_agent/core/provider_usage/provider_usage_adapter.dart';
 import 'package:sanad_agent/core/provider_usage/provider_usage_di.dart';
 import 'package:sanad_agent/core/provider_usage/provider_usage_service.dart';
+import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
+import 'package:sanad_agent/core/provider_thinking/provider_thinking_policy.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_control_cache_resolver.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_revalidator.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 
 import 'package:sanad_agent/evolution/title_service.dart';
 
@@ -138,6 +147,9 @@ void setupDI() {
   getIt.registerLazySingleton<PersistedRuntimeStateRepository>(
     () =>
         PersistedRuntimeStateRepository.fromState(getIt<AgentStateDatabase>()),
+  );
+  getIt.registerLazySingleton<AgentStateMaintenanceService>(
+    () => AgentStateMaintenanceService(getIt<AgentStateDatabase>()),
   );
   getIt.registerLazySingleton<SessionRouteTransitionRepository>(
     () => SessionRouteTransitionRepository(getIt<AgentStateDatabase>()),
@@ -285,6 +297,9 @@ void setupDI() {
   getIt.registerLazySingleton<DaemonRestartCoordinator>(
     () => DaemonRestartCoordinator(
       sessionOrchestrator: getIt<SessionRunOrchestrator>(),
+      beforeControlledExit: () async {
+        getIt<AgentStateMaintenanceService>().runPendingVacuum();
+      },
     ),
   );
   getIt.registerLazySingleton<DeviceSettingsService>(
@@ -319,10 +334,46 @@ void setupDI() {
     () => getIt<AgentRuntimeService>().defaultAdapter(),
   );
 
+  getIt.registerLazySingleton<ProviderThinkingRegistry>(
+    () => buildProviderThinkingRegistry(),
+  );
+  getIt.registerLazySingleton<ThinkingCapabilityAssembler>(
+    () => ThinkingCapabilityAssembler(getIt<ProviderThinkingRegistry>()),
+  );
+
+  getIt.registerLazySingleton<ThinkingControlCacheResolver>(
+    () => ThinkingControlCacheResolver(getIt<ProviderInstanceRepository>()),
+  );
+  getIt.registerLazySingleton<ThinkingSelectionResolver>(
+    () => ThinkingSelectionResolver(
+      instances: getIt<ProviderInstanceRepository>(),
+      cacheResolver: getIt<ThinkingControlCacheResolver>(),
+      assembler: getIt<ThinkingCapabilityAssembler>(),
+      registry: getIt<ProviderThinkingRegistry>(),
+    ),
+  );
+  getIt.registerLazySingleton<ThinkingRoutePreferenceStore>(
+    () => ThinkingRoutePreferenceStore(getIt<SessionManager>()),
+  );
+  getIt.registerLazySingleton<ThinkingRouteRevalidator>(
+    () => ThinkingRouteRevalidator(
+      resolver: getIt<ThinkingSelectionResolver>(),
+      store: getIt<ThinkingRoutePreferenceStore>(),
+    ),
+  );
+  getIt.registerLazySingleton<ThinkingRouteSessionSync>(
+    () => ThinkingRouteSessionSync(
+      revalidator: getIt<ThinkingRouteRevalidator>(),
+      store: getIt<ThinkingRoutePreferenceStore>(),
+      sessions: getIt<SessionManager>(),
+    ),
+  );
+
   getIt.registerLazySingleton<ProviderModelCacheService>(
     () => ProviderModelCacheService(
       getIt<ProviderInstanceRepository>(),
       getIt<AgentRuntimeService>(),
+      getIt<ThinkingCapabilityAssembler>(),
     ),
   );
 

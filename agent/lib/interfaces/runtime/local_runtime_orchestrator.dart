@@ -1,8 +1,11 @@
 import 'dart:async';
 
+import 'package:path/path.dart' as p;
+import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/user_attachment.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
+import 'package:sanad_agent/engine/runtime/tool_execution_coordinator.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
@@ -31,7 +34,15 @@ class LocalRuntimeOrchestrator {
     AgentTurnRequest request,
   ) async {
     final metadata = Map<String, dynamic>.from(request.toMetadata());
-    final workspaceId = request.workspaceId;
+    final execRoot = request.executionRoot;
+    if (execRoot != null && execRoot.isNotEmpty) {
+      final normalized = _runtimeContextBuilder.pathResolver
+          .validateAndNormalizeExecutionRoot(execRoot);
+      if (normalized != null) {
+        metadata['execution_root'] = normalized;
+      }
+    }
+    final workspaceId = request.effectiveWorkspaceId;
     if (workspaceId == null || workspaceId.isEmpty) {
       return metadata;
     }
@@ -65,15 +76,7 @@ class LocalRuntimeOrchestrator {
   Stream<String> streamTurn({
     required AgentRunner agentRunner,
     required AgentTurnRequest request,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
@@ -107,7 +110,7 @@ class LocalRuntimeOrchestrator {
     ).asyncExpand((tools) {
       agentRunner.registry.registerTools(tools);
       return Stream.fromFuture(
-        _buildRuntimeContext(request, agentRunner),
+        buildRuntimeContext(request, registry: agentRunner.registry),
       ).asyncExpand((runtimeContext) {
         final effectiveProviderId = request.effectiveProviderInstanceId;
         if (runtimeContext == null &&
@@ -142,15 +145,7 @@ class LocalRuntimeOrchestrator {
   Stream<String> resumeTurn({
     required AgentRunner agentRunner,
     required AgentTurnRequest request,
-    Future<void> Function({
-      required String toolName,
-      String? input,
-      String? output,
-      required bool isError,
-      required bool isStart,
-      String? toolRunId,
-    })?
-    onToolEvent,
+    ToolEventCallback? onToolEvent,
     void Function()? onSteerContinuation,
     FutureOr<void> Function(String thought)? onThoughtDelta,
     FutureOr<void> Function(String reasoning)? onReasoningDelta,
@@ -164,7 +159,7 @@ class LocalRuntimeOrchestrator {
     ).asyncExpand((tools) {
       agentRunner.registry.registerTools(tools);
       return Stream.fromFuture(
-        _buildRuntimeContext(request, agentRunner),
+        buildRuntimeContext(request, registry: agentRunner.registry),
       ).asyncExpand((runtimeContext) {
         final effectiveProviderId = request.effectiveProviderInstanceId;
         if (runtimeContext == null &&
@@ -192,28 +187,39 @@ class LocalRuntimeOrchestrator {
     });
   }
 
-  Future<String?> _buildRuntimeContext(
-    AgentTurnRequest request,
-    AgentRunner agentRunner,
-  ) async {
-    final workspaceId = request.workspaceId;
-    if (workspaceId == null || workspaceId.isEmpty) {
-      return _runtimeContextBuilder.buildWithoutWorkspace();
+  Future<String?> buildRuntimeContext(
+    AgentTurnRequest request, {
+    ToolsRegistry? registry,
+  }) async {
+    final execRoot = request.executionRoot;
+    String? workspacePath;
+    String? workspaceName;
+
+    if (execRoot != null && execRoot.isNotEmpty) {
+      workspacePath = _runtimeContextBuilder.pathResolver
+          .validateAndNormalizeExecutionRoot(execRoot);
+      workspaceName = p.basename(workspacePath!);
+    } else {
+      final workspaceId = request.effectiveWorkspaceId;
+      if (workspaceId == null || workspaceId.isEmpty) {
+        return _runtimeContextBuilder.buildWithoutWorkspace();
+      }
+
+      final workspace = await _workspaceRuntimeService.describeWorkspace(
+        workspaceId,
+      );
+      workspacePath = workspace?['path'] as String?;
+      workspaceName = workspace?['name'] as String?;
     }
 
-    final workspace = await _workspaceRuntimeService.describeWorkspace(
-      workspaceId,
-    );
-    final workspacePath = workspace?['path'] as String?;
     if (workspacePath == null || workspacePath.isEmpty) {
       return _runtimeContextBuilder.buildWithoutWorkspace();
     }
 
-    final workspaceName = workspace?['name'] as String?;
     final runtimeContext = await _runtimeContextBuilder.build(
       workspacePath: workspacePath,
       workspaceName: workspaceName,
-      registry: agentRunner.registry,
+      registry: registry,
     );
     return runtimeContext;
   }

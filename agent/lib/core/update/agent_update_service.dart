@@ -555,16 +555,16 @@ if (-not $ready) {
 }
 try {
   Move-Item -LiteralPath $staged -Destination $target -Force
-  & $target service start | Out-Null
-  if ($LASTEXITCODE -ne 0) { throw 'Service restart failed.' }
-  Write-UpdateResult 'started' 'The replacement was installed and its Scheduled Task was started.'
+  & $target service install | Out-Null
+  if ($LASTEXITCODE -ne 0) { throw 'Service registration or restart failed.' }
+  Write-UpdateResult 'started' 'The replacement and its background launcher were installed and the Scheduled Task was started.'
   Exit-Replacement 0
 } catch {
   if (Test-Path $target) { Remove-Item -LiteralPath $target -Force }
   $rollbackStarted = $false
   if (Test-Path $backup) {
     Move-Item -LiteralPath $backup -Destination $target -Force
-    & $target service start | Out-Null
+    & $target service install | Out-Null
     $rollbackStarted = $LASTEXITCODE -eq 0
   }
   if (Test-Path $staged) { Remove-Item -LiteralPath $staged -Force }

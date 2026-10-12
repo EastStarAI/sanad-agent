@@ -76,7 +76,7 @@ description: "Focused QA coverage for the Plan 32c device-scoped sidebar, includ
 ### 6. New Conversation intents
 1. Tap `+` next to `Workspaces`.
 2. **Expected:** Workspace creation flow opens.
-3. Tap `+` next to a specific workspace.
+3. Tap `+` next to a specific workspace; Driver inspection identifies it as `sidebar_new_conversation_btn:<workspaceId>` so duplicate workspace controls remain unambiguous.
 4. **Expected:** New Conversation opens with the device/workspace preselected.
 5. **Expected:** No session is created until the first user message is sent.
 6. Tap `+` next to the unscoped `Conversations` heading while a workspace-bound draft exists.

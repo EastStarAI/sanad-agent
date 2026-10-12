@@ -51,9 +51,11 @@ void main() {
 
   tearDown(() async {
     await getIt.reset();
-    if (tempDir.existsSync()) {
-      await tempDir.delete(recursive: true);
-    }
+    try {
+      if (tempDir.existsSync()) {
+        await tempDir.delete(recursive: true);
+      }
+    } catch (_) {}
   });
 
   CanonicalEvent managedEvent(String type, Map<String, dynamic> payload) {

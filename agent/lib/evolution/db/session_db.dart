@@ -5,6 +5,7 @@ import 'package:sqlite3/sqlite3.dart';
 import 'package:uuid/uuid.dart';
 
 import '../models/session_query.dart';
+import '../models/session_search.dart';
 import '../models/session_history_page.dart';
 import '../models/session_state.dart';
 import '../models/suspended_checkpoint.dart';
@@ -29,6 +30,19 @@ class SoftRewindAdmissionCommit {
   });
 }
 
+/// Result of atomically accepting one canonical root-user message.
+class RootUserMessageCommit {
+  final Message message;
+  final int historyRevision;
+  final bool inserted;
+
+  const RootUserMessageCommit({
+    required this.message,
+    required this.historyRevision,
+    required this.inserted,
+  });
+}
+
 /// Persistent storage for sessions, messages, scheduled tasks, and suspended
 /// checkpoints.
 ///
@@ -41,14 +55,18 @@ class SoftRewindAdmissionCommit {
 class SessionDB {
   late Database _db;
   late CompactionBoundaryRepository _compactionBoundaries;
+  final AgentStateDatabase _state;
 
   /// The owner this instance is responsible for disposing. Non-null only for
   /// the default constructor (standalone); `null` when sharing an injected
   /// [AgentStateDatabase] via [SessionDB.fromState].
   final AgentStateDatabase? _disposeOwnedState;
 
-  SessionDB() : _disposeOwnedState = AgentStateDatabase() {
-    final state = _disposeOwnedState!;
+  SessionDB() : this._owned(AgentStateDatabase());
+
+  SessionDB._owned(AgentStateDatabase state)
+    : _state = state,
+      _disposeOwnedState = state {
     _db = state.db;
     _compactionBoundaries = CompactionBoundaryRepository(
       state,
@@ -60,7 +78,9 @@ class SessionDB {
   /// ownership. The caller disposes [state]; this [SessionDB] will not close
   /// it. Used by the DI production path so `SessionDB` and
   /// `ProviderInstanceRepository` share one `state.db` connection.
-  SessionDB.fromState(AgentStateDatabase state) : _disposeOwnedState = null {
+  SessionDB.fromState(AgentStateDatabase state)
+    : _state = state,
+      _disposeOwnedState = null {
     _db = state.db;
     _compactionBoundaries = CompactionBoundaryRepository(
       state,
@@ -216,7 +236,7 @@ class SessionDB {
       ON CONFLICT(session_id) DO UPDATE SET
         model = excluded.model,
         provider_id = COALESCE(excluded.provider_id, sessions.provider_id),
-        thinking_mode = COALESCE(excluded.thinking_mode, sessions.thinking_mode),
+        thinking_mode = excluded.thinking_mode,
         title = COALESCE(excluded.title, sessions.title),
         title_status = excluded.title_status,
         workspace_id = excluded.workspace_id,
@@ -327,6 +347,235 @@ class SessionDB {
     );
   }
 
+  SessionSearchResult searchSessions(SessionSearchRequest request) {
+    final cursor = request.cursor == null
+        ? null
+        : _decodeSearchCursor(request.cursor!, request.fingerprint);
+    final params = <Object?>[request.query];
+    final cursorClause = cursor == null
+        ? ''
+        : '''
+          WHERE match_rank > ?
+             OR (match_rank = ? AND order_at < ?)
+             OR (match_rank = ? AND order_at = ? AND session_id < ?)
+          ''';
+    if (cursor != null) {
+      params.addAll([
+        cursor.rank,
+        cursor.rank,
+        cursor.orderAt,
+        cursor.rank,
+        cursor.orderAt,
+        cursor.sessionId,
+      ]);
+    }
+    params.add(request.limit + 1);
+
+    final rows = _db.select(
+      '''
+      WITH base_messages AS (
+        SELECT m.id, m.session_id,
+               json_extract(m.data, '\$.role') AS role,
+               json_extract(m.data, '\$.content') AS content,
+               json_extract(m.data, '\$.thought') AS thought,
+               json_extract(m.data, '\$.reasoning') AS reasoning,
+               COALESCE(json_array_length(json_extract(m.data, '\$.toolCalls')), 0) AS tool_count,
+               CASE
+                 WHEN json_extract(m.data, '\$.metadata.terminal_work_item_id') IS NOT NULL THEN 1
+                 WHEN json_extract(m.data, '\$.role') = 'assistant'
+                      AND COALESCE(json_array_length(json_extract(m.data, '\$.toolCalls')), 0) = 0
+                      AND m.id = (
+                        SELECT MAX(m2.id)
+                        FROM messages m2
+                        WHERE m2.session_id = m.session_id
+                          AND (m2.history_status = 'active' OR m2.history_status IS NULL)
+                          AND json_extract(m2.data, '\$.role') = 'assistant'
+                          AND COALESCE(json_array_length(json_extract(m2.data, '\$.toolCalls')), 0) = 0
+                          AND COALESCE(json_extract(m2.data, '\$.metadata.superseded_by_steer'), 0) != 1
+                      ) THEN 1
+                 ELSE 0
+               END AS is_terminal
+        FROM messages m
+        WHERE (m.history_status = 'active' OR m.history_status IS NULL)
+          AND COALESCE(json_extract(m.data, '\$.metadata.superseded_by_steer'), 0) != 1
+      ),
+      visible_texts AS (
+        SELECT id, session_id, content, 'user_message' AS anchor_kind,
+               0 AS anchor_ordinal, 1 AS candidate_priority
+        FROM base_messages
+        WHERE role = 'user' AND NULLIF(TRIM(content), '') IS NOT NULL
+        UNION ALL
+        SELECT id, session_id, content, 'final_answer', 0, 0
+        FROM base_messages
+        WHERE role = 'assistant' AND tool_count = 0 AND is_terminal = 1
+          AND NULLIF(TRIM(content), '') IS NOT NULL
+        UNION ALL
+        SELECT id, session_id, thought, 'thought', 0, 2
+        FROM base_messages
+        WHERE role = 'assistant' AND tool_count = 0
+          AND NULLIF(TRIM(thought), '') IS NOT NULL
+          AND (NULLIF(TRIM(reasoning), '') IS NULL OR thought != reasoning)
+        UNION ALL
+        SELECT id, session_id, content, 'thought',
+               CASE
+                 WHEN NULLIF(TRIM(thought), '') IS NOT NULL
+                      AND (NULLIF(TRIM(reasoning), '') IS NULL OR thought != reasoning)
+                 THEN 1 ELSE 0
+               END,
+               3
+        FROM base_messages
+        WHERE role = 'assistant' AND tool_count = 0 AND is_terminal = 0
+          AND NULLIF(TRIM(content), '') IS NOT NULL
+          AND (NULLIF(TRIM(reasoning), '') IS NULL OR content != reasoning)
+          AND (NULLIF(TRIM(thought), '') IS NULL OR content != thought)
+        UNION ALL
+        SELECT id, session_id,
+               CASE WHEN NULLIF(TRIM(thought), '') IS NOT NULL THEN thought ELSE content END,
+               'thought', 0, 2
+        FROM base_messages
+        WHERE role = 'assistant' AND tool_count > 0
+          AND COALESCE(NULLIF(TRIM(thought), ''), NULLIF(TRIM(content), '')) IS NOT NULL
+          AND (
+            NULLIF(TRIM(reasoning), '') IS NULL
+            OR COALESCE(NULLIF(TRIM(thought), ''), NULLIF(TRIM(content), '')) != reasoning
+          )
+      ),
+      eligible_matches AS (
+        SELECT *, ROW_NUMBER() OVER (
+          PARTITION BY session_id
+          ORDER BY id DESC, candidate_priority ASC
+        ) AS match_order
+        FROM visible_texts
+        WHERE instr(sanad_search_normalize(content), ?) > 0
+      ),
+      latest_match AS (
+        SELECT * FROM eligible_matches WHERE match_order = 1
+      ),
+      ranked AS (
+        SELECT s.*,
+               COALESCE(s.last_user_message_at, s.created_at) AS order_at,
+               lm.id AS match_row_id,
+               lm.content AS match_content,
+               lm.anchor_kind AS match_anchor_kind,
+               lm.anchor_ordinal AS match_anchor_ordinal,
+               CASE
+                 WHEN instr(sanad_search_normalize(COALESCE(s.title, '')), ?) > 0
+                      AND lm.id IS NOT NULL THEN 0
+                 WHEN instr(sanad_search_normalize(COALESCE(s.title, '')), ?) > 0 THEN 1
+                 ELSE 2
+               END AS match_rank
+        FROM sessions s
+        LEFT JOIN latest_match lm ON lm.session_id = s.session_id
+        WHERE instr(sanad_search_normalize(COALESCE(s.title, '')), ?) > 0
+           OR lm.id IS NOT NULL
+      )
+      SELECT * FROM ranked
+      $cursorClause
+      ORDER BY match_rank ASC, order_at DESC, session_id DESC
+      LIMIT ?
+      ''',
+      [request.query, request.query, request.query, ...params],
+    );
+
+    final hits = <SessionSearchHit>[];
+    for (final row in rows.take(request.limit)) {
+      final rank = row['match_rank'] as int;
+      final rowId = row['match_row_id'] as int?;
+      final anchorKind = row['match_anchor_kind'] as String?;
+      final anchorOrdinal = row['match_anchor_ordinal'] as int?;
+      hits.add(
+        SessionSearchHit(
+          session: SessionState.fromMap(row, const []),
+          matchKind: switch (rank) {
+            0 => SessionSearchMatchKind.titleAndContent,
+            1 => SessionSearchMatchKind.title,
+            _ => SessionSearchMatchKind.content,
+          },
+          snippet: _searchSnippet(
+            row['match_content'] as String?,
+            request.query,
+          ),
+          anchorEventId:
+              rowId == null || anchorKind == null || anchorOrdinal == null
+              ? null
+              : 'history:${row['session_id']}:$rowId:$anchorKind:$anchorOrdinal',
+        ),
+      );
+    }
+    final hasMore = rows.length > request.limit;
+    final last = hits.lastOrNull;
+    return SessionSearchResult(
+      hits: hits,
+      hasMore: hasMore,
+      nextCursor: hasMore && last != null
+          ? _encodeSearchCursor(
+              fingerprint: request.fingerprint,
+              rank: rows[request.limit - 1]['match_rank'] as int,
+              orderAt: rows[request.limit - 1]['order_at'] as String,
+              sessionId: last.session.sessionId,
+            )
+          : null,
+    );
+  }
+
+  String? _searchSnippet(String? content, String query) {
+    if (content == null || content.trim().isEmpty) return null;
+    final display = content.trim().replaceAll(RegExp(r'\s+'), ' ');
+    final normalized = SessionSearchRequest.normalize(display);
+    final index = normalized.indexOf(query);
+    if (index < 0) return null;
+    final start = (index - SessionSearchRequest.maxSnippetLength ~/ 2).clamp(
+      0,
+      display.length,
+    );
+    final end = (start + SessionSearchRequest.maxSnippetLength).clamp(
+      0,
+      display.length,
+    );
+    return '${start > 0 ? '…' : ''}${display.substring(start, end)}${end < display.length ? '…' : ''}';
+  }
+
+  ({int rank, String orderAt, String sessionId}) _decodeSearchCursor(
+    String cursor,
+    String fingerprint,
+  ) {
+    try {
+      final decoded = jsonDecode(utf8.decode(base64Url.decode(cursor)));
+      if (decoded is! Map ||
+          decoded['v'] != 1 ||
+          decoded['q'] != fingerprint ||
+          decoded['r'] is! int ||
+          decoded['t'] is! String ||
+          decoded['s'] is! String) {
+        throw const FormatException();
+      }
+      return (
+        rank: decoded['r'] as int,
+        orderAt: decoded['t'] as String,
+        sessionId: decoded['s'] as String,
+      );
+    } catch (_) {
+      throw ArgumentError('Invalid or stale search cursor');
+    }
+  }
+
+  String _encodeSearchCursor({
+    required String fingerprint,
+    required int rank,
+    required String orderAt,
+    required String sessionId,
+  }) => base64Url.encode(
+    utf8.encode(
+      jsonEncode({
+        'v': 1,
+        'q': fingerprint,
+        'r': rank,
+        't': orderAt,
+        's': sessionId,
+      }),
+    ),
+  );
+
   String _encodeCursor(DateTime lastUserMessageAt, String sessionId) {
     final jsonStr = jsonEncode({
       'last_user_message_at': _normalizeDateTime(lastUserMessageAt),
@@ -357,15 +606,19 @@ class SessionDB {
     return null;
   }
 
-  SessionState? getSession(String sessionId) {
+  /// Reads only the session row. Message rows are never queried or decoded.
+  SessionState? getSessionRecord(String sessionId) {
     final result = _db.select('SELECT * FROM sessions WHERE session_id = ?', [
       sessionId,
     ]);
     if (result.isEmpty) return null;
+    return SessionState.fromMap(result.first);
+  }
 
-    final row = result.first;
-    final messages = getMessages(sessionId);
-    return SessionState.fromMap(row, messages);
+  SessionState? getSession(String sessionId) {
+    final record = getSessionRecord(sessionId);
+    if (record == null) return null;
+    return SessionState.fromMap(record.toMap(), getMessages(sessionId));
   }
 
   List<SessionState> getAllSessions() {
@@ -470,6 +723,82 @@ class SessionDB {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Appends one root-user message without reading or rewriting prior rows.
+  /// A repeated non-empty request id returns the existing active row.
+  RootUserMessageCommit appendRootUserMessage(
+    String sessionId,
+    Message message,
+  ) {
+    if (!MessageHistoryIdentity.isRootUser(message)) {
+      throw ArgumentError.value(
+        message.role,
+        'message',
+        'Must be root user input',
+      );
+    }
+    return _state.transaction((transaction) {
+      final db = transaction.db;
+      final sessionRows = db.select(
+        'SELECT history_revision FROM sessions WHERE session_id = ? LIMIT 1',
+        [sessionId],
+      );
+      if (sessionRows.isEmpty) {
+        throw StateError('Session does not exist: $sessionId');
+      }
+      final requestId = MessageHistoryIdentity.requestIdOf(message);
+      if (requestId != null) {
+        final existing = db.select(
+          '''
+          SELECT * FROM messages
+          WHERE session_id = ? AND request_id = ?
+            AND input_kind = ?
+            AND (history_status = ? OR history_status IS NULL)
+          ORDER BY id DESC LIMIT 1
+          ''',
+          [
+            sessionId,
+            requestId,
+            MessageHistoryIdentity.rootTurn,
+            MessageHistoryIdentity.active,
+          ],
+        );
+        if (existing.isNotEmpty) {
+          return RootUserMessageCommit(
+            message: _persistedMessageFromRow(existing.first).message,
+            historyRevision:
+                (sessionRows.first['history_revision'] as num?)?.toInt() ?? 0,
+            inserted: false,
+          );
+        }
+      }
+
+      final committed = MessageHistoryIdentity.persist(db, sessionId, message);
+      final receivedAt = _normalizeTimestampString(
+        committed.metadata?['received_at']?.toString(),
+      );
+      final now = _normalizeDateTime(DateTime.now());
+      db.execute(
+        '''
+        UPDATE sessions
+        SET last_user_message_at = ?, updated_at = ?
+        WHERE session_id = ?
+        ''',
+        [receivedAt ?? now, now, sessionId],
+      );
+      SessionHistoryRevisionRepository.bumpDatabase(db, sessionId);
+      final revision = db.select(
+        'SELECT history_revision FROM sessions WHERE session_id = ? LIMIT 1',
+        [sessionId],
+      );
+      return RootUserMessageCommit(
+        message: committed,
+        historyRevision:
+            (revision.first['history_revision'] as num?)?.toInt() ?? 0,
+        inserted: true,
+      );
+    });
   }
 
   void replaceMessages(String sessionId, List<Message> messages) {

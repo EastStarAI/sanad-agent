@@ -1,0 +1,30 @@
+{
+  "skill_name": "delegate-task-supervisor",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Delegate five independent read-only repository reviews to OpenCode and Antigravity in parallel. Keep each workspace and session identifiable, do not use a scheduler, and return whenever any one task finishes so you can review it before waiting again.",
+      "expected_output": "Loads the implementer-specific delegate skills, uses a durable supervisor with distinct output directories, and waits through watch-once using a sequence cursor."
+    },
+    {
+      "id": 2,
+      "prompt": "Continue the failed OpenCode subagent task from yesterday in the same repository and let me watch its tool actions in a separate terminal window.",
+      "expected_output": "Resolves the canonical workspace identity, resumes only the requested session, and opens the human timeline viewer without stopping or duplicating the task."
+    },
+    {
+      "id": 3,
+      "prompt": "Have three agents implement independent changes at the same time in Sanad, and keep their edits from colliding.",
+      "expected_output": "Requires isolated worktrees as execution roots and separate sessions/conversations, uses sanad implementer with the existing logical workspace, bounds concurrency, and preserves the no-commit/no-push boundary unless separately authorized."
+    },
+    {
+      "id": 4,
+      "prompt": "Ask OpenCode one quick read-only question and wait for the answer in this terminal.",
+      "expected_output": "Uses opencode-delegate directly because durable multi-task supervision adds no value to a short one-off foreground request."
+    },
+    {
+      "id": 5,
+      "prompt": "Run an initial implementation task in Sanad, review its result, dynamically enqueue a second follow-up task in the same supervisor run, and close the run once verified.",
+      "expected_output": "Starts a long-lived supervisor run, waits event-first via watch-once for intervention or completion, dynamically enqueues follow-up tasks using supervisor enqueue, and explicitly closes the run after verification."
+    }
+  ]
+}

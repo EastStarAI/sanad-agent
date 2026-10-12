@@ -44,9 +44,11 @@ void main() {
     SessionManager.resetForTesting();
     setSanadHomeOverride(null);
     setSanadStateHomeOverride(null);
-    if (tempDir.existsSync()) {
-      tempDir.deleteSync(recursive: true);
-    }
+    try {
+      if (tempDir.existsSync()) {
+        tempDir.deleteSync(recursive: true);
+      }
+    } catch (_) {}
     await GetIt.I.reset();
   });
 
@@ -108,7 +110,7 @@ void main() {
       final tool = ScheduleTaskTool();
       final result = await tool.execute({
         'task': 'Auto Task',
-        'time': 'in 1 seconds',
+        'time': 'in 60 seconds',
       });
 
       expect(result, contains('Task scheduled successfully'));

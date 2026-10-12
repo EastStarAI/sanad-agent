@@ -31,6 +31,42 @@ void main() {
   });
 
   test(
+    'controlled-exit maintenance runs after drain and before exit',
+    () async {
+      final steps = <String>[];
+      final orchestrator = _BoundaryOrchestrator();
+      final coordinator = DaemonRestartCoordinator(
+        sessionOrchestrator: orchestrator,
+        beforeControlledExit: () async {
+          expect(orchestrator.drainStarted, isTrue);
+          steps.add('maintenance');
+        },
+        exitDaemon: (_) => steps.add('exit'),
+      );
+
+      final preparation = await coordinator.prepareRestart();
+      expect(steps, isEmpty);
+      await coordinator.completePreparedRestart(preparation);
+
+      expect(steps, ['maintenance', 'exit']);
+    },
+  );
+
+  test('maintenance failure cannot cancel a safe restart', () async {
+    int? exitCode;
+    final coordinator = DaemonRestartCoordinator(
+      sessionOrchestrator: _BoundaryOrchestrator(),
+      beforeControlledExit: () async => throw StateError('vacuum failed'),
+      exitDaemon: (code) => exitCode = code,
+    );
+
+    final preparation = await coordinator.prepareRestart();
+    await coordinator.completePreparedRestart(preparation);
+
+    expect(exitCode, 0);
+  });
+
+  test(
     'prepared pause exits permanently without cancelling durable work',
     () async {
       int? exitCode;
@@ -310,6 +346,7 @@ void main() {
     expect(restartAfterStop.outcome, 'cancelled');
     expect(orchestrator.drainCancelled, isTrue);
     expect(orchestrator.stopAllRequested, isTrue);
+    expect(orchestrator.stopAllPreserveInteractiveWaits, isTrue);
     expect(exitCodes, [123]);
   });
 }
@@ -352,6 +389,7 @@ class _BoundaryOrchestrator extends SessionRunOrchestrator {
   bool drainStarted = false;
   bool drainCancelled = false;
   bool stopAllRequested = false;
+  bool stopAllPreserveInteractiveWaits = false;
   final List<ControlledRestartBlocker> interruptedBlockers = [];
 
   @override
@@ -362,8 +400,9 @@ class _BoundaryOrchestrator extends SessionRunOrchestrator {
   }
 
   @override
-  Future<void> requestStopAll() async {
+  Future<void> requestStopAll({bool preserveInteractiveWaits = false}) async {
     stopAllRequested = true;
+    stopAllPreserveInteractiveWaits = preserveInteractiveWaits;
   }
 
   @override
@@ -438,6 +477,7 @@ class _StopBoundaryOrchestrator extends SessionRunOrchestrator {
   final Completer<ControlledRestartCheckpointResult> checkpoint;
   bool drainCancelled = false;
   bool stopAllRequested = false;
+  bool stopAllPreserveInteractiveWaits = false;
 
   @override
   void beginControlledRestartDrain() {}
@@ -448,8 +488,9 @@ class _StopBoundaryOrchestrator extends SessionRunOrchestrator {
   }
 
   @override
-  Future<void> requestStopAll() async {
+  Future<void> requestStopAll({bool preserveInteractiveWaits = false}) async {
     stopAllRequested = true;
+    stopAllPreserveInteractiveWaits = preserveInteractiveWaits;
   }
 
   @override

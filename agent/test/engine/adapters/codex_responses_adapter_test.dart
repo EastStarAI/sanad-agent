@@ -16,8 +16,9 @@ import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_codec.dart';
 import 'package:sanad_agent/engine/adapters/codex_models_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
-import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
+import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
 import 'package:sanad_agent/engine/adapters/e2e_fixture_adapter.dart';
+import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/missing_provider_adapter.dart';
 import 'package:sanad_agent/engine/adapters/mock_adapter.dart';
 import 'package:sanad_agent/engine/adapters/ollama_adapter.dart';
@@ -341,7 +342,7 @@ void main() {
           ],
           options: const LLMRequestOptions(
             providerInstanceId: 'provider-1',
-            thinkingMode: 'deep',
+            thinkingDirective: ResponsesReasoningDirective(effort: 'high'),
             maxOutputTokens: 2048,
           ),
         );

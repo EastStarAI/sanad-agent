@@ -22,8 +22,12 @@ void main() {
 
   tearDown(() async {
     setSanadHomeOverride(null);
-    if (tempWorkDir.existsSync()) await tempWorkDir.delete(recursive: true);
-    if (tempSanadHome.existsSync()) await tempSanadHome.delete(recursive: true);
+    try {
+      if (tempWorkDir.existsSync()) await tempWorkDir.delete(recursive: true);
+    } catch (_) {}
+    try {
+      if (tempSanadHome.existsSync()) await tempSanadHome.delete(recursive: true);
+    } catch (_) {}
   });
 
   group('openai-codex device-code migration', () {

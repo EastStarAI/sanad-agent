@@ -7,6 +7,8 @@ class OnboardingSetupChoices extends StatelessWidget {
     required this.hasRegisteredDevices,
     required this.onRunLocally,
     required this.onRemoteAction,
+    this.isLoadingDevices = false,
+    this.onRetry,
     this.error,
     super.key,
   });
@@ -14,13 +16,19 @@ class OnboardingSetupChoices extends StatelessWidget {
   final bool isDesktop;
   final bool isAuthenticated;
   final bool hasRegisteredDevices;
+  final bool isLoadingDevices;
   final VoidCallback onRunLocally;
   final VoidCallback onRemoteAction;
+  final VoidCallback? onRetry;
   final String? error;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // Phone layout has no local-install primary path, so a loading/error
+    // inventory must be distinct from absence there. Desktop keeps local setup
+    // primary and never flashes a false device absence for the remote path.
+    final showDeviceInventoryState = !isDesktop && !hasRegisteredDevices;
 
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -28,7 +36,16 @@ class OnboardingSetupChoices extends StatelessWidget {
       children: [
         _BrandHeader(theme: theme),
         const SizedBox(height: 24),
-        if (isDesktop)
+        if (showDeviceInventoryState && isLoadingDevices)
+          _InventoryLoadingState(theme: theme)
+        else if (showDeviceInventoryState && error != null)
+          _InventoryErrorState(
+            theme: theme,
+            message: error!,
+            onRetry: onRetry,
+            onRemoteAction: onRemoteAction,
+          )
+        else if (isDesktop)
           _DesktopChoices(
             theme: theme,
             isAuthenticated: isAuthenticated,
@@ -42,7 +59,7 @@ class OnboardingSetupChoices extends StatelessWidget {
             isAuthenticated: isAuthenticated,
             onRemoteAction: onRemoteAction,
           ),
-        if (error != null) ...[
+        if (error != null && !showDeviceInventoryState) ...[
           const SizedBox(height: 24),
           Text(
             error!,
@@ -50,6 +67,123 @@ class OnboardingSetupChoices extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
         ],
+      ],
+    );
+  }
+}
+
+/// Distinct inventory-loading state shown while the backend fetch is in flight,
+/// so the UI never flashes a false "No devices connected" (Plan 97g P09).
+/// Uses a static green dot + English status only — no continuous-animation
+/// indicator, consistent with the Windows static-activity policy (Plan 97 §3.4).
+class _InventoryLoadingState extends StatelessWidget {
+  const _InventoryLoadingState({required this.theme});
+
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          key: const Key('inventory_loading_dot'),
+          width: 14,
+          height: 14,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.green,
+          ),
+        ),
+        const SizedBox(height: 18),
+        Text(
+          'Checking for your devices…',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+            color: theme.colorScheme.onSurface,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          'Loading your connected Sanad Agents.',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 15,
+            height: 1.5,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Distinct error state shown when the backend fetch fails, so the failure is
+/// never presented as an authoritative empty device list.
+class _InventoryErrorState extends StatelessWidget {
+  const _InventoryErrorState({
+    required this.theme,
+    required this.message,
+    required this.onRemoteAction,
+    this.onRetry,
+  });
+
+  final ThemeData theme;
+  final String message;
+  final VoidCallback? onRetry;
+  final VoidCallback onRemoteAction;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Icon(
+          Icons.cloud_off_outlined,
+          size: 52,
+          color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+        ),
+        const SizedBox(height: 18),
+        Text(
+          'Couldn\u2019t load your devices',
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w600,
+            color: theme.colorScheme.onSurface,
+          ),
+        ),
+        const SizedBox(height: 10),
+        Text(
+          message,
+          textAlign: TextAlign.center,
+          style: TextStyle(
+            fontSize: 15,
+            height: 1.5,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+          ),
+        ),
+        const SizedBox(height: 28),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (onRetry != null) ...[
+              OutlinedButton.icon(
+                key: const Key('inventory_retry'),
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+              const SizedBox(width: 12),
+            ],
+            FilledButton.icon(
+              key: const Key('inventory_remote_action'),
+              onPressed: onRemoteAction,
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Add a Remote Device'),
+            ),
+          ],
+        ),
       ],
     );
   }

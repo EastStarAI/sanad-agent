@@ -1,3 +1,5 @@
+import 'dart:collection';
+
 import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/config.dart';
@@ -7,6 +9,7 @@ import 'attachments/attachment_store.dart';
 import 'db/agent_state_database.dart';
 import 'db/session_db.dart';
 import 'models/session_query.dart';
+import 'models/session_search.dart';
 import 'models/session_history_page.dart';
 import 'models/session_state.dart';
 import 'models/suspended_checkpoint.dart';
@@ -15,10 +18,21 @@ import '../core/models/message.dart';
 
 class SessionManager {
   static SessionManager? _instance;
+  static const int _maxHistorySnapshots = 8;
+
   late final SessionDB _db;
   final Map<String, Map<String, dynamic>> _inFlightSnapshots = {};
+  final LinkedHashMap<String, _SessionHistorySnapshot> _historySnapshots =
+      LinkedHashMap<String, _SessionHistorySnapshot>();
 
   SessionDB get db => _db;
+
+  @visibleForTesting
+  int get historySnapshotCount => _historySnapshots.length;
+
+  @visibleForTesting
+  bool hasHistorySnapshot(String sessionId) =>
+      _historySnapshots.containsKey(sessionId);
 
   void saveInFlightSnapshot(String sessionId, Map<String, dynamic> snapshot) {
     _inFlightSnapshots[sessionId] = snapshot;
@@ -81,8 +95,25 @@ class SessionManager {
     return session;
   }
 
+  /// Reads session metadata without querying or decoding history rows.
+  SessionState? getSessionRecord(String sessionId) {
+    return _db.getSessionRecord(sessionId);
+  }
+
   SessionState? getSession(String sessionId) {
-    return _db.getSession(sessionId);
+    final record = _db.getSessionRecord(sessionId);
+    if (record == null) {
+      _historySnapshots.remove(sessionId);
+      return null;
+    }
+    final cached = _historySnapshots.remove(sessionId);
+    if (cached != null && cached.historyRevision == record.historyRevision) {
+      _historySnapshots[sessionId] = cached;
+      return _withMessages(record, cached.messages);
+    }
+    final messages = _db.getMessages(sessionId);
+    _cacheHistory(sessionId, record.historyRevision, messages);
+    return _withMessages(record, messages);
   }
 
   List<SessionState> getAllSessions() {
@@ -91,6 +122,10 @@ class SessionManager {
 
   SessionQueryResult getSessions(SessionQueryRequest query) {
     return _db.getSessions(query);
+  }
+
+  SessionSearchResult searchSessions(SessionSearchRequest request) {
+    return _db.searchSessions(request);
   }
 
   void updateSessionTitle(String sessionId, String title) {
@@ -119,6 +154,7 @@ class SessionManager {
       return;
     }
     _db.deleteSession(sessionId);
+    _historySnapshots.remove(sessionId);
   }
 
   void updateSessionModel(String sessionId, String model) {
@@ -139,14 +175,17 @@ class SessionManager {
     String? providerId,
     String? model,
     String? thinkingMode,
+    bool clearThinkingMode = false,
   }) {
-    final session = _db.getSession(sessionId);
+    final session = _db.getSessionRecord(sessionId);
     if (session != null) {
       final updatedSession = SessionState(
         sessionId: session.sessionId,
         model: model ?? session.model,
         providerId: providerId ?? session.providerId,
-        thinkingMode: thinkingMode ?? session.thinkingMode,
+        thinkingMode: clearThinkingMode
+            ? null
+            : (thinkingMode ?? session.thinkingMode),
         title: session.title,
         titleStatus: session.titleStatus,
         workspaceId: session.workspaceId,
@@ -163,7 +202,7 @@ class SessionManager {
   }
 
   void saveSessionHistory(String sessionId, List<Message> messages) {
-    var session = _db.getSession(sessionId);
+    final session = _db.getSessionRecord(sessionId);
     if (session != null) {
       final updatedSession = SessionState(
         sessionId: session.sessionId,
@@ -183,7 +222,35 @@ class SessionManager {
       );
       _db.saveSession(updatedSession);
       _db.replaceMessages(sessionId, messages);
+      final persisted = _db.getMessages(sessionId);
+      final revision = _db.getSessionRecord(sessionId)?.historyRevision;
+      if (revision == null) {
+        _historySnapshots.remove(sessionId);
+      } else {
+        _cacheHistory(sessionId, revision, persisted);
+      }
     }
+  }
+
+  RootUserMessageCommit appendRootUserMessage(
+    String sessionId,
+    Message message,
+  ) {
+    final commit = _db.appendRootUserMessage(sessionId, message);
+    final cached = _historySnapshots.remove(sessionId);
+    if (commit.inserted &&
+        cached != null &&
+        cached.historyRevision + 1 == commit.historyRevision) {
+      _cacheHistory(sessionId, commit.historyRevision, [
+        ...cached.messages,
+        commit.message,
+      ]);
+    } else if (!commit.inserted &&
+        cached != null &&
+        cached.historyRevision == commit.historyRevision) {
+      _cacheHistory(sessionId, cached.historyRevision, cached.messages);
+    }
+    return commit;
   }
 
   List<Message> saveSessionHistoryInTransaction(
@@ -191,6 +258,7 @@ class SessionManager {
     List<Message> messages,
     AgentStateTransaction transaction,
   ) {
+    _historySnapshots.remove(sessionId);
     return _db.replaceMessagesInTransaction(sessionId, messages, transaction);
   }
 
@@ -304,4 +372,36 @@ class SessionManager {
   void deleteSuspendedCheckpointByToolCallId(String toolCallId) {
     _db.deleteSuspendedCheckpointByToolCallId(toolCallId);
   }
+
+  SessionState _withMessages(SessionState record, List<Message> messages) {
+    return SessionState.fromMap(
+      record.toMap(),
+      messages.toList(growable: false),
+    );
+  }
+
+  void _cacheHistory(
+    String sessionId,
+    int historyRevision,
+    List<Message> messages,
+  ) {
+    _historySnapshots.remove(sessionId);
+    _historySnapshots[sessionId] = _SessionHistorySnapshot(
+      historyRevision: historyRevision,
+      messages: List<Message>.unmodifiable(messages),
+    );
+    while (_historySnapshots.length > _maxHistorySnapshots) {
+      _historySnapshots.remove(_historySnapshots.keys.first);
+    }
+  }
+}
+
+class _SessionHistorySnapshot {
+  final int historyRevision;
+  final List<Message> messages;
+
+  const _SessionHistorySnapshot({
+    required this.historyRevision,
+    required this.messages,
+  });
 }

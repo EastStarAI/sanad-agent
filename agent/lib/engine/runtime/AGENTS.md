@@ -28,6 +28,12 @@ This contract applies to `agent/lib/engine/runtime/`.
 - Owner-bound rich completions use `completed_tool_results_v2` envelopes containing schema version plus session/work/run/generation/tool identity. Save the individually guarded typed result immediately, then replace it with the aggregate-guarded typed result before canonical history promotion.
 - Restore v2 snapshots without reopening tool source paths. Reject stale ownership; degrade a structurally corrupt rich payload to the deterministic text-only unavailable terminal instead of replaying the tool. Legacy/non-owned checkpoints remain text-only compatible.
 - Promote a v2 result through `SessionExecutionStateCoordinator` before the runner history callback; never append an owner-bound rich result only to volatile history.
+- A completed checkpoint tool result is reused only when its causal model step,
+  tool name, and structured arguments match the invocation that recorded it (each
+  persisted output record carries its owning `model_step_id`); a genuinely new
+  call that reuses a provider tool-call id across model steps or turns executes once. Legacy untagged durable records fall back to
+  durable id-based reuse. A freshly re-executed id purges its prior-step result at
+  the moment it is marked executing so a crash is never masked by an older outcome.
 - A typed deferred tool result may keep one non-idempotent tool executing only
   when its requester-bound descriptor is durable. Startup resolves that
   descriptor exactly once into the original tool result; it never replays the

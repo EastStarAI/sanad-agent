@@ -1,4 +1,5 @@
 import 'dart:io';
+
 import 'package:test/test.dart';
 import 'package:uuid/uuid.dart';
 
@@ -12,10 +13,22 @@ import 'package:sanad_agent/core/provider_runtime/provider_endpoint_resolver.dar
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/core/models/model_metadata.dart';
 import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
 import 'package:sanad_agent/engine/adapters/missing_provider_adapter.dart';
+import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
+
+class _StubModelsDevService extends ModelsDevService {
+  final Map<String, int> limits;
+
+  _StubModelsDevService(this.limits);
+
+  @override
+  Future<int?> getContextLimit(String provider, String model) async =>
+      limits[model];
+}
 
 String _tempStorePath() =>
     '${Directory.systemTemp.path}/sanad-secret-store-test-${DateTime.now().microsecondsSinceEpoch}-${const Uuid().v4()}.json';
@@ -517,8 +530,55 @@ context:
         runtime.resolveSignature(providerId: 'instance-stale'),
       );
 
-      expect(await adapter.getContextLimit(), 4000);
+      expect(
+        await adapter.getContextLimit(),
+        ModelMetadata.unknownContextLimit,
+      );
     });
+
+    test(
+      'resolves gpt-6-astra context limit for codex responses adapter',
+      () async {
+        repo.createInstance(
+          ProviderInstance(
+            id: 'instance-codex-gpt6',
+            templateId: 'openai-codex',
+            displayName: 'ChatGPT Codex',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.deviceCode,
+            baseUrl: 'https://chatgpt.com/backend-api/codex',
+            defaultModel: 'gpt-6-astra',
+            status: InstanceStatus.ready,
+            configRevision: 1,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        final metadataRuntime = AgentRuntimeService(
+          config,
+          repo,
+          modelsDevService: _StubModelsDevService(const {
+            'gpt-6-astra': 1050000,
+            'gpt-6-luna': 1050000,
+          }),
+          credService: credService,
+        );
+        final adapter = metadataRuntime.adapterFor(
+          metadataRuntime.resolveSignature(providerId: 'instance-codex-gpt6'),
+        );
+
+        expect(adapter, isA<CodexResponsesAdapter>());
+        expect(await adapter.getContextLimit(), 1050000);
+        expect(await adapter.getContextLimit('gpt-6-astra'), 1050000);
+        expect(await adapter.getContextLimit('gpt-6-luna'), 1050000);
+        expect(
+          await adapter.getContextLimit('unknown-futuristic-model'),
+          ModelMetadata.unknownContextLimit,
+        );
+      },
+    );
 
     test('defaultAdapter resolves live after a provider is added, '
         'not frozen from a prior missing-provider state', () {

@@ -195,6 +195,8 @@ class CanonicalEventTypes {
   static const String sessionHistory = 'session_history';
   static const String getSessions = 'get_sessions';
   static const String sessionsList = 'sessions_list';
+  static const String searchSessions = 'search_sessions';
+  static const String sessionSearchResults = 'session_search_results';
   static const String updateSessionTitle = 'update_session_title';
   static const String sessionUpdated = 'session_updated';
   static const String deleteSession = 'delete_session';
@@ -316,6 +318,12 @@ class CanonicalEventTypes {
   static const String deviceSettingsUpdate = 'device.settings.update';
   static const String deviceSettingsSnapshot = 'device.settings.snapshot';
   static const String deviceSettingsUpdated = 'device.settings.updated';
+
+  // ── Appearance Protocol ────────────────────────────────────────────────
+  static const String getAppearance = 'get_appearance';
+  static const String updateAppearance = 'update_appearance';
+  static const String appearanceSnapshot = 'appearance_snapshot';
+  static const String appearanceUpdated = 'appearance_updated';
 
   // ── Plan 25: workspace policy relocation ──────────────────────────────
   static const String workspaceGetPolicy = 'workspace.get_policy';

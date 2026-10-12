@@ -1,3 +1,5 @@
+import 'package:sanad_client_identity/sanad_client_identity.dart';
+
 enum AccountPresenceStatus { online, offline, unavailable }
 
 enum AccountPrincipalKind { clientSession, agentDevice }
@@ -9,6 +11,7 @@ class AccountPrincipal {
     required this.status,
     required this.isCurrent,
     required this.metadata,
+    this.clientInstanceId,
     this.name,
     this.createdAt,
     this.lastActiveAt,
@@ -19,7 +22,13 @@ class AccountPrincipal {
   final AccountPresenceStatus status;
   final bool isCurrent;
   final Map<String, String?> metadata;
+  final String? clientInstanceId;
   final String? name;
+
+  String? get displayReference => clientDisplayReference(
+    clientInstanceId: clientInstanceId,
+    clientSessionId: kind == AccountPrincipalKind.clientSession ? id : null,
+  );
   final DateTime? createdAt;
   final DateTime? lastActiveAt;
 
@@ -41,6 +50,7 @@ class AccountPrincipal {
         _ => AccountPresenceStatus.unavailable,
       },
       isCurrent: json['is_current'] == true,
+      clientInstanceId: json['client_instance_id']?.toString(),
       name: json['name']?.toString(),
       metadata: rawMetadata is Map
           ? rawMetadata.map((key, value) => MapEntry(key.toString(), value?.toString()))

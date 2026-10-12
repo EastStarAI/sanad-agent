@@ -4,9 +4,9 @@ context:
     gpt-5.6-sol: 258000
 
 compaction:
-  threshold: 0.80
+  threshold: 0.90
   targetRatio: 0.10
   models:
     gpt-5.6-sol:
-      threshold: 0.85
+      threshold: 0.90
       targetRatio: 0.08

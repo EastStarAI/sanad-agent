@@ -137,6 +137,15 @@ void main() {
         updatedAt: DateTime.now(),
       );
     });
+    when(mockSessionManager.getSessionRecord(any)).thenAnswer((inv) {
+      final id = inv.positionalArguments[0] as String;
+      return SessionState(
+        sessionId: id,
+        model: 'sanad-agent',
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+    });
     when(mockSessionManager.getMessages(any)).thenReturn(const []);
     when(mockSessionManager.saveSessionMetadata(any, any)).thenReturn(null);
     when(mockSessionManager.getSessionMetadata(any)).thenReturn(null);
@@ -196,7 +205,8 @@ void main() {
     );
   });
 
-  Future<void> pump() => Future<void>.delayed(Duration.zero);
+  Future<void> pump([int ms = 50]) =>
+      Future<void>.delayed(Duration(milliseconds: ms));
 
   test(
     'execution state change keeps one event id across sanad_client fan-out',
@@ -390,7 +400,6 @@ void main() {
         ),
       );
       await pump();
-
       final localFinals = local.delivered.where(
         (r) =>
             r.message.role != MessageRole.user && r.message.content == 'answer',

@@ -72,7 +72,7 @@ class LocalRuntimeCatalog {
     required AgentTurnRequest request,
     List<String> pendingAttachmentIds = const [],
   }) async {
-    final workspacePath = await _resolveWorkspacePath(request.workspaceId);
+    final workspacePath = await _resolveTargetWorkspacePath(request);
     final pendingAttachmentPaths =
         getIt.isRegistered<AttachmentStore>() &&
             pendingAttachmentIds.isNotEmpty &&
@@ -144,7 +144,8 @@ class LocalRuntimeCatalog {
                 if (workspacePath != null)
                   'workspace': {
                     ...existingWorkspace,
-                    'id': existingWorkspace['id'] ?? request.workspaceId,
+                    'id':
+                        existingWorkspace['id'] ?? request.effectiveWorkspaceId,
                     'path': workspacePath,
                   },
               },
@@ -204,7 +205,7 @@ class LocalRuntimeCatalog {
                   'tool_name': spec.name,
                   'tool_input': args,
                   'tool': spec.toJson(),
-                  'workspace_id': request.workspaceId,
+                  'workspace_id': request.effectiveWorkspaceId,
                   'session_id': request.sessionId,
                 },
               );
@@ -212,6 +213,14 @@ class LocalRuntimeCatalog {
           ),
         )
         .toList(growable: false);
+  }
+
+  Future<String?> _resolveTargetWorkspacePath(AgentTurnRequest request) async {
+    final execRoot = request.executionRoot;
+    if (execRoot != null && execRoot.isNotEmpty) {
+      return _pathResolver.validateAndNormalizeExecutionRoot(execRoot);
+    }
+    return _resolveWorkspacePath(request.effectiveWorkspaceId);
   }
 
   Future<String?> _resolveWorkspacePath(String? workspaceId) async {
@@ -656,11 +665,11 @@ class LocalRuntimeCatalog {
         ? '.'
         : inputPath;
     final resolution = allowMissing
-        ? _pathResolver.classifyPathAllowMissing(
+        ? await _pathResolver.classifyPathAllowMissingAsync(
             workspaceRoot: workspacePath,
             inputPath: effectivePath,
           )
-        : _pathResolver.classifyExistingPath(
+        : await _pathResolver.classifyExistingPathAsync(
             workspaceRoot: workspacePath,
             inputPath: effectivePath,
           );
@@ -679,7 +688,7 @@ class LocalRuntimeCatalog {
         ...?context?.metadata,
         'workspace': {
           ...existingWorkspace,
-          'id': existingWorkspace['id'] ?? request.workspaceId,
+          'id': existingWorkspace['id'] ?? request.effectiveWorkspaceId,
           'path': workspacePath,
         },
       },
@@ -907,6 +916,7 @@ class LocalRuntimeCatalog {
           'request_id': requestId,
           'tool_name': 'system_ask_user',
           'session_id': toolContext.sessionId,
+          'tool_call_id': toolCallId,
           'questions': questionsList,
           'workspace_id': toolContext.metadata['workspace_id'],
         };
@@ -933,7 +943,13 @@ class LocalRuntimeCatalog {
             payload: permissionPayload,
             timeout: const Duration(hours: 24),
           );
-          return decision['answer']?.toString() ?? '';
+          final answer = decision['answer']?.toString().trim();
+          if (answer == null || answer.isEmpty) {
+            throw Exception(
+              'User clarification question was resolved without an answer.',
+            );
+          }
+          return answer;
         } finally {
           await checkpointStore.deleteByRequestId(requestId);
         }

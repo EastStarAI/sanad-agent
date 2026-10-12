@@ -443,6 +443,11 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "3.0.2"
+  flutter_localizations:
+    dependency: "direct main"
+    description: flutter
+    source: sdk
+    version: "0.0.0"
   flutter_markdown_plus:
     dependency: "direct main"
     description:
@@ -1054,6 +1059,13 @@ packages:
       relative: true
     source: path
     version: "1.0.0"
+  sanad_client_identity:
+    dependency: "direct main"
+    description:
+      path: "../shared/client_identity"
+      relative: true
+    source: path
+    version: "1.0.0"
   sanad_public_service_endpoints:
     dependency: "direct main"
     description:
@@ -1067,7 +1079,7 @@ packages:
       path: "../release/contract"
       relative: true
     source: path
-    version: "1.0.10"
+    version: "1.0.16"
   screen_retriever:
     dependency: transitive
     description:

@@ -6,7 +6,7 @@ This completed task records the Linux credential contract that existed before
 Task 81. The active implementation and release candidate now support automatic
 owner-protected file credentials plus durable user/system systemd and OpenRC
 services on Headless Linux; see
-`docs/plans/tasks/81-linux-headless-one-command-install-and-durable-service.md`.
+`docs/plans/tasks/done/81-linux-headless-one-command-install-and-durable-service.md`.
 
 ## Historical problem
 
