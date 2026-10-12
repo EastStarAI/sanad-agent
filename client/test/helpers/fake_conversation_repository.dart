@@ -4,6 +4,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_processing_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
@@ -68,6 +69,12 @@ class FakeConversationRepository implements ConversationRepository {
   final List<Map<String, String?>> updatedSessionPreferences = [];
   final List<Map<String, Object?>> createdSessionRequests = [];
   final List<DeviceWorkspace> workspaces = [];
+  Future<SessionSearchPage> Function(
+    DeviceConfig agent,
+    String query,
+    String? cursor,
+  )?
+  searchSessionsHandler;
   final List<Map<String, String?>> createdWorkspaces = [];
   final List<String> removedWorkspaceIds = [];
   final List<Map<String, String?>> slashCommandSearchRequests = [];
@@ -454,6 +461,20 @@ class FakeConversationRepository implements ConversationRepository {
       'model': model,
       'thinking_mode': thinkingMode,
     });
+  }
+
+  @override
+  Future<SessionSearchPage> searchSessions(
+    DeviceConfig agent, {
+    required String query,
+    int limit = 20,
+    String? cursor,
+  }) async {
+    final handler = searchSessionsHandler;
+    if (handler == null) {
+      return const SessionSearchPage(hits: [], hasMore: false);
+    }
+    return handler(agent, query, cursor);
   }
 
   @override

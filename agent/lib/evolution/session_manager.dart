@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import 'db/agent_state_database.dart';
 import 'db/session_db.dart';
 import 'models/session_query.dart';
+import 'models/session_search.dart';
 import 'models/session_history_page.dart';
 import 'models/session_state.dart';
 import 'models/suspended_checkpoint.dart';
@@ -120,6 +121,10 @@ class SessionManager {
 
   SessionQueryResult getSessions(SessionQueryRequest query) {
     return _db.getSessions(query);
+  }
+
+  SessionSearchResult searchSessions(SessionSearchRequest request) {
+    return _db.searchSessions(request);
   }
 
   void updateSessionTitle(String sessionId, String title) {

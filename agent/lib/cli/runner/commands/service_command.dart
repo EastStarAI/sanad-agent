@@ -67,6 +67,12 @@ class ServiceInstallCommand extends SanadCommand {
 
   ServiceInstallCommand({this.onService, super.customAction}) {
     argParser
+      ..addFlag(
+        'user-scope',
+        negatable: false,
+        help:
+            'Explicitly install a user-scoped service without privilege elevation',
+      )
       ..addOption(
         'expected-version',
         help: 'Expected daemon version to verify after installation',
@@ -98,7 +104,9 @@ class ServiceInstallCommand extends SanadCommand {
     if (onService != null) {
       return await onService!(args);
     }
-    final result = await ServiceManager.install();
+    final result = await ServiceManager.install(
+      userScope: argResults?['user-scope'] as bool? ?? false,
+    );
     return result.success ? 0 : 1;
   }
 }

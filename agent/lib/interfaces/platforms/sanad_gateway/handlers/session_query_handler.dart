@@ -7,6 +7,7 @@ import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_sto
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/evolution/models/session_query.dart';
+import 'package:sanad_agent/evolution/models/session_search.dart';
 import 'package:sanad_agent/evolution/models/session_history_page.dart';
 import 'package:sanad_agent/evolution/models/session_execution_snapshot.dart';
 import 'package:sanad_agent/evolution/db/message_history_identity.dart';
@@ -885,6 +886,68 @@ class SessionQueryHandler {
         ),
       );
     }
+  }
+
+  Map<String, dynamic> buildSearchEnvelope(CanonicalEvent event) {
+    final requestId = event.payload['request_id'];
+    try {
+      final request = SessionSearchRequest.fromMap(event.payload);
+      final result = _sessionManager.searchSessions(request);
+      final hits = result.hits.map((hit) {
+        return {
+          'session': buildSessionPayload(
+            session: hit.session,
+            sessionMetadata: _sessionManager.getSessionMetadata(
+              hit.session.sessionId,
+            ),
+          ),
+          'match_kind': hit.matchKind.wireValue,
+          'snippet': hit.snippet,
+          'anchor_event_id': hit.anchorEventId,
+        };
+      }).toList();
+      return _bridge.buildAgentEventEnvelope(
+        CanonicalEvent(
+          type: CanonicalEventTypes.sessionSearchResults,
+          payload: {
+            'request_id': requestId,
+            'results': hits,
+            'next_cursor': result.nextCursor,
+            'has_more': result.hasMore,
+          },
+        ),
+      );
+    } on ArgumentError catch (error) {
+      return _buildSearchErrorEnvelope(
+        requestId,
+        'invalid_search_request',
+        error.message?.toString() ?? 'Invalid search request.',
+      );
+    } catch (_) {
+      return _buildSearchErrorEnvelope(
+        requestId,
+        'session_search_failed',
+        'Conversation search failed.',
+      );
+    }
+  }
+
+  Map<String, dynamic> _buildSearchErrorEnvelope(
+    Object? requestId,
+    String code,
+    String message,
+  ) {
+    return _bridge.buildAgentEventEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.sessionSearchResults,
+        payload: {
+          'request_id': requestId,
+          'results': const <Object>[],
+          'has_more': false,
+          'error': {'code': code, 'message': message},
+        },
+      ),
+    );
   }
 
   Map<String, dynamic>? buildUpdateSessionTitleEnvelope(CanonicalEvent event) {

@@ -662,6 +662,59 @@ void main() {
     });
   });
 
+  group('search result navigation', () {
+    test('reopens the active session when its search anchor is already loaded', () async {
+      socket.setConnected(true);
+      agentRepository.seedAgents([agent], activeAgentId: agent.id);
+      agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+      const anchor = 'history:session-flow-1:9:thought:0';
+      conversationRepository.setMessages(agent, [
+        CanonicalEvent(
+          id: anchor,
+          eventId: anchor,
+          kind: EventKind.thinking,
+          status: EventStatus.done,
+          text: 'Visible thought',
+          timestamp: DateTime.now(),
+        ),
+      ]);
+      wire();
+      await Future<void>.delayed(Duration.zero);
+      await sessionCubit.selectSession(session1);
+      await Future<void>.delayed(Duration.zero);
+      final initialRevision = messagesCubit.state.historyOpenRevision;
+
+      await messagesCubit.loadAnchoredHistory(anchor, forceReopen: true);
+
+      expect(messagesCubit.state.historyOpenRevision, initialRevision + 1);
+      expect(messagesCubit.state.activeSessionId, session1.id);
+    });
+
+    test('loads the requested anchor during the atomic session swap', () async {
+      socket.setConnected(true);
+      agentRepository.seedAgents([agent], activeAgentId: agent.id);
+      agentCubit.emitState(DeviceActive(activeAgent: agent, agents: [agent]));
+      wire();
+      await Future<void>.delayed(Duration.zero);
+      const anchor = 'history:session-flow-2:42:user_message:0';
+
+      messagesCubit.requestHistoryAnchor(
+        deviceId: agent.id,
+        sessionId: session2.id,
+        anchorEventId: anchor,
+      );
+      await sessionCubit.selectSession(session2);
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        conversationRepository.loadedAnchorRequests,
+        contains((session2.id, anchor)),
+      );
+      expect(messagesCubit.state.activeSessionId, session2.id);
+    });
+  });
+
   // ── Step 8: Logout resets the chain ───────────────────────────────────────
 
   group('step 8: logout clears all cached state', () {
