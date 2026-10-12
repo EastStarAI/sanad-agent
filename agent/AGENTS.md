@@ -30,6 +30,7 @@ This contract applies to `agent/`.
 - Retry, resume, route change, and automatic failover require an atomic claim of the current durable owner; stale or concurrent losers are controlled no-ops.
 - Crash recovery never replays a started tool without a durable result. Owned recognized checkpoints receive a neutral unknown-outcome result and continue automatically; only ownerless, malformed, or unrecognized state becomes blocked recovery.
 - A resumable daemon shutdown must cross the global checkpoint drain and exit without session-wide Stop so startup recovery retains safe non-terminal work. Destructive shutdown requires an explicit cancellation mode and terminalizes owned work before exit.
+- A managed daemon stop (`DaemonRestartCoordinator.stop()`) preserves unresolved interactive user-input waits (`system_ask_user` and tool-permission prompts awaiting decision) with their durable checkpoints intact and transitions active work to durable `waiting` without synthetic tool results or session cancellation, so startup recovery restores the pending decision. Explicit user stop continues to terminalize interactive waits.
 
 ### Engine and Context Authority
 - `AgentRunner` is the single owner of conversation history, current-turn boundary, model loop, latest usage projection, and model-step lifecycle.
