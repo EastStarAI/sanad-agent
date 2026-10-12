@@ -251,6 +251,30 @@ List<String> buildSwitchedClientRunArguments({
   ];
 }
 
+Map<String, String> buildSwitchedAgentEnvironment({
+  required Map<String, String> currentEnvironment,
+  required String targetWorkspaceHash,
+  String? targetWorktreeName,
+  String? targetBranch,
+  bool targetIsLinkedWorktree = false,
+}) {
+  final environment = Map<String, String>.from(currentEnvironment);
+  if (targetWorkspaceHash.isNotEmpty) {
+    environment['SANAD_DEV_WORKSPACE_HASH'] = targetWorkspaceHash;
+  }
+  if (targetIsLinkedWorktree && targetWorktreeName != null) {
+    environment['SANAD_DEV_WORKTREE_NAME'] = targetWorktreeName;
+  } else {
+    environment.remove('SANAD_DEV_WORKTREE_NAME');
+  }
+  if (targetIsLinkedWorktree && targetBranch != null) {
+    environment['SANAD_DEV_WORKTREE_BRANCH'] = targetBranch;
+  } else {
+    environment.remove('SANAD_DEV_WORKTREE_BRANCH');
+  }
+  return environment;
+}
+
 List<int> orderUnixProcessTree(String processListing, int rootPid) {
   final children = <int, List<int>>{};
   for (final line in LineSplitter.split(processListing)) {

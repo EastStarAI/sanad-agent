@@ -36,6 +36,11 @@ class FakeDevicePreferencesRepository implements IDevicePreferencesRepository {
   }
 
   @override
+  Future<void> clearLastThinkingMode(String deviceId) async {
+    _thinkingModes.remove(deviceId);
+  }
+
+  @override
   Future<void> clearPreferences(String deviceId) async {
     _providers.remove(deviceId);
     _models.remove(deviceId);

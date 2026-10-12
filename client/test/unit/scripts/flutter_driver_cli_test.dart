@@ -243,6 +243,18 @@ void main() {
       expect(driverSource, contains("trimmed.startsWith('[#')"));
     });
 
+    test('driver does not skip layout noise widgets if explicitly keyed', () {
+      final driverSource = File('lib/driver_main.dart').readAsStringSync();
+      expect(
+        driverSource,
+        contains('// Skip layout noise widgets unless explicitly keyed'),
+      );
+      expect(
+        driverSource,
+        contains('final rawKey = key is ValueKey ? key.value.toString() : key?.toString();'),
+      );
+    });
+
     test('driver authentication URL stays outside UI snapshots', () {
       final driverSource = File('lib/driver_main.dart').readAsStringSync();
       expect(

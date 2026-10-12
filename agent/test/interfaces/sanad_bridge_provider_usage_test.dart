@@ -28,6 +28,7 @@ import 'package:sanad_agent/core/provider_runtime/provider_credential_resolver.d
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
+import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_readiness_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_state_service.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
@@ -77,7 +78,11 @@ void main() {
       ProviderAuthSessionService(ProviderCredentialStore()),
     );
     getIt.registerSingleton<ProviderModelCacheService>(
-      ProviderModelCacheService(repo, _StubRuntimeService()),
+      ProviderModelCacheService(
+        repo,
+        _StubRuntimeService(),
+        buildDefaultThinkingCapabilityAssembler(),
+      ),
     );
     getIt.registerSingleton<RecentModelSelectionService>(
       RecentModelSelectionService(repo),

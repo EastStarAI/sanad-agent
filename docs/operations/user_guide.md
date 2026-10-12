@@ -185,7 +185,23 @@ scheduled work can continue on the device while the service is running.
 On Linux, the same command automatically selects a durable user systemd service
 only when its bus and linger capability are healthy. Otherwise it registers a
 system systemd unit that still runs the Agent as an unprivileged account, or a
-native OpenRC service when OpenRC is the host init manager. `service status`
+native OpenRC service when OpenRC is the host init manager.
+
+To install a systemd user service without elevation or linger modifications
+(used automatically by the Linux desktop Client during bootstrap), pass the
+explicit `--user-scope` flag:
+
+```bash
+sanad service install --user-scope
+```
+
+When `--user-scope` is specified, the service installs directly into the user's
+systemd manager without invoking `sudo` or enabling linger. Note that without
+linger enabled, the service runs only while the user has an active login
+session and will require an interactive user login to resume after logout or
+reboot.
+
+`service status`
 reports `Missing`, `InstalledStopped`, `Running`, `Failed`, or
 `ManagerUnavailable`, together with the selected scope and credential backend.
 An unsupported init manager fails explicitly rather than leaving a detached

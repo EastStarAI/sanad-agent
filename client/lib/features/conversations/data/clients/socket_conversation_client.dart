@@ -7,6 +7,7 @@ import 'package:sanad_client/features/devices/domain/stores/device_capabilities_
 import 'package:sanad_client/features/conversations/domain/models/device_processing_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/data/mappers/device_event_mapper.dart';
 import 'package:sanad_client/features/conversations/data/mappers/unified_device_mapper.dart';
@@ -472,6 +473,25 @@ class SocketConversationClient implements ConversationClient {
       }
       cursor = page.nextCursor;
     }
+  }
+
+  @override
+  Future<SessionSearchPage> searchSessions({
+    required String query,
+    int limit = 20,
+    String? cursor,
+  }) {
+    if (!isConnected || _commands == null) {
+      throw const SessionSearchException(
+        'device_unavailable',
+        'The selected device is unavailable.',
+      );
+    }
+    return _commands!.searchSessions(
+      query: query,
+      limit: limit,
+      cursor: cursor,
+    );
   }
 
   @override

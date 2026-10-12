@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import 'db/agent_state_database.dart';
 import 'db/session_db.dart';
 import 'models/session_query.dart';
+import 'models/session_search.dart';
 import 'models/session_history_page.dart';
 import 'models/session_state.dart';
 import 'models/suspended_checkpoint.dart';
@@ -122,6 +123,10 @@ class SessionManager {
     return _db.getSessions(query);
   }
 
+  SessionSearchResult searchSessions(SessionSearchRequest request) {
+    return _db.searchSessions(request);
+  }
+
   void updateSessionTitle(String sessionId, String title) {
     _db.updateSessionTitle(sessionId, title);
   }
@@ -165,6 +170,7 @@ class SessionManager {
     String? providerId,
     String? model,
     String? thinkingMode,
+    bool clearThinkingMode = false,
   }) {
     final session = _db.getSessionRecord(sessionId);
     if (session != null) {
@@ -172,7 +178,9 @@ class SessionManager {
         sessionId: session.sessionId,
         model: model ?? session.model,
         providerId: providerId ?? session.providerId,
-        thinkingMode: thinkingMode ?? session.thinkingMode,
+        thinkingMode: clearThinkingMode
+            ? null
+            : (thinkingMode ?? session.thinkingMode),
         title: session.title,
         titleStatus: session.titleStatus,
         workspaceId: session.workspaceId,
