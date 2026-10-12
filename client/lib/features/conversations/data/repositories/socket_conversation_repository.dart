@@ -4,6 +4,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_processing_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/conversation_client.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
@@ -329,6 +330,20 @@ class SocketConversationRepository implements ConversationRepository {
     SessionQueryRequest? query,
   }) {
     return _clientFor(agent).getSessions(query: query);
+  }
+
+  @override
+  Future<SessionSearchPage> searchSessions(
+    DeviceConfig agent, {
+    required String query,
+    int limit = 20,
+    String? cursor,
+  }) {
+    return _clientFor(agent).searchSessions(
+      query: query,
+      limit: limit,
+      cursor: cursor,
+    );
   }
 
   @override

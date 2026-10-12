@@ -7,6 +7,7 @@ abstract class IDevicePreferencesRepository {
 
   Future<void> setLastThinkingMode(String deviceId, String thinkingMode);
   String? getLastThinkingMode(String deviceId);
+  Future<void> clearLastThinkingMode(String deviceId);
 
   Future<void> clearPreferences(String deviceId);
 }

@@ -90,6 +90,33 @@ void main() {
     expect(payload['thinking_mode'], 'precise');
   });
 
+  test('updateSessionPreferences sends an explicit empty thinking mode to clear it', () async {
+    final future = commands.updateSessionPreferences(
+      sessionId: 'session-1',
+      providerId: 'provider-1',
+      thinkingMode: '',
+    );
+
+    final command = socket.capturedCommands.single;
+    expect(command['command'], 'update_session_preferences');
+    final payload = command['payload'] as Map<String, dynamic>;
+    expect(payload, containsPair('provider_instance_id', 'provider-1'));
+    expect(payload.containsKey('provider_id'), isFalse);
+    expect(payload, containsPair('thinking_mode', ''));
+
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_updated',
+      'payload': {
+        'request_id': payload['request_id'],
+        'session_id': 'session-1',
+        'thinking_mode': null,
+      },
+    });
+
+    await future;
+  });
+
   test('replayTurn sends the current route and explicit safety confirmation', () async {
     final future = commands.replayTurn(
       sessionId: 'session-1',
@@ -242,6 +269,40 @@ void main() {
     expect(results[0].sessions.single.id, 'session-workspace-1');
     expect(results[1].sessions.single.id, 'session-workspace-2');
     expect(results[2].sessions.single.id, 'session-unscoped');
+  });
+
+  test('searchSessions maps correlated result metadata and device identity', () async {
+    final future = commands.searchSessions(query: 'needle', limit: 7);
+
+    final command = socket.capturedCommands.single;
+    expect(command['command'], 'search_sessions');
+    final request = command['payload'] as Map<String, dynamic>;
+    expect(request['query'], 'needle');
+    expect(request['limit'], 7);
+    socket.eventRouter.routeEvent({
+      'device_id': 'agent-1',
+      'event': 'session_search_results',
+      'payload': {
+        'request_id': request['request_id'],
+        'results': [
+          {
+            'session': {'id': 'session-search', 'title': 'Found'},
+            'match_kind': 'content',
+            'snippet': 'safe needle snippet',
+            'anchor_event_id': 'history:session-search:3:user_message:0',
+          },
+        ],
+        'next_cursor': 'cursor-2',
+        'has_more': true,
+      },
+    });
+
+    final page = await future;
+    expect(page.hits.single.session.deviceId, 'agent-1');
+    expect(page.hits.single.snippet, 'safe needle snippet');
+    expect(page.hits.single.anchorEventId, 'history:session-search:3:user_message:0');
+    expect(page.nextCursor, 'cursor-2');
+    expect(page.hasMore, isTrue);
   });
 
   test('searchSlashCommands requests runtime-owned slash suggestions', () async {

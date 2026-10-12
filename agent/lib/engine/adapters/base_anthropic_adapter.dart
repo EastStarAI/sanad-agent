@@ -14,6 +14,7 @@ import '../../core/provider_runtime/provider_model_id.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
 import 'llm_http_exception.dart';
+import '../../core/provider_thinking/anthropic_thinking_wire_codec.dart';
 import 'llm_request_options.dart';
 import 'opencode_session_affinity.dart';
 import 'provider_request_transport.dart';
@@ -880,6 +881,8 @@ class BaseAnthropicAdapter implements LLMAdapter {
           )
           .toList(growable: false);
     }
+
+    AnthropicThinkingWireCodec.applyThinking(body, options.thinkingDirective);
     return body;
   }
 

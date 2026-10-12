@@ -11,6 +11,7 @@ This contract applies to `agent/lib/evolution/`.
 ## Sessions and Titles
 - Persist every accepted interaction through `SessionManager` with workspace and selected model as first-class session state.
 - History records keep stable `message_id` and `turn_id`. Normal session history exposes active records only; soft rewind never deletes the original attempt.
+- Conversation-history search is Agent-owned and separate from ordinary session pagination. It may search titles plus active visible user/assistant content (including visible thoughts, excluding reasoning and tools), returns one bounded hit per session, and issues history anchors rather than exposing private or internal message payloads.
 - Forked sessions keep an independent `lineage_id`. Parent deletion nulls `parent_session_id` and leaves child history intact. Fork materialization also clones terminal compaction lifecycle rows inside the selected prefix with child-owned identities and remapped message ranges, so the child preserves both visible history and the latest effective model projection.
 - Automatic placeholders persist as pending title ownership; explicit, generated, fallback, manual, and migrated titles are final.
 - Pending sessions remain eligible for intelligent title generation after a committed assistant response, including resumed turns, and interrupted pending work is recovered from persisted history at daemon startup.
