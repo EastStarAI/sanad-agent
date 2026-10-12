@@ -2,7 +2,7 @@
 id: 106
 title: Context Compaction Resilience, Protocol Alignment, and Reference-Grounded Token Estimation
 status: planned
-gate: G0
+gate: G1
 created: 2026-10-13
 branch: fix/106-compaction-resilience-and-token-estimation-repair
 evidence_id: 106
@@ -45,15 +45,22 @@ Eliminate context compaction failures caused by orphaned database locks, fix the
   - `opencode`: `packages/opencode/src/session/overflow.ts` (`isOverflow`, `usable`), `packages/opencode/src/session/compaction.ts` (`estimate`, `select`), `packages/core/src/util/token.ts`.
 - **Run Record:** `refrence_projects/.sanad-evidence/runs/106.md`.
 
-## Gates
+## Gate R0 — External Reference Grounding
 
-### G0 — Discovery, Evidence Grounding & Problem Inventory ✅
-- [x] Identify root cause of stuck `started` compaction row (`compaction_id: 09b8c340...`) from prior daemon run.
-- [x] Trace protocol mismatch between `CompactionFailureReason.wireValue` (camelCase) and `SessionCompactResult.fromJson` (snake_case).
-- [x] Trace 6.27x token overestimation in `CompactionTokenEstimator` caused by pricing non-wire thoughts, reasoning, and provider state JSON.
-- [x] Analyze reference implementations in `hermes-agent` and `opencode` for wire shadowing, provider token anchoring, and compaction buffer headroom.
-- [x] Author evidence packet `106.md` and run record `106.md` in `.sanad-evidence`; resolve cleanly via `resolve_packet.sh`.
-- [x] Create isolated worktree `.agent/worktrees/106-compaction-resilience-and-token-estimation-repair` on branch `fix/106-compaction-resilience-and-token-estimation-repair`.
+- [x] حل `evidence_id: 106` عبر workflow التأصيل الخارجي (`.agents/skills/sanad-reference-grounding/scripts/resolve_packet.sh 106`) والتحقق من freshness و fingerprint (`status=ready`).
+- [x] قراءة implementations والاختبارات الإلزامية في المصادر المرجعية وتسجيل مصفوفة `Adopt / Adapt / Reject` محلية ومحايدة المصدر.
+- [x] تحويل القرارات المقبولة إلى invariants واختبارات صريحة لهذه المهمة (Wire shadowing, usage anchoring, startup reconciliation, wire enum alignment).
+- [x] عند غياب الحزمة، تشغيل authoring للحزمة وسجل التشغيل حتى تصبح `ready` (`sha256:521e2ac07cf2bec923e9ec68afab079e0b72aefbe883c8e6c28886c4cfee2374`).
+- [x] عدم بدء التنفيذ البرمجي قبل تحقق `ready` وتثبيت العقد السلوكي.
+
+### R0 Exit
+
+- [x] سجل التأصيل يحمل fingerprint والرموز والاختبارات المتحققة والقرارات (`refrence_projects/.sanad-evidence/runs/106.md`).
+- [x] لا يحتوي أي ملف متتبع هوية المصدر الخارجي أو مساره؛ يبقى العقد سلوكيًا ومحايد المصدر.
+- [x] إنشاء مساحة العمل المعزولة `.agent/worktrees/106-compaction-resilience-and-token-estimation-repair` على الفرع `fix/106-compaction-resilience-and-token-estimation-repair`.
+
+## Execution Gates
+
 
 ### G1 — Protocol Wire-Format Alignment & Error Presentation
 - [ ] Align `CompactionFailureReason.wireValue` in `agent/lib/engine/compaction/compaction_enums.dart` to canonical snake_case strings (`session_busy`, `compaction_in_progress`, `claim_lost`, `source_revision_stale`, `summarization_failed`, `continuity_validation_failed`, `projection_still_over_budget`, `persistence_failed`, `interrupted`).
