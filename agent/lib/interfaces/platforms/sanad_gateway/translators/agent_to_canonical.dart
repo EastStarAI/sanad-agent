@@ -1,3 +1,4 @@
+import '../../../../core/models/view_image_media_metadata.dart';
 import '../../../../core/models/message.dart';
 import '../../../../core/models/user_attachment.dart';
 import '../../../../evolution/db/message_history_identity.dart';
@@ -73,12 +74,20 @@ class AgentToCanonical {
     } else if (response.isToolResult) {
       type = 'tool_result';
       final terminalMetadata = response.message.metadata;
-      final media = ViewImageMediaProjection.project(
-        sessionId: response.sessionId,
-        toolName: response.toolName,
-        toolCallId: response.toolCallId,
-        result: response.message.toolResult,
-      );
+      final media =
+          ViewImageMediaProjection.project(
+            sessionId: response.sessionId,
+            toolName: response.toolName,
+            toolCallId: response.toolCallId,
+            result: response.message.toolResult,
+          ) ??
+          (response.toolName == 'view_image' &&
+                  !response.isToolError &&
+                  !response.isToolCancelled
+              ? ViewImageMediaMetadata.fromPublicJson(
+                  terminalMetadata?['media'],
+                )
+              : null);
       payload = {
         'tool': response.toolName,
         'output': response.message.content,

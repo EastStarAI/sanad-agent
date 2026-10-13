@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import '../../core/constants.dart';
 import '../../core/sanad_home/sanad_home_bootstrap.dart';
 import '../../core/models/model_metadata.dart';
+import 'provider_registry.dart';
 
 class ModelsDevService {
   final _logger = Logger('ModelsDevService');
@@ -93,6 +94,52 @@ class ModelsDevService {
       result.add(mid);
     }
     return result;
+  }
+
+  /// Exact image-input evidence for the selected provider/model/endpoint.
+  /// Unlike reasoning/context discovery, this never uses family or suffix guesses.
+  Future<bool> supportsImageInput(
+    String provider,
+    String model, {
+    required String baseUrl,
+  }) async {
+    final template = ProviderRegistry.findByNameOrAlias(provider);
+    if (template == null || !providerToModelsDev.containsKey(template.name)) {
+      return false;
+    }
+    final data = await _fetchRegistry();
+    final providerData = data[providerToModelsDev[template.name]];
+    if (providerData is! Map) return false;
+    final endpoint = _imageEndpoint(baseUrl);
+    if (endpoint == null ||
+        (endpoint != _imageEndpoint(template.defaultBaseUrl) &&
+            endpoint != _imageEndpoint(providerData['api']))) {
+      return false;
+    }
+    final models = providerData['models'];
+    if (models is! Map) return false;
+    final metadata = models[model];
+    if (metadata is! Map) return false;
+    final modalities = metadata['modalities'];
+    if (modalities is! Map) return false;
+    final input = modalities['input'];
+    return input is List &&
+        input.every((value) => value is String) &&
+        input.contains('image');
+  }
+
+  static String? _imageEndpoint(Object? value) {
+    if (value is! String) return null;
+    final uri = Uri.tryParse(value);
+    if (uri == null ||
+        !uri.hasAuthority ||
+        uri.scheme != 'https' ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasQuery ||
+        uri.hasFragment) {
+      return null;
+    }
+    return uri.normalizePath().toString().replaceFirst(RegExp(r'/+$'), '');
   }
 
   /// Check if a model supports reasoning.

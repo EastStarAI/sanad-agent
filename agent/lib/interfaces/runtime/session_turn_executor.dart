@@ -1,3 +1,4 @@
+import '../../core/models/view_image_media_metadata.dart';
 import 'dart:async';
 
 import 'package:logging/logging.dart';
@@ -327,6 +328,7 @@ class SessionTurnExecutor {
                     required String toolName,
                     String? input,
                     String? output,
+                    ViewImageMediaMetadata? media,
                     required bool isError,
                     required bool isStart,
                     String? toolRunId,
@@ -341,6 +343,7 @@ class SessionTurnExecutor {
                       toolName: toolName,
                       input: input,
                       output: output,
+                      media: media,
                       isError: isError,
                       isStart: isStart,
                       toolRunId: toolRunId,
@@ -382,6 +385,7 @@ class SessionTurnExecutor {
                     required String toolName,
                     String? input,
                     String? output,
+                    ViewImageMediaMetadata? media,
                     required bool isError,
                     required bool isStart,
                     String? toolRunId,
@@ -396,6 +400,7 @@ class SessionTurnExecutor {
                       toolName: toolName,
                       input: input,
                       output: output,
+                      media: media,
                       isError: isError,
                       isStart: isStart,
                       toolRunId: toolRunId,
@@ -641,10 +646,7 @@ class SessionTurnExecutor {
           message: Message(
             role: MessageRole.assistant,
             content: e.message,
-            metadata: {
-              'error_code': e.code,
-              'thinking_selection_error': true,
-            },
+            metadata: {'error_code': e.code, 'thinking_selection_error': true},
           ),
           isComplete: true,
           runId: activeRun.runId,
@@ -775,6 +777,7 @@ class SessionTurnExecutor {
     required String toolName,
     String? input,
     String? output,
+    ViewImageMediaMetadata? media,
     required bool isError,
     required bool isStart,
     String? toolRunId,
@@ -826,6 +829,7 @@ class SessionTurnExecutor {
           role: MessageRole.tool,
           content: output,
           metadata: {
+            'media': ?media?.toPublicJson(),
             'started_at': ?startedAt?.toIso8601String(),
             'terminal_at': ?terminalAt?.toIso8601String(),
             'runtime_ms': ?runtimeMs,

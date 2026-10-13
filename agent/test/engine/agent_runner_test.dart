@@ -1,3 +1,7 @@
+import 'package:sanad_agent/core/models/view_image_media_metadata.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/translators/agent_to_canonical.dart';
+import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -934,6 +938,29 @@ class _FailOnceThenSucceedAdapter implements LLMAdapter {
   }
 }
 
+class _PreviewTool extends MockTool {
+  @override
+  ToolSchema get schema =>
+      ToolSchema(name: 'view_image', description: 'fixture', parameters: {});
+
+  @override
+  Future<ToolExecutionResult> executeResult(
+    Map<String, dynamic> args, {
+    ToolContext? context,
+  }) async => ToolExecutionResult(
+    blocks: [
+      ToolTextBlock(text: 'Image loaded (1×1, image/png, auto).'),
+      ToolImageBlock(
+        dataBase64: 'AQID',
+        mimeType: 'image/png',
+        width: 1,
+        height: 1,
+        detail: ToolImageDetail.auto,
+      ),
+    ],
+  );
+}
+
 void main() {
   group('AgentRunner', () {
     late ToolsRegistry registry;
@@ -1012,6 +1039,173 @@ void main() {
     });
 
     test(
+      'parallel view_image starts redact paths and completions follow durable history',
+      () async {
+        registry.registerTool(_PreviewTool());
+        final runner = AgentRunner(MockAdapter([]), registry, sessionManager);
+        final calls = [
+          ToolCall(
+            id: 'parallel-preview-1',
+            name: 'view_image',
+            arguments: {'path': '/private/one.png'},
+          ),
+          ToolCall(
+            id: 'parallel-preview-2',
+            name: 'view_image',
+            arguments: {'path': '/private/two.png'},
+          ),
+        ];
+        runner.history.add(
+          Message(role: MessageRole.assistant, toolCalls: calls),
+        );
+        final inputs = <String>[];
+        var completed = 0;
+        await runner.executeToolCalls(
+          calls,
+          parallel: true,
+          onToolEvent:
+              ({
+                required toolName,
+                input,
+                output,
+                media,
+                required isError,
+                required isStart,
+                toolRunId,
+                startedAt,
+                terminalAt,
+                runtimeMs,
+              }) async {
+                if (isStart) {
+                  inputs.add(input ?? '');
+                } else {
+                  completed++;
+                  expect(media, isNotNull);
+                  expect(
+                    sessionManager
+                        .getMessages(runner.sessionId)
+                        .where((message) => message.role == MessageRole.tool),
+                    hasLength(2),
+                  );
+                }
+              },
+        );
+        expect(inputs, hasLength(2));
+        expect(inputs, everyElement(contains('[local image path redacted]')));
+        expect(inputs.join(), isNot(contains('/private/')));
+        expect(completed, 2);
+      },
+    );
+
+    test(
+      'view_image completion publishes byte-free live metadata matching history',
+      () async {
+        registry.registerTool(_PreviewTool());
+        final adapter = MockAdapter([
+          AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              toolCalls: [
+                ToolCall(
+                  id: 'preview-call',
+                  name: 'view_image',
+                  arguments: {'path': '/private/image.png'},
+                ),
+              ],
+            ),
+            isToolCall: true,
+          ),
+          AgentResponse(
+            message: Message(role: MessageRole.assistant, content: 'done'),
+          ),
+        ]);
+        final runner = AgentRunner(adapter, registry, sessionManager);
+        ViewImageMediaMetadata? descriptor;
+        await runner
+            .streamMessage(
+              'preview',
+              onToolEvent:
+                  ({
+                    required toolName,
+                    input,
+                    output,
+                    media,
+                    required isError,
+                    required isStart,
+                    toolRunId,
+                    startedAt,
+                    terminalAt,
+                    runtimeMs,
+                  }) async {
+                    if (!isStart) {
+                      descriptor = media;
+                      expect(
+                        sessionManager
+                            .getMessages(runner.sessionId)
+                            .any(
+                              (message) =>
+                                  message.toolCallId == toolRunId &&
+                                  message.toolResult != null,
+                            ),
+                        isTrue,
+                        reason:
+                            'Live preview must not race durable media availability',
+                      );
+                    }
+                  },
+            )
+            .toList();
+        expect(descriptor, isNotNull);
+        expect(descriptor!.availability, CanonicalMediaAvailability.available);
+        final serialized = jsonEncode(descriptor!.toPublicJson());
+        expect(serialized, isNot(contains('AQID')));
+        expect(serialized, isNot(contains('/private/')));
+        final result = adapter.lastHistory!.firstWhere(
+          (message) => message.role == MessageRole.tool,
+        );
+        final hydrated = ViewImageMediaProjection.project(
+          sessionId: runner.sessionId,
+          toolName: 'view_image',
+          toolCallId: 'preview-call',
+          result: result.toolResult,
+        );
+        expect(descriptor!.toPublicJson(), hydrated!.toPublicJson());
+        final live = AgentToCanonical.translate(
+          GatewayResponse(
+            sessionId: runner.sessionId,
+            message: Message(
+              role: MessageRole.tool,
+              content: result.content,
+              metadata: {'media': descriptor!.toPublicJson()},
+            ),
+            isToolResult: true,
+            toolName: 'view_image',
+            toolCallId: 'preview-call',
+          ),
+        );
+        expect(live.payload['media'], hydrated.toPublicJson());
+        expect(jsonEncode(live.toJson()), isNot(contains('AQID')));
+        final rejected = AgentToCanonical.translate(
+          GatewayResponse(
+            sessionId: runner.sessionId,
+            message: Message(
+              role: MessageRole.tool,
+              content: result.content,
+              metadata: {
+                'media': {...descriptor!.toPublicJson(), 'dataBase64': 'AQID'},
+              },
+            ),
+            isToolResult: true,
+            toolName: 'view_image',
+            toolCallId: 'preview-call',
+          ),
+        );
+        expect(rejected.payload.containsKey('media'), isFalse);
+        expect(jsonEncode(rejected.toJson()), isNot(contains('AQID')));
+      },
+    );
+
+    test(
       'controlled restart parks an active tool loop before its next provider request',
       () async {
         final adapter = MockAdapter([
@@ -1048,6 +1242,7 @@ void main() {
                     required toolName,
                     input,
                     output,
+                    media,
                     required isError,
                     required isStart,
                     toolRunId,
@@ -1508,7 +1703,10 @@ void main() {
           .where((message) => message.role == MessageRole.tool)
           .toList();
       expect(toolResults, hasLength(2));
-      expect(toolResults.every((message) => message.toolResult != null), isTrue);
+      expect(
+        toolResults.every((message) => message.toolResult != null),
+        isTrue,
+      );
       expect(
         toolResults.every(
           (message) => message.content == message.toolResult!.displayText,
@@ -2057,6 +2255,7 @@ void main() {
                   required toolName,
                   input,
                   output,
+                  media,
                   required isError,
                   required isStart,
                   toolRunId,

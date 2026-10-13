@@ -54,7 +54,7 @@ Detail assertions: `low=768`, `auto=2048`, `high=4096`, and `original` preserves
 |---|---|
 | Codex Responses | Ordered `input_text`/`input_image` inside `function_call_output.output`, original `call_id`; `original` maps to wire `high`. |
 | Anthropic | Ordered text/image blocks inside the matching `tool_result`, original `tool_use_id`, valid alternation/merge. |
-| OpenAI-compatible Chat | Text projection plus one omission marker; no `image_url` or base64. |
+| OpenAI-compatible Chat | Exact provider/model image-input metadata and owned endpoint enable synthetic user image_url context after all paired results. Unknown/text-only/malformed/custom routes retain omission fallback. Sync/stream, overrides, parallel pairing, replay/pruning and immutable history must agree. |
 | Ollama/custom/missing | Same text-only projection; no retry/failover or canonical-history mutation. |
 | Rich-to-text failover | Destination request degrades locally; source history remains rich and unchanged. |
 
@@ -71,6 +71,8 @@ Both sync and stream paths use the same builder and pass identical assertions.
 | Current/incomplete loop | Image cannot be pruned. |
 | Latest three completed assistant turns | Images remain unless 24-MiB retained cap requires oldest-first pruning. |
 | Older/over-budget history | Image becomes the exact processed marker once; text/order/identity remain. |
+| Sequential/parallel image start | Private input path is redacted through the same helper in both modes. |
+| Legacy live descriptor fallback | Closed metadata validates before publication; unknown/private payload fields are rejected. |
 | Events/logs/plugins/history query | Bounded text/status only. |
 | Request dump | Deep-copy marker contains safe MIME/size only; live payload still contains the valid image. |
 
@@ -82,6 +84,8 @@ Automated model/policy ownership: `agent/test/core/models/user_attachment_test.d
 
 | Scenario | Required result |
 |---|---|
+| Hosted composer map without MIME hint | Valid upload-start carries a generic hint; Agent derives actual MIME/kind from bytes and admission succeeds. Fixture must use the real composer map shape. |
+| New Conversation → first send → New Conversation | Successful submission clears the original attachment draft despite session creation; unrelated/newer drafts survive and a failed admission retains the original owner. |
 | `+` beside Permission Mode | Opens File Picker once and preserves composer focus/text. |
 | Paste image / drag file / picker file | Enters the same ordered draft attachment pipeline. |
 | File at 5 MiB | Accepted after client and agent validation. |
@@ -97,6 +101,7 @@ Automated model/policy ownership: `agent/test/core/models/user_attachment_test.d
 
 | Scenario | Required result |
 |---|---|
+| Relative durable attachment reference | Local retrieval resolves within the selected Agent attachment store, not process working directory; hash/size/scope failures return no bytes. |
 | Sent user message | Ordered image thumbnails/file cards appear above text in live and history views. |
 | Image activation | Opens accessible Lightbox without exposing path or reusable credential. |
 | Enter Edit | Existing attachments appear ready immediately and are not uploaded again. |
@@ -109,6 +114,9 @@ Automated model/policy ownership: `agent/test/core/models/user_attachment_test.d
 
 | Scenario | Required result |
 |---|---|
+| Live completion timing | Durable final guarded result exists before the byte-free descriptor is published; no first-fetch 404 race. |
+| Default expansion | Standalone image and containing tool group open by default; manual collapse survives rebuilds, ordinary tools remain unchanged. |
+| Concurrent hosted frames | In-order wire frames stay ordered through asynchronous processing; delayed start cannot be overtaken by chunk/complete. |
 | Live/history tool result | Title is `View Image`; thumbnail appears directly below it. |
 | Near/far viewport | Hydration starts only near viewport and cancels on disposal/switch. |
 | Local route | Authenticated Local Gateway returns only the bound media. |

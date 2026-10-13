@@ -25,6 +25,7 @@ import 'opencode_session_affinity.dart';
 import 'llm_request_options.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
+import 'tool_result_wire_codec.dart';
 import '../llm_request_dumper.dart';
 
 class BaseOpenAIAdapter implements LLMAdapter {
@@ -888,11 +889,22 @@ class BaseOpenAIAdapter implements LLMAdapter {
     List<ToolSchema>? tools,
     bool stream = false,
   }) async {
+    final supportsImages =
+        ToolResultWireCodec.hasImages(history) &&
+        (profile.apiMode == 'chat_completions' || profile.apiMode == 'chat') &&
+        modelsDevService != null &&
+        await modelsDevService!.supportsImageInput(
+          profile.name,
+          resolvedModel,
+          baseUrl: _baseUrl,
+        );
     final body = <String, dynamic>{
       'model': resolvedModel,
-      'messages': history
-          .map((message) => _messageToWire(message, options))
-          .toList(growable: false),
+      'messages': ToolResultWireCodec.chatMessages(
+        history,
+        messageToWire: (message) => _messageToWire(message, options),
+        supportsImageInput: supportsImages,
+      ),
       if (stream) 'stream': true,
       if (stream) 'stream_options': const {'include_usage': true},
       if (options.maxOutputTokens != null)

@@ -1,3 +1,4 @@
+import 'package:sanad_client/features/conversations/presentation/widgets/tools/tool_group_tile.dart';
 import 'dart:async';
 import 'dart:typed_data';
 
@@ -74,6 +75,58 @@ void main() {
     resolver.dispose();
     await conversationRepository.dispose();
     socket.dispose();
+  });
+
+  testWidgets('image-containing group opens by default and preserves manual expansion choices', (tester) async {
+    CanonicalEvent tool(String id, String name) => CanonicalEvent(
+      id: id,
+      kind: EventKind.toolCall,
+      status: EventStatus.done,
+      timestamp: DateTime.utc(2026, 10, 12),
+      sessionId: 'session-1',
+      tool: {
+        'name': name,
+        'output': 'done',
+        if (name == 'view_image')
+          'media': {
+            'media_id': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+            'name': 'view-image.png',
+            'mime_type': 'image/png',
+            'width': 1,
+            'height': 1,
+            'availability': 'unavailable',
+          },
+      },
+    );
+    final first = tool('ordinary', 'shell_execute');
+    final image = tool('image', 'view_image');
+    await _pumpBrainActivityView(
+      tester,
+      agentCubit: agentCubit,
+      sessionCubit: sessionCubit,
+      sessionMessagesCubit: sessionMessagesCubit,
+      capabilities: capabilities,
+      messagesController: messagesController,
+      initialMessages: [first, image],
+      initialViewportAnchorEventId: 'ordinary',
+    );
+    await tester.pumpAndSettle();
+    var group = tester.widget<ToolGroupTile>(find.byType(ToolGroupTile));
+    expect(group.isExpanded, isTrue);
+    expect(group.expandedChildEventIds, contains('image'));
+    expect(group.expandedChildEventIds, isNot(contains('ordinary')));
+    group.onChildToggleExpanded('image', false);
+    messagesController.add([first, image, tool('third', 'shell_execute')]);
+    await tester.pumpAndSettle();
+    group = tester.widget<ToolGroupTile>(find.byType(ToolGroupTile));
+    expect(group.isExpanded, isTrue);
+    expect(group.expandedChildEventIds, isNot(contains('image')));
+    group.onToggleExpanded(false);
+    await tester.pumpAndSettle();
+    messagesController.add([first, image, tool('third', 'shell_execute'), tool('fourth', 'shell_execute')]);
+    await tester.pumpAndSettle();
+    group = tester.widget<ToolGroupTile>(find.byType(ToolGroupTile));
+    expect(group.isExpanded, isFalse);
   });
 
   testWidgets('missing saved anchor falls back to the last user message without building all history', (tester) async {

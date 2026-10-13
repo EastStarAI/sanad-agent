@@ -162,6 +162,8 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
   Future<void> sendMessage(String text, {MessageDeliveryIntent intent = MessageDeliveryIntent.auto}) async {
     final trimmedText = text.trim();
     final attachments = state.draftAttachments;
+    final submittedScope = _draftScope;
+    final submittedIds = attachments.map((attachment) => attachment.id).toSet();
     if (trimmedText.isEmpty && attachments.isEmpty) return;
     if (state.pendingSuspendedRequest != null) {
       emit(
@@ -195,13 +197,21 @@ class ConversationInputCubit extends Cubit<ConversationInputState> {
         ],
       );
       if (accepted && attachments.isNotEmpty) {
-        _draftsByScope.remove(_draftScope);
-        emit(
-          state.copyWith(
-            draftAttachments: const [],
-            clearAttachmentError: true,
-          ),
-        );
+        final cached = _draftsByScope[submittedScope];
+        if (cached != null) {
+          final remaining = cached.attachments.where((item) => !submittedIds.contains(item.id)).toList(growable: false);
+          if (remaining.isEmpty) {
+            _draftsByScope.remove(submittedScope);
+          } else {
+            _draftsByScope[submittedScope] = (attachments: List.unmodifiable(remaining), error: cached.error);
+          }
+        }
+        if (_draftScope == submittedScope) {
+          final remaining = state.draftAttachments
+              .where((item) => !submittedIds.contains(item.id))
+              .toList(growable: false);
+          emit(state.copyWith(draftAttachments: List.unmodifiable(remaining), clearAttachmentError: remaining.isEmpty));
+        }
       }
     } catch (e) {
       emit(state.copyWith(error: e.toString()));

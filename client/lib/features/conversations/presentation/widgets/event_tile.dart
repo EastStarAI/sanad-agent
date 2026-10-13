@@ -126,7 +126,10 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       _isExpanded = widget.isExpanded!;
     } else {
       // Default fallback if no external state is provided
-      _isExpanded = widget.event.kind == EventKind.userMessage || widget.event.kind == EventKind.finalAnswer;
+      _isExpanded =
+          widget.event.kind == EventKind.userMessage ||
+          widget.event.kind == EventKind.finalAnswer ||
+          widget.event.toolName == 'view_image';
     }
 
     if (_isExpanded) {

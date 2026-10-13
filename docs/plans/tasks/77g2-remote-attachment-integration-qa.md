@@ -84,3 +84,7 @@ evidence_id: "77e"
 - Corrected Client admission negotiation: `supports_attachments=true` is the sole support decision; optional `attachment_media_v1` metadata only refines limits, safe defaults apply when it is absent, and explicit `false` remains fail-closed.
 - Failure evidence passed: private relay authorization/expiry/disconnect/idempotency/limits/capability suite `15/15` in `0.20s`; public Agent store/relay `14/14`; public Client capability/socket/ordering/media/widget selection `110/110`. Coverage includes wrong user/device/session, expiry, sequence/hash failure, cancellation/disconnect cleanup, retry-safe ownership, 5 MiB+1, 4 files/20 MiB, and unsupported capability.
 - Next gate: `G3 — Closure`.
+
+### Live acceptance reopened — Task 77I
+
+Fresh user testing exposed persistent user-image preview failure, missing live tool-image descriptors, and hosted retrieval failure despite successful Codex image interpretation. Earlier G1/G2 evidence is deterministic, not acceptance of the current live environment. Follow `77i-live-image-preview-and-provider-projection-repair.md` before closing G3 or Plan 77. The earlier Chat Completions omission was a Sanad v1 projection limitation, not observed provider rejection. User-approved 77I2 subsequently implemented model-aware synthetic-user image context and passed live Go acceptance; this does not close this task's separate hosted acceptance criteria.

@@ -61,7 +61,6 @@ void main() {
         attachments: [
           {
             'name': 'fixture.png',
-            'mime_type': 'image/png',
             'size_bytes': bytes.length,
             'sha256': sha256.convert(bytes).toString(),
             'data_base64': base64Encode(bytes),

@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
+import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:logging/logging.dart';
 import 'package:sanad_release_contract/release_contract.dart';
 import 'package:sanad_agent/core/app_config.dart';
@@ -933,12 +933,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
 
     List<int>? bytes;
     try {
-      bytes = await File(attachment.agentLocalReference).readAsBytes();
-      if (bytes.length != attachment.sizeBytes ||
-          bytes.length > 5 * 1024 * 1024 ||
-          sha256.convert(bytes).toString() != attachment.sha256) {
-        bytes = null;
-      }
+      bytes = await getIt<AttachmentStore>().readVerifiedAttachment(attachment);
     } on Object {
       bytes = null;
     }

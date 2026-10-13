@@ -681,7 +681,8 @@ class SanadSocketService implements ISocketService, ISocketGateway {
         'session_id': sessionId,
         'request_id': requestId,
         'name': source['name'],
-        'mime_type': source['mime_type'],
+        // Composer admission has no MIME hint; the Agent inspects magic bytes.
+        'mime_type': source['mime_type'] ?? 'application/octet-stream',
         'size_bytes': bytes.length,
         'sha256': sha256.convert(bytes).toString(),
         'chunk_count': chunkCount == 0 ? 1 : chunkCount,

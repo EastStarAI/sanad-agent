@@ -330,9 +330,16 @@ void main() {
         'sanad-attachment-relay-',
       );
       addTearDown(() => directory.delete(recursive: true));
-      final file = File('${directory.path}/private-name.png');
+      final state = AgentStateDatabase.inMemory();
+      addTearDown(state.dispose);
+      getIt.registerSingleton<AttachmentStore>(
+        AttachmentStore(state, stateHome: directory.path),
+      );
+      const relativePath = 'attachments/attachment-1/payload';
+      final file = File(p.join(directory.path, relativePath));
+      await file.parent.create(recursive: true);
       await file.writeAsBytes(const [5, 6, 7]);
-      mediaMessages[2] = _attachmentMediaMessage(file.path);
+      mediaMessages[2] = _attachmentMediaMessage(relativePath);
 
       final liveEvent = AgentToCanonical.translate(
         GatewayResponse(sessionId: 'session-1', message: mediaMessages[2]),

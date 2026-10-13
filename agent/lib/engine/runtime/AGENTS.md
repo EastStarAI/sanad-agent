@@ -14,7 +14,8 @@ This contract applies to `agent/lib/engine/runtime/`.
 - Interactive tools, shell execution, and overlapping file paths force sequential execution.
 - Persist completion checkpoint after each tool needed for restart safety.
 - Consume `ToolExecutionResult` from tools for sequential and parallel execution. Bound text blocks before completion events, checkpoint persistence, or history insertion, and enforce an aggregate text budget across each tool-call batch; image blocks retain order and never enter character counting or text previews.
-- Append one typed `Message.toolResult` for each tool-call id through rich runner callbacks. Events, plugins, legacy callbacks, and checkpoint previews receive bounded `displayText` only and never binary blocks.
+- Append one typed `Message.toolResult` for each tool-call id through rich runner callbacks. Events, plugins, legacy callbacks, and checkpoint previews receive bounded `displayText` and, where applicable, a byte-free media descriptor only; never binary blocks.
+- Publish `view_image` completion descriptors only after the final batch-guarded typed result is durable and the owning run still permits publication. Single-tool resumed image completion preserves the same persistence-before-publication boundary.
 - Preserve typed `isError` classification across completion events, checkpoint output records, and history metadata. Do not parse typed output strings or use implicit `toString()` to infer status; only explicitly normalized legacy recovery records may use their persisted error metadata.
 
 ## Continuation Checkpoints

@@ -126,6 +126,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   List<ConversationTimelineItem> _timelineItems = [];
   StreamSubscription<List<CanonicalEvent>>? _messagesSubscription;
   final Set<String> _expandedEventIds = {};
+  final Set<String> _explicitlyInteractedEventIds = {};
   final Set<String> _explicitlyInteractedToolGroupIds = {};
   late final ValueNotifier<DateTime> _clockNotifier = ValueNotifier<DateTime>(DateTime.now());
   Timer? _clockTimer;
@@ -393,9 +394,7 @@ class _BrainActivityViewState extends State<BrainActivityView> {
   }
 
   bool get _activityEligible =>
-      widget.activityEligible &&
-      widget.sessionId != null &&
-      widget.sessionId == widget.composerSessionId;
+      widget.activityEligible && widget.sessionId != null && widget.sessionId == widget.composerSessionId;
 
   void _syncClockTimer() {
     final hasRunningWork = _activityEligible || _messages.any((m) => m.status == EventStatus.running);
@@ -412,11 +411,16 @@ class _BrainActivityViewState extends State<BrainActivityView> {
     }
   }
 
+  bool _isEventExpanded(CanonicalEvent event) =>
+      _expandedEventIds.contains(event.id) ||
+      (!_explicitlyInteractedEventIds.contains(event.id) && event.toolName == 'view_image');
+
   bool _isToolGroupExpanded(ConversationTimelineItem item) {
     final id = _toolGroupExpansionId(item);
     if (_explicitlyInteractedToolGroupIds.contains(id)) {
       return _expandedEventIds.contains(id);
     }
+    if (item.events.any((event) => event.toolName == 'view_image')) return true;
     final firstEventId = item.events.firstOrNull?.id;
     if (firstEventId != null) {
       return _expandedEventIds.contains(firstEventId);
@@ -1271,164 +1275,165 @@ class _BrainActivityViewState extends State<BrainActivityView> {
       clock: _clockNotifier,
       child: Container(
         color: Colors.transparent,
-      padding: const EdgeInsets.symmetric(horizontal: 8.0),
-      child: Stack(
-        children: [
-          Positioned.fill(
-            child: !_hasMeasuredComposer || _timelineItems.isEmpty
-                ? const SizedBox.shrink()
-                : Opacity(
-                    opacity: !_openAtTail || _hasResolvedOpeningTailAlignment ? 1 : 0,
-                    child: Container(
-                      key: const Key('chat_messages_list'),
-                      child: ShaderMask(
-                        shaderCallback: (Rect rect) {
-                          return const LinearGradient(
-                            begin: Alignment.topCenter,
-                            end: Alignment.bottomCenter,
-                            colors: [
-                              Colors.transparent,
-                              Colors.black,
-                              Colors.black,
-                              Colors.transparent,
-                            ],
-                            stops: [0.0, 0.03, 0.97, 1.0],
-                          ).createShader(rect);
-                        },
-                        blendMode: BlendMode.dstIn,
-                        child: LayoutBuilder(
-                          builder: (context, constraints) {
-                            final viewportHeight = constraints.maxHeight;
-                            final anchorPixels = _openAtTail
-                                ? _openingTailAnchorPixels ?? viewportHeight - bottomPadding
-                                : topPadding;
-                            final anchor = viewportHeight > 0
-                                ? (anchorPixels / viewportHeight).clamp(0.0, 1.0).toDouble()
-                                : 0.0;
+        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: !_hasMeasuredComposer || _timelineItems.isEmpty
+                  ? const SizedBox.shrink()
+                  : Opacity(
+                      opacity: !_openAtTail || _hasResolvedOpeningTailAlignment ? 1 : 0,
+                      child: Container(
+                        key: const Key('chat_messages_list'),
+                        child: ShaderMask(
+                          shaderCallback: (Rect rect) {
+                            return const LinearGradient(
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                              colors: [
+                                Colors.transparent,
+                                Colors.black,
+                                Colors.black,
+                                Colors.transparent,
+                              ],
+                              stops: [0.0, 0.03, 0.97, 1.0],
+                            ).createShader(rect);
+                          },
+                          blendMode: BlendMode.dstIn,
+                          child: LayoutBuilder(
+                            builder: (context, constraints) {
+                              final viewportHeight = constraints.maxHeight;
+                              final anchorPixels = _openAtTail
+                                  ? _openingTailAnchorPixels ?? viewportHeight - bottomPadding
+                                  : topPadding;
+                              final anchor = viewportHeight > 0
+                                  ? (anchorPixels / viewportHeight).clamp(0.0, 1.0).toDouble()
+                                  : 0.0;
 
-                            return SizedBox.expand(
-                              key: _scrollViewportKey,
-                              child: NotificationListener<ScrollNotification>(
-                                onNotification: _handleScrollNotification,
-                                child: KeyedSubtree(
-                                  key: ValueKey(
-                                    'conversation-timeline:${widget.sessionId ?? 'new'}',
-                                  ),
-                                  child: CustomScrollView(
-                                    key: const Key('conversation_timeline_scroll'),
-                                    controller: _scrollController,
-                                    center: _conversationAnchorKey,
-                                    anchor: anchor,
-                                    slivers: [
-                                      SliverPadding(
-                                        padding: EdgeInsets.fromLTRB(8, topPadding, 8, 0),
-                                        sliver: SliverList.builder(
-                                          itemCount: _openAnchorIndex,
-                                          itemBuilder: (context, index) {
-                                            final itemIndex = _openAnchorIndex - index - 1;
-                                            final item = _timelineItems[itemIndex];
-                                            return Center(
-                                              child: ConstrainedBox(
-                                                constraints: const BoxConstraints(
-                                                  maxWidth: SidebarBreakpoints.maxConversationWidth,
+                              return SizedBox.expand(
+                                key: _scrollViewportKey,
+                                child: NotificationListener<ScrollNotification>(
+                                  onNotification: _handleScrollNotification,
+                                  child: KeyedSubtree(
+                                    key: ValueKey(
+                                      'conversation-timeline:${widget.sessionId ?? 'new'}',
+                                    ),
+                                    child: CustomScrollView(
+                                      key: const Key('conversation_timeline_scroll'),
+                                      controller: _scrollController,
+                                      center: _conversationAnchorKey,
+                                      anchor: anchor,
+                                      slivers: [
+                                        SliverPadding(
+                                          padding: EdgeInsets.fromLTRB(8, topPadding, 8, 0),
+                                          sliver: SliverList.builder(
+                                            itemCount: _openAnchorIndex,
+                                            itemBuilder: (context, index) {
+                                              final itemIndex = _openAnchorIndex - index - 1;
+                                              final item = _timelineItems[itemIndex];
+                                              return Center(
+                                                child: ConstrainedBox(
+                                                  constraints: const BoxConstraints(
+                                                    maxWidth: SidebarBreakpoints.maxConversationWidth,
+                                                  ),
+                                                  child: _buildViewportTrackedItem(item),
                                                 ),
-                                                child: _buildViewportTrackedItem(item),
-                                              ),
-                                            );
-                                          },
+                                              );
+                                            },
+                                          ),
                                         ),
-                                      ),
-                                      SliverPadding(
-                                        key: _conversationAnchorKey,
-                                        padding: EdgeInsets.fromLTRB(8, 8, 8, bottomPadding),
-                                        sliver: SliverList.builder(
-                                          itemCount: _timelineItems.length - _openAnchorIndex,
-                                          itemBuilder: (context, index) {
-                                            final itemIndex = _openAnchorIndex + index;
-                                            final item = _timelineItems[itemIndex];
-                                            return Center(
-                                              child: ConstrainedBox(
-                                                constraints: const BoxConstraints(
-                                                  maxWidth: SidebarBreakpoints.maxConversationWidth,
+                                        SliverPadding(
+                                          key: _conversationAnchorKey,
+                                          padding: EdgeInsets.fromLTRB(8, 8, 8, bottomPadding),
+                                          sliver: SliverList.builder(
+                                            itemCount: _timelineItems.length - _openAnchorIndex,
+                                            itemBuilder: (context, index) {
+                                              final itemIndex = _openAnchorIndex + index;
+                                              final item = _timelineItems[itemIndex];
+                                              return Center(
+                                                child: ConstrainedBox(
+                                                  constraints: const BoxConstraints(
+                                                    maxWidth: SidebarBreakpoints.maxConversationWidth,
+                                                  ),
+                                                  child: _buildViewportTrackedItem(item),
                                                 ),
-                                                child: _buildViewportTrackedItem(item),
-                                              ),
-                                            );
-                                          },
+                                              );
+                                            },
+                                          ),
                                         ),
-                                      ),
-                                    ],
+                                      ],
+                                    ),
                                   ),
                                 ),
-                              ),
-                            );
-                          },
+                              );
+                            },
+                          ),
                         ),
                       ),
                     ),
-                  ),
-          ),
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: SizeChangedLayoutNotifier(
-              child: NotificationListener<SizeChangedLayoutNotification>(
-                onNotification: (notification) {
-                  WidgetsBinding.instance.addPostFrameCallback((_) {
-                    _updateComposerHeight();
-                  });
-                  return true;
-                },
-                child: Container(
-                  key: _composerKey,
-                  child: Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(
-                        maxWidth: SidebarBreakpoints.maxConversationWidth,
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          if (_activityEligible)
-                            SizedBox(
-                              height: 38,
-                              child: OverflowBox(
-                                minHeight: 52,
-                                maxHeight: 52,
-                                alignment: Alignment.topCenter,
-                                child: Padding(
-                                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                                  child: ConversationActivityBar(
-                                    key: const Key('fixed_conversation_activity_bar'),
-                                    clock: _clockNotifier,
-                                    activity: resolveCurrentActivity(
-                                      _messages,
-                                      activityEligible: _activityEligible,
+            ),
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: SizeChangedLayoutNotifier(
+                child: NotificationListener<SizeChangedLayoutNotification>(
+                  onNotification: (notification) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      _updateComposerHeight();
+                    });
+                    return true;
+                  },
+                  child: Container(
+                    key: _composerKey,
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxWidth: SidebarBreakpoints.maxConversationWidth,
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (_activityEligible)
+                              SizedBox(
+                                height: 38,
+                                child: OverflowBox(
+                                  minHeight: 52,
+                                  maxHeight: 52,
+                                  alignment: Alignment.topCenter,
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                                    child: ConversationActivityBar(
+                                      key: const Key('fixed_conversation_activity_bar'),
+                                      clock: _clockNotifier,
+                                      activity: resolveCurrentActivity(
+                                        _messages,
+                                        activityEligible: _activityEligible,
+                                      ),
+                                      latestDescription: resolveLatestToolDescription(_messages),
+                                      executionSnapshot: widget.executionSnapshot,
+                                      isRtl: resolveConversationIsRtl(_messages),
                                     ),
-                                    latestDescription: resolveLatestToolDescription(_messages),
-                                    executionSnapshot: widget.executionSnapshot,
-                                    isRtl: resolveConversationIsRtl(_messages),
                                   ),
                                 ),
                               ),
+                            ConversationInputPanel(
+                              onSendMessage: _handleSendMessage,
+                              onStop: widget.onStop,
+                              sessionId: widget.composerSessionId ?? widget.sessionId,
                             ),
-                          ConversationInputPanel(
-                            onSendMessage: _handleSendMessage,
-                            onStop: widget.onStop,
-                            sessionId: widget.composerSessionId ?? widget.sessionId,
-                          ),
-                        ],
+                          ],
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
-    ));
+    );
   }
 
   Widget _buildViewportTrackedItem(ConversationTimelineItem item) {
@@ -1461,10 +1466,14 @@ class _BrainActivityViewState extends State<BrainActivityView> {
                 item: item,
                 isExpanded: _isToolGroupExpanded(item),
                 onToggleExpanded: (expanded) => _onToolGroupToggleExpanded(item, expanded),
-                expandedChildEventIds: _expandedEventIds,
+                expandedChildEventIds: {
+                  for (final event in item.events)
+                    if (_isEventExpanded(event)) event.id,
+                },
                 viewImageMediaLoader: widget.viewImageMediaLoader,
                 userAttachmentMediaLoader: widget.userAttachmentMediaLoader,
                 onChildToggleExpanded: (eventId, expanded) {
+                  _explicitlyInteractedEventIds.add(eventId);
                   if (expanded) {
                     _expandedEventIds.add(eventId);
                   } else {
@@ -1493,8 +1502,9 @@ class _BrainActivityViewState extends State<BrainActivityView> {
         waitingIndicator: event.status == EventStatus.running && pendingToolName == event.toolName
             ? (event.toolName == 'system_ask_user' ? ToolWaitingIndicator.question : ToolWaitingIndicator.permission)
             : ToolWaitingIndicator.none,
-        isExpanded: _expandedEventIds.contains(event.id),
+        isExpanded: _isEventExpanded(event),
         onToggleExpanded: (expanded) {
+          _explicitlyInteractedEventIds.add(event.id);
           if (expanded) {
             _expandedEventIds.add(event.id);
           } else {

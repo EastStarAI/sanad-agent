@@ -3,8 +3,8 @@ title: "Plan 77: View Image, User Attachments, and Multimodal Tool Results"
 description: "خطة تنفيذ مقفلة لإضافة view_image، مرفقات المستخدم، عرض الصور في المحادثة، ونتائج أدوات نصية/صورية آمنة محليًا وعن بُعد."
 status: "in_progress"
 priority: "high"
-current_gate: "77g2/R0"
-remaining_estimate: "2%"
+current_gate: "77I final acceptance; 77I2 complete with Go live evidence"
+remaining_estimate: "77I2 0%; parent final acceptance remains open and is not inferred from Go success"
 active_worktree: "77-hosted-attachment-media-relay"
 reference_grounding: "ready; resolve the owning evidence packet before each child task"
 ---
@@ -13,7 +13,7 @@ reference_grounding: "ready; resolve the owning evidence packet before each chil
 
 ## 1. الهدف والحالة
 
-الخطة جاهزة لبدء `77a1`. التنفيذ ينتج حد أداة typed، وأداة `view_image` محلية آمنة، ومرفقات مستخدم لا تصل bytes الخاصة بها تلقائيًا إلى النموذج، وعرضًا قابلًا للفتح للصور داخل المحادثة، مع تكافؤ محلي/بعيد واستعادة لا تعيد فتح الملف بعد اكتمال الأداة.
+التنفيذ الأساسي موجود؛القبول الحي أُعيد فتحه في [Task 77I](tasks/77i-live-image-preview-and-provider-projection-repair.md) بسبب عيوب المعاينة الحية والاسترجاع السحابي. التنفيذ ينتج حد أداة typed، وأداة `view_image` محلية آمنة، ومرفقات مستخدم لا تصل bytes الخاصة بها تلقائيًا إلى النموذج، وعرضًا قابلًا للفتح للصور داخل المحادثة، مع تكافؤ محلي/بعيد واستعادة لا تعيد فتح الملف بعد اكتمال الأداة.
 
 يشمل النطاق: لصق الصور، السحب والإفلات، File Picker، زر `+` في يسار الـcomposer بجوار Permission Mode، صور وبطاقات الملفات داخل رسالة المستخدم، استعادة المرفقات في Edit & Retry، ونقل الملفات إلى وكيل بعيد عبر hosted capability متوافقة.
 
@@ -24,7 +24,7 @@ reference_grounding: "ready; resolve the owning evidence packet before each chil
 ### 2.1 نتيجة الأداة والرسائل
 
 - `core/models` يملك `ToolExecutionResult` وكتل `ToolTextBlock` و`ToolImageBlock` لأنها تعبر capabilities وengine وpersistence وadapters.
-- `BaseTool.execute` يعيد `Future<ToolExecutionResult>`؛ constructor نصية تحافظ على مخرجات الأدوات الحالية.
+- `BaseTool.executeResult` يعيد `Future<ToolExecutionResult>`؛ constructor نصية تحافظ على مخرجات الأدوات الحالية.
 - النتيجة تحمل `schemaVersion=1` وblocks مرتبة و`isError` و`errorCode` اختياريًا. كل نتيجة تحمل text block غير فارغة، و`displayText` projection حتمي.
 - `Message.toolResult` تخص `role=tool` وتبقى authoritative مع `content=displayText`. الرسائل القديمة text-only تظل قابلة للقراءة بلا migration جدولي.
 - رسالة المستخدم تحمل attachments typed مرتبة منفصلة عن النص؛ التاريخ والـEdit يعيدان metadata الآمنة ولا يضعان bytes أو مسارًا خارجيًا مطلقًا في الحدث العام.
@@ -98,8 +98,9 @@ detail = low | auto | high | original
 
 ### 2.8 البروتوكولات والـfallback
 
-- `LLMAdapter` يعلن `textOnly` أو `imageToolResults`. Codex Responses وAnthropic فقط `imageToolResults` في v1.
-- OpenAI-compatible Chat وOllama وcustom وunknown/missing هي `textOnly`; لا تعتمد القدرة على model-name أو endpoint probing.
+- `LLMAdapter` يعلن القدرة الأصلية على نتائج الأدوات: Codex Responses وAnthropic تستخدمان `imageToolResults`. هذه القدرة تختلف عن قبول الصورة كسياق user في Chat Completions.
+- يشمل النطاق المعتمد الآن OpenAI-compatible Chat مع إسقاط صور نتائج الأدوات إلى رسالة user اصطناعية بعد مجموعة نتائج الأدوات كاملة، عندما يثبت catalog دعم الصور للمزود والنموذج الفعليين. التاريخ canonical لا يتغير؛ لا model-name inference أو endpoint probing.
+- unknown/missing/text-only وcustom endpoints غير الموثقة وOllama native تبقى fail-closed. التنفيذ والقبول الحي في [Task 77I2](tasks/77i2-openai-compatible-tool-image-projection.md).
 - Responses يستخدم `function_call_output.output` من `input_text`/`input_image`. Anthropic يستخدم nested text/image blocks داخل `tool_result`.
 - text-only adapter ترسل `displayText` ثم marker واحد: `[Image omitted: active provider does not accept image tool results.]` بلا retry أو mutation للتاريخ.
 - hosted attachment/media transport تستخدم capability الحالية `supports_attachments` مع wire events versioned؛ client يخفي أو يعطل remote attachment actions عند غياب الدعم ويفشل مغلقًا بدل تضمين bytes في `device_command`.

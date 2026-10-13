@@ -1,3 +1,4 @@
+import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'dart:io';
 
 import 'dart:typed_data';
@@ -239,6 +240,86 @@ void main() {
     await inputCubit.sendMessage('   ');
 
     expect(conversationRepository.sentMessages, ['hello']);
+  });
+
+  test('accepted send clears its captured new-conversation scope, not another draft', () async {
+    messagesCubit.emitState(
+      const SessionMessagesState(nextMessageProviderId: 'provider-1', nextMessageModel: 'model-1'),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await inputCubit.selectModel(scope: CapabilityValueScope.message, providerId: 'provider-1', model: 'model-1');
+    inputCubit.selectWorkspace(workspace);
+    await Future<void>.delayed(Duration.zero);
+    const capability = Capability(
+      supportsAttachments: true,
+      attachmentMaxFileBytes: 5 * 1024 * 1024,
+      attachmentMaxFilesPerMessage: 4,
+      attachmentMaxTotalBytesPerMessage: 20 * 1024 * 1024,
+    );
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: null);
+    await inputCubit.addDraftAttachment(
+      name: 'submitted.png',
+      bytes: Uint8List.fromList([1, 2, 3]),
+      source: DraftAttachmentSource.picker,
+      capability: capability,
+    );
+    expect(inputCubit.state.draftAttachments, hasLength(1));
+    messagesCubit.onSend = () async {
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'created-session');
+      await inputCubit.addDraftAttachment(
+        name: 'unrelated.png',
+        bytes: Uint8List.fromList([4, 5, 6]),
+        source: DraftAttachmentSource.picker,
+        capability: capability,
+      );
+      return true;
+    };
+    await inputCubit.sendMessage('inspect');
+    expect(inputCubit.state.draftAttachments.single.name, 'unrelated.png');
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: null);
+    expect(inputCubit.state.draftAttachments, isEmpty);
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'created-session');
+    expect(inputCubit.state.draftAttachments.single.name, 'unrelated.png');
+  });
+
+  test('failed send preserves its captured scope and an unrelated draft', () async {
+    messagesCubit.emitState(
+      const SessionMessagesState(nextMessageProviderId: 'provider-1', nextMessageModel: 'model-1'),
+    );
+    await Future<void>.delayed(Duration.zero);
+    await inputCubit.selectModel(scope: CapabilityValueScope.message, providerId: 'provider-1', model: 'model-1');
+    inputCubit.selectWorkspace(workspace);
+    await Future<void>.delayed(Duration.zero);
+    const capability = Capability(
+      supportsAttachments: true,
+      attachmentMaxFileBytes: 5 * 1024 * 1024,
+      attachmentMaxFilesPerMessage: 4,
+      attachmentMaxTotalBytesPerMessage: 20 * 1024 * 1024,
+    );
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: null);
+    await inputCubit.addDraftAttachment(
+      name: 'submitted.png',
+      bytes: Uint8List.fromList([1, 2, 3]),
+      source: DraftAttachmentSource.picker,
+      capability: capability,
+    );
+    expect(inputCubit.state.draftAttachments, hasLength(1));
+    messagesCubit.onSend = () async {
+      inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'created-session');
+      await inputCubit.addDraftAttachment(
+        name: 'unrelated.png',
+        bytes: Uint8List.fromList([4, 5, 6]),
+        source: DraftAttachmentSource.picker,
+        capability: capability,
+      );
+      return false;
+    };
+    await inputCubit.sendMessage('inspect');
+    expect(inputCubit.state.draftAttachments.single.name, 'unrelated.png');
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: null);
+    expect(inputCubit.state.draftAttachments.single.name, 'submitted.png');
+    inputCubit.setDraftScope(deviceId: 'agent-1', sessionId: 'created-session');
+    expect(inputCubit.state.draftAttachments.single.name, 'unrelated.png');
   });
 
   test('paste, picker, and drop share admission before send', () async {
@@ -1073,6 +1154,18 @@ class _TestSessionMessagesCubit extends SessionMessagesCubit {
     super.localToolRuntime,
     super.workspaceRuntimeContext,
   });
+
+  Future<bool> Function()? onSend;
+
+  @override
+  Future<bool> sendMessage(
+    String text, {
+    MessageDeliveryIntent intent = MessageDeliveryIntent.auto,
+    List<Map<String, dynamic>> attachments = const [],
+  }) async {
+    if (onSend != null) return onSend!();
+    return super.sendMessage(text, intent: intent, attachments: attachments);
+  }
 
   void emitState(SessionMessagesState state) {
     emit(state);

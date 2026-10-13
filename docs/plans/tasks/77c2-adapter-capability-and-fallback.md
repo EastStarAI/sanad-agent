@@ -11,6 +11,8 @@ evidence_fingerprint: "sha256:2af004c77e76f850df9ab9b0abe23409cdcf470ecd3831c08c
 
 # Task 77c2: Capability والـFallback النصية
 
+> Historical completed baseline: the original blanket Chat Completions text-only policy below is superseded by the user-approved [77I2](77i2-openai-compatible-tool-image-projection.md). Scalar tool messages remain required, but supported model routes may now receive outbound-only synthetic user image context. Original completion evidence is retained, not proof of new-route acceptance.
+
 ## Goal
 
 إضافة capability مغلقة لكل adapter وضمان fallback نصية حتمية في OpenAI Chat/Ollama/custom/missing وعند failover.

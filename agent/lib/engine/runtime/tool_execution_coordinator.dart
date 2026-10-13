@@ -3,6 +3,7 @@ import 'package:logging/logging.dart';
 import '../../core/models/message.dart';
 import '../../core/models/tool_call.dart';
 import '../../core/models/tool_execution_result.dart';
+import '../../core/models/view_image_media_metadata.dart';
 import '../../capabilities/registry/tools_registry.dart';
 import '../../capabilities/tools/base_tool.dart';
 import '../../core/di.dart';
@@ -20,6 +21,7 @@ typedef ToolEventCallback =
       required String toolName,
       String? input,
       String? output,
+      ViewImageMediaMetadata? media,
       required bool isError,
       required bool isStart,
       String? toolRunId,
@@ -319,6 +321,33 @@ class ToolExecutionCoordinator {
       resumeHistoryLength: callbacks.currentHistoryLength(),
       removeRestartTerminalizedToolCallIds: toolCalls.map((call) => call.id),
     );
+    if (onToolEvent != null) {
+      for (final toolCall in toolCallsToRun.where(
+        (call) => call.name == 'view_image',
+      )) {
+        final result = typedResults[toolCall.id]!;
+        final timing = toolTiming[toolCall.id];
+        await _maybeEmitToolEvent(
+          cancellationScope,
+          emit: () => onToolEvent(
+            toolName: toolCall.name,
+            output: result.displayText,
+            media: ViewImageMediaMetadata.project(
+              sessionId: sessionId,
+              toolName: toolCall.name,
+              toolCallId: toolCall.id,
+              result: result,
+            ),
+            isError: result.isError,
+            isStart: false,
+            toolRunId: toolCall.id,
+            startedAt: timing?.startedAt,
+            terminalAt: timing?.terminalAt,
+            runtimeMs: timing?.runtimeMs,
+          ),
+        );
+      }
+    }
     callbacks.applyPendingSteerToToolResults(toolCalls.length);
   }
 
@@ -407,7 +436,7 @@ class ToolExecutionCoordinator {
       final argumentsString = _eventInputFor(toolCall);
       _logger.info('🛠️ [Agent] Requesting tool call: ${toolCall.name}');
       final startedAt = DateTime.now().toUtc();
-      if (onToolEvent != null) {
+      if (onToolEvent != null && toolCall.name != 'view_image') {
         await _maybeEmitToolEvent(
           cancellationScope,
           emit: () => onToolEvent(
@@ -478,12 +507,18 @@ class ToolExecutionCoordinator {
           terminalAt: terminalAt,
           runtimeMs: runtimeMs,
         );
-        if (onToolEvent != null) {
+        if (onToolEvent != null && toolCall.name != 'view_image') {
           await _maybeEmitToolEvent(
             cancellationScope,
             emit: () => onToolEvent(
               toolName: toolCall.name,
               output: result,
+              media: ViewImageMediaMetadata.project(
+                sessionId: sessionId,
+                toolName: toolCall.name,
+                toolCallId: toolCall.id,
+                result: typedResult,
+              ),
               isError: typedResult.isError,
               isStart: false,
               toolRunId: toolCall.id,
@@ -542,7 +577,7 @@ class ToolExecutionCoordinator {
             cancellationScope,
             emit: () => onToolEvent(
               toolName: toolCall.name,
-              input: jsonEncode(toolCall.arguments),
+              input: _eventInputFor(toolCall),
               isError: false,
               isStart: true,
               toolRunId: toolCall.id,
@@ -702,12 +737,18 @@ class ToolExecutionCoordinator {
           (outputRecord is Map && outputRecord['is_error'] == true) ||
           _resultIndicatesError(result);
       final timing = toolTiming?[toolCall.id];
-      if (onToolEvent != null) {
+      if (onToolEvent != null && toolCall.name != 'view_image') {
         await _maybeEmitToolEvent(
           cancellationScope,
           emit: () => onToolEvent(
             toolName: toolCall.name,
             output: result,
+            media: ViewImageMediaMetadata.project(
+              sessionId: sessionId,
+              toolName: toolCall.name,
+              toolCallId: toolCall.id,
+              result: typedResults[toolCall.id],
+            ),
             isError: isError,
             isStart: false,
             toolRunId: toolCall.id,
@@ -842,12 +883,32 @@ class ToolExecutionCoordinator {
           toolCallId: toolCall.id,
         ) !=
         null;
-    if (onToolEvent != null && !isDeferredResult) {
+    if (appendToHistory && toolCall.name == 'view_image') {
+      await _appendToolMessage(
+        callbacks,
+        checkpointCoordinator,
+        toolCall,
+        typedResult,
+        startedAt: startedAt,
+        terminalAt: terminalAt,
+        runtimeMs: runtimeMs,
+      );
+      callbacks.saveHistory();
+    }
+    if (onToolEvent != null &&
+        !isDeferredResult &&
+        (toolCall.name != 'view_image' || appendToHistory)) {
       await _maybeEmitToolEvent(
         cancellationScope,
         emit: () => onToolEvent(
           toolName: toolCall.name,
           output: result,
+          media: ViewImageMediaMetadata.project(
+            sessionId: sessionId,
+            toolName: toolCall.name,
+            toolCallId: toolCall.id,
+            result: typedResult,
+          ),
           isError: typedResult.isError,
           isStart: false,
           toolRunId: toolCall.id,
@@ -858,7 +919,7 @@ class ToolExecutionCoordinator {
       );
     }
 
-    if (appendToHistory) {
+    if (appendToHistory && toolCall.name != 'view_image') {
       await _appendToolMessage(
         callbacks,
         checkpointCoordinator,

@@ -1,86 +1,52 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'package:crypto/crypto.dart';
+import '../../../../core/models/view_image_media_metadata.dart';
+export '../../../../core/models/view_image_media_metadata.dart'
+    show CanonicalMediaAvailability;
 
 import '../../../../core/models/message.dart';
 import '../../../../core/models/tool_execution_result.dart';
 import '../../../models/delivery/models.dart';
 import '../../../models/device_control.dart';
 
-enum CanonicalMediaAvailability { available, unavailable }
-
-final class CanonicalViewImageMedia {
+final class CanonicalViewImageMedia extends ViewImageMediaMetadata {
   const CanonicalViewImageMedia({
-    required this.mediaId,
-    required this.safeName,
-    required this.mimeType,
-    required this.width,
-    required this.height,
-    required this.availability,
+    required super.mediaId,
+    required super.safeName,
+    required super.mimeType,
+    required super.width,
+    required super.height,
+    required super.availability,
     this.bytes,
   });
 
-  final String mediaId;
-  final String safeName;
-  final String mimeType;
-  final int width;
-  final int height;
-  final CanonicalMediaAvailability availability;
-
-  /// Agent-internal retrieval bytes. Never serialize this field.
+  /// Agent-internal retrieval bytes. Inherited serialization is byte-free.
   final Uint8List? bytes;
-
-  Map<String, dynamic> toPublicJson() => {
-    'media_id': mediaId,
-    'name': safeName,
-    'mime_type': mimeType,
-    'width': width,
-    'height': height,
-    'availability': availability.name,
-  };
 }
 
 final class ViewImageMediaProjection {
-  static const _toolName = 'view_image';
-  static final RegExp _summaryPattern = RegExp(
-    r'^Image loaded \(([1-9][0-9]*)×([1-9][0-9]*), (image/(?:png|jpeg|webp)),',
-  );
-
   static CanonicalViewImageMedia? project({
     required String sessionId,
     required String? toolName,
     required String? toolCallId,
     required ToolExecutionResult? result,
   }) {
-    if (toolName != _toolName ||
-        toolCallId == null ||
-        toolCallId.isEmpty ||
-        result == null ||
-        result.isError) {
-      return null;
-    }
-    final imageIndex = result.blocks.indexWhere(
-      (block) => block is ToolImageBlock,
+    final metadata = ViewImageMediaMetadata.project(
+      sessionId: sessionId,
+      toolName: toolName,
+      toolCallId: toolCallId,
+      result: result,
     );
-    final image = imageIndex < 0
-        ? null
-        : result.blocks[imageIndex] as ToolImageBlock;
-    final summary = _summary(result);
-    if (image == null && summary == null) return null;
-    final mimeType = image?.mimeType ?? summary!.$3;
-    final width = image?.width ?? summary!.$1;
-    final height = image?.height ?? summary!.$2;
-    final stableIndex = imageIndex < 0 ? 1 : imageIndex;
+    if (metadata == null) return null;
+    final image = result!.blocks.whereType<ToolImageBlock>().firstOrNull;
     return CanonicalViewImageMedia(
-      mediaId: _mediaId(sessionId, toolCallId, stableIndex),
-      safeName: _safeName(mimeType),
-      mimeType: mimeType,
-      width: width,
-      height: height,
-      availability: image == null
-          ? CanonicalMediaAvailability.unavailable
-          : CanonicalMediaAvailability.available,
+      mediaId: metadata.mediaId,
+      safeName: metadata.safeName,
+      mimeType: metadata.mimeType,
+      width: metadata.width,
+      height: metadata.height,
+      availability: metadata.availability,
       bytes: image == null
           ? null
           : Uint8List.fromList(base64.decode(image.dataBase64)),
@@ -108,31 +74,6 @@ final class ViewImageMediaProjection {
     }
     return null;
   }
-
-  static (int, int, String)? _summary(ToolExecutionResult result) {
-    for (final block in result.blocks.whereType<ToolTextBlock>()) {
-      final match = _summaryPattern.firstMatch(block.text);
-      if (match != null) {
-        return (
-          int.parse(match.group(1)!),
-          int.parse(match.group(2)!),
-          match.group(3)!,
-        );
-      }
-    }
-    return null;
-  }
-
-  static String _mediaId(String sessionId, String toolCallId, int index) =>
-      sha256
-          .convert(utf8.encode('$sessionId\u0000$toolCallId\u0000$index'))
-          .toString();
-
-  static String _safeName(String mimeType) => switch (mimeType) {
-    'image/jpeg' => 'view-image.jpg',
-    'image/webp' => 'view-image.webp',
-    _ => 'view-image.png',
-  };
 }
 
 typedef ViewImageMediaHistoryLoader = List<Message> Function(String sessionId);

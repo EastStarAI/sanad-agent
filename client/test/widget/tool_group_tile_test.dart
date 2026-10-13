@@ -454,13 +454,32 @@ void main() {
     expect(live?.viewImageMedia?.name, 'view-image.png');
   });
 
+  testWidgets('view-image manual collapse survives a rebuild', (tester) async {
+    final loader = _FakeMediaLoader.completed(_onePixelPng);
+    Widget fixture() => _app(
+      EventTile(
+        key: const ValueKey('manual-view-image'),
+        event: _viewImageEvent(),
+        viewImageMediaLoader: loader,
+      ),
+    );
+    await tester.pumpWidget(fixture());
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('view_image_thumbnail')), findsOneWidget);
+    await tester.tap(find.textContaining('View Image', findRichText: true));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('view_image_thumbnail')), findsNothing);
+    await tester.pumpWidget(fixture());
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('view_image_thumbnail')), findsNothing);
+  });
+
   testWidgets('view-image thumbnail opens an accessible lightbox', (tester) async {
     final loader = _FakeMediaLoader.completed(_onePixelPng);
     await tester.pumpWidget(
       _app(
         EventTile(
           event: _viewImageEvent(),
-          isExpanded: true,
           viewImageMediaLoader: loader,
         ),
       ),
