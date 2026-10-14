@@ -18,6 +18,8 @@ void main() {
     final payload = buildSessionPayload(session: session(thinkingMode: 'deep'));
 
     expect(payload['thinking_mode'], 'deep');
+    expect(payload['lineage_id'], 'session-1');
+    expect(payload['fork_sequence'], 0);
   });
 
   test(

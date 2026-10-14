@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:google_fonts/google_fonts.dart';
 // ignore: depend_on_referenced_packages
 import 'package:markdown/markdown.dart' as md;
@@ -20,7 +20,7 @@ class MarkdownStyleHelper {
     final codeColor = theme.colorScheme.codeColor;
 
     return MarkdownStyleSheet(
-      p: GoogleFonts.roboto(
+      p: (theme.textTheme.bodyMedium ?? const TextStyle()).copyWith(
         color: isFinal ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
         fontSize: 13,
         height: 1.5,
@@ -37,7 +37,7 @@ class MarkdownStyleHelper {
           color: theme.colorScheme.outline.withValues(alpha: 0.1),
         ),
       ),
-      blockquote: GoogleFonts.roboto(
+      blockquote: (theme.textTheme.bodyMedium ?? const TextStyle()).copyWith(
         color: isDark ? theme.colorScheme.onSurface.withValues(alpha: 0.9) : theme.colorScheme.onSurfaceVariant,
         fontSize: 13,
         height: 1.5,

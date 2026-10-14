@@ -11,6 +11,7 @@ import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_codec.dart';
 import 'package:sanad_agent/engine/adapters/codex_models_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
+import 'package:sanad_agent/core/provider_thinking/native_thinking_directive.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_state_rejected_exception.dart';
 import 'package:sanad_agent/engine/adapters/provider_profile.dart';
@@ -148,7 +149,7 @@ void main() {
           ],
           options: const LLMRequestOptions(
             providerInstanceId: 'provider-1',
-            thinkingMode: 'deep',
+            thinkingDirective: ResponsesReasoningDirective(effort: 'high'),
             maxOutputTokens: 2048,
           ),
         );
@@ -970,6 +971,31 @@ void main() {
       );
       expect(sent, isFalse);
     });
+
+    test(
+      'wire measurement recognizes only strict request extensions',
+      () async {
+        final adapter = CodexResponsesAdapter(config, profile);
+        final baseline = await adapter.measureInput([
+          Message(role: MessageRole.system, content: 'Stable instructions'),
+          Message(role: MessageRole.user, content: 'Measured request'),
+        ]);
+        final extended = await adapter.measureInput([
+          Message(role: MessageRole.system, content: 'Stable instructions'),
+          Message(role: MessageRole.user, content: 'Measured request'),
+          Message(role: MessageRole.user, content: 'Small suffix'),
+        ]);
+        final changedInstructions = await adapter.measureInput([
+          Message(role: MessageRole.system, content: 'Changed instructions'),
+          Message(role: MessageRole.user, content: 'Measured request'),
+          Message(role: MessageRole.user, content: 'Small suffix'),
+        ]);
+
+        expect(extended!.extendsMeasurement(baseline!), isTrue);
+        expect(extended.estimatedTokens, greaterThan(baseline.estimatedTokens));
+        expect(changedInstructions!.extendsMeasurement(baseline), isFalse);
+      },
+    );
 
     test('stream propagates typed stream-level errors', () async {
       final adapter = CodexResponsesAdapter(

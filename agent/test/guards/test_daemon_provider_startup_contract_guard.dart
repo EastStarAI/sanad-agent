@@ -17,5 +17,19 @@ void main() {
     final source = daemon.readAsStringSync();
     expect(source, isNot(contains('config.isValid')));
     expect(source, isNot(contains('Configuration is not valid')));
+    expect(source.contains('runAgentStateMaintenanceSafely()'), isTrue);
+    final maintenanceCall = source.indexOf('runAgentStateMaintenanceSafely()');
+    expect(
+      source.indexOf('_restoreDurableStateSafely'),
+      lessThan(source.indexOf('gatewayManager.start()')),
+    );
+    expect(
+      maintenanceCall,
+      greaterThan(source.indexOf('gatewayManager.start()')),
+    );
+    expect(
+      maintenanceCall,
+      greaterThan(source.indexOf('Daemon is running. Press Ctrl+C')),
+    );
   });
 }

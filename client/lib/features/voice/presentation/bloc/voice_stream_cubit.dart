@@ -110,7 +110,7 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
               _logger.info('[VoiceStreamCubit] Local WS: Received audio chunk of size: ${message.length}');
               _voiceStreamService.playAudioChunk(message);
             } else if (message is String) {
-              _logger.info('[VoiceStreamCubit] Local WS: Received control message: $message');
+              _logger.info('[VoiceStreamCubit] Local WS: Received control message');
               try {
                 final Map<String, dynamic> decoded = jsonDecode(message);
                 final type = decoded['type'];

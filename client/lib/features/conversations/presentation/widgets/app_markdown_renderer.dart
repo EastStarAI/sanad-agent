@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown/flutter_markdown.dart';
+import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/markdown_style_helper.dart';
 
 /// Application-owned Markdown boundary for progressive and completed text.

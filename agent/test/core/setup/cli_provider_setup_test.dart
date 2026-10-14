@@ -17,6 +17,7 @@ import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.da
 import 'package:sanad_agent/core/provider_runtime/provider_readiness_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_state_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
+import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
 import 'package:sanad_agent/core/provider_runtime/secret_record.dart';
 import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart';
@@ -64,7 +65,11 @@ void main() {
       repo,
       credentialResolver: resolver,
     );
-    final modelCache = ProviderModelCacheService(repo, runtime);
+    final modelCache = ProviderModelCacheService(
+      repo,
+      runtime,
+      buildDefaultThinkingCapabilityAssembler(),
+    );
     final recentSelection = RecentModelSelectionService(repo);
     return CliProviderServices.from(
       env: env,

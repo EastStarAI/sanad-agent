@@ -59,6 +59,8 @@ class CanonicalEventTypes {
   static const String sessionHistory = 'session_history';
   static const String getSessions = 'get_sessions';
   static const String sessionsList = 'sessions_list';
+  static const String searchSessions = 'search_sessions';
+  static const String sessionSearchResults = 'session_search_results';
   static const String updateSessionTitle = 'update_session_title';
   static const String sessionUpdated = 'session_updated';
   static const String deleteSession = 'delete_session';
@@ -181,6 +183,12 @@ class CanonicalEventTypes {
   static const String deviceSettingsSnapshot = 'device.settings.snapshot';
   static const String deviceSettingsUpdated = 'device.settings.updated';
 
+  // ── Appearance Protocol ────────────────────────────────────────────────
+  static const String getAppearance = 'get_appearance';
+  static const String updateAppearance = 'update_appearance';
+  static const String appearanceSnapshot = 'appearance_snapshot';
+  static const String appearanceUpdated = 'appearance_updated';
+
   // ── Plan 25: workspace policy relocation ──────────────────────────────
   static const String workspaceGetPolicy = 'workspace.get_policy';
   static const String workspaceSetPermissionMode =
@@ -258,6 +266,19 @@ class CanonicalEventTypes {
   // ── Task 49: historical turn edit/retry ────────────────────────────────
   static const String sessionTurnReplay = 'session.turn_replay';
   static const String sessionTurnReplayResult = 'session.turn_replay_result';
+
+  // ── Plan 53: Context compaction lifecycle ───────────────────────────────
+  static const String contextCompactionStarted = 'context_compaction.started';
+  static const String contextCompactionCompleted =
+      'context_compaction.completed';
+  static const String contextCompactionFailed = 'context_compaction.failed';
+  static const String sessionCompact = 'session.compact';
+  static const String sessionCompactResult = 'session.compact_result';
+
+  // ── Task 52: materialized conversation fork ────────────────────────────
+  static const String sessionFork = 'session.fork';
+  static const String sessionForkResult = 'session.fork_result';
+  static const String sessionForked = 'session.forked';
 
   // ── Task 55: Provider account usage limits ─────────────────────────────
   static const String providerUsageGet = 'provider.usage.get';

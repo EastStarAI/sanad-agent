@@ -1,6 +1,7 @@
 import 'package:sanad_client/features/conversations/data/mappers/device_event_mapper.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/llm_usage_snapshot.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_route_snapshot.dart';
 
 /// Maps standardized agent events (live Redis stream + persisted history rows) into
@@ -41,10 +42,22 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
   CanonicalEvent? _historyRowToCanonical(Map<String, dynamic> row) {
     final type = row['type'] as String?;
     final metadata = (row['metadata'] as Map?)?.cast<String, dynamic>() ?? {};
-    final timestamp = _extractTimestamp(row['created_at']) ?? DateTime.now();
+    final startedAtTimestamp = _extractTimestamp(row['started_at'] ?? metadata['started_at']);
+    final terminalAtTimestamp = _extractTimestamp(row['terminal_at'] ?? metadata['terminal_at']);
+    final createdAtTimestamp = _extractTimestamp(row['created_at']);
+    final timestamp = switch (type) {
+      'tool_use' => startedAtTimestamp ?? createdAtTimestamp ?? DateTime.now(),
+      'tool_result' => terminalAtTimestamp ?? createdAtTimestamp ?? DateTime.now(),
+      _ => createdAtTimestamp ?? startedAtTimestamp ?? DateTime.now(),
+    };
     final toolMetadata = (metadata['tool'] is Map) ? (metadata['tool'] as Map).cast<String, dynamic>() : null;
     final canonicalFields = <String, dynamic>{
       'request_id': row['request_id'] ?? metadata['request_id'],
+      'message_id': row['message_id'] ?? metadata['message_id'],
+      'turn_id': row['turn_id'] ?? metadata['turn_id'],
+      'input_kind': row['input_kind'] ?? metadata['input_kind'],
+      'history_status': row['history_status'] ?? metadata['history_status'],
+      'replay_eligible': row['replay_eligible'] ?? metadata['replay_eligible'],
       'session_id': row['session_id'] ?? metadata['session_id'],
       'run_id': row['run_id'] ?? metadata['run_id'],
       'model_step_id': row['model_step_id'] ?? metadata['model_step_id'],
@@ -63,6 +76,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       'previous_provider_instance_id':
           row['previous_provider_instance_id'] ?? metadata['previous_provider_instance_id'],
       'provider_instance_id': row['provider_instance_id'] ?? metadata['provider_instance_id'],
+      'model_id': row['model_id'] ?? metadata['model_id'],
       'route_revision': row['route_revision'] ?? metadata['route_revision'],
       'reason': row['reason'] ?? metadata['reason'],
       'generation': row['generation'] ?? metadata['generation'],
@@ -84,6 +98,8 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         'output': row['output'] ?? metadata['output'] ?? toolMetadata?['output'],
         'isError': row['isError'] ?? metadata['isError'],
         'status': row['status'] ?? metadata['status'],
+        'provider_instance_id': row['provider_instance_id'] ?? metadata['provider_instance_id'],
+        'model_id': row['model_id'] ?? metadata['model_id'],
       },
       'tool_call' => <String, dynamic>{
         'tool': row['tool'] ?? toolMetadata ?? _historyToolName(metadata['tool']),
@@ -91,8 +107,26 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
         'output': row['output'] ?? metadata['output'] ?? toolMetadata?['output'],
         'status': row['status'] ?? metadata['status'],
       },
-      'plan' => <String, dynamic>{
-        'plan': row['plan'] ?? metadata['plan'],
+      'plan' => <String, dynamic>{'plan': row['plan'] ?? metadata['plan']},
+      'context_compaction.started' ||
+      'context_compaction.completed' ||
+      'context_compaction.failed' => <String, dynamic>{
+        'compaction_id': row['compaction_id'] ?? metadata['compaction_id'],
+        'trigger': row['trigger'] ?? metadata['trigger'],
+        'status': row['status'] ?? metadata['status'],
+        'started_at': row['started_at'] ?? metadata['started_at'],
+        'completed_at': row['completed_at'] ?? metadata['completed_at'],
+        'failure_reason': row['failure_reason'] ?? metadata['failure_reason'],
+        'context_window_tokens': row['context_window_tokens'] ?? metadata['context_window_tokens'],
+        'estimated_request_tokens_before':
+            row['estimated_request_tokens_before'] ?? metadata['estimated_request_tokens_before'],
+        'estimated_request_tokens_after':
+            row['estimated_request_tokens_after'] ?? metadata['estimated_request_tokens_after'],
+        'before_measurement_kind': row['before_measurement_kind'] ?? metadata['before_measurement_kind'],
+        'provider_confirmed_request_tokens_after':
+            row['provider_confirmed_request_tokens_after'] ?? metadata['provider_confirmed_request_tokens_after'],
+        'retained_tail_tokens': row['retained_tail_tokens'] ?? metadata['retained_tail_tokens'],
+        'duration_ms': row['duration_ms'] ?? metadata['duration_ms'],
       },
       _ => const <String, dynamic>{},
     };
@@ -126,11 +160,21 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
     final usage = event['usage'];
     final rawContextUsage = event['context_usage'];
     final contextUsage = rawContextUsage is Map
-        ? LlmUsageSnapshot.fromJson(
-            Map<String, dynamic>.from(rawContextUsage),
-          )
+        ? LlmUsageSnapshot.fromJson(Map<String, dynamic>.from(rawContextUsage))
         : null;
-    final runtimeMs = event['runtime_ms'] is num ? (event['runtime_ms'] as num).toInt() : null;
+    final rawRuntimeMs = event['runtime_ms'] is num ? (event['runtime_ms'] as num).toInt() : null;
+    final derivedRuntimeMs =
+        rawRuntimeMs ??
+        (() {
+          final startedAt = DateTime.tryParse(event['started_at']?.toString() ?? '');
+          final terminalAt = DateTime.tryParse(event['terminal_at']?.toString() ?? '');
+          if (startedAt != null && terminalAt != null) {
+            final diff = terminalAt.difference(startedAt).inMilliseconds;
+            return diff >= 0 ? diff : null;
+          }
+          return null;
+        })();
+    final runtimeMs = derivedRuntimeMs;
     final contextTokens = event['context_tokens'] is num ? (event['context_tokens'] as num).toInt() : null;
     final thinkingMode = event['thinking_mode']?.toString();
     final reasoningLevel = event['reasoning_level']?.toString();
@@ -140,15 +184,18 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       // Legacy rows persisted as 'text' before the refactor.
       case 'text':
         return CanonicalEvent(
-          id: requestId != null && requestId.isNotEmpty
-              ? 'user_$requestId'
-              : 'user_${timestamp.millisecondsSinceEpoch}_${text.hashCode}',
+          id:
+              eventId ??
+              (requestId != null && requestId.isNotEmpty
+                  ? 'user_$requestId'
+                  : 'user_${timestamp.millisecondsSinceEpoch}_${text.hashCode}'),
           kind: EventKind.userMessage,
           status: EventStatus.done,
           text: text,
           timestamp: timestamp,
           sessionId: sessionId,
           runId: runId,
+          eventId: eventId,
           model: model,
           modelDisplay: modelDisplay,
           provider: provider,
@@ -163,7 +210,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
 
       case 'thinking':
       case 'thought_stream':
-        if (text.trim().isEmpty) return null;
+        if (text.isEmpty) return null;
         return CanonicalEvent(
           id: _thinkingId(modelStepId, runId, eventId, timestamp),
           kind: EventKind.thinking,
@@ -302,10 +349,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
           id: _toolId(toolCallId, eventId, timestamp),
           kind: EventKind.toolCall,
           status: isCancelled ? EventStatus.cancelled : (isError ? EventStatus.error : EventStatus.done),
-          tool: {
-            'name': event['tool'] ?? '',
-            'output': output,
-          },
+          tool: {'name': event['tool'] ?? '', 'output': output},
           timestamp: timestamp,
           sessionId: sessionId,
           runId: runId,
@@ -419,6 +463,27 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
           metadata: metadata,
         );
 
+      case 'context_compaction.started':
+      case 'context_compaction.completed':
+      case 'context_compaction.failed':
+        return _mapCompactionEvent(event, timestamp);
+
+      case 'session.forked':
+        return CanonicalEvent(
+          id: eventId ?? 'fork_${sessionId ?? timestamp.microsecondsSinceEpoch}',
+          kind: EventKind.informational,
+          status: EventStatus.done,
+          text: text.isNotEmpty ? text : 'Conversation forked',
+          timestamp: timestamp,
+          sessionId: sessionId,
+          eventId: eventId,
+          metadata: {
+            ...?metadata,
+            'informational': true,
+            'informational_kind': 'session_fork',
+          },
+        );
+
       case 'session_route_transition':
         final snapshot = SessionRouteSnapshot.fromJson(event);
         return CanonicalEvent(
@@ -444,6 +509,64 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
     }
   }
 
+  CanonicalEvent? _mapCompactionEvent(
+    Map<String, dynamic> event,
+    DateTime timestamp,
+  ) {
+    final snapshot = CompactionEventSnapshot.fromJson(event);
+    final status = switch (snapshot.status) {
+      CompactionLifecycleStatus.started => EventStatus.running,
+      CompactionLifecycleStatus.completed => EventStatus.done,
+      CompactionLifecycleStatus.failed => EventStatus.error,
+    };
+    final tokensAfterCompaction = snapshot.providerConfirmedRequestTokensAfter ?? snapshot.estimatedRequestTokensAfter;
+    final contextUsage =
+        snapshot.status == CompactionLifecycleStatus.completed &&
+            tokensAfterCompaction != null &&
+            snapshot.contextWindowTokens != null
+        ? LlmUsageSnapshot(
+            inputTokens: tokensAfterCompaction,
+            contextWindowTokens: snapshot.contextWindowTokens,
+            modelId: event['model_id']?.toString(),
+            providerInstanceId: event['provider_instance_id']?.toString(),
+            observedAt: snapshot.completedAt ?? timestamp,
+          )
+        : null;
+    return CanonicalEvent(
+      id: snapshot.logicalEventId,
+      kind: EventKind.informational,
+      status: status,
+      text: snapshot.timelineLabel,
+      timestamp: snapshot.completedAt ?? snapshot.startedAt ?? timestamp,
+      sessionId: snapshot.sessionId,
+      eventId: event['event_id']?.toString() ?? 'context_compaction:${snapshot.compactionId}:${snapshot.status.name}',
+      contextUsage: contextUsage,
+      metadata: {
+        'informational': true,
+        'compaction_event': true,
+        'compaction_id': snapshot.compactionId,
+        'compaction_status': snapshot.status.name,
+        'compaction_trigger': snapshot.trigger.name,
+        if (event['provider_instance_id'] != null) 'provider_instance_id': event['provider_instance_id'],
+        if (event['model_id'] != null) 'model_id': event['model_id'],
+        if (snapshot.failureReason != null) 'failure_reason': snapshot.failureReason,
+        if (snapshot.contextWindowTokens != null) 'context_window_tokens': snapshot.contextWindowTokens,
+        if (snapshot.effectiveInputBudgetTokens != null)
+          'effective_input_budget_tokens': snapshot.effectiveInputBudgetTokens,
+        if (snapshot.autoThresholdTokens != null) 'auto_threshold_tokens': snapshot.autoThresholdTokens,
+        if (snapshot.estimatedRequestTokensBefore != null)
+          'estimated_request_tokens_before': snapshot.estimatedRequestTokensBefore,
+        if (snapshot.estimatedRequestTokensAfter != null)
+          'estimated_request_tokens_after': snapshot.estimatedRequestTokensAfter,
+        if (snapshot.beforeMeasurementKind != null) 'before_measurement_kind': snapshot.beforeMeasurementKind,
+        if (snapshot.providerConfirmedRequestTokensAfter != null)
+          'provider_confirmed_request_tokens_after': snapshot.providerConfirmedRequestTokensAfter,
+        if (snapshot.retainedTailTokens != null) 'retained_tail_tokens': snapshot.retainedTailTokens,
+        if (snapshot.durationMs != null) 'duration_ms': snapshot.durationMs,
+      },
+    );
+  }
+
   // Same id for every chunk + finalized thought within one cycle so
   // ConversationState folds them into one bubble.
   String _thinkingId(
@@ -463,11 +586,8 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
   ) => 'reasoning_${modelStepId ?? runId ?? eventId ?? timestamp.millisecondsSinceEpoch}';
 
   // Same id for tool_use + matching tool_result so they fold together.
-  String _toolId(
-    String? toolCallId,
-    String? eventId,
-    DateTime timestamp,
-  ) => 'tool_${toolCallId ?? eventId ?? timestamp.microsecondsSinceEpoch}';
+  String _toolId(String? toolCallId, String? eventId, DateTime timestamp) =>
+      'tool_${toolCallId ?? eventId ?? timestamp.microsecondsSinceEpoch}';
 
   String? _stringId(dynamic value) {
     final normalized = value?.toString().trim();
@@ -509,6 +629,11 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
     final normalized = <String, dynamic>{
       if (metadata is Map) ...metadata.cast<String, dynamic>(),
       if (event['request_id'] != null) 'request_id': event['request_id'],
+      if (event['message_id'] != null) 'message_id': event['message_id'],
+      if (event['turn_id'] != null) 'turn_id': event['turn_id'],
+      if (event['input_kind'] != null) 'input_kind': event['input_kind'],
+      if (event['history_status'] != null) 'history_status': event['history_status'],
+      if (event['replay_eligible'] != null) 'replay_eligible': event['replay_eligible'],
       if (event['queued'] != null) 'queued': event['queued'],
       if (event['classification'] != null) 'classification': event['classification'],
       if (event['generation'] != null) 'generation': event['generation'],
@@ -516,6 +641,7 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       if (event['reason'] != null) 'reason': event['reason'],
       if (event['started_at'] != null) 'started_at': event['started_at'],
       if (event['terminal_at'] != null) 'terminal_at': event['terminal_at'],
+      if (event['runtime_ms'] != null) 'runtime_ms': event['runtime_ms'],
       if (event['cleanup_outcome'] != null) 'cleanup_outcome': event['cleanup_outcome'],
     };
     return normalized.isEmpty ? null : normalized;

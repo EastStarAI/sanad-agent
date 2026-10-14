@@ -14,6 +14,26 @@ class SkillSlashQuery {
 
 class SkillComposerUtils {
   static SkillSlashQuery? detectSlashQuery(TextEditingValue value) {
+    final query = _detectSlashToken(value);
+    if (query == null) {
+      return null;
+    }
+    // Runtime slash commands own index zero; mid-message slash stays skill-only.
+    if (query.slashIndex == 0) {
+      return null;
+    }
+    return query;
+  }
+
+  static SkillSlashQuery? detectRuntimeSlashQuery(TextEditingValue value) {
+    final query = _detectSlashToken(value);
+    if (query == null || query.slashIndex != 0) {
+      return null;
+    }
+    return query;
+  }
+
+  static SkillSlashQuery? _detectSlashToken(TextEditingValue value) {
     final selection = value.selection;
     if (!selection.isValid || !selection.isCollapsed) {
       return null;
@@ -55,21 +75,38 @@ class SkillComposerUtils {
     );
   }
 
-  static TextEditingValue applySkillSelection(
+  static TextEditingValue applySlashSelectionText(
     TextEditingValue value, {
     required SkillSlashQuery query,
-    required String skillName,
+    required String replacement,
   }) {
     final updated = value.text.replaceRange(
       query.slashIndex,
       query.cursorIndex,
-      skillName,
+      replacement,
     );
-    final selectionOffset = query.slashIndex + skillName.length;
+    final selectionOffset = query.slashIndex + replacement.length;
     return value.copyWith(
       text: updated,
       selection: TextSelection.collapsed(offset: selectionOffset),
       composing: TextRange.empty,
+    );
+  }
+
+  static RuntimeSlashInvocation? parseLeadingRuntimeInvocation(String value) {
+    final trimmed = value.trim();
+    if (!trimmed.startsWith('/') || trimmed.startsWith('//')) {
+      return null;
+    }
+    final separator = trimmed.indexOf(RegExp(r'\s'));
+    final commandEnd = separator < 0 ? trimmed.length : separator;
+    final command = trimmed.substring(1, commandEnd).trim().toLowerCase();
+    if (command.isEmpty) {
+      return null;
+    }
+    return RuntimeSlashInvocation(
+      command: command,
+      arguments: separator < 0 ? '' : trimmed.substring(separator).trim(),
     );
   }
 
@@ -80,4 +117,14 @@ class SkillComposerUtils {
   static String normalizeSlashSearchToken(String value) {
     return value.toLowerCase().replaceAll(RegExp(r'[\s\-_]+'), '');
   }
+}
+
+class RuntimeSlashInvocation {
+  final String command;
+  final String arguments;
+
+  const RuntimeSlashInvocation({
+    required this.command,
+    required this.arguments,
+  });
 }

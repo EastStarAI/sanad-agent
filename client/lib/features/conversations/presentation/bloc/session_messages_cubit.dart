@@ -13,7 +13,9 @@ import 'package:sanad_client/features/conversations/domain/models/slash_command_
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
@@ -65,6 +67,8 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   final Set<String> _freshSessionIdsAwaitingFirstTurn = {};
   final Set<String> _initiatedStopRequestIds = {};
   final Map<String, String> _stopRecoveryClaimIds = {};
+  final Set<String> _inFlightStopRecoveryAckIds = {};
+  final Map<String, String> _requestedHistoryAnchors = {};
   int _requestGeneration = 0;
   Timer? _delayedLoadingTimer;
 
@@ -148,6 +152,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       unawaited(_queuedMessagesSubscription?.cancel());
       unawaited(_attentionSubscription?.cancel());
       unawaited(_stopRecoverySubscription?.cancel());
+      _inFlightStopRecoveryAckIds.clear();
       _selectedSessionId = null;
       emit(const SessionMessagesState());
     }
@@ -165,6 +170,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       return;
     }
 
+    final requestedAnchorKey = nextSessionId == null
+        ? null
+        : '${selectedSession?.deviceId ?? _currentAgent?.id}:$nextSessionId';
+    _requestedHistoryAnchors.removeWhere(
+      (key, _) => requestedAnchorKey == null || key != requestedAnchorKey,
+    );
     final generation = ++_requestGeneration;
     _delayedLoadingTimer?.cancel();
     _selectedSessionId = nextSessionId;
@@ -198,6 +209,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           clearRequestedSessionId: true,
           isHistoryLoading: false,
           showDelayedLoading: false,
+          hasOlderHistory: currentAgent != null && conversationRepository.historyHasMore(currentAgent),
+          hasNewerHistory: currentAgent != null && conversationRepository.historyHasNewer(currentAgent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
         ),
       );
       return;
@@ -273,6 +290,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           clearRequestedSessionId: true,
           isHistoryLoading: false,
           showDelayedLoading: false,
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
         ),
       );
     } else if (agent != null) {
@@ -318,6 +341,168 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     unawaited(_loadHistoryForAtomicSwap(agent, sessionId, generation));
   }
 
+  Future<void> loadOlderHistory() async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null ||
+        sessionId == null ||
+        state.isOlderHistoryLoading ||
+        !state.hasOlderHistory ||
+        state.requestedSessionId != null ||
+        state.isHistoryLoading) {
+      return;
+    }
+    final generation = _requestGeneration;
+    emit(
+      state.copyWith(
+        isOlderHistoryLoading: true,
+        clearOlderHistoryError: true,
+      ),
+    );
+    try {
+      await conversationRepository.loadOlderSessionHistory(agent, sessionId);
+      if (isClosed || generation != _requestGeneration || state.activeSessionId != sessionId) {
+        return;
+      }
+      emit(
+        state.copyWith(
+          messages: conversationRepository.currentMessages(agent),
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
+        ),
+      );
+    } catch (error, stackTrace) {
+      if (isClosed || generation != _requestGeneration) return;
+      _logger.warning(
+        'Older history load failed device_id=${agent.id} '
+        'session_id=$sessionId error_type=${error.runtimeType}',
+        error,
+        stackTrace,
+      );
+      emit(
+        state.copyWith(
+          isOlderHistoryLoading: false,
+          olderHistoryError: 'Could not load earlier messages.',
+        ),
+      );
+    }
+  }
+
+  Future<void> loadNewerHistory() async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null ||
+        sessionId == null ||
+        state.isNewerHistoryLoading ||
+        !state.hasNewerHistory ||
+        state.requestedSessionId != null ||
+        state.isHistoryLoading) {
+      return;
+    }
+    final generation = _requestGeneration;
+    emit(
+      state.copyWith(
+        isNewerHistoryLoading: true,
+        clearNewerHistoryError: true,
+      ),
+    );
+    try {
+      await conversationRepository.loadNewerSessionHistory(agent, sessionId);
+      if (isClosed || generation != _requestGeneration || state.activeSessionId != sessionId) {
+        return;
+      }
+      emit(
+        state.copyWith(
+          messages: conversationRepository.currentMessages(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
+        ),
+      );
+    } catch (error, stackTrace) {
+      if (isClosed || generation != _requestGeneration) return;
+      _logger.warning(
+        'Newer history load failed device_id=${agent.id} '
+        'session_id=$sessionId error_type=${error.runtimeType}',
+        error,
+        stackTrace,
+      );
+      emit(
+        state.copyWith(
+          isNewerHistoryLoading: false,
+          newerHistoryError: 'Could not load later messages.',
+        ),
+      );
+    }
+  }
+
+  void requestHistoryAnchor({
+    required String deviceId,
+    required String sessionId,
+    required String anchorEventId,
+  }) {
+    final anchor = anchorEventId.trim();
+    if (anchor.isEmpty) return;
+    _requestedHistoryAnchors['$deviceId:$sessionId'] = anchor;
+  }
+
+  Future<void> loadAnchoredHistory(
+    String anchorEventId, {
+    bool forceReopen = false,
+  }) async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null ||
+        sessionId == null ||
+        anchorEventId.trim().isEmpty ||
+        state.requestedSessionId != null ||
+        state.isHistoryLoading) {
+      return;
+    }
+    final anchorIsLoaded = state.messages.any(
+      (event) => event.id == anchorEventId || event.eventId == anchorEventId,
+    );
+    if (anchorIsLoaded && !forceReopen) return;
+    final generation = ++_requestGeneration;
+    try {
+      if (!anchorIsLoaded) {
+        await conversationRepository.loadAnchoredSessionHistory(
+          agent,
+          sessionId,
+          anchorEventId,
+        );
+      }
+      if (isClosed || generation != _requestGeneration || state.activeSessionId != sessionId) {
+        return;
+      }
+      _requestedHistoryAnchors.remove('${agent.id}:$sessionId');
+      emit(
+        state.copyWith(
+          messages: conversationRepository.currentMessages(agent),
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
+          historyOpenRevision: forceReopen ? state.historyOpenRevision + 1 : state.historyOpenRevision,
+        ),
+      );
+    } catch (error, stackTrace) {
+      if (isClosed || generation != _requestGeneration) return;
+      _logger.fine(
+        'Saved history anchor unavailable device_id=${agent.id} '
+        'session_id=$sessionId error_type=${error.runtimeType}',
+        error,
+        stackTrace,
+      );
+    }
+  }
+
   /// Invalidates a deleted session even when it is merely the presentation
   /// retained underneath a newer requested destination.
   void invalidateDeletedSession(String deviceId, String sessionId) {
@@ -347,8 +532,24 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     int generation,
   ) async {
     try {
-      await conversationRepository.loadSessionHistory(agent, sessionId);
-      if (isClosed || generation != _requestGeneration) return;
+      final anchorKey = '${agent.id}:$sessionId';
+      final requestedAnchor = _requestedHistoryAnchors[anchorKey];
+      if (requestedAnchor == null) {
+        await conversationRepository.loadSessionHistory(agent, sessionId);
+      } else {
+        await conversationRepository.loadAnchoredSessionHistory(
+          agent,
+          sessionId,
+          requestedAnchor,
+        );
+      }
+      if (isClosed || generation != _requestGeneration) {
+        if (!isClosed && state.requestedSessionId == sessionId && _selectedSessionId != sessionId) {
+          _delayedLoadingTimer?.cancel();
+        }
+        return;
+      }
+      _requestedHistoryAnchors.remove(anchorKey);
 
       _delayedLoadingTimer?.cancel();
       final attention = _attentionFor(agent, sessionId);
@@ -390,6 +591,12 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           clearRequestedSessionId: true,
           isHistoryLoading: false,
           showDelayedLoading: false,
+          hasOlderHistory: conversationRepository.historyHasMore(agent),
+          hasNewerHistory: conversationRepository.historyHasNewer(agent),
+          isOlderHistoryLoading: false,
+          clearOlderHistoryError: true,
+          isNewerHistoryLoading: false,
+          clearNewerHistoryError: true,
         ),
       );
     } catch (error, stackTrace) {
@@ -417,6 +624,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     unawaited(_queuedMessagesSubscription?.cancel());
     unawaited(_attentionSubscription?.cancel());
     unawaited(_workspacePolicySubscription?.cancel());
+    unawaited(_stopRecoverySubscription?.cancel());
 
     _currentAgent = agent;
 
@@ -466,10 +674,17 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
       }
       if (!_nextMessageThinkingByAgentId.containsKey(agent.id)) {
         final savedThinking = preferencesRepository.getLastThinkingMode(agent.id)?.trim();
-        final thinkingMode = savedThinking?.isNotEmpty == true ? savedThinking! : defaultThinkingMode;
-        _nextMessageThinkingByAgentId[agent.id] = thinkingMode;
-        if (savedThinking == null || savedThinking.isEmpty) {
-          unawaited(preferencesRepository.setLastThinkingMode(agent.id, thinkingMode));
+        final caps = capabilitiesStore?.getForAgent(agent.id);
+        if (caps?.usesModelThinkingControls == true) {
+          if (savedThinking != null && savedThinking.isNotEmpty) {
+            _nextMessageThinkingByAgentId[agent.id] = savedThinking;
+          }
+        } else {
+          final thinkingMode = savedThinking?.isNotEmpty == true ? savedThinking! : defaultThinkingMode;
+          _nextMessageThinkingByAgentId[agent.id] = thinkingMode;
+          if (savedThinking == null || savedThinking.isEmpty) {
+            unawaited(preferencesRepository.setLastThinkingMode(agent.id, thinkingMode));
+          }
         }
       }
 
@@ -682,6 +897,10 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         thinkingMode: _nextMessageThinkingByAgentId[agent.id],
         intent: intent,
       );
+      if (targetSessionId.isNotEmpty) {
+        final currentThinking = _nextMessageThinkingByAgentId[agent.id];
+        sessionCubit.applyThinkingMode(targetSessionId, currentThinking);
+      }
       if (requestId != null && targetSessionId.isNotEmpty) {
         sessionCubit.markSessionDraftAwaitingAcceptance(
           agent.id,
@@ -830,16 +1049,23 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     final alreadyApplied = draft?.appliedStopRecoveryIds.contains(recovery.stopRequestId) == true;
     final isOwned = recovery.recoveryReason == 'daemon_restart'
         ? claimedByThisClient || alreadyApplied
-        : recoveryOwnerToken != null && recoveryOwnerToken.isNotEmpty;
+        : (recoveryOwnerToken != null && recoveryOwnerToken.isNotEmpty && !alreadyApplied);
     if (!isOwned) return;
+    if (_inFlightStopRecoveryAckIds.contains(recovery.stopRequestId)) return;
+    _inFlightStopRecoveryAckIds.add(recovery.stopRequestId);
     try {
-      await cache.prependStopRecoveryAndFlush(
+      final changed = await cache.prependStopRecoveryAndFlush(
         agent.id,
         recovery.sessionId,
         stopRequestId: recovery.stopRequestId,
         texts: recovery.inputs.map((input) => input.text),
       );
+      if (!changed && !alreadyApplied) {
+        _inFlightStopRecoveryAckIds.remove(recovery.stopRequestId);
+        return;
+      }
     } catch (_) {
+      _inFlightStopRecoveryAckIds.remove(recovery.stopRequestId);
       return;
     }
     await conversationRepository.acknowledgeStopRecovery(
@@ -871,9 +1097,13 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
 
   Future<TurnReplayResult> replayTurn({
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) async {
     final agent = _currentAgent;
     final sessionId = state.activeSessionId;
@@ -884,17 +1114,64 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         requiresConfirmation: false,
       );
     }
-    return conversationRepository.replayTurn(
+    final result = await conversationRepository.replayTurn(
       agent,
       sessionId: sessionId,
       targetRequestId: targetRequestId,
+      targetMessageId: targetMessageId,
+      targetTurnId: targetTurnId,
+      expectedHistoryRevision: expectedHistoryRevision ?? sessionCubit.state.selectedSession?.historyRevision ?? 0,
       action: action,
       message: message,
       providerInstanceId: state.nextMessageProviderId,
       modelId: state.nextMessageModel,
       thinkingMode: state.nextMessageThinkingMode,
       confirmedReplayUnsafe: confirmedReplayUnsafe,
+      confirmedDropSteers: confirmedDropSteers,
     );
+    final nextRevision = result.historyRevision;
+    final selected = sessionCubit.state.selectedSession;
+    if (nextRevision != null && selected != null && selected.id == sessionId) {
+      sessionCubit.applyHistoryRevision(sessionId, nextRevision);
+    }
+    return result;
+  }
+
+  Future<SessionForkResult> forkSession({
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || sessionId.isEmpty) {
+      return const SessionForkResult(outcome: 'missing_session');
+    }
+    final result = await conversationRepository.forkSession(
+      agent,
+      sessionId: sessionId,
+      targetMessageId: targetMessageId,
+      targetTurnId: targetTurnId,
+    );
+    final child = result.child;
+    if (result.isAccepted && child != null) {
+      try {
+        await sessionCubit.adoptForkedSession(
+          child.copyWith(deviceId: child.deviceId ?? agent.id),
+        );
+      } catch (error, stackTrace) {
+        _logger.warning(
+          'Fork committed but child navigation failed.',
+          error,
+          stackTrace,
+        );
+        return SessionForkResult(
+          outcome: result.outcome,
+          child: child,
+          navigationFailed: true,
+        );
+      }
+    }
+    return result;
   }
 
   Future<void> retryRuntimeNotice() async {
@@ -984,18 +1261,46 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     }
 
     try {
-      await conversationRepository.updateSessionPreferences(
-        agent,
-        sessionId: sessionId,
-        providerId: providerId,
-        model: model,
-        thinkingMode: thinkingMode,
+      final trimmedProviderId = providerId?.trim();
+      final trimmedModel = model?.trim();
+      final trimmedThinkingMode = thinkingMode?.trim();
+
+      // 1. Immediately update SessionCubit state & cache
+      sessionCubit.applySessionRoutePreferences(
+        sessionId,
+        providerId: trimmedProviderId,
+        model: trimmedModel,
+        thinkingMode: thinkingMode != null ? (trimmedThinkingMode ?? '') : null,
       );
 
-      // Persist these as the last selected values for this agent
+      // 2. Persist device-level last preferences and in-memory nextMessage maps
+      if (trimmedProviderId != null) {
+        if (trimmedProviderId.isEmpty) {
+          _nextMessageProviderByAgentId.remove(agent.id);
+        } else {
+          _nextMessageProviderByAgentId[agent.id] = trimmedProviderId;
+          unawaited(preferencesRepository.setLastProvider(agent.id, trimmedProviderId));
+        }
+      }
+
+      if (trimmedModel != null) {
+        if (trimmedModel.isEmpty) {
+          _nextMessageModelByAgentId.remove(agent.id);
+          unawaited(preferencesRepository.clearPreferences(agent.id));
+        } else {
+          _nextMessageModelByAgentId[agent.id] = trimmedModel;
+          unawaited(preferencesRepository.setLastModel(agent.id, trimmedModel));
+        }
+      }
+
       if (thinkingMode != null) {
-        _nextMessageThinkingByAgentId[agent.id] = thinkingMode;
-        unawaited(preferencesRepository.setLastThinkingMode(agent.id, thinkingMode));
+        if (trimmedThinkingMode == null || trimmedThinkingMode.isEmpty) {
+          _nextMessageThinkingByAgentId.remove(agent.id);
+          unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
+        } else {
+          _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
+          unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
+        }
       }
 
       emit(
@@ -1004,6 +1309,14 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
           nextMessageModel: _nextMessageModelByAgentId[agent.id],
           nextMessageThinkingMode: _nextMessageThinkingByAgentId[agent.id],
         ),
+      );
+
+      await conversationRepository.updateSessionPreferences(
+        agent,
+        sessionId: sessionId,
+        providerId: providerId,
+        model: model,
+        thinkingMode: thinkingMode,
       );
     } catch (e) {
       emit(state.copyWith(error: e.toString()));
@@ -1049,10 +1362,15 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
         final trimmedThinkingMode = thinkingMode.trim();
         if (trimmedThinkingMode.isEmpty) {
           _nextMessageThinkingByAgentId.remove(agent.id);
+          unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
         } else {
           _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
           unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
         }
+        sessionCubit.applyThinkingMode(
+          activeSessionId,
+          trimmedThinkingMode.isEmpty ? null : trimmedThinkingMode,
+        );
       }
       emit(
         state.copyWith(
@@ -1092,9 +1410,17 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     if (trimmedThinkingMode != null) {
       if (trimmedThinkingMode.isEmpty) {
         _nextMessageThinkingByAgentId.remove(agent.id);
+        unawaited(preferencesRepository.clearLastThinkingMode(agent.id));
       } else {
         _nextMessageThinkingByAgentId[agent.id] = trimmedThinkingMode;
         unawaited(preferencesRepository.setLastThinkingMode(agent.id, trimmedThinkingMode));
+      }
+      final activeSessionId = state.activeSessionId;
+      if (activeSessionId != null && activeSessionId.isNotEmpty) {
+        sessionCubit.applyThinkingMode(
+          activeSessionId,
+          trimmedThinkingMode.isEmpty ? null : trimmedThinkingMode,
+        );
       }
     }
 
@@ -1309,6 +1635,18 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
     final agent = _currentAgent;
     if (agent == null) return;
     await _ensureWorkspacesForAgent(agent, force: true);
+  }
+
+  Future<SessionCompactResult> compactSession() async {
+    final agent = _currentAgent;
+    final sessionId = state.activeSessionId;
+    if (agent == null || sessionId == null || sessionId.isEmpty) {
+      return const SessionCompactResult(outcome: 'missing_session');
+    }
+    return conversationRepository.compactSession(
+      agent,
+      sessionId: sessionId,
+    );
   }
 
   Future<List<SlashCommandEntry>> searchSlashCommands({String? query}) async {
@@ -1642,6 +1980,7 @@ class SessionMessagesCubit extends Cubit<SessionMessagesState> {
   @override
   Future<void> close() async {
     _delayedLoadingTimer?.cancel();
+    _inFlightStopRecoveryAckIds.clear();
     await _agentStateSubscription?.cancel();
     await _cacheSubscription?.cancel();
     await _sessionStateSubscription?.cancel();

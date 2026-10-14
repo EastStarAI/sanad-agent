@@ -5,8 +5,7 @@ enum PendingSteerState {
   delivering,
   delivered,
   cancelled,
-  recovered
-  ;
+  recovered;
 
   static PendingSteerState fromWire(Object? value) => PendingSteerState.values.firstWhere(
     (state) => state.name == value?.toString(),
@@ -24,6 +23,11 @@ class PendingSteerRecord extends Equatable {
   final PendingSteerState state;
   final int revision;
   final DateTime? updatedAt;
+  final String? messageId;
+  final String? turnId;
+  final String? anchorMessageId;
+  final String? anchorToolCallId;
+  final int? historyRevision;
 
   const PendingSteerRecord({
     required this.sessionId,
@@ -35,6 +39,11 @@ class PendingSteerRecord extends Equatable {
     required this.state,
     required this.revision,
     required this.updatedAt,
+    this.messageId,
+    this.turnId,
+    this.anchorMessageId,
+    this.anchorToolCallId,
+    this.historyRevision,
   });
 
   factory PendingSteerRecord.fromJson(Map<String, dynamic> json) {
@@ -59,7 +68,17 @@ class PendingSteerRecord extends Equatable {
       state: PendingSteerState.fromWire(json['state']),
       revision: revision,
       updatedAt: updatedAt,
+      messageId: _optionalId(json['message_id']),
+      turnId: _optionalId(json['turn_id']),
+      anchorMessageId: _optionalId(json['anchor_message_id']),
+      anchorToolCallId: _optionalId(json['anchor_tool_call_id']),
+      historyRevision: json['history_revision'] == null ? null : _integer(json['history_revision'], 'history_revision'),
     );
+  }
+
+  static String? _optionalId(Object? value) {
+    final normalized = value?.toString().trim();
+    return normalized == null || normalized.isEmpty ? null : normalized;
   }
 
   static int _integer(Object? value, String name) {
@@ -68,5 +87,20 @@ class PendingSteerRecord extends Equatable {
   }
 
   @override
-  List<Object?> get props => [sessionId, requestId, runId, generation, text, receivedAt, state, revision, updatedAt];
+  List<Object?> get props => [
+    sessionId,
+    requestId,
+    runId,
+    generation,
+    text,
+    receivedAt,
+    state,
+    revision,
+    updatedAt,
+    messageId,
+    turnId,
+    anchorMessageId,
+    anchorToolCallId,
+    historyRevision,
+  ];
 }

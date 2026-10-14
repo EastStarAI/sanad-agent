@@ -33,6 +33,9 @@ class CliRunner {
         case 'find':
           return await _handleFind(commandArgs, explicitUrl, isJson);
 
+        case 'auth-url':
+          return await _handleAuthUrl(explicitUrl, isJson);
+
         case 'tap':
           return await _handleTap(commandArgs, explicitUrl, isJson);
 
@@ -65,10 +68,30 @@ class CliRunner {
     } catch (e) {
       if (isJson) {
         print(json.encode({'status': 'error', 'error': e.toString()}));
+      } else if (command == 'auth-url') {
+        stderr.writeln('Authentication URL unavailable: $e');
       } else {
         print('❌ Error executing command "$command": $e');
       }
       return 1;
+    }
+  }
+
+  Future<int> _handleAuthUrl(String? explicitUrl, bool isJson) async {
+    final controller = await FlutterVmController.connect(
+      explicitUrl: explicitUrl,
+      connectDriver: false,
+    );
+    try {
+      final authUrl = await controller.authUrl();
+      if (isJson) {
+        print(json.encode({'status': 'ok', 'auth_url': authUrl}));
+      } else {
+        print(authUrl);
+      }
+      return 0;
+    } finally {
+      await controller.close();
     }
   }
 
@@ -528,6 +551,9 @@ Commands:
 
   find           Find element by key, text, type, or query
                  Options: --key <k>, --text <t>, --type <type>, --query <q>, --within <scope>, --interactive, --compact, --json
+
+  auth-url       Print the active browser authentication URL for the selected Client
+                 Options: --json
 
   tap            Tap an element (with auto-scroll into view)
                  Options: --key <k>, --text <t>, --type <type>, --within <scope>, --index <i>, --coords x,y, --timeout <sec>, --delay <ms>, --json

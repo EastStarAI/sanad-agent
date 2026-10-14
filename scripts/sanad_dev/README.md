@@ -2,6 +2,14 @@
 
 `sanad-dev` is the canonical developer DX utility for running, observing, and debugging the open-source components of the SanadAgent system (Dart background daemon & Flutter client).
 
+## Package and tests
+
+The CLI implementation is a standalone Pure-Dart package. Production source is
+under `lib/`, tests are under `test/`, and `scripts/sanad_dev.dart` remains a
+compatibility forwarder. From `scripts/sanad_dev/`, use `fvm dart analyze` and
+`fvm dart test`; these tests are intentionally excluded from the Flutter Client
+suite. Bootstrap resolves this package before entering the runtime CLI.
+
 ## Running and bootstrapping
 
 From a fresh macOS/Linux checkout, install the user command once:
@@ -12,8 +20,8 @@ scripts/sanad-dev install
 
 Use `scripts/sanad-dev.ps1 install` in Windows PowerShell. No arguments display
 help without mutation. `install` owns verified FVM `4.1.2`, pinned Flutter, and
-the user shim; `setup` ensures install and resolves Release Contract, Agent, and
-Client packages without launching; `run` ensures stale or missing stages and
+the user shim; `setup` ensures install and resolves Release Contract, `sanad-dev`,
+Agent, and Client packages without launching; `run` ensures stale or missing stages and
 then launches. Work-performing stages stream real stdout/stderr and finish with
 duration plus outcome. The official source command is:
 
@@ -81,9 +89,10 @@ sanad-dev run [options]
 * `--config <path>`: Specifies client config JSON file (defaults to `config/prod.json`; `config/dev.json` is explicit internal integration only).
 * `--home <user|absolute>`: Selects the primary user Home or an isolated absolute Home.
 * `--dry-run`: Resolves and prints all candidate ports and paths without launching.
+* `--background`: Starts a detached launcher and waits through a bounded handshake until the requested components are managed or startup publishes a staged failure. The user does not need `nohup`, `screen`, or another shell wrapper. `--background` and `--dry-run` are mutually exclusive.
 
 ### 2. `status`
-Displays runtime status and metadata for the current Git worktree in real-time. Reports whether the agent and client are running, their PIDs, VM service ports, and active configuration modes.
+Displays runtime status and metadata for the current Git worktree in real-time. Reports whether the agent and client are running, their PIDs, VM service ports, and active configuration modes. It also reports the latest validated startup attempt, including requested versus resolved Home, startup stage, outcome, and bounded failure reason; this diagnostic record never grants runtime ownership.
 ```bash
 sanad-dev status
 ```

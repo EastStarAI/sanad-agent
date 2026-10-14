@@ -9,9 +9,7 @@ class AuthCubit extends Cubit<AuthState> {
   static final _logger = Logger('AuthCubit');
   final IAuthRepository _authRepository;
 
-  AuthCubit({required IAuthRepository authRepository})
-    : _authRepository = authRepository,
-      super(AuthInitial());
+  AuthCubit({required IAuthRepository authRepository}) : _authRepository = authRepository, super(AuthInitial());
 
   Future<void> init() async {
     emit(AuthLoading());

@@ -80,9 +80,7 @@ class SkillLoadToolTile extends StatelessWidget {
         border: Border.all(color: errorColor.withValues(alpha: 0.2)),
       ),
       child: Text(
-        event.text.isNotEmpty
-            ? event.text
-            : (event.toolOutput?.toString() ?? 'Failed to load skill.'),
+        event.text.isNotEmpty ? event.text : (event.toolOutput?.toString() ?? 'Failed to load skill.'),
         style: GoogleFonts.firaCode(fontSize: 11, color: errorColor),
       ),
     );
@@ -144,9 +142,7 @@ class _SkillDocument {
       final separator = raw.indexOf('\n\n');
       if (separator >= 0) {
         return _SkillDocument(
-          path: raw
-              .substring(SkillLoadToolTile._sourcePrefix.length, separator)
-              .trim(),
+          path: raw.substring(SkillLoadToolTile._sourcePrefix.length, separator).trim(),
           markdown: raw.substring(separator + 2),
         );
       }
@@ -165,8 +161,7 @@ class _SkillDocument {
   factory _SkillDocument.fromMap(Map<String, dynamic> output) {
     return _SkillDocument(
       path: output['path']?.toString() ?? '',
-      markdown:
-          output['prompt']?.toString() ?? output['content']?.toString() ?? '',
+      markdown: output['prompt']?.toString() ?? output['content']?.toString() ?? '',
     );
   }
 }

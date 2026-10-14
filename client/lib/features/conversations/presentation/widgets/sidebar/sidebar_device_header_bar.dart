@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 
 import '../../../../devices/domain/models/device_config.dart';
 import '../../../../devices/presentation/utils/device_ui_mapper.dart';
@@ -77,7 +78,7 @@ class _DeviceDropdown extends StatelessWidget {
         children: [
           SizedBox.square(
             dimension: 16,
-            child: CircularProgressIndicator(
+            child: AppProgressIndicator(
               strokeWidth: 2,
               valueColor: AlwaysStoppedAnimation(theme.colorScheme.onSurfaceVariant),
             ),

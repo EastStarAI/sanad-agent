@@ -7,11 +7,11 @@ This contract applies to `agent/lib/plugins/`.
 - Plugins provide generic lifecycle hooks around engine execution only.
 - `PluginManager` owns registration, initialization, hook ordering, failure isolation, and disposal.
 - `BasePlugin` defines the lifecycle contract; implementations must not bypass runtime, persistence, capability, or interface owners.
-- `ContextEngine` may provide history/context transformation through plugin hooks but must not become a second conversation-history owner.
+- Plugins must not become a second conversation-history owner or perform context compaction.
 
 ## Lifecycle
 - Initialize each plugin once through composition and dispose it with the owning runtime.
-- Preserve deterministic hook order and run context compression before plugin hooks so plugins observe the final effective history.
+- Preserve deterministic hook order around pre/post model execution.
 - Contain plugin failures so an optional plugin cannot terminate the daemon or corrupt committed runtime state.
 - Do not execute terminal delivery, durable admission, provider credential mutation, or platform routing from plugin hooks.
 

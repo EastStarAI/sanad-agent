@@ -29,6 +29,8 @@ void main() {
     await tester.pump();
 
     expect(find.textContaining('Cached input: 120k tokens'), findsOneWidget);
+    expect(find.textContaining('Context window:75% full'), findsOneWidget);
+    expect(find.textContaining('Measurement:'), findsNothing);
     expect(find.textContaining('Cache write'), findsNothing);
   });
 

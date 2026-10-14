@@ -4,6 +4,8 @@ Map<String, dynamic> buildSessionPayload({
   required SessionState session,
   Map<String, dynamic>? sessionMetadata,
   Map<String, dynamic>? metadataOverrides,
+  Map<String, dynamic>? thinkingControl,
+  Map<String, dynamic>? thinkingCorrection,
 }) {
   final persistedMetadata = sessionMetadata == null
       ? <String, dynamic>{}
@@ -50,8 +52,19 @@ Map<String, dynamic> buildSessionPayload({
       'route_revision': session.routeRevision,
       'route_updated_at': session.routeUpdatedAt.toUtc().toIso8601String(),
     },
+    'history_revision': session.historyRevision,
+    'lineage_id': session.lineageId,
+    'fork_sequence': session.forkSequence,
+    if (session.parentSessionId != null)
+      'parent_session_id': session.parentSessionId,
+    if (session.forkedFromMessageId != null)
+      'forked_from_message_id': session.forkedFromMessageId,
+    if (session.forkedFromTurnId != null)
+      'forked_from_turn_id': session.forkedFromTurnId,
     if (thinkingMode != null && thinkingMode.isNotEmpty)
       'thinking_mode': thinkingMode,
+    'thinking_control': ?thinkingControl,
+    'thinking_correction': ?thinkingCorrection,
     if (mergedMetadata['context_tokens'] != null)
       'context_tokens': mergedMetadata['context_tokens'],
     if (mergedMetadata['context_usage'] is Map)

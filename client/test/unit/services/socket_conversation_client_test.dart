@@ -393,8 +393,12 @@ void main() {
     final second = client.refreshSessions();
     await Future<void>.delayed(Duration.zero);
 
-    // 3. Force-dispose the old gateway to make the request fail immediately
-    client.updateSocketService(socket);
+    // 3. Replace the transport so disposing the old gateway fails the pending
+    // request immediately. Rebinding the identical socket is intentionally a
+    // no-op and would make this test wait for the production request timeout.
+    final replacementSocket = FakeSanadSocketService()..setConnected(true);
+    addTearDown(replacementSocket.dispose);
+    client.updateSocketService(replacementSocket);
 
     // 4. Await the second future, it should return the cached list
     final secondResult = await second;

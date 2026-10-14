@@ -1,12 +1,17 @@
 import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/conversation_clock_scope.dart';
 import 'package:sanad_client/utils/format_utils.dart';
 import 'package:sanad_client/utils/link_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/plan_task_list.dart';
 import 'package:sanad_client/shared/widgets/copy_button.dart';
 import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/compaction_event_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/tool_presentation_helper.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/file_tool_tile.dart';
@@ -16,6 +21,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/tools/a
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/generic_tool_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/tools/skill_load_tool_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/user_message_tile.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_fork_event_tile.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/app_markdown_renderer.dart';
 
 enum ToolWaitingIndicator { none, permission, question }
@@ -34,6 +40,9 @@ class EventTile extends StatefulWidget {
   final VoidCallback? onCancelEdit;
   final Future<void> Function()? onSubmitEdit;
   final Future<void> Function()? onRetry;
+  final bool canFork;
+  final bool isForkPending;
+  final Future<void> Function()? onFork;
   final ToolWaitingIndicator waitingIndicator;
 
   const EventTile({
@@ -51,6 +60,9 @@ class EventTile extends StatefulWidget {
     this.onCancelEdit,
     this.onSubmitEdit,
     this.onRetry,
+    this.canFork = false,
+    this.isForkPending = false,
+    this.onFork,
     this.waitingIndicator = ToolWaitingIndicator.none,
   });
 
@@ -115,11 +127,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     }
 
     if (widget.isExpanded != null && widget.isExpanded != oldWidget.isExpanded) {
-      _setExpanded(
-        widget.isExpanded!,
-        notifyParent: false,
-        rebuild: false,
-      );
+      _setExpanded(widget.isExpanded!, notifyParent: false, rebuild: false);
     }
   }
 
@@ -190,6 +198,9 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
           onRetry: widget.onRetry,
         );
       case EventKind.informational:
+        if (widget.event.metadata?['informational_kind'] == 'session_fork') {
+          return ConversationForkEventTile(event: widget.event);
+        }
         return _buildInformational(context);
       default:
         return _buildCollapsibleEvent(context);
@@ -197,6 +208,31 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   }
 
   Widget _buildInformational(BuildContext context) {
+    if (widget.event.metadata?['compaction_event'] == true) {
+      final metadata = widget.event.metadata ?? const {};
+      final snapshot = CompactionEventSnapshot(
+        sessionId: widget.event.sessionId ?? '',
+        compactionId: metadata['compaction_id']?.toString() ?? widget.event.id,
+        status: CompactionLifecycleStatus.fromWire(
+          metadata['compaction_status'] ?? widget.event.status.name,
+        ),
+        trigger: CompactionTriggerKind.fromWire(
+          metadata['compaction_trigger'] ?? 'manual',
+        ),
+        failureReason: metadata['failure_reason']?.toString(),
+        contextWindowTokens: metadata['context_window_tokens'] as int?,
+        effectiveInputBudgetTokens: metadata['effective_input_budget_tokens'] as int?,
+        autoThresholdTokens: metadata['auto_threshold_tokens'] as int?,
+        estimatedRequestTokensBefore: metadata['estimated_request_tokens_before'] as int?,
+        estimatedRequestTokensAfter: metadata['estimated_request_tokens_after'] as int?,
+        beforeMeasurementKind: metadata['before_measurement_kind']?.toString(),
+        providerConfirmedRequestTokensAfter: metadata['provider_confirmed_request_tokens_after'] as int?,
+        retainedTailTokens: metadata['retained_tail_tokens'] as int?,
+        durationMs: metadata['duration_ms'] as int?,
+      );
+      return CompactionEventTile(snapshot: snapshot);
+    }
+
     return Semantics(
       label: 'Session route changed',
       child: Padding(
@@ -260,33 +296,35 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   Widget _buildReasoningRow(BuildContext context) {
     final color = Theme.of(context).colorScheme.onSurface;
     final isRunning = widget.event.status == EventStatus.running;
+    final textDirection = Directionality.of(context);
+    final isArabic = textDirection == TextDirection.rtl;
     final preview = _firstWords(widget.event.text, 5);
 
     return Semantics(
-      label: 'Thinking',
+      label: isArabic ? 'تفكير' : 'Thinking',
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: 4.0, horizontal: 12.0),
-        child: Row(
-          children: [
-            if (isRunning)
-              SizedBox(
-                width: 14,
-                height: 14,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Theme.of(context).colorScheme.primary,
+        child: Directionality(
+          textDirection: textDirection,
+          child: Row(
+            children: [
+              if (isRunning)
+                SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: AppProgressIndicator(
+                    strokeWidth: 2,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
+                )
+              else
+                Icon(
+                  Icons.psychology_outlined,
+                  size: 18,
+                  color: color.withValues(alpha: 0.4),
                 ),
-              )
-            else
-              Icon(
-                Icons.psychology_outlined,
-                size: 18,
-                color: color.withValues(alpha: 0.4),
-              ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Directionality(
-                textDirection: TextDirection.ltr,
+              const SizedBox(width: 8),
+              Flexible(
                 child: RichText(
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
@@ -294,7 +332,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                     style: GoogleFonts.outfit(fontSize: 13, letterSpacing: 0.5),
                     children: [
                       TextSpan(
-                        text: 'Thinking: ',
+                        text: isArabic ? 'تفكير: ' : 'Thinking: ',
                         style: TextStyle(
                           color: color.withValues(alpha: 0.4),
                           fontWeight: FontWeight.w500,
@@ -312,8 +350,8 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                   ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -329,13 +367,15 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     return SelectionArea(
       child: Directionality(
         textDirection: TextUtils.getTextDirection(widget.event.text),
-        child: SizedBox(
-          key: Key('primary_markdown_${widget.event.kind.name}'),
-          width: double.infinity,
-          child: AppMarkdownRenderer(
-            data: widget.event.text,
-            isFinal: true,
-            onTapLink: _onTapLink,
+        child: KeyedSubtree(
+          key: Key('assistant_message_body:${widget.event.id}'),
+          child: SizedBox(
+            width: double.infinity,
+            child: AppMarkdownRenderer(
+              data: widget.event.text,
+              isFinal: true,
+              onTapLink: _onTapLink,
+            ),
           ),
         ),
       ),
@@ -343,7 +383,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
   }
 
   Widget _buildFinalAnswerFooter(BuildContext context) {
-    final metaText = EventMetadataFormatter.responseMetaText(
+    final metaParts = EventMetadataFormatter.responseMetaParts(
       widget.event,
       context,
     );
@@ -351,34 +391,71 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       widget.event.timestamp,
       context,
     );
-    return Row(
-      children: [
-        if (metaText.isNotEmpty || timestampText.isNotEmpty)
-          Expanded(
-            child: Directionality(
-              textDirection: TextDirection.ltr,
+    final subTextStyle = GoogleFonts.roboto(
+      color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
+      fontSize: 11,
+    );
+
+    return Directionality(
+      textDirection: TextDirection.ltr,
+      child: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          if (timestampText.isNotEmpty)
+            Tooltip(
+              message: EventMetadataFormatter.dateTooltip(
+                widget.event.timestamp,
+                context,
+              ),
               child: Text(
-                [
-                  timestampText,
-                  metaText,
-                ].where((part) => part.isNotEmpty).join('  •  '),
-                style: GoogleFonts.roboto(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
-                  fontSize: 11,
-                ),
+                timestampText,
+                style: subTextStyle,
               ),
             ),
-          )
-        else
-          const Spacer(),
-        const SizedBox(width: 8),
-        CopyButton(
-          text: widget.event.text,
-          successMessage: 'Answer copied to clipboard',
-        ),
-      ],
+          for (int i = 0; i < metaParts.length; i++)
+            Text(
+              (i == 0 && timestampText.isEmpty) ? metaParts[i] : '•  ${metaParts[i]}',
+              style: subTextStyle,
+            ),
+          Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (widget.canFork) ...[
+                Semantics(
+                  label: 'Fork',
+                  child: IconButton(
+                    key: const Key('fork_conversation_button'),
+                    tooltip: 'Fork',
+                    style: ConversationActionStyle.buttonStyle,
+                    visualDensity: VisualDensity.compact,
+                    constraints: ConversationActionStyle.constraints,
+                    padding: EdgeInsets.zero,
+                    onPressed: widget.isForkPending || widget.onFork == null ? null : () => unawaited(widget.onFork!()),
+                    icon: widget.isForkPending
+                        ? const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: AppProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            Icons.account_tree_outlined,
+                            size: ConversationActionStyle.iconSize,
+                            color: ConversationActionStyle.iconColor(context),
+                          ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+              ],
+              CopyButton(
+                text: widget.event.text,
+                successMessage: 'Answer copied to clipboard',
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 
@@ -390,25 +467,15 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     final bool isToolLike = widget.event.kind == EventKind.toolCall || widget.event.kind == EventKind.plan;
     final bool canExpand = isToolLike;
 
-    return Column(
-      children: [
-        _buildEventHeader(canExpand),
-        _buildEventBody(),
-      ],
-    );
+    return Column(children: [_buildEventHeader(canExpand), _buildEventBody()]);
   }
 
   // ── Sub-Components ────────────────────────────────────────────────────────
 
   Widget _buildEventHeader(bool canExpand) {
     final bool isError = widget.event.status == EventStatus.error;
-    final titleText = ToolPresentationHelper.getEventTitle(widget.event);
-    final titleDetail = widget.event.kind == EventKind.toolCall
-        ? ToolPresentationHelper.getToolDetailSuffix(widget.event)
-        : '';
-    final textDirection = TextUtils.getTextDirection(
-      titleDetail.isNotEmpty ? titleDetail : titleText,
-    );
+    final textDirection = Directionality.of(context);
+    final isArabic = textDirection == TextDirection.rtl;
 
     final Widget header = InkWell(
       onTap: canExpand ? _toggleExpanded : null,
@@ -431,12 +498,15 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                         event: widget.event,
                         titleColor: _getTitleColor(context),
                         textDirection: textDirection,
+                        isArabic: isArabic,
                       ),
                     ),
                     if (canExpand) ...[
                       const SizedBox(width: 4),
                       RotationTransition(
-                        turns: _expansionAnimation.drive(Tween<double>(begin: 0.0, end: 0.25)),
+                        turns: _expansionAnimation.drive(
+                          Tween<double>(begin: 0.0, end: 0.25),
+                        ),
                         child: Icon(
                           Icons.chevron_right,
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -444,6 +514,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                         ),
                       ),
                     ],
+                    _buildToolHeaderTimer(context),
                     if (isError) ...[
                       const SizedBox(width: 6),
                       Icon(
@@ -462,6 +533,87 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     );
 
     return header;
+  }
+
+  Widget _buildToolHeaderTimer(BuildContext context) {
+    if (widget.event.kind != EventKind.toolCall) {
+      return const SizedBox.shrink();
+    }
+
+    final textStyle = GoogleFonts.outfit(
+      fontSize: 11.5,
+      fontWeight: FontWeight.w500,
+      fontFeatures: const [FontFeature.tabularFigures()],
+      color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.65),
+    );
+
+    if (widget.event.status == EventStatus.running) {
+      final startedAt = DateTime.tryParse(
+        widget.event.metadata?['started_at']?.toString() ?? '',
+      );
+      final startTime = startedAt ?? widget.event.timestamp;
+      final clock = ConversationClockScope.maybeOf(context);
+      if (clock != null) {
+        return Padding(
+          padding: const EdgeInsetsDirectional.only(start: 6),
+          child: ValueListenableBuilder<DateTime>(
+            valueListenable: clock,
+            builder: (context, now, _) {
+              final diff = now.difference(startTime);
+              final text = EventMetadataFormatter.formatRuntime(
+                diff.inMilliseconds < 0 ? 0 : diff.inMilliseconds,
+              );
+              return Text(
+                text.isEmpty ? '0s' : text,
+                key: const Key('tool_header_timer'),
+                style: textStyle,
+              );
+            },
+          ),
+        );
+      }
+      final diff = DateTime.now().difference(startTime);
+      final text = EventMetadataFormatter.formatRuntime(
+        diff.inMilliseconds < 0 ? 0 : diff.inMilliseconds,
+      );
+      return Padding(
+        padding: const EdgeInsetsDirectional.only(start: 6),
+        child: Text(
+          text.isEmpty ? '0s' : text,
+          key: const Key('tool_header_timer'),
+          style: textStyle,
+        ),
+      );
+    }
+
+    final runtimeMs =
+        widget.event.runtimeMs ??
+        (() {
+          final raw = widget.event.metadata?['runtime_ms'];
+          if (raw is num) return raw.toInt();
+          final startedAt = DateTime.tryParse(widget.event.metadata?['started_at']?.toString() ?? '');
+          final terminalAt = DateTime.tryParse(widget.event.metadata?['terminal_at']?.toString() ?? '');
+          if (startedAt != null && terminalAt != null) {
+            final diff = terminalAt.difference(startedAt).inMilliseconds;
+            return diff >= 0 ? diff : null;
+          }
+          return null;
+        })();
+    if (runtimeMs != null) {
+      final text = EventMetadataFormatter.formatRuntime(runtimeMs);
+      if (text.isNotEmpty) {
+        return Padding(
+          padding: const EdgeInsetsDirectional.only(start: 6),
+          child: Text(
+            text,
+            key: const Key('tool_header_runtime'),
+            style: textStyle,
+          ),
+        );
+      }
+    }
+
+    return const SizedBox.shrink();
   }
 
   Widget _buildEventBody() {
@@ -486,16 +638,16 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
               decoration: BoxDecoration(
                 color: Theme.of(context).scaffoldBackgroundColor.withValues(alpha: 0.5),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.05)),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.05),
+                ),
               ),
               child: Padding(
                 padding: const EdgeInsets.all(12),
                 child: SelectionArea(
                   child: ConstrainedBox(
                     constraints: const BoxConstraints(maxHeight: 500),
-                    child: SingleChildScrollView(
-                      child: _buildEventContent(),
-                    ),
+                    child: SingleChildScrollView(child: _buildEventContent()),
                   ),
                 ),
               ),
@@ -510,7 +662,9 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         label: isQuestion ? 'Waiting for your answer' : 'Waiting for permission',
         child: Icon(
           isQuestion ? Icons.help_outline_rounded : Icons.shield_outlined,
-          key: Key(isQuestion ? 'tool_waiting_question_icon' : 'tool_waiting_permission_icon'),
+          key: Key(
+            isQuestion ? 'tool_waiting_question_icon' : 'tool_waiting_permission_icon',
+          ),
           size: 18,
           color: Theme.of(context).colorScheme.tertiary,
         ),
@@ -522,7 +676,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
         child: SizedBox(
           width: 14,
           height: 14,
-          child: CircularProgressIndicator(
+          child: AppProgressIndicator(
             key: const Key('tool_running_progress_indicator'),
             strokeWidth: 2,
             color: Theme.of(context).colorScheme.primary,
@@ -535,7 +689,9 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
     final cleanName = ToolPresentationHelper.cleanToolTitle(rawName);
     if (widget.event.kind == EventKind.toolCall) {
       if (cleanName == 'Read' || cleanName == 'Write' || cleanName == 'Edit') {
-        final fileName = ToolPresentationHelper.getToolDetailSuffix(widget.event);
+        final fileName = ToolPresentationHelper.getToolDetailSuffix(
+          widget.event,
+        );
         if (fileName.isNotEmpty) {
           return FileExtensionIcon(fileName: fileName, size: 18);
         }
@@ -546,7 +702,10 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       }
     }
 
-    final (icon, color) = ToolPresentationHelper.getEventIconData(context, widget.event);
+    final (icon, color) = ToolPresentationHelper.getEventIconData(
+      context,
+      widget.event,
+    );
     return Icon(icon, size: 18, color: color.withValues(alpha: 0.7));
   }
 
@@ -570,14 +729,27 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
 
   Widget _buildToolContent() {
     final toolName = widget.event.toolName ?? '';
+    final category = ToolPresentationHelper.cleanToolTitle(toolName);
+
+    // A terminal result can arrive before its matching tool-use input during
+    // live/history reconciliation. The specialized tile still unwraps and
+    // renders that result safely without requiring a command suffix.
+    if (category == 'Ran') {
+      return Directionality(
+        textDirection: TextDirection.ltr,
+        child: TerminalToolTile(event: widget.event),
+      );
+    }
+
     final details = ToolPresentationHelper.getToolDetailSuffix(widget.event);
 
     // If we could not extract any suffix details, fall back to the old GenericToolTile (input/output JSON)
     if (details.isEmpty) {
-      return GenericToolTile(event: widget.event);
+      return Directionality(
+        textDirection: TextDirection.ltr,
+        child: GenericToolTile(event: widget.event),
+      );
     }
-
-    final category = ToolPresentationHelper.cleanToolTitle(toolName);
 
     switch (category) {
       case 'Read':
@@ -585,12 +757,13 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       case 'Edit':
       case 'Search':
       case 'Grep':
-        return FileToolTile(
-          event: widget.event,
-          isFullyExpanded: _isExpanded && _expansionController.isCompleted,
+        return Directionality(
+          textDirection: TextDirection.ltr,
+          child: FileToolTile(
+            event: widget.event,
+            isFullyExpanded: _isExpanded && _expansionController.isCompleted,
+          ),
         );
-      case 'Ran':
-        return TerminalToolTile(event: widget.event);
       case 'Search Web':
       case 'Fetch':
         return WebToolTile(event: widget.event);
@@ -602,7 +775,10 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       // case 'Memory':
       //   return MemoryToolTile(event: widget.event);
       default:
-        return GenericToolTile(event: widget.event);
+        return Directionality(
+          textDirection: TextDirection.ltr,
+          child: GenericToolTile(event: widget.event),
+        );
     }
   }
 

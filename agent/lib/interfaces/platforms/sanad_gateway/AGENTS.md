@@ -14,8 +14,15 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Use device-first canonical envelopes with explicit device, hardware, session, request, origin, and typed delivery identity.
 - Do not emit legacy agent type fields or legacy thread identity in new payloads.
 - Preserve opaque event id across transport copies and preserve run/model-step/tool-call distinctions.
+- A session-bound Local Gateway response retains the explicit device identity captured for that session. A later unrelated command on the same socket must not replace it with another device or hardware identity; socket identity is fallback-only when no session identity exists.
+- A newly accepted Local Gateway socket starts with the initialized Agent `hardware_id`, so platform-family events emitted before its first command still carry the canonical local inventory identity. Do not emit or accept a synthetic local runtime identity.
 - `thinking_mode` is the only session/persistence/protocol field name; do not accept or emit aliases.
 - Every request-correlated response carries the original request id.
+
+## Cross-Transport Delivery Presence
+- Platform-family fan-out is Local-first and awaited before Cloud serialization. Local write failures are isolated and remain Cloud-eligible.
+- `DeliveryPresenceController` owns bounded in-memory event-local delivery results. The Cloud adapter consumes each result once, intersects it with the fresh Gateway-authored Cloud instance lease, and emits sorted `local_delivery_client_instance_ids` only for instances that received the same canonical `event_id` locally.
+- Local delivery results and Local membership never leave Agent memory except for that one event-local exclusion list; missing/expired/ambiguous state preserves Cloud egress.
 
 ## Local Runtime Context
 - Rebuild per-turn workspace tools before assembling fresh runtime-owned system context for the runner.
@@ -33,7 +40,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 ## Session and History
 - `create_session` bootstraps without execution and preserves an explicit supplied title.
 - Workspace-associated session events include workspace identity and recoverable display metadata.
-- Session lists use keyset ordering by last accepted user message then session id; only canonical user acceptance advances ordering.
+- Session lists use keyset ordering by the canonical activity timestamp then session id. Fork creation initializes the child at commit time so it leads the list; afterward only canonical user acceptance advances ordering.
 - Reject incompatible filters, malformed cursors, and non-positive limits explicitly.
 - History omits absent optional runtime, metadata, and request fields rather than emitting null.
 - Hydrate durable pending steer, unacknowledged draft recovery, runtime notice, route transitions, canonical reasoning/tool/final events, and latest context usage.
@@ -46,7 +53,8 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - Restart draft recovery is text-free until a first-writer claim succeeds; only the winning direct response carries recovered items.
 - User-stop recovery requires its private owner token for acknowledgment. Restart recovery requires the durable winning claimant id.
 - History and broadcasts never grant recovery ownership or expose claimed text.
-- Turn edit/retry classifies replay safety before cancellation, requires explicit unsafe/unknown confirmation, establishes authoritative idle, then truncates and dispatches replacement.
+- Turn edit/retry classifies replay safety before cancellation, requires explicit unsafe/unknown confirmation, rejects steer targets before Stop, serializes one replay per session, waits for an authoritative `idle` snapshot after scoped stop, then atomically soft-rewinds and accepts the replacement user record before dispatch.
+- `session.fork` materializes an independent child from a durable terminal final-answer identity. The daemon copies the active prefix server-side in one transaction; the child starts idle and does not inherit runtime work. Child history derives one trailing stable `session.forked` UI event from session lineage without persisting it as a model-visible message.
 
 ## Runtime Queries and Provider Commands
 - Shared handlers own workspace list/create/remove/tree, MCP list/save/delete/replace/inspect, skills, slash commands, device settings, provider setup, models, session queries, recovery, replay, and remote update/restart.
@@ -87,6 +95,8 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 
 ## Cloud Device Authentication
 - A key-bound `sanad_agent` Device Credential never registers by bearer possession alone. Request a one-use Gateway challenge, then send an ES256 proof over `SOCKET`, the canonical Gateway registration target, nonce, bounded issue time, and fresh JTI.
+- Authentication-lock timeout during reconnect registration is transient and contained within the cloud adapter. Retry only while the socket remains connected, coalesce concurrent registration callbacks, and obtain a fresh challenge instead of replaying a nonce observed before or during contention.
+- Agent registration preserves the device-runtime `capabilities` object and negotiates transport features separately through `transport_capabilities`; delivery-presence advertisement must never replace or change the runtime capability schema.
 - The registration proof uses the same Agent-owned P-256 key approved during Device Authorization. Never send the private key, device code, or proof through logs or durable protocol state.
 - One-command pairing is a separate provisioning grant but has the same final possession boundary: request a challenge before claim, send pairing token plus public JWK and proof, and retain the same key/credential for fresh-proof lost-response recovery.
 - User `sanad_client` access credentials are not an Agent registration fallback for new key-bound enrollment. Their login or rotation must not start Agent registration, and an Agent registration rejection must never refresh the User credential family.
@@ -101,11 +111,12 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
   runtime nonce only as local ownership evidence; neither value is an
   authentication credential, and managed mutation still requires the complete
   launcher lease and client identity to agree.
+- After an authenticated Local WebSocket upgrade, a Client may send one bounded `client.hello` with protocol/version, Client instance UUID, allowlisted display metadata, and capabilities. The Agent records that instance only for the lifetime of the authenticated Local socket; hello remains correlation-only, grants no command authorization, carries no Cloud assertion, and never creates cloud-published Local presence.
 - Native desktop authentication reconciliation is local-only. Accept exactly `{"type":"authentication_exchange"}` with no additional fields, reload owner-only `auth.json`, and broadcast no credentials. Reject unexpected fields before payload logging; never route this event through the cloud platform. CLI writers retry the authenticated HTTP trigger within a strict bound, require an explicit credential-free acknowledgment, treat an absent daemon as expected, and surface a restart instruction when a reachable daemon does not reconcile.
 - Automatic co-located coupling uses the authenticated loopback HTTP surface only. It may return bounded status, expiry, and non-secret enrollment request identity; it must never return or accept User tokens, Device Credentials, private device codes, proofs, or account identity. Authenticated body-free `DELETE` cancels the current pending enrollment through the Agent-owned private device code and proof, invalidates stale redemption completion, and returns only bounded status so the next start owns a fresh request. Query-bearing and unsupported-method requests fail closed.
 - Explicit Agent logout is admitted only as an authenticated local Desktop `POST /auth/logout` with no query or body. It delegates to `AuthManager.logout()`, returns bounded credential-free status, disconnects cloud authorization through the normal auth change signal, and never stops the Local Gateway.
-- Keep streaming events at fine/debug log level and lifecycle, command, and terminal events concise at info level.
+- Keep streaming events at fine/debug log level and lifecycle, command, and terminal events concise at info level. Command lifecycle logs use one privacy-safe stable Client reference shared with Sessions & Devices: authenticated instance identity is preferred, account-session identity is a legacy fallback, normalized kind/platform remain bounded prefixes, and raw ids never enter logs. Origin delivery retains the correlated Client tag; multi-recipient delivery uses `[clients]` rather than claiming one recipient. Malformed or absent identity falls back to `[client]`, and free-form metadata, command envelopes, and payloads never enter logs.
 - Fine payload dumps use `SecretsRedactor.redactForLog`. Nested `secrets` maps and secret-shaped values must never appear in command, protocol, or device-event logs.
 - Daemon restart and permanent stop use the shared restart coordinator so local HTTP and protocol callers preserve acknowledgment delay and supervisor exit semantics.
 - Long-running restart safety evaluation must not serialize local HTTP acceptance; health, stop, and unrelated WebSocket upgrades remain responsive while a restart waits.
-- Never log secrets, raw recovery text, pending steer text, or full sensitive tool payloads.
+- Never log secrets, raw recovery text, pending steer text, Client instance ids, event ids, presence assertions, origin projections, command/event content, or full envelopes/tool payloads.

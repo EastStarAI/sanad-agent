@@ -75,6 +75,21 @@ This matrix covers recovery scenarios for Plan 32e: navigation history, deletion
 | D3.2 | `session_deleted` event for current session | Same as D2.x fallback logic; no confirmation dialog | ⬜ |
 | D3.3 | External delete while offline → reconnect | Session removed; fallback applied on reconnect | ⬜ |
 
+## S1: Conversation History Search
+
+| ID | Scenario | Expected | Status |
+|----|----------|----------|--------|
+| S1.1 | Search a title or visible user/assistant phrase (including a thought) beyond loaded sidebar pages | One result per matching conversation from the selected Agent | ✅ Automated |
+| S1.2 | Match exists only in system, reasoning-only, tool, private, superseded, or otherwise non-visible assistant content | No result is produced from that content | ✅ Automated |
+| S1.3 | Search Arabic text and English text with ASCII case/whitespace variation | Deterministic results follow the documented normalization | ✅ Automated |
+| S1.4 | Type two queries quickly, clear during a request, or change query during load-more | Stale generations never replace or append results | ✅ Automated |
+| S1.5 | Search returns empty or fails | Explicit empty or retryable error state; no sidebar cache is presented as complete results | ✅ Automated |
+| S1.6 | Select a content hit outside the loaded history page | Atomic swap loads the Agent-issued anchor and opens the matching event | ✅ Automated |
+| S1.7 | Use wide and compact layouts | Wide dialog and compact bottom sheet expose equivalent controls and results | ✅ Widget / manual compact smoke |
+| S1.8 | Confirm IME composition or use arrows, Enter, clear, and Escape | Composition does not select early; keyboard controls remain usable | ✅ Automated |
+| S1.9 | Reuse a cursor with another query or send invalid bounds | Agent returns a correlated typed error and no misleading page | ✅ Automated |
+| S1.10 | Select a result absent from partial sidebar pages, then select it again after scrolling the open session away from its anchor | The route remains on the result session with its real title/workspace metadata; no sidebar **Load more** is required; the second selection remounts the anchored timeline even when the event is already loaded | ✅ Automated + live driver |
+
 ## V1: Timeline Viewport Restoration
 
 | ID | Scenario | Expected | Status |

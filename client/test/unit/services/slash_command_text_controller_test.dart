@@ -9,7 +9,10 @@ void main() {
   group('SlashCommandTextController', () {
     test('exports selected slash command tokens back to plain text', () {
       final controller = SlashCommandTextController();
-      const originalValue = TextEditingValue(text: '/tes please help', selection: TextSelection.collapsed(offset: 4));
+      const originalValue = TextEditingValue(
+        text: 'please /tes help',
+        selection: TextSelection.collapsed(offset: 12),
+      );
       final query = SkillComposerUtils.detectSlashQuery(originalValue)!;
 
       controller.value = controller.applySlashCommandSelection(
@@ -22,7 +25,7 @@ void main() {
         ),
       );
 
-      expect(controller.exportPlainText(), 'test sanad plugin please help');
+      expect(controller.exportPlainText(), 'please test sanad plugin help');
     });
 
     test('exports selected slash command token metadata for dispatch rewriting', () {
@@ -53,7 +56,10 @@ void main() {
 
     test('removes the whole token when the marker is deleted', () {
       final controller = SlashCommandTextController();
-      const originalValue = TextEditingValue(text: '/review', selection: TextSelection.collapsed(offset: 7));
+      const originalValue = TextEditingValue(
+        text: 'please /review',
+        selection: TextSelection.collapsed(offset: 14),
+      );
       final query = SkillComposerUtils.detectSlashQuery(originalValue)!;
 
       controller.value = controller.applySlashCommandSelection(
@@ -68,7 +74,7 @@ void main() {
         selection: TextSelection.collapsed(offset: markerIndex),
       );
 
-      expect(controller.exportPlainText().trim(), isEmpty);
+      expect(controller.exportPlainText().trim(), 'please');
     });
   });
 }

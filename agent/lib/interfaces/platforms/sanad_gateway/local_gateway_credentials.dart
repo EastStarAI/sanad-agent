@@ -36,10 +36,29 @@ class LocalGatewayCredentials {
         // Another process won first creation; validate its file below.
       }
     }
-    boundary.readSecretBytes(lockRelativePath);
+    if (!Platform.isWindows) {
+      boundary.readSecretBytes(lockRelativePath);
+    }
 
     final lock = lockFile.openSync(mode: FileMode.append);
-    await lock.lock(FileLock.exclusive);
+    final stopwatch = Stopwatch()..start();
+    while (true) {
+      try {
+        await lock.lock(FileLock.exclusive);
+        break;
+      } on FileSystemException catch (error) {
+        if (const {11, 33, 35}.contains(error.osError?.errorCode) &&
+            stopwatch.elapsed < const Duration(seconds: 10)) {
+          await Future.delayed(const Duration(milliseconds: 25));
+          continue;
+        }
+        lock.closeSync();
+        rethrow;
+      } catch (_) {
+        lock.closeSync();
+        rethrow;
+      }
+    }
     try {
       final persisted = _readFrom(boundary);
       if (persisted != null) return persisted;

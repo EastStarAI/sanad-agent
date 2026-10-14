@@ -277,6 +277,7 @@ class ConversationCacheCodec {
     'model_display': s.modelDisplay,
     'model_provider': s.modelProvider,
     'route_revision': s.routeRevision,
+    'history_revision': s.historyRevision,
     'thinking_mode': s.thinkingMode,
     'reasoning_level': s.reasoningLevel,
     'context_tokens': s.contextTokens,

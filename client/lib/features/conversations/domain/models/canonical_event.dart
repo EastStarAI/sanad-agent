@@ -51,6 +51,47 @@ class CanonicalEvent {
     return value == null || value.isEmpty ? null : value;
   }
 
+  String? get messageId {
+    final value = metadata?['message_id']?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  String? get turnId {
+    final value = metadata?['turn_id']?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  String? get inputKind {
+    final value = metadata?['input_kind']?.toString().trim();
+    return value == null || value.isEmpty ? null : value;
+  }
+
+  bool get isSteerInput {
+    if (inputKind == 'steer' || metadata?['steer'] == true) return true;
+    final pending = metadata?['pending_steer_state']?.toString();
+    return pending != null && pending.isNotEmpty;
+  }
+
+  bool get isReplayableRootTurn {
+    return kind == EventKind.userMessage &&
+        requestId != null &&
+        messageId != null &&
+        turnId != null &&
+        inputKind == 'root_turn' &&
+        metadata?['replay_eligible'] == true &&
+        !isSteerInput &&
+        metadata?['history_status']?.toString() != 'superseded';
+  }
+
+  bool get isForkableFinalAnswer {
+    return kind == EventKind.finalAnswer &&
+        status == EventStatus.done &&
+        messageId != null &&
+        turnId != null &&
+        metadata?['history_status']?.toString() != 'superseded' &&
+        metadata?['superseded_by_steer'] != true;
+  }
+
   int? get generation => _metadataInt(metadata?['generation']);
 
   int? get revision => _metadataInt(metadata?['revision']);
@@ -142,6 +183,11 @@ class CanonicalEvent {
 
   /// Merges another event into this one (e.g. tool_result into tool_use)
   CanonicalEvent merge(CanonicalEvent other) {
+    final derivedRuntimeMs = other.runtimeMs ??
+        runtimeMs ??
+        (other.timestamp.isAfter(timestamp)
+            ? other.timestamp.difference(timestamp).inMilliseconds
+            : null);
     return copyWith(
       text: other.text.isNotEmpty ? other.text : text,
       status: _terminalStatusPrecedence(status, other.status),
@@ -152,7 +198,7 @@ class CanonicalEvent {
       provider: other.provider ?? provider,
       usage: other.usage ?? usage,
       contextUsage: other.contextUsage ?? contextUsage,
-      runtimeMs: other.runtimeMs ?? runtimeMs,
+      runtimeMs: derivedRuntimeMs,
       contextTokens: other.contextTokens ?? contextTokens,
       thinkingMode: other.thinkingMode ?? thinkingMode,
       reasoningLevel: other.reasoningLevel ?? reasoningLevel,
@@ -232,8 +278,51 @@ EventStatus _terminalStatusPrecedence(EventStatus current, EventStatus incoming)
 }
 
 LlmUsageSnapshot? latestContextUsage(List<CanonicalEvent> events) {
-  for (final event in events.reversed) {
+  for (var index = events.length - 1; index >= 0; index--) {
+    final event = events[index];
+    final compactionUsage = _completedCompactionContextUsage(event);
+    if (compactionUsage != null) {
+      LlmUsageSnapshot? priorUsage;
+      for (var priorIndex = index - 1; priorIndex >= 0; priorIndex--) {
+        if (events[priorIndex].metadata?['compaction_event'] == true) continue;
+        priorUsage = events[priorIndex].contextUsage;
+        if (priorUsage != null) break;
+      }
+      final sameModel =
+          priorUsage == null ||
+          compactionUsage.modelId == null ||
+          priorUsage.modelId == null ||
+          compactionUsage.modelId == priorUsage.modelId;
+      return LlmUsageSnapshot(
+        inputTokens: compactionUsage.inputTokens,
+        contextWindowTokens: sameModel
+            ? priorUsage?.contextWindowTokens ?? compactionUsage.contextWindowTokens
+            : compactionUsage.contextWindowTokens,
+        modelId: compactionUsage.modelId ?? priorUsage?.modelId,
+        providerInstanceId: compactionUsage.providerInstanceId ?? priorUsage?.providerInstanceId,
+        observedAt: compactionUsage.observedAt,
+      );
+    }
     if (event.contextUsage != null) return event.contextUsage;
   }
   return null;
+}
+
+LlmUsageSnapshot? _completedCompactionContextUsage(CanonicalEvent event) {
+  final metadata = event.metadata;
+  if (metadata?['compaction_event'] != true || metadata?['compaction_status'] != 'completed') {
+    return null;
+  }
+  final inputTokens =
+      _metadataInt(metadata?['provider_confirmed_request_tokens_after']) ??
+      _metadataInt(metadata?['estimated_request_tokens_after']);
+  final contextWindowTokens = _metadataInt(metadata?['context_window_tokens']);
+  if (inputTokens == null || contextWindowTokens == null) return null;
+  return LlmUsageSnapshot(
+    inputTokens: inputTokens,
+    contextWindowTokens: contextWindowTokens,
+    modelId: metadata?['model_id']?.toString(),
+    providerInstanceId: metadata?['provider_instance_id']?.toString(),
+    observedAt: event.timestamp,
+  );
 }

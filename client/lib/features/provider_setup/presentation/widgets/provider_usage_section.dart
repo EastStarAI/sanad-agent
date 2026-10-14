@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_usage_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
@@ -35,8 +35,6 @@ class ProviderUsageSection extends StatelessWidget {
     required this.instanceId,
   });
 
-  String get _deviceId => agent?.id ?? DeviceInventoryIds.localDevice;
-
   String _updatedLabel(DateTime at) {
     final local = at.toLocal();
     final delta = DateTime.now().difference(local);
@@ -50,15 +48,16 @@ class ProviderUsageSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final deviceId = agent?.id ?? context.read<ProviderUsageCubit>().localDeviceId;
 
     return BlocBuilder<ProviderUsageCubit, ProviderUsageState>(
       buildWhen: (prev, next) {
-        final a = prev.entry(_deviceId, instanceId);
-        final b = next.entry(_deviceId, instanceId);
+        final a = prev.entry(deviceId, instanceId);
+        final b = next.entry(deviceId, instanceId);
         return a != b;
       },
       builder: (context, state) {
-        final entry = state.entry(_deviceId, instanceId);
+        final entry = state.entry(deviceId, instanceId);
 
         // No entry yet, or the daemon has explicitly said this instance is
         // unsupported → render nothing. Never an empty placeholder section.
@@ -118,7 +117,7 @@ class ProviderUsageSection extends StatelessWidget {
                             ? const SizedBox(
                                 width: 10,
                                 height: 10,
-                                child: CircularProgressIndicator(strokeWidth: 1.5),
+                                child: AppProgressIndicator(strokeWidth: 1.5),
                               )
                             : const Icon(Icons.refresh, size: 12),
                         label: const Text('Refresh'),
@@ -136,7 +135,7 @@ class ProviderUsageSection extends StatelessWidget {
                           width: 14,
                           height: 14,
                           child: FittedBox(
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child: AppProgressIndicator(strokeWidth: 2),
                           ),
                         ),
                       ),
@@ -191,7 +190,7 @@ class _UsageBody extends StatelessWidget {
               SizedBox(
                 width: 18,
                 height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                child: AppProgressIndicator(strokeWidth: 2),
               ),
               SizedBox(height: 8),
               Text(
@@ -235,7 +234,7 @@ class _UsageBody extends StatelessWidget {
                 const SizedBox(
                   width: 12,
                   height: 12,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: AppProgressIndicator(strokeWidth: 2),
                 ),
                 const SizedBox(width: 6),
                 Text(
@@ -457,7 +456,7 @@ class _ResetControls extends StatelessWidget {
             TextButton.icon(
               onPressed: entry.resetInProgress ? null : () => _start(context),
               icon: entry.resetInProgress
-                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox(width: 14, height: 14, child: AppProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.restart_alt, size: 14),
               label: const Text('Reset limits'),
               style: TextButton.styleFrom(

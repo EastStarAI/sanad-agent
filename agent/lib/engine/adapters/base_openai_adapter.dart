@@ -1,6 +1,8 @@
 import 'dart:convert';
+
 import 'package:logging/logging.dart';
 import 'package:http/http.dart' as http;
+
 import '../../core/config.dart';
 import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
@@ -8,6 +10,10 @@ import '../../core/models/llm_provider_state.dart';
 import '../../core/models/tool_call.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
+import '../../core/provider_thinking/aggregator_thinking_wire_codec.dart';
+import '../../core/provider_thinking/google_thinking_wire_codec.dart';
+import '../../core/provider_thinking/openai_thinking_wire_codec.dart';
+import '../../core/provider_thinking/toggle_effort_thinking_wire_codec.dart';
 import '../../core/models/model_metadata.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 import '../../core/provider_runtime/provider_model_id.dart';
@@ -15,6 +21,7 @@ import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
 import 'models_dev_service.dart';
 import 'llm_http_exception.dart';
+import 'opencode_session_affinity.dart';
 import 'llm_request_options.dart';
 import 'provider_request_transport.dart';
 import 'tagged_reasoning_parser.dart';
@@ -26,6 +33,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
   final ProviderProfile profile;
   final http.Client? client;
   final ModelsDevService? modelsDevService;
+  final ModelContextLimitLookup? modelContextLimitLookup;
   final String? baseUrlOverride;
   final String? apiKeyOverride;
   final String? defaultModelOverride;
@@ -37,6 +45,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     this.profile, {
     this.client,
     this.modelsDevService,
+    this.modelContextLimitLookup,
     this.baseUrlOverride,
     this.apiKeyOverride,
     this.defaultModelOverride,
@@ -328,8 +337,11 @@ class BaseOpenAIAdapter implements LLMAdapter {
   @override
   Future<int> getContextLimit([String? modelOverride]) async {
     final resolvedModel = _resolveModel(modelOverride);
+    final configuredLimit = config.contextModelLimit(resolvedModel);
+    if (configuredLimit != null) return configuredLimit;
 
-    if (config.contextLimit != 4000) return config.contextLimit;
+    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
+    if (catalogLimit != null) return catalogLimit;
 
     // 1. LM Studio local probe (reference-style)
     if (profile.name == 'lm-studio') {
@@ -405,7 +417,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
     if (metadataLimit != null) return metadataLimit;
 
-    return config.contextLimit;
+    return ModelMetadata.unknownContextLimit;
   }
 
   String _resolveModel(String? override) {
@@ -430,7 +442,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
       resolvedModel: resolvedModel,
       options: options,
     );
-    final headers = _requestHeaders();
+    final headers = _requestHeaders(options);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
         url: url,
@@ -488,9 +500,10 @@ class BaseOpenAIAdapter implements LLMAdapter {
       choiceEnvelope['finish_reason'],
       hasToolCalls: toolCalls.isNotEmpty,
     );
-    final providerState = _providerStateForReasoningDetails(
-      structuredReasoning.details,
-      options,
+    final providerState = _providerStateForReasoning(
+      details: structuredReasoning.details,
+      reasoningContent: structuredReasoning.providerContent,
+      options: options,
     );
 
     return AgentResponse(
@@ -523,7 +536,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
       adapterSharedClient: client,
     );
     final request = http.Request('POST', url);
-    request.headers.addAll(_requestHeaders());
+    request.headers.addAll(_requestHeaders(options));
     final body = await _buildRequestBody(
       history,
       tools: tools,
@@ -570,10 +583,16 @@ class BaseOpenAIAdapter implements LLMAdapter {
       }
 
       final partialToolCalls = <int, _PartialToolCall>{};
+      final completedToolCalls = <ToolCall>[];
       final reasoningDetails = <dynamic>[];
       final tagFallback = TaggedReasoningStreamParser();
-      final List<String> accumulatedStreamLines = [];
       var emittedProviderState = false;
+      final contentBuffer = StringBuffer();
+      final reasoningBuffer = StringBuffer();
+      final providerReasoningContentBuffer = StringBuffer();
+      var hasProviderReasoningContent = false;
+      Map<String, dynamic>? finalUsage;
+      LLMFinishReason streamFinishReason = LLMFinishReason.unknown;
 
       try {
         await for (final line in transport.decodeSseLines(
@@ -581,7 +600,6 @@ class BaseOpenAIAdapter implements LLMAdapter {
           operation: 'generateStream',
         )) {
           transport.throwIfCancelled(operation: 'generateStream');
-          accumulatedStreamLines.add(line);
           if (line.trim().isEmpty) continue;
 
           if (line.startsWith('data:')) {
@@ -617,6 +635,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
             }
 
             final usage = _asStringMap(data['usage']);
+            if (usage != null) finalUsage = usage;
 
             if (data['choices'] == null || (data['choices'] as List).isEmpty) {
               if (usage != null) {
@@ -638,10 +657,24 @@ class BaseOpenAIAdapter implements LLMAdapter {
 
             final structuredReasoning = _extractStructuredReasoning(delta);
             reasoningDetails.addAll(structuredReasoning.details);
+            final providerReasoningContent =
+                structuredReasoning.providerContent;
+            if (providerReasoningContent is String) {
+              hasProviderReasoningContent = true;
+              providerReasoningContentBuffer.write(providerReasoningContent);
+            }
             final contentChunk = delta['content']?.toString();
             final taggedChunk = contentChunk == null
                 ? const TaggedReasoningText()
                 : tagFallback.add(contentChunk);
+            if (taggedChunk.content != null) {
+              contentBuffer.write(taggedChunk.content);
+            }
+            if (taggedChunk.reasoning != null) {
+              reasoningBuffer.write(taggedChunk.reasoning);
+            } else if (structuredReasoning.visibleText != null) {
+              reasoningBuffer.write(structuredReasoning.visibleText);
+            }
 
             if (delta['tool_calls'] != null) {
               final List<dynamic> tcList = delta['tool_calls'];
@@ -670,9 +703,18 @@ class BaseOpenAIAdapter implements LLMAdapter {
               choice?['finish_reason'],
               hasToolCalls: false,
             );
+            if (finishReason != LLMFinishReason.unknown) {
+              streamFinishReason = finishReason;
+            }
             final providerState = finishReason == LLMFinishReason.unknown
                 ? null
-                : _providerStateForReasoningDetails(reasoningDetails, options);
+                : _providerStateForReasoning(
+                    details: reasoningDetails,
+                    reasoningContent: hasProviderReasoningContent
+                        ? providerReasoningContentBuffer.toString()
+                        : null,
+                    options: options,
+                  );
             if (providerState != null) emittedProviderState = true;
 
             if (taggedChunk.content != null ||
@@ -700,6 +742,12 @@ class BaseOpenAIAdapter implements LLMAdapter {
 
         final pendingTagged = tagFallback.finish();
         if (pendingTagged.content != null || pendingTagged.reasoning != null) {
+          if (pendingTagged.content != null) {
+            contentBuffer.write(pendingTagged.content);
+          }
+          if (pendingTagged.reasoning != null) {
+            reasoningBuffer.write(pendingTagged.reasoning);
+          }
           yield AgentResponse(
             message: Message(
               role: MessageRole.assistant,
@@ -710,76 +758,121 @@ class BaseOpenAIAdapter implements LLMAdapter {
             provider: _providerForModel(resolvedModel),
           );
         }
+
+        for (final entry in partialToolCalls.entries) {
+          final partial = entry.value;
+          final decodedArguments = _tryDecodeToolArguments(
+            partial.argumentsBuffer.toString(),
+          );
+          if (decodedArguments == null) {
+            throw FormatException(
+              'Malformed arguments for streamed tool ${partial.name ?? '<unknown>'}.',
+            );
+          }
+          completedToolCalls.add(
+            ToolCall(
+              id: partial.id ?? '',
+              name: partial.name ?? '',
+              arguments: decodedArguments,
+            ),
+          );
+        }
+
+        if (completedToolCalls.isNotEmpty) {
+          final providerState = _providerStateForReasoning(
+            details: reasoningDetails,
+            reasoningContent: hasProviderReasoningContent
+                ? providerReasoningContentBuffer.toString()
+                : null,
+            options: options,
+          );
+          if (providerState != null) emittedProviderState = true;
+          yield AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              content: '',
+              toolCalls: completedToolCalls,
+              providerState: providerState,
+            ),
+            isToolCall: true,
+            usage: null,
+            model: resolvedModel,
+            provider: _providerForModel(resolvedModel),
+            finishReason: LLMFinishReason.toolCalls,
+          );
+        }
+
+        if (!emittedProviderState &&
+            (reasoningDetails.isNotEmpty || hasProviderReasoningContent)) {
+          yield AgentResponse(
+            message: Message(
+              role: MessageRole.assistant,
+              providerState: _providerStateForReasoning(
+                details: reasoningDetails,
+                reasoningContent: hasProviderReasoningContent
+                    ? providerReasoningContentBuffer.toString()
+                    : null,
+                options: options,
+              ),
+            ),
+            model: resolvedModel,
+            provider: _providerForModel(resolvedModel),
+          );
+        }
+
         if (LLMRequestDumper.isEnabled) {
+          final effectiveFinishReason = completedToolCalls.isNotEmpty
+              ? LLMFinishReason.toolCalls
+              : streamFinishReason;
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
-            'stream_lines': accumulatedStreamLines,
+            'message': {
+              'role': 'assistant',
+              'content': contentBuffer.toString(),
+              if (reasoningBuffer.isNotEmpty)
+                'reasoning': reasoningBuffer.toString(),
+              if (completedToolCalls.isNotEmpty)
+                'tool_calls': completedToolCalls
+                    .map((tc) => tc.toJson())
+                    .toList(),
+            },
+            'finish_reason': effectiveFinishReason.name,
+            'usage': ?finalUsage,
           });
         }
       } catch (e) {
         if (LLMRequestDumper.isEnabled) {
           await LLMRequestDumper.dumpResponse({
             'status_code': response.statusCode,
-            'stream_lines': accumulatedStreamLines,
+            if (contentBuffer.isNotEmpty ||
+                reasoningBuffer.isNotEmpty ||
+                partialToolCalls.isNotEmpty ||
+                completedToolCalls.isNotEmpty)
+              'partial_message': {
+                'role': 'assistant',
+                if (contentBuffer.isNotEmpty)
+                  'content': contentBuffer.toString(),
+                if (reasoningBuffer.isNotEmpty)
+                  'reasoning': reasoningBuffer.toString(),
+                if (completedToolCalls.isNotEmpty)
+                  'tool_calls': completedToolCalls
+                      .map((tc) => tc.toJson())
+                      .toList(),
+                if (partialToolCalls.isNotEmpty)
+                  'partial_tool_calls': partialToolCalls.values
+                      .map(
+                        (p) => {
+                          if (p.id != null) 'id': p.id,
+                          if (p.name != null) 'name': p.name,
+                          'arguments': p.argumentsBuffer.toString(),
+                        },
+                      )
+                      .toList(),
+              },
             'error': e.toString(),
           });
         }
         rethrow;
-      }
-
-      final completedToolCalls = <ToolCall>[];
-      for (final entry in partialToolCalls.entries) {
-        final partial = entry.value;
-        final decodedArguments = _tryDecodeToolArguments(
-          partial.argumentsBuffer.toString(),
-        );
-        if (decodedArguments == null) {
-          throw FormatException(
-            'Malformed arguments for streamed tool ${partial.name ?? '<unknown>'}.',
-          );
-        }
-        completedToolCalls.add(
-          ToolCall(
-            id: partial.id ?? '',
-            name: partial.name ?? '',
-            arguments: decodedArguments,
-          ),
-        );
-      }
-
-      if (completedToolCalls.isNotEmpty) {
-        final providerState = _providerStateForReasoningDetails(
-          reasoningDetails,
-          options,
-        );
-        if (providerState != null) emittedProviderState = true;
-        yield AgentResponse(
-          message: Message(
-            role: MessageRole.assistant,
-            content: '',
-            toolCalls: completedToolCalls,
-            providerState: providerState,
-          ),
-          isToolCall: true,
-          usage: null,
-          model: resolvedModel,
-          provider: _providerForModel(resolvedModel),
-          finishReason: LLMFinishReason.toolCalls,
-        );
-      }
-
-      if (!emittedProviderState && reasoningDetails.isNotEmpty) {
-        yield AgentResponse(
-          message: Message(
-            role: MessageRole.assistant,
-            providerState: _providerStateForReasoningDetails(
-              reasoningDetails,
-              options,
-            ),
-          ),
-          model: resolvedModel,
-          provider: _providerForModel(resolvedModel),
-        );
       }
     } finally {
       await transport.dispose();
@@ -806,9 +899,27 @@ class BaseOpenAIAdapter implements LLMAdapter {
         'max_completion_tokens': options.maxOutputTokens,
     };
 
-    final effort = _normalizeReasoningEffort(options.thinkingMode);
-    if (effort != null && await _modelSupportsReasoning(resolvedModel)) {
-      body['reasoning_effort'] = effort;
+    switch (profile.effectiveThinkingPolicyId) {
+      case 'aggregator_upstream':
+        AggregatorThinkingWireCodec.applyReasoning(
+          body,
+          options.thinkingDirective,
+        );
+      case 'google_thinking':
+        GoogleThinkingWireCodec.applyThinkingConfig(
+          body,
+          options.thinkingDirective,
+        );
+      case 'deepseek_thinking':
+        ToggleEffortThinkingWireCodec.applyChatCompletions(
+          body,
+          options.thinkingDirective,
+        );
+      default:
+        OpenAiThinkingWireCodec.applyChatCompletionsReasoning(
+          body,
+          options.thinkingDirective,
+        );
     }
 
     if (tools != null && tools.isNotEmpty) {
@@ -856,18 +967,29 @@ class BaseOpenAIAdapter implements LLMAdapter {
 
     final state = message.providerState;
     if (state?.namespace == _providerStateNamespace &&
-        state?.issuer == _stateIssuer(options) &&
-        state?.data['reasoning_details'] is List) {
-      data['reasoning_details'] = state!.data['reasoning_details'];
+        state?.issuer == _stateIssuer(options)) {
+      final reasoningDetails = state!.data['reasoning_details'];
+      if (reasoningDetails is List) {
+        data['reasoning_details'] = reasoningDetails;
+      }
+      if (state.data.containsKey('reasoning_content')) {
+        data['reasoning_content'] = state.data['reasoning_content'];
+      }
     }
     return data;
   }
 
-  Map<String, String> _requestHeaders() => {
-    'Content-Type': 'application/json',
-    if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
-    ...profile.defaultHeaders,
-  };
+  Map<String, String> _requestHeaders(LLMRequestOptions options) =>
+      withOpenCodeSessionAffinity(
+        headers: {
+          'Content-Type': 'application/json',
+          if (_apiKey.isNotEmpty) 'Authorization': 'Bearer $_apiKey',
+          ...profile.defaultHeaders,
+        },
+        providerName: profile.name,
+        baseUrl: _baseUrl,
+        sessionId: options.sessionId,
+      );
 
   String _stateIssuer(LLMRequestOptions options) {
     final instance = options.providerInstanceId ?? profile.name;
@@ -875,15 +997,20 @@ class BaseOpenAIAdapter implements LLMAdapter {
     return '$instance|${profile.effectiveProtocol}|$endpoint';
   }
 
-  LLMProviderState? _providerStateForReasoningDetails(
-    List<dynamic> details,
-    LLMRequestOptions options,
-  ) {
-    if (details.isEmpty) return null;
+  LLMProviderState? _providerStateForReasoning({
+    required List<dynamic> details,
+    required dynamic reasoningContent,
+    required LLMRequestOptions options,
+  }) {
+    final data = <String, dynamic>{
+      if (details.isNotEmpty) 'reasoning_details': details,
+      'reasoning_content': ?reasoningContent,
+    };
+    if (data.isEmpty) return null;
     return LLMProviderState(
       namespace: _providerStateNamespace,
       issuer: _stateIssuer(options),
-      data: {'reasoning_details': details},
+      data: data,
     );
   }
 
@@ -931,6 +1058,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     return _StructuredReasoning(
       visibleText: visible.isEmpty ? null : visible.join(),
       details: details,
+      providerContent: reasoningContent,
     );
   }
 
@@ -984,28 +1112,6 @@ class BaseOpenAIAdapter implements LLMAdapter {
         return hasToolCalls
             ? LLMFinishReason.toolCalls
             : LLMFinishReason.unknown;
-    }
-  }
-
-  String? _normalizeReasoningEffort(String? thinkingMode) {
-    switch (thinkingMode?.trim().toLowerCase()) {
-      case 'fast':
-        return 'low';
-      case 'balanced':
-      case 'normal':
-        return 'medium';
-      case 'deep':
-        return 'high';
-      case 'none':
-      case 'minimal':
-      case 'low':
-      case 'medium':
-      case 'high':
-      case 'xhigh':
-      case 'max':
-        return thinkingMode!.trim().toLowerCase();
-      default:
-        return null;
     }
   }
 
@@ -1098,6 +1204,11 @@ class _PartialToolCall {
 class _StructuredReasoning {
   final String? visibleText;
   final List<dynamic> details;
+  final dynamic providerContent;
 
-  const _StructuredReasoning({this.visibleText, this.details = const []});
+  const _StructuredReasoning({
+    this.visibleText,
+    this.details = const [],
+    this.providerContent,
+  });
 }

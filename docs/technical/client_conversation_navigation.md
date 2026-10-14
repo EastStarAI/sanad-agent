@@ -16,6 +16,7 @@ description: "Technical design for device-scoped sidebar projection, atomic hist
 - `SessionMessagesCubit` owns requested-versus-presented session state and the
   atomic history swap.
 - `SessionSidebarCubit` is a read-only projection of the active cache device.
+- `SessionSearchCubit` owns transient debounced search presentation, request generations, and search pagination; it never mutates sidebar cache pages.
 
 ## Sidebar Composition
 
@@ -38,6 +39,16 @@ distinct; `lastSelectedSessionId` is only context inheritance and never decides
 the restart route. Background refreshes with usable cached rows are visually
 silent; only initial loading and stale errors add sidebar chrome.
 
+## Authoritative Conversation Search
+
+The Client sends the independent canonical command `search_sessions` with `query`, bounded `limit`, and an opaque `cursor`. The Agent responds with `session_search_results`: one result per session, a normal session summary, `match_kind`, bounded `snippet`, optional `anchor_event_id`, `next_cursor`, and `has_more`. Typed errors use the same correlated result envelope.
+
+`SessionDB` applies trim, whitespace collapse, and ASCII-only case folding while preserving non-ASCII code points and diacritics. It searches session titles and active visible user/assistant text, including visible thoughts while excluding reasoning, tools, superseded rows, and private payloads. Results rank title+content, title-only, then content-only before deterministic activity/session ordering. Cursors include a query fingerprint and ordering tuple, so reuse with another query fails closed.
+
+`SessionSearchCubit` clears prior results as soon as a query/device generation changes, debounces first-page requests, and rejects stale first-page and load-more completions. `ConversationCommands.searchSessions` bypasses the ordinary session-page caches. The wide dialog and compact bottom sheet consume only this transient state.
+
+When a hit carries an Agent-issued history anchor, the search selection registers it with `SessionMessagesCubit` before `SessionCubit` changes selection. The atomic history swap then calls `loadAnchoredSessionHistory` instead of loading the newest page, preserving requested-versus-presented timeline safety while making unloaded matches reachable. The same anchor is recorded as the intended opening viewport event. Route initialization reuses this already-selected typed session, including its title and workspace metadata, even when it is absent from partial sidebar pages; cache absence alone must not replace it with a `Loading...` placeholder or redirect the result to a new conversation.
+
 ## Atomic Session Swap
 
 Navigation sets `requestedSessionId` while retaining the currently presented
@@ -54,7 +65,12 @@ new generation.
 Fresh sessions created locally for their first outgoing turn swap immediately
 without a history round-trip. During an existing-session transition, timeline
 ownership remains with the presented session while composer draft ownership
-moves immediately to the requested session.
+moves immediately to the requested session. Background pagination (`loadOlderHistory`,
+`loadNewerHistory`) and viewport anchor restoration (`loadAnchoredHistory`) on the
+transitional presentation are suspended while `requestedSessionId` or `isHistoryLoading`
+is active, and duplicate session selections for an already-selected target are ignored.
+This prevents secondary requests from bumping the request generation or corrupting
+the pending session hydration in the transport store.
 
 Client restart may initially restore only the selected session identity while
 its authoritative summary and history are still loading. That placeholder does
@@ -66,12 +82,35 @@ fields; it cannot overwrite non-empty local intent awaiting confirmation. This
 keeps the composer sendable across runtime-source handoff while preserving
 daemon route authority once hydration completes.
 
+## Incremental History Loading
+
+The initial atomic session swap requests only the newest history page. The
+conversation client keeps the daemon's opaque cursor per device and exposes
+whether another page exists. `SessionMessagesCubit` serializes older-page
+requests, ignores stale completions after session or device changes, prepends
+only newly discovered canonical event ids, and retains the current page when an
+older-page request fails.
+
+The timeline prefetches automatically when manual motion approaches either
+loaded boundary. Short anchored slices alternate bounded older/newer auto-fill
+until content fills the viewport, a direction exhausts, or the three-page
+per-direction budget is reached. No pagination or retry control is rendered in
+the transcript. After an error, automatic fill stops; fresh edge intent or
+over-scroll may retry up to three consecutive failures per direction. Success
+resets that direction's failure budget, while session navigation resets both.
+Because older rows are inserted before the centered anchor sliver, the currently
+visible event retains its viewport position rather than jumping when a page
+arrives.
+
 ## Timeline Opening Position
 
 The conversation timeline uses a centered sliver layout so a long history can
 open at a selected event without building every older row. An idle session opens
 at its saved manual viewport event when valid, then falls back to its latest user
-message; that event begins near the visible top. A session with authoritative
+message; that event begins near the visible top. Saved viewport identity is
+always the Agent-issued history event id, not the Client's live, steer, model-step,
+or grouped display identity; legacy display ids migrate to the nearest loaded
+history event before another navigation. A session with authoritative
 active work ignores the saved reading position and opens at the live tail: the
 latest event ends at the visible bottom boundary immediately above the composer.
 The active-tail layout keeps old history in the upward-growing sliver without
@@ -124,3 +163,11 @@ returning through Back. External deletion uses the same fallback path.
 GoRouter synchronization compares typed history state before navigation and
 performs presentation-triggered route changes after the current frame. Late
 history responses for deleted or superseded sessions are discarded.
+
+## Sidebar and Workspace Session Synchronization Efficiency
+
+Device sidebar synchronization coordinates with `DeviceCubit` lifecycle transitions:
+- `SessionCubit` retains `_lastRefreshedDeviceId` and skips re-invoking `refreshDeviceSidebar` when peer device inventories update (such as Cloud Gateway authentication discovering remote devices) without changing the active device identity.
+- Explicit user refresh intents (`SessionCubit.refreshSessions`) force a full reload (`force: true`), bypassing debounce guards.
+- `ConversationCacheRepository._runRefreshDeviceSidebar` refreshes conversations only for expanded workspaces (`context.workspaceExpansion[workspace.id] ?? true`). Collapsed workspaces defer conversation queries until explicitly expanded via `SessionSidebarCubit.loadWorkspaceConversationsIfNeeded`, preventing startup duplicate request bursts.
+

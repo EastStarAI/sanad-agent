@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'package:logging/logging.dart';
-import 'package:sanad_agent/core/secrets_redactor.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'sanad_protocol_bridge.dart';
+import 'protocol/authenticated_command_origin.dart';
 import 'protocol/canonical_events.dart';
 
 /// A mixin that provides shared behavior for Sanad Gateway platforms
@@ -18,16 +18,19 @@ mixin SanadGatewayBehavior {
   Future<void> handleIncomingProtocolEvent({
     required CanonicalEvent event,
     required PlatformRuntimeBridge runtimeBridge,
-    required Future<void> Function(Map<String, dynamic> responseEnvelope)
-    onResponse,
+    required Future<void> Function(Map<String, dynamic>) onResponse,
     Map<String, dynamic>? envelope,
+    AuthenticatedCommandOrigin? authenticatedOrigin,
   }) async {
-    logger.info('⬇️ [$transportName] Received protocol_event: ${event.type}');
+    final origin =
+        authenticatedOrigin ??
+        (envelope != null
+            ? AuthenticatedCommandOrigin.fromEnvelope(envelope)
+            : null);
+    final tag = origin?.displayTag ?? transportName;
+    logger.info('⬇️ [$tag] Received protocol_event: ${event.type}');
     if (envelope != null) {
-      logFinePayload(
-        '⬇️ [$transportName] Protocol event payload:',
-        envelope,
-      );
+      logFinePayload('⬇️ [$tag] Protocol event payload:', envelope);
     }
     if (runtimeBridge.handleProtocolEvent(event)) {
       return;
@@ -40,19 +43,60 @@ mixin SanadGatewayBehavior {
   Future<bool> handleIncomingCommand({
     required Map<String, dynamic> envelope,
     required PlatformRuntimeBridge runtimeBridge,
-    required Future<void> Function(Map<String, dynamic> responseEnvelope)
-    onResponse,
+    required Future<void> Function(Map<String, dynamic>) onResponse,
+    AuthenticatedCommandOrigin? authenticatedOrigin,
   }) async {
     final commandName = envelope['command']?.toString() ?? 'unknown';
-    logger.info('⬇️ [$transportName] Received execute_command: $commandName');
-    logFinePayload('⬇️ [$transportName] Command payload:', envelope);
+    final origin =
+        authenticatedOrigin ??
+        AuthenticatedCommandOrigin.fromEnvelope(envelope);
+    final tag = origin.displayTag;
+    logger.info('⬇️ [$tag] Received execute_command: $commandName');
+    logFinePayload('⬇️ [$tag] Command payload:', envelope);
 
     final rawPayload = envelope['payload'];
     final payload = rawPayload is Map
         ? Map<String, dynamic>.from(rawPayload)
         : <String, dynamic>{};
-    if (commandName == CanonicalEventTypes.toolPermissionResponse ||
-        commandName == CanonicalEventTypes.platformToolResult) {
+    if (commandName == CanonicalEventTypes.toolPermissionResponse) {
+      final result = await runtimeBridge.handlePermissionResponse(
+        CanonicalEvent(
+          type: commandName,
+          sessionId: payload['session_id']?.toString(),
+          payload: payload,
+        ),
+      );
+      final rpcRequestId = envelope['request_id']?.toString();
+      if (rpcRequestId != null && rpcRequestId.isNotEmpty) {
+        if (result.isSuccess) {
+          await onResponse({
+            'type': 'event',
+            'event': CanonicalEventTypes.toolPermissionResolved,
+            'request_id': rpcRequestId,
+            'payload': {
+              'request_id': rpcRequestId,
+              'session_id': payload['session_id'],
+              'permission_request_id': payload['request_id'],
+              'success': true,
+              'outcome': result.outcome,
+            },
+          });
+        } else {
+          await onResponse({
+            'type': 'error',
+            'request_id': rpcRequestId,
+            'payload': {
+              'request_id': rpcRequestId,
+              'code': result.errorCode,
+              'message': result.errorMessage,
+              'outcome': result.outcome,
+            },
+          });
+        }
+      }
+      return true;
+    }
+    if (commandName == CanonicalEventTypes.platformToolResult) {
       return runtimeBridge.handleProtocolEvent(
         CanonicalEvent(
           type: commandName,
@@ -64,9 +108,10 @@ mixin SanadGatewayBehavior {
     return protocolBridge.handleCommand(envelope, onResponse);
   }
 
-  /// Logs a payload at FINE after secret-field redaction.
+  /// Logs only bounded structural metadata;payload values never enter logs.
   void logFinePayload(String label, Object? payload) {
-    logger.fine('$label ${const SecretsRedactor().redactForLog(payload)}');
+    final fieldCount = payload is Map ? payload.length : 0;
+    logger.fine('$label field_count=$fieldCount');
   }
 
   /// Safely converts dynamic map-like data into a structured `Map<String, dynamic>`.

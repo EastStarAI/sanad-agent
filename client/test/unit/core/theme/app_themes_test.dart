@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 import 'package:sanad_client/core/theme/app_themes.dart';
 
 void main() {
@@ -24,6 +25,27 @@ void main() {
       expect(decoration, isNotNull);
       expect(decoration!.color, const Color(0xFF252525));
       expect(tooltipTheme.textStyle?.color, Colors.white);
+    });
+
+    test('midnight theme has true-black background and dark styling', () {
+      final midnightTheme = AppThemes.midnight;
+      expect(midnightTheme.brightness, Brightness.dark);
+      expect(midnightTheme.scaffoldBackgroundColor, const Color(0xFF000000));
+    });
+
+    test('sepia theme has warm paper background and light styling', () {
+      final sepiaTheme = AppThemes.sepia;
+      expect(sepiaTheme.brightness, Brightness.light);
+      expect(sepiaTheme.scaffoldBackgroundColor, const Color(0xFFFBF0D9));
+    });
+
+    test('themeForStyle applies customized primary color and segmentedButtonTheme', () {
+      final customTheme = AppThemes.themeForStyle(
+        AppThemeStyle.dark,
+        primaryColor: AppPrimaryColor.rose,
+      );
+      expect(customTheme.colorScheme.primary, AppPrimaryColor.rose.darkColor);
+      expect(customTheme.segmentedButtonTheme.style, isNotNull);
     });
   });
 }

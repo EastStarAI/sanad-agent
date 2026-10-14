@@ -8,6 +8,7 @@ import 'package:sanad_client/features/conversations/domain/models/session_route_
 import 'package:sanad_client/features/conversations/domain/models/pending_steer_record.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
 import 'package:sanad_client/features/conversations/domain/stores/device_conversation_store.dart';
+import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 
 class ConversationEventHandler {
   static const Set<String> _streamingEvents = {
@@ -25,22 +26,30 @@ class ConversationEventHandler {
     'thinking',
     'tool_call',
   };
+  static const Set<String> _sessionTimelineEvents = {
+    'context_compaction.started',
+    'context_compaction.completed',
+    'context_compaction.failed',
+  };
 
-  final String _deviceId;
+  final DeviceConfig _device;
   final ConversationCommandGateway _gateway;
   final DeviceConversationStore _conversationStore;
   final DeviceEventMapper _mapper;
+  final Future<void> Function(String sessionId)? _onReplayTailHydrationRequired;
   late final StreamSubscription<Map<String, dynamic>> _eventSubscription;
 
   ConversationEventHandler({
-    required String deviceId,
+    required DeviceConfig device,
     required ConversationCommandGateway gateway,
     required DeviceConversationStore conversationStore,
     required DeviceEventMapper mapper,
-  }) : _deviceId = deviceId,
+    Future<void> Function(String sessionId)? onReplayTailHydrationRequired,
+  }) : _device = device,
        _gateway = gateway,
        _conversationStore = conversationStore,
-       _mapper = mapper {
+       _mapper = mapper,
+       _onReplayTailHydrationRequired = onReplayTailHydrationRequired {
     _eventSubscription = _gateway.events.listen(handleIncomingEvent);
   }
 
@@ -50,7 +59,7 @@ class ConversationEventHandler {
     final runId = payload['run_id'] as String?;
 
     final deviceId = event['device_id'];
-    if (deviceId != null && deviceId != _deviceId) {
+    if (deviceId != null && (deviceId is! String || !_device.representsDeviceId(deviceId))) {
       return;
     }
 
@@ -98,19 +107,35 @@ class ConversationEventHandler {
       final targetRequestId = payload['target_request_id']?.toString();
       final outcome = payload['outcome']?.toString() ?? '';
       if (targetRequestId != null) {
-        _conversationStore.applyPendingSteerCancelOutcome(targetRequestId, outcome);
+        _conversationStore.applyPendingSteerCancelOutcome(
+          targetRequestId,
+          outcome,
+        );
       }
       return;
     }
 
-    if (eventType == 'session.queued_message_changed' || eventType == 'session.queued_message_delete_result') {
+    if (eventType == 'session.queued_message_changed' ||
+        eventType == 'session.queued_message_delete_result' ||
+        eventType == 'session.queued_message_steer_result') {
       final targetRequestId = payload['target_request_id']?.toString();
-      final outcome = payload['state']?.toString();
+      final outcome = eventType == 'session.queued_message_changed'
+          ? payload['state']?.toString()
+          : payload['outcome']?.toString();
       if (targetRequestId != null &&
-          {'deleted', 'cancelled', 'already_removed', 'already_processed', 'promoted'}.contains(outcome)) {
+          {
+            'deleted',
+            'cancelled',
+            'already_removed',
+            'already_processed',
+            'promoted',
+          }.contains(outcome)) {
         _conversationStore.removeQueuedMessage(targetRequestId);
       } else if (targetRequestId != null) {
-        _conversationStore.applyQueueMutationOutcome(targetRequestId, outcome ?? 'unknown');
+        _conversationStore.applyQueueMutationOutcome(
+          targetRequestId,
+          outcome ?? 'unknown',
+        );
       }
       return;
     }
@@ -121,11 +146,32 @@ class ConversationEventHandler {
           eventSessionId != null &&
           targetRequestId != null &&
           targetRequestId.isNotEmpty) {
+        final targetTurnId = payload['target_turn_id']?.toString();
+        final targetMessageId = payload['target_message_id']?.toString();
+        final hadLocalBoundary = _conversationStore.hasReplayBoundary(
+          sessionId: eventSessionId,
+          targetRequestId: targetRequestId,
+          targetTurnId: targetTurnId,
+          targetMessageId: targetMessageId,
+        );
         _conversationStore.applyTurnReplayAccepted(
           sessionId: eventSessionId,
           targetRequestId: targetRequestId,
+          targetTurnId: targetTurnId,
+          targetRunId: payload['target_run_id']?.toString(),
+          targetMessageId: targetMessageId,
         );
+        final reconcileTail = _onReplayTailHydrationRequired;
+        if (!hadLocalBoundary && reconcileTail != null) {
+          unawaited(reconcileTail(eventSessionId));
+        }
       }
+      return;
+    }
+
+    if (eventType == 'session.compact_result') {
+      // Command acknowledgement only; lifecycle tiles come from
+      // context_compaction.started/completed/failed events.
       return;
     }
 
@@ -193,12 +239,15 @@ class ConversationEventHandler {
 
     final createdSessionId = payload['session_id'] as String? ?? payload['id'] as String?;
     if (eventType == 'session_created' && createdSessionId != null) {
-      if (!_conversationStore.adoptCreatedSession(createdSessionId: createdSessionId, requestId: requestId)) {
+      if (!_conversationStore.adoptCreatedSession(
+        createdSessionId: createdSessionId,
+        requestId: requestId,
+      )) {
         return;
       }
     }
 
-    if (_streamingEvents.contains(eventType)) {
+    if (_streamingEvents.contains(eventType) || _sessionTimelineEvents.contains(eventType)) {
       if (!_conversationStore.shouldAcceptStreamingEvent(eventSessionId)) {
         return;
       }
@@ -230,6 +279,7 @@ class ConversationEventHandler {
       _conversationStore.clearRuntimeNotice(
         sessionId: eventSessionId,
         requestId: requestId,
+        executionRevision: (payload['execution_revision'] as num?)?.toInt(),
       );
       return;
     }
@@ -247,6 +297,7 @@ class ConversationEventHandler {
         _conversationStore.clearRuntimeNotice(
           sessionId: eventSessionId,
           requestId: requestId,
+          executionRevision: (payload['execution_revision'] as num?)?.toInt(),
         );
       }
       return;
@@ -257,6 +308,7 @@ class ConversationEventHandler {
       _conversationStore.clearRuntimeNotice(
         sessionId: eventSessionId,
         requestId: requestId,
+        executionRevision: (payload['execution_revision'] as num?)?.toInt(),
       );
       return;
     }

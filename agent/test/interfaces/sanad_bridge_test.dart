@@ -451,7 +451,8 @@ void main() {
       expect(json['display_name'], equals('Test Agent'));
       expect(json['protocol_version'], equals('v1'));
       expect(json['capabilities'].containsKey('models'), isFalse);
-      expect(json['capabilities']['thinking_modes_list'], contains('fast'));
+      expect(json['capabilities']['thinking_modes_list'], isEmpty);
+      expect(json['capabilities']['thinking_mode_source'], equals('model'));
       expect(json['capabilities']['supports_stop'], isTrue);
       expect(json['capabilities']['supports_workspaces'], isTrue);
       expect(json['capabilities']['supports_local_tool_runtime'], isTrue);
@@ -844,7 +845,7 @@ void main() {
       await bridge.handleCommand(
         {
           'command': 'search_slash_commands',
-          'payload': {'request_id': 'req-5', 'query': 'mcp'},
+          'payload': {'request_id': 'req-5', 'query': 'compact'},
         },
         (envelope) async {
           slashEnvelope = envelope;
@@ -856,7 +857,7 @@ void main() {
         equals(CanonicalEventTypes.slashCommandsList),
       );
       final commands = slashEnvelope?['payload']['commands'] as List<dynamic>;
-      expect(commands.any((entry) => entry['command'] == 'mcp'), isTrue);
+      expect(commands.any((entry) => entry['command'] == 'compact'), isTrue);
     });
 
     test(
@@ -1112,6 +1113,9 @@ void main() {
         expect(messages[1]['content'], '**Planning**\n\n**Refining**');
         expect(messages[2]['content'], 'I will update the implementation.');
         expect(messages[3]['content'], 'The fix is complete.');
+        expect(messages[3]['status'], 'done');
+        expect(messages[3]['message_id'], isNotEmpty);
+        expect(messages[3]['turn_id'], isNotEmpty);
       },
     );
 
@@ -1285,6 +1289,95 @@ void main() {
         final persisted = sessionManager.getMessages(sessionId);
         expect(persisted[1].reasoning, 'Planning the inspection');
         expect(persisted[3].reasoning, 'Reviewing the result');
+      },
+    );
+
+    test(
+      'history pages preserve fan-out identity and tail-only runtime state',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-paged-history';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'gpt-5.5',
+            createdAt: DateTime.parse('2026-07-14T01:00:00Z'),
+            updatedAt: DateTime.parse('2026-07-14T01:01:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Inspect'),
+          Message(
+            role: MessageRole.assistant,
+            reasoning: 'Planning',
+            content: 'Reading',
+            toolCalls: [
+              ToolCall(
+                id: 'tool-page-1',
+                name: 'file_read',
+                arguments: const {'path': 'lib/main.dart'},
+              ),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'tool-page-1',
+            content: 'contents',
+          ),
+          Message(role: MessageRole.assistant, content: 'Done'),
+        ]);
+
+        Future<Map<String, dynamic>> page({
+          String? cursor,
+          String? anchor,
+        }) async {
+          Map<String, dynamic>? emitted;
+          await bridge.handleCommand({
+            'command': 'get_session_history',
+            'payload': {
+              'request_id': 'req-${cursor ?? anchor ?? 'tail'}',
+              'session_id': sessionId,
+              'limit': 1,
+              'cursor': ?cursor,
+              'anchor_event_id': ?anchor,
+            },
+          }, (envelope) async => emitted = envelope);
+          return Map<String, dynamic>.from(emitted!['payload'] as Map);
+        }
+
+        final tail = await page();
+        final page3 = await page(cursor: tail['next_cursor'] as String);
+        final page2 = await page(cursor: page3['next_cursor'] as String);
+        final page1 = await page(cursor: page2['next_cursor'] as String);
+        final allRows = [
+          page1,
+          page2,
+          page3,
+          tail,
+        ].expand((payload) => payload['messages'] as List).cast<Map>().toList();
+        final eventIds = allRows.map((row) => row['event_id']).toList();
+
+        expect(eventIds.toSet(), hasLength(eventIds.length));
+        expect(page2['messages'].map((row) => row['type']), [
+          'reasoning',
+          'thought',
+          'tool_use',
+        ]);
+        expect(tail, contains('execution_snapshot'));
+        expect(page3, isNot(contains('execution_snapshot')));
+        expect(page1['has_more'], isFalse);
+
+        final anchorId = page2['messages'][1]['event_id'] as String;
+        final anchored = await page(anchor: anchorId);
+        expect(anchored['page_kind'], 'anchor');
+        expect(
+          (anchored['messages'] as List).any(
+            (row) => row['event_id'] == anchorId,
+          ),
+          isTrue,
+        );
+        expect(anchored, contains('execution_snapshot'));
       },
     );
 
@@ -1539,6 +1632,151 @@ void main() {
         expect(messages[2]['request_id'], 'steer-late-history-1');
       },
     );
+
+    test(
+      'get_session_history restores authoritative started_at, terminal_at, and runtime_ms for completed tools and sets tool_use started_at',
+      () async {
+        final bridge = SanadProtocolBridge();
+        final sessionManager = getIt<SessionManager>();
+        const sessionId = 'session-tool-timing-history';
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'sanad-agent',
+            createdAt: DateTime.parse('2026-07-02T10:00:00Z'),
+            updatedAt: DateTime.parse('2026-07-02T10:06:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Run command'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'tool-call-timing-1',
+                name: 'run_command',
+                arguments: {'command': 'sleep 5'},
+              ),
+            ],
+          ),
+          Message(
+            role: MessageRole.tool,
+            toolCallId: 'tool-call-timing-1',
+            content: 'done',
+            metadata: {
+              'started_at': '2026-07-02T10:00:05.100Z',
+              'terminal_at': '2026-07-02T10:00:10.550Z',
+              'runtime_ms': 5450,
+            },
+          ),
+          Message(role: MessageRole.assistant, content: 'Finished command'),
+        ]);
+
+        Map<String, dynamic>? emitted;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-tool-timing-history',
+            'session_id': sessionId,
+          },
+        }, (envelope) async => emitted = envelope);
+
+        expect(emitted, isNotNull);
+        final messages = (emitted!['payload']['messages'] as List)
+            .cast<Map<String, dynamic>>();
+
+        final toolUse = messages.firstWhere((m) => m['type'] == 'tool_use');
+        final toolResult = messages.firstWhere(
+          (m) => m['type'] == 'tool_result',
+        );
+
+        expect(toolUse['status'], 'done');
+        expect(toolUse['started_at'], '2026-07-02T10:00:05.100Z');
+        expect(toolUse['created_at'], '2026-07-02T10:00:05.100Z');
+
+        expect(toolResult['started_at'], '2026-07-02T10:00:05.100Z');
+        expect(toolResult['terminal_at'], '2026-07-02T10:00:10.550Z');
+        expect(toolResult['runtime_ms'], 5450);
+        expect(toolResult['created_at'], '2026-07-02T10:00:10.550Z');
+      },
+    );
+
+    test(
+      'get_session_history marks actively executing tool calls as running with their started_at from continuation metadata',
+      () async {
+        final sessionManager = getIt<SessionManager>();
+        final state = AgentStateDatabase.inMemory();
+        addTearDown(state.dispose);
+        final repo = PersistedRuntimeStateRepository.fromState(state);
+        getIt.registerSingleton<PersistedRuntimeStateRepository>(repo);
+        final bridge = SanadProtocolBridge();
+        const sessionId = 'session-tool-active-running';
+        state.db.execute(
+          '''
+          INSERT INTO sessions (session_id, model, created_at, updated_at)
+          VALUES (?, ?, ?, ?)
+          ''',
+          [
+            sessionId,
+            'sanad-agent',
+            '2026-07-02T10:00:00Z',
+            '2026-07-02T10:00:00Z',
+          ],
+        );
+        sessionManager.db.saveSession(
+          SessionState(
+            sessionId: sessionId,
+            model: 'sanad-agent',
+            createdAt: DateTime.parse('2026-07-02T10:00:00Z'),
+            updatedAt: DateTime.parse('2026-07-02T10:06:00Z'),
+          ),
+        );
+        sessionManager.saveSessionHistory(sessionId, [
+          Message(role: MessageRole.user, content: 'Long running task'),
+          Message(
+            role: MessageRole.assistant,
+            toolCalls: [
+              ToolCall(
+                id: 'tool-call-running-1',
+                name: 'long_task',
+                arguments: {'duration': 120},
+              ),
+            ],
+          ),
+        ]);
+
+        repo.workItems.enqueueWorkItem(
+          workItemId: 'work-item-running-1',
+          sessionId: sessionId,
+          requestId: 'req-tool-active-running',
+          state: SessionWorkState.running,
+          continuationMetadata: {
+            'currently_executing_tools': ['tool-call-running-1'],
+            'tool_started_at': {
+              'tool-call-running-1': '2026-07-02T10:01:02.000Z',
+            },
+          },
+        );
+
+        Map<String, dynamic>? emitted;
+        await bridge.handleCommand({
+          'command': 'get_session_history',
+          'payload': {
+            'request_id': 'req-tool-active-running',
+            'session_id': sessionId,
+          },
+        }, (envelope) async => emitted = envelope);
+
+        expect(emitted, isNotNull);
+        final messages = (emitted!['payload']['messages'] as List)
+            .cast<Map<String, dynamic>>();
+
+        final toolUse = messages.firstWhere((m) => m['type'] == 'tool_use');
+        expect(toolUse['status'], 'running');
+        expect(toolUse['started_at'], '2026-07-02T10:01:02.000Z');
+        expect(toolUse['created_at'], '2026-07-02T10:01:02.000Z');
+      },
+    );
   });
 
   group('Workspace Policy Commands', () {
@@ -1668,6 +1906,37 @@ void main() {
         );
       },
     );
+
+    test('search_sessions emits correlated anchored results', () async {
+      final manager = getIt<SessionManager>();
+      manager.db.saveSession(
+        SessionState(
+          sessionId: 'search-session',
+          model: 'model-1',
+          title: 'Searchable conversation',
+          createdAt: DateTime.utc(2026),
+          updatedAt: DateTime.utc(2026),
+        ),
+      );
+      manager.db.replaceMessages('search-session', [
+        Message(role: MessageRole.user, content: 'protocol needle'),
+      ]);
+      Map<String, dynamic>? emitted;
+
+      final handled = await SanadProtocolBridge().handleCommand({
+        'command': CanonicalEventTypes.searchSessions,
+        'payload': {'request_id': 'search-1', 'query': 'needle'},
+      }, (envelope) async => emitted = envelope);
+
+      expect(handled, isTrue);
+      expect(emitted?['event'], CanonicalEventTypes.sessionSearchResults);
+      expect(emitted?['request_id'], 'search-1');
+      expect(emitted?['payload']['results'], hasLength(1));
+      expect(
+        emitted?['payload']['results'][0]['anchor_event_id'],
+        matches(r'^history:search-session:\d+:user_message:0$'),
+      );
+    });
 
     test(
       'workspace.set_permission_mode rejects an unknown workspace id',

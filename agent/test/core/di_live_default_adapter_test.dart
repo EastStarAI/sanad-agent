@@ -9,7 +9,6 @@ import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/missing_provider_adapter.dart';
 import 'package:sanad_agent/engine/agent_runner.dart';
-import 'package:sanad_agent/engine/context_engine.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/title_service.dart';
 import 'package:test/test.dart';
@@ -24,7 +23,7 @@ void main() {
       'sanad-live-default-adapter-',
     );
     setSanadHomeOverride(sanadHome.path);
-    setSanadStateHomeOverride(null);
+    setSanadStateHomeOverride(sanadHome.path);
     setupDI();
   });
 
@@ -33,20 +32,20 @@ void main() {
     SessionManager.resetForTesting();
     setSanadHomeOverride(null);
     setSanadStateHomeOverride(null);
-    if (sanadHome.existsSync()) {
-      await sanadHome.delete(recursive: true);
-    }
+    try {
+      if (sanadHome.existsSync()) {
+        await sanadHome.delete(recursive: true);
+      }
+    } catch (_) {}
   });
 
   test(
     'first runner after onboarding resolves a live default without DI reset',
     () {
       final preOnboardingAdapter = getIt<LLMAdapter>();
-      final sharedContextEngine = getIt<ContextEngine>();
       final titleService = getIt<TitleService>();
 
       expect(preOnboardingAdapter, isA<MissingProviderAdapter>());
-      expect(sharedContextEngine.adapter, isNull);
       expect(titleService, isNotNull);
 
       getIt<ProviderInstanceRepository>().createInstance(
@@ -71,7 +70,6 @@ void main() {
       expect(postOnboardingAdapter, isA<BaseOpenAIAdapter>());
       expect(postOnboardingAdapter, isNot(same(preOnboardingAdapter)));
       expect(runner.adapter, same(postOnboardingAdapter));
-      expect(runner.contextEngine, same(sharedContextEngine));
     },
   );
 }

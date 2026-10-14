@@ -14,8 +14,7 @@ class WorkspaceCreateRequest {
 }
 
 class WorkspacePickerHelper {
-  static const remoteDisabledMessage =
-      'To change a workspace path, you must use a local connection.';
+  static const remoteDisabledMessage = 'To change a workspace path, you must use a local connection.';
 
   @visibleForTesting
   static ValueChanged<String>? debugOnRemoteDisabled;

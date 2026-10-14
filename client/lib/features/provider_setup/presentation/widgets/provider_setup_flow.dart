@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -71,7 +72,12 @@ class _ProviderSetupFlowState extends State<ProviderSetupFlow> {
       showReadyState: widget.showReadyState,
     );
     _ownsUsageCubit = widget.client != null;
-    _usageCubit = _ownsUsageCubit ? ProviderUsageCubit(client: _client) : getIt<ProviderUsageCubit>();
+    _usageCubit = _ownsUsageCubit
+        ? ProviderUsageCubit(
+            client: _client,
+            localDeviceId: widget.device?.id ?? getIt<String>(instanceName: 'hardwareId'),
+          )
+        : getIt<ProviderUsageCubit>();
 
     // Whenever the configured instances change, refresh the daemon's usage
     // support map and fetch usage in parallel for supported instances. This is
@@ -231,7 +237,7 @@ class _LoadingView extends StatelessWidget {
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const CircularProgressIndicator(),
+          const AppProgressIndicator(),
           const SizedBox(height: 16),
           Text(
             message,

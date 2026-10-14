@@ -4,6 +4,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_processing_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/conversation_client.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
@@ -15,7 +16,9 @@ import 'package:sanad_client/features/conversations/domain/models/slash_command_
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
@@ -104,9 +107,8 @@ class SocketConversationRepository implements ConversationRepository {
   ) => _clientFor(agent).currentAttentionStates;
 
   @override
-  Map<String, SessionRouteSnapshot> currentRouteSnapshots(
-    DeviceConfig agent,
-  ) => _clientFor(agent).currentRouteSnapshots;
+  Map<String, SessionRouteSnapshot> currentRouteSnapshots(DeviceConfig agent) =>
+      _clientFor(agent).currentRouteSnapshots;
 
   @override
   void activateSession(DeviceConfig agent, String sessionId) {
@@ -169,20 +171,22 @@ class SocketConversationRepository implements ConversationRepository {
     required String requestId,
     required String sessionId,
   }) {
-    return _clientFor(agent).steerMessage(
-      message,
-      requestId: requestId,
-      sessionId: sessionId,
-    );
+    return _clientFor(agent).steerMessage(message, requestId: requestId, sessionId: sessionId);
   }
 
   @override
-  Future<String?> deleteQueuedMessage(DeviceConfig agent, {required String requestId, required String sessionId}) =>
-      _clientFor(agent).deleteQueuedMessage(requestId: requestId, sessionId: sessionId);
+  Future<String?> deleteQueuedMessage(
+    DeviceConfig agent, {
+    required String requestId,
+    required String sessionId,
+  }) => _clientFor(agent).deleteQueuedMessage(requestId: requestId, sessionId: sessionId);
 
   @override
-  Future<String?> cancelPendingSteer(DeviceConfig agent, {required String requestId, required String sessionId}) =>
-      _clientFor(agent).cancelPendingSteer(requestId: requestId, sessionId: sessionId);
+  Future<String?> cancelPendingSteer(
+    DeviceConfig agent, {
+    required String requestId,
+    required String sessionId,
+  }) => _clientFor(agent).cancelPendingSteer(requestId: requestId, sessionId: sessionId);
 
   @override
   Future<String?> stop(
@@ -229,22 +233,48 @@ class SocketConversationRepository implements ConversationRepository {
     DeviceConfig agent, {
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) => _clientFor(agent).replayTurn(
     sessionId: sessionId,
     targetRequestId: targetRequestId,
+    targetMessageId: targetMessageId,
+    targetTurnId: targetTurnId,
+    expectedHistoryRevision: expectedHistoryRevision,
     action: action,
     message: message,
     providerInstanceId: providerInstanceId,
     modelId: modelId,
     thinkingMode: thinkingMode,
     confirmedReplayUnsafe: confirmedReplayUnsafe,
+    confirmedDropSteers: confirmedDropSteers,
   );
+
+  @override
+  Future<SessionForkResult> forkSession(
+    DeviceConfig agent, {
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) => _clientFor(agent).forkSession(
+    sessionId: sessionId,
+    targetMessageId: targetMessageId,
+    targetTurnId: targetTurnId,
+  );
+
+  @override
+  Future<SessionCompactResult> compactSession(
+    DeviceConfig agent, {
+    required String sessionId,
+  }) => _clientFor(agent).compactSession(sessionId: sessionId);
 
   @override
   Future<void> retryRuntimeNotice(
@@ -295,12 +325,32 @@ class SocketConversationRepository implements ConversationRepository {
   }
 
   @override
-  Future<SessionQueryResult> getSessions(DeviceConfig agent, {SessionQueryRequest? query}) {
+  Future<SessionQueryResult> getSessions(
+    DeviceConfig agent, {
+    SessionQueryRequest? query,
+  }) {
     return _clientFor(agent).getSessions(query: query);
   }
 
   @override
-  Future<SessionQueryResult> refreshSessions(DeviceConfig agent, {SessionQueryRequest? query}) {
+  Future<SessionSearchPage> searchSessions(
+    DeviceConfig agent, {
+    required String query,
+    int limit = 20,
+    String? cursor,
+  }) {
+    return _clientFor(agent).searchSessions(
+      query: query,
+      limit: limit,
+      cursor: cursor,
+    );
+  }
+
+  @override
+  Future<SessionQueryResult> refreshSessions(
+    DeviceConfig agent, {
+    SessionQueryRequest? query,
+  }) {
     return _clientFor(agent).refreshSessions(query: query);
   }
 
@@ -334,11 +384,7 @@ class SocketConversationRepository implements ConversationRepository {
     String? name,
     String? description,
   }) {
-    return _clientFor(agent).createWorkspace(
-      path: path,
-      name: name,
-      description: description,
-    );
+    return _clientFor(agent).createWorkspace(path: path, name: name, description: description);
   }
 
   @override
@@ -347,10 +393,7 @@ class SocketConversationRepository implements ConversationRepository {
     required String workspaceId,
     required String displayName,
   }) {
-    return _clientFor(agent).renameWorkspace(
-      workspaceId: workspaceId,
-      displayName: displayName,
-    );
+    return _clientFor(agent).renameWorkspace(workspaceId: workspaceId, displayName: displayName);
   }
 
   @override
@@ -367,10 +410,7 @@ class SocketConversationRepository implements ConversationRepository {
     required String workspaceId,
     required String newPath,
   }) {
-    return _clientFor(agent).relocateWorkspace(
-      workspaceId: workspaceId,
-      newPath: newPath,
-    );
+    return _clientFor(agent).relocateWorkspace(workspaceId: workspaceId, newPath: newPath);
   }
 
   @override
@@ -379,10 +419,7 @@ class SocketConversationRepository implements ConversationRepository {
     required String parentPath,
     required String name,
   }) {
-    return _clientFor(agent).createFolder(
-      parentPath: parentPath,
-      name: name,
-    );
+    return _clientFor(agent).createFolder(parentPath: parentPath, name: name);
   }
 
   @override
@@ -395,20 +432,58 @@ class SocketConversationRepository implements ConversationRepository {
   }
 
   @override
-  Future<void> deleteFolder(
-    DeviceConfig agent, {
-    required String path,
-  }) {
+  Future<void> deleteFolder(DeviceConfig agent, {required String path}) {
     return _clientFor(agent).deleteFolder(path: path);
   }
 
   @override
-  Future<List<CanonicalEvent>> loadSessionHistory(DeviceConfig agent, String sessionId) {
+  Future<List<CanonicalEvent>> loadSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) {
     return _clientFor(agent).loadSessionHistory(sessionId);
   }
 
   @override
-  Future<void> updateSessionTitle(DeviceConfig agent, String sessionId, String title) {
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) {
+    return _clientFor(agent).loadOlderSessionHistory(sessionId);
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+    String anchorEventId,
+  ) {
+    return _clientFor(agent).loadAnchoredSessionHistory(
+      sessionId,
+      anchorEventId,
+    );
+  }
+
+  @override
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) {
+    return _clientFor(agent).loadNewerSessionHistory(sessionId);
+  }
+
+  @override
+  bool historyHasMore(DeviceConfig agent) => _clientFor(agent).historyHasMore;
+
+  @override
+  bool historyHasNewer(DeviceConfig agent) => _clientFor(agent).historyHasNewer;
+
+  @override
+  Future<void> updateSessionTitle(
+    DeviceConfig agent,
+    String sessionId,
+    String title,
+  ) {
     return _clientFor(agent).updateSessionTitle(sessionId, title);
   }
 
@@ -436,7 +511,10 @@ class SocketConversationRepository implements ConversationRepository {
   }
 
   @override
-  Future<WorkspacePolicy> getWorkspacePolicy(DeviceConfig agent, String workspacePath) {
+  Future<WorkspacePolicy> getWorkspacePolicy(
+    DeviceConfig agent,
+    String workspacePath,
+  ) {
     return _clientFor(agent).getWorkspacePolicy(workspacePath);
   }
 
@@ -455,7 +533,10 @@ class SocketConversationRepository implements ConversationRepository {
   }
 
   @override
-  Stream<WorkspacePolicy> watchWorkspacePolicy(DeviceConfig agent, String workspaceId) {
+  Stream<WorkspacePolicy> watchWorkspacePolicy(
+    DeviceConfig agent,
+    String workspaceId,
+  ) {
     return _clientFor(agent).watchWorkspacePolicy(workspaceId);
   }
 

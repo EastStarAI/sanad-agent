@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 
 class ConversationContextChips extends StatelessWidget {
   static const String addNewWorkspaceMenuValue = '__add_new_workspace__';
@@ -128,7 +129,7 @@ class ConversationContextChips extends StatelessWidget {
                 width: 12,
                 height: 12,
                 margin: const EdgeInsets.only(left: 6),
-                child: const CircularProgressIndicator(strokeWidth: 1.5),
+                child: const AppProgressIndicator(strokeWidth: 1.5),
               )
             : hasBoundSessionWorkspace
             ? Container(

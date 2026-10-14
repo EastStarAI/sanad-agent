@@ -15,9 +15,7 @@ class ExternalPasteManager {
     final state = focus.context!.findAncestorStateOfType<EditableTextState>();
     if (state != null) {
       final value = state.textEditingValue;
-      final selection = value.selection.isValid
-          ? value.selection
-          : TextSelection.collapsed(offset: value.text.length);
+      final selection = value.selection.isValid ? value.selection : TextSelection.collapsed(offset: value.text.length);
 
       final newText = value.text.replaceRange(selection.start, selection.end, text);
       final newOffset = selection.start + text.length;

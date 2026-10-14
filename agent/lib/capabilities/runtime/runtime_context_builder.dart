@@ -15,6 +15,8 @@ class RuntimeContextBuilder {
   final WorkspacePathResolver _pathResolver;
   final SkillRegistry _skillRegistry;
 
+  WorkspacePathResolver get pathResolver => _pathResolver;
+
   const RuntimeContextBuilder({
     WorkspacePathResolver pathResolver = const WorkspacePathResolver(),
     SkillRegistry skillRegistry = const SkillRegistry(),

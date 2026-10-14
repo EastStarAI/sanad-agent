@@ -89,6 +89,41 @@ The `NavigationHistoryController` maintains three stacks:
 - Same invariants as local deletion.
 - If current, fallback is applied immediately without a confirmation dialog.
 
+## Conversation History Search
+
+- The sidebar exposes **Search conversations** for the currently selected device directly above **New Session**, using the same action-row geometry, typography, colors, and hover treatment.
+- Wide layouts open a bounded dialog; drawer/compact layouts open an equivalent bottom sheet.
+- Search covers conversation titles plus visible user and assistant text, including visible thoughts and final answers. It does not expose reasoning, system/compaction data, tool content, private payloads, or superseded responses.
+- Each conversation appears at most once with its title, workspace when available, last activity date, match kind, and a bounded safe snippet.
+- Input is debounced and supports clear, Escape, arrow-key selection, Enter, and IME-safe composition. Loading, no-results, failure, retry, and pagination states remain explicit.
+- The clear affordance is a compact circular icon inside the search field that appears only while the input has content; it stays visually distinct from the dialog's close button, which is pinned to the top-right of the header row.
+- Selecting a message result opens its device/session and requests the Agent-issued anchored history slice before the atomic timeline swap. Selecting a result from the already-open session reopens the timeline at that anchor even when the event is loaded. A title-only result opens the session normally.
+- Search is authoritative on the selected Agent and is independent of the partially loaded sidebar cache. Opening a result preserves its returned title and workspace metadata without requiring **Load more** in the sidebar.
+
+## Long Conversation History
+
+- Opening a conversation displays its newest bounded page without waiting for
+  the complete transcript.
+- Scrolling toward either loaded boundary prefetches the next older/newer page
+  before the boundary enters view. Short slices auto-fill in both directions.
+  Pagination and retry buttons never appear inside the transcript.
+- Loading older messages never blanks the conversation or forces the viewport
+  back to the tail. The first visible event keeps the same screen position after
+  prepend, and live responses may continue at the tail without duplication.
+- An anchored slice can be browsed in both directions. Downward intent loads the
+  next newer page without tail-follow until the reader explicitly reaches the
+  newest boundary.
+- Tool calls that form one visible run remain one group when a newer page joins
+  them. Historical reasoning hidden from the timeline does not create an
+  invisible group boundary; visible messages, thinking rows, final answers, and
+  `system_ask_user` remain explicit boundaries.
+- Each conversation owns its saved top-visible event independently. Navigating
+  away and back restores that event instead of reusing another conversation's
+  offset or reopening at the tail.
+- A short first page may auto-fill at most three older pages, then stops at a
+  filled viewport, exhaustion, or error.
+- When no older page remains, the earlier-history control disappears.
+
 ## Restart Recovery
 
 - The last typed `ConversationDestination` per device is restored from `ConversationCacheStore`.
@@ -96,6 +131,12 @@ The `NavigationHistoryController` maintains three stacks:
 - New Conversation restores its nullable workspace preselection; `null` means no workspace is selected. A workspace known to be removed is dropped.
 - `lastSelectedSessionId` is used only to inherit previous session context and never determines the restart route.
 - A missing saved destination defaults to New Conversation. If a saved session was deleted while offline, recovery also falls back to New Conversation.
+- An idle session persists only a durable history event as its viewport anchor,
+  requests the bounded page containing that event, and reopens it near the visible
+  top. Temporary steer/live/tool-group identities are skipped; a legacy temporary
+  anchor migrates to the nearest loaded durable event. Active work always opens at
+  the live tail. A missing, compacted, or stale durable event safely retains the
+  newest tail.
 
 ## Test Scenarios
 

@@ -12,6 +12,8 @@ This contract applies to `agent/lib/core/`.
 
 ## Environment and Identity
 - Resolve runtime environment from process variables before the global `SANAD_HOME` environment file.
+- Load non-secret context-window and compaction policy from `SANAD_HOME/config.yaml` once at daemon startup; provider credentials and other secrets never belong there.
+- A Dart test must explicitly select temporary state or inject an in-memory/explicit-path database before opening agent state; inherited `SANAD_HOME` is never test isolation.
 - `AuthManager` owns persistent `hardware_id`; create it locally when absent and keep it distinct from backend-assigned device ids.
 - Persist non-secret Sanad auth metadata and temporary pairing state in `SANAD_HOME/auth.json` with owner-only Unix permissions or equivalent Windows ACL. Agent P-256 private keys and durable Device Credentials belong only in the OS-backed Agent secret store and must never be rewritten to JSON.
 - A UI-issued device token is initial pairing authority only. Before the first
@@ -30,6 +32,7 @@ This contract applies to `agent/lib/core/`.
 ## Provider Runtime
 - `ProviderRegistry` is the source of supported provider templates; `ProviderInstance` UUID is routing identity and display name is presentation metadata.
 - `core/provider_usage/` owns the unified account-usage models, per-template usage adapters, and the usage adapter registry (Task 55). The registry is the single authority for whether an instance supports usage queries; clients must not hardcode a provider list. Adapters are auth-method-independent and read-only in v1; ChatGPT (`openai-codex`) maps `primary_window`/`secondary_window` to Session/Weekly and never synthesises a placeholder. Snapshots never carry credentials, account ids, or raw provider payloads.
+- `core/provider_thinking/` owns typed thinking-control descriptors, native directive unions, provider thinking policies, and the thinking policy registry (Task 43). Policies decide per-route capability and translate stored selection ids into typed directives; adapters own wire payloads and must not infer capability from `supportsReasoning` alone.
 - Provider setup is instance-first. Templates are immutable capability definitions; instances own editable metadata, credential revision, model choice, rate limit, and failover policy.
 - Keep constants for protocol, auth method, credential action, requirement, and status centralized; do not branch on duplicate raw literals.
 - Separate configured state from runtime readiness. Only a successfully verified current metadata/credential revision may become ready or default.

@@ -1,4 +1,5 @@
 import '../../../../core/models/message.dart';
+import '../../../../evolution/db/message_history_identity.dart';
 import '../../../models/gateway_event.dart';
 import '../protocol/canonical_events.dart';
 
@@ -18,6 +19,7 @@ class AgentToCanonical {
         'updated_at': DateTime.now().toIso8601String(),
         ...?response.sessionPayload,
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.runId != null) 'request_id': response.runId,
       };
     } else if (response.isSessionUpdated) {
@@ -29,6 +31,7 @@ class AgentToCanonical {
         'updated_at': DateTime.now().toIso8601String(),
         ...?response.sessionPayload,
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
       };
     } else if (response.message.role == MessageRole.user) {
       type = 'user_message';
@@ -40,10 +43,12 @@ class AgentToCanonical {
             response.message.metadata?['received_at'] ??
             DateTime.now().toIso8601String(),
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.message.metadata != null)
           'metadata': response.message.metadata,
         if (response.message.metadata?['request_id'] != null)
           'request_id': response.message.metadata?['request_id'],
+        ...MessageHistoryIdentity.wireFields(response.message),
       };
     } else if (response.isToolUse) {
       type = 'tool_use';
@@ -52,10 +57,13 @@ class AgentToCanonical {
         'input': response.message.content,
         'status': 'running',
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,
         if (response.toolCallId != null) 'tool_call_id': response.toolCallId,
         if (response.contextUsage != null)
           'context_usage': response.contextUsage,
+        if (response.message.metadata?['started_at'] != null)
+          'started_at': response.message.metadata!['started_at'],
       };
     } else if (response.isToolResult) {
       type = 'tool_result';
@@ -68,6 +76,7 @@ class AgentToCanonical {
             ? 'cancelled'
             : (response.isToolError ? 'error' : 'done'),
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,
         if (response.toolCallId != null) 'tool_call_id': response.toolCallId,
         if (terminalMetadata?['generation'] != null)
@@ -80,6 +89,8 @@ class AgentToCanonical {
           'started_at': terminalMetadata!['started_at'],
         if (terminalMetadata?['terminal_at'] != null)
           'terminal_at': terminalMetadata!['terminal_at'],
+        if (terminalMetadata?['runtime_ms'] != null)
+          'runtime_ms': terminalMetadata!['runtime_ms'],
         if (terminalMetadata?['cleanup_outcome'] != null)
           'cleanup_outcome': terminalMetadata!['cleanup_outcome'],
       };
@@ -91,6 +102,7 @@ class AgentToCanonical {
         'status': 'done',
         'timestamp': DateTime.now().toIso8601String(),
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,
         if (response.model != null) 'model': response.model,
         if (response.modelDisplay != null)
@@ -102,6 +114,7 @@ class AgentToCanonical {
         if (response.runtimeMs != null) 'runtime_ms': response.runtimeMs,
         if (response.contextTokens != null)
           'context_tokens': response.contextTokens,
+        ...MessageHistoryIdentity.wireFields(response.message),
       };
     } else {
       // Distinguish reasoning content from intermediate thought text.
@@ -119,6 +132,7 @@ class AgentToCanonical {
             : response.message.thought ?? response.message.content,
         'status': 'running',
         if (response.runId != null) 'run_id': response.runId,
+        if (response.turnId != null) 'turn_id': response.turnId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,
       };
     }

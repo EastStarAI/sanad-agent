@@ -138,7 +138,9 @@ reasoning streams are discarded.
 final-answer `MarkdownBody` renderer with the same complete
 `MarkdownStyleSheet`, link handling, and inline-code builder. The former
 progressive Markdown dependency has been removed, so conversation content has
-only one Markdown implementation. There is no content-length threshold and no
+only one Markdown implementation. `AppMarkdownRenderer` does not synthesize
+newline or content-length milestone keys; timeline identity remains owned by
+the surrounding canonical event tile. There is no content-length threshold and no
 separate card, disclosure, measurement probe, bounded viewport, or nested
 scrollbar for streaming text.
 Long content grows naturally inside the conversation timeline. Programming and

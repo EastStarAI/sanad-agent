@@ -21,6 +21,7 @@ class WindowManagerService with WindowListener {
 
   static const _widthKey = 'window_width';
   static const _heightKey = 'window_height';
+  static const _compactHeightKey = 'window_compact_height';
   static const _legacyXKey = 'window_x';
   static const _legacyYKey = 'window_y';
   static const _expandedXKey = 'window_expanded_x';
@@ -53,28 +54,78 @@ class WindowManagerService with WindowListener {
   static bool isCompactWidth(double width) => width <= compactWindowSize.width + 1.0;
 
   @visibleForTesting
-  static Rect compactBoundsFor(Rect currentBounds, {Offset? savedPosition}) => Rect.fromLTWH(
-    savedPosition?.dx ?? currentBounds.left,
-    savedPosition?.dy ?? currentBounds.top,
-    compactWindowSize.width,
-    compactWindowSize.height,
-  );
+  static Size clampToDisplay(
+    Size targetSize, {
+    Size? displayLogicalSize,
+    double marginHeight = 64.0,
+    double marginWidth = 32.0,
+  }) {
+    final available = displayLogicalSize ?? getPrimaryDisplayLogicalSize();
+    if (available == null) {
+      return targetSize;
+    }
+    final maxWidth = (available.width - marginWidth).clamp(minimumWindowSize.width, double.infinity);
+    final maxHeight = (available.height - marginHeight).clamp(minimumWindowSize.height, double.infinity);
+
+    final width = targetSize.width.clamp(minimumWindowSize.width, maxWidth);
+    final height = targetSize.height.clamp(minimumWindowSize.height, maxHeight);
+    return Size(width, height);
+  }
+
+  @visibleForTesting
+  static Size? getPrimaryDisplayLogicalSize() {
+    try {
+      final displays = WidgetsBinding.instance.platformDispatcher.displays;
+      if (displays.isNotEmpty) {
+        final primary = displays.first;
+        final dpr = primary.devicePixelRatio > 0 ? primary.devicePixelRatio : 1.0;
+        return Size(primary.size.width / dpr, primary.size.height / dpr);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  @visibleForTesting
+  static Rect compactBoundsFor(
+    Rect currentBounds, {
+    Offset? savedPosition,
+    double? preferredHeight,
+    Size? displayLogicalSize,
+  }) {
+    final targetHeight = preferredHeight ?? compactWindowSize.height;
+    final effectiveHeight = clampToDisplay(
+      Size(compactWindowSize.width, targetHeight),
+      displayLogicalSize: displayLogicalSize,
+    ).height;
+
+    return Rect.fromLTWH(
+      savedPosition?.dx ?? currentBounds.left,
+      savedPosition?.dy ?? currentBounds.top,
+      compactWindowSize.width,
+      effectiveHeight,
+    );
+  }
 
   @visibleForTesting
   static Rect restoreBoundsFor(
     Rect? previousBounds, {
     Rect? currentBounds,
     Offset? savedPosition,
+    Size? displayLogicalSize,
   }) {
     final origin = previousBounds?.topLeft ?? savedPosition ?? currentBounds?.topLeft ?? Offset.zero;
+    final effectiveDefault = clampToDisplay(
+      defaultWindowSize,
+      displayLogicalSize: displayLogicalSize,
+    );
     if (previousBounds == null ||
-        previousBounds.width < defaultWindowSize.width ||
-        previousBounds.height < defaultWindowSize.height) {
+        previousBounds.width < effectiveDefault.width ||
+        previousBounds.height < effectiveDefault.height) {
       return Rect.fromLTWH(
         origin.dx,
         origin.dy,
-        defaultWindowSize.width,
-        defaultWindowSize.height,
+        effectiveDefault.width,
+        effectiveDefault.height,
       );
     }
     return previousBounds;
@@ -102,6 +153,7 @@ class WindowManagerService with WindowListener {
 
     final savedWidth = prefs.getDouble(_widthKey);
     final savedHeight = prefs.getDouble(_heightKey);
+    final savedCompactHeight = prefs.getDouble(_compactHeightKey);
     final legacyX = prefs.getDouble(_legacyXKey);
     final legacyY = prefs.getDouble(_legacyYKey);
     final expandedPosition = _readPosition(
@@ -124,12 +176,25 @@ class WindowManagerService with WindowListener {
     final savedExpandedSize = (savedWidth != null && savedHeight != null && !isCompactWidth(savedWidth))
         ? Size(savedWidth, savedHeight)
         : defaultWindowSize;
-    final expandedSize = Size(
-      savedExpandedSize.width < minimumWindowSize.width ? minimumWindowSize.width : savedExpandedSize.width,
-      savedExpandedSize.height < minimumWindowSize.height ? minimumWindowSize.height : savedExpandedSize.height,
+    final expandedSize = clampToDisplay(
+      Size(
+        savedExpandedSize.width < minimumWindowSize.width ? minimumWindowSize.width : savedExpandedSize.width,
+        savedExpandedSize.height < minimumWindowSize.height ? minimumWindowSize.height : savedExpandedSize.height,
+      ),
     );
-    final windowSize = startCompact ? compactWindowSize : expandedSize;
-    final savedPosition = startCompact ? compactPosition : expandedPosition;
+    final compactSize = clampToDisplay(
+      Size(compactWindowSize.width, savedCompactHeight ?? compactWindowSize.height),
+    );
+    final windowSize = startCompact ? compactSize : expandedSize;
+    var savedPosition = startCompact ? compactPosition : expandedPosition;
+
+    final primaryDisplaySize = getPrimaryDisplayLogicalSize();
+    if (savedPosition != null && primaryDisplaySize != null) {
+      if (savedPosition.dx > primaryDisplaySize.width - 100 ||
+          savedPosition.dy > primaryDisplaySize.height - 100) {
+        savedPosition = null;
+      }
+    }
 
     final hasCentered = prefs.getBool('has_centered_window') ?? false;
     final shouldCenter = !hasCentered && savedPosition == null;
@@ -211,9 +276,11 @@ class WindowManagerService with WindowListener {
       _compactXKey,
       _compactYKey,
     );
+    final savedCompactHeight = prefs.getDouble(_compactHeightKey);
     final compactBounds = compactBoundsFor(
       currentBounds,
       savedPosition: compactPosition,
+      preferredHeight: savedCompactHeight,
     );
     await _setBounds(compactBounds);
     _isCompactMode.value = true;
@@ -247,7 +314,9 @@ class WindowManagerService with WindowListener {
     await prefs.setDouble(xKey, bounds.left);
     await prefs.setDouble(yKey, bounds.top);
 
-    if (!isCompact) {
+    if (isCompact) {
+      await prefs.setDouble(_compactHeightKey, bounds.height);
+    } else {
       await prefs.setDouble(_widthKey, bounds.width);
       await prefs.setDouble(_heightKey, bounds.height);
       // Keep the legacy position synchronized for seamless downgrade/migration.

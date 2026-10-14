@@ -1,4 +1,6 @@
 import 'dart:async';
+
+import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
@@ -7,11 +9,12 @@ import 'package:sanad_agent/engine/agent_runner.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_execution_state_coordinator.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
-import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 
 import 'local_workspace_runtime_service.dart';
+import 'session_run_orchestrator.dart';
+import 'session_turn_executor.dart';
 import 'suspended_checkpoint_store.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
@@ -19,6 +22,7 @@ import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
 typedef SuspendedResponseEmitter =
     Future<void> Function(GatewayResponse response);
 typedef SuspendedDecisionClaimed = Future<void> Function();
+typedef SuspendedTerminalCommitted = void Function(String sessionId);
 
 class SuspendedResumeService {
   SuspendedResumeService({
@@ -30,10 +34,12 @@ class SuspendedResumeService {
     PermissionManager? permissionManager,
     PersistedRuntimeStateRepository? persistedState,
     RuntimeRecoveryService? runtimeRecovery,
+    SuspendedTerminalCommitted? onTerminalCommitted,
   }) : _checkpointStore = checkpointStore ?? SuspendedCheckpointStore(),
        _sessionManagerProvided = sessionManager,
        _persistedStateProvided = persistedState,
        _runtimeRecoveryProvided = runtimeRecovery,
+       _onTerminalCommitted = onTerminalCommitted,
        _runtimeCatalog = runtimeCatalog ?? getIt<LocalRuntimeCatalog>(),
        _runtimeContextBuilder =
            runtimeContextBuilder ?? getIt<RuntimeContextBuilder>(),
@@ -45,6 +51,7 @@ class SuspendedResumeService {
   SessionManager? _sessionManagerProvided;
   final PersistedRuntimeStateRepository? _persistedStateProvided;
   final RuntimeRecoveryService? _runtimeRecoveryProvided;
+  final SuspendedTerminalCommitted? _onTerminalCommitted;
   SessionManager get _sessionManager =>
       _sessionManagerProvided ??= SessionManager();
   PersistedRuntimeStateRepository? get _persistedState =>
@@ -67,27 +74,89 @@ class SuspendedResumeService {
     required Map<String, dynamic> decision,
     required SuspendedResponseEmitter emitResponse,
     SuspendedDecisionClaimed? onClaimed,
+  }) => _resumeFromDecision(
+    requestId: requestId,
+    decision: decision,
+    emitResponse: emitResponse,
+    onClaimed: onClaimed,
+    reclaimPersistedDecision: false,
+  );
+
+  Future<bool> resumePersistedDecision({
+    required String requestId,
+    required Map<String, dynamic> decision,
+    required SuspendedResponseEmitter emitResponse,
+  }) => _resumeFromDecision(
+    requestId: requestId,
+    decision: decision,
+    emitResponse: emitResponse,
+    reclaimPersistedDecision: true,
+  );
+
+  Future<bool> _resumeFromDecision({
+    required String requestId,
+    required Map<String, dynamic> decision,
+    required SuspendedResponseEmitter emitResponse,
+    SuspendedDecisionClaimed? onClaimed,
+    required bool reclaimPersistedDecision,
   }) async {
-    final checkpoint = await _checkpointStore.getByRequestId(requestId);
-    if (checkpoint == null) {
+    final foundCheckpoint = await _checkpointStore.getByRequestId(requestId);
+    if (foundCheckpoint == null) return false;
+    var checkpoint = foundCheckpoint;
+
+    final decisionSessionId = decision['session_id']?.toString();
+    if (decisionSessionId != null &&
+        decisionSessionId.isNotEmpty &&
+        decisionSessionId != checkpoint.sessionId) {
+      return false;
+    }
+
+    final expectedStatus = reclaimPersistedDecision
+        ? 'decision_ready'
+        : 'awaiting_permission';
+    if (checkpoint.status != expectedStatus) {
       return false;
     }
 
     final isAskUser = checkpoint.toolName == 'system_ask_user';
+    if (isAskUser) {
+      final answer = decision['answer']?.toString().trim();
+      if (answer == null || answer.isEmpty) {
+        return false;
+      }
+    } else {
+      final hasAllowed =
+          decision.containsKey('allowed') || decision.containsKey('decision');
+      if (!hasAllowed) {
+        return false;
+      }
+    }
 
-    final claimed = await _checkpointStore.claimDecision(
-      requestId: requestId,
-      status: isAskUser
-          ? 'resuming'
-          : (decision['allowed'] == true ? 'resuming' : 'denied'),
-    );
-    if (!claimed) {
-      return false;
+    final persistedState = _persistedState;
+    SuspendedDecisionClaim? durableClaim;
+    if (persistedState != null) {
+      durableClaim = persistedState.claimSuspendedDecision(
+        checkpoint: checkpoint,
+        decision: decision,
+        reclaimPersistedDecision: reclaimPersistedDecision,
+      );
+      if (durableClaim == null) return false;
+      checkpoint = durableClaim.checkpoint;
+    } else {
+      if (reclaimPersistedDecision) return false;
+      final claimed = await _checkpointStore.claimDecision(
+        requestId: requestId,
+        status: 'decision_ready',
+      );
+      if (!claimed) return false;
     }
-    final resumeOwner = _claimDurableResume(checkpoint);
-    if (_persistedState != null && resumeOwner == null) {
-      return false;
-    }
+    final resumeOwner = durableClaim == null
+        ? null
+        : (
+            workItemId: durableClaim.workItem.workItemId,
+            runId: durableClaim.runId,
+            generation: durableClaim.generation,
+          );
     await onClaimed?.call();
 
     if (!isAskUser) {
@@ -109,12 +178,25 @@ class SuspendedResumeService {
       metadata: Map<String, dynamic>.from(sessionMetadata),
     );
     final agentRunner = getIt<AgentRunner>(param1: checkpoint.sessionId);
+    SessionRunOrchestrator? orchestrator;
+    ActiveRun? activeRun;
     if (resumeOwner != null) {
-      agentRunner.beginAuthoritativeRun(
-        resumeOwner.runId,
-        workItemId: resumeOwner.workItemId,
-        generation: resumeOwner.generation,
-      );
+      if (getIt.isRegistered<SessionRunOrchestrator>()) {
+        orchestrator = getIt<SessionRunOrchestrator>();
+        activeRun = orchestrator.adoptPersistedSuspendedRun(
+          sessionId: checkpoint.sessionId,
+          workItemId: resumeOwner.workItemId,
+          runId: resumeOwner.runId,
+          generation: resumeOwner.generation,
+          agentRunner: agentRunner,
+        );
+      } else {
+        agentRunner.beginAuthoritativeRun(
+          resumeOwner.runId,
+          workItemId: resumeOwner.workItemId,
+          generation: resumeOwner.generation,
+        );
+      }
       final persistedWork = _persistedState?.findWorkItem(
         resumeOwner.workItemId,
       );
@@ -123,6 +205,8 @@ class SuspendedResumeService {
       }
       _clearStaleRecoveryNotice(checkpoint.sessionId);
     }
+    bool canPublish() =>
+        activeRun == null || orchestrator!.ownsPersistedSuspendedRun(activeRun);
     final tools = await _runtimeCatalog.buildTools(
       registry: agentRunner.registry,
       request: runtimeRequest,
@@ -135,7 +219,7 @@ class SuspendedResumeService {
 
     final denyComment = decision['comment']?.toString().trim();
     final forcedOutput = isAskUser
-        ? (decision['answer']?.toString() ?? '')
+        ? decision['answer']!.toString()
         : (decision['allowed'] == true
               ? null
               : [
@@ -146,6 +230,17 @@ class SuspendedResumeService {
     final forcedIsError = isAskUser ? false : (decision['allowed'] != true);
     final ownerRunId =
         resumeOwner?.runId ?? sessionMetadata['run_id']?.toString();
+    var terminalCommitted = false;
+
+    if (!isAskUser && decision['allowed'] == true) {
+      // Crossing this marker means startup must never replay the approved
+      // side effect. If the process exits afterward, normal interrupted-tool
+      // recovery records an unknown outcome instead.
+      await _checkpointStore.updateStatus(
+        requestId: requestId,
+        status: 'executing_tool',
+      );
+    }
 
     try {
       String fullContent = '';
@@ -164,13 +259,22 @@ class SuspendedResumeService {
               required bool isError,
               required bool isStart,
               String? toolRunId,
+              DateTime? startedAt,
+              DateTime? terminalAt,
+              int? runtimeMs,
             }) async {
+              if (!canPublish()) return;
               await emitResponse(
                 GatewayResponse(
                   sessionId: checkpoint.sessionId,
                   message: Message(
                     role: MessageRole.tool,
                     content: isStart ? input : output,
+                    metadata: {
+                      'started_at': ?startedAt?.toIso8601String(),
+                      'terminal_at': ?terminalAt?.toIso8601String(),
+                      'runtime_ms': ?runtimeMs,
+                    },
                   ),
                   isComplete: false,
                   runId: ownerRunId,
@@ -183,16 +287,21 @@ class SuspendedResumeService {
                 ),
               );
             },
-        onReasoningDelta: (reasoning) => emitResponse(
-          GatewayResponse(
-            sessionId: checkpoint.sessionId,
-            message: Message(role: MessageRole.assistant, content: reasoning),
-            isComplete: false,
-            runId: ownerRunId,
-            modelStepId: agentRunner.currentModelStepId,
-          ),
-        ),
+        onReasoningDelta: (reasoning) async {
+          if (!canPublish()) return;
+          await emitResponse(
+            GatewayResponse(
+              sessionId: checkpoint.sessionId,
+              message: Message(role: MessageRole.assistant, content: reasoning),
+              isComplete: false,
+              runId: ownerRunId,
+              turnId: activeRun?.turnId,
+              modelStepId: agentRunner.currentModelStepId,
+            ),
+          );
+        },
       )) {
+        if (!canPublish()) continue;
         fullContent += chunk;
         await emitResponse(
           GatewayResponse(
@@ -200,11 +309,13 @@ class SuspendedResumeService {
             message: Message(role: MessageRole.assistant, content: chunk),
             isComplete: false,
             runId: ownerRunId,
+            turnId: activeRun?.turnId,
             modelStepId: agentRunner.currentModelStepId,
           ),
         );
       }
 
+      if (!canPublish()) return true;
       final contextUsage = await agentRunner.getContextUsageSnapshot();
       final contextTokens = await agentRunner.getContextTokens();
       final turnMetadata = <String, dynamic>{
@@ -232,6 +343,7 @@ class SuspendedResumeService {
         metadata: {
           ...turnMetadata,
           if (resumeOwner != null) 'run_id': resumeOwner.runId,
+          if (activeRun?.turnId != null) 'turn_id': activeRun!.turnId,
           if (agentRunner.currentModelStepId != null)
             'model_step_id': agentRunner.currentModelStepId,
         },
@@ -249,13 +361,16 @@ class SuspendedResumeService {
             'Persisted suspended resume terminal commit failed: $outcome',
           );
         }
+        terminalCommitted = true;
       }
+      if (!canPublish()) return true;
       await emitResponse(
         GatewayResponse(
           sessionId: checkpoint.sessionId,
           message: terminalMessage,
           isComplete: true,
           runId: resumeOwner?.runId ?? ownerRunId,
+          turnId: activeRun?.turnId,
           modelStepId: agentRunner.currentModelStepId,
           usage: agentRunner.lastUsage,
           contextUsage: contextUsage,
@@ -269,52 +384,15 @@ class SuspendedResumeService {
       await _checkpointStore.deleteByRequestId(requestId);
       return true;
     } finally {
-      if (resumeOwner != null) {
+      if (activeRun != null) {
+        orchestrator!.releasePersistedSuspendedRun(activeRun);
+      } else if (resumeOwner != null) {
         agentRunner.endAuthoritativeRun(resumeOwner.runId);
       }
+      if (terminalCommitted) {
+        _onTerminalCommitted?.call(checkpoint.sessionId);
+      }
     }
-  }
-
-  _SuspendedResumeOwner? _claimDurableResume(SuspendedCheckpoint checkpoint) {
-    final store = _persistedState;
-    if (store == null) return null;
-    final active = store.findActiveWorkItem(checkpoint.sessionId);
-    if (active == null ||
-        (active.state != SessionWorkState.waiting &&
-            active.state != SessionWorkState.blocked)) {
-      return null;
-    }
-    final executingTools = List<String>.from(
-      active.continuationMetadata['currently_executing_tools'] as List? ??
-          const [],
-    );
-    if (!executingTools.contains(checkpoint.toolCallId)) {
-      return null;
-    }
-    final runId = active.continuationMetadata['owner_run_id']?.toString();
-    final generationRaw = active.continuationMetadata['owner_generation'];
-    final generation = switch (generationRaw) {
-      int() => generationRaw,
-      String() => int.tryParse(generationRaw),
-      _ => null,
-    };
-    if (runId == null || runId.isEmpty || generation == null) {
-      return null;
-    }
-    try {
-      store.transitionWorkItemState(
-        workItemId: active.workItemId,
-        fromState: active.state,
-        toState: SessionWorkState.resuming,
-      );
-    } catch (_) {
-      return null;
-    }
-    return (
-      workItemId: active.workItemId,
-      runId: runId,
-      generation: generation,
-    );
   }
 
   void _clearStaleRecoveryNotice(String sessionId) {
@@ -335,29 +413,35 @@ class SuspendedResumeService {
     AgentTurnRequest request,
     AgentRunner agentRunner,
   ) async {
-    final workspaceId = request.workspaceId;
-    if (workspaceId == null || workspaceId.isEmpty) {
-      return _runtimeContextBuilder.buildWithoutWorkspace();
+    final execRoot = request.executionRoot;
+    String? workspacePath;
+    String? workspaceName;
+
+    if (execRoot != null && execRoot.isNotEmpty) {
+      workspacePath = _runtimeContextBuilder.pathResolver
+          .validateAndNormalizeExecutionRoot(execRoot);
+      workspaceName = p.basename(workspacePath!);
+    } else {
+      final workspaceId = request.effectiveWorkspaceId;
+      if (workspaceId == null || workspaceId.isEmpty) {
+        return _runtimeContextBuilder.buildWithoutWorkspace();
+      }
+
+      final workspace = await _workspaceRuntimeService.describeWorkspace(
+        workspaceId,
+      );
+      workspacePath = workspace?['path'] as String?;
+      workspaceName = workspace?['name'] as String?;
     }
 
-    final workspace = await _workspaceRuntimeService.describeWorkspace(
-      workspaceId,
-    );
-    final workspacePath = workspace?['path'] as String?;
     if (workspacePath == null || workspacePath.isEmpty) {
       return _runtimeContextBuilder.buildWithoutWorkspace();
     }
 
     return _runtimeContextBuilder.build(
       workspacePath: workspacePath,
-      workspaceName: workspace?['name'] as String?,
+      workspaceName: workspaceName,
       registry: agentRunner.registry,
     );
   }
 }
-
-typedef _SuspendedResumeOwner = ({
-  String workItemId,
-  String runId,
-  int generation,
-});

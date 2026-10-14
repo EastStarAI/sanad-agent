@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/utils/format_utils.dart';
 
@@ -8,13 +9,15 @@ void main() {
       expect(EventMetadataFormatter.formatRuntime('abc'), '');
     });
 
-    test('formats millisecond durations under 1 second', () {
-      expect(EventMetadataFormatter.formatRuntime(250), '250ms');
-      expect(EventMetadataFormatter.formatRuntime(999), '999ms');
+    test('formats subsecond durations under 1 second with fractions', () {
+      expect(EventMetadataFormatter.formatRuntime(250), '0.3s');
+      expect(EventMetadataFormatter.formatRuntime(400), '0.4s');
+      expect(EventMetadataFormatter.formatRuntime(999), '1s');
     });
 
-    test('formats second durations under 1 minute', () {
-      expect(EventMetadataFormatter.formatRuntime(1500), '1.5s');
+    test('formats durations >= 1 second without fractions', () {
+      expect(EventMetadataFormatter.formatRuntime(1000), '1s');
+      expect(EventMetadataFormatter.formatRuntime(1500), '2s');
       expect(EventMetadataFormatter.formatRuntime(12500), '13s');
       expect(EventMetadataFormatter.formatRuntime(59000), '59s');
     });
@@ -31,6 +34,42 @@ void main() {
       expect(EventMetadataFormatter.formatRuntime(200 * 60 * 1000), '3h 20m');
       // 1 hour, 5 minutes, 30 seconds -> 1h 5m
       expect(EventMetadataFormatter.formatRuntime((1 * 3600 + 5 * 60 + 30) * 1000), '1h 5m');
+    });
+  });
+
+  group('EventMetadataFormatter.timestampText & dateTooltip', () {
+    testWidgets('timestampText shows only time', (tester) async {
+      final timestamp = DateTime(2026, 5, 10, 14, 0);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) {
+              final formatted = EventMetadataFormatter.timestampText(timestamp, context);
+              expect(formatted, contains('2:00'));
+              expect(formatted, isNot(contains('2026')));
+              return const SizedBox.shrink();
+            },
+          ),
+        ),
+      );
+    });
+
+    testWidgets('dateTooltip shows full date for tooltip display', (tester) async {
+      final timestamp = DateTime(2026, 5, 8, 14, 0);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Builder(
+            builder: (context) {
+              final tooltip = EventMetadataFormatter.dateTooltip(timestamp, context);
+              expect(tooltip, contains('2026'));
+              expect(tooltip, contains('8'));
+              return const SizedBox.shrink();
+            },
+          ),
+        ),
+      );
     });
   });
 }

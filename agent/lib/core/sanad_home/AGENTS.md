@@ -32,7 +32,8 @@ no writer outside this helper reaches the filesystem.
   (Windows) BEFORE any byte is written, then atomically renamed.
 - Cross-process file-backed mutations use a stable owner-only lock file created
   and opened by `SanadHomeBootstrap`; callers never replace a lock inode while
-  another process may hold it.
+  another process may hold it. The daemon and in-process CLI hold one shared
+  state-root runtime-ownership lease before any SQLite connection opens.
 - The configured root and child path components are rejected when they are
   symlinks; the resulting real path is verified against the canonical root.
 - Identity prepare creates `workspaces/` as a non-symlink managed remote

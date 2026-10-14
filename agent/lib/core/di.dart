@@ -23,13 +23,22 @@ import 'package:sanad_agent/capabilities/skills/skill_load_service.dart';
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/db/agent_state_maintenance_service.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_mutation_coordinator.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_route_transition_repository.dart';
+import 'package:sanad_agent/evolution/db/session_history_revision_repository.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
+import 'package:sanad_agent/engine/context/context.dart';
+import 'package:sanad_agent/engine/runtime/compaction_coordinator.dart';
+import 'package:sanad_agent/evolution/compaction/model_projection_builder.dart';
+import 'package:sanad_agent/evolution/db/session_projection_revision_repository.dart';
+import 'package:sanad_agent/evolution/compaction/compaction_activation_service.dart';
+import 'package:sanad_agent/evolution/compaction/compaction_boundary_change.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/plugins/plugin_manager.dart';
-import 'package:sanad_agent/engine/context_engine.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
@@ -39,6 +48,7 @@ import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_resume_service.dart';
 import 'package:sanad_agent/interfaces/gateway_manager.dart';
+import 'package:sanad_agent/interfaces/runtime/compaction_lifecycle_relay.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/daemon_restart_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/device_settings_service.dart';
@@ -63,6 +73,14 @@ import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service
 import 'package:sanad_agent/core/provider_usage/provider_usage_adapter.dart';
 import 'package:sanad_agent/core/provider_usage/provider_usage_di.dart';
 import 'package:sanad_agent/core/provider_usage/provider_usage_service.dart';
+import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
+import 'package:sanad_agent/core/provider_thinking/provider_thinking_policy.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_control_cache_resolver.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_preference_store.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_revalidator.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_route_session_sync.dart';
+import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 
 import 'package:sanad_agent/evolution/title_service.dart';
 
@@ -97,7 +115,18 @@ void setupDI() {
   getIt.registerLazySingleton<Config>(() => Config());
   getIt.registerLazySingleton<ModelsDevService>(() => ModelsDevService());
   getIt.registerLazySingleton<SessionRunOrchestrator>(
-    () => SessionRunOrchestrator(),
+    () => SessionRunOrchestrator(
+      resumePersistedSuspendedDecision:
+          ({required checkpoint, required emitResponse}) {
+            final decision = checkpoint.resolvedDecision;
+            if (decision == null) return Future.value(false);
+            return getIt<SuspendedResumeService>().resumePersistedDecision(
+              requestId: checkpoint.requestId,
+              decision: decision,
+              emitResponse: emitResponse,
+            );
+          },
+    ),
   );
   getIt.registerLazySingleton<SessionQueueProviderOverride>(
     () => getIt<SessionRunOrchestrator>(),
@@ -115,8 +144,23 @@ void setupDI() {
     () =>
         PersistedRuntimeStateRepository.fromState(getIt<AgentStateDatabase>()),
   );
+  getIt.registerLazySingleton<AgentStateMaintenanceService>(
+    () => AgentStateMaintenanceService(getIt<AgentStateDatabase>()),
+  );
   getIt.registerLazySingleton<SessionRouteTransitionRepository>(
     () => SessionRouteTransitionRepository(getIt<AgentStateDatabase>()),
+  );
+  getIt.registerLazySingleton<SessionHistoryRevisionRepository>(
+    () => SessionHistoryRevisionRepository(getIt<AgentStateDatabase>()),
+  );
+  getIt.registerLazySingleton<SessionProjectionRevisionRepository>(
+    () => SessionProjectionRevisionRepository(getIt<AgentStateDatabase>()),
+  );
+  getIt.registerLazySingleton<CompactionBoundaryRepository>(
+    () => CompactionBoundaryRepository(
+      getIt<AgentStateDatabase>(),
+      getIt<SessionHistoryRevisionRepository>(),
+    ),
   );
   getIt.registerLazySingleton<SessionRouteMutationCoordinator>(
     () => SessionRouteMutationCoordinator(
@@ -196,6 +240,40 @@ void setupDI() {
   );
 
   getIt.registerLazySingleton<SessionManager>(() => SessionManager());
+  getIt.registerLazySingleton<CompactionBoundaryChangeNotifier>(
+    () => CompactionBoundaryChangeNotifier(),
+  );
+  getIt.registerLazySingleton<CompactionActivationService>(
+    () => CompactionActivationService(
+      boundaries: getIt<CompactionBoundaryRepository>(),
+      projectionRevisions: getIt<SessionProjectionRevisionRepository>(),
+      changes: getIt<CompactionBoundaryChangeNotifier>(),
+    ),
+  );
+  getIt.registerLazySingleton<ContextCompactionEngine>(
+    () => ContextCompactionEngine(
+      summarizer: ProviderBackedCompactionSummarizer(
+        getIt<AgentRuntimeService>(),
+      ),
+    ),
+  );
+  getIt.registerLazySingleton<CompactionCoordinator>(
+    () => CompactionCoordinator(
+      engine: getIt<ContextCompactionEngine>(),
+      boundaries: getIt<CompactionBoundaryRepository>(),
+      activation: getIt<CompactionActivationService>(),
+      projectionBuilder: getIt<ModelProjectionBuilder>(),
+      projectionRevisions: getIt<SessionProjectionRevisionRepository>(),
+      runtime: getIt<AgentRuntimeService>(),
+      onLifecycleEvent: CompactionLifecycleRelay.publish,
+    ),
+  );
+  getIt.registerLazySingleton<ModelProjectionBuilder>(
+    () => ModelProjectionBuilder(
+      sessions: getIt<SessionManager>().db,
+      boundaries: getIt<CompactionBoundaryRepository>(),
+    ),
+  );
   getIt.registerLazySingleton<CronScheduler>(() => CronScheduler());
   getIt.registerLazySingleton<TitleService>(() => TitleService());
 
@@ -215,6 +293,9 @@ void setupDI() {
   getIt.registerLazySingleton<DaemonRestartCoordinator>(
     () => DaemonRestartCoordinator(
       sessionOrchestrator: getIt<SessionRunOrchestrator>(),
+      beforeControlledExit: () async {
+        getIt<AgentStateMaintenanceService>().runPendingVacuum();
+      },
     ),
   );
   getIt.registerLazySingleton<DeviceSettingsService>(
@@ -249,10 +330,46 @@ void setupDI() {
     () => getIt<AgentRuntimeService>().defaultAdapter(),
   );
 
+  getIt.registerLazySingleton<ProviderThinkingRegistry>(
+    () => buildProviderThinkingRegistry(),
+  );
+  getIt.registerLazySingleton<ThinkingCapabilityAssembler>(
+    () => ThinkingCapabilityAssembler(getIt<ProviderThinkingRegistry>()),
+  );
+
+  getIt.registerLazySingleton<ThinkingControlCacheResolver>(
+    () => ThinkingControlCacheResolver(getIt<ProviderInstanceRepository>()),
+  );
+  getIt.registerLazySingleton<ThinkingSelectionResolver>(
+    () => ThinkingSelectionResolver(
+      instances: getIt<ProviderInstanceRepository>(),
+      cacheResolver: getIt<ThinkingControlCacheResolver>(),
+      assembler: getIt<ThinkingCapabilityAssembler>(),
+      registry: getIt<ProviderThinkingRegistry>(),
+    ),
+  );
+  getIt.registerLazySingleton<ThinkingRoutePreferenceStore>(
+    () => ThinkingRoutePreferenceStore(getIt<SessionManager>()),
+  );
+  getIt.registerLazySingleton<ThinkingRouteRevalidator>(
+    () => ThinkingRouteRevalidator(
+      resolver: getIt<ThinkingSelectionResolver>(),
+      store: getIt<ThinkingRoutePreferenceStore>(),
+    ),
+  );
+  getIt.registerLazySingleton<ThinkingRouteSessionSync>(
+    () => ThinkingRouteSessionSync(
+      revalidator: getIt<ThinkingRouteRevalidator>(),
+      store: getIt<ThinkingRoutePreferenceStore>(),
+      sessions: getIt<SessionManager>(),
+    ),
+  );
+
   getIt.registerLazySingleton<ProviderModelCacheService>(
     () => ProviderModelCacheService(
       getIt<ProviderInstanceRepository>(),
       getIt<AgentRuntimeService>(),
+      getIt<ThinkingCapabilityAssembler>(),
     ),
   );
 
@@ -347,21 +464,25 @@ void setupDI() {
       runtimeContextBuilder: getIt<RuntimeContextBuilder>(),
       workspaceRuntimeService: getIt<LocalWorkspaceRuntimeService>(),
       permissionManager: getIt<PermissionManager>(),
+      onTerminalCommitted: (sessionId) => getIt<SessionRunOrchestrator>()
+          .reconcilePersistedSuspendedTerminal(sessionId),
     ),
   );
+  getIt.registerLazySingleton<DeliveryPresenceController>(
+    () => DeliveryPresenceController(),
+  );
   getIt.registerLazySingleton<ServerSanadGatewayPlatform>(
-    () => ServerSanadGatewayPlatform(),
+    () => ServerSanadGatewayPlatform(
+      deliveryPresence: getIt<DeliveryPresenceController>(),
+    ),
   );
   getIt.registerLazySingleton<LocalDaemonServerPlatform>(
-    () => LocalDaemonServerPlatform(),
+    () => LocalDaemonServerPlatform(
+      deliveryPresence: getIt<DeliveryPresenceController>(),
+    ),
   );
 
   getIt.registerLazySingleton<PluginManager>(() => PluginManager());
-
-  // Compression receives the live turn-scoped adapter from AgentRunner. Keep
-  // the shared engine provider-neutral so it cannot retain a pre-onboarding
-  // MissingProviderAdapter.
-  getIt.registerLazySingleton<ContextEngine>(() => ContextEngine());
 
   getIt.registerFactoryParam<AgentRunner, String?, void>(
     (sessionId, _) => AgentRunner(
@@ -369,7 +490,6 @@ void setupDI() {
       getIt<ToolsRegistry>().copy(),
       getIt<SessionManager>(),
       pluginManager: getIt<PluginManager>(),
-      contextEngine: getIt<ContextEngine>(),
       existingSessionId: sessionId,
     ),
   );

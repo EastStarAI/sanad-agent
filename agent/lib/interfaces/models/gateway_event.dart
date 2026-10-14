@@ -47,6 +47,7 @@ class GatewayResponse {
   final Message message;
   final bool isComplete;
   final String? runId;
+  final String? turnId;
   final String? modelStepId;
   final String? toolCallId;
 
@@ -87,6 +88,7 @@ class GatewayResponse {
     required this.message,
     this.isComplete = true,
     this.runId,
+    this.turnId,
     this.modelStepId,
     this.toolCallId,
     this.usage,
@@ -124,6 +126,7 @@ class GatewayResponse {
     message: message,
     isComplete: isComplete,
     runId: runId,
+    turnId: turnId,
     modelStepId: modelStepId,
     toolCallId: toolCallId,
     usage: usage,

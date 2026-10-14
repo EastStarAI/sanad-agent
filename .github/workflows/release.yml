@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: Intended v1.0.1 or v1.0.1-rc.N identity
+        description: Intended vX.Y.Z or vX.Y.Z-rc.N identity
         type: string
         required: true
       validation_only:
@@ -163,13 +163,16 @@ jobs:
           fvm dart run tool/generate_bundled_skills.dart --check
           fvm dart analyze
           fvm dart test test/core/update/release_manifest_test.dart
-      - name: Compile Windows agent
+      - name: Compile Windows agent and no-console launcher
         if: matrix.platform == 'windows'
         working-directory: agent
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path ../dist -Force | Out-Null
+          cmake -S windows/launcher -B build/windows-launcher -A x64
+          cmake --build build/windows-launcher --config Release
           fvm dart compile exe "-DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }}" bin/sanad_agent.dart -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
+          fvm dart run tool/package_windows_launcher.dart --agent "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe" --launcher "build/windows-launcher/out/sanad-launcher.exe"
       - name: Smoke-test embedded skills
         if: matrix.platform != 'windows'
         shell: bash
@@ -217,12 +220,13 @@ jobs:
           printf '%s' "$APPLE_KEY_BASE64" | base64 -D > "$RUNNER_TEMP/AuthKey.p8"
           chmod 600 "$RUNNER_TEMP/developer-id.p12" "$RUNNER_TEMP/AuthKey.p8"
           security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
           security default-keychain -s "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" \
             -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security list-keychains -d user -s "$keychain"
-          security set-key-partition-list -S apple-tool:,apple: \
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$keychain_password" "$keychain"
           identity="$(security find-identity -v -p codesigning "$keychain" |
             sed -n 's/.*"\(Developer ID Application: NanoSoft LY LLC ([^"]*)\)".*/\1/p' |
@@ -424,13 +428,16 @@ jobs:
             "$RUNNER_TEMP/sparkle-private-key" \
             "$RUNNER_TEMP/AuthKey.p8"
           security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
           security default-keychain -s "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           security import "$RUNNER_TEMP/developer-id.p12" -k "$keychain" \
             -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security list-keychains -d user -s "$keychain"
-          security set-key-partition-list -S apple-tool:,apple: \
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$keychain_password" "$keychain"
+          echo "KEYCHAIN_PATH=$keychain" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$keychain_password" >> "$GITHUB_ENV"
       - name: Build signed and notarized DMG
         working-directory: client
         env:
@@ -443,6 +450,8 @@ jobs:
           fvm flutter pub get
           fvm flutter precache --macos
           (cd macos && pod install)
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" || true
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH" || true
           release/macos/release_macos.sh
           mkdir -p ../dist
           source_prefix="build/sanad-client-${{ needs.validate.outputs.version }}-macos-universal.dmg"
@@ -543,12 +552,13 @@ jobs:
           printf '%s' "$PROFILE_BASE64" | base64 -D > "$RUNNER_TEMP/sanad.mobileprovision"
           chmod 600 "$RUNNER_TEMP/distribution.p12" "$RUNNER_TEMP/sanad.mobileprovision"
           security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
           security default-keychain -s "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           security import "$RUNNER_TEMP/distribution.p12" -k "$keychain" \
             -P "$CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security list-keychains -d user -s "$keychain"
-          security set-key-partition-list -S apple-tool:,apple: \
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$keychain_password" "$keychain"
           uuid="$(security cms -D -i "$RUNNER_TEMP/sanad.mobileprovision" | \
             plutil -extract UUID raw -o - -)"

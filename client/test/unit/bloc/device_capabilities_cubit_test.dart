@@ -89,4 +89,60 @@ void main() {
 
     await cubit.close();
   });
+
+  test('does not re-fetch capabilities on repeated state emissions for already-online devices', () async {
+    socket.setConnected(true);
+    socket.autoCapabilitiesPayload = const {
+      'supports_model_change': true,
+    };
+
+    final localAgent = DeviceConfig(
+      id: 'local-agent',
+      name: 'Local',
+      isOnline: true,
+      metadata: const {'is_local_reachable': true},
+    );
+    final remoteAgent = DeviceConfig(
+      id: 'remote-agent',
+      name: 'Remote',
+      isOnline: true,
+    );
+
+    final cubit = DeviceCapabilitiesCubit(
+      capabilities: capabilities,
+      agentCubit: agentCubit,
+    );
+
+    // Initial state emission
+    agentCubit.emitState(
+      DeviceActive(activeAgent: localAgent, agents: [localAgent, remoteAgent]),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    final initialCount = socket.capturedCommands
+        .where((command) => command['event'] == 'get_capabilities')
+        .length;
+    expect(initialCount, greaterThan(0));
+
+    socket.clearCaptured();
+
+    // Subsequent state emissions (e.g. switching active device or metadata updates)
+    agentCubit.emitState(
+      DeviceActive(activeAgent: remoteAgent, agents: [localAgent, remoteAgent]),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    agentCubit.emitState(
+      DeviceActive(activeAgent: localAgent, agents: [localAgent, remoteAgent]),
+    );
+    await Future<void>.delayed(Duration.zero);
+
+    // Should NOT emit get_capabilities again because devices are already cached and fresh
+    expect(
+      socket.capturedCommands.where((command) => command['event'] == 'get_capabilities'),
+      isEmpty,
+    );
+
+    await cubit.close();
+  });
 }

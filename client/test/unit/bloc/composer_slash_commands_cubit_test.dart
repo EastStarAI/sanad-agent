@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -70,6 +72,46 @@ void main() {
       expect(cubit.state.visibleEntries.map((entry) => entry.command), ['test sanad plugin']);
     });
 
+    test('filters leading-only runtime actions from a mid-message slash', () async {
+      searcher.queryResults['co'] = [
+        _entry(name: 'compact', type: SlashCommandType.runtimeAction),
+        _entry(name: 'code-review'),
+      ];
+
+      cubit.onComposerChanged(
+        const TextEditingValue(
+          text: 'please /co',
+          selection: TextSelection.collapsed(offset: 10),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        cubit.state.visibleEntries.map((entry) => entry.command),
+        ['code-review'],
+      );
+    });
+
+    test('keeps runtime actions visible for a leading slash', () async {
+      searcher.queryResults['co'] = [
+        _entry(name: 'compact', type: SlashCommandType.runtimeAction),
+        _entry(name: 'code-review'),
+      ];
+
+      cubit.onComposerChanged(
+        const TextEditingValue(
+          text: '/co',
+          selection: TextSelection.collapsed(offset: 3),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        cubit.state.visibleEntries.map((entry) => entry.command),
+        ['compact', 'code-review'],
+      );
+    });
+
     test('applySelection clears the active suggestion session after the input is updated', () async {
       searcher.entriesByWorkspace['workspace-1'] = [_entry(name: 'test-sanad-plugin')];
 
@@ -99,6 +141,29 @@ void main() {
       expect(cubit.state.visibleEntries, isEmpty);
       expect(cubit.state.activeQuery, isNull);
       expect(cubit.state.highlightedIndex, 0);
+    });
+
+    test('clear rejects a stale search response that completes afterward', () async {
+      final delayedSearch = Completer<List<SlashCommandEntry>>();
+      searcher.delayedResults['compact'] = delayedSearch;
+
+      cubit.onComposerChanged(
+        const TextEditingValue(
+          text: '/compact',
+          selection: TextSelection.collapsed(offset: 8),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(searcher.requests, isNotEmpty);
+
+      cubit.clear();
+      delayedSearch.complete([
+        _entry(name: 'compact', type: SlashCommandType.runtimeAction),
+      ]);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(cubit.state.activeQuery, isNull);
+      expect(cubit.state.visibleEntries, isEmpty);
     });
 
     test('moves the highlighted selection with keyboard navigation', () async {
@@ -162,6 +227,7 @@ void main() {
 class _FakeSlashCommandsSearcher {
   final Map<String?, List<SlashCommandEntry>> entriesByWorkspace = {};
   final Map<String, List<SlashCommandEntry>> queryResults = {};
+  final Map<String, Completer<List<SlashCommandEntry>>> delayedResults = {};
   final List<Map<String, String?>> requests = [];
 
   Future<List<SlashCommandEntry>> call({
@@ -173,6 +239,8 @@ class _FakeSlashCommandsSearcher {
       'workspace_id': workspaceId,
     });
     if (query != null) {
+      final delayedResult = delayedResults[query];
+      if (delayedResult != null) return delayedResult.future;
       return queryResults[query] ?? const [];
     }
     return entriesByWorkspace[workspaceId] ?? const [];
@@ -182,6 +250,13 @@ class _FakeSlashCommandsSearcher {
 SlashCommandEntry _entry({
   required String name,
   String? description,
+  SlashCommandType type = SlashCommandType.skill,
 }) {
-  return SlashCommandEntry(sourceId: 'test', command: name, insertText: name, description: description);
+  return SlashCommandEntry(
+    sourceId: 'test',
+    command: name,
+    insertText: name,
+    description: description,
+    type: type,
+  );
 }

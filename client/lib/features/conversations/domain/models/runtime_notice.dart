@@ -13,6 +13,7 @@ class RuntimeNotice extends Equatable {
   final int? retryAfterMs;
   final int? requestsPerMinuteLimit;
   final List<String> actions;
+  final int? executionRevision;
 
   const RuntimeNotice({
     required this.sessionId,
@@ -27,6 +28,7 @@ class RuntimeNotice extends Equatable {
     this.retryAfterMs,
     this.requestsPerMinuteLimit,
     this.actions = const <String>[],
+    this.executionRevision,
   });
 
   bool get isWaiting => status == 'waiting';
@@ -50,6 +52,7 @@ class RuntimeNotice extends Equatable {
       retryAfterMs: (json['retry_after_ms'] as num?)?.toInt(),
       requestsPerMinuteLimit: (limitMap['requests_per_minute'] as num?)?.toInt(),
       actions: (json['actions'] as List?)?.map((value) => value.toString()).toList() ?? const <String>[],
+      executionRevision: (json['execution_revision'] as num?)?.toInt(),
     );
   }
 
@@ -75,5 +78,6 @@ class RuntimeNotice extends Equatable {
     retryAfterMs,
     requestsPerMinuteLimit,
     actions,
+    executionRevision,
   ];
 }

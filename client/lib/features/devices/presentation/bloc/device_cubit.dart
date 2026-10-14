@@ -4,7 +4,6 @@ import 'package:sanad_client/features/devices/domain/device_client_registry.dart
 import 'package:sanad_client/features/devices/domain/device_repository.dart';
 import 'package:sanad_client/core/interfaces/socket_service.dart';
 import 'package:sanad_client/features/conversations/domain/conversation_client.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
 import '../../domain/models/device_config.dart';
@@ -34,7 +33,7 @@ class DeviceCubit extends Cubit<DeviceState> {
     bool wasAuthedBeforeManagerCreated = false;
     _authSubscription ??= socketService.onAuthSuccess.listen((_) {
       if (state is! AgentInitial && state is! DeviceLoading) {
-        unawaited(_fetchAgentsWithLoading(suppressErrors: true));
+        unawaited(_fetchAgentsWithLoading());
       } else {
         wasAuthedBeforeManagerCreated = true;
       }
@@ -48,9 +47,9 @@ class DeviceCubit extends Cubit<DeviceState> {
 
       // If auth happened while we were creating the manager, fetch now
       if (wasAuthedBeforeManagerCreated) {
-        unawaited(_fetchAgentsWithLoading(suppressErrors: true));
+        unawaited(_fetchAgentsWithLoading());
       } else if (socketService.isConnected) {
-        unawaited(_fetchAgentsWithLoading(suppressErrors: true));
+        unawaited(_fetchAgentsWithLoading());
       }
 
       final active = _resolveInitialActiveAgent(agentRepository.agents);
@@ -60,7 +59,7 @@ class DeviceCubit extends Cubit<DeviceState> {
         emit(
           DeviceNoActive(
             agents: agentRepository.agents,
-            isLoadingFromBackend: _isLoadingEmptyInventory(agentRepository.agents),
+            isLoadingFromBackend: _hasBackendFetchInFlight,
           ),
         );
       }
@@ -69,16 +68,23 @@ class DeviceCubit extends Cubit<DeviceState> {
     }
   }
 
-  Future<List<DeviceConfig>> _fetchAgentsWithLoading({bool suppressErrors = false}) async {
+  Future<List<DeviceConfig>> _fetchAgentsWithLoading() async {
     final fetchEpoch = _inventoryEpoch;
     _backendFetchesInFlight++;
     _publishBackendLoading();
 
     try {
       return await agentRepository.fetchAgents();
-    } catch (_) {
-      if (suppressErrors) return agentRepository.agents;
-      rethrow;
+    } catch (error) {
+      // A failed fetch (including a timeout) must never wipe valid cached data
+      // nor trigger a logout. We surface a typed error while retaining agents.
+      // A stale fetch (superseded by logout/reset, epoch changed) must not
+      // surface its error on the reset surface: only the current epoch's error
+      // is shown, keeping event ordering causal (Plan 97g).
+      if (fetchEpoch == _inventoryEpoch) {
+        _recordInventoryError(error);
+      }
+      return agentRepository.agents;
     } finally {
       if (fetchEpoch == _inventoryEpoch) {
         _backendFetchesInFlight--;
@@ -87,18 +93,47 @@ class DeviceCubit extends Cubit<DeviceState> {
     }
   }
 
-  bool _isLoadingEmptyInventory(List<DeviceConfig> agents) {
-    return agents.isEmpty && _backendFetchesInFlight > 0;
+  /// Surfaces an inventory fetch failure without clearing [agentRepository]
+  /// data or the auth session. On the "no active device" surface the cached
+  /// [DeviceNoActive.agents] are retained so the UI shows an error (or stale)
+  /// state instead of a false authoritative empty.
+  void _recordInventoryError(Object error) {
+    if (isClosed) return;
+    final current = state;
+    // A live session keeps its active device: never degrade to empty on error.
+    if (current is DeviceActive || current is! DeviceNoActive) return;
+    emit(
+      DeviceNoActive(
+        agents: current.agents,
+        isLoadingFromBackend: false,
+        errorMessage: _friendlyErrorMessage(error),
+      ),
+    );
   }
+
+  String _friendlyErrorMessage(Object error) {
+    if (error is TimeoutException) {
+      return 'Timed out while checking for your devices. Check your connection and try again.';
+    }
+    return 'Could not load your devices. Check your connection and try again.';
+  }
+
+  bool get _hasBackendFetchInFlight => _backendFetchesInFlight > 0;
 
   void _publishBackendLoading() {
     if (isClosed) return;
     final current = state;
     if (current is! DeviceNoActive) return;
 
-    final isLoading = _isLoadingEmptyInventory(current.agents);
-    if (current.isLoadingFromBackend != isLoading) {
-      emit(current.copyWith(isLoadingFromBackend: isLoading));
+    final isLoading = _hasBackendFetchInFlight;
+    if (current.isLoadingFromBackend != isLoading || (isLoading && current.errorMessage != null)) {
+      // Starting a new fetch clears the previous transient error.
+      emit(
+        current.copyWith(
+          isLoadingFromBackend: isLoading,
+          clearError: isLoading,
+        ),
+      );
     }
   }
 
@@ -106,8 +141,10 @@ class DeviceCubit extends Cubit<DeviceState> {
     final current = state;
     final stableAgents =
         current is DeviceActive &&
-            current.activeAgent.id == DeviceInventoryIds.localDevice &&
-            !agents.any((agent) => agent.representsDeviceId(DeviceInventoryIds.localDevice))
+            current.activeAgent.isLocalInventoryDevice &&
+            !agents.any(
+              (agent) => agent.representsDeviceId(current.activeAgent.id),
+            )
         ? <DeviceConfig>[
             current.activeAgent.copyWith(isOnline: false),
             ...agents,
@@ -130,7 +167,7 @@ class DeviceCubit extends Cubit<DeviceState> {
           emit(
             DeviceNoActive(
               agents: agents,
-              isLoadingFromBackend: _isLoadingEmptyInventory(agents),
+              isLoadingFromBackend: _hasBackendFetchInFlight,
             ),
           );
         }
@@ -148,7 +185,7 @@ class DeviceCubit extends Cubit<DeviceState> {
         emit(
           DeviceNoActive(
             agents: agents,
-            isLoadingFromBackend: _isLoadingEmptyInventory(agents),
+            isLoadingFromBackend: _hasBackendFetchInFlight,
           ),
         );
       }
@@ -191,9 +228,11 @@ class DeviceCubit extends Cubit<DeviceState> {
   }
 
   DeviceConfig? _defaultActiveAgent(List<DeviceConfig> agents) {
-    final registeredAgents = agents.where((agent) => agent.id != DeviceInventoryIds.localDevice).toList();
+    final registeredAgents = agents.where((agent) => agent.accountDeviceId != null).toList();
     if (registeredAgents.isEmpty) {
-      final localAgents = agents.where((agent) => agent.id == DeviceInventoryIds.localDevice && agent.isOnline);
+      final localAgents = agents.where(
+        (agent) => agent.isLocalInventoryDevice && agent.isOnline,
+      );
       return localAgents.firstOrNull;
     }
     final onlineAgents = registeredAgents.where((agent) => agent.isOnline);
@@ -206,7 +245,7 @@ class DeviceCubit extends Cubit<DeviceState> {
 
   Future<void> setActiveAgent(String deviceId) async {
     await agentRepository.setActiveAgent(deviceId);
-    final selected = agentRepository.agents.where((a) => a.id == deviceId).firstOrNull;
+    final selected = agentRepository.agents.where((a) => a.representsDeviceId(deviceId)).firstOrNull;
     if (selected != null) {
       await switchAgent(selected);
     }

@@ -10,6 +10,28 @@ class EventRouter {
     return _deviceStreams[deviceId]!.stream;
   }
 
+  /// Merge the streams for a bounded set of server-owned device aliases.
+  Stream<Map<String, dynamic>> forDevices(Iterable<String> deviceIds) {
+    final normalizedIds = deviceIds.where((id) => id.isNotEmpty).toSet();
+    if (normalizedIds.length == 1) return forDevice(normalizedIds.single);
+
+    return Stream<Map<String, dynamic>>.multi((controller) {
+      final subscriptions = normalizedIds
+          .map(
+            (deviceId) => forDevice(deviceId).listen(
+              controller.add,
+              onError: controller.addError,
+            ),
+          )
+          .toList(growable: false);
+      controller.onCancel = () async {
+        for (final subscription in subscriptions) {
+          await subscription.cancel();
+        }
+      };
+    }, isBroadcast: true);
+  }
+
   /// Route an event to its device stream. Events without device_id are ignored.
   void routeEvent(Map<String, dynamic> event) {
     final deviceId = event['device_id'] as String?;

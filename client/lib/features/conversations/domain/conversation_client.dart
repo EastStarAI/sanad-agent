@@ -2,6 +2,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_processing_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
@@ -12,7 +13,9 @@ import 'package:sanad_client/features/conversations/domain/models/slash_command_
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
 abstract class ConversationClient {
@@ -67,8 +70,14 @@ abstract class ConversationClient {
     required String requestId,
     required String sessionId,
   });
-  Future<String?> deleteQueuedMessage({required String requestId, required String sessionId});
-  Future<String?> cancelPendingSteer({required String requestId, required String sessionId});
+  Future<String?> deleteQueuedMessage({
+    required String requestId,
+    required String sessionId,
+  });
+  Future<String?> cancelPendingSteer({
+    required String requestId,
+    required String sessionId,
+  });
   Future<String?> stop({
     String? sessionId,
     String? requestId,
@@ -88,17 +97,30 @@ abstract class ConversationClient {
   Future<TurnReplayResult> replayTurn({
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) async => const TurnReplayResult(
     outcome: 'unsupported',
     safety: TurnReplaySafety.unknown,
     requiresConfirmation: false,
   );
+  Future<SessionCompactResult> compactSession({
+    required String sessionId,
+  }) async => const SessionCompactResult(outcome: 'unsupported');
+
+  Future<SessionForkResult> forkSession({
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async => const SessionForkResult(outcome: 'unsupported');
   Future<void> retryRuntimeNotice({
     required String sessionId,
     String? requestId,
@@ -118,6 +140,11 @@ abstract class ConversationClient {
     String? thinkingMode,
   });
   Future<SessionQueryResult> getSessions({SessionQueryRequest? query});
+  Future<SessionSearchPage> searchSessions({
+    required String query,
+    int limit = 20,
+    String? cursor,
+  }) => throw UnsupportedError('Conversation search is not supported.');
   Future<SessionQueryResult> refreshSessions({SessionQueryRequest? query});
   Future<List<DeviceWorkspace>> getWorkspaces();
   Future<List<SlashCommandEntry>> searchSlashCommands({
@@ -142,13 +169,27 @@ abstract class ConversationClient {
     required String workspaceId,
     required String newPath,
   });
-  Future<void> createFolder({
-    required String parentPath,
-    required String name,
-  });
+  Future<void> createFolder({required String parentPath, required String name});
   Future<void> renameFolder({required String path, required String newName});
   Future<void> deleteFolder({required String path});
   Future<List<CanonicalEvent>> loadSessionHistory(String sessionId);
+
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(String sessionId) => loadSessionHistory(sessionId);
+
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    String sessionId,
+    String anchorEventId,
+  ) => loadSessionHistory(sessionId);
+
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) => loadSessionHistory(sessionId);
+
+  bool get historyHasMore => false;
+
+  String? get historyNextCursor => null;
+
+  bool get historyHasNewer => false;
+
+  String? get historyNextNewerCursor => null;
   Future<void> updateSessionTitle(String sessionId, String title);
   Future<void> deleteSession(String sessionId);
   Future<void> respondToSuspendedRequest(

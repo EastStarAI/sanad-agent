@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:isolate';
 import '../workspace_path_resolver.dart';
 import 'workspace_tools_utils.dart';
 
@@ -20,8 +21,10 @@ class FileEditHandler {
       throw const FormatException('old_string is required.');
     }
 
-    final workspaceRoot = _pathResolver.normalizeWorkspaceRoot(workspacePath);
-    final resolvedPath = _pathResolver.resolveExistingPath(
+    final workspaceRoot = await _pathResolver.normalizeWorkspaceRootAsync(
+      workspacePath,
+    );
+    final resolvedPath = await _pathResolver.resolveExistingPathAsync(
       workspaceRoot: workspaceRoot,
       inputPath: path,
       authorizedExternalRoot: authorizedExternalRoot,
@@ -34,7 +37,7 @@ class FileEditHandler {
     final oldNormalized = oldString.replaceAll('\r\n', '\n');
     final newNormalized = newString.replaceAll('\r\n', '\n');
 
-    final editResult = _smartReplace(
+    final editResult = await _smartReplaceAsync(
       originalNormalized,
       oldNormalized,
       newNormalized,
@@ -77,7 +80,26 @@ class FileEditHandler {
     });
   }
 
-  _EditResult _smartReplace(
+  static Future<_EditResult> _smartReplaceAsync(
+    String content,
+    String oldString,
+    String newString,
+    bool replaceAll,
+  ) async {
+    if (content.length < 32768 && content.contains(oldString)) {
+      final firstIdx = content.indexOf(oldString);
+      final lastIdx = content.lastIndexOf(oldString);
+      if (replaceAll || firstIdx == lastIdx) {
+        return _smartReplace(content, oldString, newString, replaceAll);
+      }
+    }
+
+    return Isolate.run(
+      () => _smartReplace(content, oldString, newString, replaceAll),
+    );
+  }
+
+  static _EditResult _smartReplace(
     String content,
     String oldString,
     String newString,
@@ -153,11 +175,14 @@ class FileEditHandler {
     );
   }
 
-  Iterable<String> _simpleReplacer(String content, String find) sync* {
+  static Iterable<String> _simpleReplacer(String content, String find) sync* {
     yield find;
   }
 
-  Iterable<String> _lineTrimmedReplacer(String content, String find) sync* {
+  static Iterable<String> _lineTrimmedReplacer(
+    String content,
+    String find,
+  ) sync* {
     final originalLines = content.split('\n');
     final searchLines = find.split('\n');
     if (searchLines.isNotEmpty && searchLines.last.isEmpty) {
@@ -178,7 +203,10 @@ class FileEditHandler {
     }
   }
 
-  Iterable<String> _blockAnchorReplacer(String content, String find) sync* {
+  static Iterable<String> _blockAnchorReplacer(
+    String content,
+    String find,
+  ) sync* {
     final originalLines = content.split('\n');
     final searchLines = find.split('\n');
     if (searchLines.length < 3) return;
@@ -279,7 +307,7 @@ class FileEditHandler {
     }
   }
 
-  int _levenshtein(String a, String b) {
+  static int _levenshtein(String a, String b) {
     if (a.isEmpty || b.isEmpty) {
       return a.length > b.length ? a.length : b.length;
     }
@@ -304,7 +332,7 @@ class FileEditHandler {
     return dp[a.length][b.length];
   }
 
-  Iterable<String> _whitespaceNormalizedReplacer(
+  static Iterable<String> _whitespaceNormalizedReplacer(
     String content,
     String find,
   ) sync* {
@@ -342,7 +370,7 @@ class FileEditHandler {
     }
   }
 
-  Iterable<String> _indentationFlexibleReplacer(
+  static Iterable<String> _indentationFlexibleReplacer(
     String content,
     String find,
   ) sync* {
@@ -373,7 +401,7 @@ class FileEditHandler {
     }
   }
 
-  String _unescapeString(String str) {
+  static String _unescapeString(String str) {
     return str.replaceAllMapped(RegExp(r'\\(n|t|r|\x27|\x22|\x60|\\|\n|\$)'), (
       match,
     ) {
@@ -403,7 +431,7 @@ class FileEditHandler {
     });
   }
 
-  Iterable<String> _escapeNormalizedReplacer(
+  static Iterable<String> _escapeNormalizedReplacer(
     String content,
     String find,
   ) sync* {
@@ -417,7 +445,10 @@ class FileEditHandler {
     }
   }
 
-  Iterable<String> _trimmedBoundaryReplacer(String content, String find) sync* {
+  static Iterable<String> _trimmedBoundaryReplacer(
+    String content,
+    String find,
+  ) sync* {
     final trimmedFind = find.trim();
     if (trimmedFind == find) return;
     if (content.contains(trimmedFind)) yield trimmedFind;
@@ -429,7 +460,10 @@ class FileEditHandler {
     }
   }
 
-  Iterable<String> _contextAwareReplacer(String content, String find) sync* {
+  static Iterable<String> _contextAwareReplacer(
+    String content,
+    String find,
+  ) sync* {
     final findLines = find.split('\n');
     if (findLines.length < 3) return;
     if (findLines.isNotEmpty && findLines.last.isEmpty) findLines.removeLast();
@@ -465,7 +499,10 @@ class FileEditHandler {
     }
   }
 
-  Iterable<String> _multiOccurrenceReplacer(String content, String find) sync* {
+  static Iterable<String> _multiOccurrenceReplacer(
+    String content,
+    String find,
+  ) sync* {
     var startIndex = 0;
     while (true) {
       final index = content.indexOf(find, startIndex);

@@ -1,14 +1,54 @@
 // ignore: depend_on_referenced_packages
 import 'package:flutter_driver/driver_extension.dart';
 import 'package:sanad_client/main.dart' as app;
+
 import 'dart:developer' as developer;
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/driver/ui_inspection_text.dart';
+import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 
 void main() {
   // Enable integration testing with the Flutter Driver extension.
-  enableFlutterDriverExtension();
+  enableFlutterDriverExtension(enableTextEntryEmulation: false);
+
+  developer.registerExtension('ext.sanad_client.auth_url', (
+    method,
+    parameters,
+  ) async {
+    if (!getIt.isRegistered<AuthService>()) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': 'Authentication service is not ready'}),
+      );
+    }
+
+    final challenge = getIt<AuthService>().loginChallenge;
+    if (challenge == null) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': 'No active authentication challenge'}),
+      );
+    }
+
+    final authUri = Uri.tryParse(challenge.authUrl);
+    if (authUri == null || (authUri.scheme != 'http' && authUri.scheme != 'https') || authUri.host.isEmpty) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({
+          'error': 'Active authentication challenge URL is invalid',
+        }),
+      );
+    }
+
+    return developer.ServiceExtensionResponse.result(
+      json.encode({'status': 'ok', 'auth_url': challenge.authUrl}),
+    );
+  });
 
   const Set<String> ignoredNoiseTypes = {
     'SizedBox',
@@ -86,6 +126,7 @@ void main() {
     final trimmed = key.trim();
     if (trimmed.startsWith('[GlobalKey#') ||
         trimmed.startsWith('[LabeledGlobalKey') ||
+        trimmed.startsWith('[#') ||
         trimmed.startsWith('[_') ||
         trimmed.startsWith('[LocalKey#') ||
         trimmed.startsWith('sidebar-row-state:')) {
@@ -110,12 +151,7 @@ void main() {
         keyString = key is ValueKey ? key.value.toString() : key.toString();
       }
 
-      String? textValue;
-      if (widget is Text) {
-        textValue = widget.data;
-      } else if (widget is RichText) {
-        textValue = widget.text.toPlainText();
-      }
+      final textValue = inspectableWidgetText(widget);
 
       if ((keyString != null && keyString.toLowerCase().contains(target)) ||
           (textValue != null && textValue.toLowerCase().contains(target)) ||
@@ -133,7 +169,10 @@ void main() {
   }
 
   // Register our custom interactive UI inspection extension
-  developer.registerExtension('ext.sanad_client.inspect_ui', (method, parameters) async {
+  developer.registerExtension('ext.sanad_client.inspect_ui', (
+    method,
+    parameters,
+  ) async {
     final widgets = <Map<String, dynamic>>[];
     final includeBounds = parameters['includeBounds'] != 'false';
     final onlyWithKeys = parameters['onlyWithKeys'] == 'true';
@@ -150,17 +189,21 @@ void main() {
       final widget = element.widget;
       final widgetType = widget.runtimeType.toString();
 
-      // Skip layout noise widgets
+      // Skip layout noise widgets unless explicitly keyed
       if (ignoredNoiseTypes.contains(widgetType)) {
-        element.visitChildren(
-          (child) => walk(
-            child,
-            parentElement: element,
-            insideConsolidatedRow: insideConsolidatedRow,
-            inheritedTooltip: inheritedTooltip,
-          ),
-        );
-        return;
+        final key = widget.key;
+        final rawKey = key is ValueKey ? key.value.toString() : key?.toString();
+        if (rawKey == null || isIgnoredKey(rawKey)) {
+          element.visitChildren(
+            (child) => walk(
+              child,
+              parentElement: element,
+              insideConsolidatedRow: insideConsolidatedRow,
+              inheritedTooltip: inheritedTooltip,
+            ),
+          );
+          return;
+        }
       }
 
       // Skip internal state management wrappers
@@ -211,14 +254,7 @@ void main() {
         }
       }
 
-      String? textValue;
-      if (widget is Text) {
-        textValue = widget.data;
-      } else if (widget is RichText) {
-        textValue = widget.text.toPlainText();
-      } else if (widget is SelectableText) {
-        textValue = widget.data;
-      }
+      String? textValue = inspectableWidgetText(widget);
 
       // Skip icon font glyphs
       if (isIconGlyph(textValue)) {
@@ -287,22 +323,16 @@ void main() {
 
       // Generic consolidation for any keyed or interactive container widget
       if (hasKey && !isText && !isTextField) {
-        String? primaryText;
-        void findPrimaryText(Element el) {
-          if (primaryText != null) return;
-          final w = el.widget;
-          if (w is Text &&
-              w.data != null &&
-              w.data!.trim().isNotEmpty &&
-              !isIconGlyph(w.data) &&
-              !RegExp(r'^\d+[smhdwmo]$').hasMatch(w.data!.trim())) {
-            primaryText = w.data;
-            return;
-          }
-          el.visitChildren(findPrimaryText);
-        }
-
-        element.visitChildren(findPrimaryText);
+        bool acceptsPrimaryText(String candidateText) =>
+            !isIconGlyph(candidateText) && !RegExp(r'^\d+[smhdwmo]$').hasMatch(candidateText.trim());
+        final isMessageBody =
+            keyString.startsWith('user_message_body:') || keyString.startsWith('assistant_message_body:');
+        final primaryText = isMessageBody
+            ? allInspectableDescendantText(element, accept: acceptsPrimaryText)
+            : firstInspectableDescendantText(
+                element,
+                accept: acceptsPrimaryText,
+              );
 
         String? semanticsLabel;
         bool? semanticsSelected;
@@ -412,9 +442,7 @@ void main() {
             widgetType.toLowerCase().contains(filterQuery);
 
         if (matchesFilter) {
-          final Map<String, dynamic> data = {
-            'type': widgetType,
-          };
+          final Map<String, dynamic> data = {'type': widgetType};
           if (keyString != null) data['key'] = keyString;
           if (effectiveText?.trim().isNotEmpty ?? false) {
             data['text'] = effectiveText;
@@ -487,8 +515,98 @@ void main() {
     }
   });
 
+  // Register text entry without replacing the operating system text channel.
+  developer.registerExtension('ext.sanad_client.enter_text', (
+    method,
+    parameters,
+  ) async {
+    try {
+      final targetKey = parameters['key']?.trim();
+      final targetText = parameters['text'];
+      final root = WidgetsBinding.instance.rootElement;
+      if (root == null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': 'Root element not found'}),
+        );
+      }
+      if (targetText == null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': 'Text entry requires a text value'}),
+        );
+      }
+
+      Element? keyedElement;
+      if (targetKey != null && targetKey.isNotEmpty) {
+        void findKeyedElement(Element element) {
+          if (keyedElement != null) return;
+          final key = element.widget.key;
+          final keyValue = key is ValueKey ? key.value.toString() : key?.toString();
+          if (keyValue == targetKey) {
+            keyedElement = element;
+            return;
+          }
+          element.visitChildren(findKeyedElement);
+        }
+
+        findKeyedElement(root);
+        if (keyedElement == null) {
+          return developer.ServiceExtensionResponse.error(
+            developer.ServiceExtensionResponse.extensionError,
+            json.encode({'error': 'Text input key not found: $targetKey'}),
+          );
+        }
+      }
+
+      EditableTextState? editableState;
+      void findEditableState(Element element) {
+        if (editableState != null) return;
+        if (element is StatefulElement && element.state is EditableTextState) {
+          final candidate = element.state as EditableTextState;
+          if (keyedElement != null || candidate.widget.focusNode.hasFocus) {
+            editableState = candidate;
+            return;
+          }
+        }
+        element.visitChildren(findEditableState);
+      }
+
+      findEditableState(keyedElement ?? root);
+      if (editableState == null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({
+            'error': targetKey == null || targetKey.isEmpty
+                ? 'No focused editable text field found'
+                : 'No editable text field found for key: $targetKey',
+          }),
+        );
+      }
+
+      editableState!.updateEditingValue(
+        TextEditingValue(
+          text: targetText,
+          selection: TextSelection.collapsed(offset: targetText.length),
+        ),
+      );
+      await Future<void>.delayed(Duration.zero);
+      return developer.ServiceExtensionResponse.result(
+        json.encode({'status': 'ok'}),
+      );
+    } catch (error) {
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': error.toString()}),
+      );
+    }
+  });
+
   // Register scroll extension
-  developer.registerExtension('ext.sanad_client.scroll', (method, parameters) async {
+  developer.registerExtension('ext.sanad_client.scroll', (
+    method,
+    parameters,
+  ) async {
     try {
       final targetKey = parameters['key'];
       final dx = double.tryParse(parameters['dx'] ?? '0') ?? 0.0;
@@ -531,7 +649,9 @@ void main() {
         if (matchedElement == null) {
           return developer.ServiceExtensionResponse.error(
             developer.ServiceExtensionResponse.extensionError,
-            json.encode({'error': 'Scrollable target key not found: $targetKey'}),
+            json.encode({
+              'error': 'Scrollable target key not found: $targetKey',
+            }),
           );
         }
         scrollableState = Scrollable.maybeOf(matchedElement!);
@@ -566,11 +686,25 @@ void main() {
         );
       }
 
+      final emitsUserIntent = (targetOffset - position.pixels).abs() > 0.5;
+      if (emitsUserIntent) {
+        UserScrollNotification(
+          metrics: position,
+          context: scrollableState!.context,
+          direction: targetOffset < position.pixels ? ScrollDirection.forward : ScrollDirection.reverse,
+        ).dispatch(scrollableState!.context);
+      }
       await position.animateTo(
         targetOffset,
         duration: const Duration(milliseconds: 300),
         curve: Curves.easeOut,
       );
+      if (emitsUserIntent) {
+        ScrollEndNotification(
+          metrics: position,
+          context: scrollableState!.context,
+        ).dispatch(scrollableState!.context);
+      }
 
       return developer.ServiceExtensionResponse.result(
         json.encode({
@@ -589,7 +723,10 @@ void main() {
   });
 
   // Register gesture / tap extension
-  developer.registerExtension('ext.sanad_client.tap', (method, parameters) async {
+  developer.registerExtension('ext.sanad_client.tap', (
+    method,
+    parameters,
+  ) async {
     try {
       double? targetX = double.tryParse(parameters['x'] ?? '');
       double? targetY = double.tryParse(parameters['y'] ?? '');

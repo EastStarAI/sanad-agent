@@ -2,6 +2,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_processing_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/session.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_query.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_search.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
@@ -12,7 +13,9 @@ import 'package:sanad_client/features/conversations/domain/models/slash_command_
 import 'package:sanad_client/features/conversations/domain/models/workspace_tree_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/domain/models/stop_draft_recovery.dart';
+import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/turn_replay_result.dart';
+import 'package:sanad_client/features/conversations/domain/models/session_fork_result.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 
 abstract class ConversationRepository {
@@ -41,9 +44,7 @@ abstract class ConversationRepository {
   Map<String, SessionAttentionState> currentAttentionStates(
     DeviceConfig agent,
   ) => const {};
-  Map<String, SessionRouteSnapshot> currentRouteSnapshots(
-    DeviceConfig agent,
-  ) => const {};
+  Map<String, SessionRouteSnapshot> currentRouteSnapshots(DeviceConfig agent) => const {};
 
   void activateSession(DeviceConfig agent, String sessionId);
   void beginNewSession(DeviceConfig agent);
@@ -74,8 +75,16 @@ abstract class ConversationRepository {
     required String requestId,
     required String sessionId,
   });
-  Future<String?> deleteQueuedMessage(DeviceConfig agent, {required String requestId, required String sessionId});
-  Future<String?> cancelPendingSteer(DeviceConfig agent, {required String requestId, required String sessionId});
+  Future<String?> deleteQueuedMessage(
+    DeviceConfig agent, {
+    required String requestId,
+    required String sessionId,
+  });
+  Future<String?> cancelPendingSteer(
+    DeviceConfig agent, {
+    required String requestId,
+    required String sessionId,
+  });
   Future<String?> stop(
     DeviceConfig agent, {
     String? sessionId,
@@ -99,17 +108,32 @@ abstract class ConversationRepository {
     DeviceConfig agent, {
     required String sessionId,
     required String targetRequestId,
+    String? targetMessageId,
+    String? targetTurnId,
+    int? expectedHistoryRevision,
     required TurnReplayAction action,
     String? message,
     String? providerInstanceId,
     String? modelId,
     String? thinkingMode,
     bool confirmedReplayUnsafe = false,
+    bool confirmedDropSteers = false,
   }) async => const TurnReplayResult(
     outcome: 'unsupported',
     safety: TurnReplaySafety.unknown,
     requiresConfirmation: false,
   );
+  Future<SessionCompactResult> compactSession(
+    DeviceConfig agent, {
+    required String sessionId,
+  }) async => const SessionCompactResult(outcome: 'unsupported');
+
+  Future<SessionForkResult> forkSession(
+    DeviceConfig agent, {
+    required String sessionId,
+    required String targetMessageId,
+    required String targetTurnId,
+  }) async => const SessionForkResult(outcome: 'unsupported');
   Future<void> retryRuntimeNotice(
     DeviceConfig agent, {
     required String sessionId,
@@ -131,8 +155,20 @@ abstract class ConversationRepository {
     String? model,
     String? thinkingMode,
   });
-  Future<SessionQueryResult> getSessions(DeviceConfig agent, {SessionQueryRequest? query});
-  Future<SessionQueryResult> refreshSessions(DeviceConfig agent, {SessionQueryRequest? query});
+  Future<SessionQueryResult> getSessions(
+    DeviceConfig agent, {
+    SessionQueryRequest? query,
+  });
+  Future<SessionSearchPage> searchSessions(
+    DeviceConfig agent, {
+    required String query,
+    int limit = 20,
+    String? cursor,
+  }) => throw UnsupportedError('Conversation search is not supported.');
+  Future<SessionQueryResult> refreshSessions(
+    DeviceConfig agent, {
+    SessionQueryRequest? query,
+  });
   Future<List<DeviceWorkspace>> getWorkspaces(DeviceConfig agent);
   Future<List<SlashCommandEntry>> searchSlashCommands(
     DeviceConfig agent, {
@@ -174,12 +210,35 @@ abstract class ConversationRepository {
     required String path,
     required String newName,
   });
-  Future<void> deleteFolder(
-    DeviceConfig agent, {
-    required String path,
-  });
-  Future<List<CanonicalEvent>> loadSessionHistory(DeviceConfig agent, String sessionId);
-  Future<void> updateSessionTitle(DeviceConfig agent, String sessionId, String title);
+  Future<void> deleteFolder(DeviceConfig agent, {required String path});
+  Future<List<CanonicalEvent>> loadSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  );
+
+  Future<List<CanonicalEvent>> loadOlderSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) => loadSessionHistory(agent, sessionId);
+
+  Future<List<CanonicalEvent>> loadAnchoredSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+    String anchorEventId,
+  ) => loadSessionHistory(agent, sessionId);
+
+  Future<List<CanonicalEvent>> loadNewerSessionHistory(
+    DeviceConfig agent,
+    String sessionId,
+  ) => loadSessionHistory(agent, sessionId);
+
+  bool historyHasMore(DeviceConfig agent) => false;
+  bool historyHasNewer(DeviceConfig agent) => false;
+  Future<void> updateSessionTitle(
+    DeviceConfig agent,
+    String sessionId,
+    String title,
+  );
   Future<void> deleteSession(DeviceConfig agent, String sessionId);
   Future<void> respondToSuspendedRequest(
     DeviceConfig agent,
@@ -189,12 +248,18 @@ abstract class ConversationRepository {
     String? comment,
     String? answer,
   });
-  Future<WorkspacePolicy> getWorkspacePolicy(DeviceConfig agent, String workspacePath);
+  Future<WorkspacePolicy> getWorkspacePolicy(
+    DeviceConfig agent,
+    String workspacePath,
+  );
   Future<WorkspacePolicy> setWorkspacePermissionMode(
     DeviceConfig agent, {
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
   });
-  Stream<WorkspacePolicy> watchWorkspacePolicy(DeviceConfig agent, String workspaceId);
+  Stream<WorkspacePolicy> watchWorkspacePolicy(
+    DeviceConfig agent,
+    String workspaceId,
+  );
 }

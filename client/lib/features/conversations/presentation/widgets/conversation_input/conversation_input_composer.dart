@@ -19,6 +19,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_permission_card.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/model_picker_dialog.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/runtime_notice_card.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/route_thinking_mode_selector.dart';
 import '../sidebar/sidebar_composition.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/slash_suggestion_surface.dart';
@@ -28,7 +29,6 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_state.dart';
-import 'package:sanad_client/features/devices/data/device_inventory_source.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:flutter/foundation.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
@@ -39,6 +39,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 
 class ConversationInputComposer extends StatelessWidget {
   final SlashCommandTextController chatController;
@@ -292,12 +293,16 @@ class _UnifiedComposerContainer extends StatelessWidget {
                 child: ValueListenableBuilder<TextEditingValue>(
                   valueListenable: chatController,
                   builder: (context, value, _) {
-                    final textDirection = TextUtils.getTextDirection(chatController.exportPlainText());
+                    final plainText = chatController.exportPlainText();
+                    final ambientDirection = Directionality.of(context);
+                    final textDirection = plainText.trim().isEmpty
+                        ? ambientDirection
+                        : TextUtils.getTextDirection(plainText);
                     return TextField(
                       key: const Key('chat_input'),
                       controller: chatController,
                       focusNode: chatFocusNode,
-                      style: GoogleFonts.inter(
+                      style: (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
                         color: Theme.of(context).colorScheme.onSurface,
                         fontSize: 15,
                         height: 1.5,
@@ -309,8 +314,10 @@ class _UnifiedComposerContainer extends StatelessWidget {
                       textAlign: textDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
                       textDirection: textDirection,
                       decoration: InputDecoration(
-                        hintText: 'Ask Sanad anything',
-                        hintStyle: GoogleFonts.inter(
+                        hintText: Directionality.of(context) == TextDirection.rtl
+                            ? 'اسأل سند أي شيء'
+                            : 'Ask Sanad anything',
+                        hintStyle: (Theme.of(context).textTheme.bodyMedium ?? const TextStyle()).copyWith(
                           color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.35),
                           fontSize: 15,
                         ),
@@ -351,13 +358,18 @@ class _UnifiedComposerContainer extends StatelessWidget {
           )
         : null;
 
-    final thinkingModeChip = !hasPendingRequest && capabilities.supportsThinkingModeChange
-        ? _ThinkingModeChip(
-            inputSlice: inputSlice,
+    final thinkingModeChip = !hasPendingRequest
+        ? RouteThinkingModeSelector(
             capabilities: capabilities,
-            dimTextColor: dimTextColor,
-            chipBgColor: chipBgColor,
-            borderColor: borderColor,
+            inputSlice: inputSlice,
+            activeAgent: agentSlice.activeAgent,
+            chipBuilder: (context, label, {required enabled}) {
+              return _buildThinkingModeChipShell(
+                context,
+                label: label,
+                enabled: enabled,
+              );
+            },
           )
         : null;
 
@@ -453,6 +465,40 @@ class _UnifiedComposerContainer extends StatelessWidget {
               ],
             ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildThinkingModeChipShell(
+    BuildContext context, {
+    required String label,
+    required bool enabled,
+  }) {
+    final isCompact = SidebarBreakpoints.isCompact(context);
+    return Opacity(
+      opacity: enabled ? 1 : 0.55,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: isCompact ? 4 : 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: chipBgColor.withValues(alpha: 0.50),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: borderColor),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Symbols.neurology, size: 16, color: dimTextColor),
+            const SizedBox(width: 4),
+            Text(
+              label,
+              style: GoogleFonts.inter(color: dimTextColor, fontSize: 12),
+            ),
+            if (enabled) ...[
+              const SizedBox(width: 4),
+              Icon(Icons.keyboard_arrow_down, size: 12, color: dimTextColor),
+            ],
+          ],
+        ),
       ),
     );
   }
@@ -582,28 +628,27 @@ class _ModelChip extends StatefulWidget {
 }
 
 class _ModelChipState extends State<_ModelChip> {
-  static const Duration _emptyProviderDisplayRetryCooldown = Duration(seconds: 30);
-  final Map<String, Map<String, String>> _providerDisplayNamesByAgent = {};
-  final Set<String> _providerDisplayLoadsInFlight = <String>{};
-  final Set<String> _providerDisplayLookupAttempts = <String>{};
-  final Map<String, DateTime> _emptyProviderDisplayFetchUntilByAgent = {};
-  bool _didLoadInitialProviderDisplayNames = false;
-  String? _lastLoadedProviderId;
-  String? _lastLoadedAgentId;
+  // (97h) No provider display-name fetch lives in this widget anymore; the
+  // resource owner (`ProviderUsageCubit`) resolves `model.snapshot` and
+  // `provider.usage.support` once per (device, query) and shares in-flight
+  // requests. Widget lifecycle only asks the owner to ensure the logical
+  // resource it consumes, which is a no-op when unchanged — rebuild/theme/
+  // responsive remounts stay at zero extra Agent requests.
+  bool _didSyncInitialResource = false;
 
   @override
   void initState() {
     super.initState();
-    unawaited(_ensureProviderDisplayNamesLoaded());
+    _syncProviderResource();
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    if (_didLoadInitialProviderDisplayNames) return;
-    _didLoadInitialProviderDisplayNames = true;
+    if (_didSyncInitialResource) return;
+    _didSyncInitialResource = true;
     final selectedSession = context.read<SessionCubit>().state.selectedSession;
-    unawaited(_ensureProviderDisplayNamesLoaded(selectedSession: selectedSession));
+    _syncProviderResource(selectedSession: selectedSession);
   }
 
   @override
@@ -612,9 +657,27 @@ class _ModelChipState extends State<_ModelChip> {
     final agentChanged = oldWidget.agentSlice.activeAgent?.id != widget.agentSlice.activeAgent?.id;
     final providerChanged = oldWidget.inputSlice.nextMessageProviderId != widget.inputSlice.nextMessageProviderId;
     if (agentChanged || providerChanged) {
-      _providerDisplayLookupAttempts.clear();
-      unawaited(_ensureProviderDisplayNamesLoaded());
+      _syncProviderResource();
     }
+  }
+
+  /// Asks the resource owner to ensure the catalog and the active provider's
+  /// usage/support are loaded for the current device. The owner dedupes by
+  /// (device, query) and shares in-flight requests, so repeated calls from
+  /// rebuilds and remounts cost zero Agent requests after the first load.
+  void _syncProviderResource({Session? selectedSession}) {
+    if (!getIt.isRegistered<ProviderUsageCubit>()) return;
+    final cubit = getIt<ProviderUsageCubit>();
+    final resolved = selectedSession ?? (mounted ? context.read<SessionCubit>().state.selectedSession : null);
+    final activeProviderId = _activeProviderId(resolved);
+    if (activeProviderId == null || activeProviderId.isEmpty) return;
+    unawaited(cubit.ensureProviderDisplayNames(agent: widget.agentSlice.activeAgent));
+    unawaited(
+      cubit.ensureInstanceUsage(
+        agent: widget.agentSlice.activeAgent,
+        instanceId: activeProviderId,
+      ),
+    );
   }
 
   @override
@@ -623,18 +686,20 @@ class _ModelChipState extends State<_ModelChip> {
     final contextUsage = context.select<SessionMessagesCubit, LlmUsageSnapshot?>(
       (cubit) => latestContextUsage(cubit.state.messages),
     );
-    final providerDisplayNames =
-        _providerDisplayNamesByAgent[_providerLookupKey(widget.agentSlice.activeAgent)] ?? const <String, String>{};
-
-    final currentModel = _currentModelLabel(
-      selectedSession,
-      nextMessageModel: widget.inputSlice.nextMessageModel,
-      providerDisplayNames: providerDisplayNames,
-    );
-
     final showProgress = getIt.isRegistered<ProviderUsageCubit>();
 
-    Widget buildChip(BuildContext context, double? progress, Color? progressColor) {
+    Widget buildChip(
+      BuildContext context,
+      Map<String, String> providerDisplayNames,
+      double? progress,
+      Color? progressColor,
+    ) {
+      final currentModel = _currentModelLabel(
+        selectedSession,
+        nextMessageModel: widget.inputSlice.nextMessageModel,
+        providerDisplayNames: providerDisplayNames,
+      );
+
       return InkWell(
         key: const Key('model_selector_btn'),
         onTap: () => _openModelPicker(context),
@@ -646,20 +711,20 @@ class _ModelChipState extends State<_ModelChip> {
     return BlocListener<SessionCubit, SessionState>(
       listenWhen: (previous, current) => previous.selectedSession != current.selectedSession,
       listener: (context, state) {
-        _providerDisplayLookupAttempts.clear();
-        unawaited(_ensureProviderDisplayNamesLoaded(selectedSession: state.selectedSession));
+        _syncProviderResource(selectedSession: state.selectedSession);
       },
       child: showProgress
           ? BlocBuilder<ProviderUsageCubit, ProviderUsageState>(
               bloc: getIt<ProviderUsageCubit>(),
               builder: (context, usageState) {
                 final theme = Theme.of(context);
+                final deviceId = widget.agentSlice.activeAgent?.id ?? getIt<ProviderUsageCubit>().localDeviceId;
+                final providerDisplayNames = usageState.displayNamesFor(deviceId);
                 final activeProviderId = _activeProviderId(selectedSession);
                 double? progress;
                 Color? progressColor;
 
                 if (activeProviderId != null && activeProviderId.isNotEmpty) {
-                  final deviceId = widget.agentSlice.activeAgent?.id ?? DeviceInventoryIds.localDevice;
                   final entry = usageState.entry(deviceId, activeProviderId);
                   final supports = usageState.support.supports(deviceId, activeProviderId);
 
@@ -687,98 +752,13 @@ class _ModelChipState extends State<_ModelChip> {
                   }
                 }
 
-                return buildChip(context, progress, progressColor);
+                return buildChip(context, providerDisplayNames, progress, progressColor);
               },
             )
           : Builder(
-              builder: (context) => buildChip(context, null, null),
+              builder: (context) => buildChip(context, const {}, null, null),
             ),
     );
-  }
-
-  String _providerLookupKey(DeviceConfig? agent) => agent?.id ?? '__local__';
-
-  String _providerDisplayLookupAttemptKey(String agentKey, String providerId) => '$agentKey::$providerId';
-
-  Future<void> _ensureProviderDisplayNamesLoaded({Session? selectedSession}) async {
-    final activeAgent = widget.agentSlice.activeAgent;
-    if (activeAgent == null) return;
-    final key = _providerLookupKey(activeAgent);
-    final activeProviderId = _activeProviderId(selectedSession);
-    if (activeProviderId == null || activeProviderId.isEmpty) return;
-
-    final activeAgentId = activeAgent.id;
-    if (activeProviderId != _lastLoadedProviderId || activeAgentId != _lastLoadedAgentId) {
-      _lastLoadedProviderId = activeProviderId;
-      _lastLoadedAgentId = activeAgentId;
-      if (getIt.isRegistered<ProviderUsageCubit>()) {
-        unawaited(
-          getIt<ProviderUsageCubit>().onInstancesLoaded(
-            agent: activeAgent,
-            instanceIds: [activeProviderId],
-          ),
-        );
-      }
-    }
-    final knownDisplays = _providerDisplayNamesByAgent[key];
-    if (knownDisplays != null && knownDisplays.isNotEmpty && knownDisplays.containsKey(activeProviderId)) return;
-
-    final retryAfter = _emptyProviderDisplayFetchUntilByAgent[key];
-    if (retryAfter != null && DateTime.now().isBefore(retryAfter)) return;
-    if (_providerDisplayLoadsInFlight.contains(key)) return;
-
-    final attemptKey = _providerDisplayLookupAttemptKey(key, activeProviderId);
-    if (_providerDisplayLookupAttempts.contains(attemptKey)) return;
-    _providerDisplayLookupAttempts.add(attemptKey);
-    _providerDisplayLoadsInFlight.add(key);
-    try {
-      final client = getIt<ProviderSetupClient>();
-      final names = <String, String>{};
-
-      final snapshot = await client.modelSnapshot(agent: activeAgent);
-      for (final instance in snapshot.instances) {
-        final id = instance.id.trim();
-        final displayName = instance.displayName.trim();
-        if (id.isNotEmpty && displayName.isNotEmpty) names[id] = displayName;
-      }
-
-      if (names.isEmpty) {
-        final instances = await client.listInstances(agent: activeAgent);
-        for (final instance in instances) {
-          final id = instance.id.trim();
-          final displayName = instance.displayName.trim();
-          if (id.isNotEmpty && displayName.isNotEmpty) names[id] = displayName;
-        }
-      }
-
-      if (!mounted) return;
-
-      final previousNames = _providerDisplayNamesByAgent[key] ?? const <String, String>{};
-      if (names.isEmpty) {
-        _emptyProviderDisplayFetchUntilByAgent[key] = DateTime.now().add(_emptyProviderDisplayRetryCooldown);
-        _providerDisplayLookupAttempts.remove(attemptKey);
-        if (previousNames.isEmpty) return;
-      } else if (_sameProviderDisplayNames(previousNames, names)) {
-        return;
-      }
-
-      setState(() {
-        _providerDisplayNamesByAgent[key] = names;
-        if (names.isNotEmpty) _emptyProviderDisplayFetchUntilByAgent.remove(key);
-      });
-    } catch (_) {
-      _providerDisplayLookupAttempts.remove(attemptKey);
-    } finally {
-      _providerDisplayLoadsInFlight.remove(key);
-    }
-  }
-
-  bool _sameProviderDisplayNames(Map<String, String> a, Map<String, String> b) {
-    if (a.length != b.length) return false;
-    for (final entry in a.entries) {
-      if (b[entry.key] != entry.value) return false;
-    }
-    return true;
   }
 
   void _openModelPicker(BuildContext context) {
@@ -946,96 +926,6 @@ class _ModelChipState extends State<_ModelChip> {
   }
 }
 
-class _ThinkingModeChip extends StatelessWidget {
-  final ConversationInputSlice inputSlice;
-  final Capability capabilities;
-  final Color dimTextColor;
-  final Color chipBgColor;
-  final Color borderColor;
-
-  const _ThinkingModeChip({
-    required this.inputSlice,
-    required this.capabilities,
-    required this.dimTextColor,
-    required this.chipBgColor,
-    required this.borderColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final selectedSession = context.select<SessionCubit, Session?>((cubit) => cubit.state.selectedSession);
-    final currentMode = _currentModeLabel(selectedSession);
-    return PopupMenuButton<String>(
-      tooltip: 'Select Thinking Mode',
-      child: _buildChip(context, currentMode),
-      itemBuilder: (context) => capabilities.thinkingModesList
-          .map(
-            (m) => PopupMenuItem(
-              value: m,
-              height: 32,
-              child: Text(m, style: const TextStyle(fontSize: 12)),
-            ),
-          )
-          .toList(),
-      onSelected: (value) {
-        unawaited(
-          context.read<ConversationInputCubit>().selectThinkingMode(
-            scope: capabilities.thinkingModeScope,
-            thinkingMode: value,
-          ),
-        );
-      },
-    );
-  }
-
-  String _currentModeLabel(Session? session) {
-    if (capabilities.thinkingModeScope == CapabilityValueScope.message) {
-      final mode = inputSlice.nextMessageThinkingMode?.trim();
-      if (mode != null && mode.isNotEmpty) return mode;
-      return _firstMode();
-    }
-    final mode = session?.thinkingMode;
-    if (mode != null && mode.isNotEmpty) return mode;
-    final savedMode = inputSlice.nextMessageThinkingMode?.trim();
-    if (savedMode != null && savedMode.isNotEmpty) return savedMode;
-    return _firstMode();
-  }
-
-  String _firstMode() {
-    final modes = capabilities.thinkingModesList;
-    if (modes.contains(SessionMessagesCubit.defaultThinkingMode)) {
-      return SessionMessagesCubit.defaultThinkingMode;
-    }
-    if (modes.isNotEmpty) return modes.first;
-    return SessionMessagesCubit.defaultThinkingMode;
-  }
-
-  Widget _buildChip(BuildContext context, String text) {
-    final isCompact = SidebarBreakpoints.isCompact(context);
-    return Container(
-      padding: EdgeInsets.symmetric(horizontal: isCompact ? 4 : 8, vertical: 4),
-      decoration: BoxDecoration(
-        color: chipBgColor.withValues(alpha: 0.50),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: borderColor),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Symbols.neurology, size: 16, color: dimTextColor),
-          const SizedBox(width: 4),
-          Text(
-            text,
-            style: GoogleFonts.inter(color: dimTextColor, fontSize: 12),
-          ),
-          const SizedBox(width: 4),
-          Icon(Icons.keyboard_arrow_down, size: 12, color: dimTextColor),
-        ],
-      ),
-    );
-  }
-}
-
 class _SendStopButton extends StatelessWidget {
   final ConversationInputAgentSlice agentSlice;
   final ConversationInputSlice inputSlice;
@@ -1096,7 +986,7 @@ class _SendStopButton extends StatelessWidget {
                   key: const Key('stop_message_progress_indicator'),
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(
+                  child: AppProgressIndicator(
                     strokeWidth: 2,
                     color: Theme.of(context).colorScheme.error,
                   ),
@@ -1127,7 +1017,7 @@ class _SendStopButton extends StatelessWidget {
           icon: const SizedBox(
             width: 16,
             height: 16,
-            child: CircularProgressIndicator(
+            child: AppProgressIndicator(
               strokeWidth: 2,
               color: Colors.black,
             ),

@@ -44,6 +44,8 @@ class LocalWorkspaceRuntimeService {
              ),
            ),
        _mcpOAuthService = mcpOAuthService ?? McpOAuthService(),
+       _ownsMcpRuntimeManager = mcpRuntimeManager == null,
+       _ownsMcpOAuthService = mcpOAuthService == null,
        _sessionDb = sessionDb;
 
   final String? _sanadHomePath;
@@ -52,6 +54,8 @@ class LocalWorkspaceRuntimeService {
   final SkillLoadService _skillLoadService;
   final McpRuntimeManager _mcpRuntimeManager;
   final McpOAuthService _mcpOAuthService;
+  final bool _ownsMcpRuntimeManager;
+  final bool _ownsMcpOAuthService;
   final SessionDB? _sessionDb;
   SessionDB? _localDb;
   AgentStateDatabase? _localStateDb;
@@ -70,27 +74,11 @@ class LocalWorkspaceRuntimeService {
 
   static const List<Map<String, String>> _defaultSlashCommands = [
     {
-      'command': 'model',
+      'command': 'compact',
       'description':
-          'Change or inspect the active model for the current thread.',
+          'Compact conversation context while preserving the current goal.',
+      'type': 'runtime_action',
     },
-    {
-      'command': 'think',
-      'description': 'Adjust thinking mode for the next local turn.',
-    },
-    {
-      'command': 'workspace',
-      'description': 'Inspect or switch the active workspace context.',
-    },
-    {
-      'command': 'mcp',
-      'description': 'Inspect configured MCP servers for the local runtime.',
-    },
-    {
-      'command': 'sessions',
-      'description': 'Browse local conversation threads.',
-    },
-    {'command': 'stop', 'description': 'Stop the current run.'},
   ];
 
   Future<List<Map<String, dynamic>>> listWorkspaces() async {
@@ -853,6 +841,7 @@ class LocalWorkspaceRuntimeService {
             'command': entry.name,
             'description': entry.description ?? 'Load the ${entry.name} skill.',
             'source': 'skill',
+            'type': 'skill',
             'path': entry.path,
           },
         )
@@ -1711,6 +1700,20 @@ class LocalWorkspaceRuntimeService {
       return (count: count, truncated: false);
     }
     return (count: count, truncated: false);
+  }
+
+  Future<void> dispose() async {
+    await _mutationTail;
+    if (_ownsMcpRuntimeManager) {
+      await _mcpRuntimeManager.dispose();
+    }
+    if (_ownsMcpOAuthService) {
+      await _mcpOAuthService.dispose();
+    }
+    _localDb?.dispose();
+    _localStateDb?.dispose();
+    _localDb = null;
+    _localStateDb = null;
   }
 
   Future<T> _serialized<T>(Future<T> Function() operation) async {

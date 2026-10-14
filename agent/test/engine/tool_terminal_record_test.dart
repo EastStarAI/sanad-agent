@@ -74,6 +74,7 @@ void main() {
             metadata: record.toHistoryMetadata(modelStepId: 'step-live'),
           ),
           runId: record.runId,
+          turnId: 'turn-live',
           modelStepId: 'step-live',
           toolCallId: record.toolCallId,
           toolName: record.toolName,
@@ -83,6 +84,7 @@ void main() {
         ),
       );
 
+      expect(event.payload, containsPair('turn_id', 'turn-live'));
       expect(event.payload, containsPair('status', 'cancelled'));
       expect(event.payload, containsPair('generation', 3));
       expect(event.payload, containsPair('revision', 17));

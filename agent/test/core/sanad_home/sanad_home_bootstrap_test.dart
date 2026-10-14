@@ -368,5 +368,22 @@ void main() {
         expect(SanadHomeBootstrap.exists('present.json'), isTrue);
       },
     );
+
+    test('readSecret and writeSecret execute without subprocess overhead', () async {
+      final boundary = SanadHomeBootstrap.identity();
+      await boundary.writeSecretBytes('perf_test.json', [1, 2, 3, 4]);
+
+      final sw = Stopwatch()..start();
+      for (var i = 0; i < 50; i++) {
+        final bytes = boundary.readSecretBytes('perf_test.json');
+        expect(bytes, [1, 2, 3, 4]);
+      }
+      sw.stop();
+      expect(
+        sw.elapsedMilliseconds,
+        lessThan(200),
+        reason: 'readSecretBytes took ${sw.elapsedMilliseconds}ms for 50 reads, indicating subprocess regression',
+      );
+    });
   });
 }

@@ -46,6 +46,8 @@ Instances persist in `state.db` (three Plan 29 tables shared with sessions) via 
 
 The constant vocabulary (`ProviderProtocol`, `ApiKeyRequirement`, `ProviderAuthMethod`, `InstanceStatus`, `CredentialAction`, `kCustomProviderTemplateId`) lives in [`provider_protocol_constants.dart`](../../agent/lib/core/provider_runtime/provider_protocol_constants.dart) and MUST be used instead of raw literals. Instance creation validates `auth_method` against the selected template's `effectiveAuthMethods`; being globally recognized is not sufficient. Current production templates advertise exactly one method, so clients derive it rather than asking the user to choose it.
 
+Provider-specific request metadata belongs to the owning template's `defaultHeaders` and is merged into every compatible chat-completion request path. The OpenRouter template sends its documented app-attribution pair, `HTTP-Referer: https://sanad.eaststarai.com` and `X-OpenRouter-Title: Sanad Agent`, for both synchronous and streaming requests. Other provider templates do not inherit these headers, and the legacy `X-Title` spelling is not emitted.
+
 ### Credential edit contract (Plan 29 §7.5)
 Editing an instance never re-requests a credential unless explicitly asked. This applies to all auth methods: editing an existing OAuth/device-code/loopback instance saves metadata (Display Name, auto-failover) and returns to the configured list without starting a new auth session. OAuth re-authentication is triggered only during initial setup or through the explicit reconnect action. The action is one of `keep` (default) \\| `replace` \\| `remove`. An empty field never implies `remove`. `replace` without a value is rejected. The actual secret is never returned to the client or CLI; only a masked `summary` is exposed. Its canonical wire fields are `configured`, `auth_method`, `status`, optional `masked_key_hint`, optional `account_label`, optional `account_name`, optional `expires_at`, and `relogin_required`. Flutter must derive stored-credential presentation from `configured`, display the API-key hint from `masked_key_hint`, and render OAuth identity only from the optional daemon summary fields; it may accept the former client aliases `has_secret` and `masked_secret` only as read-time migration fallbacks.
 
@@ -78,6 +80,7 @@ Model fetch contract details:
 - Model-cache refresh coalescing owns cleanup inside the same awaited Future; it must not create a detached error-propagating `whenComplete` Future. A failed refresh keeps a non-empty prior successful list as `cache_stale`. Without usable prior models it persists `source=failed` plus `last_error` and rethrows so `model.refresh` emits terminal `failed`, never `updated` with an empty failed row. The detached gateway workflow contains both refresh and terminal-event delivery failures so neither can terminate the daemon event loop.
 - Anthropic-compatible discovery must resolve `.../v1/models` from a root base URL (or `.../models` when the configured base already ends with `/v1`). Native Anthropic Messages requests authenticate with `x-api-key` plus the required `anthropic-version` header. Some Anthropic-compatible local/proxy gateways expose the same catalog only through `Authorization: Bearer ...`; in that case model discovery must retry with bearer auth before falling back. The main Sanad Anthropic adapter should keep native request execution on `x-api-key` by default and use bearer auth only as a compatibility fallback unless the runtime later adds an explicit auth-mode contract.
 - When live discovery fails, the fallback list must preserve the instance's selected/default model and merge it with the template's curated fallback models so the picker never collapses to an unrelated single model.
+- Model metadata returned by discovery is runtime input, not presentation-only data. `context_window` is persisted with each `ModelOption`; `AgentRuntimeService` supplies adapters with an instance-scoped lookup that accepts only cache rows matching the route's config and credential revisions and the exact normalized model id. Context-limit precedence is explicit `config.yaml` override, matching instance catalog, adapter/provider metadata (including `models.dev` for Codex Responses), known static metadata, then the adapter fallback. Codex forward-compatible GPT-6 aliases may inherit a positive window only from the live GPT-6 template that caused the alias to be offered; absent or invalid template metadata remains unresolved so the later sources decide it. Unknown OpenAI-compatible and Ollama models retain the conservative `4000` fallback because inflating an unverified local/small model window can suppress required compaction and cause provider overflow. A model discovered after the Sanad release therefore does not require a hardcoded model-name condition to receive its advertised context window.
 - `provider.instance.create` must never crash the daemon on validation failures such as duplicate display names. The response must come back on `provider.instance.created` with an `error` payload so the client can render an inline validation message.
 - **Connection Test Verification**: To ensure that the connection test command (`provider.instance.test`) fails properly when endpoints are offline or misconfigured, it queries the resulting model cache metadata directly after performing the manual refresh. If `last_error` is populated, or if the cache `source` is set to `'fallback'` or `'cache_stale'` (indicating that live fetch failed and the adapter fell back to local/cached presets), the test fails with `success: false` and returns the actual connection error details to the UI/CLI.
 
@@ -127,7 +130,7 @@ All responses carry `request_id`. Instance mutations broadcast
 | `provider.credential.update` | `provider.credential.updated` | `keep` \| `replace` \| `remove` for API-key instances. |
 | `provider.auth.reconnect` | `provider_auth_started` | Re-runs OAuth for an existing instance. |
 | `provider.auth.disconnect` | `provider.credential.updated` | Deletes OAuth tokens; instance metadata stays. |
-| `model.snapshot` | `model.snapshot_result` | Returns cached models per instance (stale-while-revalidate), including `status` so clients can render true runtime readiness from the instance lifecycle instead of inferring it from cache presence. Model ids are instance-local: redundant `<template>/` prefixes and Gemini's `models/` transport prefix must already be stripped. |
+| `model.snapshot` | `model.snapshot_result` | Returns cached models per instance (stale-while-revalidate), including `status` so clients can render true runtime readiness from the instance lifecycle instead of inferring it from cache presence. Model ids are instance-local: redundant `<template>/` prefixes and Gemini's `models/` transport prefix must already be stripped. Each model entry may include `supports_reasoning_output` and a per-model `thinking_control` descriptor (Task 43). |
 | `model.refresh` | `model.cache_updated` | Refreshes models for an instance; **all events (started/updated/failed) carry the original `request_id`** and clients must complete the request only on `updated`/`failed`, never on `started`. |
 | `model.recent.list` | `model.recent.recent_result` | Returns last 5 selections with current display names, using the same normalized instance-local model ids as `model.snapshot`. |
 | `model.recent.record` | `model.recent.recent_recorded` | Records a model selection (upsert, moves to top). |
@@ -186,6 +189,32 @@ Additional contract rules:
 - Templates whose account-auth flow is not implemented yet must be omitted by `ProviderCatalogService` itself so CLI and client stay consistent.
 - `get_capabilities` must not double as provider-model discovery. A fresh install with no provider instances must still answer `capabilities` successfully; model catalogs come only from `model.snapshot`, `model.refresh`, `model.options`, and readiness/setup commands.
 
+### Task 43 — Provider-aware thinking controls (Gates A–C)
+
+Device capabilities advertise whether the client understands model-scoped thinking
+controls, not the selectable values themselves:
+
+- `supports_thinking_mode_change`: device understands the thinking selector contract.
+- `thinking_mode_source`: `model` when options come from the active model snapshot; legacy agents omit this field and clients treat `thinking_modes_list` as authoritative.
+- `thinking_modes_list`: retained for backward compatibility only. Current agents emit an empty list when `thinking_mode_source` is `model`.
+
+Each model entry in `model.snapshot_result.instances[].models[]` may include:
+
+- `supports_reasoning_output`: whether the model may emit reasoning output.
+- `thinking_control`: descriptor with `status` (`supported` | `unsupported` | `unknown`), optional `kind`, ordered `options[]` (`id`, English `label`, `is_off`, `is_provider_default`), `default_option_id`, `capability_revision`, and `source`.
+
+Session payloads may also include `thinking_control` for the active route when the daemon can resolve it from the current model cache revision. Clients must ignore a route descriptor when its `capability_revision` or `route_revision` does not match the active route (Gate D).
+
+Aggregator templates such as OpenRouter use `aggregator_upstream` thinking policy: capability follows the upstream vendor prefix in the model id (`anthropic/...`, `google/...`, `deepseek/...`, `openai/...`, etc.), and the chat-completions adapter emits OpenRouter's nested `reasoning` object instead of top-level `reasoning_effort`.
+
+Gemini templates use `google_thinking`: budget models map to `extra_body.google.thinking_config.thinking_budget`, level models map to `thinking_level`, and the adapter never mixes those shapes with top-level `reasoning_effort`.
+
+DeepSeek templates use `deepseek_thinking`: only fixed chat fixtures advertise toggle/effort controls; unresolved models stay `unknown`, reasoner models stay `unsupported`, and the wire codec keeps toggle off and effort mutually exclusive.
+
+OpenCode Go explicitly opts into the OpenAI Chat effort policy, but selectable controls remain limited to recognized reasoning model families; `supports_reasoning_output` alone never proves control support. OpenAI-family effort descriptors expose `medium` as the display default while a null/cleared persisted selection still means provider default by wire omission. General recognized models expose `low | medium | high | xhigh`; models with verified maximum effort support additionally expose `max`, while `o1` remains limited to `medium | high`.
+
+`update_session_preferences` may update provider/model and `thinking_mode` together or update thinking alone. New clients send the canonical `provider_instance_id`; the daemon also accepts legacy `provider_id` input for compatibility but does not require both. Presence of `thinking_mode` is significant: a non-empty value persists the normalized selection, while an empty or null value clears it and the resulting session event includes `thinking_mode: null`. Omitting the key leaves the stored thinking selection unchanged.
+
 ### Provisional setup ownership (Task 57)
 
 The client wizard records the UUID returned by the first `provider.instance.create` as `provisionalInstanceId`. Back keeps that identity and local details, including the in-memory credential input, and a later Continue updates the same row rather than creating another instance. The credential input remains controller-owned memory and must not enter logs or Equatable string output.
@@ -223,9 +252,8 @@ current default instance. Provider mutations clear that runtime-owned cache
 through the explicitly injected service; protocol handlers do not inspect or
 reset the dependency container.
 
-The shared `ContextEngine` is provider-neutral. `AgentRunner._streamNextResponse`
-and `_generateResponse` resolve the current turn route and pass its adapter to
-`contextEngine.compressIfNeeded(history, adapter: …)` before every model call.
+Shared context services remain provider-neutral. `AgentRunner._streamNextResponse`
+and `_generateResponse` resolve the current turn route for each model call.
 Title generation likewise resolves its fallback route from `AgentRuntimeService`
 at call time. Together these boundaries allow the first post-onboarding turn and
 background title work to use the newly configured provider without a daemon

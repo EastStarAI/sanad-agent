@@ -6,7 +6,8 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 void main() {
-  late Directory root;
+  group('installer transaction', () {
+    late Directory root;
   late Directory home;
   late Directory mockBin;
   late File commandLog;
@@ -223,6 +224,7 @@ exit 0
       expect(result.stdout.toString(), contains('pairing completed'));
     },
   );
+  }, skip: Platform.isWindows ? 'POSIX-only install.sh test' : false);
 }
 
 Future<ProcessResult> _runInstaller({

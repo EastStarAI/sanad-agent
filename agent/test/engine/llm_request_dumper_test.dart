@@ -298,6 +298,62 @@ void main() {
         );
       },
     );
+
+    test(
+      'dumpResponse correctly records aggregated final response structure',
+      () async {
+        LLMRequestDumper.environmentOverride = {'DUMP_REQUESTS': 'true'};
+
+        final path = await LLMRequestDumper.dumpRequest(
+          sessionId: 'test-session-aggregated',
+          history: [],
+          tools: [],
+        );
+
+        expect(path, isNotNull);
+
+        final aggregatedResponse = {
+          'status_code': 200,
+          'message': {
+            'role': 'assistant',
+            'content': 'Here is the summary of the task.',
+            'reasoning': 'User asked for a summary, processing now.',
+            'tool_calls': [
+              {
+                'id': 'call_abc123',
+                'name': 'search_web',
+                'arguments': {'query': 'sanad agent'},
+              },
+            ],
+          },
+          'finish_reason': 'toolCalls',
+          'usage': {
+            'prompt_tokens': 120,
+            'completion_tokens': 45,
+            'total_tokens': 165,
+          },
+        };
+
+        await LLMRequestDumper.dumpResponse(aggregatedResponse);
+
+        final file = File(path!);
+        expect(file.existsSync(), isTrue);
+
+        final fileContent = await file.readAsString();
+        final decoded = jsonDecode(fileContent) as Map<String, dynamic>;
+
+        expect(decoded['response'], isNotNull);
+        final resp = decoded['response'] as Map<String, dynamic>;
+        expect(resp['status_code'], 200);
+        expect(resp['message']['role'], 'assistant');
+        expect(resp['message']['content'], 'Here is the summary of the task.');
+        expect(resp['message']['reasoning'], 'User asked for a summary, processing now.');
+        expect(resp['message']['tool_calls'], isA<List>());
+        expect(resp['message']['tool_calls'][0]['name'], 'search_web');
+        expect(resp['finish_reason'], 'toolCalls');
+        expect(resp['usage']['total_tokens'], 165);
+      },
+    );
   });
 }
 

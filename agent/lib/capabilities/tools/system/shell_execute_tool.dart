@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
+import 'package:sanad_windows_path/windows_path.dart';
 
 import '../../models/local_tool_spec.dart';
 import '../../permissions/permission_manager.dart';
@@ -18,11 +19,15 @@ class ShellExecuteTool extends SpecBackedTool {
 
   final String workspacePath;
   final PermissionManager? _permissionManager;
+  final WindowsSystemPath _windowsSystemPath;
 
   ShellExecuteTool({
     required this.workspacePath,
     PermissionManager? permissionManager,
-  }) : _permissionManager = permissionManager;
+    WindowsSystemPath? windowsSystemPath,
+  }) : _permissionManager = permissionManager,
+       _windowsSystemPath =
+           windowsSystemPath ?? sharedWindowsSystemPathResolver;
 
   @override
   bool get isCooperativelyCancellable => true;
@@ -43,8 +48,13 @@ class ShellExecuteTool extends SpecBackedTool {
               'Optional subdirectory relative to workspace root. Do not use for root.',
         },
         'timeout_ms': {'type': 'integer'},
+        'description': {
+          'type': 'string',
+          'description':
+              'A concise sentence of no more than seven words that explains to the user, in their own language, the purpose or goal of executing this command.',
+        },
       },
-      'required': ['command'],
+      'required': ['command', 'description'],
       'additionalProperties': false,
     },
     source: {'type': 'builtin_local', 'id': 'sanad-agent.system'},
@@ -129,6 +139,8 @@ class ShellExecuteTool extends SpecBackedTool {
     Map<String, dynamic> args, {
     ToolContext? context,
   }) async {
+    final stopwatch = Stopwatch()..start();
+
     if (_permissionManager != null && context != null) {
       await _permissionManager.ensureAuthorized(
         tool: toolSpec,
@@ -178,7 +190,38 @@ class ShellExecuteTool extends SpecBackedTool {
     RunCancellationResourceHandle? cancellationHandle;
     Future<({String text, int totalChars, bool truncated})>? stdoutFuture;
     Future<({String text, int totalChars, bool truncated})>? stderrFuture;
+    var stdoutSnapshot = (text: '', totalChars: 0, truncated: false);
+    var stderrSnapshot = (text: '', totalChars: 0, truncated: false);
+    DateTime? lastProgressWrite;
+    var lastPersistedOutputChars = 0;
     var terminalSet = false;
+
+    void persistProgress({bool force = false}) {
+      final callback = context?.onExecutionProgress;
+      final fingerprint = tree?.fingerprint;
+      if (callback == null || fingerprint == null) return;
+      final now = DateTime.now().toUtc();
+      final outputChars = stdoutSnapshot.totalChars + stderrSnapshot.totalChars;
+      if (!force &&
+          lastPersistedOutputChars > 0 &&
+          lastProgressWrite != null &&
+          now.difference(lastProgressWrite!) <
+              const Duration(milliseconds: 100)) {
+        return;
+      }
+      lastProgressWrite = now;
+      lastPersistedOutputChars = outputChars;
+      callback({
+        'tool_name': 'shell_execute',
+        'status': 'running',
+        'stdout': _renderBoundedOutput(stdoutSnapshot),
+        'stderr': _renderBoundedOutput(stderrSnapshot),
+        'stdout_total_chars': stdoutSnapshot.totalChars,
+        'stderr_total_chars': stderrSnapshot.totalChars,
+        'updated_at': now.toIso8601String(),
+        'process': fingerprint.toJson(),
+      });
+    }
 
     bool trySetTerminal(ToolExecutionTerminalReason reason) {
       if (terminalSet) return false;
@@ -190,36 +233,47 @@ class ShellExecuteTool extends SpecBackedTool {
       required bool isError,
       required String output,
       ToolProcessCleanupReport? cleanup,
+      String? terminalReason,
     }) async {
       final payload = <String, dynamic>{
-        'isError': isError,
+        if (isError) 'isError': true,
         'output': output,
-        if (cleanup != null) 'cleanup_outcome': cleanup.outcome.name,
+        'duration_ms': stopwatch.elapsedMilliseconds,
+        'cleanup_outcome': ?cleanup?.outcome.name,
+        'terminal_reason': ?terminalReason,
       };
       return const JsonEncoder.withIndent('  ').convert(payload);
     }
 
     try {
+      var childEnvironment = Map<String, String>.from(Platform.environment);
+      if (_windowsSystemPath.isWindows) {
+        final path = await _windowsSystemPath.resolve(
+          inheritedPathFromEnvironment(childEnvironment),
+        );
+        childEnvironment = replaceEnvironmentPath(childEnvironment, path);
+      }
+      childEnvironment.addAll({
+        'GIT_TERMINAL_PROMPT': '0',
+        'GCM_INTERACTIVE': 'false',
+        'SSH_ASKPASS_REQUIRE': 'never',
+        if (context?.sessionId.isNotEmpty == true)
+          'SANAD_REQUESTER_SESSION_ID': context!.sessionId,
+        if (context?.toolCallId?.isNotEmpty == true)
+          'SANAD_REQUESTER_TOOL_CALL_ID': context!.toolCallId!,
+      });
       process = await Process.start(
         shell.executable,
         shell.arguments,
         workingDirectory: workingDir,
         runInShell: false,
-        environment: {
-          ...Platform.environment,
-          'GIT_TERMINAL_PROMPT': '0',
-          'GCM_INTERACTIVE': 'false',
-          'SSH_ASKPASS_REQUIRE': 'never',
-          if (context?.sessionId.isNotEmpty == true)
-            'SANAD_REQUESTER_SESSION_ID': context!.sessionId,
-          if (context?.toolCallId?.isNotEmpty == true)
-            'SANAD_REQUESTER_TOOL_CALL_ID': context!.toolCallId!,
-        },
+        environment: childEnvironment,
       );
       tree = ProcessTreeController.attach(
         process,
         usesProcessGroup: shell.usesProcessGroup,
       );
+      persistProgress(force: true);
 
       final scope = context?.cancellationScope;
       if (scope != null) {
@@ -232,18 +286,34 @@ class ShellExecuteTool extends SpecBackedTool {
       }
       if (scope != null && !scope.isPublicationOpen) {
         final cleanup = await tree.terminate(gracePeriod: _terminationGrace);
+        final cancellation = _cancellationResult(scope.reason);
         return await finishWith(
           isError: true,
-          output: 'Command cancelled by user.',
+          output: cancellation.message,
           cleanup: cleanup,
+          terminalReason: cancellation.reason,
         );
       }
       await shell.startGate?.writeAsString('owned');
 
       unawaited(process.stdin.close().catchError((_) {}));
 
-      stdoutFuture = _collectBoundedOutput(process.stdout, _maxStreamChars);
-      stderrFuture = _collectBoundedOutput(process.stderr, _maxStreamChars);
+      stdoutFuture = _collectBoundedOutput(
+        process.stdout,
+        _maxStreamChars,
+        onSnapshot: (snapshot) {
+          stdoutSnapshot = snapshot;
+          persistProgress();
+        },
+      );
+      stderrFuture = _collectBoundedOutput(
+        process.stderr,
+        _maxStreamChars,
+        onSnapshot: (snapshot) {
+          stderrSnapshot = snapshot;
+          persistProgress();
+        },
+      );
 
       final waitOutcome = await _waitForOutcome(
         process: process,
@@ -286,19 +356,32 @@ class ShellExecuteTool extends SpecBackedTool {
         case _ShellWaitTimedOut():
           final cleanup = await tree.terminate(gracePeriod: _terminationGrace);
           cancellationHandle?.release();
-          await _drainOutput(stdoutFuture, stderrFuture);
+          final partialOutput = await _collectFinishedOutput(
+            stdoutFuture,
+            stderrFuture,
+          );
           return await finishWith(
             isError: true,
-            output: 'Command timed out after $timeoutMs ms.',
+            output: _appendTerminalMessage(
+              partialOutput,
+              'Command timed out after $timeoutMs ms.',
+            ),
             cleanup: cleanup,
+            terminalReason: 'timed_out',
           );
         case _ShellWaitCancelled():
           final cleanup = await tree.terminate(gracePeriod: _terminationGrace);
-          await _drainOutput(stdoutFuture, stderrFuture);
+          cancellationHandle?.release();
+          final partialOutput = await _collectFinishedOutput(
+            stdoutFuture,
+            stderrFuture,
+          );
+          final cancellation = _cancellationResult(scope?.reason);
           return await finishWith(
             isError: true,
-            output: 'Command cancelled by user.',
+            output: _appendTerminalMessage(partialOutput, cancellation.message),
             cleanup: cleanup,
+            terminalReason: cancellation.reason,
           );
       }
     } catch (e) {
@@ -321,18 +404,54 @@ class ShellExecuteTool extends SpecBackedTool {
     }
   }
 
-  Future<void> _drainOutput(
+  Future<String> _collectFinishedOutput(
     Future<({String text, int totalChars, bool truncated})>? stdoutFuture,
     Future<({String text, int totalChars, bool truncated})>? stderrFuture,
   ) async {
-    if (stdoutFuture == null || stderrFuture == null) return;
+    if (stdoutFuture == null || stderrFuture == null) return '';
     try {
-      await Future.any([
-        Future.wait([stdoutFuture, stderrFuture]),
-        Future.delayed(const Duration(seconds: 2)),
-      ]);
-    } catch (_) {}
+      final results = await Future.wait([
+        stdoutFuture,
+        stderrFuture,
+      ]).timeout(const Duration(seconds: 2));
+      final stdout = _renderBoundedOutput(results[0]);
+      final stderr = _renderBoundedOutput(results[1]);
+      if (stderr.isEmpty) return stdout;
+      return stdout.isEmpty ? 'STDERR:\n$stderr' : '$stdout\nSTDERR:\n$stderr';
+    } catch (_) {
+      return '';
+    }
   }
+
+  String _appendTerminalMessage(String output, String message) =>
+      output.trim().isEmpty ? message : '${output.trimRight()}\n$message';
+
+  ({String reason, String message}) _cancellationResult(
+    RunCancellationReason? reason,
+  ) => switch (reason) {
+    RunCancellationReason.userStop => (
+      reason: 'cancelled_by_user',
+      message: 'Command cancelled by user.',
+    ),
+    RunCancellationReason.timeout => (
+      reason: 'timed_out',
+      message: 'Command timed out.',
+    ),
+    RunCancellationReason.shutdown => (
+      reason: 'agent_interrupted',
+      message:
+          'The command was interrupted because the agent stopped. Its final outcome is unknown.',
+    ),
+    RunCancellationReason.superseded => (
+      reason: 'superseded',
+      message: 'The command was interrupted by a newer execution owner.',
+    ),
+    null => (
+      reason: 'agent_interrupted',
+      message:
+          'The command was interrupted because the agent stopped unexpectedly. Its final outcome is unknown.',
+    ),
+  };
 
   Future<_ShellWaitOutcome> _waitForOutcome({
     required Process process,
@@ -384,8 +503,10 @@ class ShellExecuteTool extends SpecBackedTool {
 
   Future<({String text, int totalChars, bool truncated})> _collectBoundedOutput(
     Stream<List<int>> stream,
-    int maxChars,
-  ) async {
+    int maxChars, {
+    void Function(({String text, int totalChars, bool truncated}) snapshot)?
+    onSnapshot,
+  }) async {
     final headLimit = (maxChars * 0.4).floor();
     final tailLimit = maxChars - headLimit;
     final head = StringBuffer();
@@ -411,6 +532,11 @@ class ShellExecuteTool extends SpecBackedTool {
           tail = tail.substring(tail.length - tailLimit);
         }
       }
+      onSnapshot?.call((
+        text: '${head.toString()}$tail',
+        totalChars: totalChars,
+        truncated: totalChars > maxChars,
+      ));
     }
 
     return (

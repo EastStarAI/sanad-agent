@@ -14,10 +14,21 @@ import 'device_inventory_source.dart';
 class DeviceManager {
   static const String _activeAgentKey = 'active_device_id';
 
+  static Future<void> normalizeActiveDeviceId(
+    SharedPreferences preferences,
+    String legacyId,
+    String deviceId,
+  ) async {
+    if (preferences.getString(_activeAgentKey) == legacyId) {
+      await preferences.setString(_activeAgentKey, deviceId);
+    }
+  }
+
   final SanadSocketService _socket;
   final DeviceConnectionCoordinator _connectionCoordinator;
   final DeviceInventoryMerger _inventoryMerger;
   final SharedPreferences _prefs;
+  final Duration _fetchTimeout;
 
   List<DeviceConfig> _cloudAgents = [];
   List<DeviceConfig> _agents = [];
@@ -40,7 +51,9 @@ class DeviceManager {
     this._connectionCoordinator,
     this._prefs, {
     DeviceInventoryMerger? inventoryMerger,
-  }) : _inventoryMerger =
+    Duration fetchTimeout = const Duration(seconds: 5),
+  }) : _fetchTimeout = fetchTimeout,
+       _inventoryMerger =
            inventoryMerger ??
            DeviceInventoryMerger(
              connectionCoordinator: _connectionCoordinator,
@@ -51,21 +64,30 @@ class DeviceManager {
     _emitAgentsUpdate();
     _authSuccessSubscription = _socket.onAuthSuccess.listen((_) async {
       _setupSocketListeners();
-      unawaited(fetchAgents());
+      _fireAndForgetFetch();
     });
     _connectionChangesSubscription = _connectionCoordinator.changes.listen((_) {
       _rebuildInventory();
       _emitAgentsUpdate();
     });
+    if (_isCloudGatewayReady) {
+      _fireAndForgetFetch();
+    }
   }
 
   /// Create an instance of DeviceManager
   static Future<DeviceManager> create(
     SanadSocketService socket,
-    DeviceConnectionCoordinator connectionCoordinator,
-  ) async {
+    DeviceConnectionCoordinator connectionCoordinator, {
+    Duration fetchTimeout = const Duration(seconds: 5),
+  }) async {
     final prefs = await SharedPreferences.getInstance();
-    final manager = DeviceManager._(socket, connectionCoordinator, prefs);
+    final manager = DeviceManager._(
+      socket,
+      connectionCoordinator,
+      prefs,
+      fetchTimeout: fetchTimeout,
+    );
     return manager;
   }
 
@@ -126,12 +148,24 @@ class DeviceManager {
     }
 
     return completer.future.timeout(
-      const Duration(seconds: 5),
+      _fetchTimeout,
       onTimeout: () {
         _pendingFetches.remove(completer);
-        return List.unmodifiable(_agents);
+        // A timed-out fetch is a failure, never an authoritative empty list.
+        // The caller (DeviceCubit) records a typed error while retaining any
+        // cached inventory, so an offline phone never flashes "No devices
+        // connected" after the request window (Plan 97g P09).
+        throw TimeoutException('Timed out waiting for the device inventory');
       },
     );
+  }
+
+  /// Fires an inventory fetch without surfacing an error to the event loop.
+  /// Inventory read failures are owned by [DeviceCubit], which records them as
+  /// a typed state; the manager's internal housekeeping fetches must not raise
+  /// unhandled async errors when a request times out.
+  void _fireAndForgetFetch() {
+    unawaited(fetchAgents().then<void>((_) {}, onError: (_) {}));
   }
 
   /// Create a new device
@@ -271,6 +305,7 @@ class DeviceManager {
 
   void _rebuildInventory() {
     _agents = _inventoryMerger.merge(_cloudAgents);
+    _connectionCoordinator.synchronizeCloudInterests(_cloudAgents);
   }
 
   bool get _isCloudGatewayReady => !_socket.isLocalTransport && _socket.lifecycleState == SocketLifecycleState.ready;
@@ -297,7 +332,7 @@ class DeviceManager {
           if (represented.id != activeId) {
             await setActiveAgent(represented.id);
           }
-        } else if (activeId != DeviceInventoryIds.localDevice) {
+        } else {
           await setActiveAgent(null);
         }
       }
@@ -392,7 +427,7 @@ class DeviceManager {
         // receives an inventory row for it. Reconcile authoritatively so the
         // capabilities owner observes the new DeviceConfig and fetches model /
         // thinking controls without requiring an Agent restart.
-        unawaited(fetchAgents());
+        _fireAndForgetFetch();
       }
 
       _agentStatusController.add(data);

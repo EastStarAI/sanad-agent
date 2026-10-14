@@ -18,7 +18,22 @@ void main() {
       const SessionMessagesState().visualState,
       ConversationVisualState.newConversation,
     );
+    expect(
+      const SessionMessagesState(requestedSessionId: 'session-1', isHistoryLoading: true).visualState,
+      ConversationVisualState.loadingTransition,
+    );
+    expect(
+      const SessionMessagesState(historyLoadError: 'Could not load').visualState,
+      ConversationVisualState.loadingTransition,
+    );
   });
+
+  test('showAppBar is true for active and loading transition, false only for new conversation', () {
+    expect(ConversationVisualState.newConversation.showAppBar, isFalse);
+    expect(ConversationVisualState.loadingTransition.showAppBar, isTrue);
+    expect(ConversationVisualState.activeSession.showAppBar, isTrue);
+  });
+
 
   testWidgets('desktop app bar constrains long workspace and session titles', (
     tester,
@@ -171,7 +186,7 @@ void main() {
     expect(titleText.textDirection, TextDirection.rtl);
   });
 
-  testWidgets('app bar applies RTL text direction and alignments in mobile layout', (
+  testWidgets('app bar keeps mobile layout aligned to the left regardless of language direction', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -192,13 +207,60 @@ void main() {
 
     final titleText = tester.widget<Text>(find.text('محادثة جديدة'));
     expect(titleText.textDirection, TextDirection.rtl);
-    expect(titleText.textAlign, TextAlign.right);
+    expect(titleText.textAlign, TextAlign.left);
 
     final workspaceText = tester.widget<Text>(find.text('مساحة العمل'));
     expect(workspaceText.textDirection, TextDirection.rtl);
-    expect(workspaceText.textAlign, TextAlign.right);
+    expect(workspaceText.textAlign, TextAlign.left);
 
     final column = tester.widget<Column>(find.byType(Column));
-    expect(column.crossAxisAlignment, CrossAxisAlignment.end);
+    expect(column.crossAxisAlignment, CrossAxisAlignment.start);
+  });
+
+  testWidgets('mobile app bar renders default Conversation title and menu button when sessionTitle is null', (
+    tester,
+  ) async {
+    bool menuPressed = false;
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ConversationAppBar(
+            sessionTitle: null,
+            isMobile: true,
+            onMenuPressed: () {
+              menuPressed = true;
+            },
+          ),
+        ),
+      ),
+    );
+
+    expect(find.text('Conversation'), findsOneWidget);
+    expect(find.byTooltip('Open navigation menu'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('Open navigation menu'));
+    expect(menuPressed, isTrue);
+  });
+
+  testWidgets('mobile app bar inherits ambient RTL directionality without forcing LTR', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Directionality(
+          textDirection: TextDirection.rtl,
+          child: Scaffold(
+            body: ConversationAppBar(
+              sessionTitle: 'محادثة',
+              isMobile: true,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final row = tester.widgetList<Row>(find.byType(Row)).first;
+    expect(row.textDirection, isNull);
+    expect(Directionality.of(tester.element(find.byType(ConversationAppBar))), TextDirection.rtl);
   });
 }

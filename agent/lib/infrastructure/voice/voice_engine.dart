@@ -124,7 +124,7 @@ class VoiceEngine {
       final messages = sessionManager.getMessages(sessionId);
       messages.add(Message(role: role, content: content));
       sessionManager.saveSessionHistory(sessionId, messages);
-      _logger.info('Saved voice turn ($role) to database: "$content"');
+      _logger.info('Saved voice turn to database');
     } catch (e) {
       _logger.warning('Failed to save voice turn ($role) to database: $e');
     }
