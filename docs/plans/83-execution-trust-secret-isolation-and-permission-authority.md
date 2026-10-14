@@ -88,7 +88,7 @@ Permission or secret persistence
 | 83a Security Contracts and Attack Reproduction | `complete` | Done | 12 | اعتماد الخطة |
 | 83b Daemon-Private Permission Authority | `complete` | Done | 15 | اكتمال 83a |
 | 83c Unified Agent Secret Store and Migration | `complete` | Done | 15 | اكتمال 83a |
-| 83d Native Client Secure Credential Storage | `pending` | Waiting | 12 | اكتمال 83a |
+| 83d Native Client Secure Credential Storage | `complete` | Done | 12 | اكتمال 83a |
 | 83e Child Process Environment and Developer Parity | `pending` | Waiting | 15 | اكتمال 83a |
 | 83f Owner-Controlled Host Capability Discovery | `pending` | Waiting | 13 | اكتمال 83a و83b و83e contracts |
 | 83g Direct and Protected Execution Backends | `pending` | Waiting | 15 | اكتمال 83b و83e و83f |

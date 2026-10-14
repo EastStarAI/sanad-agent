@@ -95,6 +95,7 @@ dependencies:
   desktop_drop: ^0.7.1
   flutter_localizations:
     sdk: flutter
+  flutter_secure_storage: ^10.3.4
 dev_dependencies:
   flutter_test:
     sdk: flutter

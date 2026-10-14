@@ -21,6 +21,7 @@ import 'package:sanad_client/features/auth/infrastructure/portal_auth_client.dar
 import 'package:sanad_client/features/auth/infrastructure/colocated_auth_coupling_client.dart';
 import 'package:sanad_client/features/auth/domain/user_display_name.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_callback_binding.dart';
+import 'package:sanad_client/features/auth/infrastructure/client_credential_store.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class AuthLoginChallenge {
@@ -56,6 +57,7 @@ class AuthService {
   final Dio _dio;
   final SanadSettingsStore _settingsStore;
   final SharedPreferences? _prefs;
+  final ClientCredentialStore _credentialStore;
   final PortalAuthClient _portalAuth;
   final ColocatedAuthCouplingClient _colocatedCoupling;
   final Future<AuthCallbackBinding> Function() _callbackBindingFactory;
@@ -93,6 +95,7 @@ class AuthService {
     Dio? dio,
     SanadSettingsStore? settingsStore,
     SharedPreferences? prefs,
+    ClientCredentialStore? credentialStore,
     PortalAuthClient? portalAuth,
     ColocatedAuthCouplingClient? colocatedCoupling,
     Future<AuthCallbackBinding> Function()? callbackBindingFactory,
@@ -106,6 +109,7 @@ class AuthService {
              ..options.receiveTimeout = const Duration(seconds: 3)),
        _settingsStore = settingsStore ?? const SanadSettingsStore(),
        _prefs = prefs,
+       _credentialStore = credentialStore ?? NativeClientCredentialStore(),
        _portalAuth = portalAuth ?? PortalAuthClient(),
        _colocatedCoupling = colocatedCoupling ?? ColocatedAuthCouplingClient(),
        _callbackBindingFactory = callbackBindingFactory ?? createAuthCallbackBinding,
@@ -119,26 +123,24 @@ class AuthService {
     return _prefs ?? SharedPreferences.getInstance();
   }
 
-  (String?, String?) _readStoredAuthSession(SharedPreferences prefs) {
-    final encoded = prefs.getString(_authSessionKey);
-    if (encoded != null) {
-      try {
-        final decoded = jsonDecode(encoded);
-        if (decoded is Map) {
-          final accessToken = decoded['access_token']?.toString();
-          final refreshToken = decoded['refresh_token']?.toString();
-          if (accessToken?.isNotEmpty == true || refreshToken?.isNotEmpty == true) {
-            return (accessToken, refreshToken);
-          }
-        }
-      } on FormatException {
-        _logger.warning('Ignoring malformed persisted auth session.');
-      }
+  Future<(String?, String?)> _readStoredAuthSession(SharedPreferences prefs) async {
+    // Purge legacy SharedPreferences keys without migrating (Plan 83 Task 83d)
+    if (prefs.containsKey(_authSessionKey) ||
+        prefs.containsKey('backend_access_token') ||
+        prefs.containsKey('backend_refresh_token')) {
+      _logger.info(
+        'Legacy auth tokens detected in SharedPreferences; purging per Task 83d.',
+      );
+      await prefs.remove(_authSessionKey);
+      await prefs.remove('backend_access_token');
+      await prefs.remove('backend_refresh_token');
     }
-    return (
-      prefs.getString('backend_access_token'),
-      prefs.getString('backend_refresh_token'),
-    );
+
+    final pair = await _credentialStore.readCredentials();
+    if (pair != null) {
+      return pair;
+    }
+    return (null, null);
   }
 
   Future<void> _persistAuthPair(
@@ -146,20 +148,15 @@ class AuthService {
     required String accessToken,
     required String? refreshToken,
   }) async {
-    await prefs.setString(
-      _authSessionKey,
-      jsonEncode({'access_token': accessToken, 'refresh_token': refreshToken}),
-    );
-    try {
-      await prefs.setString('backend_access_token', accessToken);
-      if (refreshToken == null || refreshToken.isEmpty) {
-        await prefs.remove('backend_refresh_token');
-      } else {
-        await prefs.setString('backend_refresh_token', refreshToken);
-      }
-    } catch (error) {
-      _logger.warning(
-        'Failed to update legacy auth mirrors: ${error.runtimeType}',
+    // Purge legacy SharedPreferences keys to ensure zero plaintext credential storage
+    await prefs.remove(_authSessionKey);
+    await prefs.remove('backend_access_token');
+    await prefs.remove('backend_refresh_token');
+
+    if (refreshToken != null && refreshToken.trim().isNotEmpty) {
+      await _credentialStore.writeCredentials(
+        accessToken: accessToken,
+        refreshToken: refreshToken,
       );
     }
   }
@@ -205,7 +202,7 @@ class AuthService {
   Future<void> init({String? fallbackDeviceId}) async {
     final prefs = await _getPrefs();
 
-    final storedSession = _readStoredAuthSession(prefs);
+    final storedSession = await _readStoredAuthSession(prefs);
     _backendAccessToken = storedSession.$1;
     _backendRefreshToken = storedSession.$2;
 
@@ -282,6 +279,7 @@ class AuthService {
       await prefs.remove(_authSessionKey);
       await prefs.remove('backend_access_token');
       await prefs.remove('backend_refresh_token');
+      await _credentialStore.clearCredentials();
       username = null;
       displayName = null;
       email = null;
@@ -334,7 +332,8 @@ class AuthService {
 
     final prefs = await _getPrefs();
     _backendAccessToken = accessToken;
-    _backendRefreshToken = _readStoredAuthSession(prefs).$2;
+    final storedSession = await _readStoredAuthSession(prefs);
+    _backendRefreshToken = storedSession.$2;
     await fetchProfile();
     _emitAccessToken();
   }
@@ -560,6 +559,7 @@ class AuthService {
     await prefs.remove(_authSessionKey);
     await prefs.remove('backend_access_token');
     await prefs.remove('backend_refresh_token');
+    await _credentialStore.clearCredentials();
     _emitAccessToken();
 
     if (AppPlatform.isDesktop) {
