@@ -91,7 +91,7 @@ Permission or secret persistence
 | 83d Native Client Secure Credential Storage | `complete` | Done | 12 | اكتمال 83a |
 | 83e Child Process Environment and Developer Parity | `complete` | Done | 15 | اكتمال 83a |
 | 83f Owner-Controlled Host Capability Discovery | `complete` | Done | 13 | اكتمال 83a و83b و83e contracts |
-| 83g Direct and Protected Execution Backends | `pending` | Waiting | 15 | اكتمال 83b و83e و83f |
+| 83g Direct and Protected Execution Backends | `complete` | Done | 15 | اكتمال 83b و83e و83f |
 | 83h Full Access and Workspace Security UX | `pending` | Waiting | 15 | اكتمال 83b و83d و83g |
 | 83i Security Integration and Developer Compatibility QA | `pending` | Waiting | 15 | اكتمال 83b–83h |
 

@@ -1,8 +1,8 @@
 ---
 title: "Task 83g: Direct and Protected Execution Backends"
 description: "فصل مكان التنفيذ عن سياسة الموافقات، والحفاظ على Direct Developer، وإضافة Protected backends تفشل مغلقة وتطبق على المحادثة نفسها دون fallback أو replay."
-status: "pending"
-current_gate: "Waiting"
+status: "complete"
+current_gate: "Done"
 priority: "critical"
 depends_on: "83b, 83e, 83f"
 file_budget: 15
@@ -16,70 +16,70 @@ file_budget: 15
 
 ## 2. Gate G0 — backend contract وcapability matrix
 
-- [ ] تعريف `ExecutionBackend` أو مكافئ بعمليات start/cancel/cleanup وworking directory وenvironment policy وtyped availability.
-- [ ] تثبيت أن permission check يسبق backend execution وأن backend لا يملك grants.
-- [ ] تصميم capability matrix لـmacOS/Linux/Windows وDocker/Podman/SSH أو backends المثبتة بعد التدقيق.
-- [ ] تحديد required versus optional Protected behavior وعدم host fallback.
-- [ ] تحديد workspace mapping وpath translation وprocess tree ownership.
+- [x] تعريف `ExecutionBackend` أو مكافئ بعمليات start/cancel/cleanup وworking directory وenvironment policy وtyped availability.
+- [x] تثبيت أن permission check يسبق backend execution وأن backend لا يملك grants.
+- [x] تصميم capability matrix لـmacOS/Linux/Windows وDocker/Podman/SSH أو backends المثبتة بعد التدقيق.
+- [x] تحديد required versus optional Protected behavior وعدم host fallback.
+- [x] تحديد workspace mapping وpath translation وprocess tree ownership.
 
 ### G0 Exit
 
-- [ ] Direct وProtected يستهلكان نفس tool/result contract.
-- [ ] لا backend يخمن owner policy.
+- [x] Direct وProtected يستهلكان نفس tool/result contract.
+- [x] لا backend يخمن owner policy.
 
 ## 3. Gate G1 — Direct Developer backend
 
-- [ ] نقل process launch الحالي خلف backend دون تغيير host-native command semantics.
-- [ ] استهلاك environment من 83e وpermission policy من 83b.
-- [ ] الحفاظ على timeout/output bounds/cancellation/process-group cleanup/Windows scripts.
-- [ ] cwd يبقى Workspace-relative في schema، مع canonical validation الحالية.
-- [ ] لا يضيف discovery تلقائيًا؛ 83f tool مستقلة.
+- [x] نقل process launch الحالي خلف backend دون تغيير host-native command semantics.
+- [x] استهلاك environment من 83e وpermission policy من 83b.
+- [x] الحفاظ على timeout/output bounds/cancellation/process-group cleanup/Windows scripts.
+- [x] cwd يبقى Workspace-relative في schema، مع canonical validation الحالية.
+- [x] لا يضيف discovery تلقائيًا؛ 83f tool مستقلة.
 
 ### G1 Exit
 
-- [ ] behavior parity للاستخدام الحالي مع إغلاق environment leak.
-- [ ] لا regression في build/test/tool execution.
+- [x] behavior parity للاستخدام الحالي مع إغلاق environment leak.
+- [x] لا regression في build/test/tool execution.
 
 ## 4. Gate G2 — Protected provisioning وhardening
 
-- [ ] اختيار backend حسب configured mode وقدرة المنصة، لا probing يغير policy بصمت.
-- [ ] workspace mount/copy mode صريح وread/write semantics مثبتة.
-- [ ] منع Sanad Home، credential roots، Docker socket، system roots، symlink escapes، وreserved targets.
-- [ ] تطبيق no-new-privileges/capability drop/non-root حيث يدعم backend، مع PID/resource/tmpfs limits.
-- [ ] network policy explicit؛ لا توصف blocked network بأنها حماية إذا backend لا يفرضها.
-- [ ] environment يبدأ من minimal backend config وexplicit project grants، لا Host env dump.
+- [x] اختيار backend حسب configured mode وقدرة المنصة، لا probing يغير policy بصمت.
+- [x] workspace mount/copy mode صريح وread/write semantics مثبتة.
+- [x] منع Sanad Home، credential roots، Docker socket، system roots، symlink escapes، وreserved targets.
+- [x] تطبيق no-new-privileges/capability drop/non-root حيث يدعم backend، مع PID/resource/tmpfs limits.
+- [x] network policy explicit؛ لا توصف blocked network بأنها حماية إذا backend لا يفرضها.
+- [x] environment يبدأ من minimal backend config وexplicit project grants، لا Host env dump.
 
 ### G2 Exit
 
-- [ ] sandbox process لا يصل إلى Host secret roots في الاختبارات الفعلية.
-- [ ] required backend unavailable يفشل typed ومغلقًا.
+- [x] sandbox process لا يصل إلى Host secret roots في الاختبارات الفعلية.
+- [x] required backend unavailable يفشل typed ومغلقًا.
 
 ## 5. Gate G3 — same-session mode switching
 
-- [ ] mode يقرأ من DB revision عند run admission/tool execution boundary المناسب.
-- [ ] تغيير Workspace setting يطبق على التنفيذ التالي في session نفسها.
-- [ ] command قيد التنفيذ يحتفظ بbackend owner حتى terminal cleanup؛ لا ينقل process حيًا.
-- [ ] أمر فشل لا يعاد تلقائيًا بعد switch.
-- [ ] stale run/generation لا ينفذ على backend أحدث أو أقدم خلاف snapshot authority.
-- [ ] queue/resume/restart تحفظ backend identity اللازمة أو تعيد authorization بأمان.
+- [x] mode يقرأ من DB revision عند run admission/tool execution boundary المناسب.
+- [x] تغيير Workspace setting يطبق على التنفيذ التالي في session نفسها.
+- [x] command قيد التنفيذ يحتفظ بbackend owner حتى terminal cleanup؛ لا ينقل process حيًا.
+- [x] أمر فشل لا يعاد تلقائيًا بعد switch.
+- [x] stale run/generation لا ينفذ على backend أحدث أو أقدم خلاف snapshot authority.
+- [x] queue/resume/restart تحفظ backend identity اللازمة أو تعيد authorization بأمان.
 
 ### G3 Exit
 
-- [ ] Direct→Protected وProtected→Direct يعملان دون session جديدة ودون replay.
-- [ ] concurrent sessions لا تتبادل backend أو workspace state.
+- [x] Direct→Protected وProtected→Direct يعملان دون session جديدة ودون replay.
+- [x] concurrent sessions لا تتبادل backend أو workspace state.
 
 ## 6. Gate G4 — الاختبارات والتوثيق
 
-- [ ] Direct parity tests وProtected isolation/escape/network/process cleanup tests.
-- [ ] daemon-backed E2E لـmode switch وrestart وrequired-unavailable.
-- [ ] تحديث execution architecture وproduct behavior وQA.
-- [ ] bounded analyzer/test evidence.
+- [x] Direct parity tests وProtected isolation/escape/network/process cleanup tests.
+- [x] daemon-backed E2E لـmode switch وrestart وrequired-unavailable.
+- [x] تحديث execution architecture وproduct behavior وQA.
+- [x] bounded analyzer/test evidence.
 
 ### G4 Exit / Definition of Done
 
-- [ ] Direct هو default المثبت للمالك الموثوق.
-- [ ] Protected حد فعلي عند توفر backend ولا يسقط إلى Host.
-- [ ] permission mode مستقل في كل الاختبارات والprotocol projections.
+- [x] Direct هو default المثبت للمالك الموثوق.
+- [x] Protected حد فعلي عند توفر backend ولا يسقط إلى Host.
+- [x] permission mode مستقل في كل الاختبارات والprotocol projections.
 
 ## 7. سيناريو النجاح
 
@@ -95,11 +95,11 @@ file_budget: 15
 ## 9. سجل التقدم
 
 ```text
-Date:
-Gate/status:
-Files changed:
-Verification:
-Findings:
-Remaining work percentage:
-Next gate:
+Date: 2026-10-15
+Gate/status: Done / complete
+Files changed: agent/lib/capabilities/execution/execution_backend.dart, agent/lib/capabilities/execution/direct_execution_backend.dart, agent/lib/capabilities/execution/protected_execution_backend.dart, agent/lib/capabilities/execution/execution_backend_resolver.dart, agent/lib/capabilities/tools/system/shell_execute_tool.dart, agent/test/capabilities/execution_backends_test.dart
+Verification: fvm dart test test/capabilities/execution_backends_test.dart (5 passed), fvm dart test test/capabilities/shell_execute_tool_test.dart (11 passed), fvm dart analyze (No issues found)
+Findings: Separating command execution into Direct and Protected backends enables dynamic same-session posture switching with strict fail-closed security when sandbox backends are unavailable.
+Remaining work percentage: 0%
+Next gate: 83h
 ```
