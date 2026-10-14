@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
+import 'package:sanad_agent/capabilities/permissions/process_environment_policy.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
@@ -105,9 +106,9 @@ void main() {
     );
 
     test(
-      '[REPRODUCTION - FLIP IN 83e] ShellExecuteTool passes Platform.environment secrets to child processes',
+      '[FIXED IN 83e] ProcessEnvironmentPolicy prevents ShellExecuteTool from passing secrets to child processes',
       () {
-        // Simulates unhardened childEnvironment assembly in ShellExecuteTool
+        const policy = ProcessEnvironmentPolicy();
         final mockEnvironment = {
           'PATH': '/usr/bin:/bin',
           'HOME': '/Users/test',
@@ -115,23 +116,24 @@ void main() {
           'OPENAI_API_KEY': 'sk-mock-secret-key-12345',
         };
 
-        final childEnv = Map<String, String>.from(mockEnvironment);
-        childEnv.addAll({
-          'GIT_TERMINAL_PROMPT': '0',
-          'GCM_INTERACTIVE': 'false',
-          'SSH_ASKPASS_REQUIRE': 'never',
-        });
+        final childEnv = policy.buildChildEnvironment(
+          purpose: ChildProcessPurpose.directDeveloper,
+          inheritedEnvironment: mockEnvironment,
+        );
 
         expect(
           childEnv.containsKey('SANAD_AUTH_TOKEN'),
-          isTrue,
-          reason: 'Vulnerability reproduced: child process inherits Sanad auth token',
+          isFalse,
+          reason: 'Hardening verified: child process does not inherit Sanad auth token',
         );
         expect(
           childEnv.containsKey('OPENAI_API_KEY'),
-          isTrue,
-          reason: 'Vulnerability reproduced: child process inherits provider API keys',
+          isFalse,
+          reason: 'Hardening verified: child process does not inherit provider API keys',
         );
+
+        expect(childEnv['PATH'], '/usr/bin:/bin');
+        expect(childEnv['HOME'], '/Users/test');
 
         // Verify security contract detects these secrets
         expect(ChildProcessSecurityContract.isSanadControlPlaneSecret('SANAD_AUTH_TOKEN'), isTrue);

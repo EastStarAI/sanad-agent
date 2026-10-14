@@ -42,7 +42,11 @@ class ChildProcessSecurityContract {
     'PATH',
     'HOME',
     'USER',
+    'USERNAME',
+    'USERPROFILE',
     'SHELL',
+    'COMSPEC',
+    'PATHEXT',
     'TMPDIR',
     'TEMP',
     'TMP',
@@ -56,8 +60,23 @@ class ChildProcessSecurityContract {
     'SANAD_AUTH_TOKEN',
     'SANAD_AGENT_KEY',
     'SANAD_SECRET_KEY',
+    'SANAD_LOCAL_GATEWAY_TOKEN',
+    'SANAD_DEVICE_CREDENTIAL',
     'SANAD_GATEWAY_URL',
     'SANAD_LOCAL_GATEWAY_URL',
+    // Injection and hook vectors
+    'NODE_OPTIONS',
+    'PYTHONSTARTUP',
+    'PERL5OPT',
+    'RUBYOPT',
+    'BASH_ENV',
+    'ENV',
+    'GIT_SSH',
+    'GIT_SSH_COMMAND',
+    'GIT_ASKPASS',
+    'SSH_ASKPASS',
+    'SSL_CERT_FILE',
+    'SSL_CERT_DIR',
   };
 
   /// Common patterns or prefixes of control-plane and provider secrets
@@ -67,6 +86,8 @@ class ChildProcessSecurityContract {
     'SANAD_AGENT_',
     'SANAD_DEVICE_',
     'SANAD_TOKEN_',
+    'SANAD_LOCAL_GATEWAY_',
+    'SANAD_DEV_',
   ];
 
   static const Set<String> commonProviderSecretKeys = {
@@ -91,10 +112,25 @@ class ChildProcessSecurityContract {
     return protectedOperatorKeys.contains(key.toUpperCase());
   }
 
+  /// Checks if an environment variable key is a dangerous request override.
+  static bool isDangerousRequestOverride(String key) {
+    final upper = key.toUpperCase();
+    if (protectedOperatorKeys.contains(upper)) return true;
+    if (isSanadControlPlaneSecret(upper)) return true;
+    return false;
+  }
+
   /// Checks if an environment variable key represents a Sanad control-plane secret.
   static bool isSanadControlPlaneSecret(String key) {
     final upper = key.toUpperCase();
-    if (upper == 'SANAD_AUTH_TOKEN' || upper == 'SANAD_AGENT_KEY') return true;
+    if (upper == 'SANAD_AUTH_TOKEN' ||
+        upper == 'SANAD_AGENT_KEY' ||
+        upper == 'SANAD_SECRET_KEY' ||
+        upper == 'SANAD_LOCAL_GATEWAY_TOKEN' ||
+        upper == 'SANAD_DEVICE_CREDENTIAL' ||
+        upper == 'SANAD_PAIRING_TOKEN') {
+      return true;
+    }
     for (final prefix in sanadSecretPrefixes) {
       if (upper.startsWith(prefix)) return true;
     }

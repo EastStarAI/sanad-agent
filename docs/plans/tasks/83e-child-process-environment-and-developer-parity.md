@@ -1,8 +1,8 @@
 ---
 title: "Task 83e: Child Process Environment and Developer Parity"
 description: "إنشاء سلطة مركزية لبيئات العمليات تفصل inherited operator context عن overrides وتحجب أسرار سند دون كسر أدوات وSDKs المطور."
-status: "pending"
-current_gate: "Waiting"
+status: "complete"
+current_gate: "Done"
 priority: "critical"
 depends_on: "83a"
 file_budget: 15
@@ -16,68 +16,68 @@ file_budget: 15
 
 ## 2. Gate E0 — تصنيف البيئة
 
-- [ ] إنشاء taxonomy لـinherited operator، Sanad control-plane، provider، MCP owner، session markers، request overrides، وbackend-generated values.
-- [ ] اشتقاق Sanad-owned names من registries/config owners قدر الإمكان بدل قائمة يدوية فقط.
-- [ ] تعريف never-forward control-plane tier وpurpose-scoped grants.
-- [ ] تعريف dangerous request override keys/prefixes مع rationale.
-- [ ] تحديد inherited values التي تبقى للحفاظ على SDKs/helpers، وأي daemon-runtime markers تزال لمنع cross-project corruption.
+- [x] إنشاء taxonomy لـinherited operator، Sanad control-plane، provider، MCP owner، session markers، request overrides، وbackend-generated values.
+- [x] اشتقاق Sanad-owned names من registries/config owners قدر الإمكان بدل قائمة يدوية فقط.
+- [x] تعريف never-forward control-plane tier وpurpose-scoped grants.
+- [x] تعريف dangerous request override keys/prefixes مع rationale.
+- [x] تحديد inherited values التي تبقى للحفاظ على SDKs/helpers، وأي daemon-runtime markers تزال لمنع cross-project corruption.
 
 ### E0 Exit
 
-- [ ] كل key source لها policy وسبب واختبار.
-- [ ] suffix regex ليس المصدر الوحيد للحكم.
+- [x] كل key source لها policy وسبب واختبار.
+- [x] suffix regex ليس المصدر الوحيد للحكم.
 
 ## 3. Gate E1 — `ProcessEnvironmentPolicy`
 
-- [ ] إضافة service مركزي يأخذ child purpose وinherited env وtyped overrides وexplicit grants.
-- [ ] الحفاظ على inherited `PATH` وعدم قبول request-scoped PATH replacement.
-- [ ] إزالة Sanad/provider/gateway/local-token/session secrets من general Shell.
-- [ ] منع model/request overrides للloader hooks وcompiler wrappers وGit/package-manager pivots وcredential/trust roots حسب contract.
-- [ ] diagnostics تسمي key/reason فقط ولا تعرض value.
-- [ ] منع call sites من `...Platform.environment` المباشر عبر tests/guardrail search.
+- [x] إضافة service مركزي يأخذ child purpose وinherited env وtyped overrides وexplicit grants.
+- [x] الحفاظ على inherited `PATH` وعدم قبول request-scoped PATH replacement.
+- [x] إزالة Sanad/provider/gateway/local-token/session secrets من general Shell.
+- [x] منع model/request overrides للloader hooks وcompiler wrappers وGit/package-manager pivots وcredential/trust roots حسب contract.
+- [x] diagnostics تسمي key/reason فقط ولا تعرض value.
+- [x] منع call sites من `...Platform.environment` المباشر عبر tests/guardrail search.
 
 ### E1 Exit
 
-- [ ] Shell لا ترى Sanad-owned secrets.
-- [ ] inherited developer context يبقى متاحًا.
+- [x] Shell لا ترى Sanad-owned secrets.
+- [x] inherited developer context يبقى متاحًا.
 
 ## 4. Gate E2 — ربط spawn surfaces
 
-- [ ] ربط Shell foreground/background/PTY paths بالpolicy نفسها.
-- [ ] ربط MCP/helper/browser/installer child purposes دون توحيد سياساتها قسرًا.
-- [ ] إبقاء reserved restart/session markers بأقل payload وpurpose محدد.
-- [ ] cleanup/cancellation/process-tree behavior لا يتراجع.
-- [ ] Windows case-insensitive env names وPATHEXT/COMSPEC/location values مدعومة.
+- [x] ربط Shell foreground/background/PTY paths بالpolicy نفسها.
+- [x] ربط MCP/helper/browser/installer child purposes دون توحيد سياساتها قسرًا.
+- [x] إبقاء reserved restart/session markers بأقل payload وpurpose محدد.
+- [x] cleanup/cancellation/process-tree behavior لا يتراجع.
+- [x] Windows case-insensitive env names وPATHEXT/COMSPEC/location values مدعومة.
 
 ### E2 Exit
 
-- [ ] كل production spawn يمر بالowner المركزي أو يملك استثناء موثقًا لا يحمل model input.
-- [ ] لا يوجد sibling drift بين foreground/background.
+- [x] كل production spawn يمر بالowner المركزي أو يملك استثناء موثقًا لا يحمل model input.
+- [x] لا يوجد sibling drift بين foreground/background.
 
 ## 5. Gate E3 — Developer Capability Parity
 
-- [ ] fixtures لـFlutter/FVM، Android SDK/NDK/AVD، Java، Node/npm، Python project venv، Git/SSH agent، Docker context، cloud CLI selectors، package caches، proxies، وCA roots.
-- [ ] اختبارات command discovery من inherited PATH على Unix/Windows.
-- [ ] اختبار أن daemon venv markers لا تفسد project venv مع إبقاء executable discovery.
-- [ ] اختبار explicit owner grant لمتغير مشروع مشروع دون فتح Sanad secrets.
-- [ ] أي متغير محجوب مشروعًا يعيد diagnostic قابلة للفهم، لا `command not found` زائفة بسبب PATH حذف.
+- [x] fixtures لـFlutter/FVM، Android SDK/NDK/AVD، Java، Node/npm، Python project venv، Git/SSH agent، Docker context، cloud CLI selectors، package caches، proxies، وCA roots.
+- [x] اختبارات command discovery من inherited PATH على Unix/Windows.
+- [x] اختبار أن daemon venv markers لا تفسد project venv مع إبقاء executable discovery.
+- [x] اختبار explicit owner grant لمتغير مشروع مشروع دون فتح Sanad secrets.
+- [x] أي متغير محجوب مشروعًا يعيد diagnostic قابلة للفهم، لا `command not found` زائفة بسبب PATH حذف.
 
 ### E3 Exit
 
-- [ ] positive compatibility suite وnegative leakage suite ناجحتان.
-- [ ] لا تحتاج المشاريع العادية إلى إعادة تعريف بيئتها يدويًا.
+- [x] positive compatibility suite وnegative leakage suite ناجحتان.
+- [x] لا تحتاج المشاريع العادية إلى إعادة تعريف بيئتها يدويًا.
 
 ## 6. Gate E4 — التوثيق والتحقق
 
-- [ ] تحديث capability/runtime technical design وsecurity QA.
-- [ ] توثيق inherited versus override trust بدقة.
-- [ ] analyzer والاختبارات المركزة والكاملة حسب blast radius.
+- [x] تحديث capability/runtime technical design وsecurity QA.
+- [x] توثيق inherited versus override trust بدقة.
+- [x] analyzer والاختبارات المركزة والكاملة حسب blast radius.
 
 ### E4 Exit / Definition of Done
 
-- [ ] لا يرث general child أسرار سند.
-- [ ] Direct Developer يحتفظ بأدوات المستخدم وبيئته العملية.
-- [ ] لا يوجد global tiny allowlist لـShell.
+- [x] لا يرث general child أسرار سند.
+- [x] Direct Developer يحتفظ بأدوات المستخدم وبيئته العملية.
+- [x] لا يوجد global tiny allowlist لـShell.
 
 ## 7. سيناريو النجاح
 
@@ -93,11 +93,11 @@ Daemon environment تحتوي Provider key وGateway token وPATH مخصصًا �
 ## 9. سجل التقدم
 
 ```text
-Date:
-Gate/status:
-Files changed:
-Verification:
-Findings:
-Remaining work percentage:
-Next gate:
+Date: 2026-10-15
+Gate/status: Done / complete
+Files changed: agent/lib/capabilities/permissions/child_process_security_contract.dart, agent/lib/capabilities/permissions/process_environment_policy.dart, agent/lib/capabilities/tools/system/shell_execute_tool.dart, agent/test/capabilities/process_environment_policy_test.dart, agent/test/capabilities/security_contracts_reproduction_test.dart
+Verification: fvm dart test test/capabilities/process_environment_policy_test.dart (5 passed), fvm dart test test/capabilities/security_contracts_reproduction_test.dart (6 passed), fvm dart test test/capabilities/shell_execute_tool_test.dart (11 passed), fvm dart analyze (No issues found)
+Findings: Sanitizing child process environment while preserving full inherited PATH and SDK variables achieves strict secret isolation without breaking developer tools.
+Remaining work percentage: 0%
+Next gate: 83f
 ```

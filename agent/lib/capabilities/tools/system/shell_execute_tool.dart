@@ -6,7 +6,9 @@ import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_windows_path/windows_path.dart';
 
 import '../../models/local_tool_spec.dart';
+import '../../permissions/child_process_security_contract.dart';
 import '../../permissions/permission_manager.dart';
+import '../../permissions/process_environment_policy.dart';
 import '../base_tool.dart';
 import '../runtime/spec_backed_tool.dart';
 import '../tool_execution_outcome.dart';
@@ -20,14 +22,18 @@ class ShellExecuteTool extends SpecBackedTool {
   final String workspacePath;
   final PermissionManager? _permissionManager;
   final WindowsSystemPath _windowsSystemPath;
+  final ProcessEnvironmentPolicy _processEnvironmentPolicy;
 
   ShellExecuteTool({
     required this.workspacePath,
     PermissionManager? permissionManager,
     WindowsSystemPath? windowsSystemPath,
+    ProcessEnvironmentPolicy? processEnvironmentPolicy,
   }) : _permissionManager = permissionManager,
        _windowsSystemPath =
-           windowsSystemPath ?? sharedWindowsSystemPathResolver;
+           windowsSystemPath ?? sharedWindowsSystemPathResolver,
+       _processEnvironmentPolicy =
+           processEnvironmentPolicy ?? const ProcessEnvironmentPolicy();
 
   @override
   bool get isCooperativelyCancellable => true;
@@ -246,7 +252,11 @@ class ShellExecuteTool extends SpecBackedTool {
     }
 
     try {
-      var childEnvironment = Map<String, String>.from(Platform.environment);
+      final sanitizedEnv = _processEnvironmentPolicy.buildChildEnvironment(
+        purpose: ChildProcessPurpose.directDeveloper,
+        inheritedEnvironment: Platform.environment,
+      );
+      var childEnvironment = Map<String, String>.from(sanitizedEnv);
       if (_windowsSystemPath.isWindows) {
         final path = await _windowsSystemPath.resolve(
           inheritedPathFromEnvironment(childEnvironment),
