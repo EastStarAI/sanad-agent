@@ -19,6 +19,7 @@ import 'package:sanad_agent/capabilities/runtime/web_search/web_fetch_service.da
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
 import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_security_policy_repository.dart';
 import 'package:sanad_agent/capabilities/skills/skill_load_service.dart';
 import 'package:sanad_agent/capabilities/skills/skill_registry.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
@@ -413,8 +414,13 @@ void setupDI() {
   getIt.registerLazySingleton<SuspendedCheckpointStore>(
     () => SuspendedCheckpointStore(sessionManager: getIt<SessionManager>()),
   );
+  getIt.registerLazySingleton<WorkspaceSecurityPolicyRepository>(
+    () => WorkspaceSecurityPolicyRepository(getIt<AgentStateDatabase>().db),
+  );
   getIt.registerLazySingleton<WorkspacePolicyStore>(
-    () => const WorkspacePolicyStore(),
+    () => WorkspacePolicyStore(
+      repository: getIt<WorkspaceSecurityPolicyRepository>(),
+    ),
   );
   getIt.registerLazySingleton<PermissionManager>(
     () => PermissionManager(

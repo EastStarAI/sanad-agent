@@ -1073,6 +1073,8 @@ class WorkspaceCommandHandler {
     Future<void> Function(Map<String, dynamic> envelope) emitEnvelope,
   ) async {
     final requestId = event.payload['request_id'] as String?;
+    final rejected = _rejectManagedAdmission(event, requestId);
+    if (rejected != null) return rejected;
     final workspaceId = event.payload['workspace_id'] as String?;
     final permissionModeString = event.payload['permission_mode'] as String?;
 
@@ -1102,9 +1104,20 @@ class WorkspaceCommandHandler {
         throw StateError('Workspace folder is unavailable.');
       }
       final workspacePath = workspace['path'] as String;
-      final current = await _policyStore!.readPolicy(workspacePath);
-      final updated = current.copyWith(permissionMode: mode);
-      await _policyStore.savePolicy(workspacePath, updated);
+      final currentSec = await _policyStore!.readSecurityPolicy(
+        workspaceId,
+        canonicalPath: workspacePath,
+      );
+      final updatedSec = currentSec.copyWith(
+        workspaceId: workspaceId,
+        canonicalPath: workspacePath,
+        permissionMode: mode,
+      );
+      await _policyStore.saveSecurityPolicy(updatedSec);
+      final updated = WorkspacePolicy(
+        permissionMode: updatedSec.permissionMode,
+        permissions: updatedSec.permissions,
+      );
 
       final broadcastEvent = CanonicalEvent(
         type: CanonicalEventTypes.workspacePolicyChanged,

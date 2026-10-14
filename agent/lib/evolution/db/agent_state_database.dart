@@ -797,6 +797,30 @@ class AgentStateDatabase {
     _migrateWorkspaceIdentity(db);
     _migrateLastUserMessageAt(db);
     _migratePlan53Compaction(db);
+    _createWorkspaceSecurityPoliciesTable(db);
+  }
+
+  static void _createWorkspaceSecurityPoliciesTable(Database db) {
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS workspace_security_policies (
+        workspace_id TEXT PRIMARY KEY,
+        canonical_path TEXT NOT NULL,
+        permission_mode TEXT NOT NULL DEFAULT 'default'
+          CHECK (permission_mode IN ('default', 'full_access')),
+        execution_mode TEXT NOT NULL DEFAULT 'direct'
+          CHECK (execution_mode IN ('direct', 'protected')),
+        host_discovery_policy TEXT NOT NULL DEFAULT 'owner_only'
+          CHECK (host_discovery_policy IN ('disabled', 'owner_only')),
+        permissions_json TEXT NOT NULL DEFAULT '{}',
+        revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+    ''');
+    db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_workspace_security_policies_path
+      ON workspace_security_policies(canonical_path);
+    ''');
   }
 
   static void _migratePlan53Compaction(Database db) {

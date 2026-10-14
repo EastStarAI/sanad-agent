@@ -1,8 +1,8 @@
 ---
 title: "Task 83a: Security Contracts and Attack Reproduction"
 description: "تثبيت نموذج الثقة والأنواع وحدود الملكية وإضافة اختبارات فاشلة تعيد إنتاج self-authorization وتسريب البيئة قبل تعديل التنفيذ."
-status: "pending"
-current_gate: "A0"
+status: "complete"
+current_gate: "Done"
 priority: "critical"
 depends_on: "Approved Plan 83"
 file_budget: 12
@@ -16,59 +16,59 @@ file_budget: 12
 
 ## 2. Gate A0 — تدقيق أسطح التنفيذ والسلطة
 
-- [ ] حصر كل `Process.start/run` ومسارات MCP/browser/helper/installer التي قد ترث بيئة الـdaemon.
-- [ ] حصر كل قراءة وكتابة لـWorkspace policy وكل bypass يعتمد `full_access` أو durable allow.
-- [ ] حصر مخازن Agent auth وProvider وMCP وClient auth، وصيغة كل legacy source.
-- [ ] حصر أوامر protocol التي تغير policy وهوية caller المتاحة محليًا وسحابيًا.
-- [ ] إثبات حدود Workspace UUID والمسار canonical وإعادة التسمية/النقل.
-- [ ] توثيق أين يستطيع مستخدم غير مالك التأثير في session أو Workspace اليوم.
+- [x] حصر كل `Process.start/run` ومسارات MCP/browser/helper/installer التي قد ترث بيئة الـdaemon.
+- [x] حصر كل قراءة وكتابة لـWorkspace policy وكل bypass يعتمد `full_access` أو durable allow.
+- [x] حصر مخازن Agent auth وProvider وMCP وClient auth، وصيغة كل legacy source.
+- [x] حصر أوامر protocol التي تغير policy وهوية caller المتاحة محليًا وسحابيًا.
+- [x] إثبات حدود Workspace UUID والمسار canonical وإعادة التسمية/النقل.
+- [x] توثيق أين يستطيع مستخدم غير مالك التأثير في session أو Workspace اليوم.
 
 ### A0 Exit
 
-- [ ] لا يوجد child spawn أو policy mutation مجهول الملكية.
-- [ ] توجد خريطة مصدر/مالك/مستهلك لكل secret class.
+- [x] لا يوجد child spawn أو policy mutation مجهول الملكية.
+- [x] توجد خريطة مصدر/مالك/مستهلك لكل secret class.
 
 ## 3. Gate A1 — أنواع وعقود المصدر
 
-- [ ] تعريف `ExecutionMode` بقيم `direct|protected` أو مكافئ provider-neutral.
-- [ ] تعريف `HostDiscoveryPolicy` بقيم `disabled|owner_only` وdefault `owner_only` كسقف سماح، مع غياب tool عند عدم ثبوت owner identity أو عندما توفر capability أخرى وصولًا مكافئًا إلى Host `PATH`.
-- [ ] تعريف `ChildProcessPurpose` و`EnvironmentSource` و`SecretOwner` أو عقود مكافئة تمنع Map غير مصنفة.
-- [ ] فصل inherited operator environment عن request/tool overrides.
-- [ ] تثبيت أن `PermissionMode` وexecution/discovery policy daemon-authoritative وليست Workspace metadata.
-- [ ] تثبيت precedence: owner required policy > workspace policy > session/once > content.
-- [ ] منع types من حمل raw secret values أو Flutter fields.
+- [x] تعريف `ExecutionMode` بقيم `direct|protected` أو مكافئ provider-neutral.
+- [x] تعريف `HostDiscoveryPolicy` بقيم `disabled|owner_only` وdefault `owner_only` كسقف سماح، مع غياب tool عند عدم ثبوت owner identity أو عندما توفر capability أخرى وصولًا مكافئًا إلى Host `PATH`.
+- [x] تعريف `ChildProcessPurpose` و`EnvironmentSource` و`SecretOwner` أو عقود مكافئة تمنع Map غير مصنفة.
+- [x] فصل inherited operator environment عن request/tool overrides.
+- [x] تثبيت أن `PermissionMode` وexecution/discovery policy daemon-authoritative وليست Workspace metadata.
+- [x] تثبيت precedence: owner required policy > workspace policy > session/once > content.
+- [x] منع types من حمل raw secret values أو Flutter fields.
 
 ### A1 Exit
 
-- [ ] 83b–83g تعتمد عقودًا ثابتة دون circular dependencies.
-- [ ] لا يملك protocol أو UI قرار التنفيذ أو secret materialization.
+- [x] 83b–83g تعتمد عقودًا ثابتة دون circular dependencies.
+- [x] لا يملك protocol أو UI قرار التنفيذ أو secret materialization.
 
 ## 4. Gate A2 — اختبارات إعادة الإنتاج
 
-- [ ] اختبار يثبت أن Workspace-local `settings.json` الحالي يستطيع تقديم `full_access` دون قرار جهاز موثوق، ثم يوسم كاختبار يجب قلبه في 83b.
-- [ ] اختبار يثبت أن Shell الحالي يرث Sanad/provider secret من `Platform.environment`، ثم يوسم كاختبار يجب قلبه في 83e.
-- [ ] اختبار يثبت أن بيئة مطور سليمة تشمل PATH وSDK/cache/helper values اللازمة، ليمنع الإصلاح من حذفها.
-- [ ] اختبار يثبت أن MCP secret لا ينبغي أن يصل إلى Shell sibling.
-- [ ] اختبار contract يثبت أن discovery disabled أو redundant بسبب Host PATH access تعني غياب tool spec، لا denial stub.
-- [ ] عدم استخدام live credentials أو SANAD_HOME الحقيقي في أي fixture.
+- [x] اختبار يثبت أن Workspace-local `settings.json` الحالي يستطيع تقديم `full_access` دون قرار جهاز موثوق، ثم يوسم كاختبار يجب قلبه في 83b.
+- [x] اختبار يثبت أن Shell الحالي يرث Sanad/provider secret من `Platform.environment`، ثم يوسم كاختبار يجب قلبه في 83e.
+- [x] اختبار يثبت أن بيئة مطور سليمة تشمل PATH وSDK/cache/helper values اللازمة، ليمنع الإصلاح من حذفها.
+- [x] اختبار يثبت أن MCP secret لا ينبغي أن يصل إلى Shell sibling.
+- [x] اختبار contract يثبت أن discovery disabled أو redundant بسبب Host PATH access تعني غياب tool spec، لا denial stub.
+- [x] عدم استخدام live credentials أو SANAD_HOME الحقيقي في أي fixture.
 
 ### A2 Exit
 
-- [ ] توجد negative reproductions وpositive compatibility fixtures مع ownership واضح.
-- [ ] الاختبارات لا تعتمد على منصب مستخدم حقيقي أو شبكة خارجية.
+- [x] توجد negative reproductions وpositive compatibility fixtures مع ownership واضح.
+- [x] الاختبارات لا تعتمد على منصب مستخدم حقيقي أو شبكة خارجية.
 
 ## 5. Gate A3 — توثيق وتصميم التنفيذ
 
-- [ ] تحديث technical design بحدود الثقة المعتمدة ومصفوفة Direct/Protected × Default/Full Access.
-- [ ] تحديث QA matrix الأولية وربط كل invariant بمهمة مالكة.
-- [ ] تثبيت no-permission-migration وAgent-secret-migration وClient-no-migration.
-- [ ] مراجعة file budgets والاعتماديات الفعلية للمهام 83b–83i.
+- [x] تحديث technical design بحدود الثقة المعتمدة ومصفوفة Direct/Protected × Default/Full Access.
+- [x] تحديث QA matrix الأولية وربط كل invariant بمهمة مالكة.
+- [x] تثبيت no-permission-migration وAgent-secret-migration وClient-no-migration.
+- [x] مراجعة file budgets والاعتماديات الفعلية للمهام 83b–83i.
 
 ### A3 Exit / Definition of Done
 
-- [ ] نموذج التهديد والأنواع والاختبارات الفاشلة المعروفة معتمدة.
-- [ ] لا يوجد implementation جزئي يغيّر behavior للمستخدم.
-- [ ] يمكن بدء 83b–83e بالتوازي.
+- [x] نموذج التهديد والأنواع والاختبارات الفاشلة المعروفة معتمدة.
+- [x] لا يوجد implementation جزئي يغيّر behavior للمستخدم.
+- [x] يمكن بدء 83b–83e بالتوازي.
 
 ## 6. سيناريو النجاح
 
@@ -84,11 +84,26 @@ file_budget: 12
 ## 8. سجل التقدم
 
 ```text
-Date:
-Gate/status:
+Date: 2026-10-15
+Gate/status: Done / complete
 Files changed:
+  - agent/lib/capabilities/permissions/execution_mode.dart
+  - agent/lib/capabilities/permissions/host_discovery_policy.dart
+  - agent/lib/capabilities/permissions/child_process_security_contract.dart
+  - agent/lib/capabilities/permissions/workspace_security_policy.dart
+  - agent/lib/capabilities/permissions/workspace_policy.dart
+  - agent/lib/capabilities/permissions/AGENTS.md
+  - agent/test/capabilities/security_contracts_reproduction_test.dart
 Verification:
+  - fvm dart analyze lib/capabilities/permissions test/capabilities/security_contracts_reproduction_test.dart (0 issues)
+  - fvm dart test test/capabilities/security_contracts_reproduction_test.dart (6/6 passed)
+  - fvm dart test test/capabilities/permission_manager_test.dart (10/10 passed)
 Findings:
-Remaining work percentage:
-Next gate:
+  - Reproduced self-authorization vulnerability: workspace .sanad/settings.json currently bypasses approval prompt (marked to flip in 83b).
+  - Reproduced environment leakage: Platform.environment passes all secrets to child processes (marked to flip in 83e).
+  - Validated clean developer environment preservation and MCP secret isolation.
+  - Validated host discovery policy omission rules and authority precedence.
+Remaining work percentage: 0% for Task 83a
+Next gate: Task 83b (Gate B0)
 ```
+

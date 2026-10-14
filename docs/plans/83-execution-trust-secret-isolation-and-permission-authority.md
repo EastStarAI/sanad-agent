@@ -85,8 +85,8 @@ Permission or secret persistence
 
 | المهمة | الحالة | Gate الحالية | سقف الملفات | شرط الانتقال |
 |---|---|---|---:|---|
-| 83a Security Contracts and Attack Reproduction | `pending` | A0 | 12 | اعتماد الخطة |
-| 83b Daemon-Private Permission Authority | `pending` | Waiting | 15 | اكتمال 83a |
+| 83a Security Contracts and Attack Reproduction | `complete` | Done | 12 | اعتماد الخطة |
+| 83b Daemon-Private Permission Authority | `complete` | Done | 15 | اكتمال 83a |
 | 83c Unified Agent Secret Store and Migration | `pending` | Waiting | 15 | اكتمال 83a |
 | 83d Native Client Secure Credential Storage | `pending` | Waiting | 12 | اكتمال 83a |
 | 83e Child Process Environment and Developer Parity | `pending` | Waiting | 15 | اكتمال 83a |

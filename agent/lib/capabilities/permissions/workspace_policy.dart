@@ -1,3 +1,8 @@
+export 'child_process_security_contract.dart';
+export 'execution_mode.dart';
+export 'host_discovery_policy.dart';
+export 'workspace_security_policy.dart';
+
 enum WorkspacePermissionMode {
   defaultMode('default'),
   fullAccess('full_access');
