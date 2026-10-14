@@ -2,10 +2,14 @@ import 'dart:convert';
 
 import 'package:sanad_agent/capabilities/mcp/mcp_runtime_manager.dart';
 import 'package:sanad_agent/capabilities/models/local_tool_spec.dart';
+import 'package:sanad_agent/capabilities/permissions/execution_mode.dart';
 import 'package:sanad_agent/capabilities/permissions/permission_manager.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_policy_store.dart';
+import 'package:sanad_agent/capabilities/permissions/workspace_security_policy.dart';
 import 'package:sanad_agent/capabilities/registry/tools_registry.dart';
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/runtime/spec_backed_tool.dart';
+import 'package:sanad_agent/capabilities/tools/system/host_capability_discovery_tool.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
@@ -36,6 +40,7 @@ class LocalRuntimeCatalog {
     PermissionManager? permissionManager,
     PlatformRuntimeBridge? platformRuntimeBridge,
     WorkspacePathResolver? pathResolver,
+    WorkspacePolicyStore? workspacePolicyStore,
   }) : _workspaceRuntimeService = workspaceRuntimeService,
        _webSearchService = webSearchService ?? WebSearchService(),
        _webFetchService = webFetchService ?? WebFetchService(),
@@ -43,7 +48,9 @@ class LocalRuntimeCatalog {
        _permissionManager = permissionManager ?? PermissionManager(),
        _platformRuntimeBridge =
            platformRuntimeBridge ?? PlatformRuntimeBridge(),
-       _pathResolver = pathResolver ?? const WorkspacePathResolver();
+       _pathResolver = pathResolver ?? const WorkspacePathResolver(),
+       _workspacePolicyStore =
+           workspacePolicyStore ?? const WorkspacePolicyStore();
 
   final LocalWorkspaceRuntimeService _workspaceRuntimeService;
   final WorkspacePathResolver _pathResolver;
@@ -52,6 +59,7 @@ class LocalRuntimeCatalog {
   final McpRuntimeManager _mcpRuntimeManager;
   final PermissionManager _permissionManager;
   final PlatformRuntimeBridge _platformRuntimeBridge;
+  final WorkspacePolicyStore _workspacePolicyStore;
 
   Future<List<BaseTool>> buildTools({
     required ToolsRegistry registry,
@@ -68,7 +76,17 @@ class LocalRuntimeCatalog {
     ];
 
     if (workspacePath != null && workspacePath.isNotEmpty) {
+      final effectiveWsId = request.effectiveWorkspaceId ?? '';
+      final policy = await _workspacePolicyStore.readSecurityPolicy(
+        effectiveWsId,
+        canonicalPath: workspacePath,
+      );
+
       tools.addAll(_buildWorkspaceTools(workspacePath, request));
+
+      if (_shouldIncludeHostDiscoveryTool(request, policy)) {
+        tools.add(HostCapabilityDiscoveryTool());
+      }
     }
 
     final hasConfig = getIt.isRegistered<Config>();
@@ -849,6 +867,17 @@ class LocalRuntimeCatalog {
           await checkpointStore.deleteByRequestId(requestId);
         }
       },
+    );
+  }
+
+  bool _shouldIncludeHostDiscoveryTool(
+    AgentTurnRequest request,
+    WorkspaceSecurityPolicy policy,
+  ) {
+    return WorkspaceSecurityPolicy.isHostDiscoveryPermitted(
+      policy: policy.hostDiscoveryPolicy,
+      isOwner: true,
+      hasEquivalentHostAccess: policy.executionMode == ExecutionMode.direct,
     );
   }
 }
