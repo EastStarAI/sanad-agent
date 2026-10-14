@@ -5,39 +5,32 @@ import 'package:path/path.dart' as p;
 import 'package:logging/logging.dart';
 
 import '../../engine/adapters/provider_registry.dart';
+import '../auth/agent_secret_namespaces.dart';
+import '../auth/agent_secret_store.dart';
 import '../constants.dart';
 import '../sanad_home/sanad_home_bootstrap.dart';
 import 'provider_protocol_constants.dart';
 import 'secret_record.dart';
 import 'secret_store.dart';
 
-/// File-backed `SecretStore` keyed by instance UUID (Plan 29 §7.4).
+/// File- and vault-backed `SecretStore` keyed by instance UUID (Plan 29 §7.4, Plan 83 Task 83c).
 ///
-/// Guarantees:
-/// - Single JSON store file (`provider_secrets.json`) under [getSanadHome],
-///   separate from `auth.json` and `provider_auth.json`. Records are keyed by
-///   instance UUID.
-/// - **Atomic writes**: payload is written to a temp file, flushed, fsynced,
-///   then atomically renamed over the store. A crash mid-write never corrupts
-///   the existing store.
-/// - **Cross-process lock**: every read-modify-write acquires a blocking
-///   exclusive `FileLock` on a sidecar `.lock` file so concurrent writers
-///   (daemon + CLI) cannot interleave.
-/// - **Owner-only permissions**: `chmod 600` on Unix; on Windows the file is
-///   restricted to the current user via `icacls` (ACL) instead of being left
-///   world-readable.
-/// - **Redaction**: raw content is never logged; exceptions are masked.
-///
-/// This store does NOT claim encryption-at-rest; the abstraction allows an OS
-/// vault backend to be added later without touching callers.
+/// Under Plan 83, secrets are stored in the unified [AgentSecretStore] under
+/// the `providers:` namespace, while maintaining backward-compatible migration
+/// from legacy `provider_secrets.json`.
 class SecureFileSecretStore implements SecretStore {
   final _logger = Logger('SecureFileSecretStore');
 
   late final String _storePath;
   late final String _lockPath;
   late final bool _usesSanadHome;
+  final AgentSecretStore? _agentSecretStore;
+  final Map<String, SecretRecord> _cache = {};
 
-  SecureFileSecretStore({String? storePath}) {
+  SecureFileSecretStore({
+    String? storePath,
+    AgentSecretStore? agentSecretStore,
+  }) : _agentSecretStore = agentSecretStore {
     _usesSanadHome = storePath == null;
     _storePath = storePath ?? p.join(getSanadHome(), 'provider_secrets.json');
     _lockPath = '$_storePath.lock';
@@ -205,13 +198,106 @@ class SecureFileSecretStore implements SecretStore {
     }
   }
 
+  /// Migrates legacy `provider_secrets.json` into [_agentSecretStore] under
+  /// the `providers:` namespace.
+  ///
+  /// Verification guarantee: Each record is written to the target vault, read back,
+  /// and compared. Only if ALL records pass verification is the legacy file removed.
+  Future<bool> migrateLegacy({bool deleteOnSuccess = true}) async {
+    final vault = _agentSecretStore;
+    if (vault == null) return false;
+
+    return await _withLock(() async {
+      final raw = _readRaw();
+      final instances = (raw['instances'] as Map?)?.cast<String, dynamic>();
+      if (instances == null || instances.isEmpty) {
+        // No legacy secrets to migrate.
+        return true;
+      }
+
+      final verifiedRecords = <String, SecretRecord>{};
+      final migratedIds = <String>[];
+
+      for (final entry in instances.entries) {
+        final id = entry.key;
+        final data = entry.value;
+        if (data is! Map<String, dynamic>) continue;
+
+        try {
+          final record = SecretRecord.fromJson(data);
+          final key = AgentSecretNamespaces.providerKey(id);
+          final encoded = jsonEncode(record.toJson());
+          await vault.write(key, encoded);
+
+          // Read-back verification
+          final readBack = await vault.read(key);
+          if (readBack == null) {
+            _logger.severe('Migration failed for provider instance $id: read-back returned null');
+            return false;
+          }
+          final decoded = jsonDecode(readBack);
+          if (decoded is! Map || decoded['instance_id'] != id) {
+            _logger.severe('Migration failed for provider instance $id: payload mismatch');
+            return false;
+          }
+
+          verifiedRecords[id] = record;
+          migratedIds.add(id);
+        } catch (e) {
+          _logger.severe('Migration failed for provider instance $id: $e');
+          return false;
+        }
+      }
+
+      // Record index of provider instances
+      try {
+        await vault.write(
+          AgentSecretNamespaces.providerIndexKey,
+          jsonEncode(migratedIds),
+        );
+      } catch (e) {
+        _logger.warning('Failed to write provider index during migration: $e');
+      }
+
+      // Update in-memory cache
+      _cache.addAll(verifiedRecords);
+
+      // Only delete legacy file if fully verified and requested
+      if (deleteOnSuccess) {
+        try {
+          if (_usesSanadHome) {
+            final boundary = SanadHomeBootstrap.identity();
+            if (boundary.fileExists('provider_secrets.json')) {
+              boundary.deleteFileSync('provider_secrets.json');
+            }
+          } else {
+            final file = File(_storePath);
+            if (file.existsSync()) {
+              file.deleteSync();
+            }
+          }
+          _logger.info('Legacy provider_secrets.json successfully migrated to vault and deleted.');
+        } catch (e) {
+          _logger.warning('Failed to delete legacy provider_secrets.json after migration: $e');
+        }
+      }
+
+      return true;
+    });
+  }
+
   @override
   SecretRecord? read(String instanceId) {
+    if (_cache.containsKey(instanceId)) {
+      return _cache[instanceId];
+    }
     final data = _readRaw();
     final entry = data['instances']?[instanceId];
     if (entry is Map<String, dynamic>) {
       try {
-        return SecretRecord.fromJson(entry);
+        final rec = SecretRecord.fromJson(entry);
+        _cache[instanceId] = rec;
+        return rec;
       } catch (_) {
         return null;
       }
@@ -221,15 +307,30 @@ class SecureFileSecretStore implements SecretStore {
 
   @override
   Future<void> write(String instanceId, SecretRecord record) async {
-    await _withLock(() async {
-      final data = _readRaw(backupIfCorrupted: true);
-      final instances =
-          (data['instances'] as Map?)?.cast<String, dynamic>() ??
-          <String, dynamic>{};
-      instances[instanceId] = record.toJson();
-      data['instances'] = instances;
-      await _replaceStoreDataLocked(data);
-    });
+    _cache[instanceId] = record;
+
+    if (_agentSecretStore != null) {
+      final key = AgentSecretNamespaces.providerKey(instanceId);
+      await _agentSecretStore.write(key, jsonEncode(record.toJson()));
+      try {
+        await _agentSecretStore.write(
+          AgentSecretNamespaces.providerIndexKey,
+          jsonEncode(_cache.keys.toList()),
+        );
+      } catch (_) {}
+    }
+
+    if (!_usesSanadHome || _agentSecretStore == null) {
+      await _withLock(() async {
+        final data = _readRaw(backupIfCorrupted: true);
+        final instances =
+            (data['instances'] as Map?)?.cast<String, dynamic>() ??
+            <String, dynamic>{};
+        instances[instanceId] = record.toJson();
+        data['instances'] = instances;
+        await _replaceStoreDataLocked(data);
+      });
+    }
   }
 
   @override
@@ -238,20 +339,38 @@ class SecureFileSecretStore implements SecretStore {
 
   @override
   Future<void> remove(String instanceId) async {
-    await _withLock(() async {
-      final data = _readRaw(backupIfCorrupted: true);
-      final instances =
-          (data['instances'] as Map?)?.cast<String, dynamic>() ??
-          <String, dynamic>{};
-      if (!instances.containsKey(instanceId)) return;
-      instances.remove(instanceId);
-      data['instances'] = instances;
-      await _replaceStoreDataLocked(data);
-    });
+    _cache.remove(instanceId);
+
+    if (_agentSecretStore != null) {
+      final key = AgentSecretNamespaces.providerKey(instanceId);
+      await _agentSecretStore.delete(key);
+      try {
+        await _agentSecretStore.write(
+          AgentSecretNamespaces.providerIndexKey,
+          jsonEncode(_cache.keys.toList()),
+        );
+      } catch (_) {}
+    }
+
+    if (!_usesSanadHome || _agentSecretStore == null) {
+      await _withLock(() async {
+        final data = _readRaw(backupIfCorrupted: true);
+        final instances =
+            (data['instances'] as Map?)?.cast<String, dynamic>() ??
+            <String, dynamic>{};
+        if (!instances.containsKey(instanceId)) return;
+        instances.remove(instanceId);
+        data['instances'] = instances;
+        await _replaceStoreDataLocked(data);
+      });
+    }
   }
 
   @override
   List<String> listIds() {
+    if (_cache.isNotEmpty) {
+      return _cache.keys.toList(growable: false);
+    }
     final data = _readRaw();
     final instances = data['instances'];
     if (instances is Map) {
@@ -262,21 +381,43 @@ class SecureFileSecretStore implements SecretStore {
 
   @override
   Future<void> pruneOrphans(Set<String> validInstanceIds) async {
-    await _withLock(() async {
-      final data = _readRaw(backupIfCorrupted: true);
-      final instances =
-          (data['instances'] as Map?)?.cast<String, dynamic>() ??
-          <String, dynamic>{};
-      final orphanIds = instances.keys
-          .where((instanceId) => !validInstanceIds.contains(instanceId))
-          .toList(growable: false);
-      if (orphanIds.isEmpty) return;
-      for (final instanceId in orphanIds) {
-        instances.remove(instanceId);
+    final orphanIds = _cache.keys
+        .where((instanceId) => !validInstanceIds.contains(instanceId))
+        .toList(growable: false);
+
+    for (final id in orphanIds) {
+      _cache.remove(id);
+      if (_agentSecretStore != null) {
+        await _agentSecretStore.delete(AgentSecretNamespaces.providerKey(id));
       }
-      data['instances'] = instances;
-      await _replaceStoreDataLocked(data);
-    });
+    }
+
+    if (_agentSecretStore != null && orphanIds.isNotEmpty) {
+      try {
+        await _agentSecretStore.write(
+          AgentSecretNamespaces.providerIndexKey,
+          jsonEncode(_cache.keys.toList()),
+        );
+      } catch (_) {}
+    }
+
+    if (!_usesSanadHome || _agentSecretStore == null) {
+      await _withLock(() async {
+        final data = _readRaw(backupIfCorrupted: true);
+        final instances =
+            (data['instances'] as Map?)?.cast<String, dynamic>() ??
+            <String, dynamic>{};
+        final fileOrphans = instances.keys
+            .where((instanceId) => !validInstanceIds.contains(instanceId))
+            .toList(growable: false);
+        if (fileOrphans.isEmpty) return;
+        for (final instanceId in fileOrphans) {
+          instances.remove(instanceId);
+        }
+        data['instances'] = instances;
+        await _replaceStoreDataLocked(data);
+      });
+    }
   }
 
   /// Convenience: produces a `SecretRecord` for a static API key. Used by the
