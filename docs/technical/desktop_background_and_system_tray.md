@@ -23,7 +23,7 @@ Under the background lifecycle model:
 | :--- | :---: | :---: | :--- |
 | **macOS** | Supported | Supported | `NSStatusItem` menu in top system bar; click opens menu or restores window. |
 | **Windows** | Supported | Supported | `Shell_NotifyIcon` in taskbar tray; right-click context menu, left-click restores window. |
-| **Linux** | **Deferred** | Normal exit | Tray support is explicitly deferred. No unsupported tray is advertised; closing window terminates normally. |
+| **Linux** | Supported | Supported | `StatusNotifierItem` over D-Bus; the panel hosts the icon and opens the menu, so click events stay with the panel. On GNOME this requires the AppIndicator extension (Ubuntu ships and enables it). |
 | **Web / Mobile** | N/A | N/A | Background lifecycle and system tray are native desktop only. |
 
 ---
@@ -32,16 +32,14 @@ Under the background lifecycle model:
 
 ### 3.1 Window Close Interception (`WindowManagerService`)
 
-On macOS and Windows:
+On every desktop platform:
 1. During application bootstrap, `WindowManagerService.initialize()` sets `setPreventClose(true)`.
-2. When the user clicks the window close button (`X` on macOS / Windows):
+2. When the user clicks the window close button:
    - The native platform event is intercepted by `WindowListener.onWindowClose()`.
-   - `WindowManagerService` delegates to `DesktopLifecycleManager.handleWindowClose(isLinux: false)`.
+   - `WindowManagerService` delegates to `DesktopLifecycleManager.handleWindowClose()`.
    - `DesktopLifecycleManager` invokes `hideWindow()`, which calls `windowManager.hide()`.
    - The Flutter process, event loop, sockets, `ClientCliHost`, and in-memory caches remain fully active.
-3. On Linux:
-   - `setPreventClose(true)` is omitted.
-   - If a close event occurs, `DesktopLifecycleManager.handleWindowClose(isLinux: true)` initiates an explicit quit.
+3. During an explicit quit the manager already released `setPreventClose(false)` and destroys the window itself, so a close request that arrives while shutting down never hides the window again.
 
 ### 3.2 Restoring the Window (`Show`)
 
@@ -124,3 +122,32 @@ All native platform plugins (`window_manager`, `tray_manager`) are wrapped behin
 - `DesktopWindowManagerAdapter`: encapsulates window show, hide, focus, preventClose, and destroy.
 - `TrayManagerAdapter`: encapsulates tray initialization, context menu updates, and destruction.
 - `TrayMenuBuilder`: pure function producing `TrayMenuItemDescriptor` lists, allowing 100% test coverage of menu layout, sorting, truncation, and callbacks without requiring native C++ or platform channel execution.
+
+---
+
+## 6. Dependency and Toolchain Compatibility
+
+Tray support is macOS/Windows only, but the tray dependency is a normal
+cross-platform Flutter plugin, so its Linux backend is compiled for every Linux
+desktop build. `tray_manager` pulls in `nativeapi`, whose GTK/GIO backend calls
+`G_APPLICATION_DEFAULT_FLAGS`, a name that only exists from GLib 2.74 onwards.
+
+`client/linux/CMakeLists.txt` defines that symbol to the identical legacy flag
+`G_APPLICATION_FLAGS_NONE` only when the local GLib predates 2.74, and only
+before the generated plugin subdirectories are added. This keeps supported Linux
+development toolchains (for example Ubuntu 22.04 with GLib 2.72) building the
+Client with the Linux tray enabled.
+
+### 6.1. Linux runtime surface
+
+- The tray icon is a `StatusNotifierItem` published over the session D-Bus by
+  `tray_manager`, so no `libappindicator` package is required at runtime; the
+  panel (GNOME with the AppIndicator extension, KDE Plasma, and most others)
+  hosts the icon and opens the menu itself, which means tray click events never
+  reach the application on Linux. Every action must therefore exist as a menu
+  entry, including `Show`.
+- `client/linux/runner/my_application.cc` sets the GTK application display name
+  to `Sanad`; without it the desktop shell labels the running window with the raw
+  application id.
+- Bootstrap initializes the tray service on every desktop platform, and a window
+  close hides the window instead of exiting.

@@ -386,3 +386,32 @@ Clients initiate execution by opening `ws://127.0.0.1:<port>/ws?token=<token>`.
     "message": "Target device \"Linux Build Node\" is currently unreachable."
   }
   ```
+
+---
+
+## 9. Client Inventory Ownership and Version Reporting
+
+- The loopback CLI host resolves remote devices from the **same initialized device
+  inventory owner** as the conversation UI (`IDeviceRepository` registered once as
+  a lazy singleton). A host that builds its own repository instance would read an
+  uninitialized manager and silently report an empty device list.
+- Only devices that are not the local inventory device are exposed; the local
+  Agent is never offered as a relay target.
+- The host records the running Client version from the platform package metadata
+  (`PackageInfo`) as the single runtime source, while the standalone
+  `sanad-client` entry uses one shared constant
+  (`client/lib/features/client_cli/domain/models/client_cli_version.dart`) that a
+  contract test keeps aligned with `client/pubspec.yaml`. Discovery compares major
+  versions only.
+- The endpoint is re-acquired whenever the persisted setting is enabled and no
+  listener is live, so a login/logout cycle cannot leave an "enabled" Client
+  without a reachable endpoint.
+
+### 9.1. Observed operational limits
+
+- While the Client mirrors a heavily streaming session, the loopback endpoint may
+  miss the discovery health window and the caller receives the no-owner failure
+  instead of relayed output.
+- The `login` command is host-local by design: forwarding it through the relay
+  returns a zero exit code with no relayed output rather than an explicit
+  unsupported-command result.
