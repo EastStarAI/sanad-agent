@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:ui';
 
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/tool_presentation_helper.dart';
 
 enum ConversationActivityKind { reasoning, runningTool, thinking }
@@ -70,6 +72,7 @@ List<ConversationTimelineItem> projectConversationTimeline(
   List<CanonicalEvent> events, {
   List<ConversationTimelineItem> previousItems = const [],
   bool activityEligible = false,
+  bool includeActivityItem = true,
 }) {
   final items = <ConversationTimelineItem>[];
   final toolRun = <CanonicalEvent>[];
@@ -128,20 +131,98 @@ List<ConversationTimelineItem> projectConversationTimeline(
   }
 
   flushTools();
-  ConversationTimelineItem? previousActivity;
-  for (final item in previousItems.reversed) {
-    if (item.isActivity) {
-      previousActivity = item;
+  if (includeActivityItem) {
+    ConversationTimelineItem? previousActivity;
+    for (final item in previousItems.reversed) {
+      if (item.isActivity) {
+        previousActivity = item;
+        break;
+      }
+    }
+    _appendCurrentActivity(
+      items,
+      currentTurnEvents,
+      activityEligible: activityEligible,
+      previousActivity: previousActivity,
+    );
+  }
+  return List<ConversationTimelineItem>.unmodifiable(items);
+}
+
+ConversationActivity? resolveCurrentActivity(
+  List<CanonicalEvent> events, {
+  bool activityEligible = false,
+}) {
+  if (!activityEligible || events.isEmpty) return null;
+
+  final currentTurnStart = events.lastIndexWhere(
+    (event) => event.kind == EventKind.userMessage,
+  );
+  final currentTurnEvents = events.skip(currentTurnStart + 1).toList(growable: false);
+  if (currentTurnEvents.isEmpty) return null;
+
+  final latestEvent = currentTurnEvents.last;
+  if (latestEvent.status == EventStatus.error || latestEvent.kind == EventKind.error) {
+    return null;
+  }
+
+  final activeReasoning =
+      latestEvent.kind == EventKind.reasoning && latestEvent.status == EventStatus.running
+          ? latestEvent
+          : null;
+
+  CanonicalEvent? runningTool;
+  for (final event in currentTurnEvents.reversed) {
+    if (event.kind == EventKind.toolCall &&
+        event.toolName != 'system_ask_user' &&
+        event.status == EventStatus.running) {
+      runningTool = event;
       break;
     }
   }
-  _appendCurrentActivity(
-    items,
-    currentTurnEvents,
-    activityEligible: activityEligible,
-    previousActivity: previousActivity,
+
+  if (activeReasoning != null) {
+    return ConversationActivity.reasoning(activeReasoning);
+  } else if (runningTool != null) {
+    return ConversationActivity.runningTool(runningTool);
+  }
+
+  return const ConversationActivity.thinking();
+}
+
+String? resolveLatestToolDescription(List<CanonicalEvent> events) {
+  final currentTurnStart = events.lastIndexWhere(
+    (event) => event.kind == EventKind.userMessage,
   );
-  return List<ConversationTimelineItem>.unmodifiable(items);
+  final currentTurnEvents = events.skip(currentTurnStart + 1);
+  for (final event in currentTurnEvents.toList().reversed) {
+    if (event.kind == EventKind.toolCall && event.status == EventStatus.running) {
+      final input = event.toolInput;
+      Map<String, dynamic> mapInput = {};
+      if (input is Map) {
+        mapInput = Map<String, dynamic>.from(input);
+      } else if (input is String) {
+        try {
+          final decoded = jsonDecode(input);
+          if (decoded is Map) mapInput = Map<String, dynamic>.from(decoded);
+        } catch (_) {}
+      }
+      final desc = mapInput['description']?.toString().trim();
+      if (desc != null && desc.isNotEmpty) {
+        return desc;
+      }
+    }
+  }
+  return null;
+}
+
+bool resolveConversationIsRtl(List<CanonicalEvent> events) {
+  for (final event in events.reversed) {
+    if (event.kind == EventKind.userMessage && event.text.trim().isNotEmpty) {
+      return TextUtils.getTextDirection(event.text) == TextDirection.rtl;
+    }
+  }
+  return false;
 }
 
 void _appendCurrentActivity(

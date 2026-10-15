@@ -353,6 +353,7 @@ Future<void> handleRun({
         ..['ENABLE_GATEWAY'] = cloudEnabled ? 'true' : 'false'
         ..['SANAD_DEV_LAUNCHER_ID'] = launcherId
         ..['SANAD_DEV_RUNTIME_NONCE'] = runtimeNonce
+        ..['SANAD_DEV_WORKSPACE_HASH'] = runtime.worktreeId.split('-').last
         ..addAll(cloudEndpoints?.toAgentEnvironment() ?? const {});
   final flutterArguments = <String>[
     'flutter',

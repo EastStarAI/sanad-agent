@@ -88,33 +88,83 @@ void main() {
     expect(restored.size, WindowManagerService.defaultWindowSize);
   });
 
-  test('window state declares separate compact and expanded position keys', () {
+  test('window state declares separate compact and expanded position keys and compact height key', () {
     final service = File(
       'lib/infrastructure/platform/window_manager_service.dart',
     ).readAsStringSync();
 
     expect(service, contains("'window_compact_x'"));
     expect(service, contains("'window_compact_y'"));
+    expect(service, contains("'window_compact_height'"));
     expect(service, contains("'window_expanded_x'"));
     expect(service, contains("'window_expanded_y'"));
   });
 
-  test('compact desktop menu hover drawer is gated and tracks both hover regions', () {
+  test('clampToDisplay preserves preferred dimensions on large displays', () {
+    const largeDisplay = Size(1920, 1080);
+    final clampedDefault = WindowManagerService.clampToDisplay(
+      WindowManagerService.defaultWindowSize,
+      displayLogicalSize: largeDisplay,
+    );
+    expect(clampedDefault, WindowManagerService.defaultWindowSize);
+
+    final clampedCompact = WindowManagerService.clampToDisplay(
+      WindowManagerService.compactWindowSize,
+      displayLogicalSize: largeDisplay,
+    );
+    expect(clampedCompact, WindowManagerService.compactWindowSize);
+  });
+
+  test('clampToDisplay clamps height on small or high-DPI displays without going below minimum', () {
+    // Standard 1080p laptop at 125% scaling (logical: 1536 x 864)
+    const scaled1080pDisplay = Size(1536, 864);
+    final clamped = WindowManagerService.clampToDisplay(
+      WindowManagerService.defaultWindowSize,
+      displayLogicalSize: scaled1080pDisplay,
+    );
+    // Height must be clamped to 864 - 64 = 800
+    expect(clamped.height, 800);
+    expect(clamped.width, 1400);
+
+    // Very small display (768p with taskbar)
+    const small768pDisplay = Size(1366, 768);
+    final clamped768 = WindowManagerService.clampToDisplay(
+      WindowManagerService.defaultWindowSize,
+      displayLogicalSize: small768pDisplay,
+    );
+    expect(clamped768.height, 704);
+    expect(clamped768.width, 1334);
+  });
+
+  test('compactBoundsFor clamps height to display while preserving exact compact width 450', () {
+    const scaled1080pDisplay = Size(1536, 864);
+    final bounds = WindowManagerService.compactBoundsFor(
+      const Rect.fromLTWH(120, 80, 1400, 900),
+      displayLogicalSize: scaled1080pDisplay,
+    );
+
+    expect(bounds.width, 450);
+    expect(bounds.height, 800);
+  });
+
+  test('compactBoundsFor respects saved compact height when provided', () {
+    final bounds = WindowManagerService.compactBoundsFor(
+      const Rect.fromLTWH(120, 80, 1400, 900),
+      preferredHeight: 750,
+    );
+
+    expect(bounds.width, 450);
+    expect(bounds.height, 750);
+  });
+
+  test('compact desktop menu drawer requires explicit click and disables hover opening', () {
     final homeScreen = File(
       'lib/features/home/presentation/screens/home_screen.dart',
     ).readAsStringSync();
 
-    expect(
-      homeScreen,
-      contains('AppPlatform.isDesktop && !isDesktop && isCompactWindow'),
-    );
-    final headerActions = File(
-      'lib/features/conversations/presentation/widgets/conversation_header_actions.dart',
-    ).readAsStringSync();
-    expect(headerActions, contains("Key('conversation_menu_hover_region')"));
-    expect(homeScreen, contains("Key('compact_sidebar_hover_region')"));
-    expect(homeScreen, contains('_isMenuButtonHovered || _isDrawerHovered'));
-    expect(homeScreen, contains('scaffold!.closeDrawer()'));
+    expect(homeScreen, contains('_SidebarDrawer'));
+    expect(homeScreen, isNot(contains('_onCompactMenuButtonEnter')));
+    expect(homeScreen, isNot(contains('Key(\'compact_sidebar_hover_region\')')));
   });
 
   test('custom caption tracks maximize and full-screen lifecycle events', () {

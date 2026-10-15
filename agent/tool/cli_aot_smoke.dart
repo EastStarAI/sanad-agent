@@ -42,7 +42,16 @@ Future<void> main() async {
 
     final jsonRun = await _runAotProcess(
       executable.path,
-      ['run', '--standalone', '--home', home.path, '--json', 'AOT JSON smoke'],
+      [
+        'run',
+        '--standalone',
+        '--home',
+        home.path,
+        '--execution-root',
+        root.path,
+        '--json',
+        'AOT JSON smoke',
+      ],
       environment: environment,
       operation: 'AOT JSON run',
     );
@@ -56,7 +65,15 @@ Future<void> main() async {
 
     final pipeRun = await _runAotProcess(
       executable.path,
-      ['run', '--standalone', '--home', home.path, '--quiet'],
+      [
+        'run',
+        '--standalone',
+        '--home',
+        home.path,
+        '--execution-root',
+        root.path,
+        '--quiet',
+      ],
       environment: environment,
       operation: 'AOT pipe run',
       stdinInput: 'AOT pipe smoke',

@@ -48,8 +48,13 @@ class ShellExecuteTool extends SpecBackedTool {
               'Optional subdirectory relative to workspace root. Do not use for root.',
         },
         'timeout_ms': {'type': 'integer'},
+        'description': {
+          'type': 'string',
+          'description':
+              'A concise sentence of no more than seven words that explains to the user, in their own language, the purpose or goal of executing this command.',
+        },
       },
-      'required': ['command'],
+      'required': ['command', 'description'],
       'additionalProperties': false,
     },
     source: {'type': 'builtin_local', 'id': 'sanad-agent.system'},
@@ -134,6 +139,8 @@ class ShellExecuteTool extends SpecBackedTool {
     Map<String, dynamic> args, {
     ToolContext? context,
   }) async {
+    final stopwatch = Stopwatch()..start();
+
     if (_permissionManager != null && context != null) {
       await _permissionManager.ensureAuthorized(
         tool: toolSpec,
@@ -229,8 +236,9 @@ class ShellExecuteTool extends SpecBackedTool {
       String? terminalReason,
     }) async {
       final payload = <String, dynamic>{
-        'isError': isError,
+        if (isError) 'isError': true,
         'output': output,
+        'duration_ms': stopwatch.elapsedMilliseconds,
         'cleanup_outcome': ?cleanup?.outcome.name,
         'terminal_reason': ?terminalReason,
       };

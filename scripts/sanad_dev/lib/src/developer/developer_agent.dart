@@ -1,12 +1,23 @@
 part of '../../sanad_dev_cli.dart';
 
+bool _agentInteractiveRestartInProgress = false;
+
 Future<void> _sendManagedAgentInteractiveKey({
   required String sanadHome,
   required int agentPort,
   required String key,
 }) async {
   if (key == 'r' || key == 'R') {
-    await handleAgentRestart(agentPort);
+    if (_agentInteractiveRestartInProgress) {
+      print('\n[sanad-dev] Agent restart already in progress, ignoring key.');
+      return;
+    }
+    _agentInteractiveRestartInProgress = true;
+    try {
+      await handleAgentRestart(agentPort, exitOnError: false);
+    } finally {
+      _agentInteractiveRestartInProgress = false;
+    }
     return;
   }
   if (key != 's' && key != 'q') return;
@@ -26,18 +37,23 @@ Future<void> _sendManagedAgentInteractiveKey({
   if (!succeeded) exitCode = 1;
 }
 
-Future<void> handleAgentRestart(
+Future<bool> handleAgentRestart(
   int? portOverride, {
   bool force = false,
   int timeoutSeconds = 60,
   String? sanadHomePath,
+  bool exitOnError = true,
 }) async {
   final instance = await selectAgentInstance(
     portOverride,
     allowStartupGrace: true,
     sanadHomePath: sanadHomePath,
+    exitOnError: exitOnError,
   );
-  if (instance == null) exit(1);
+  if (instance == null) {
+    if (exitOnError) exit(1);
+    return false;
+  }
   final runtime = await discoverSanadDevRuntime(
     callerDirectory: _callerDirectory,
     sanadHomeOverride: sanadHomePath,
@@ -49,8 +65,8 @@ Future<void> handleAgentRestart(
       '${instance.workspaceHash}, not ${runtime.worktreeId}. Explicit ports '
       'are diagnostic selectors and do not grant mutation ownership.',
     );
-    exitCode = 1;
-    return;
+    if (exitOnError) exitCode = 1;
+    return false;
   }
   final clients = await discoverClientInstances();
   final processState = selectRuntimeProcessState(
@@ -71,8 +87,8 @@ Future<void> handleAgentRestart(
       '${ownership.classification.name}; a live matching sanad-dev launcher '
       'lease is required.',
     );
-    exitCode = 1;
-    return;
+    if (exitOnError) exitCode = 1;
+    return false;
   }
 
   print(
@@ -129,12 +145,14 @@ Future<void> handleAgentRestart(
       );
       if (healthy) {
         print('✓ Agent daemon restarted and healthy on port ${instance.port}.');
+        return true;
       } else {
         stderr.writeln(
           'Restart failed: daemon accepted the request, but the health probe '
           'timed out on port ${instance.port} after ${timeoutSeconds}s.',
         );
-        exitCode = 1;
+        if (exitOnError) exitCode = 1;
+        return false;
       }
     } else {
       stderr.writeln(
@@ -143,14 +161,14 @@ Future<void> handleAgentRestart(
       );
       final blockers = data?['blockers'];
       if (blockers != null) stderr.writeln('Blockers: $blockers');
-      exitCode = 1;
+      if (exitOnError) exitCode = 1;
+      return false;
     }
-  } catch (e) {
-    stderr.writeln(
-      'Could not connect to local agent daemon at http://localhost:${instance.port}: $e',
-    );
-    exitCode = 1;
+  } on Object catch (e) {
+    stderr.writeln('Agent restart request failed: $e');
+    if (exitOnError) exitCode = 1;
+    return false;
   } finally {
-    client.close();
+    client.close(force: true);
   }
 }

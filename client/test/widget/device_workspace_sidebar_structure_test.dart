@@ -372,6 +372,26 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing);
   });
 
+  testWidgets('search action matches New Session and appears above it', (tester) async {
+    await pumpSidebar(tester);
+
+    final search = find.byKey(const Key('conversation_search_button'));
+    final newSession = find.byKey(const Key('sidebar_new_session_btn'));
+    expect(search, findsOneWidget);
+    expect(newSession, findsOneWidget);
+    expect(tester.getTopLeft(search).dy, lessThan(tester.getTopLeft(newSession).dy));
+    expect(tester.getSize(search), tester.getSize(newSession));
+
+    final searchMaterial = tester.widget<Material>(search);
+    final newSessionMaterial = tester.widget<Material>(newSession);
+    expect(searchMaterial.color, newSessionMaterial.color);
+    expect(searchMaterial.borderRadius, newSessionMaterial.borderRadius);
+    expect(
+      tester.widget<Text>(find.text('Search conversations')).style,
+      tester.widget<Text>(find.text('New Session')).style,
+    );
+  });
+
   testWidgets('top New Session routes intent without creating a daemon session', (tester) async {
     final router = GoRouter(
       initialLocation: '/',
@@ -418,7 +438,7 @@ void main() {
     await pumpSidebar(tester, router: router);
     expect(conversationRepository.createdSessionRequests.length, 0);
     expect(conversationRepository.beginNewSessionCalls, 0);
-    final plusButton = find.byKey(const Key('sidebar_new_conversation_btn'));
+    final plusButton = find.byKey(const Key('sidebar_new_conversation_btn:ws-1'));
     expect(plusButton, findsOneWidget);
     await tester.tap(plusButton);
     await tester.pump();
@@ -510,7 +530,7 @@ void main() {
     await tester.pump();
 
     expect(tester.getSize(find.byKey(const Key('sidebar_create_workspace_btn'))).height, greaterThanOrEqualTo(44));
-    expect(tester.getSize(find.byKey(const Key('sidebar_new_conversation_btn'))).height, greaterThanOrEqualTo(44));
+    expect(tester.getSize(find.byKey(const Key('sidebar_new_conversation_btn:ws-1'))).height, greaterThanOrEqualTo(44));
   });
 
   testWidgets('offline stale banner keeps cached sessions visible with retry affordance', (tester) async {
@@ -599,6 +619,13 @@ void main() {
       tester.getSize(find.byKey(const Key('sidebar_toggle_btn'))),
     );
 
+    final wordmarkFinder = find.byKey(const Key('sidebar_wordmark_logo'));
+    expect(wordmarkFinder, findsOneWidget);
+    expect(
+      tester.getTopLeft(wordmarkFinder).dx,
+      greaterThan(tester.getTopRight(find.byKey(const Key('sidebar_forward_btn'))).dx),
+    );
+
     await tester.tap(find.byKey(const Key('sidebar_back_btn')));
     await tester.pumpAndSettle();
     expect(navigatedRoute, '/conversations/device-1/s-1');
@@ -607,6 +634,48 @@ void main() {
     await tester.pumpAndSettle();
     expect(navigatedRoute, '/conversations/device-1/s-2');
     expect(tester.takeException(), isNull);
+  });
+
+  testWidgets('ConversationWorkspaceLayout reveals hover trigger when unpinned and reacts to hover', (tester) async {
+    final history = ConversationHistoryController();
+    getIt.registerSingleton<ConversationHistoryController>(history);
+    addTearDown(() => getIt.unregister<ConversationHistoryController>());
+
+    await pumpSidebar(
+      tester,
+      router: GoRouter(
+        initialLocation: '/',
+        routes: [
+          GoRoute(
+            path: '/',
+            builder: (context, state) => const Scaffold(
+              body: ConversationWorkspaceLayout(
+                showChrome: false,
+                child: SizedBox(),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('sidebar_edge_hover_trigger')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('sidebar_toggle_btn')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('sidebar_edge_hover_trigger')), findsOneWidget);
+
+    final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+    await gesture.addPointer(location: Offset.zero);
+    addTearDown(gesture.removePointer);
+
+    await gesture.moveTo(tester.getCenter(find.byKey(const Key('sidebar_edge_hover_trigger'))));
+    await tester.pumpAndSettle();
+
+    final state = tester.state<ConversationWorkspaceLayoutState>(find.byType(ConversationWorkspaceLayout));
+    expect(state.isPinned, isFalse);
   });
 
   testWidgets('options menu works when hover exits row to pop up menu', (tester) async {

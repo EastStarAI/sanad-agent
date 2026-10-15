@@ -18,9 +18,12 @@ Future<int> main(List<String> args) async {
   }
 
   ServiceHealthExpectation? healthExpectation;
+  var userScope = false;
   if (command == 'install') {
     try {
-      healthExpectation = _parseHealthExpectation(args.sublist(1));
+      final options = _parseInstallOptions(args.sublist(1));
+      healthExpectation = options.healthExpectation;
+      userScope = options.userScope;
     } on FormatException catch (error) {
       stderr.writeln(error.message);
       _printUsage();
@@ -37,6 +40,7 @@ Future<int> main(List<String> args) async {
   final operation = switch (command) {
     'install' => () => ServiceManager.install(
       healthExpectation: healthExpectation,
+      userScope: userScope,
     ),
     'uninstall' => ServiceManager.uninstall,
     'start' => ServiceManager.start,
@@ -68,20 +72,33 @@ Future<int> main(List<String> args) async {
   return 0;
 }
 
-ServiceHealthExpectation? _parseHealthExpectation(List<String> args) {
-  if (args.isEmpty) return null;
+class _InstallOptions {
+  const _InstallOptions({this.healthExpectation, this.userScope = false});
+
+  final ServiceHealthExpectation? healthExpectation;
+  final bool userScope;
+}
+
+_InstallOptions _parseInstallOptions(List<String> args) {
+  if (args.isEmpty) return const _InstallOptions();
   String? expectedVersion;
   var requireCloud = false;
+  var hasHealthOptions = false;
+  var userScope = false;
   var timeout = const Duration(seconds: 60);
   for (var index = 0; index < args.length; index++) {
     switch (args[index]) {
+      case '--user-scope':
+        userScope = true;
       case '--expected-version':
         if (++index >= args.length || args[index].trim().isEmpty) {
           throw const FormatException('--expected-version requires a value.');
         }
         expectedVersion = args[index].trim();
+        hasHealthOptions = true;
       case '--require-cloud':
         requireCloud = true;
+        hasHealthOptions = true;
       case '--health-timeout':
         if (++index >= args.length) {
           throw const FormatException('--health-timeout requires seconds.');
@@ -93,19 +110,25 @@ ServiceHealthExpectation? _parseHealthExpectation(List<String> args) {
           );
         }
         timeout = Duration(seconds: seconds);
+        hasHealthOptions = true;
       default:
         throw FormatException('Unknown service install option: ${args[index]}');
     }
   }
-  if (expectedVersion == null) {
+  if (hasHealthOptions && expectedVersion == null) {
     throw const FormatException(
       '--expected-version is required when install health options are used.',
     );
   }
-  return ServiceHealthExpectation(
-    expectedVersion: expectedVersion,
-    requireCloudRegistration: requireCloud,
-    timeout: timeout,
+  return _InstallOptions(
+    healthExpectation: expectedVersion == null
+        ? null
+        : ServiceHealthExpectation(
+            expectedVersion: expectedVersion,
+            requireCloudRegistration: requireCloud,
+            timeout: timeout,
+          ),
+    userScope: userScope,
   );
 }
 
@@ -157,8 +180,9 @@ void _printUsage() {
   stdout.writeln('Actions:');
   stdout.writeln('  install      Register and start the agent daemon');
   stdout.writeln(
-    '               [--expected-version VERSION] [--require-cloud] [--health-timeout SECONDS]',
+    '               [--user-scope] [--expected-version VERSION] [--require-cloud]',
   );
+  stdout.writeln('               [--health-timeout SECONDS]');
   stdout.writeln('  uninstall    Stop and unregister the owned service');
   stdout.writeln('  start        Start the registered service');
   stdout.writeln('  stop         Stop the running service');

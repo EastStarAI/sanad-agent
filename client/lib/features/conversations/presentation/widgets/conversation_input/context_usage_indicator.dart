@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/llm_usage_snapshot.dart';
 
 class ContextUsageIndicator extends StatefulWidget {
@@ -38,7 +39,7 @@ class _ContextUsageIndicatorState extends State<ContextUsageIndicator> {
             key: const Key('context_usage_indicator'),
             width: 16,
             height: 16,
-            child: CircularProgressIndicator(
+            child: AppProgressIndicator(
               value: fraction,
               strokeWidth: 2.2,
               backgroundColor: color.withValues(alpha: 0.16),

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 
 import 'package:sanad_dev/src/infrastructure/secure_runtime_file.dart';
+import 'package:sanad_dev/src/infrastructure/windows_secure_runtime_backend.dart';
 
 void main() {
   test('atomic publication replaces an existing runtime file', () async {
@@ -215,6 +216,210 @@ void main() {
       }
     },
     skip: Platform.isWindows,
+  );
+
+  test(
+    'concurrent readers and writers do not observe partial content or leave stragglers',
+    () async {
+      final home = await Directory.systemTemp.createTemp(
+        'sanad-secure-runtime-concurrent-rw-',
+      );
+      addTearDown(() => home.delete(recursive: true));
+      final path = '${home.path}${Platform.pathSeparator}data.json';
+      await secureRuntimeAtomicWrite(home.path, path, '{"version": 0}');
+
+      var writing = true;
+      final expectedPayloads = <String>{'{"version": 0}'};
+      for (var i = 1; i <= 15; i++) {
+        expectedPayloads.add('{"version": $i, "padding": "${"x" * 200}"}');
+      }
+
+      final writeFuture = () async {
+        for (var i = 1; i <= 15; i++) {
+          final payload = '{"version": $i, "padding": "${"x" * 200}"}';
+          await secureRuntimeAtomicWrite(home.path, path, payload);
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+        }
+        writing = false;
+      }();
+
+      final readerErrors = <Object>[];
+      final readFutures = List.generate(4, (readerIndex) async {
+        while (writing) {
+          try {
+            final content = await secureRuntimeReadText(home.path, path);
+            if (!expectedPayloads.contains(content)) {
+              readerErrors.add(
+                'Reader $readerIndex observed invalid content: $content',
+              );
+            }
+          } catch (e) {
+            readerErrors.add('Reader $readerIndex encountered error: $e');
+          }
+          await Future<void>.delayed(const Duration(milliseconds: 2));
+        }
+      });
+
+      await Future.wait([writeFuture, ...readFutures]);
+      expect(readerErrors, isEmpty);
+
+      final finalContent = await File(path).readAsString();
+      expect(finalContent, '{"version": 15, "padding": "${"x" * 200}"}');
+
+      final stragglers = await home
+          .list()
+          .where((entry) => entry.path.contains('.tmp.'))
+          .toList();
+      expect(stragglers, isEmpty);
+    },
+  );
+
+  test(
+    'concurrent atomic writers to the same destination succeed without stragglers',
+    () async {
+      final home = await Directory.systemTemp.createTemp(
+        'sanad-secure-runtime-concurrent-w-',
+      );
+      addTearDown(() => home.delete(recursive: true));
+      final path = '${home.path}${Platform.pathSeparator}concurrent.json';
+
+      final writes = List.generate(8, (i) {
+        return secureRuntimeAtomicWrite(
+          home.path,
+          path,
+          '{"writer": $i, "payload": "${"y" * 150}"}',
+        );
+      });
+
+      await Future.wait(writes);
+
+      final content = await File(path).readAsString();
+      final validPayloads = List.generate(
+        8,
+        (i) => '{"writer": $i, "payload": "${"y" * 150}"}',
+      );
+      expect(validPayloads, contains(content));
+
+      final stragglers = await home
+          .list()
+          .where((entry) => entry.path.contains('.tmp.'))
+          .toList();
+      expect(stragglers, isEmpty);
+    },
+  );
+
+  test(
+    'secureRuntimeAppendFile enforces containment and creates file exclusively',
+    () async {
+      final home = await Directory.systemTemp.createTemp(
+        'sanad-secure-runtime-append-',
+      );
+      addTearDown(() => home.delete(recursive: true));
+      final path = '${home.path}${Platform.pathSeparator}append.log';
+
+      final file = await secureRuntimeAppendFile(home.path, path);
+      expect(await file.exists(), isTrue);
+
+      final handle = await file.open(mode: FileMode.append);
+      await handle.writeString('line 1\n');
+      await handle.close();
+
+      final existingFile = await secureRuntimeAppendFile(home.path, path);
+      expect(existingFile.path, file.path);
+      expect(await File(path).readAsString(), 'line 1\n');
+
+      final escapedPath =
+          '${home.path}${Platform.pathSeparator}..${Platform.pathSeparator}outside.log';
+      await expectLater(
+        secureRuntimeAppendFile(home.path, escapedPath),
+        throwsA(
+          isA<SecureRuntimeFileException>().having(
+            (e) => e.code,
+            'code',
+            'outside_home',
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'secureRuntimeReadText enforces containment and fails closed on missing files',
+    () async {
+      final home = await Directory.systemTemp.createTemp(
+        'sanad-secure-runtime-read-',
+      );
+      addTearDown(() => home.delete(recursive: true));
+      final path = '${home.path}${Platform.pathSeparator}readable.json';
+
+      await expectLater(
+        secureRuntimeReadText(home.path, path),
+        throwsA(
+          isA<SecureRuntimeFileException>().having(
+            (e) => e.code,
+            'code',
+            'unsafe_file',
+          ),
+        ),
+      );
+
+      await secureRuntimeAtomicWrite(home.path, path, '{"read": true}');
+      final read = await secureRuntimeReadText(home.path, path);
+      expect(read, '{"read": true}');
+
+      final escapedPath =
+          '${home.path}${Platform.pathSeparator}..${Platform.pathSeparator}outside.json';
+      await expectLater(
+        secureRuntimeReadText(home.path, escapedPath),
+        throwsA(
+          isA<SecureRuntimeFileException>().having(
+            (e) => e.code,
+            'code',
+            'outside_home',
+          ),
+        ),
+      );
+    },
+  );
+
+  test(
+    'Windows native backend throws typed WindowsSecureRuntimeException on native failures',
+    () async {
+      final root = await Directory.systemTemp.createTemp(
+        'sanad-secure-runtime-native-failure-',
+      );
+      addTearDown(() => root.delete(recursive: true));
+      final backend = WindowsSecureRuntimeBackend();
+      final missingFile =
+          '${root.path}${Platform.pathSeparator}missing-file.json';
+      final missingSource =
+          '${root.path}${Platform.pathSeparator}missing-source.tmp';
+      final missingDestination =
+          '${root.path}${Platform.pathSeparator}missing-destination.json';
+
+      expect(
+        () => backend.restrictPath(missingFile, directory: false),
+        throwsA(
+          isA<WindowsSecureRuntimeException>().having(
+            (e) => e.code,
+            'code',
+            startsWith('set_dacl_failed:'),
+          ),
+        ),
+      );
+
+      expect(
+        () => backend.replaceFile(missingSource, missingDestination),
+        throwsA(
+          isA<WindowsSecureRuntimeException>().having(
+            (e) => e.code,
+            'code',
+            'move_file_failed',
+          ),
+        ),
+      );
+    },
+    skip: !Platform.isWindows,
   );
 }
 

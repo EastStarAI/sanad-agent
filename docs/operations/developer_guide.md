@@ -596,6 +596,46 @@ Run focused tests for the changed behavior before broad suites. E2E or
 integration tests that bind shared ports run sequentially; normal unit and
 widget tests do not require forced sequential execution.
 
+## PR workflow guards
+
+The standalone Pure-Dart package `scripts/workflow_guards/` owns two bounded,
+tested developer tools (no external packages; run through FVM):
+
+- **`pr_checks_watch`** — bounded CI check monitor for pull requests:
+
+  ```bash
+  fvm dart run scripts/workflow_guards/bin/pr_checks_watch.dart <pr>
+  ```
+
+  It polls `gh pr checks <pr> --json` every 5 seconds, stops on the first
+  failed/cancelled check (fail-fast), enforces a 7-minute maximum, prints one
+  bounded summary line per poll, and preserves its exit status (`0` all reported checks passed, `1` first failure,
+  `124` timeout pending, `2` tool error or no checks to prove the gate).
+  Windows-safe: no `for /f` parsing; a `.cmd`/`.bat` `--gh` override is routed
+  through the shell only after every argument passes a metacharacter check,
+  and `gh` itself is spawned directly.
+
+- **`merge_validate`** — fail-closed merge/rebase conflict gate:
+
+  ```bash
+  fvm dart run scripts/workflow_guards/bin/merge_validate.dart <resolved-file>...
+  ```
+
+  It rejects leftover conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`,
+  `|||||||`) with line numbers and corrupt JSON/JSONL syntax, exiting `3`
+  (markers) or `4` (syntax) so `git add` refuses a corrupt file. Use it after
+  a three-way reconstruction (`git show :1:<path>` / `:2:` / `:3:`) and before
+  staging, then run the affected analyzer/tests.
+
+Verify the guards with their own package suite:
+
+```bash
+cd scripts/workflow_guards
+fvm dart pub get
+fvm dart analyze
+fvm dart test
+```
+
 ## Documentation
 
 Behavior changes must update their owning page under `docs/` and the closest

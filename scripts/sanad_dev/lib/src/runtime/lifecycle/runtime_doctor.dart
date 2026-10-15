@@ -10,10 +10,15 @@ Future<void> handleRuntimeDoctor({
   required bool fix,
   String? sanadHomePath,
   Future<bool> Function(int? pid) processRunning = isProcessRunning,
+  Future<List<AgentInstance>> Function({String? sanadHomeOverride})
+      discoverAgents =
+      discoverAgentInstances,
+  Future<List<ClientInstance>> Function() discoverClients =
+      discoverClientInstances,
 }) async {
   final runtime = await _currentRuntime(sanadHomePath: sanadHomePath);
-  final agents = await discoverAgentInstances(sanadHomeOverride: sanadHomePath);
-  final clients = await discoverClientInstances();
+  final agents = await discoverAgents(sanadHomeOverride: sanadHomePath);
+  final clients = await discoverClients();
   final state = selectRuntimeProcessState(
     activeAgents: agents,
     activeClients: clients,

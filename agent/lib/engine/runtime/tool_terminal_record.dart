@@ -142,6 +142,7 @@ class ToolTerminalRecord {
       'is_error': isError,
       'started_at': startedAt.toIso8601String(),
       'terminal_at': terminalAt.toIso8601String(),
+      'runtime_ms': terminalAt.difference(startedAt).inMilliseconds,
       'model_step_id': ?(modelStepId ?? this.modelStepId),
       'cleanup_outcome': ?cleanupOutcome,
     };

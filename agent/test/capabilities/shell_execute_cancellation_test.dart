@@ -144,7 +144,8 @@ void main() {
             .timeout(const Duration(seconds: 5));
         final result = jsonDecode(resultString) as Map<String, dynamic>;
 
-        expect(result['isError'], isFalse);
+        expect(result.containsKey('isError'), isFalse);
+        expect(result['duration_ms'], isA<int>());
         final childPid = childPidFile.readAsStringSync().trim();
         expect(
           (await Process.run('kill', ['-0', childPid])).exitCode,

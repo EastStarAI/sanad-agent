@@ -18,3 +18,4 @@ This directory owns the specifications of the agent reasoning loop, prompt engin
 - [Context Compaction Engine Design](context_compaction_design.md): Goal-preserving pressure measurement, tail selection, summarization, and continuity validation (Plan 53c).
 - [LLM Adapter Runtime Contract](llm_adapter_runtime_contract.md): يفصل النص النهائي وreasoning القابل للعرض وحالة المزود opaque، ويحدد خيارات الطلب والاستمرارية.
 - [Codex Responses Runtime Design](codex_responses_runtime_design.md): عقد codec والبث والاستكمال المحدود والتعافي من replay state المرفوض.
+- [Sanad Delegate Execution Relay](sanad_delegate_relay.md): مواصفات جسر الترحيل عالي الأمان لتشغيل واجهة الأوامر التابعة للخادم وإدارة المخرجات المهيكلة.

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
@@ -285,7 +286,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
                   if (compact) {
                     return Scaffold(
+                      backgroundColor: Colors.transparent,
                       appBar: AppBar(
+                        backgroundColor: Colors.transparent,
                         title: const Text('Settings'),
                         leading: IconButton(
                           key: const Key('settings_back_to_conversations_btn'),
@@ -305,24 +308,42 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           ),
                         ],
                       ),
-                      drawer: Drawer(child: SafeArea(child: navigation)),
+                      drawer: Drawer(
+                        backgroundColor: Theme.of(context).colorScheme.surface.withValues(alpha: 0.85),
+                        child: SafeArea(child: navigation),
+                      ),
                       body: content,
                     );
                   }
                   return Scaffold(
+                    backgroundColor: Colors.transparent,
                     body: SafeArea(
                       child: Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Container(
                             width: 300,
-                            margin: EdgeInsets.all(AppPlatform.isMacOS ? 8 : 0),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.surface,
-                              border: Border.all(color: Theme.of(context).colorScheme.outline),
-                              borderRadius: BorderRadius.circular(12),
+                            margin: EdgeInsetsDirectional.only(
+                              start: AppPlatform.isMacOS ? 8 : 0,
+                              top: AppPlatform.isMacOS ? 8 : 0,
+                              bottom: AppPlatform.isMacOS ? 8 : 0,
                             ),
-                            child: navigation,
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(12),
+                              child: BackdropFilter(
+                                filter: ImageFilter.blur(sigmaX: 15, sigmaY: 15),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    color: Theme.of(context).colorScheme.surface.withValues(alpha: 0.50),
+                                    border: Border.all(
+                                      color: Theme.of(context).colorScheme.outline.withValues(alpha: 0.25),
+                                    ),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: navigation,
+                                ),
+                              ),
+                            ),
                           ),
                           Expanded(child: content),
                         ],

@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
+import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_cubit.dart';
@@ -160,20 +163,28 @@ class _InstanceCard extends StatelessWidget {
     final feedback = setupState.instanceFeedback[instance.id];
     final busy = operation != null;
 
-    return Container(
-      key: Key('provider_instance_${instance.id}'),
-      decoration: BoxDecoration(
-        color: theme.colorScheme.surfaceContainer,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: instance.isDefault
-              ? theme.colorScheme.primary.withValues(alpha: 0.4)
-              : theme.colorScheme.outlineVariant.withValues(alpha: 0.05),
-          width: instance.isDefault ? 1.5 : 1,
+    final appearance = context.watch<AppearanceCubit?>()?.state;
+    final isCustomBg = appearance != null && appearance.backgroundOption != AppBackgroundOption.defaultTheme;
+    final cardColor = isCustomBg
+        ? (theme.cardTheme.color ?? theme.colorScheme.surface).withValues(alpha: 0.60)
+        : theme.colorScheme.surfaceContainer;
+
+    final card = Material(
+      color: cardColor,
+      borderRadius: BorderRadius.circular(14),
+      child: Container(
+        key: Key('provider_instance_${instance.id}'),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: instance.isDefault
+                ? theme.colorScheme.primary.withValues(alpha: 0.4)
+                : theme.colorScheme.outlineVariant.withValues(alpha: isCustomBg ? 0.25 : 0.05),
+            width: instance.isDefault ? 1.5 : 1,
+          ),
         ),
-      ),
-      padding: const EdgeInsets.all(14),
-      child: Column(
+        padding: const EdgeInsets.all(14),
+        child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Row(
@@ -369,7 +380,19 @@ class _InstanceCard extends StatelessWidget {
           ),
         ],
       ),
-    );
+    ),
+  );
+
+    if (isCustomBg) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(14),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 12, sigmaY: 12),
+          child: card,
+        ),
+      );
+    }
+    return card;
   }
 
   void _confirmDelete(BuildContext context) {

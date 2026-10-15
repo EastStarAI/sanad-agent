@@ -10,6 +10,10 @@ import '../../core/models/llm_provider_state.dart';
 import '../../core/models/tool_call.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
+import '../../core/provider_thinking/aggregator_thinking_wire_codec.dart';
+import '../../core/provider_thinking/google_thinking_wire_codec.dart';
+import '../../core/provider_thinking/openai_thinking_wire_codec.dart';
+import '../../core/provider_thinking/toggle_effort_thinking_wire_codec.dart';
 import '../../core/models/model_metadata.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 import '../../core/provider_runtime/provider_model_id.dart';
@@ -413,7 +417,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
     if (metadataLimit != null) return metadataLimit;
 
-    return 4000;
+    return ModelMetadata.unknownContextLimit;
   }
 
   String _resolveModel(String? override) {
@@ -496,9 +500,10 @@ class BaseOpenAIAdapter implements LLMAdapter {
       choiceEnvelope['finish_reason'],
       hasToolCalls: toolCalls.isNotEmpty,
     );
-    final providerState = _providerStateForReasoningDetails(
-      structuredReasoning.details,
-      options,
+    final providerState = _providerStateForReasoning(
+      details: structuredReasoning.details,
+      reasoningContent: structuredReasoning.providerContent,
+      options: options,
     );
 
     return AgentResponse(
@@ -584,6 +589,8 @@ class BaseOpenAIAdapter implements LLMAdapter {
       var emittedProviderState = false;
       final contentBuffer = StringBuffer();
       final reasoningBuffer = StringBuffer();
+      final providerReasoningContentBuffer = StringBuffer();
+      var hasProviderReasoningContent = false;
       Map<String, dynamic>? finalUsage;
       LLMFinishReason streamFinishReason = LLMFinishReason.unknown;
 
@@ -650,6 +657,12 @@ class BaseOpenAIAdapter implements LLMAdapter {
 
             final structuredReasoning = _extractStructuredReasoning(delta);
             reasoningDetails.addAll(structuredReasoning.details);
+            final providerReasoningContent =
+                structuredReasoning.providerContent;
+            if (providerReasoningContent is String) {
+              hasProviderReasoningContent = true;
+              providerReasoningContentBuffer.write(providerReasoningContent);
+            }
             final contentChunk = delta['content']?.toString();
             final taggedChunk = contentChunk == null
                 ? const TaggedReasoningText()
@@ -695,7 +708,13 @@ class BaseOpenAIAdapter implements LLMAdapter {
             }
             final providerState = finishReason == LLMFinishReason.unknown
                 ? null
-                : _providerStateForReasoningDetails(reasoningDetails, options);
+                : _providerStateForReasoning(
+                    details: reasoningDetails,
+                    reasoningContent: hasProviderReasoningContent
+                        ? providerReasoningContentBuffer.toString()
+                        : null,
+                    options: options,
+                  );
             if (providerState != null) emittedProviderState = true;
 
             if (taggedChunk.content != null ||
@@ -760,9 +779,12 @@ class BaseOpenAIAdapter implements LLMAdapter {
         }
 
         if (completedToolCalls.isNotEmpty) {
-          final providerState = _providerStateForReasoningDetails(
-            reasoningDetails,
-            options,
+          final providerState = _providerStateForReasoning(
+            details: reasoningDetails,
+            reasoningContent: hasProviderReasoningContent
+                ? providerReasoningContentBuffer.toString()
+                : null,
+            options: options,
           );
           if (providerState != null) emittedProviderState = true;
           yield AgentResponse(
@@ -780,13 +802,17 @@ class BaseOpenAIAdapter implements LLMAdapter {
           );
         }
 
-        if (!emittedProviderState && reasoningDetails.isNotEmpty) {
+        if (!emittedProviderState &&
+            (reasoningDetails.isNotEmpty || hasProviderReasoningContent)) {
           yield AgentResponse(
             message: Message(
               role: MessageRole.assistant,
-              providerState: _providerStateForReasoningDetails(
-                reasoningDetails,
-                options,
+              providerState: _providerStateForReasoning(
+                details: reasoningDetails,
+                reasoningContent: hasProviderReasoningContent
+                    ? providerReasoningContentBuffer.toString()
+                    : null,
+                options: options,
               ),
             ),
             model: resolvedModel,
@@ -806,8 +832,9 @@ class BaseOpenAIAdapter implements LLMAdapter {
               if (reasoningBuffer.isNotEmpty)
                 'reasoning': reasoningBuffer.toString(),
               if (completedToolCalls.isNotEmpty)
-                'tool_calls':
-                    completedToolCalls.map((tc) => tc.toJson()).toList(),
+                'tool_calls': completedToolCalls
+                    .map((tc) => tc.toJson())
+                    .toList(),
             },
             'finish_reason': effectiveFinishReason.name,
             'usage': ?finalUsage,
@@ -828,15 +855,18 @@ class BaseOpenAIAdapter implements LLMAdapter {
                 if (reasoningBuffer.isNotEmpty)
                   'reasoning': reasoningBuffer.toString(),
                 if (completedToolCalls.isNotEmpty)
-                  'tool_calls':
-                      completedToolCalls.map((tc) => tc.toJson()).toList(),
+                  'tool_calls': completedToolCalls
+                      .map((tc) => tc.toJson())
+                      .toList(),
                 if (partialToolCalls.isNotEmpty)
                   'partial_tool_calls': partialToolCalls.values
-                      .map((p) => {
-                            if (p.id != null) 'id': p.id,
-                            if (p.name != null) 'name': p.name,
-                            'arguments': p.argumentsBuffer.toString(),
-                          })
+                      .map(
+                        (p) => {
+                          if (p.id != null) 'id': p.id,
+                          if (p.name != null) 'name': p.name,
+                          'arguments': p.argumentsBuffer.toString(),
+                        },
+                      )
                       .toList(),
               },
             'error': e.toString(),
@@ -869,9 +899,27 @@ class BaseOpenAIAdapter implements LLMAdapter {
         'max_completion_tokens': options.maxOutputTokens,
     };
 
-    final effort = _normalizeReasoningEffort(options.thinkingMode);
-    if (effort != null && await _modelSupportsReasoning(resolvedModel)) {
-      body['reasoning_effort'] = effort;
+    switch (profile.effectiveThinkingPolicyId) {
+      case 'aggregator_upstream':
+        AggregatorThinkingWireCodec.applyReasoning(
+          body,
+          options.thinkingDirective,
+        );
+      case 'google_thinking':
+        GoogleThinkingWireCodec.applyThinkingConfig(
+          body,
+          options.thinkingDirective,
+        );
+      case 'deepseek_thinking':
+        ToggleEffortThinkingWireCodec.applyChatCompletions(
+          body,
+          options.thinkingDirective,
+        );
+      default:
+        OpenAiThinkingWireCodec.applyChatCompletionsReasoning(
+          body,
+          options.thinkingDirective,
+        );
     }
 
     if (tools != null && tools.isNotEmpty) {
@@ -919,9 +967,14 @@ class BaseOpenAIAdapter implements LLMAdapter {
 
     final state = message.providerState;
     if (state?.namespace == _providerStateNamespace &&
-        state?.issuer == _stateIssuer(options) &&
-        state?.data['reasoning_details'] is List) {
-      data['reasoning_details'] = state!.data['reasoning_details'];
+        state?.issuer == _stateIssuer(options)) {
+      final reasoningDetails = state!.data['reasoning_details'];
+      if (reasoningDetails is List) {
+        data['reasoning_details'] = reasoningDetails;
+      }
+      if (state.data.containsKey('reasoning_content')) {
+        data['reasoning_content'] = state.data['reasoning_content'];
+      }
     }
     return data;
   }
@@ -944,15 +997,20 @@ class BaseOpenAIAdapter implements LLMAdapter {
     return '$instance|${profile.effectiveProtocol}|$endpoint';
   }
 
-  LLMProviderState? _providerStateForReasoningDetails(
-    List<dynamic> details,
-    LLMRequestOptions options,
-  ) {
-    if (details.isEmpty) return null;
+  LLMProviderState? _providerStateForReasoning({
+    required List<dynamic> details,
+    required dynamic reasoningContent,
+    required LLMRequestOptions options,
+  }) {
+    final data = <String, dynamic>{
+      if (details.isNotEmpty) 'reasoning_details': details,
+      'reasoning_content': ?reasoningContent,
+    };
+    if (data.isEmpty) return null;
     return LLMProviderState(
       namespace: _providerStateNamespace,
       issuer: _stateIssuer(options),
-      data: {'reasoning_details': details},
+      data: data,
     );
   }
 
@@ -1000,6 +1058,7 @@ class BaseOpenAIAdapter implements LLMAdapter {
     return _StructuredReasoning(
       visibleText: visible.isEmpty ? null : visible.join(),
       details: details,
+      providerContent: reasoningContent,
     );
   }
 
@@ -1053,28 +1112,6 @@ class BaseOpenAIAdapter implements LLMAdapter {
         return hasToolCalls
             ? LLMFinishReason.toolCalls
             : LLMFinishReason.unknown;
-    }
-  }
-
-  String? _normalizeReasoningEffort(String? thinkingMode) {
-    switch (thinkingMode?.trim().toLowerCase()) {
-      case 'fast':
-        return 'low';
-      case 'balanced':
-      case 'normal':
-        return 'medium';
-      case 'deep':
-        return 'high';
-      case 'none':
-      case 'minimal':
-      case 'low':
-      case 'medium':
-      case 'high':
-      case 'xhigh':
-      case 'max':
-        return thinkingMode!.trim().toLowerCase();
-      default:
-        return null;
     }
   }
 
@@ -1167,6 +1204,11 @@ class _PartialToolCall {
 class _StructuredReasoning {
   final String? visibleText;
   final List<dynamic> details;
+  final dynamic providerContent;
 
-  const _StructuredReasoning({this.visibleText, this.details = const []});
+  const _StructuredReasoning({
+    this.visibleText,
+    this.details = const [],
+    this.providerContent,
+  });
 }

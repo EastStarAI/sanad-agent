@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -116,7 +117,7 @@ class ProviderUsageSection extends StatelessWidget {
                             ? const SizedBox(
                                 width: 10,
                                 height: 10,
-                                child: CircularProgressIndicator(strokeWidth: 1.5),
+                                child: AppProgressIndicator(strokeWidth: 1.5),
                               )
                             : const Icon(Icons.refresh, size: 12),
                         label: const Text('Refresh'),
@@ -134,7 +135,7 @@ class ProviderUsageSection extends StatelessWidget {
                           width: 14,
                           height: 14,
                           child: FittedBox(
-                            child: CircularProgressIndicator(strokeWidth: 2),
+                            child: AppProgressIndicator(strokeWidth: 2),
                           ),
                         ),
                       ),
@@ -189,7 +190,7 @@ class _UsageBody extends StatelessWidget {
               SizedBox(
                 width: 18,
                 height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                child: AppProgressIndicator(strokeWidth: 2),
               ),
               SizedBox(height: 8),
               Text(
@@ -233,7 +234,7 @@ class _UsageBody extends StatelessWidget {
                 const SizedBox(
                   width: 12,
                   height: 12,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: AppProgressIndicator(strokeWidth: 2),
                 ),
                 const SizedBox(width: 6),
                 Text(
@@ -455,7 +456,7 @@ class _ResetControls extends StatelessWidget {
             TextButton.icon(
               onPressed: entry.resetInProgress ? null : () => _start(context),
               icon: entry.resetInProgress
-                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox(width: 14, height: 14, child: AppProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.restart_alt, size: 14),
               label: const Text('Reset limits'),
               style: TextButton.styleFrom(

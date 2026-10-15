@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
@@ -162,7 +163,7 @@ class _ChallengeDialog extends StatelessWidget {
                     SizedBox(
                       width: 40,
                       height: 40,
-                      child: CircularProgressIndicator(
+                      child: AppProgressIndicator(
                         color: colorScheme.primary,
                         strokeWidth: 3,
                       ),

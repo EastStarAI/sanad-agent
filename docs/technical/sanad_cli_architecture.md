@@ -124,7 +124,7 @@ The CLI supports both attached daemon operation and standalone fallback:
 2. **Standalone Fallback Mode:**
    - Triggered when `--standalone` is passed or when no running daemon is detected.
    - `StandaloneCliTurnClient` initializes DI, auth, sessions, `SessionRunOrchestrator`, tools, permissions, provider routing, and canonical event translation inside the CLI process.
-   - It binds both orchestrator responses and `RuntimeRecoveryService` notices into the canonical event path. Terminal provider failures therefore complete the one-shot command immediately instead of waiting for the CLI timeout.
+   - It binds both orchestrator responses and `RuntimeRecoveryService` notices into the canonical event path. Only `fatal` (or an unknown fail-closed status) terminates the current one-shot command. `waiting`, `blocked`, `resuming`, and `cleared` are non-terminal recovery lifecycle events: an attached `sanad run` remains connected while blocked for intervention and through a later resume, until the turn completes or its own timeout/stop boundary fires.
    - It starts no Local Gateway, cloud transport, daemon supervisor, cron scheduler, or listening port.
    - The daemon and standalone process compete for the same owner-only state-root lock before SQLite opens. A conflict exits with configuration code `78` and advises attachment or another Home.
    - Teardown detaches the runtime bridge, closes orchestrator subscriptions, workspace/MCP/OAuth resources, provider model cache, the database owner, event streams, and finally the ownership lease.
@@ -204,3 +204,53 @@ The REPL intercepts interactive slash commands locally or via gateway commands r
 E2E tests that initialize DI, open the on-disk SQLite owner, or launch an agent process use temporary roots for both `SANAD_HOME` and `SANAD_STATE_HOME`. Dart child processes receive both variables explicitly rather than inheriting the developer's environment. In-process tests set and clear both root overrides around each test.
 
 `AgentStateDatabase` additionally fails closed under the Dart test runner when no explicit state isolation is detectable. `test/guards/e2e_state_isolation_contract_test.dart` scans E2E persistent-runtime entry points and Dart child-process tests so newly added coverage cannot silently fall back to the user's normal Sanad database.
+
+---
+
+## 9. Session Observability & Safe Intervention (`sanad session`)
+
+The CLI provides daemon-backed session inspection and safe intervention paths across both interactive chat and non-interactive script runs.
+
+### 9.1. Subcommands Reference
+
+| Subcommand | Invocations | Description |
+|---|---|---|
+| `list` | `sanad session list [--json]` | Lists active sessions discovered via the gateway. Appends `[Pending intervention]` when a session is suspended awaiting tool approval or user input. |
+| `show` | `sanad session show <session-id> [--json] [--include-messages]` | Authoritative session inspection. Exposes status (`needs_input`, `needs_permission`, `running`, `idle`), owner identities, in-flight execution details, pending request payloads, the effective route, timestamps, and message/tool count summaries. By default the projection is **bounded** and excludes the full messages payload; pass `--include-messages` to opt in to the complete conversation/history. |
+| `stop` | `sanad session stop <session-id> [--json]` | Halts execution strictly for the specified session, leaving other active sessions untouched. |
+| `answer` | `sanad session answer <session-id> -r <req-id> --answer <text> [--file <path>] [--json]` | Explicit resolution path for pending `system_ask_user` questions. Accepts direct text or JSON/text file payload. |
+| `permission` | `sanad session permission <session-id> -r <req-id> (--allow \| --deny) [--decision allow\|deny] [--scope once\|session\|workspace] [--comment <text>] [--file <path>] [--json]` | Explicit decision path for gated tool approvals. Accepts boolean flags or a structured JSON file payload. Aliases: `permit`, `decide`. |
+| `new` | `sanad session new` | Generates and outputs a fresh UUID session identifier. |
+| `delete` | `sanad session delete <session-id> [--json]` | Deletes a session and its cached turns from the daemon. |
+
+### 9.2. Safe Intervention Protocol
+
+1. **Strict Identity & Kind Validation:**
+   - Every intervention binds to both `session_id` and `request_id`.
+   - The daemon gateway enforces cross-session boundaries: attempting to answer a request under a different session returns `CROSS_SESSION_MISMATCH` without consuming the request.
+   - Distinct failure codes prevent kind confusion: answers sent to ordinary tool permission requests return `INVALID_INTERVENTION_KIND`, while permission approvals sent to clarification questions return `INVALID_ANSWER` / `INVALID_INTERVENTION_KIND`.
+   - Empty or whitespace-only clarification answers are rejected with `INVALID_ANSWER`.
+   - Conflicting fields (e.g. `allowed: true, decision: deny`) are rejected with `CONTRADICTORY_DECISION`.
+
+2. **Durable Checkpoints & First-Writer-Wins:**
+   - Pending suspensions are backed by `suspended_checkpoints` rows in SQLite.
+   - Multi-client or racing intervention attempts are reconciled using atomic DB claim semantics (`claimSuspendedCheckpointDecision`).
+   - The winning writer claims the checkpoint and resumes execution; subsequent or duplicate responses receive `ALREADY_RESOLVED` and do not resume a second turn.
+
+3. **One-Shot Non-Interactive Policy (`sanad run`):**
+   - Headless execution (`sanad run "<prompt>"`) leaves gated tool permissions pending and emits a diagnostic notice to `stderr` specifying the exact intervention command syntax (`sanad session permission <session-id> -r <req-id> --allow / --deny`).
+   - Permissions are never auto-denied, enabling external supervisors and developers to inspect via `session show` and resolve via `session permission`.
+   - The `--allow-all-tools` option automatically approves ordinary tool execution only. Clarification questions (`system_ask_user`) always remain pending and require explicit user input.
+
+### 9.3. Bounded Session Show Projection (Machine-Review Contract)
+
+`session show <session-id> --json` returns a **bounded, reviewer-focused** envelope by default so that supervisors and orchestrators can inspect a session without pulling the entire conversation/history payload. The default envelope includes:
+
+- **Owner identities** (`identities`): `session_id`, active `run_id`, `work_item_id`, `request_id`, `pending_request_id`, `history_revision`, and `route_revision` when present.
+- **Execution status** (`status`): `idle`, `running`, `needs_input`, or `needs_permission`, derived from in-flight state and any pending suspended request.
+- **Pending intervention** (`pending_permission_request`) and in-flight execution (`in_flight`, `execution_snapshot`).
+- **Effective route**: `model`, `model_display`, `provider_instance_id`, `model_provider`, `route_revision`, `route_updated_at`, and `thinking_mode`.
+- **Timestamps**: `created_at`, `updated_at`, `last_user_message_at`.
+- **Counts** (`message_count` + `summary`): total rows plus bounded `user_messages`, `final_answers`, `tool_calls`, `tool_results`, `reasoning_rows`, and `thought_rows` counts derived from the message history without copying any content.
+
+The complete conversation/history is **never** embedded by default. It is exposed only through the explicit `--include-messages` opt-in flag, which adds the full `messages` payload. The plain-text (non-`--json`) branch already renders a bounded human summary and, when history exists, reminds the operator that full history requires `--include-messages`.

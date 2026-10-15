@@ -62,6 +62,8 @@ class AgentToCanonical {
         if (response.toolCallId != null) 'tool_call_id': response.toolCallId,
         if (response.contextUsage != null)
           'context_usage': response.contextUsage,
+        if (response.message.metadata?['started_at'] != null)
+          'started_at': response.message.metadata!['started_at'],
       };
     } else if (response.isToolResult) {
       type = 'tool_result';
@@ -87,6 +89,8 @@ class AgentToCanonical {
           'started_at': terminalMetadata!['started_at'],
         if (terminalMetadata?['terminal_at'] != null)
           'terminal_at': terminalMetadata!['terminal_at'],
+        if (terminalMetadata?['runtime_ms'] != null)
+          'runtime_ms': terminalMetadata!['runtime_ms'],
         if (terminalMetadata?['cleanup_outcome'] != null)
           'cleanup_outcome': terminalMetadata!['cleanup_outcome'],
       };

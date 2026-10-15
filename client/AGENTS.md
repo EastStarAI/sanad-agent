@@ -45,6 +45,12 @@ Do not introduce convenience code that weakens these boundaries.
 - Session, draft, processing, and recovery state remain isolated by device/session identity; a selected session from another device cannot survive a device switch.
 - Raw request id is transport identity. Display ids, timestamps, and optimistic UI rows cannot replace it.
 
+### Localization Ownership
+- The client UI is multilingual (`en` + `ar` RTL). Translations live in `client/lib/l10n/app_en.arb` (English source of truth) and `app_ar.arb` (Arabic). Generated `app_localizations*.dart` files are build output and remain git-ignored; run `fvm flutter gen-l10n` after editing ARBs.
+- Widget code holds no user-visible Arabic literals and no hard-coded English copy for localized surfaces; new user-facing strings must go through `AppLocalizations.of(context)` ("Show less", "Load more", section headers, settings pages, sidebar, relative time).
+- The app locale is owned by `LocaleCubit` (`core/presentation/bloc/locale/locale_cubit.dart`) with SharedPreferences key `app_locale`. It silently falls back to `en` when the stored code is unsupported; no client page may crash on an unknown locale token.
+- RTL mirroring is content-driven; layouts must use `Directionality`/start-and-end semantics, not absolute left-only assumptions when a surface must mirror.
+
 ### Provider and Configuration Ownership
 - Provider templates, instances, credentials status, model options, readiness, defaults, limits, and failover settings come from the agent provider runtime.
 - Provider setup remains instance-first; the client must not hardcode providers, synthesize instances, or treat cached models as readiness.

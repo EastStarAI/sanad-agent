@@ -1,7 +1,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 class GenericToolTile extends StatelessWidget {
   final CanonicalEvent event;
@@ -133,11 +135,11 @@ class GenericToolTile extends StatelessWidget {
               const SizedBox(
                 width: 14,
                 height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                child: AppProgressIndicator(strokeWidth: 2),
               ),
               const SizedBox(width: 12),
               Text(
-                'Executing tool...',
+                AppLocalizations.of(context)?.toolExecuting ?? 'Executing tool...',
                 style: GoogleFonts.roboto(
                   fontSize: 12,
                   color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),

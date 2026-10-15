@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 
@@ -120,7 +121,7 @@ class WebToolTile extends StatelessWidget {
               const SizedBox(
                 width: 14,
                 height: 14,
-                child: CircularProgressIndicator(strokeWidth: 2),
+                child: AppProgressIndicator(strokeWidth: 2),
               ),
               const SizedBox(width: 12),
               Text(

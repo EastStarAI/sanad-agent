@@ -80,9 +80,14 @@ void main() {
 param([string] $Algorithm, [string] $Path)
 [pscustomobject]@{ Hash = 'fixture-hash' }
 ''');
+      final powershellWrapper = (await File('../sanad-dev.ps1').readAsString())
+          .replaceAll(
+            r'Ensure-UserBinPath $binRoot',
+            '# Test fixture suppresses user PATH persistence.',
+          );
       await File(
         '${fixture.path}${Platform.pathSeparator}scripts${Platform.pathSeparator}sanad-dev.ps1',
-      ).writeAsString(await File('../sanad-dev.ps1').readAsString());
+      ).writeAsString(powershellWrapper);
     } else {
       final fakeFvm = File('${fakeBin.path}${Platform.pathSeparator}fvm');
       await fakeFvm.writeAsString('''#!/usr/bin/env bash
@@ -118,7 +123,17 @@ fi
   });
 
   tearDown(() async {
-    if (await fixture.exists()) await fixture.delete(recursive: true);
+    if (await fixture.exists()) {
+      try {
+        await fixture.delete(recursive: true);
+      } on FileSystemException {
+        // Windows file locking can delay folder deletion after process exit
+        await Future<void>.delayed(const Duration(milliseconds: 500));
+        try {
+          if (await fixture.exists()) await fixture.delete(recursive: true);
+        } catch (_) {}
+      }
+    }
   });
 
   Future<ProcessResult> runBootstrap(
@@ -213,7 +228,7 @@ fi
       },
     );
 
-    test('stale runtime command fails without invoking bootstrap', () async {
+    test('stale runtime command auto-heals and executes without manual setup', () async {
       expect((await runBootstrap(['setup'])).exitCode, 0);
       await calls.writeAsString('');
       final source = File(
@@ -223,10 +238,12 @@ fi
 
       final result = await runBootstrap(const ['status']);
 
-      expect(result.exitCode, isNonZero);
-      expect(result.stderr, contains('Project runtime is stale'));
-      expect(result.stderr, contains('sanad-dev setup'));
-      expect(await calls.exists() ? await calls.readAsString() : '', isEmpty);
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      expect(result.stderr, contains('running auto-setup'));
+      final invocations = await calls.readAsLines();
+      expect(invocations, hasLength(2));
+      expect(invocations.first, contains('dart compile exe'));
+      expect(invocations.last, contains('runtime|status'));
     });
 
     test('run rebuilds a stale runtime before entering the CLI', () async {
@@ -603,7 +620,7 @@ fi
     expect(await calls.readAsString(), isEmpty);
     expect(installedShim.existsSync(), isTrue);
     expect(await installedShim.readAsString(), '@echo foreign checkout');
-  }, skip: !Platform.isWindows);
+  }, skip: !Platform.isWindows, timeout: const Timeout(Duration(minutes: 2)));
 
   test('PowerShell bootstrap pins verified user-scoped artifacts', () async {
     final source = await File('../sanad-dev.ps1').readAsString();

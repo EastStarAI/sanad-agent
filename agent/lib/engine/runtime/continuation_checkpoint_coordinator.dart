@@ -96,6 +96,7 @@ class ContinuationCheckpointCoordinator {
     Map<String, Map<String, dynamic>>? additionalDeferredToolResults,
     Iterable<String>? removeDeferredToolCallIds,
     Iterable<String>? removeRestartTerminalizedToolCallIds,
+    Iterable<String>? removeCompletedToolCallIds,
     Map<String, bool>? toolReplaySafety,
     String? checkpointKind,
     int? resumeHistoryLength,
@@ -128,6 +129,11 @@ class ContinuationCheckpointCoordinator {
     final results = Map<String, dynamic>.from(
       meta['completed_tool_results'] as Map? ?? const {},
     );
+    if (removeCompletedToolCallIds != null) {
+      for (final toolCallId in removeCompletedToolCallIds) {
+        results.remove(toolCallId);
+      }
+    }
     if (additionalToolResults != null) {
       results.addAll(additionalToolResults);
     }
@@ -136,10 +142,21 @@ class ContinuationCheckpointCoordinator {
     final outputs = Map<String, dynamic>.from(
       meta['completed_tool_outputs'] as Map? ?? const {},
     );
+    if (removeCompletedToolCallIds != null) {
+      for (final toolCallId in removeCompletedToolCallIds) {
+        outputs.remove(toolCallId);
+      }
+    }
     if (additionalToolOutputs != null) {
+      // Tag each persisted output record with the owning model step so a
+      // completed result is only ever reused for the same causal invocation.
+      final ownerStepId = ctx.currentModelStepId;
       outputs.addAll(
         additionalToolOutputs.map(
-          (key, value) => MapEntry(key, _redactedToolOutput(value)),
+          (key, value) => MapEntry(
+            key,
+            _redactedToolOutput({...value, 'model_step_id': ?ownerStepId}),
+          ),
         ),
       );
     }
@@ -486,6 +503,64 @@ class ContinuationCheckpointCoordinator {
           ? savedModelStepId
           : null,
     );
+  }
+
+  /// Returns the persisted completed-output record for [toolCallId], if any.
+  Map<String, dynamic>? completedToolOutputFor(
+    Map<String, dynamic> continuationMetadata,
+    String toolCallId,
+  ) {
+    final outputs = continuationMetadata['completed_tool_outputs'];
+    final raw = outputs is Map ? outputs[toolCallId] : null;
+    return raw is Map ? Map<String, dynamic>.from(raw) : null;
+  }
+
+  /// True when the persisted completed output for [toolCall.id] belongs to the
+  /// same causal model step and matches [toolCall]'s name and arguments.
+  ///
+  /// This gates checkpoint-result reuse in [ToolExecutionCoordinator]: a
+  /// completed result is only returned for the exact model invocation that
+  /// produced it. A genuinely new call that reuses a provider tool-call id
+  /// across steps (or turns) will not match and therefore executes once.
+  bool isCompletedResultForCausalToolCall(
+    Map<String, dynamic> continuationMetadata,
+    ToolCall toolCall, {
+    required String modelStepId,
+  }) {
+    final record = completedToolOutputFor(continuationMetadata, toolCall.id);
+    if (record == null) return false;
+    final tag = record['model_step_id']?.toString();
+    if (tag == null || tag.isEmpty) {
+      // Legacy durable record (written before model-step scoping): no owner is
+      // recorded, so it is treated as a legitimate result of the current
+      // checkpoint context and is reused rather than re-executed.
+      return true;
+    }
+    return tag == modelStepId &&
+        record['tool_name'] == toolCall.name &&
+        _jsonLikeEquals(record['arguments'], toolCall.arguments);
+  }
+
+  bool _jsonLikeEquals(Object? left, Object? right) {
+    if (identical(left, right)) return true;
+    if (left is Map && right is Map) {
+      if (left.length != right.length) return false;
+      for (final key in left.keys) {
+        if (!right.containsKey(key) ||
+            !_jsonLikeEquals(left[key], right[key])) {
+          return false;
+        }
+      }
+      return true;
+    }
+    if (left is List && right is List) {
+      if (left.length != right.length) return false;
+      for (var index = 0; index < left.length; index++) {
+        if (!_jsonLikeEquals(left[index], right[index])) return false;
+      }
+      return true;
+    }
+    return left == right;
   }
 
   /// Converts a tool execution failure into a durable blocked state instead

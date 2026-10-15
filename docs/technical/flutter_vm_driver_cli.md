@@ -24,7 +24,7 @@ Desktop worktree discovery belongs to `sanad-dev ui`. Standalone, mobile, and we
 
 ## Interaction Contract
 
-The public primitives are snapshot, find, tap, enter-text, scroll, wait-for, screenshot, and batch. Selectors use widget keys, exact text, widget types, explicit indexes, coordinates, and optional subtree scope.
+The public primitives are snapshot, find, tap, enter-text, scroll, wait-for, screenshot, and batch. Selectors use widget keys, exact text, widget types, explicit indexes, coordinates, and optional subtree scope. Batch recipes also expose a bounded `message_bodies` evidence step that returns at most the latest 50 event-scoped user and assistant message bodies, with total count and explicit truncation metadata, before the shared Driver connection closes.
 
 `enter-text` first focuses the requested field, then calls the Sanad
 `ext.sanad_client.enter_text` extension. The extension resolves an exact keyed
@@ -39,6 +39,8 @@ The controller selects the isolate that advertises the required extension rather
 `auth-url` calls the dedicated `ext.sanad_client.auth_url` extension on the selected Client isolate. The extension reads only the in-memory active authentication challenge from the Client's registered `AuthService`, accepts only an absolute HTTP(S) URL, and fails when authentication is not currently in progress. It does not inspect heap instances, browser tabs, or another Client. The non-JSON command prints only the ephemeral URL to standard output so a caller can capture and immediately open it; failures use standard error. Neither layer persists the value or includes it in UI snapshots, managed journals, or runtime metadata. When more than one managed driver Client is active, `sanad-dev ui` requires an explicit `--vm-url` instead of selecting a Client implicitly.
 
 Snapshot output is a flat list of typed elements with optional key, text, hint, tooltip, semantic label/role/selection state, and global bounds. Framework wrappers and icon-font glyphs may be suppressed, while tooltips and actionable semantics are consolidated into the keyed element. Obscured text-field values are never exposed. JSON mode emits one machine-parseable result object.
+
+Rendered conversation bodies expose event-scoped keys: `user_message_body:<eventId>` and `assistant_message_body:<eventId>`. The inspector reads plain text from `Text.data`, `Text.textSpan`, `RichText`, and `SelectableText`; for these message-body containers it joins rendered Markdown text leaves in display order and emits one consolidated keyed row rather than duplicate framework descendants. Callers can therefore use exact-key `find` or a filtered `snapshot` to verify message content without clipboard access. The event id remains the durable selector boundary, so a generic final-answer key must not be used when several messages are mounted.
 
 ## Safety and Portability
 

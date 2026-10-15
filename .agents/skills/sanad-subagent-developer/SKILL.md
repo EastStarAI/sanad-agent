@@ -7,6 +7,10 @@ description: Standard operating procedure for isolated coding, verification, and
 
 Execute one well-defined task in an isolated worktree, prove its Definition of Done, and return a reviewable result without contaminating another active runtime.
 
+## Role Boundaries
+
+You are the scoped **implementer** in the three-role workflow (orchestrator / implementer / independent reviewer). You own the assigned change inside its worktree and brief: implement, verify, and report. You do not perform the final independent review, and you do not stand in for the orchestrator or run its review/CI-repair work. Merge, Ready conversion, protected labels, and destructive cleanup remain authorization boundaries unless the brief granted them up front.
+
 ## 1. Read the Plan and Create Isolation
 
 1. Read the assigned task plan from `docs/plans/tasks/<task_id>-<task_name>.md`.
@@ -43,7 +47,7 @@ Execute one well-defined task in an isolated worktree, prove its Definition of D
 1. Review the complete diff and confirm the task DoD before committing.
 2. Commit in the isolated worktree with a descriptive task-referenced message.
 3. Push the branch to origin.
-4. Open a Pull Request through `gh` with Problem/Goal, Technical Changes, and Verification sections.
+4. Open the pull request as a **Draft** after the first accepted gate so CI runs on every push; converting it to Ready and merging remain authorization boundaries unless the brief granted them up front. Follow `sanad-pull-request-lifecycle` for title, labels, and handoff.
 
 ## 5. Project Tracking and Handoff
 
