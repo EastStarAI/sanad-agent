@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:sanad_client/features/client_cli/data/client_cli_approval_coordinator.dart';
 import 'package:sanad_client/features/client_cli/data/client_cli_host.dart';
 import 'package:sanad_client/features/client_cli/data/client_cli_ownership.dart';
+import 'package:sanad_client/features/client_cli/domain/models/client_cli_record.dart';
 import 'package:sanad_client/features/client_cli/domain/models/client_cli_settings.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -41,6 +42,26 @@ class TestSanadSocketService extends FakeSanadSocketService {
 
   void emitMockEvent(Map<String, dynamic> event) {
     debugEmitEvent(event);
+  }
+}
+
+class _ConcurrencyProbeOwnership extends ClientCliOwnership {
+  _ConcurrencyProbeOwnership({required super.processAliveChecker});
+
+  int _inFlight = 0;
+  int maxInFlight = 0;
+
+  @override
+  Future<void> acquireOwnership(ClientCliRecord record) async {
+    _inFlight++;
+    if (_inFlight > maxInFlight) maxInFlight = _inFlight;
+    try {
+      // Widen the window so overlapping lifecycle mutations cannot hide.
+      await Future<void>.delayed(const Duration(milliseconds: 25));
+      await super.acquireOwnership(record);
+    } finally {
+      _inFlight--;
+    }
   }
 }
 
@@ -324,6 +345,139 @@ void main() {
       await host.stop();
       expect(host.isRunning, isFalse);
       expect(await File(ownership.recordPath(tempHome.path)).exists(), isFalse);
+    });
+
+    test('re-applying an enabled setting restores a released endpoint', () async {
+      await host.updateSettings(
+        enabled: true,
+        permissionMode: ClientCliSettings.defaultMode,
+      );
+      final releasedPort = host.port;
+      expect(host.isRunning, isTrue);
+
+      // Simulate the logout path that releases ownership while the feature
+      // stays enabled in settings.
+      await host.stop();
+      expect(host.isRunning, isFalse);
+      expect(await File(ownership.recordPath(tempHome.path)).exists(), isFalse);
+
+      await host.updateSettings(
+        enabled: true,
+        permissionMode: ClientCliSettings.defaultMode,
+      );
+
+      expect(host.isRunning, isTrue);
+      expect(host.port, isNotNull);
+      expect(host.port, isNot(releasedPort));
+      expect(await File(ownership.recordPath(tempHome.path)).exists(), isTrue);
+
+      final record = await ownership.readRecord(tempHome.path);
+      expect(record?.enabled, isTrue);
+      expect(record?.port, host.port);
+    });
+
+    test('re-applying a disabled setting keeps the endpoint closed', () async {
+      await host.updateSettings(
+        enabled: false,
+        permissionMode: ClientCliSettings.defaultMode,
+      );
+
+      expect(host.isRunning, isFalse);
+      expect(await File(ownership.recordPath(tempHome.path)).exists(), isFalse);
+    });
+
+    test('concurrent enable requests publish exactly one serving endpoint', () async {
+      final probe = _ConcurrencyProbeOwnership(
+        processAliveChecker: (_) async => true,
+      );
+      final probeHost = ClientCliHost(
+        connectionCoordinator: coordinator,
+        deviceRepository: deviceRepo,
+        ownership: probe,
+        approvalCoordinator: approvalCoordinator,
+        sanadHome: tempHome.path,
+        clientVersion: '1.0.15',
+        initialEnabled: false,
+        initialPermissionMode: ClientCliSettings.defaultMode,
+      );
+
+      await Future.wait([
+        probeHost.updateSettings(
+          enabled: true,
+          permissionMode: ClientCliSettings.defaultMode,
+        ),
+        probeHost.updateSettings(
+          enabled: true,
+          permissionMode: ClientCliSettings.defaultMode,
+        ),
+        probeHost.updateSettings(
+          enabled: true,
+          permissionMode: ClientCliSettings.defaultMode,
+        ),
+      ]);
+
+      // Lifecycle mutations are serialized: only one owner acquisition may be in
+      // flight, so a second start can never bind a listener on a published server.
+      expect(probe.maxInFlight, 1);
+      expect(probeHost.isRunning, isTrue);
+      final port = probeHost.port!;
+
+      final response = await http
+          .get(
+            Uri.parse('http://127.0.0.1:$port/health'),
+            headers: {'x-sanad-client-token': probeHost.token!},
+          )
+          .timeout(const Duration(seconds: 5));
+      expect(response.statusCode, 200);
+
+      final record = await probe.readRecord(tempHome.path);
+      expect(record?.port, port);
+      expect(record?.enabled, isTrue);
+
+      await probeHost.stop();
+    });
+
+    test('an enable immediately followed by stop settles as stopped', () async {
+      await Future.wait([
+        host.updateSettings(
+          enabled: true,
+          permissionMode: ClientCliSettings.defaultMode,
+        ),
+        host.stop(),
+      ]);
+
+      expect(host.isRunning, isFalse);
+      expect(await File(ownership.recordPath(tempHome.path)).exists(), isFalse);
+    });
+
+    test('a stop immediately followed by enable restores a serving endpoint',
+        () async {
+      await host.updateSettings(
+        enabled: true,
+        permissionMode: ClientCliSettings.defaultMode,
+      );
+
+      await Future.wait([
+        host.stop(),
+        host.updateSettings(
+          enabled: true,
+          permissionMode: ClientCliSettings.defaultMode,
+        ),
+      ]);
+
+      expect(host.isRunning, isTrue);
+      final port = host.port!;
+
+      final response = await http
+          .get(
+            Uri.parse('http://127.0.0.1:$port/health'),
+            headers: {'x-sanad-client-token': host.token!},
+          )
+          .timeout(const Duration(seconds: 5));
+      expect(response.statusCode, 200);
+
+      final record = await ownership.readRecord(tempHome.path);
+      expect(record?.port, port);
     });
   });
 }

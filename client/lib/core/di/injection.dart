@@ -160,6 +160,16 @@ Future<void> configureDependencies({
   );
   await startupTrace?.call('hardware-id-ready');
 
+  if (!getIt.isRegistered<String>(instanceName: 'appVersion')) {
+    // Single runtime source for the Client release version. The last-resort
+    // fallback only applies when the platform package metadata is unavailable.
+    var appVersion = '1.0.0';
+    try {
+      appVersion = (await PackageInfo.fromPlatform()).version.split('+').first;
+    } catch (_) {}
+    getIt.registerSingleton<String>(appVersion, instanceName: 'appVersion');
+  }
+
   if (!getIt.isRegistered<SanadSocketService>(
     instanceName: 'cloudSocketService',
   )) {
@@ -214,12 +224,6 @@ Future<void> configureDependencies({
   }
 
   if (!getIt.isRegistered<DeviceConnectionCoordinator>()) {
-    String appVersion = '1.0.0';
-    try {
-      final packageInfo = await PackageInfo.fromPlatform();
-      appVersion = packageInfo.version.split('+').first;
-    } catch (_) {}
-
     getIt.registerLazySingleton<DeviceConnectionCoordinator>(
       () => DeviceConnectionCoordinator(
         cloudSocketService: getIt<SanadSocketService>(
@@ -230,7 +234,7 @@ Future<void> configureDependencies({
         ),
         currentDeviceId: getIt<String>(instanceName: 'hardwareId'),
         daemonController: getIt<LocalDaemonController>(),
-        expectedVersion: appVersion,
+        expectedVersion: getIt<String>(instanceName: 'appVersion'),
       ),
       dispose: (coordinator) => coordinator.dispose(),
     );
@@ -310,7 +314,12 @@ Future<void> configureDependencies({
   }
 
   if (!getIt.isRegistered<IDeviceRepository>()) {
-    getIt.registerFactory<IDeviceRepository>(
+    // One inventory owner: every consumer (device cubit, conversation default
+    // device, and the Client CLI host) must read the same initialized
+    // DeviceManager. A factory would hand the Client CLI host an uninitialized
+    // repository whose agent list is always empty, silently disabling remote
+    // device discovery for `sanad-client`.
+    getIt.registerLazySingleton<IDeviceRepository>(
       () => DeviceRepositoryImpl(
         getIt<SanadSocketService>(instanceName: 'cloudSocketService'),
         getIt<DeviceConnectionCoordinator>(),
@@ -445,7 +454,7 @@ Future<void> configureDependencies({
         ownership: getIt<ClientCliOwnership>(),
         approvalCoordinator: getIt<ClientCliApprovalCoordinator>(),
         sanadHome: home,
-        clientVersion: '1.0.15',
+        clientVersion: getIt<String>(instanceName: 'appVersion'),
       ),
       dispose: (host) => host.stop(),
     );

@@ -26,6 +26,8 @@ class ClientCliHost {
   final _logger = Logger('ClientCliHost');
 
   HttpServer? _server;
+  StreamSubscription<HttpRequest>? _serverSubscription;
+  Future<void>? _lifecycleLock;
   String? _token;
   bool _enabled;
   String _permissionMode;
@@ -53,51 +55,72 @@ class ClientCliHost {
   Future<void> updateSettings({
     required bool enabled,
     required String permissionMode,
-  }) async {
-    final modeChanged = _permissionMode != permissionMode;
-    final enabledChanged = _enabled != enabled;
-    _enabled = enabled;
-    _permissionMode = permissionMode;
+  }) {
+    // Lifecycle mutations are serialized: overlapping enable/disable requests
+    // from settings, login events, and workspace restore must never bind two
+    // listeners or publish a port that is not actually serving.
+    return _serialize(() async {
+      final modeChanged = _permissionMode != permissionMode;
+      _enabled = enabled;
+      _permissionMode = permissionMode;
 
-    if (enabledChanged) {
-      if (_enabled) {
-        await start();
-      } else {
-        await stop();
+      if (!_enabled) {
+        if (isRunning) {
+          await _stopLocked();
+        }
+        return;
       }
-    } else if (isRunning && modeChanged) {
-      // Update running record
-      final currentPort = _server?.port;
-      final currentToken = _token;
-      if (currentPort != null && currentToken != null) {
-        final record = ClientCliRecord(
-          pid: pid,
-          port: currentPort,
-          token: currentToken,
-          sanadHome: sanadHome,
-          clientVersion: clientVersion,
-          enabled: _enabled,
-          permissionMode: _permissionMode,
-          updatedAt: DateTime.now().toUtc(),
-        );
-        await ownership.acquireOwnership(record);
+
+      if (!isRunning) {
+        // Restore the endpoint whenever the setting is enabled but no listener
+        // is live, for example after a logout/login cycle released ownership.
+        await _startLocked();
+        return;
       }
-    }
+
+      if (modeChanged) {
+        // Update running record
+        final currentPort = _server?.port;
+        final currentToken = _token;
+        if (currentPort != null && currentToken != null) {
+          final record = ClientCliRecord(
+            pid: pid,
+            port: currentPort,
+            token: currentToken,
+            sanadHome: sanadHome,
+            clientVersion: clientVersion,
+            enabled: _enabled,
+            permissionMode: _permissionMode,
+            updatedAt: DateTime.now().toUtc(),
+          );
+          await ownership.acquireOwnership(record);
+        }
+      }
+    });
   }
 
-  Future<void> start() async {
+  Future<T> _serialize<T>(Future<T> Function() action) {
+    final previous = _lifecycleLock ?? Future<void>.value();
+    final result = previous.then((_) => action());
+    // Keep the chain alive for later callers without leaking failures.
+    _lifecycleLock = result.then((_) {}, onError: (_) {});
+    return result;
+  }
+
+  Future<void> start() => _serialize(_startLocked);
+
+  Future<void> _startLocked() async {
     if (isRunning) return;
 
     final tokenBytes = List<int>.generate(32, (_) => Random.secure().nextInt(256));
-    _token = base64Url.encode(tokenBytes);
+    final token = base64Url.encode(tokenBytes);
 
-    _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final currentPort = _server!.port;
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
 
     final record = ClientCliRecord(
       pid: pid,
-      port: currentPort,
-      token: _token!,
+      port: server.port,
+      token: token,
       sanadHome: sanadHome,
       clientVersion: clientVersion,
       enabled: _enabled,
@@ -108,27 +131,45 @@ class ClientCliHost {
     try {
       await ownership.acquireOwnership(record);
     } catch (e) {
-      await _server?.close(force: true);
-      _server = null;
-      _token = null;
+      await server.close(force: true);
       rethrow;
     }
 
-    _server!.listen(
-      _handleRequest,
-      onError: (e) {
-        _logger.warning('Client CLI server error: $e');
-      },
-    );
+    final StreamSubscription<HttpRequest> subscription;
+    try {
+      subscription = server.listen(
+        _handleRequest,
+        onError: (e) {
+          _logger.warning('Client CLI server error: $e');
+        },
+      );
+    } catch (e) {
+      await server.close(force: true);
+      try {
+        await ownership.releaseOwnership(sanadHome, pid: pid);
+      } catch (_) {}
+      rethrow;
+    }
+
+    // Publish only once the endpoint is actually serving, so the runtime record
+    // can never point at a bound-but-unserved port.
+    _token = token;
+    _serverSubscription = subscription;
+    _server = server;
   }
 
-  Future<void> stop() async {
+  Future<void> stop() => _serialize(_stopLocked);
+
+  Future<void> _stopLocked() async {
     for (final socket in List<WebSocket>.from(_activeSockets)) {
       try {
         await socket.close(WebSocketStatus.normalClosure, 'Client CLI stopped');
       } catch (_) {}
     }
     _activeSockets.clear();
+
+    await _serverSubscription?.cancel();
+    _serverSubscription = null;
 
     await _server?.close(force: true);
     _server = null;

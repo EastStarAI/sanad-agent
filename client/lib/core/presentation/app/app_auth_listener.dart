@@ -132,6 +132,9 @@ class _AppAuthListenerState extends State<AppAuthListener> {
         if (state is AuthAuthenticated) {
           unawaited(widget.authService.syncExternalSession(state.accessToken));
           unawaited(widget.syncAuthContext());
+          // A login cycle may have released Client CLI endpoint ownership while
+          // the feature stayed enabled; re-apply the persisted setting.
+          unawaited(context.read<ClientCliCubit>().reconcile());
           widget.socketService.setAccessToken(state.accessToken);
           unawaited(
             widget.socketService

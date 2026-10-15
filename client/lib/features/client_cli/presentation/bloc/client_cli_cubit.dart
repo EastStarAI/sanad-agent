@@ -47,6 +47,16 @@ class ClientCliCubit extends Cubit<ClientCliSettings> {
     await _host.stop();
   }
 
+  /// Re-applies the persisted setting to the owning host after an external
+  /// lifecycle event (for example a completed login) released the endpoint
+  /// while the feature stayed enabled.
+  Future<void> reconcile() async {
+    await _host.updateSettings(
+      enabled: state.enabled,
+      permissionMode: state.permissionMode,
+    );
+  }
+
   @override
   Future<void> close() async {
     await _host.stop();

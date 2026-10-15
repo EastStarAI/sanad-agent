@@ -8,6 +8,7 @@ import 'package:uuid/uuid.dart';
 import '../data/client_cli_discovery.dart';
 import '../domain/models/client_cli_exceptions.dart';
 import '../domain/models/client_cli_record.dart';
+import '../domain/models/client_cli_version.dart';
 
 typedef WebSocketConnector = Future<WebSocket> Function(Uri uri, {Map<String, dynamic>? headers});
 
@@ -20,7 +21,7 @@ class SanadClientRunner {
 
   const SanadClientRunner({
     this.discovery = const ClientCliDiscovery(),
-    this.version = '1.0.15',
+    this.version = sanadClientCliVersion,
     this.uuid = const Uuid(),
     this.httpClientFactory,
     this.webSocketConnector,
