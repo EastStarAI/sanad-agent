@@ -7,6 +7,7 @@ import 'package:sanad_client/features/settings/domain/account_lifecycle.dart';
 class _FakeLifecycleSocket implements AccountLifecycleSocket {
   final responsesController = StreamController<Map<String, dynamic>>.broadcast();
   final revokeController = StreamController<Map<String, dynamic>>.broadcast();
+  final deleteController = StreamController<Map<String, dynamic>>.broadcast();
   final changesController = StreamController<void>.broadcast();
   final readinessController = StreamController<bool>.broadcast();
   final emitted = <(String, Map<String, dynamic>)>[];
@@ -17,6 +18,9 @@ class _FakeLifecycleSocket implements AccountLifecycleSocket {
 
   @override
   Stream<Map<String, dynamic>> get revokeResults => revokeController.stream;
+
+  @override
+  Stream<Map<String, dynamic>> get deleteResults => deleteController.stream;
 
   @override
   Stream<void> get changes => changesController.stream;
@@ -35,6 +39,7 @@ class _FakeLifecycleSocket implements AccountLifecycleSocket {
   Future<void> close() async {
     await responsesController.close();
     await revokeController.close();
+    await deleteController.close();
     await changesController.close();
     await readinessController.close();
   }
@@ -166,5 +171,84 @@ void main() {
     expect(readiness, [false]);
     await changeSubscription.cancel();
     await readinessSubscription.cancel();
+  });
+
+  test('deleteAccount is versioned, correlated, sends DELETE_ACCOUNT confirmation, and contains no credential', () async {
+    final future = repository.deleteAccount();
+    await Future<void>.delayed(Duration.zero);
+
+    final (event, payload) = socket.emitted.single;
+    expect(event, 'delete_account');
+    expect(payload['version'], 1);
+    expect(payload['confirmation'], 'DELETE_ACCOUNT');
+    expect(payload['request_id'], 'request-1');
+    expect(payload, isNot(contains('access_token')));
+    expect(payload, isNot(contains('user_id')));
+
+    socket.deleteController.add({
+      'version': 1,
+      'status': 'ok',
+      'request_id': 'request-1',
+      'result': 'core_deleted',
+      'cleanup_status': 'pending',
+    });
+
+    final result = await future;
+    expect(result.requestId, 'request-1');
+    expect(result.result, 'core_deleted');
+    expect(result.cleanupStatus, 'pending');
+    expect(result.isPending, isTrue);
+    expect(result.isCompleted, isFalse);
+  });
+
+  test('deleteAccount parses completed and idempotent cleanup results', () async {
+    final future = repository.deleteAccount();
+    await Future<void>.delayed(Duration.zero);
+
+    socket.deleteController.add({
+      'version': 1,
+      'status': 'ok',
+      'request_id': 'request-1',
+      'result': 'completed',
+      'cleanup_status': 'completed',
+      'idempotent': true,
+    });
+
+    final result = await future;
+    expect(result.requestId, 'request-1');
+    expect(result.result, 'completed');
+    expect(result.cleanupStatus, 'completed');
+    expect(result.isPending, isFalse);
+    expect(result.isCompleted, isTrue);
+    expect(result.isIdempotent, isTrue);
+  });
+
+
+  test('deleteAccount throws when result is not deleted or error is returned', () async {
+    final future = repository.deleteAccount();
+    await Future<void>.delayed(Duration.zero);
+
+    socket.deleteController.add({
+      'version': 1,
+      'status': 'error',
+      'request_id': 'request-1',
+      'error': 'confirmation_required',
+    });
+
+    await expectLater(
+      future,
+      throwsA(isA<AccountLifecycleException>()),
+    );
+  });
+
+  test('deleteAccount times out and sets outcomeUnknown', () async {
+    await expectLater(
+      repository.deleteAccount(),
+      throwsA(
+        isA<AccountLifecycleException>()
+            .having((e) => e.outcomeUnknown, 'outcomeUnknown', isTrue)
+            .having((e) => e.message, 'message', contains('timed out')),
+      ),
+    );
   });
 }

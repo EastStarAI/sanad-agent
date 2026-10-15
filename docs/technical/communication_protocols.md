@@ -178,6 +178,57 @@ All events are formatted in JSON and routed via FastAPI's Socket.IO manager.
     }
     ```
 
+#### D. Account Lifecycle & Deletion
+- **Transport & Authentication:**
+  - Carried strictly over authenticated client Socket.IO connections.
+  - Carries NO bearer tokens or user identifiers in event payloads; user identity and session family are derived by the Gateway from the authenticated socket connection.
+  - Correlated request-response pattern using `request_id`.
+- **Event: `get_account_lifecycle` (Client → Backend)**
+  - Requests account lifecycle snapshot of active client sessions and connected agent devices.
+  - Payload Schema:
+    ```json
+    {
+      "version": 1,
+      "limit": 100,
+      "request_id": "string"
+    }
+    ```
+  - Response Event: `account_lifecycle_response` (Backend → Client) with items and presence status.
+- **Event: `revoke_account_principal` (Client → Backend)**
+  - Revokes a specific client session or agent device principal.
+  - Response Event: `account_lifecycle_revoke_result` (Backend → Client).
+- **Event: `delete_account` (Client → Backend)**
+  - Initiates permanent transactional deletion of the authenticated account, cloud sessions, credentials, credits, devices, and associated cloud metadata.
+  - Payload Schema:
+    ```json
+    {
+      "version": 1,
+      "confirmation": "DELETE_ACCOUNT",
+      "request_id": "string"
+    }
+    ```
+  - Response Event: `account_lifecycle_delete_result` (Backend → Client) emitted to caller after database commit and before distributed eviction:
+    ```json
+    {
+      "version": 1,
+      "request_id": "string",
+      "status": "ok",
+      "result": "core_deleted",
+      "cleanup_status": "pending",
+      "idempotent": false
+    }
+    ```
+  - `core_deleted` confirms the database commit, not completion of distributed cleanup. `completed` is emitted only when cleanup is complete. A timeout or transport loss before a trustworthy result is an unknown outcome; the Client must not report success or automatically resubmit deletion. A later authenticated `auth_revoked` terminal event may still sign the Client out.
+  - Distributed Eviction & Disconnection:
+    - Publishes to Redis `auth:account_deleted`, `auth:family_revoked`, and `auth:device_revoked` channels.
+    - Connected app sockets for the deleted account receive `auth_revoked` (`{"version": 1, "reason": "account_deleted"}`) before disconnection.
+    - Connected agent/device daemon sockets are disconnected directly.
+    - Purges Redis presence, capability, and tool keys with durable state tracking and service lifecycle recovery.
+  - Local Data & Sign in with Apple Notice:
+    - Agent-owned local conversations and workspace files on user machines remain completely preserved.
+    - Sign in with Apple manual revocation guidance (Apple TN3194): Apple account refresh tokens are not stored or retained on Sanad servers. Users who signed in via Apple may manage or revoke Sanad access in Apple ID settings (Settings > Apple ID > Sign in with Apple > Sanad > Stop using Apple ID) or at https://appleid.apple.com.
+
+
 ---
 
 ### 2.2. Backend ↔ Daemon (Bridge Events)
