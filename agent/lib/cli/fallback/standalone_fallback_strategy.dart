@@ -24,12 +24,16 @@ class StandaloneFallbackStrategy {
     : discovery = discovery ?? const LocalGatewayDiscovery();
 
   /// Resolves the runtime mode based on user options and daemon reachability.
+  ///
+  /// [probeTimeout] overrides every discovery probe deadline. When omitted,
+  /// discovery applies its own targeted and speculative bounds, so an
+  /// explicitly targeted daemon that answers slowly is still recognized.
   Future<CliRuntimeMode> resolveMode({
     bool forceStandalone = false,
     String? urlOverride,
     int? portOverride,
     String? tokenOverride,
-    Duration probeTimeout = const Duration(milliseconds: 300),
+    Duration? probeTimeout,
   }) async {
     if (forceStandalone) {
       _logger.info('Standalone mode forced by user flag (--standalone).');
