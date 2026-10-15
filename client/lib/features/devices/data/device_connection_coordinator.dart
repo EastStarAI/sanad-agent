@@ -103,18 +103,11 @@ class DeviceConnectionCoordinator {
       return result.isSuccess;
     }
 
-    if ((_serviceManager.shouldAutoStart || force) && _serviceManager.isServiceInstalled()) {
-      final started = await _serviceManager.startDaemon();
-      if (!started) return false;
-      for (var attempt = 0; attempt < 8; attempt++) {
-        if (await _serviceManager.isDaemonRunning()) {
-          final result = await _serviceManager.updateDaemon(
-            targetVersion: expectedVersion,
-          );
-          return result.isSuccess;
-        }
-        await Future<void>.delayed(Duration(milliseconds: 300 + attempt * 250));
-      }
+    if (_serviceManager.shouldAutoStart || force) {
+      final result = await _serviceManager.updateDaemon(
+        targetVersion: expectedVersion,
+      );
+      return result.isSuccess;
     }
     return false;
   }

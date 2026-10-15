@@ -81,4 +81,10 @@ abstract class LocalDaemonController {
   bool isServiceInstalled();
   bool get shouldAutoStart;
   Future<bool> install();
+
+  Future<String?> getInstalledExecutableVersion() async => null;
+  Future<bool> validateServiceInstallCompatibility({
+    String? executablePath,
+    List<String>? arguments,
+  }) async => true;
 }

@@ -250,4 +250,13 @@ class SourceDaemonController implements LocalDaemonController {
 
   @override
   Future<bool> install() async => true; // No-op in dev mode
+
+  @override
+  Future<String?> getInstalledExecutableVersion() async => null;
+
+  @override
+  Future<bool> validateServiceInstallCompatibility({
+    String? executablePath,
+    List<String>? arguments,
+  }) async => true;
 }

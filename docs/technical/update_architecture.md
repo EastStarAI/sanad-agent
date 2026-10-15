@@ -82,12 +82,15 @@ interrupting active client connections while retaining existing authentication.
 
 ## First install and retry
 
-`VerifiedAgentBootstrapInstaller` is used only when the packaged Desktop Client
-cannot reach an installed Agent. It validates the exact manifest and artifact,
-stages beside the target, preserves the previous executable, performs an atomic
-move, and restores the previous executable when replacement fails.
-`StandaloneDaemonController` then registers the platform service idempotently,
-starts it, and polls authenticated health with bounded backoff.
+`VerifiedAgentBootstrapInstaller` is used when the packaged Desktop Client
+cannot reach an installed Agent or when an existing on-disk Agent executable is
+stopped and determined to be incompatible (e.g. outdated version, unparseable version,
+or missing required service CLI options detected via dynamic `--help` inspection).
+It validates the exact manifest and artifact, stages beside the target, preserves
+the previous executable, performs an atomic move, and restores the previous executable
+when replacement fails. `StandaloneDaemonController` then validates compatibility,
+registers the platform service idempotently, starts it, and polls authenticated
+health with bounded backoff.
 
 The connection coordinator proves the authenticated local socket after health.
 A failed socket attempt is not cached permanently; a later retry creates a new
