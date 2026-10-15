@@ -15,16 +15,15 @@ class AggregatorThinkingWireCodec {
       case OpenAiEffortDirective(:final effort):
         body['reasoning'] = {'enabled': true, 'effort': effort};
       case AnthropicBudgetDirective(:final budgetTokens):
-        body['reasoning'] = {
-          'enabled': true,
-          'max_tokens': budgetTokens,
-        };
+        body['reasoning'] = {'enabled': true, 'max_tokens': budgetTokens};
       case AnthropicAdaptiveDirective(:final effort):
         body['reasoning'] = {'enabled': true, 'effort': effort};
       case GoogleBudgetDirective(:final budget):
         body['reasoning'] = {'enabled': true, 'max_tokens': budget};
       case GoogleLevelDirective(:final level):
         body['reasoning'] = {'enabled': true, 'effort': level};
+      case ThinkingToggleDirective(enabled: true):
+        body['reasoning'] = const {'enabled': true};
       case ThinkingToggleDirective(enabled: false):
         body['reasoning'] = const {'effort': 'none'};
       case UseProviderDefault():

@@ -11,10 +11,12 @@ import '../../core/models/tool_call.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
 import '../../core/provider_thinking/aggregator_thinking_wire_codec.dart';
+import '../../core/provider_thinking/deepseek_thinking_wire_codec.dart';
 import '../../core/provider_thinking/google_thinking_wire_codec.dart';
 import '../../core/provider_thinking/native_thinking_directive.dart';
 import '../../core/provider_thinking/toggle_effort_thinking_wire_codec.dart';
 import '../../core/provider_thinking/thinking_route_policy.dart';
+import '../../core/provider_thinking/zai_thinking_wire_codec.dart';
 import '../../core/models/model_metadata.dart';
 import '../../core/di.dart';
 import '../../core/provider_runtime/provider_instance.dart';
@@ -470,7 +472,8 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final transport = ProviderRequestTransport(
       options: options,
       adapterSharedClient: client,
-      requestClientFactory: requestClientFactory ?? options.requestClientFactory,
+      requestClientFactory:
+          requestClientFactory ?? options.requestClientFactory,
     );
     late http.Response response;
     try {
@@ -551,7 +554,8 @@ class BaseOpenAIAdapter implements LLMAdapter {
     final transport = ProviderRequestTransport(
       options: options,
       adapterSharedClient: client,
-      requestClientFactory: requestClientFactory ?? options.requestClientFactory,
+      requestClientFactory:
+          requestClientFactory ?? options.requestClientFactory,
     );
     final request = http.Request('POST', url);
     request.headers.addAll(_requestHeaders(options));
@@ -984,13 +988,16 @@ class BaseOpenAIAdapter implements LLMAdapter {
         modelId: resolvedModel,
       );
 
-      if (directive is GoogleBudgetDirective ||
-          directive is GoogleLevelDirective) {
-        GoogleThinkingWireCodec.applyThinkingConfig(body, directive);
-      } else if (effectivePolicyId == 'aggregator_upstream') {
+      if (effectivePolicyId == 'aggregator_upstream') {
         AggregatorThinkingWireCodec.applyReasoning(body, directive);
-      } else if (effectivePolicyId == 'google_thinking') {
+      } else if (directive is GoogleBudgetDirective ||
+          directive is GoogleLevelDirective ||
+          effectivePolicyId == 'google_thinking') {
         GoogleThinkingWireCodec.applyThinkingConfig(body, directive);
+      } else if (effectivePolicyId == 'deepseek_thinking') {
+        DeepSeekThinkingWireCodec.applyChatCompletions(body, directive);
+      } else if (effectivePolicyId == 'zai_thinking') {
+        ZaiThinkingWireCodec.applyChatCompletions(body, directive);
       } else {
         ToggleEffortThinkingWireCodec.applyChatCompletions(body, directive);
       }
@@ -1015,7 +1022,8 @@ class BaseOpenAIAdapter implements LLMAdapter {
 
   ProviderInstance _toRouteInstance({String? overrideInstanceId}) {
     final effectiveId = overrideInstanceId ?? providerInstanceId;
-    if (effectiveId != null && getIt.isRegistered<ProviderInstanceRepository>()) {
+    if (effectiveId != null &&
+        getIt.isRegistered<ProviderInstanceRepository>()) {
       final found = getIt<ProviderInstanceRepository>().findById(effectiveId);
       if (found != null) return found;
     }

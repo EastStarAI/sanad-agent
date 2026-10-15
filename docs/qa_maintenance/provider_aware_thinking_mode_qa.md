@@ -26,8 +26,15 @@ routes, and never silently ignore an explicit unsupported selection.
 | DeepSeek fixture model | Toggle XOR effort; unresolved DeepSeek models stay `unknown` |
 | Aggregator OpenRouter upstream | Delegates descriptor/directive to upstream family policy |
 | Ollama without live thinking capability | Descriptor `unknown`; no invented options from model name |
-| Ollama with live `thinking` capability | Options from probe; `off` → `think: false` |
-| Custom / Kimi / generic chat_completions without opt-in | `unknown` policy; no selector inventing OpenAI effort |
+| Ollama Boolean declaration | Exactly declared On/Off choices and member Boolean default; sync/stream `think` remains Boolean; omitted Default emits no `think` |
+| Ollama level declaration | Exactly declared native string choices/default; a native string `off` stays a string, not Boolean `false` |
+| Malformed native values/default or untyped capability list | No fabricated options/defaults; unresolved evidence stays unknown |
+| Codex exact native metadata | `supported_reasoning_levels` and optional member `default_reasoning_level` survive discovery/cache/resolution; malformed or foreign-model metadata is not finite evidence |
+| Valid native levels without a default | No guessed first/medium default; provider Default remains wire omission |
+| GPT-5.6 Sol `none` versus Default | `none` is an explicit Off effort; Default omits the field; Astra does not acquire unsupported `none` |
+| Custom / generic compatible route without exact model evidence or declaration | `unknown`; no selector inventing OpenAI effort |
+| Compatible route with exact evidenced Kimi model | Model-owned finite Kimi controls; fixed models unsupported; aggregator retains its route-owned envelope |
+| Every registry/factory kind | Automatic evidenced/unknown/unsupported expectations plus finite declaration, actual-mode and default-omission checks; no claim that registry coverage proves every upstream model |
 | OpenCode Go recognized reasoning family | Selector uses the OpenAI Chat effort descriptor and supported ordered tiers |
 | OpenCode Go unknown model with `supports_reasoning_output=true` | Control remains unavailable; reasoning output alone does not invent selectable effort |
 | Explicit empty `thinking_mode` session preference | Client transmits the present empty field; daemon clears persistence and emits `thinking_mode: null` |

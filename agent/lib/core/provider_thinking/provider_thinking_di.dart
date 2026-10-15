@@ -11,6 +11,7 @@ import 'anthropic_thinking_policy.dart';
 import 'openai_chat_effort_thinking_policy.dart';
 import 'provider_thinking_policy.dart';
 import 'unknown_thinking_policy.dart';
+import 'zai_thinking_policy.dart';
 import 'thinking_capability_assembler.dart';
 
 /// First-release thinking policy ids locked in Task 43 Gate R0.
@@ -25,6 +26,7 @@ const reservedThinkingPolicyIds = [
   'deepseek_thinking',
   'ollama_live',
   'kimi_thinking',
+  'zai_thinking',
 ];
 
 ProviderThinkingRegistry buildProviderThinkingRegistry() {
@@ -39,6 +41,7 @@ ProviderThinkingRegistry buildProviderThinkingRegistry() {
   registry.register(const DeepSeekThinkingPolicy());
   registry.register(const OllamaLiveThinkingPolicy());
   registry.register(const KimiThinkingPolicy());
+  registry.register(const ZaiThinkingPolicy());
   return registry;
 }
 

@@ -1,11 +1,7 @@
 /// Fixed Google Gemini model thinking tables (Task 43 Gate G).
 library;
 
-enum GoogleRouteThinkingKind {
-  unsupported,
-  tokenBudget,
-  level,
-}
+enum GoogleRouteThinkingKind { unsupported, tokenBudget, level }
 
 class GoogleModelCatalog {
   GoogleModelCatalog._();
@@ -28,6 +24,10 @@ class GoogleModelCatalog {
       return GoogleRouteThinkingKind.level;
     }
     return GoogleRouteThinkingKind.unsupported;
+  }
+
+  static bool isEvidencedModel(String modelId) {
+    return thinkingKindForModel(modelId) != GoogleRouteThinkingKind.unsupported;
   }
 
   static List<String> budgetOptionIdsForModel(String modelId) {
@@ -95,10 +95,7 @@ class GoogleModelCatalog {
     return patterns.any(normalized.contains);
   }
 
-  static const _budgetModelPatterns = [
-    'gemini-2.5',
-    'gemini-2-5',
-  ];
+  static const _budgetModelPatterns = ['gemini-2.5', 'gemini-2-5'];
 
   static const _levelModelPatterns = [
     'gemini-3',

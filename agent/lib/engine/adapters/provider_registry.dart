@@ -323,6 +323,7 @@ class ProviderRegistry {
       envBaseUrlName: 'ZAI_API_BASE',
       authType: 'api_key',
       apiMode: 'chat_completions',
+      thinkingPolicyId: 'zai_thinking',
       aliases: ['glm', 'z-ai', 'z.ai', 'zhipu'],
       fallbackModels: [
         'glm-4-plus',
@@ -346,6 +347,7 @@ class ProviderRegistry {
       envBaseUrlName: 'ZAI_CODING_API_BASE',
       authType: 'api_key',
       apiMode: 'chat_completions',
+      thinkingPolicyId: 'zai_thinking',
       aliases: ['zai-coding', 'glm-coding-plan', 'zhipu-coding-plan'],
       fallbackModels: ['glm-4.7', 'glm-5.1', 'glm-4.5-air', 'glm-5-turbo'],
       docsUrl: 'https://docs.z.ai/devpack/overview',

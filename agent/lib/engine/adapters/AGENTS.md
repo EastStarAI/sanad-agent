@@ -25,6 +25,7 @@ This contract applies to `agent/lib/engine/adapters/`.
 - Codex Responses API requires `stream: true` on every request; the sync `generateResponse` path sends a streaming request and consumes the SSE events internally, returning one complete `AgentResponse` — callers see no difference.
 - Responses requests keep server storage disabled and encrypted reasoning replay explicitly scoped.
 - Anthropic, OpenAI-compatible, Ollama, and other protocols keep translation isolated in their owning adapters.
+- Exact model thinking facts never override the active serializer: aggregators retain their reasoning envelope, native finite values retain their wire types, and provider Default is omission rather than a guessed effort.
 
 ## Rich Tool-Result Translation
 - Rich tool results are validated and mapped from canonical ordered blocks by the shared provider-neutral wire codec; adapters must not read paths, process image bytes, or mutate canonical messages.
@@ -35,11 +36,11 @@ This contract applies to `agent/lib/engine/adapters/`.
 
 ## Model Discovery
 - Provider/template aliases stay aligned with registry identities.
-- Family-level metadata may cover newly introduced model variants when exact catalog metadata lags.
+- Selectable thinking controls/defaults require exact model-owned evidence; family names, output-reasoning flags, and speculative future variants never authorize them.
 - Provider model discovery and core model options reuse one provider-owned service.
 - Codex model discovery uses the shared versioned service, hidden-entry filtering, priority ordering, and curated forward-compatible aliases.
 - Dynamic model ids normalize transport-only prefixes before reaching provider-neutral layers.
-- Generic model resolution strips an optional provider prefix and falls back to configured model when no override is supplied.
+- Generic model resolution strips only an explicitly owned transport provider prefix, preserving catalog namespaces, casing and variant markers; it falls back to the configured model only when no override is supplied.
 
 ## Rate Limits and Retry
 - Apply rate limiting per provider instance; zero means unlimited, and provider-side 429 cooldown affects every session using that instance.

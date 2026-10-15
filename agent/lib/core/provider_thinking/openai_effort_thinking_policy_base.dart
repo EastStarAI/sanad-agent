@@ -7,7 +7,8 @@ import 'provider_thinking_policy.dart';
 import 'thinking_control_models.dart';
 import 'thinking_policy_context.dart';
 
-abstract class OpenAiEffortThinkingPolicyBase implements ProviderThinkingPolicy {
+abstract class OpenAiEffortThinkingPolicyBase
+    implements ProviderThinkingPolicy {
   const OpenAiEffortThinkingPolicyBase();
 
   @override
@@ -21,6 +22,11 @@ abstract class OpenAiEffortThinkingPolicyBase implements ProviderThinkingPolicy 
 
     final optionIds = OpenAiReasoningModels.effortOptionIdsForModel(
       context.modelId,
+      metadata: context.modelMetadata,
+    );
+    final defaultOptionId = OpenAiReasoningModels.defaultEffortIdForModel(
+      context.modelId,
+      metadata: context.modelMetadata,
     );
     return ThinkingControlDescriptor(
       status: ThinkingCapabilityStatus.supported,
@@ -30,11 +36,12 @@ abstract class OpenAiEffortThinkingPolicyBase implements ProviderThinkingPolicy 
             (id) => ThinkingControlOption(
               id: id,
               label: OpenAiReasoningModels.labelForEffortId(id),
-              isProviderDefault: id == 'medium',
+              isOff: id == 'none',
+              isProviderDefault: id == defaultOptionId,
             ),
           )
           .toList(growable: false),
-      defaultOptionId: 'medium',
+      defaultOptionId: defaultOptionId,
       capabilityRevision: context.capabilityRevision,
       source: 'profile',
     );
@@ -49,7 +56,11 @@ abstract class OpenAiEffortThinkingPolicyBase implements ProviderThinkingPolicy 
     if (trimmed == null || trimmed.isEmpty) {
       return const UseProviderDefault();
     }
-    if (!OpenAiReasoningModels.allowsEffortId(context.modelId, trimmed)) {
+    if (!OpenAiReasoningModels.allowsEffortId(
+      context.modelId,
+      trimmed,
+      metadata: context.modelMetadata,
+    )) {
       return const UseProviderDefault();
     }
     return buildDirective(trimmed);

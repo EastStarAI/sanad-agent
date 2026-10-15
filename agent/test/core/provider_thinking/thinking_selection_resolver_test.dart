@@ -581,10 +581,7 @@ model_capabilities:
                 'thinking_control': {
                   'status': 'supported',
                   'wire': 'openai_chat_effort',
-                  'options': {
-                    'fast': 'low',
-                    'deep': 'high',
-                  },
+                  'options': {'fast': 'low', 'deep': 'high'},
                   'default_option': 'fast',
                 },
               },
@@ -647,9 +644,9 @@ model_capabilities:
         expect(resPlainWithOverride.descriptor.source, 'config_override');
 
         // Step 2: Config override is removed WITHOUT refetching model cache
-        File('${tempHome.path}/config.yaml').writeAsStringSync(
-          'model_capabilities: {}\n',
-        );
+        File(
+          '${tempHome.path}/config.yaml',
+        ).writeAsStringSync('model_capabilities: {}\n');
         config = Config(environment: const {});
         assembler = ThinkingCapabilityAssembler(registry, config);
         final resolverWithoutOverride = ThinkingSelectionResolver(
@@ -731,10 +728,7 @@ model_capabilities:
                 'thinking_control': {
                   'status': 'supported',
                   'wire': 'anthropic_budget',
-                  'options': {
-                    'tier_min': 2048,
-                    'tier_max': 8192,
-                  },
+                  'options': {'tier_min': 2048, 'tier_max': 8192},
                   'default_option': 'tier_min',
                 },
               },
@@ -746,10 +740,7 @@ model_capabilities:
                 'thinking_control': {
                   'status': 'supported',
                   'wire': 'anthropic_budget',
-                  'options': {
-                    'invented': 'not_a_number',
-                    'too_small': 500,
-                  },
+                  'options': {'invented': 'not_a_number', 'too_small': 500},
                 },
               },
             },
@@ -770,11 +761,7 @@ model_capabilities:
                 'thinking_control': {
                   'status': 'supported',
                   'wire': 'openai_chat_effort',
-                  'options': {
-                    'quick': 'low',
-                    'deep': 'high',
-                    'off': 'none',
-                  },
+                  'options': {'quick': 'low', 'deep': 'high', 'off': 'none'},
                   'default_option': 'quick',
                 },
               },
@@ -953,11 +940,7 @@ model_capabilities:
                 'thinking_control': {
                   'status': 'supported',
                   'wire': 'anthropic_adaptive',
-                  'options': {
-                    'off': 'off',
-                    'low': 'low',
-                    'high': 'high',
-                  },
+                  'options': {'off': 'off', 'low': 'low', 'high': 'high'},
                 },
               },
             },
@@ -979,11 +962,7 @@ model_capabilities:
                 'thinking_control': {
                   'status': 'supported',
                   'wire': 'google_thinking',
-                  'options': {
-                    'off': 0,
-                    'low': 'low',
-                    'budget': 4096,
-                  },
+                  'options': {'off': 0, 'low': 'low', 'budget': 4096},
                 },
               },
             },
@@ -1005,10 +984,7 @@ model_capabilities:
                 'thinking_control': {
                   'status': 'supported',
                   'wire': 'toggle_effort',
-                  'options': {
-                    'off': false,
-                    'on': true,
-                  },
+                  'options': {'off': false, 'on': true},
                 },
               },
             },
@@ -1036,10 +1012,17 @@ model_capabilities:
         );
         expect(
           resAdaptiveOff.directive,
-          isA<ThinkingToggleDirective>().having((d) => d.enabled, 'enabled', isFalse),
+          isA<ThinkingToggleDirective>().having(
+            (d) => d.enabled,
+            'enabled',
+            isFalse,
+          ),
         );
         final adaptiveOffBody = <String, dynamic>{};
-        AnthropicThinkingWireCodec.applyThinking(adaptiveOffBody, resAdaptiveOff.directive);
+        AnthropicThinkingWireCodec.applyThinking(
+          adaptiveOffBody,
+          resAdaptiveOff.directive,
+        );
         expect(adaptiveOffBody['thinking'], {'type': 'disabled'});
         expect(adaptiveOffBody.containsKey('output_config'), isFalse);
 
@@ -1050,9 +1033,15 @@ model_capabilities:
           selectionId: 'low',
         );
         expect(resAdaptiveLow.directive, isA<AnthropicAdaptiveDirective>());
-        expect((resAdaptiveLow.directive as AnthropicAdaptiveDirective).effort, 'low');
+        expect(
+          (resAdaptiveLow.directive as AnthropicAdaptiveDirective).effort,
+          'low',
+        );
         final adaptiveLowBody = <String, dynamic>{};
-        AnthropicThinkingWireCodec.applyThinking(adaptiveLowBody, resAdaptiveLow.directive);
+        AnthropicThinkingWireCodec.applyThinking(
+          adaptiveLowBody,
+          resAdaptiveLow.directive,
+        );
         expect(adaptiveLowBody['thinking'], {'type': 'adaptive'});
         expect(adaptiveLowBody['output_config'], {'effort': 'low'});
 
@@ -1067,7 +1056,10 @@ model_capabilities:
           isA<GoogleLevelDirective>().having((d) => d.level, 'level', 'off'),
         );
         final googleOffBody = <String, dynamic>{};
-        GoogleThinkingWireCodec.applyThinkingConfig(googleOffBody, resGoogleOff.directive);
+        GoogleThinkingWireCodec.applyThinkingConfig(
+          googleOffBody,
+          resGoogleOff.directive,
+        );
         expect(
           googleOffBody['extra_body']['google']['thinking_config']['thinking_level'],
           'off',
@@ -1080,9 +1072,15 @@ model_capabilities:
           selectionId: 'budget',
         );
         expect(resGoogleBudget.directive, isA<GoogleBudgetDirective>());
-        expect((resGoogleBudget.directive as GoogleBudgetDirective).budget, 4096);
+        expect(
+          (resGoogleBudget.directive as GoogleBudgetDirective).budget,
+          4096,
+        );
         final googleBudgetBody = <String, dynamic>{};
-        GoogleThinkingWireCodec.applyThinkingConfig(googleBudgetBody, resGoogleBudget.directive);
+        GoogleThinkingWireCodec.applyThinkingConfig(
+          googleBudgetBody,
+          resGoogleBudget.directive,
+        );
         expect(
           googleBudgetBody['extra_body']['google']['thinking_config']['thinking_budget'],
           4096,
@@ -1096,10 +1094,17 @@ model_capabilities:
         );
         expect(
           resToggleOff.directive,
-          isA<ThinkingToggleDirective>().having((d) => d.enabled, 'enabled', isFalse),
+          isA<ThinkingToggleDirective>().having(
+            (d) => d.enabled,
+            'enabled',
+            isFalse,
+          ),
         );
         final toggleOffBody = <String, dynamic>{};
-        ToggleEffortThinkingWireCodec.applyChatCompletions(toggleOffBody, resToggleOff.directive);
+        ToggleEffortThinkingWireCodec.applyChatCompletions(
+          toggleOffBody,
+          resToggleOff.directive,
+        );
         expect(toggleOffBody['thinking'], {'type': 'disabled'});
         expect(toggleOffBody.containsKey('reasoning_effort'), isFalse);
 
@@ -1111,10 +1116,17 @@ model_capabilities:
         );
         expect(
           resToggleOn.directive,
-          isA<ThinkingToggleDirective>().having((d) => d.enabled, 'enabled', isTrue),
+          isA<ThinkingToggleDirective>().having(
+            (d) => d.enabled,
+            'enabled',
+            isTrue,
+          ),
         );
         final toggleOnBody = <String, dynamic>{};
-        ToggleEffortThinkingWireCodec.applyChatCompletions(toggleOnBody, resToggleOn.directive);
+        ToggleEffortThinkingWireCodec.applyChatCompletions(
+          toggleOnBody,
+          resToggleOn.directive,
+        );
         expect(toggleOnBody['thinking'], {'type': 'enabled'});
         expect(toggleOnBody.containsKey('reasoning_effort'), isFalse);
 
@@ -1126,7 +1138,10 @@ model_capabilities:
         );
         expect(resOmitted.directive, const UseProviderDefault());
         final omittedBody = <String, dynamic>{};
-        AnthropicThinkingWireCodec.applyThinking(omittedBody, resOmitted.directive);
+        AnthropicThinkingWireCodec.applyThinking(
+          omittedBody,
+          resOmitted.directive,
+        );
         expect(omittedBody.containsKey('thinking'), isFalse);
         expect(omittedBody.containsKey('output_config'), isFalse);
       },
@@ -1169,15 +1184,15 @@ model_capabilities:
         );
         repo.createInstance(customOpenAi);
 
-        final familyModels = [
-          'o3-mini',
+        final unevidencedFamilyModels = [
+          'o3-mini-variant',
           'grok-3',
           'kimi-k2.5',
-          'deepseek-v4-flash',
+          'deepseek-custom-7b',
           'qwen-2.5-coder',
         ];
 
-        for (final modelId in familyModels) {
+        for (final modelId in unevidencedFamilyModels) {
           // Real assembler boundary check
           final assembled = assembler.assemble(
             instance: customOpenAi,
@@ -1204,15 +1219,17 @@ model_capabilities:
                 ThinkingSelectionErrorCode.capabilityUnknown,
               ),
             ),
-            reason: '$modelId on custom instance must reject selection as capabilityUnknown',
+            reason:
+                '$modelId on custom instance must reject selection as capabilityUnknown',
           );
         }
       },
     );
 
     test(
-      'fresh custom Anthropic-compatible instance with claude-3-7-sonnet fails closed to unknown without fabricated controls',
+      'custom routes reuse exact evidenced model controls; Chat Claude preserved as not native Anthropic wire',
       () {
+        // 1. Custom Anthropic with claude-3-7-sonnet gets native Anthropic controls
         final customAnthropic = ProviderInstance(
           id: 'custom-anthropic-regress',
           templateId: kCustomProviderTemplateId,
@@ -1224,19 +1241,46 @@ model_capabilities:
         );
         repo.createInstance(customAnthropic);
 
-        final assembled = assembler.assemble(
+        final assembledAnthropic = assembler.assemble(
           instance: customAnthropic,
           model: ModelOption(
             value: 'claude-3-7-sonnet',
             label: 'Claude 3.7 Sonnet',
           ),
         );
-        expect(assembled.status, ThinkingCapabilityStatus.unknown);
-        expect(assembled.source, 'unconfigured');
+        expect(assembledAnthropic.status, ThinkingCapabilityStatus.supported);
+        expect(assembledAnthropic.kind, ThinkingControlKind.tokenBudget);
 
+        final resolvedAnthropic = resolver.resolve(
+          providerInstanceId: 'custom-anthropic-regress',
+          modelId: 'claude-3-7-sonnet',
+          selectionId: 'high',
+        );
+        expect(resolvedAnthropic.directive, isA<AnthropicBudgetDirective>());
+
+        // 2. Chat Claude on custom OpenAI route is NOT native Anthropic wire (fails closed to unknown)
+        final customOpenAi = ProviderInstance(
+          id: 'custom-openai-chat-claude',
+          templateId: kCustomProviderTemplateId,
+          displayName: 'Custom OpenAI Chat',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        );
+        repo.createInstance(customOpenAi);
+
+        final assembledChatClaude = assembler.assemble(
+          instance: customOpenAi,
+          model: ModelOption(
+            value: 'claude-3-7-sonnet',
+            label: 'Claude 3.7 Sonnet on Chat',
+          ),
+        );
+        expect(assembledChatClaude.status, ThinkingCapabilityStatus.unknown);
         expect(
           () => resolver.resolve(
-            providerInstanceId: 'custom-anthropic-regress',
+            providerInstanceId: 'custom-openai-chat-claude',
             modelId: 'claude-3-7-sonnet',
             selectionId: 'high',
           ),
@@ -1248,14 +1292,39 @@ model_capabilities:
             ),
           ),
         );
+
+        // 3. Custom OpenAI with o3-mini gets exact OpenAI controls
+        final assembledO3 = assembler.assemble(
+          instance: customOpenAi,
+          model: ModelOption(value: 'o3-mini', label: 'o3-mini'),
+        );
+        expect(assembledO3.status, ThinkingCapabilityStatus.supported);
+        expect(assembledO3.kind, ThinkingControlKind.effort);
+        expect(assembledO3.options.map((o) => o.id), ['low', 'medium', 'high']);
+
+        // 4. Custom OpenAI with deepseek-v4-flash gets exact DeepSeek controls
+        final assembledDeepSeek = assembler.assemble(
+          instance: customOpenAi,
+          model: ModelOption(
+            value: 'deepseek-v4-flash',
+            label: 'DeepSeek V4 Flash',
+          ),
+        );
+        expect(assembledDeepSeek.status, ThinkingCapabilityStatus.supported);
+        expect(assembledDeepSeek.options.map((o) => o.id), [
+          'off',
+          'low',
+          'high',
+          'max',
+        ]);
       },
     );
 
     test(
-      'unconfigured shipped templates (nvidia, xai, kimi) fail closed to unknown without fabricated controls',
+      'unconfigured shipped templates fail closed for unevidenced models, resolve exact evidenced models',
       () {
         final unconfiguredTemplates = [
-          ('nvidia', 'deepseek-ai/deepseek-v4-flash'),
+          ('nvidia', 'nvidia/nemotron-3-ultra-550b-a55b'),
           ('xai', 'grok-3'),
           ('kimi', 'kimi-k2.5'),
         ];
@@ -1295,9 +1364,21 @@ model_capabilities:
                 ThinkingSelectionErrorCode.capabilityUnknown,
               ),
             ),
-            reason: '$tpl with $modelId must reject selection as capabilityUnknown',
+            reason:
+                '$tpl with $modelId must reject selection as capabilityUnknown',
           );
         }
+
+        // Evidenced model served via NVIDIA NIM resolves exact controls
+        final nvidiaInst = repo.findById('inst-nvidia')!;
+        final assembledEvidenced = assembler.assemble(
+          instance: nvidiaInst,
+          model: ModelOption(
+            value: 'deepseek-ai/deepseek-v4-flash',
+            label: 'DeepSeek V4 Flash',
+          ),
+        );
+        expect(assembledEvidenced.status, ThinkingCapabilityStatus.supported);
       },
     );
 

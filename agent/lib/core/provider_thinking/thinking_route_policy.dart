@@ -4,7 +4,16 @@ library;
 import '../provider_runtime/provider_instance.dart';
 import '../provider_runtime/provider_protocol_constants.dart';
 import '../../engine/adapters/provider_profile.dart';
+import 'anthropic_model_catalog.dart';
+import 'anthropic_thinking_policy.dart';
+import 'codex_responses_effort_thinking_policy.dart';
+import 'deepseek_model_catalog.dart';
+import 'deepseek_thinking_policy.dart';
 import 'kimi_thinking_policy.dart';
+import 'openai_chat_effort_thinking_policy.dart';
+import 'openai_reasoning_models.dart';
+import 'zai_model_catalog.dart';
+import 'zai_thinking_policy.dart';
 
 class ThinkingRoutePolicy {
   ThinkingRoutePolicy._();
@@ -13,24 +22,55 @@ class ThinkingRoutePolicy {
 
   /// Resolves the thinking policy id for [instance] and optional [modelId].
   ///
-  /// For templates with an explicit thinking policy, that policy is preferred.
+  /// Aggregators retain their dedicated upstream policy.
+  /// Exact evidenced model knowledge takes precedence on compatible API modes
+  /// across factory kinds, custom instances, and local routes (model-only contract).
+  ///
   /// For custom instances or templates without a dedicated thinking policy
   /// (effectiveThinkingPolicyId == 'unknown'), exact evidenced model knowledge
   /// is resolved when the route's API mode is compatible.
+  ///
+  /// Chat Claude on chat_completions is preserved as NOT native Anthropic wire
+  /// unless an explicit compatible declaration is configured.
   ///
   /// Unknown routes fail closed to [unknownPolicyId] per Plan 29 §3.10.
   static String policyIdFor(ProviderInstance instance, {String? modelId}) {
     final template = resolveTemplate(instance);
     final apiMode = apiModeFor(instance, template);
 
+    // Dedicated upstream aggregators retain their aggregator policy so that
+    // aggregator wire serialization is not bypassed.
+    final templatePolicyId = template.effectiveThinkingPolicyId;
+    if (!instance.isCustom && templatePolicyId == 'aggregator_upstream') {
+      return 'aggregator_upstream';
+    }
+
     // Exact evidenced model knowledge takes precedence on compatible API modes (model-only contract).
-    if (modelId != null && apiMode == 'chat_completions') {
-      if (KimiThinkingPolicy.isEvidencedModel(modelId)) {
-        return KimiThinkingPolicy.policyIdentifier;
+    if (modelId != null) {
+      if (apiMode == 'chat_completions' || apiMode == 'chat') {
+        if (KimiThinkingPolicy.isEvidencedModel(modelId)) {
+          return KimiThinkingPolicy.policyIdentifier;
+        }
+        if (DeepSeekModelCatalog.isEvidencedModel(modelId)) {
+          return DeepSeekThinkingPolicy.policyIdentifier;
+        }
+        if (ZaiModelCatalog.isEvidencedModel(modelId)) {
+          return ZaiThinkingPolicy.policyIdentifier;
+        }
+        if (OpenAiReasoningModels.isEvidencedModel(modelId)) {
+          return OpenAiChatEffortThinkingPolicy.policyIdentifier;
+        }
+      } else if (apiMode == 'anthropic_messages' || apiMode == 'messages') {
+        if (AnthropicModelCatalog.isEvidencedModel(modelId)) {
+          return AnthropicThinkingPolicy.policyIdentifier;
+        }
+      } else if (apiMode == 'codex_responses' || apiMode == 'responses') {
+        if (OpenAiReasoningModels.isEvidencedModel(modelId)) {
+          return CodexResponsesEffortThinkingPolicy.policyIdentifier;
+        }
       }
     }
 
-    final templatePolicyId = template.effectiveThinkingPolicyId;
     if (!instance.isCustom && templatePolicyId != unknownPolicyId) {
       return templatePolicyId;
     }
@@ -75,6 +115,9 @@ class ThinkingRoutePolicy {
     switch (wire) {
       case 'openai_chat_effort':
       case 'toggle_effort':
+      case 'kimi_thinking':
+      case 'deepseek_thinking':
+      case 'zai_thinking':
         final isOpenAi =
             p == ProviderProtocol.openaiCompatible.toLowerCase() ||
             p == 'openai' ||
@@ -92,6 +135,7 @@ class ThinkingRoutePolicy {
         return isOpenAi && isResponses;
       case 'anthropic_adaptive':
       case 'anthropic_budget':
+      case 'anthropic_thinking':
         final isAnthropic =
             p == ProviderProtocol.anthropicCompatible.toLowerCase() ||
             p == 'anthropic' ||
