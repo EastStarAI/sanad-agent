@@ -112,7 +112,8 @@ List<ConversationTimelineItem> projectConversationTimeline(
     if (event.kind == EventKind.reasoning) {
       continue;
     }
-    final isAskUser = event.kind == EventKind.toolCall && event.toolName == 'system_ask_user';
+    final isAskUser = event.kind == EventKind.toolCall &&
+        (event.toolName == 'system_ask_user' || event.toolName == 'system_request_secret');
     if (isAskUser) {
       flushTools();
       if (event.status != EventStatus.running) {
@@ -175,6 +176,7 @@ ConversationActivity? resolveCurrentActivity(
   for (final event in currentTurnEvents.reversed) {
     if (event.kind == EventKind.toolCall &&
         event.toolName != 'system_ask_user' &&
+        event.toolName != 'system_request_secret' &&
         event.status == EventStatus.running) {
       runningTool = event;
       break;
@@ -242,7 +244,9 @@ void _appendCurrentActivity(
       ? latestEvent
       : null;
   ConversationTimelineItem? activeGroup;
-  if (latestEvent.kind == EventKind.toolCall && latestEvent.toolName != 'system_ask_user') {
+  if (latestEvent.kind == EventKind.toolCall &&
+      latestEvent.toolName != 'system_ask_user' &&
+      latestEvent.toolName != 'system_request_secret') {
     for (final item in items.reversed) {
       if (item.isToolGroup && item.containsEventId(latestEvent.id)) {
         activeGroup = item;
@@ -269,7 +273,9 @@ void _appendCurrentActivity(
 
   if (activity == null) {
     final isTemporaryStandaloneTool =
-        latestEvent.kind == EventKind.toolCall && latestEvent.toolName != 'system_ask_user';
+        latestEvent.kind == EventKind.toolCall &&
+        latestEvent.toolName != 'system_ask_user' &&
+        latestEvent.toolName != 'system_request_secret';
     if (isTemporaryStandaloneTool && previousActivity != null) {
       items.add(previousActivity);
     }

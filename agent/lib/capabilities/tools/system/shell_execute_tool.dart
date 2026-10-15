@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:sanad_agent/capabilities/execution/direct_execution_backend.dart';
 import 'package:sanad_agent/capabilities/execution/execution_backend_resolver.dart';
 import 'package:sanad_agent/capabilities/permissions/process_environment_policy.dart';
+import 'package:sanad_agent/core/auth/agent_secret_store_contract.dart';
 import 'package:sanad_windows_path/windows_path.dart';
 
 import '../../models/local_tool_spec.dart';
@@ -20,6 +21,7 @@ class ShellExecuteTool extends SpecBackedTool {
     PermissionManager? permissionManager,
     WindowsSystemPath? windowsSystemPath,
     ProcessEnvironmentPolicy? processEnvironmentPolicy,
+    AgentSecretStore? secretStore,
     ExecutionBackendResolver? backendResolver,
   }) : _permissionManager = permissionManager,
        _backendResolver = backendResolver ??
@@ -27,6 +29,7 @@ class ShellExecuteTool extends SpecBackedTool {
              directBackend: DirectExecutionBackend(
                processEnvironmentPolicy: processEnvironmentPolicy,
                windowsSystemPath: windowsSystemPath,
+               secretStore: secretStore,
              ),
            );
 

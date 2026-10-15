@@ -8,6 +8,8 @@ import 'package:sanad_agent/capabilities/permissions/process_environment_policy.
 import 'package:sanad_agent/capabilities/tools/base_tool.dart';
 import 'package:sanad_agent/capabilities/tools/system/process_tree_controller.dart';
 import 'package:sanad_agent/capabilities/tools/tool_execution_outcome.dart';
+import 'package:sanad_agent/core/auth/agent_secret_store_contract.dart';
+import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_windows_path/windows_path.dart';
 
@@ -22,13 +24,16 @@ class DirectExecutionBackend implements ExecutionBackend {
   DirectExecutionBackend({
     ProcessEnvironmentPolicy? processEnvironmentPolicy,
     WindowsSystemPath? windowsSystemPath,
+    AgentSecretStore? secretStore,
   }) : _processEnvironmentPolicy =
            processEnvironmentPolicy ?? const ProcessEnvironmentPolicy(),
        _windowsSystemPath =
-           windowsSystemPath ?? sharedWindowsSystemPathResolver;
+           windowsSystemPath ?? sharedWindowsSystemPathResolver,
+       _secretStore = secretStore;
 
   final ProcessEnvironmentPolicy _processEnvironmentPolicy;
   final WindowsSystemPath _windowsSystemPath;
+  final AgentSecretStore? _secretStore;
 
   static const int _maxOutputChars = 50000;
   static const int _maxStreamChars = _maxOutputChars ~/ 2;
@@ -176,9 +181,23 @@ class DirectExecutionBackend implements ExecutionBackend {
     }
 
     try {
+      final store = _secretStore ??
+          (getIt.isRegistered<AgentSecretStore>()
+              ? getIt<AgentSecretStore>()
+              : null);
+      Map<String, String>? customSecrets;
+      if (store != null) {
+        final customVault = context?.metadata['custom_vault']?.toString();
+        customSecrets = await _processEnvironmentPolicy.resolveVaultSecrets(
+          store: store,
+          targetVault: customVault,
+        );
+      }
+
       final sanitizedEnv = _processEnvironmentPolicy.buildChildEnvironment(
         purpose: ChildProcessPurpose.directDeveloper,
         inheritedEnvironment: Platform.environment,
+        customSecrets: customSecrets,
       );
       var childEnvironment = Map<String, String>.from(sanitizedEnv);
       if (_windowsSystemPath.isWindows) {
