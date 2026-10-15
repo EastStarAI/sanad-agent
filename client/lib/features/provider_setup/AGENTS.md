@@ -43,6 +43,7 @@ This contract applies to `client/lib/features/provider_setup/`.
 - Drive readiness badges from authoritative model snapshot instance status.
 - Complete manual refresh only on terminal updated or failed status under the matching request id.
 - Expose a user-triggered manual refresh from conversation model selection.
+- Project model-cache terminal notifications through the existing feature client with strict provider/device identity and finite status validation. Observation is consumer-lazy and shares source subscriptions; malformed/foreign notifications and raw socket errors cannot clear valid authority or leak raw diagnostics.
 - Recently Used rows must not truncate configured provider groups.
 - Keep temporary provider-name lookup misses from degrading the UI to raw instance UUIDs.
 
@@ -56,7 +57,7 @@ This contract applies to `client/lib/features/provider_setup/`.
 - Preserve a stale snapshot when its background refresh fails, and render only windows supplied by the daemon with remaining percentage first.
 
 ## Presentation
-- Keep all visible text in English.
+- Localize user-visible copy through the Client localization owner with equivalent English/Arabic meaning; do not introduce hard-coded language-specific UI strings.
 - Keep widgets reusable and controller-driven; they must not own polling, transport, or provider state.
 - The shared flow must support both bounded overlays and unbounded page embeddings: bounded hosts scroll inside the flow, while Settings retains ownership of its page-level scroll.
 - Details, OAuth, and model steps keep their current actions in a fixed footer for bounded hosts and let only the body scroll; unbounded Settings embedding keeps normal document flow.

@@ -23,6 +23,7 @@ This contract applies to `client/lib/features/conversations/presentation/`.
   initialize and persist `balanced`. Preserve any non-empty returning-user
   value after route revalidation.
 - Model identity in thinking descriptor resolution and route matching preserves exact casing, catalog namespaces, and variant markers; only transport-owned provider instance prefixes with exact boundaries are normalized.
+- Same-route authoritative model refresh updates mounted composer controls without a Client restart. Preserve valid preferences and prior same-device authority on fetch failure; clear invalid removed/unsupported preferences explicitly, reject superseded responses, and never rewrite an admitted turn/history directive.
 - A partial provider/model preference is not a valid route. Authoritative readiness may complete or replace a partial pair, while a complete saved pair remains user intent.
 - Do not eagerly hydrate history for a session created locally for its first outgoing turn.
 - Block normal message dispatch before session creation when either the provider instance or model selection is absent.

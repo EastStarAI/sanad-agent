@@ -23,9 +23,9 @@ routes, and never silently ignore an explicit unsupported selection.
 | Legacy alias when mapped option missing | Cleared with correction reason `thinking_option_unavailable_for_route` |
 | Anthropic manual vs adaptive model | Manual emits `budget_tokens`; adaptive emits `thinking.type=adaptive` + effort; never both |
 | Gemini budget vs level | Nested `thinking_config` uses budget or level only |
-| DeepSeek fixture model | Toggle XOR effort; unresolved DeepSeek models stay `unknown` |
+| Exact DeepSeek effort model | Enabled thinking plus documented effort; Off disables without effort; fixed reasoners expose no adjustable control and unresolved models stay `unknown` |
 | Aggregator OpenRouter upstream | Delegates descriptor/directive to upstream family policy |
-| Ollama without live thinking capability | Descriptor `unknown`; no invented options from model name |
+| Ollama missing probe versus valid negative probe | Missing/malformed evidence is `unknown`; a valid capability list lacking `thinking` is `unsupported`; no name-based options |
 | Ollama Boolean declaration | Exactly declared On/Off choices and member Boolean default; sync/stream `think` remains Boolean; omitted Default emits no `think` |
 | Ollama level declaration | Exactly declared native string choices/default; a native string `off` stays a string, not Boolean `false` |
 | Malformed native values/default or untyped capability list | No fabricated options/defaults; unresolved evidence stays unknown |
@@ -44,6 +44,10 @@ routes, and never silently ignore an explicit unsupported selection.
 | Client initial descriptor load | Shows `Loading...` until the authoritative snapshot arrives |
 | Client authoritative unknown descriptor | Shows `Default` / provider-managed behavior; does not invent selectable controls or display a false `Unavailable` state |
 | Route revision mismatch | Stale session descriptor ignored |
+| Explicit model refresh on mounted route | Composer updates options, default, and capability revision without route change or restart |
+| Model refresh invalidating current selection | Selection repaired visibly to provider default (`null`), retaining valid selections |
+| Model refresh removing descriptor or marking unsupported | Transitions visibly to provider-managed (`Default`) or hidden |
+| Failed, late, or cross-device model update events | Retains prior validated authority on failure; ignores foreign device/provider events |
 | Model/provider switch invalidating selection | Preference cleared + correction event |
 | Daemon restart with queued turn | Revalidates persisted selection before provider call |
 
@@ -52,6 +56,8 @@ routes, and never silently ignore an explicit unsupported selection.
 - `agent/test/core/provider_thinking/`
 - `agent/test/engine/thinking_selection_agent_runner_test.dart`
 - `agent/e2e_test/thinking_mode_gate_i_e2e_test.dart` (`--concurrency=1`)
-- `client/test/unit/conversations/route_thinking_control_test.dart`
-- `client/test/widget/route_thinking_mode_selector_test.dart`
+- `client/test/unit/conversations/route_thinking_control_test.dart` (exact model identity, freshness arbitration, route binding)
+- `client/test/widget/route_thinking_mode_selector_test.dart` (exact identity, refresh lifecycle, invalidation repair, restoration)
+- `client/test/unit/provider_setup/provider_setup_client_impl_test.dart` (event stream projection)
+- `client/test/unit/provider_setup/model_cache_snapshot_dto_test.dart` (event parsing)
 - `client/test/unit/bloc/conversation_input_cubit_test.dart` (model-scoped defaults/clear)

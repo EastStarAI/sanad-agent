@@ -92,6 +92,225 @@ void main() {
       expect(descriptor?.options.map((option) => option.id), ['medium']);
     });
 
+    test(
+      'prefers newly fetched snapshot descriptor when capability revision differs from session',
+      () {
+        const sessionDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          capabilityRevision: 'rev-1',
+          options: [
+            ThinkingControlOptionDto(id: 'low', label: 'Low'),
+            ThinkingControlOptionDto(id: 'high', label: 'High'),
+          ],
+        );
+
+        const refreshedDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          capabilityRevision: 'rev-2',
+          options: [
+            ThinkingControlOptionDto(id: 'off', label: 'Off'),
+            ThinkingControlOptionDto(id: 'max', label: 'Max'),
+          ],
+        );
+
+        const refreshedSnapshot = ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'OpenAI',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'o3',
+                  thinkingControl: refreshedDescriptor,
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final descriptor = RouteThinkingControl.resolveDescriptor(
+          snapshot: refreshedSnapshot,
+          providerInstanceId: 'provider-1',
+          modelId: 'o3',
+          sessionDescriptor: sessionDescriptor,
+          sessionRouteRevision: 3,
+          activeRouteRevision: 3,
+          sessionProviderId: 'provider-1',
+          sessionModelId: 'o3',
+        );
+
+        expect(descriptor?.capabilityRevision, 'rev-2');
+        expect(descriptor?.options.map((o) => o.id), ['off', 'max']);
+      },
+    );
+
+    test(
+      'authoritatively refreshed snapshot wins when legacy descriptors carry equal or absent capability revisions',
+      () {
+        const sessionDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          capabilityRevision: '',
+          options: [
+            ThinkingControlOptionDto(id: 'low', label: 'Legacy Low'),
+          ],
+        );
+
+        const refreshedDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          capabilityRevision: '',
+          options: [
+            ThinkingControlOptionDto(id: 'quick', label: 'Fresh Quick'),
+            ThinkingControlOptionDto(id: 'deep', label: 'Fresh Deep'),
+          ],
+        );
+
+        const refreshedSnapshot = ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'OpenAI',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'o3',
+                  thinkingControl: refreshedDescriptor,
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final legacyWins = RouteThinkingControl.resolveDescriptor(
+          snapshot: refreshedSnapshot,
+          providerInstanceId: 'provider-1',
+          modelId: 'o3',
+          sessionDescriptor: sessionDescriptor,
+          sessionRouteRevision: 3,
+          activeRouteRevision: 3,
+          sessionProviderId: 'provider-1',
+          sessionModelId: 'o3',
+          isAuthoritative: false,
+        );
+        expect(legacyWins?.options.map((o) => o.id), ['low']);
+
+        final authoritativeWins = RouteThinkingControl.resolveDescriptor(
+          snapshot: refreshedSnapshot,
+          providerInstanceId: 'provider-1',
+          modelId: 'o3',
+          sessionDescriptor: sessionDescriptor,
+          sessionRouteRevision: 3,
+          activeRouteRevision: 3,
+          sessionProviderId: 'provider-1',
+          sessionModelId: 'o3',
+          isAuthoritative: true,
+        );
+        expect(authoritativeWins?.options.map((o) => o.id), ['quick', 'deep']);
+      },
+    );
+
+    test(
+      'reflects thinking control removal in authoritative snapshot when model has null thinkingControl',
+      () {
+        const sessionDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          capabilityRevision: 'rev-1',
+          options: [
+            ThinkingControlOptionDto(id: 'low', label: 'Low'),
+          ],
+        );
+
+        const removedSnapshot = ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'OpenAI',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'o3',
+                  thinkingControl: null,
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final descriptor = RouteThinkingControl.resolveDescriptor(
+          snapshot: removedSnapshot,
+          providerInstanceId: 'provider-1',
+          modelId: 'o3',
+          sessionDescriptor: sessionDescriptor,
+          sessionRouteRevision: 3,
+          activeRouteRevision: 3,
+          sessionProviderId: 'provider-1',
+          sessionModelId: 'o3',
+        );
+
+        expect(descriptor, isNull);
+      },
+    );
+
+    test(
+      'reflects unsupported thinking control in authoritative snapshot when model becomes unsupported',
+      () {
+        const sessionDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.supported,
+          capabilityRevision: 'rev-1',
+          options: [
+            ThinkingControlOptionDto(id: 'low', label: 'Low'),
+          ],
+        );
+
+        const unsupportedDescriptor = ThinkingControlDescriptorDto(
+          status: ThinkingCapabilityStatus.unsupported,
+          capabilityRevision: 'unsupported',
+        );
+
+        const unsupportedSnapshot = ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'OpenAI',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'o3',
+                  thinkingControl: unsupportedDescriptor,
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final descriptor = RouteThinkingControl.resolveDescriptor(
+          snapshot: unsupportedSnapshot,
+          providerInstanceId: 'provider-1',
+          modelId: 'o3',
+          sessionDescriptor: sessionDescriptor,
+          sessionRouteRevision: 3,
+          activeRouteRevision: 3,
+          sessionProviderId: 'provider-1',
+          sessionModelId: 'o3',
+        );
+
+        expect(descriptor?.status, ThinkingCapabilityStatus.unsupported);
+        expect(descriptor?.capabilityRevision, 'unsupported');
+      },
+    );
+
     test('ignores stale session descriptor when route revision mismatches', () {
       const staleSessionDescriptor = ThinkingControlDescriptorDto(
         status: ThinkingCapabilityStatus.supported,

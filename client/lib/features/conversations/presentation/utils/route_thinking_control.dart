@@ -51,9 +51,7 @@ class RouteThinkingControl {
     if (metadataProvider != null && metadataProvider.isNotEmpty) {
       return metadataProvider;
     }
-    final metadataModelProvider = session?.metadata?['model_provider']
-        ?.toString()
-        .trim();
+    final metadataModelProvider = session?.metadata?['model_provider']?.toString().trim();
     if (metadataModelProvider != null && metadataModelProvider.isNotEmpty) {
       return metadataModelProvider;
     }
@@ -84,8 +82,9 @@ class RouteThinkingControl {
     int? activeRouteRevision,
     String? sessionProviderId,
     String? sessionModelId,
+    bool isAuthoritative = false,
   }) {
-    if (_sessionDescriptorMatchesActiveRoute(
+    final sessionMatches = _sessionDescriptorMatchesActiveRoute(
       sessionDescriptor: sessionDescriptor,
       sessionRouteRevision: sessionRouteRevision,
       activeRouteRevision: activeRouteRevision,
@@ -93,19 +92,36 @@ class RouteThinkingControl {
       sessionModelId: sessionModelId,
       activeProviderId: providerInstanceId,
       activeModelId: modelId,
-    )) {
-      return sessionDescriptor;
-    }
+    );
 
     if (snapshot == null) {
-      return null;
+      return sessionMatches ? sessionDescriptor : null;
     }
 
-    return _resolveFromSnapshot(
+    final snapshotModel = _findModelInSnapshot(
       snapshot: snapshot,
       providerInstanceId: providerInstanceId,
       modelId: modelId,
     );
+
+    if (sessionMatches) {
+      if (snapshotModel == null) {
+        return sessionDescriptor;
+      }
+      final snapshotDescriptor = snapshotModel.thinkingControl;
+      if (snapshotDescriptor == null) {
+        return null;
+      }
+      if (snapshotDescriptor.status == ThinkingCapabilityStatus.unsupported) {
+        return snapshotDescriptor;
+      }
+      if (isAuthoritative || snapshotDescriptor.capabilityRevision != sessionDescriptor!.capabilityRevision) {
+        return snapshotDescriptor;
+      }
+      return sessionDescriptor;
+    }
+
+    return snapshotModel?.thinkingControl;
   }
 
   static bool _sessionDescriptorMatchesActiveRoute({
@@ -123,9 +139,7 @@ class RouteThinkingControl {
     if (sessionDescriptor.status == ThinkingCapabilityStatus.unknown) {
       return false;
     }
-    if (sessionRouteRevision == null ||
-        activeRouteRevision == null ||
-        sessionRouteRevision != activeRouteRevision) {
+    if (sessionRouteRevision == null || activeRouteRevision == null || sessionRouteRevision != activeRouteRevision) {
       return false;
     }
 
@@ -145,21 +159,17 @@ class RouteThinkingControl {
     }
 
     return boundProviderId == providerId &&
-        _normalizeModelId(boundModelId, providerId) ==
-            _normalizeModelId(routeModelId, providerId);
+        _normalizeModelId(boundModelId, providerId) == _normalizeModelId(routeModelId, providerId);
   }
 
-  static ThinkingControlDescriptorDto? _resolveFromSnapshot({
+  static ModelCacheModelDto? _findModelInSnapshot({
     required ModelCacheSnapshotDto snapshot,
     required String? providerInstanceId,
     required String? modelId,
   }) {
     final providerId = providerInstanceId?.trim();
     final routeModelId = modelId?.trim();
-    if (providerId == null ||
-        providerId.isEmpty ||
-        routeModelId == null ||
-        routeModelId.isEmpty) {
+    if (providerId == null || providerId.isEmpty || routeModelId == null || routeModelId.isEmpty) {
       return null;
     }
 
@@ -177,7 +187,7 @@ class RouteThinkingControl {
     final normalizedTarget = _normalizeModelId(routeModelId, providerId);
     for (final model in instance.models) {
       if (_normalizeModelId(model.id, providerId) == normalizedTarget) {
-        return model.thinkingControl;
+        return model;
       }
     }
     return null;
@@ -199,14 +209,10 @@ class RouteThinkingControl {
     }
     if (descriptor != null) {
       return switch (descriptor.status) {
-        ThinkingCapabilityStatus.unsupported =>
-          RouteThinkingSelectorState.hidden,
-        ThinkingCapabilityStatus.unknown =>
-          RouteThinkingSelectorState.providerManaged,
+        ThinkingCapabilityStatus.unsupported => RouteThinkingSelectorState.hidden,
+        ThinkingCapabilityStatus.unknown => RouteThinkingSelectorState.providerManaged,
         ThinkingCapabilityStatus.supported =>
-          descriptor.isSelectable
-              ? RouteThinkingSelectorState.selectable
-              : RouteThinkingSelectorState.providerManaged,
+          descriptor.isSelectable ? RouteThinkingSelectorState.selectable : RouteThinkingSelectorState.providerManaged,
       };
     }
     if (isLoading) {
@@ -244,16 +250,12 @@ class RouteThinkingControl {
     if (descriptor != null && descriptor.options.isNotEmpty) {
       final defaultOptionId = descriptor.defaultOptionId?.trim();
       if (defaultOptionId != null && defaultOptionId.isNotEmpty) {
-        final option = descriptor.options
-            .where((o) => o.id == defaultOptionId)
-            .firstOrNull;
+        final option = descriptor.options.where((o) => o.id == defaultOptionId).firstOrNull;
         if (option != null) {
           return option.id;
         }
       }
-      final providerDefault = descriptor.options
-          .where((o) => o.isProviderDefault)
-          .firstOrNull;
+      final providerDefault = descriptor.options.where((o) => o.isProviderDefault).firstOrNull;
       if (providerDefault != null) {
         return providerDefault.id;
       }

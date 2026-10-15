@@ -37,8 +37,7 @@ class RouteThinkingModeSelector extends StatefulWidget {
   });
 
   @override
-  State<RouteThinkingModeSelector> createState() =>
-      _RouteThinkingModeSelectorState();
+  State<RouteThinkingModeSelector> createState() => _RouteThinkingModeSelectorState();
 }
 
 class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
@@ -48,15 +47,76 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
   bool _isLoading = false;
   bool _hasFetchError = false;
   bool _initialized = false;
+  bool _isAuthoritativeSnapshot = false;
 
   String? _lastProviderId;
   String? _lastModelId;
   String? _lastDeviceId;
   bool? _lastUsesModelControls;
 
+  StreamSubscription<ModelCacheUpdateEvent>? _modelUpdatesSub;
+
+  @override
+  void initState() {
+    super.initState();
+    _subscribeToModelUpdates();
+  }
+
+  void _subscribeToModelUpdates() {
+    if (_modelUpdatesSub != null) return;
+    try {
+      if (getIt.isRegistered<ProviderSetupClient>()) {
+        _modelUpdatesSub = getIt<ProviderSetupClient>().modelUpdates.listen(_handleModelUpdate);
+      }
+    } catch (_) {}
+  }
+
+  void _handleModelUpdate(ModelCacheUpdateEvent event) {
+    if (!mounted) return;
+    if (!widget.capabilities.usesModelThinkingControls) return;
+
+    final session = _currentSession();
+    final activeProvider = RouteThinkingControl.activeProviderId(
+      session: session,
+      inputSlice: widget.inputSlice,
+    );
+    if (activeProvider == null ||
+        activeProvider.isEmpty ||
+        event.providerInstanceId.isEmpty ||
+        event.providerInstanceId != activeProvider) {
+      return;
+    }
+
+    final activeAgent = widget.activeAgent;
+    if (activeAgent != null) {
+      final devId = event.deviceId;
+      if (devId == null || devId.isEmpty || !activeAgent.representsDeviceId(devId)) {
+        return;
+      }
+    } else if (event.deviceId != null) {
+      return;
+    }
+
+    if (event.isFailed) {
+      // Failed refresh retains prior validated authority where appropriate.
+      return;
+    }
+
+    if (event.isUpdated) {
+      unawaited(_loadSnapshot(revalidateSelection: true));
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(_modelUpdatesSub?.cancel());
+    super.dispose();
+  }
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    _subscribeToModelUpdates();
     if (!_initialized) {
       _initialized = true;
       final session = _currentSession();
@@ -105,10 +165,12 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
 
     if (activeDevice != _snapshotAgentId) {
       _snapshot = null;
+      _isAuthoritativeSnapshot = false;
       _snapshotAgentId = activeDevice;
     }
 
-    final routeChanged = _lastUsesModelControls != usesModelControls ||
+    final routeChanged =
+        _lastUsesModelControls != usesModelControls ||
         _lastProviderId != activeProvider ||
         _lastModelId != activeModel ||
         _lastDeviceId != activeDevice;
@@ -118,6 +180,7 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
       _lastProviderId = activeProvider;
       _lastModelId = activeModel;
       _lastDeviceId = activeDevice;
+      _isAuthoritativeSnapshot = false;
 
       if (usesModelControls) {
         final cachedDescriptor = _descriptorForSession(session, _snapshot);
@@ -158,6 +221,7 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
       }
       setState(() {
         _snapshot = snapshot;
+        _isAuthoritativeSnapshot = true;
         _isLoading = false;
         _hasFetchError = false;
       });
@@ -168,8 +232,12 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
       if (!mounted || _loadToken != token) {
         return;
       }
+      final sameDevice = widget.activeAgent?.id == _snapshotAgentId;
       setState(() {
-        _snapshot = null;
+        if (!sameDevice) {
+          _snapshot = null;
+          _isAuthoritativeSnapshot = false;
+        }
         _isLoading = false;
         _hasFetchError = true;
       });
@@ -179,14 +247,18 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
   Future<void> _revalidateSelection(ModelCacheSnapshotDto snapshot) async {
     final session = _currentSession();
     final descriptor = _descriptorForSession(session, snapshot);
-    if (descriptor == null || !descriptor.isSelectable) {
+    final currentSelection = _currentSelectionId(session);
+    if (currentSelection == null || currentSelection.isEmpty) {
       return;
     }
-    final currentSelection = _currentSelectionId(session);
-    if (RouteThinkingControl.isValidSelection(
-      descriptor: descriptor,
-      selectionId: currentSelection,
-    )) {
+    final isInvalid =
+        descriptor == null ||
+        !descriptor.isSelectable ||
+        !RouteThinkingControl.isValidSelection(
+          descriptor: descriptor,
+          selectionId: currentSelection,
+        );
+    if (!isInvalid) {
       return;
     }
     final targetSessionId = session?.id;
@@ -214,10 +286,8 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
     final hasPendingRouteChange =
         (widget.inputSlice.nextMessageProviderId != null &&
             widget.inputSlice.nextMessageProviderId != session?.modelProvider) ||
-        (widget.inputSlice.nextMessageModel != null &&
-            widget.inputSlice.nextMessageModel != session?.model);
-    final activeRouteRevision =
-        hasPendingRouteChange ? null : session?.routeRevision;
+        (widget.inputSlice.nextMessageModel != null && widget.inputSlice.nextMessageModel != session?.model);
+    final activeRouteRevision = hasPendingRouteChange ? null : session?.routeRevision;
 
     return RouteThinkingControl.resolveDescriptor(
       snapshot: snapshot,
@@ -228,13 +298,13 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
       activeRouteRevision: activeRouteRevision,
       sessionProviderId: session?.modelProvider,
       sessionModelId: session?.model,
+      isAuthoritative: _isAuthoritativeSnapshot,
     );
   }
 
   String? _currentSelectionId(Session? session) {
     if (widget.capabilities.thinkingModeScope == CapabilityValueScope.message) {
-      return widget.inputSlice.nextMessageThinkingMode ??
-          session?.thinkingMode?.trim();
+      return widget.inputSlice.nextMessageThinkingMode ?? session?.thinkingMode?.trim();
     }
     final sessionMode = session?.thinkingMode?.trim();
     if (sessionMode != null && sessionMode.isNotEmpty) {
@@ -276,9 +346,7 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
         session = null;
       }
     }
-    final descriptor = usesModelControls
-        ? _descriptorForSession(session, _snapshot)
-        : null;
+    final descriptor = usesModelControls ? _descriptorForSession(session, _snapshot) : null;
     final selectorState = RouteThinkingControl.selectorState(
       capabilities: widget.capabilities,
       descriptor: descriptor,
@@ -369,8 +437,7 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
                           key: Key('thinking_mode_title_${entry.id}'),
                           style: TextStyle(
                             fontSize: 12,
-                            fontWeight:
-                                isSelected ? FontWeight.w600 : FontWeight.w400,
+                            fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
                             color: isSelected ? theme.colorScheme.primary : null,
                           ),
                         ),
@@ -399,8 +466,7 @@ class _RouteThinkingModeSelectorState extends State<RouteThinkingModeSelector> {
     try {
       context.read<SessionCubit>();
       return BlocListener<SessionCubit, SessionState>(
-        listenWhen: (previous, current) =>
-            previous.selectedSession != current.selectedSession,
+        listenWhen: (previous, current) => previous.selectedSession != current.selectedSession,
         listener: (context, state) {
           _checkRouteChanged(
             session: state.selectedSession,

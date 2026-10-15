@@ -144,6 +144,15 @@ Composer components (`_ModelChip`, `ConversationBottomActions`) display the acti
 - **Race Condition Guard**: A monotonic per-device catalog revision counter bails out any delayed, in-flight pre-mutation responses from reinstalling stale display names. Generation authority persists across device clears to eliminate ABA races where pre-clear requests match generation 0, and authoritative mutation snapshots (including empty removals) neutralize in-flight loads.
 - **Unrelated Resource Isolation**: Updating or invalidating the display-name catalog never aborts or drops in-flight usage/support fetches, ensuring seamless UI operations. Quiescent identical name updates with no in-flight fetch are strict no-ops.
 
+### Client Route Thinking Control Refresh Lifecycle
+
+Mounted composer controls (`RouteThinkingModeSelector`) display model-scoped thinking mode options, labels, and defaults. The client synchronizes these controls with daemon model updates without requiring route transitions or application restart:
+- **Authoritative Stream Projection**: `ProviderSetupClient.modelUpdates` projects incoming `model.cache_updated` socket events into typed `ModelCacheUpdateEvent` models carrying `providerInstanceId`, `status`, `deviceId`, and optional error details.
+- **Terminal Event Admission**: `RouteThinkingModeSelector` subscribes to `modelUpdates` and triggers snapshot revalidation strictly on terminal `updated` events for the active route's provider instance and matching device.
+- **Freshness Arbitration**: `RouteThinkingControl.resolveDescriptor` arbitrates between session-stored descriptors and authoritative model snapshots. When an authoritative snapshot provides a differing `capabilityRevision`, reflects control removal (`null`), or reports `unsupported`, the snapshot descriptor takes precedence over same-route session cache.
+- **Selection Safety & Invalidation**: When refreshed options invalidate the current selection, selection is repaired visibly to the provider default (`null`); when the selection remains supported, it is retained.
+- **Failure & Cross-Scope Isolation**: Terminal `failed` refresh events retain prior validated authority rather than resetting or clearing mounted controls. Events targeting other provider instances or foreign devices are safely ignored.
+
 ### Task 55 — Provider account usage limits (Gates A–C)
 
 Provider account limits are instance-scoped account data, separate from both

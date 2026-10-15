@@ -16,7 +16,24 @@ import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
+import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
+import 'package:sanad_client/features/provider_setup/data/provider_setup_client_impl.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
+
+import '../mocks/mock_socket_service.dart';
+
+class _TestRealProviderSetupClient extends ProviderSetupClientImpl {
+  _TestRealProviderSetupClient({required super.connectionCoordinator});
+
+  ModelCacheSnapshotDto snapshotResult = const ModelCacheSnapshotDto(instances: [], recent: []);
+  int snapshotCallCount = 0;
+
+  @override
+  Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) async {
+    snapshotCallCount++;
+    return snapshotResult;
+  }
+}
 
 class _FakeProviderSetupClient extends Fake implements ProviderSetupClient {
   Completer<ModelCacheSnapshotDto>? pendingSnapshotCompleter;
@@ -25,7 +42,12 @@ class _FakeProviderSetupClient extends Fake implements ProviderSetupClient {
     recent: [],
   );
   bool shouldThrow = false;
+
   int callCount = 0;
+  final modelUpdatesController = StreamController<ModelCacheUpdateEvent>.broadcast();
+
+  @override
+  Stream<ModelCacheUpdateEvent> get modelUpdates => modelUpdatesController.stream;
 
   @override
   Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) async {
@@ -40,8 +62,7 @@ class _FakeProviderSetupClient extends Fake implements ProviderSetupClient {
   }
 }
 
-class _TestConversationInputCubit extends Cubit<ConversationInputState>
-    implements ConversationInputCubit {
+class _TestConversationInputCubit extends Cubit<ConversationInputState> implements ConversationInputCubit {
   CapabilityValueScope? selectedScope;
   String? selectedThinkingMode;
   int selectCount = 0;
@@ -63,8 +84,7 @@ class _TestConversationInputCubit extends Cubit<ConversationInputState>
 }
 
 class _TestSessionCubit extends Cubit<SessionState> implements SessionCubit {
-  _TestSessionCubit([Session? initialSession])
-    : super(SessionState(selectedSession: initialSession));
+  _TestSessionCubit([Session? initialSession]) : super(SessionState(selectedSession: initialSession));
 
   void setSession(Session? session) {
     emit(state.copyWith(selectedSession: session));
@@ -108,6 +128,7 @@ void main() {
   });
 
   tearDown(() async {
+    await fakeClient.modelUpdatesController.close();
     if (getIt.isRegistered<ProviderSetupClient>()) {
       await getIt.unregister<ProviderSetupClient>();
     }
@@ -919,4 +940,992 @@ void main() {
       expect(find.text('Low'), findsNothing);
     },
   );
+
+  group('RouteThinkingModeSelector refresh lifecycle', () {
+    testWidgets(
+      'updates visible menu and options on terminal model.refresh without route change or restart',
+      (tester) async {
+        final session = Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-a',
+        );
+        final sessionCubit = _TestSessionCubit(session);
+        final inputCubit = _TestConversationInputCubit();
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    defaultOptionId: 'medium',
+                    capabilityRevision: 'rev-1',
+                    options: [
+                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                      ThinkingControlOptionDto(id: 'medium', label: 'Medium'),
+                      ThinkingControlOptionDto(id: 'high', label: 'High'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final slice = createInputSlice(
+          nextMessageProviderId: 'provider-1',
+          nextMessageModel: 'model-a',
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: slice,
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('chip_Medium')), findsOneWidget);
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    defaultOptionId: 'off',
+                    capabilityRevision: 'rev-2',
+                    options: [
+                      ThinkingControlOptionDto(id: 'off', label: 'Off'),
+                      ThinkingControlOptionDto(id: 'max', label: 'Max'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        fakeClient.modelUpdatesController.add(
+          const ModelCacheUpdateEvent(
+            providerInstanceId: 'provider-1',
+            status: 'updated',
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('chip_Off')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('route_thinking_mode_selector_button')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('thinking_mode_option_off')), findsOneWidget);
+        expect(find.byKey(const Key('thinking_mode_option_max')), findsOneWidget);
+        expect(find.byKey(const Key('thinking_mode_option_low')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'repairs invalid selection visibly to provider default on model refresh',
+      (tester) async {
+        final session = Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-a',
+          thinkingMode: 'low',
+        );
+        final sessionCubit = _TestSessionCubit(session);
+        final inputCubit = _TestConversationInputCubit();
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    options: [
+                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                      ThinkingControlOptionDto(id: 'high', label: 'High'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final slice = createInputSlice(
+          nextMessageProviderId: 'provider-1',
+          nextMessageModel: 'model-a',
+          nextMessageThinkingMode: 'low',
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: slice,
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(inputCubit.selectCount, 0);
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    capabilityRevision: 'rev-2',
+                    options: [
+                      ThinkingControlOptionDto(id: 'fast', label: 'Fast'),
+                      ThinkingControlOptionDto(id: 'deep', label: 'Deep'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        fakeClient.modelUpdatesController.add(
+          const ModelCacheUpdateEvent(
+            providerInstanceId: 'provider-1',
+            status: 'updated',
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(inputCubit.selectCount, 1);
+        expect(inputCubit.selectedThinkingMode, isNull);
+      },
+    );
+
+    testWidgets(
+      'retains valid selection when still valid in refreshed descriptor',
+      (tester) async {
+        final session = Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-a',
+          thinkingMode: 'high',
+        );
+        final sessionCubit = _TestSessionCubit(session);
+        final inputCubit = _TestConversationInputCubit();
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    options: [
+                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                      ThinkingControlOptionDto(id: 'high', label: 'High'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final slice = createInputSlice(
+          nextMessageProviderId: 'provider-1',
+          nextMessageModel: 'model-a',
+          nextMessageThinkingMode: 'high',
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: slice,
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    capabilityRevision: 'rev-2',
+                    options: [
+                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                      ThinkingControlOptionDto(id: 'high', label: 'High'),
+                      ThinkingControlOptionDto(id: 'max', label: 'Max'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        fakeClient.modelUpdatesController.add(
+          const ModelCacheUpdateEvent(
+            providerInstanceId: 'provider-1',
+            status: 'updated',
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(inputCubit.selectCount, 0);
+      },
+    );
+
+    testWidgets(
+      'failed model refresh retains prior validated authority',
+      (tester) async {
+        final session = Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-a',
+        );
+        final sessionCubit = _TestSessionCubit(session);
+        final inputCubit = _TestConversationInputCubit();
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    options: [
+                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                      ThinkingControlOptionDto(id: 'high', label: 'High'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final slice = createInputSlice(
+          nextMessageProviderId: 'provider-1',
+          nextMessageModel: 'model-a',
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: slice,
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final initialCallCount = fakeClient.callCount;
+
+        fakeClient.modelUpdatesController.add(
+          const ModelCacheUpdateEvent(
+            providerInstanceId: 'provider-1',
+            status: 'failed',
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+        expect(fakeClient.callCount, initialCallCount);
+      },
+    );
+
+    testWidgets(
+      'ignores superseded event for different provider or cross-device',
+      (tester) async {
+        final session = Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-a',
+        );
+        final sessionCubit = _TestSessionCubit(session);
+        final inputCubit = _TestConversationInputCubit();
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    options: [
+                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final slice = createInputSlice(
+          nextMessageProviderId: 'provider-1',
+          nextMessageModel: 'model-a',
+        );
+
+        final activeAgent = DeviceConfig(
+          id: 'agent-1',
+          name: 'Agent 1',
+          hardwareId: 'agent-1',
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: slice,
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+            activeAgent: activeAgent,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final countAfterInit = fakeClient.callCount;
+
+        // Different provider
+        fakeClient.modelUpdatesController.add(
+          const ModelCacheUpdateEvent(
+            providerInstanceId: 'provider-2',
+            status: 'updated',
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(fakeClient.callCount, countAfterInit);
+
+        // Cross-device event for different agent
+        fakeClient.modelUpdatesController.add(
+          const ModelCacheUpdateEvent(
+            providerInstanceId: 'provider-1',
+            status: 'updated',
+            deviceId: 'other-agent',
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(fakeClient.callCount, countAfterInit);
+      },
+    );
+
+    testWidgets(
+      'reflects thinking control removal in refreshed snapshot',
+      (tester) async {
+        final session = Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-a',
+        );
+        final sessionCubit = _TestSessionCubit(session);
+        final inputCubit = _TestConversationInputCubit();
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    options: [
+                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final slice = createInputSlice(
+          nextMessageProviderId: 'provider-1',
+          nextMessageModel: 'model-a',
+          nextMessageThinkingMode: 'low',
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: slice,
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+
+        // Refreshed snapshot has null thinkingControl (removed)
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: null,
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        fakeClient.modelUpdatesController.add(
+          const ModelCacheUpdateEvent(
+            providerInstanceId: 'provider-1',
+            status: 'updated',
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('route_thinking_mode_provider_managed')), findsOneWidget);
+        expect(inputCubit.selectedThinkingMode, isNull);
+      },
+    );
+
+    testWidgets(
+      'reflects unsupported status in refreshed snapshot',
+      (tester) async {
+        final session = Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-a',
+        );
+        final sessionCubit = _TestSessionCubit(session);
+        final inputCubit = _TestConversationInputCubit();
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    options: [
+                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final slice = createInputSlice(
+          nextMessageProviderId: 'provider-1',
+          nextMessageModel: 'model-a',
+          nextMessageThinkingMode: 'low',
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: slice,
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.unsupported,
+                    capabilityRevision: 'unsupported',
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        fakeClient.modelUpdatesController.add(
+          const ModelCacheUpdateEvent(
+            providerInstanceId: 'provider-1',
+            status: 'updated',
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('route_thinking_mode_hidden')), findsOneWidget);
+        expect(inputCubit.selectedThinkingMode, isNull);
+      },
+    );
+
+    testWidgets(
+      'restores selectable options when restored config brings back thinking control',
+      (tester) async {
+        final session = Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-a',
+        );
+        final sessionCubit = _TestSessionCubit(session);
+        final inputCubit = _TestConversationInputCubit();
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: null,
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final slice = createInputSlice(
+          nextMessageProviderId: 'provider-1',
+          nextMessageModel: 'model-a',
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: slice,
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('route_thinking_mode_provider_managed')), findsOneWidget);
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    capabilityRevision: 'rev-restored',
+                    options: [
+                      ThinkingControlOptionDto(id: 'quick', label: 'Quick'),
+                      ThinkingControlOptionDto(id: 'deep', label: 'Deep'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        fakeClient.modelUpdatesController.add(
+          const ModelCacheUpdateEvent(
+            providerInstanceId: 'provider-1',
+            status: 'updated',
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+
+        // Select restored option
+        await tester.tap(find.byKey(const Key('route_thinking_mode_selector_button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('Quick'));
+        await tester.pumpAndSettle();
+        expect(inputCubit.selectedThinkingMode, 'quick');
+      },
+    );
+
+    testWidgets(
+      'failed modelSnapshot fetch preserves prior same-device snapshot without losing authority',
+      (tester) async {
+        final session = Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-a',
+        );
+        final sessionCubit = _TestSessionCubit(session);
+        final inputCubit = _TestConversationInputCubit();
+
+        fakeClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    options: [
+                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                      ThinkingControlOptionDto(id: 'high', label: 'High'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final slice = createInputSlice(
+          nextMessageProviderId: 'provider-1',
+          nextMessageModel: 'model-a',
+          nextMessageThinkingMode: 'high',
+        );
+
+        final agent = DeviceConfig(
+          id: 'device-1',
+          name: 'Device 1',
+          hardwareId: 'device-1',
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: slice,
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+            activeAgent: agent,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('High'), findsOneWidget);
+        expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+
+        fakeClient.shouldThrow = true;
+
+        fakeClient.modelUpdatesController.add(
+          const ModelCacheUpdateEvent(
+            providerInstanceId: 'provider-1',
+            status: 'updated',
+            deviceId: 'device-1',
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Preserves prior same-device options and selection
+        expect(find.text('High'), findsOneWidget);
+        expect(find.byKey(const Key('route_thinking_mode_selector_button')), findsOneWidget);
+        expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsNothing);
+
+        // Switching to different agent does not preserve prior-device snapshot
+        final agent2 = DeviceConfig(
+          id: 'device-2',
+          name: 'Device 2',
+          hardwareId: 'device-2',
+        );
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: slice,
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+            activeAgent: agent2,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('route_thinking_mode_fetch_failure')), findsOneWidget);
+      },
+    );
+  });
+
+  group('RouteThinkingModeSelector real ProviderSetupClientImpl stream integration', () {
+    late FakeSanadSocketService local;
+    late FakeSanadSocketService cloud;
+    late DeviceConnectionCoordinator coordinator;
+    late _TestRealProviderSetupClient realClient;
+
+    setUp(() async {
+      local = FakeSanadSocketService()..setConnected(true);
+      cloud = FakeSanadSocketService()..setConnected(true);
+      coordinator = DeviceConnectionCoordinator(
+        cloudSocketService: cloud,
+        localSocketService: local,
+        currentDeviceId: 'this-hardware',
+      );
+      realClient = _TestRealProviderSetupClient(
+        connectionCoordinator: coordinator,
+      );
+      if (getIt.isRegistered<ProviderSetupClient>()) {
+        await getIt.unregister<ProviderSetupClient>();
+      }
+      getIt.registerSingleton<ProviderSetupClient>(realClient);
+    });
+
+    tearDown(() async {
+      if (getIt.isRegistered<ProviderSetupClient>()) {
+        await getIt.unregister<ProviderSetupClient>();
+      }
+      coordinator.dispose();
+      local.dispose();
+      cloud.dispose();
+    });
+
+    testWidgets(
+      'filters missing, malformed, foreign identity and unknown status while accepting allowed aliases on both transports',
+      (tester) async {
+        final session = Session(
+          id: 'session-1',
+          title: 'Session 1',
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+          modelProvider: 'provider-1',
+          model: 'model-a',
+        );
+        final sessionCubit = _TestSessionCubit(session);
+        final inputCubit = _TestConversationInputCubit();
+
+        realClient.snapshotResult = const ModelCacheSnapshotDto(
+          instances: [
+            ModelCacheInstanceDto(
+              id: 'provider-1',
+              displayName: 'P1',
+              status: 'ready',
+              isDefault: true,
+              cacheStatus: 'fetched',
+              models: [
+                ModelCacheModelDto(
+                  id: 'model-a',
+                  thinkingControl: ThinkingControlDescriptorDto(
+                    status: ThinkingCapabilityStatus.supported,
+                    options: [
+                      ThinkingControlOptionDto(id: 'low', label: 'Low'),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ],
+          recent: [],
+        );
+
+        final activeAgent = DeviceConfig(
+          id: 'local-agent',
+          name: 'Local Agent',
+          hardwareId: 'this-hardware',
+          metadata: {'cloud_device_id': 'cloud-agent-alias'},
+        );
+
+        final slice = createInputSlice(
+          nextMessageProviderId: 'provider-1',
+          nextMessageModel: 'model-a',
+        );
+
+        await tester.pumpWidget(
+          createWidget(
+            inputSlice: slice,
+            inputCubit: inputCubit,
+            sessionCubit: sessionCubit,
+            activeAgent: activeAgent,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final initialCalls = realClient.snapshotCallCount;
+
+        // 1. Missing identity on cloud socket -> dropped
+        cloud.debugEmitEvent({
+          'event': 'model.cache_updated',
+          'payload': {
+            'provider_instance_id': 'provider-1',
+            'status': 'updated',
+          },
+        });
+        await tester.pumpAndSettle();
+        expect(realClient.snapshotCallCount, initialCalls);
+
+        // 2. Malformed identity -> dropped
+        cloud.debugEmitEvent({
+          'event': 'model.cache_updated',
+          'device_id': 12345,
+          'payload': {
+            'provider_instance_id': 'provider-1',
+            'status': 'updated',
+          },
+        });
+        await tester.pumpAndSettle();
+        expect(realClient.snapshotCallCount, initialCalls);
+
+        // 3. Wrong identity (foreign device) -> ignored
+        cloud.debugEmitEvent({
+          'event': 'model.cache_updated',
+          'device_id': 'foreign-device',
+          'payload': {
+            'provider_instance_id': 'provider-1',
+            'status': 'updated',
+          },
+        });
+        await tester.pumpAndSettle();
+        expect(realClient.snapshotCallCount, initialCalls);
+
+        // 4. Unknown status -> dropped
+        local.debugEmitEvent({
+          'event': 'model.cache_updated',
+          'hardware_id': 'this-hardware',
+          'payload': {
+            'provider_instance_id': 'provider-1',
+            'status': 'pending_approval',
+          },
+        });
+        await tester.pumpAndSettle();
+        expect(realClient.snapshotCallCount, initialCalls);
+
+        // 5. Allowed alias: Cloud event carrying cloudDeviceId triggers refresh
+        cloud.debugEmitEvent({
+          'event': 'model.cache_updated',
+          'device_id': 'cloud-agent-alias',
+          'payload': {
+            'provider_instance_id': 'provider-1',
+            'status': 'updated',
+          },
+        });
+        await tester.pumpAndSettle();
+        expect(realClient.snapshotCallCount, initialCalls + 1);
+
+        // 6. Allowed alias: Local event carrying hardwareId triggers refresh
+        local.debugEmitEvent({
+          'event': 'model.cache_updated',
+          'hardware_id': 'this-hardware',
+          'payload': {
+            'provider_instance_id': 'provider-1',
+            'status': 'updated',
+          },
+        });
+        await tester.pumpAndSettle();
+        expect(realClient.snapshotCallCount, initialCalls + 2);
+      },
+    );
+  });
 }
