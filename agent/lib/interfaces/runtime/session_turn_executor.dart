@@ -638,6 +638,36 @@ class SessionTurnExecutor {
       if (activeRun == null || !ownsRun(activeRun)) {
         return;
       }
+      // Terminal delivery requires the exact owner's durable terminal commit.
+      // The rejection terminalizes only the durable work item this run owns, and
+      // durable ownership (not the in-memory projection) decides whether this
+      // run may still deliver a terminal response: a stale loser whose work item
+      // was already released, replaced, or cancelled stays silent so it cannot
+      // clear or overwrite the newer owner's in-flight state or deliver a stale
+      // terminal answer. A turn with no durable work item (no persisted state)
+      // keeps its in-memory rejection.
+      final repo = getPersistedState();
+      final rejectedWorkItemId = activeRun.workItemId;
+      if (repo != null && rejectedWorkItemId != null) {
+        final terminalized = repo.transitionOwnedWorkItem(
+          sessionId: event.sessionId,
+          workItemId: rejectedWorkItemId,
+          toState: SessionWorkState.cancelled,
+        );
+        if (!terminalized) {
+          _logger.warning(
+            'Ignoring thinking-selection rejection for session '
+            '${event.sessionId}, work item $rejectedWorkItemId, run '
+            '${activeRun.runId}: durable ownership has moved on.',
+          );
+          // Align the in-memory projection with durable ownership so run
+          // finalization treats this run as no longer owning the session. The
+          // completion callback releases busy ownership and drains queued work,
+          // so it must not fire for a run whose durable ownership is gone.
+          activeRun.invalidated = true;
+          return;
+        }
+      }
       sessionManager.clearInFlightSnapshot(event.sessionId);
       emitResponse(
         GatewayResponse(
@@ -650,6 +680,7 @@ class SessionTurnExecutor {
           ),
           isComplete: true,
           runId: activeRun.runId,
+          turnId: activeRun.turnId,
           modelStepId: agentRunner.currentModelStepId,
         ),
       );

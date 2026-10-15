@@ -12,6 +12,7 @@ import 'package:sanad_agent/core/provider_thinking/thinking_control_cache_resolv
 import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_policy_context.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_stale_evidence.dart';
+import 'package:sanad_agent/core/provider_thinking/ollama_thinking_probe.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_route_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_aliases.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_errors.dart';
@@ -321,14 +322,69 @@ class ThinkingSelectionResolver {
     if (cached == null) {
       return fresh;
     }
-    if (cached.capabilityRevision != fresh.capabilityRevision) {
-      return fresh;
-    }
-    if (ThinkingControlStaleEvidence.isStale(cached)) {
+    // Explicit failure/invalidation evidence stays authoritative for the route:
+    // a transient probe failure or stale cache keeps thinking unresolved until
+    // a live probe succeeds again, even though the assembler can still rebuild a
+    // supported descriptor from persisted model metadata.
+    if (ThinkingControlStaleEvidence.isInvalidated(cached)) {
       return ThinkingControlStaleEvidence.freshUnknown(
         capabilityRevision: fresh.capabilityRevision,
       );
     }
-    return cached;
+    if (cached.capabilityRevision != fresh.capabilityRevision) {
+      return fresh;
+    }
+    if (!ThinkingControlStaleEvidence.isStale(cached)) {
+      return cached;
+    }
+    // Expired live evidence normally fails closed to unknown. The single
+    // exception is expired evidence whose descriptor was produced from a
+    // validated native declaration for the exact model route and whose fresh
+    // rebuild under the same revision still resolves supported: those facts are
+    // model-owned, not clock-owned, and stay authoritative until an
+    // authoritative refresh, invalidation, or revision change.
+    if (_retainsValidatedNativeFacts(
+      model: model,
+      cached: cached,
+      fresh: fresh,
+    )) {
+      return cached;
+    }
+    return ThinkingControlStaleEvidence.freshUnknown(
+      capabilityRevision: fresh.capabilityRevision,
+    );
+  }
+
+  /// Whether expired `live` evidence may retain its validated native
+  /// declaration instead of degrading to unknown.
+  ///
+  /// Narrowness is deliberate:
+  /// * explicit failure/invalidation markers (`live_probe_failed`,
+  ///   `cache_stale`, `stale_live_evidence`) are never `live`, so they can
+  ///   never be retained;
+  /// * malformed, unknown, or unsupported evidence on either side fails
+  ///   closed;
+  /// * the caller has already proven the cached and freshly rebuilt
+  ///   descriptors share the route/config/credential revision.
+  static bool _retainsValidatedNativeFacts({
+    required ModelOption model,
+    required ThinkingControlDescriptor cached,
+    required ThinkingControlDescriptor fresh,
+  }) {
+    if (cached.source != 'live' || fresh.source != 'live') {
+      return false;
+    }
+    if (cached.status != ThinkingCapabilityStatus.supported ||
+        fresh.status != ThinkingCapabilityStatus.supported) {
+      return false;
+    }
+    return _hasValidatedNativeDeclaration(model.modelMetadata);
+  }
+
+  /// A validated native declaration is model-owned evidence discovered from the
+  /// adapter probe itself, so it remains true independently of wall-clock age.
+  static bool _hasValidatedNativeDeclaration(Map<String, Object?> metadata) {
+    return OllamaThinkingProbe.hasThinkingCapability(metadata) == true &&
+        OllamaThinkingProbe.parseThinkingDeclaration(metadata) != null;
   }
 }

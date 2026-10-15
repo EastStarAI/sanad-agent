@@ -17,6 +17,8 @@ import 'package:sanad_agent/core/provider_thinking/thinking_route_policy.dart';
 import 'package:sanad_agent/core/provider_thinking/anthropic_thinking_wire_codec.dart';
 import 'package:sanad_agent/core/provider_thinking/google_thinking_wire_codec.dart';
 import 'package:sanad_agent/core/provider_thinking/openai_thinking_wire_codec.dart';
+import 'package:sanad_agent/core/provider_thinking/ollama_thinking_probe.dart';
+import 'package:sanad_agent/core/provider_thinking/ollama_thinking_wire_codec.dart';
 import 'package:sanad_agent/core/provider_thinking/toggle_effort_thinking_wire_codec.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_id.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
@@ -1401,6 +1403,408 @@ model_capabilities:
             providerInstanceId: 'custom-unknown-1',
             modelId: 'custom-unsupported-llama',
             selectionId: 'high',
+          ),
+          throwsA(
+            isA<ThinkingSelectionException>().having(
+              (e) => e.code,
+              'code',
+              ThinkingSelectionErrorCode.capabilityUnknown,
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'validated native Ollama boolean thinking declaration older than 5 minutes preserves On, Off, and default without degradation to unknown',
+      () {
+        repo.createInstance(
+          ProviderInstance(
+            id: 'ollama-1',
+            templateId: 'ollama',
+            displayName: 'Ollama',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            configRevision: 1,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        final staleObservedAt = DateTime.now().toUtc().subtract(
+          const Duration(minutes: 10),
+        );
+
+        final gemmaMetadata = {
+          OllamaThinkingProbe.capabilitiesMetadataKey: ['thinking'],
+          OllamaThinkingProbe.thinkingDeclarationMetadataKey: {
+            'values': [false, true],
+            'default': true,
+          },
+        };
+
+        final gemmaThinkingControl = {
+          'status': 'supported',
+          'kind': 'toggle',
+          'options': [
+            {'id': 'off', 'label': 'Off', 'is_off': true, 'is_provider_default': false},
+            {'id': 'on', 'label': 'On', 'is_off': false, 'is_provider_default': true},
+          ],
+          'default_option_id': 'on',
+          'capability_revision': '1:1:ollama_live:gemma4:e2b',
+          'source': 'live',
+          'observed_at': staleObservedAt.toIso8601String(),
+        };
+
+        repo.upsertModelCache(
+          instanceId: 'ollama-1',
+          cacheKey: 'models',
+          models: [
+            {
+              'value': 'gemma4:e2b',
+              'model_metadata': gemmaMetadata,
+              'thinking_control': gemmaThinkingControl,
+            },
+          ],
+          fetchedAt: staleObservedAt,
+          source: 'live',
+          configRevision: 1,
+          credentialRevision: 1,
+        );
+
+        // Off turn (>5 minutes after observation) - reproduces and verifies the reviewer regression
+        final offResolution = resolver.resolve(
+          providerInstanceId: 'ollama-1',
+          modelId: 'gemma4:e2b',
+          selectionId: 'off',
+        );
+        expect(offResolution.descriptor.status, ThinkingCapabilityStatus.supported);
+        expect(offResolution.directive, const ThinkingToggleDirective(enabled: false));
+
+        // Wire serialization for Off: think: false
+        final offBody = <String, dynamic>{'model': 'gemma4:e2b'};
+        OllamaThinkingWireCodec.applyThink(offBody, offResolution.directive);
+        expect(offBody['think'], isFalse);
+
+        // On turn (>5 minutes after observation)
+        final onResolution = resolver.resolve(
+          providerInstanceId: 'ollama-1',
+          modelId: 'gemma4:e2b',
+          selectionId: 'on',
+        );
+        expect(onResolution.descriptor.status, ThinkingCapabilityStatus.supported);
+        expect(onResolution.directive, const ThinkingToggleDirective(enabled: true));
+
+        // Wire serialization for On: think: true
+        final onBody = <String, dynamic>{'model': 'gemma4:e2b'};
+        OllamaThinkingWireCodec.applyThink(onBody, onResolution.directive);
+        expect(onBody['think'], isTrue);
+
+        // Default turn (null selection) (>5 minutes after observation)
+        final defaultResolution = resolver.resolve(
+          providerInstanceId: 'ollama-1',
+          modelId: 'gemma4:e2b',
+          selectionId: null,
+        );
+        expect(defaultResolution.descriptor.status, ThinkingCapabilityStatus.supported);
+        expect(defaultResolution.directive, isA<UseProviderDefault>());
+
+        // Wire serialization for Default: think is omitted
+        final defaultBody = <String, dynamic>{'model': 'gemma4:e2b'};
+        OllamaThinkingWireCodec.applyThink(defaultBody, defaultResolution.directive);
+        expect(defaultBody.containsKey('think'), isFalse);
+      },
+    );
+
+    test(
+      'explicit probe failure marker on native model retains failure and rejects selection',
+      () {
+        repo.createInstance(
+          ProviderInstance(
+            id: 'ollama-1',
+            templateId: 'ollama',
+            displayName: 'Ollama',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            configRevision: 1,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        final staleObservedAt = DateTime.now().toUtc().subtract(
+          const Duration(minutes: 10),
+        );
+
+        final gemmaMetadata = {
+          OllamaThinkingProbe.capabilitiesMetadataKey: ['thinking'],
+          OllamaThinkingProbe.thinkingDeclarationMetadataKey: {
+            'values': [false, true],
+            'default': true,
+          },
+        };
+
+        repo.upsertModelCache(
+          instanceId: 'ollama-1',
+          cacheKey: 'models',
+          models: [
+            {
+              'value': 'gemma4:e2b',
+              'model_metadata': gemmaMetadata,
+              'thinking_control': {
+                'status': 'supported',
+                'kind': 'toggle',
+                'options': [
+                  {'id': 'off', 'label': 'Off'},
+                  {'id': 'on', 'label': 'On'},
+                ],
+                'default_option_id': 'on',
+                'capability_revision': '1:1:ollama_live:gemma4:e2b',
+                'source': 'live_probe_failed',
+                'observed_at': staleObservedAt.toIso8601String(),
+              },
+            },
+          ],
+          fetchedAt: staleObservedAt,
+          source: 'live_probe_failed',
+          configRevision: 1,
+          credentialRevision: 1,
+        );
+
+        expect(
+          () => resolver.resolve(
+            providerInstanceId: 'ollama-1',
+            modelId: 'gemma4:e2b',
+            selectionId: 'off',
+          ),
+          throwsA(
+            isA<ThinkingSelectionException>().having(
+              (e) => e.code,
+              'code',
+              ThinkingSelectionErrorCode.capabilityUnknown,
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'explicit cache_stale marker on native model retains invalidation and rejects selection',
+      () {
+        repo.createInstance(
+          ProviderInstance(
+            id: 'ollama-1',
+            templateId: 'ollama',
+            displayName: 'Ollama',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            configRevision: 1,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        final staleObservedAt = DateTime.now().toUtc().subtract(
+          const Duration(minutes: 10),
+        );
+
+        final gemmaMetadata = {
+          OllamaThinkingProbe.capabilitiesMetadataKey: ['thinking'],
+          OllamaThinkingProbe.thinkingDeclarationMetadataKey: {
+            'values': [false, true],
+            'default': true,
+          },
+        };
+
+        repo.upsertModelCache(
+          instanceId: 'ollama-1',
+          cacheKey: 'models',
+          models: [
+            {
+              'value': 'gemma4:e2b',
+              'model_metadata': gemmaMetadata,
+              'thinking_control': {
+                'status': 'supported',
+                'kind': 'toggle',
+                'options': [
+                  {'id': 'off', 'label': 'Off'},
+                  {'id': 'on', 'label': 'On'},
+                ],
+                'default_option_id': 'on',
+                'capability_revision': '1:1:ollama_live:gemma4:e2b',
+                'source': 'cache_stale',
+                'observed_at': staleObservedAt.toIso8601String(),
+              },
+            },
+          ],
+          fetchedAt: staleObservedAt,
+          source: 'cache_stale',
+          configRevision: 1,
+          credentialRevision: 1,
+        );
+
+        expect(
+          () => resolver.resolve(
+            providerInstanceId: 'ollama-1',
+            modelId: 'gemma4:e2b',
+            selectionId: 'off',
+          ),
+          throwsA(
+            isA<ThinkingSelectionException>().having(
+              (e) => e.code,
+              'code',
+              ThinkingSelectionErrorCode.capabilityUnknown,
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'malformed native declaration fails closed to unknown and rejects selection',
+      () {
+        repo.createInstance(
+          ProviderInstance(
+            id: 'ollama-1',
+            templateId: 'ollama',
+            displayName: 'Ollama',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            configRevision: 1,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        final staleObservedAt = DateTime.now().toUtc().subtract(
+          const Duration(minutes: 10),
+        );
+
+        repo.upsertModelCache(
+          instanceId: 'ollama-1',
+          cacheKey: 'models',
+          models: [
+            {
+              'value': 'gemma4:e2b',
+              // Malformed: empty values list fails parseThinkingDeclaration
+              'model_metadata': {
+                OllamaThinkingProbe.capabilitiesMetadataKey: ['thinking'],
+                OllamaThinkingProbe.thinkingDeclarationMetadataKey: {
+                  'values': <dynamic>[],
+                  'default': true,
+                },
+              },
+              'thinking_control': {
+                'status': 'supported',
+                'kind': 'toggle',
+                'options': [
+                  {'id': 'off', 'label': 'Off'},
+                  {'id': 'on', 'label': 'On'},
+                ],
+                'default_option_id': 'on',
+                'capability_revision': '1:1:ollama_live:gemma4:e2b',
+                'source': 'live',
+                'observed_at': staleObservedAt.toIso8601String(),
+              },
+            },
+          ],
+          fetchedAt: staleObservedAt,
+          source: 'live',
+          configRevision: 1,
+          credentialRevision: 1,
+        );
+
+        expect(
+          () => resolver.resolve(
+            providerInstanceId: 'ollama-1',
+            modelId: 'gemma4:e2b',
+            selectionId: 'off',
+          ),
+          throwsA(
+            isA<ThinkingSelectionException>().having(
+              (e) => e.code,
+              'code',
+              ThinkingSelectionErrorCode.capabilityUnknown,
+            ),
+          ),
+        );
+      },
+    );
+
+    test(
+      'revision change invalidates cached descriptor and reassembles fresh revision',
+      () {
+        // Instance updated to configRevision 2
+        repo.createInstance(
+          ProviderInstance(
+            id: 'ollama-1',
+            templateId: 'ollama',
+            displayName: 'Ollama',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            configRevision: 2,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        final staleObservedAt = DateTime.now().toUtc().subtract(
+          const Duration(minutes: 10),
+        );
+
+        final gemmaMetadata = {
+          OllamaThinkingProbe.capabilitiesMetadataKey: ['thinking'],
+          OllamaThinkingProbe.thinkingDeclarationMetadataKey: {
+            'values': [false, true],
+            'default': true,
+          },
+        };
+
+        repo.upsertModelCache(
+          instanceId: 'ollama-1',
+          cacheKey: 'models',
+          models: [
+            {
+              'value': 'gemma4:e2b',
+              'model_metadata': gemmaMetadata,
+              'thinking_control': {
+                'status': 'supported',
+                'kind': 'toggle',
+                'options': [
+                  {'id': 'off', 'label': 'Off'},
+                  {'id': 'on', 'label': 'On'},
+                ],
+                'default_option_id': 'on',
+                'capability_revision': '1:1:ollama_live:gemma4:e2b', // old rev 1:1
+                'source': 'live',
+                'observed_at': staleObservedAt.toIso8601String(),
+              },
+            },
+          ],
+          fetchedAt: staleObservedAt,
+          source: 'live',
+          configRevision: 1,
+          credentialRevision: 1,
+        );
+
+        final resolution = resolver.resolve(
+          providerInstanceId: 'ollama-1',
+          modelId: 'gemma4:e2b',
+          selectionId: null,
+        );
+        expect(resolution.descriptor.capabilityRevision, startsWith('2:1:'));
+        expect(resolution.descriptor.status, ThinkingCapabilityStatus.unknown);
+
+        expect(
+          () => resolver.resolve(
+            providerInstanceId: 'ollama-1',
+            modelId: 'gemma4:e2b',
+            selectionId: 'off',
           ),
           throwsA(
             isA<ThinkingSelectionException>().having(

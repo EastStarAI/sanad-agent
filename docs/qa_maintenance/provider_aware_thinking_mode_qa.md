@@ -28,6 +28,13 @@ routes, and never silently ignore an explicit unsupported selection.
 | GLM hybrid versus forced effort | GLM-4.5/Air permit On/Off with provider-managed hybrid default; GLM-5.3 permits low/high/max with default max and rejects Off; Kimi XOR wire remains unchanged |
 | Ollama missing probe versus valid negative probe | Missing/malformed evidence is `unknown`; a valid capability list lacking `thinking` is `unsupported`; no name-based options |
 | Ollama Boolean declaration | Exactly declared On/Off choices and member Boolean default; sync/stream `think` remains Boolean; omitted Default emits no `think` |
+| Live native evidence older than the 5-minute TTL | Validated On/Off/default facts are retained under the matching route/config revision: On sends `think: true`, Off sends `think: false`, Default omits `think`; no degradation to unknown or rejection |
+| Explicit probe failure or stale cache on a native route | Resolution stays `unknown` and explicit selection is rejected with `thinking_capability_unknown`; aged evidence never bypasses failure/invalidation markers |
+| Config or credential revision change with aged native facts | Cached descriptor is invalidated, the fresh revision is reassembled, and selection is rejected while that revision has no native evidence |
+| Failed refresh then config/credential revision change | Failure provenance is not cleared by the revision alone; resolution stays `unknown` and selection is rejected |
+| Successful live refresh after a failed probe | Failure provenance is dropped, `source` returns to `live`, and On/Off/default resolve with typed native wire |
+| Typed thinking-selection rejection at turn admission | Terminal error response delivered only after the owned work item commits `cancelled`, then the turn completes normally; unrelated queued work stays `queued` and restorable |
+| Stale rejection whose work item already lost ownership | No terminal response, no in-flight clear, no turn-completion signal (no busy release or queued-work drain); the newer durable owner, its bound identity, and its queued work are untouched |
 | Ollama level declaration | Exactly declared native string choices/default; a native string `off` stays a string, not Boolean `false` |
 | Malformed native values/default or untyped capability list | No fabricated options/defaults; unresolved evidence stays unknown |
 | Codex exact native metadata | `supported_reasoning_levels` and optional member `default_reasoning_level` survive discovery/cache/resolution; malformed or foreign-model metadata is not finite evidence |
@@ -58,6 +65,8 @@ routes, and never silently ignore an explicit unsupported selection.
 ## Automated anchors
 
 - `agent/test/core/provider_thinking/`
+- `agent/test/core/provider_thinking/ollama_live_thinking_ttl_retention_test.dart` (real `OllamaAdapter` over mock HTTP: >5-minute native On/Off/default typed wire, malformed discovery, refresh-failure markers, revision change)
+- `agent/test/interfaces/runtime/thinking_selection_rejection_test.dart` (turn-admission rejection commits the owned durable item before delivering; stale non-owner rejection stays silent and preserves the newer owner and its in-flight state)
 - `agent/test/core/provider_thinking/opencode_go_deepseek_v41_thinking_regression_test.dart` (exact V4.1 Flash policy/descriptor, production Go Chat mock-HTTP default/Off/effort wire, near-ID negatives)
 - `agent/test/engine/thinking_selection_agent_runner_test.dart`
 - `agent/e2e_test/thinking_mode_gate_i_e2e_test.dart` (`--concurrency=1`)
