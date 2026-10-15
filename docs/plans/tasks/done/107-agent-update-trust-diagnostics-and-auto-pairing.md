@@ -147,11 +147,9 @@ must be backed by executable evidence, not manual reasoning.
   - [x] Ubuntu 26 note: if an Ubuntu 26 host is required for any part and is not
     available, that part is explicitly declared **not covered** and the gate is
     not considered fully verified.
-    → **Ubuntu 26 is NOT available.** The development host is Ubuntu 22.04.5 (kernel
-    6.8.0-138) and CI provides ubuntu-24.04. All real-host evidence above is from
-    Ubuntu 22.04.5. Any Ubuntu-26-specific behavior (e.g. a changed systemd user-bus
-    or `loginctl` contract) is **not covered**, and R4 must not be treated as fully
-    verified on that dimension.
+    → **Now covered on Ubuntu 26.04.1** (see G5-R2 below). Bottom-up sequence used:
+    the 22.04.5 host first, then an isolated Ubuntu 26.04.1 Multipass VM. Any
+    Ubuntu-26-specific behavior is no longer an open gap.
 
 ## Acceptance Criteria
 
@@ -216,7 +214,8 @@ must be backed by executable evidence, not manual reasoning.
   to the PR as evidence. **Ubuntu 26 is not available on this host (Ubuntu 22.04;
   CI provides ubuntu-24.04) — any Ubuntu-26-specific behavior is declared not
   covered and AC-R4 is not claimed fully verified on that dimension.**
-  → **PASS on Ubuntu 22.04.5; NOT COVERED on Ubuntu 26.** Real-host results:
+  → **PASS on Ubuntu 22.04.5 and PASS on Ubuntu 26.04.1** (both verified, see
+  G5-R2). 22.04.5 real-host results:
 
   | Scenario | Pre-state | Result | Post-state evidence |
   | --- | --- | --- | --- |
@@ -234,15 +233,72 @@ must be backed by executable evidence, not manual reasoning.
 
 ## Real-Host Verification Harness
 
-The real scenarios above are reproducible through
-`client/tool/task107_real_linux_verification.dart`, which drives the real
+### G5-R2 — Ubuntu 26.04 Verification (isolated VM)
+
+Executed after R4 on a purpose-built **Ubuntu 26.04.1 LTS** Multipass VM so the
+26.04 dimension is verified without touching the 22.04.5 development host. The VM
+runs a real systemd user session over SSH, which is the condition the fix targets.
+
+Environment: Ubuntu 26.04.1 LTS · kernel `7.0.0-34-generic` · systemd `259`
+(`259.5-0ubuntu3.4`) · `sudo-rs 0.2.13-0ubuntu1.2` · Flutter `3.47.0` (via fvm) ·
+repository at commit `4a35588` · `Linger=no` (no `loginctl` change in any step).
+
+| Scenario | Pre-state | Result | Post-state evidence (26.04) |
+| --- | --- | --- | --- |
+| A | stopped real v1.0.15, service unregistered | `ready` | disk `1.0.17+18`; `~/.config/systemd/user/sanad-agent-task107.service` created; `systemctl --user is-active` = `active`; `/health` = `1.0.17`; `/etc/systemd/system/...` absent; `Linger=no` |
+| B | real v1.0.15 daemon running under systemd, service registered | `ready` | update actually executed by the daemon; disk `1.0.17+18`; unit restarted; `/health` = `1.0.17`; `Linger=no` |
+| C | real v1.0.17 daemon started manually, service unregistered | `upToDate` | unit created and `active`; client issued no start/restart; `Linger=no`; no system unit |
+
+Additional 26.04 evidence: `fvm flutter analyze` clean; the focused suite
+(`agent_compatibility_validation_test.dart`) passes 16/16; privilege-escalation
+strings in the unit journal: 0.
+
+Findings from this verification, recorded honestly:
+
+1. **Legacy escalation still exists on 26.04 (Agent-side).** Running the published
+   v1.0.15 `service install` directly on 26.04 performs privilege escalation: with
+   passwordless `sudo` present in the VM it invoked
+   `sudo loginctl enable-linger ubuntu` (setting `Linger=yes`), installed a
+   `systemd-user` scope unit, and exited 0. A second run on the same host exited 1
+   with no unit while still enabling linger, so the legacy outcome is
+   environment-dependent. State was restored (`Linger=no`, unit removed). This is
+   precisely the path the Client must never use, and it confirms the defect the
+   `--user-scope` capability path exists to avoid — the v1.0.15 binary does not
+   advertise `--user-scope`.
+2. **Agent `--version` reporting is working-directory sensitive.** Running the
+   published v1.0.15 artifact from `/tmp` reports `1.0.15`, but from
+   `client/` inside a source checkout it reports that checkout's version
+   (`1.0.17+18`), for a byte-identical artifact (sha256 `84bee311…`, matching the
+   v1.0.15 `SHA256SUMS`). Tooling that pipes the binary's output into `grep -q`
+   under `pipefail` can additionally report a false failure, because the early
+   reader exit raises SIGPIPE in the binary. `task107_prepare_scenario.sh`
+   therefore verifies the artifact from a neutral pinned cwd and home.
+3. **Scenario A on the dev host is driven by the capability branch.** Because the
+   Flutter test process runs with `client/` as its working directory, the
+   controller's on-disk version read sees the checkout version, so the update is
+   triggered by `validateServiceInstallCompatibility()` (v1.0.15 lacks
+   `--user-scope`) rather than by the version comparison. This satisfies the
+   acceptance criterion, which covers "older than `targetVersion` **or** lacks
+   required service CLI options"; the version-comparison branch remains covered by
+   the unit scenarios with an injected process runner.
+4. **Harness defects found and fixed by real execution** (verification tooling, not
+   product code): the scenario-C preparer did not detach the unmanaged daemon, so
+   it held the caller's stdout open and an SSH/exec caller waited forever; the
+   cleanup matched processes by a relative/absolute argv that missed the
+   supervisor and by `exe` paths that carry a ` (deleted)` suffix after the
+   scenario directory is removed; and the health budget was too short for a cold
+   start in a fresh Sanad Home. All three are fixed and re-verified.
+
+The real scenarios are reproducible through
+`client/tool/task107_real_linux_verification.dart` plus
+`client/tool/task107_prepare_scenario.sh`, which drives the real
 `StandaloneDaemonController` against real published Agent binaries on an isolated
-Sanad Home and an isolated systemd user unit instance. It is driven manually with
+Sanad Home and an isolated systemd user unit instance. They are run manually with
 `fvm flutter test` and environment preparation (`TASK107_ROOT`, `TASK107_SCENARIO`,
-`SANAD_HOME`, `SANAD_SERVICE_INSTANCE`, `LOCAL_GATEWAY_URL` dart-define); it is not
-part of CI because it requires a real systemd user session, real release downloads,
-and real service registration. Only `LOCAL_GATEWAY_URL` is a build-time input;
-no production defaults are redefined by it.
+`SANAD_HOME`, `SANAD_SERVICE_INSTANCE`, `LOCAL_GATEWAY_URL` dart-define); they are
+not part of CI because they require a real systemd user session, real release
+downloads, and real service registration. Only `LOCAL_GATEWAY_URL` is a build-time
+input; no production defaults are redefined by them.
 
 Residual observations (non-blocking, out of R1–R4 scope):
 
@@ -259,7 +315,8 @@ Residual observations (non-blocking, out of R1–R4 scope):
 - [x] Unit and regression tests passing for all 8 original scenarios plus R1–R3.
 - [x] Technical documentation updated in `docs/technical/update_architecture.md` and `docs/technical/client_local_daemon_control.md`.
 - [x] Real Ubuntu 22.04.5 host verification for scenarios A–C (R4).
-- [ ] Ubuntu 26 real-host verification — **not covered** (no Ubuntu 26 host available).
+- [x] Real Ubuntu 26.04.1 VM verification for scenarios A–C (G5-R2), including the
+  legacy escalation side effect and its restoration.
 - [ ] Codebase knowledge graph refreshed via `graphify update .` — **not run**: the
   `graphify` CLI is not installed on this host and neither the primary checkout nor
   this worktree contains `graphify-out/`. The source change is a purely local method
@@ -267,9 +324,8 @@ Residual observations (non-blocking, out of R1–R4 scope):
 - [x] PR #211 updated and CI checks verified.
 
 ## Current Status
-- Gate: G5-R (Reopened — R1–R4 complete on Ubuntu 22.04.5; Ubuntu 26 not covered)
+- Gate: G5-R2 (Completed — R1–R4 verified on Ubuntu 22.04.5 and Ubuntu 26.04.1)
 - Target PR: #211
-- Note: G0–G5 remain complete; G5-R hardens running-daemon scenarios and adds
-  real host verification. Ubuntu 26 is unavailable on the development host
-  (Ubuntu 22.04.5; CI ubuntu-24.04), so Ubuntu-26-specific coverage is explicitly
-  declared not covered and R4 is not claimed fully verified on that dimension.
+- Note: G0–G5 remain complete. Ubuntu 26.04 was verified in an isolated Multipass
+  VM (Ubuntu 26.04.1, kernel 7.0.0-34, systemd 259, sudo-rs 0.2.13) so the 22.04.5
+  development host was never upgraded or otherwise modified.

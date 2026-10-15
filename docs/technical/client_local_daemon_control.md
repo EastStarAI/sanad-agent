@@ -51,6 +51,14 @@ behavior, not a client restart.
 
 ### Pre-flight Capability Validation & Dynamic Help Detection
 
+On-disk version inspection has one caveat worth knowing: the Agent binary resolves
+the version it reports from the current working directory, so invoking it from
+inside a source checkout reports that checkout's version rather than the
+artifact's own. `getInstalledExecutableVersion()` inherits the client process's
+working directory, which is harmless for a packaged Client but means the version
+comparison must not be the only guard for a source-context run. Capability
+validation below is the authoritative check and is not affected by this.
+
 To prevent unrecognized CLI argument crashes (such as `Could not find an option named "--user-scope"`
 on older agent binaries like v1.0.15), `StandaloneDaemonController` provides dynamic capability
 detection via `validateServiceInstallCompatibility()`. Before registering or invoking service
