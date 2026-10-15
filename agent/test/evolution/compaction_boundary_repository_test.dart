@@ -314,6 +314,43 @@ void main() {
     expect(row?.failureReason, CompactionFailureReason.interrupted);
   });
 
+  test('reconcileOrphanedStartedOperations unblocks subsequent compaction claims', () {
+    boundaries.tryClaim(
+      compactionId: 'cmp-orphaned',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.manual,
+      sourceRange: _sourceRange(),
+      retainedTailRange: _tailRange(),
+      routeSignature: _route(),
+      startedAt: DateTime.utc(2026, 8, 29),
+    );
+
+    final blocked = boundaries.tryClaim(
+      compactionId: 'cmp-second',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.manual,
+      sourceRange: _sourceRange(),
+      retainedTailRange: _tailRange(),
+      routeSignature: _route(),
+      startedAt: DateTime.utc(2026, 8, 29),
+    );
+    expect(blocked.outcome, CompactionClaimOutcome.compactionInProgress);
+
+    final recovered = boundaries.reconcileOrphanedStartedOperations();
+    expect(recovered, 1);
+
+    final unblocked = boundaries.tryClaim(
+      compactionId: 'cmp-third',
+      sessionId: 'session-1',
+      trigger: CompactionTrigger.manual,
+      sourceRange: _sourceRange(),
+      retainedTailRange: _tailRange(),
+      routeSignature: _route(),
+      startedAt: DateTime.utc(2026, 8, 29),
+    );
+    expect(unblocked.outcome, CompactionClaimOutcome.claimed);
+  });
+
   test('completeStarted rejects stale history revision', () {
     final startedAt = DateTime.utc(2026, 8, 29, 1);
     final claim = boundaries.tryClaim(

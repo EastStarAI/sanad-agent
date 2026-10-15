@@ -36,17 +36,21 @@ abstract final class CompactionTokenEstimator {
         total += estimateText(content);
       }
     }
-    total += estimateText(message.thought);
-    total += estimateText(message.reasoning);
     if (message.toolCalls != null) {
       for (final call in message.toolCalls!) {
         total += estimateText(call.name);
         total += estimateText(jsonEncode(call.arguments));
+        if (call.id.isNotEmpty) {
+          total += estimateText(call.id);
+        }
       }
     }
-    if (message.providerState != null) {
-      total += estimateText(jsonEncode(message.providerState!.toJson()));
+    if (message.toolCallId != null && message.toolCallId!.isNotEmpty) {
+      total += estimateText(message.toolCallId);
     }
+    // Wire shadowing: reasoning, thought, and opaque providerState do not
+    // reach the model request wire as input context and are deliberately
+    // excluded from wire token estimates.
     return total;
   }
 

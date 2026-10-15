@@ -68,9 +68,7 @@ abstract final class CompactionRequestFactory {
         .evaluate(
           routeSignature: route,
           contextWindowTokens: 128_000,
-          conversationMessages: [
-            for (final entry in timeline.messages) entry.message,
-          ],
+          conversationMessages: activeProjection.conversationMessages,
           systemPrompt: systemPrompt,
           runtimeContext: runtimeContext,
           toolSchemas: toolSchemas,

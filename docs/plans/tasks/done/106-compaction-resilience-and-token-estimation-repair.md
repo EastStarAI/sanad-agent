@@ -63,46 +63,46 @@ Eliminate context compaction failures caused by orphaned database locks, fix the
 
 
 ### G1 — Protocol Wire-Format Alignment & Error Presentation
-- [ ] Align `CompactionFailureReason.wireValue` in `agent/lib/engine/compaction/compaction_enums.dart` to canonical snake_case strings (`session_busy`, `compaction_in_progress`, `claim_lost`, `source_revision_stale`, `summarization_failed`, `continuity_validation_failed`, `projection_still_over_budget`, `persistence_failed`, `interrupted`).
-- [ ] Update `SessionCompactResult.fromJson` and getter properties in `client/lib/features/conversations/domain/models/compaction_event_snapshot.dart` to support both `snake_case` and `camelCase`.
-- [ ] Ensure `SessionCompactResult` captures the failure reason and human-readable feedback when outcome is not accepted, preventing silent fallbacks to generic error messages.
-- [ ] Add unit tests for wire-format serialization, deserialization, and client error message resolution.
+- [x] Align `CompactionFailureReason.wireValue` in `agent/lib/engine/compaction/compaction_enums.dart` to canonical snake_case strings (`session_busy`, `compaction_in_progress`, `claim_lost`, `source_revision_stale`, `summarization_failed`, `continuity_validation_failed`, `projection_still_over_budget`, `persistence_failed`, `interrupted`).
+- [x] Update `SessionCompactResult.fromJson` and getter properties in `client/lib/features/conversations/domain/models/compaction_event_snapshot.dart` to support both `snake_case` and `camelCase`.
+- [x] Ensure `SessionCompactResult` captures the failure reason and human-readable feedback when outcome is not accepted, preventing silent fallbacks to generic error messages.
+- [x] Add unit tests for wire-format serialization, deserialization, and client error message resolution.
 
 ### G2 — Daemon Startup Reconciliation for Orphaned Compactions
-- [ ] Add `reconcileOrphanedStartedOperations()` to `CompactionBoundaryRepository` in `agent/lib/evolution/db/compaction_boundary_repository.dart` that marks any existing `started` operations as `failed` (`failure_reason = 'interrupted'`).
-- [ ] Wire the reconciliation call into daemon bootstrap lifecycle (in `agent_runtime_service.dart` / `gateway_manager.dart` or during database open).
-- [ ] Add regression tests in `agent/test/evolution/compaction_boundary_repository_test.dart` verifying that orphaned rows from previous runs are safely reconciled on startup and do not block subsequent claims.
+- [x] Add `reconcileOrphanedStartedOperations()` to `CompactionBoundaryRepository` in `agent/lib/evolution/db/compaction_boundary_repository.dart` that marks any existing `started` operations as `failed` (`failure_reason = 'interrupted'`).
+- [x] Wire the reconciliation call into daemon bootstrap lifecycle (in `agent_runtime_service.dart` / `gateway_manager.dart` or during database open).
+- [x] Add regression tests in `agent/test/evolution/compaction_boundary_repository_test.dart` verifying that orphaned rows from previous runs are safely reconciled on startup and do not block subsequent claims.
 
 ### G3 — Reference-Grounded Wire Shadowing & Token Estimation Accuracy
-- [ ] Implement wire shadowing in `CompactionTokenEstimator` (`agent/lib/engine/context/compaction_token_estimator.dart`) following Hermes `_wire_message_shadow`:
+- [x] Implement wire shadowing in `CompactionTokenEstimator` (`agent/lib/engine/context/compaction_token_estimator.dart`) following Hermes `_wire_message_shadow`:
   - Exclude `message.thought` and `message.reasoning` from character token counting when they do not reach the model wire.
   - Exclude opaque provider state (`message.providerState`) and encrypted blobs from raw character pricing.
   - Price tool calls accurately based on schema parameters and invocation arguments.
-- [ ] Integrate model-projected history from `ModelProjectionBuilder` into `RequestPressureEvaluator` so pressure checks evaluate only model-visible turns.
-- [ ] Add unit tests verifying that large reasoning chains or provider state metadata do not inflate message token estimates.
+- [x] Integrate model-projected history from `ModelProjectionBuilder` into `RequestPressureEvaluator` so pressure checks evaluate only model-visible turns.
+- [x] Add unit tests verifying that large reasoning chains or provider state metadata do not inflate message token estimates.
 
 ### G4 — Client UI Metric Consistency & Invariant Guardrails
-- [ ] Update `CompactionEventTile` in `client/lib/features/conversations/presentation/widgets/compaction_event_tile.dart`:
+- [x] Update `CompactionEventTile` in `client/lib/features/conversations/presentation/widgets/compaction_event_tile.dart`:
   - Enforce mathematical invariant: `Retained tail` cannot exceed `After compaction`.
   - When `providerConfirmedRequestTokensAfter` is present, clamp or calibrate `Retained tail` so it reflects the confirmed context boundary.
   - Fix `Context reclaimed` calculation so it uses consistent bases and does not subtract confirmed figures from inflated character estimates.
   - Clarify the "Before compaction" label when estimated usage exceeds 100% of context window (e.g. indicate accumulated conversation history).
-- [ ] Add widget and unit tests for `CompactionEventTile` verifying no UI contradictions when provider usage is confirmed.
+- [x] Add widget and unit tests for `CompactionEventTile` verifying no UI contradictions when provider usage is confirmed.
 
 ### G5 — Verification, Tests & Documentation
-- [ ] Run `fvm dart analyze` in `agent/` and `fvm flutter analyze` in `client/`.
-- [ ] Run focused unit and widget test suites covering compaction commands, boundary repository, token estimator, and event tile widgets.
-- [ ] Verify that `docs/llms.txt`, contracts, and task documentation are updated in accordance with the Definition of Done.
-- [ ] Run `graphify update .` to keep knowledge graph current.
+- [x] Run `fvm dart analyze` in `agent/` and `fvm flutter analyze` in `client/`.
+- [x] Run focused unit and widget test suites covering compaction commands, boundary repository, token estimator, and event tile widgets.
+- [x] Verify that `docs/llms.txt`, contracts, and task documentation are updated in accordance with the Definition of Done.
+- [x] Run `graphify update .` to keep knowledge graph current.
 
 ## Acceptance Criteria
 
-- [ ] Typing `/compact` while another compaction is running displays `"Context compaction is already in progress."` in the client UI, not `"Context compaction could not start."`.
-- [ ] If a compaction fails for a specific reason (e.g. `source_revision_stale`, `session_busy`), the client displays the specific failure reason.
-- [ ] Killing or restarting the agent daemon while a compaction is active does not permanently lock the session; upon daemon restart, the session can immediately run `/compact` or send messages.
-- [ ] Token estimation for long conversations with thinking/reasoning models (like ChatGPT Codex) matches within a reasonable margin of actual provider token usage, rather than inflating by 6x+.
-- [ ] In `CompactionEventTile`, the `Retained tail` token count never exceeds the `After compaction` token count.
-- [ ] Context reclaimed percentage is mathematically consistent and never derived from mismatched estimated vs. confirmed bases.
+- [x] Typing `/compact` while another compaction is running displays `"Context compaction is already in progress."` in the client UI, not `"Context compaction could not start."`.
+- [x] If a compaction fails for a specific reason (e.g. `source_revision_stale`, `session_busy`), the client displays the specific failure reason.
+- [x] Killing or restarting the agent daemon while a compaction is active does not permanently lock the session; upon daemon restart, the session can immediately run `/compact` or send messages.
+- [x] Token estimation for long conversations with thinking/reasoning models (like ChatGPT Codex) matches within a reasonable margin of actual provider token usage, rather than inflating by 6x+.
+- [x] In `CompactionEventTile`, the `Retained tail` token count never exceeds the `After compaction` token count.
+- [x] Context reclaimed percentage is mathematically consistent and never derived from mismatched estimated vs. confirmed bases.
 
 ## Definition of Done
 

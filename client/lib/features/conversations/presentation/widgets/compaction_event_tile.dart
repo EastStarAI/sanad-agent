@@ -107,14 +107,18 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
     final lines = <String>[];
     final percentageBudget = snapshot.effectiveInputBudgetTokens ?? snapshot.contextWindowTokens;
     if (snapshot.estimatedRequestTokensBefore != null) {
+      final beforeTokens = snapshot.estimatedRequestTokensBefore!;
+      final isOverBudget = percentageBudget != null && beforeTokens > percentageBudget;
+      final label = isOverBudget ? 'Before compaction (history)' : 'Before compaction';
       lines.add(
         _tokenLine(
-          'Before compaction',
-          snapshot.estimatedRequestTokensBefore!,
+          label,
+          beforeTokens,
           percentageBudget,
         ),
       );
     }
+    final afterTokens = snapshot.providerConfirmedRequestTokensAfter ?? snapshot.estimatedRequestTokensAfter;
     if (snapshot.providerConfirmedRequestTokensAfter != null) {
       lines.add(
         '${_tokenLine('After compaction', snapshot.providerConfirmedRequestTokensAfter!, percentageBudget)} ✓ Confirmed',
@@ -129,9 +133,8 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
       );
     }
     final before = snapshot.estimatedRequestTokensBefore;
-    final confirmedAfter = snapshot.providerConfirmedRequestTokensAfter;
-    final reclaimed = before != null && confirmedAfter != null
-        ? (before - confirmedAfter).clamp(0, before).toInt()
+    final reclaimed = before != null && afterTokens != null && before > afterTokens
+        ? (before - afterTokens).clamp(0, before).toInt()
         : snapshot.reclaimedTokens;
     if (reclaimed != null && before != null) {
       lines.add(
@@ -139,8 +142,12 @@ class _CompactionEventTileState extends State<CompactionEventTile> {
       );
     }
     if (snapshot.retainedTailTokens != null) {
+      final rawTail = snapshot.retainedTailTokens!;
+      final tailTokens = (afterTokens != null && rawTail > afterTokens)
+          ? afterTokens
+          : rawTail;
       lines.add(
-        'Retained tail: ~${_formatTokens(snapshot.retainedTailTokens!)} tokens',
+        'Retained tail: ~${_formatTokens(tailTokens)} tokens',
       );
     }
     final threshold = snapshot.autoThresholdTokens;

@@ -1120,6 +1120,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         'session_id': sessionId,
         'request_id': requestId,
         'outcome': CompactionFailureReason.sessionBusy.wireValue,
+        'failure_reason': CompactionFailureReason.sessionBusy.wireValue,
       };
     }
     if (isSessionCompacting(sessionId)) {
@@ -1127,6 +1128,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
         'session_id': sessionId,
         'request_id': requestId,
         'outcome': CompactionFailureReason.compactionInProgress.wireValue,
+        'failure_reason': CompactionFailureReason.compactionInProgress.wireValue,
       };
     }
     if (getIt.isRegistered<CompactionBoundaryRepository>()) {
@@ -1137,6 +1139,7 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
           'session_id': sessionId,
           'request_id': requestId,
           'outcome': CompactionFailureReason.compactionInProgress.wireValue,
+          'failure_reason': CompactionFailureReason.compactionInProgress.wireValue,
         };
       }
     }

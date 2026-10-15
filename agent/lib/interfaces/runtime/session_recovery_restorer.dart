@@ -11,6 +11,7 @@ import 'package:sanad_agent/engine/runtime/continuation_checkpoint_coordinator.d
 import 'package:sanad_agent/engine/runtime/tool_terminal_record.dart';
 import 'package:sanad_agent/capabilities/tools/system/process_tree_controller.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
 import 'package:sanad_agent/evolution/db/runtime/session_execution_state_coordinator.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
@@ -63,6 +64,16 @@ class SessionRecoveryRestorer {
     final store = _getPersistedState();
     if (store == null) return;
     _deleteOrphanedRuntimeNotices(store);
+
+    if (getIt.isRegistered<CompactionBoundaryRepository>()) {
+      final recovered = getIt<CompactionBoundaryRepository>()
+          .reconcileOrphanedStartedOperations();
+      if (recovered > 0) {
+        _logger.info(
+          'Reconciled $recovered orphaned compaction operation(s) from previous daemon run.',
+        );
+      }
+    }
 
     final awaitingSuspensions = await _listAwaitingSuspensions();
     final suspendedToolCallIdsBySession = <String, Set<String>>{};
