@@ -1,6 +1,6 @@
 ---
 title: "Task 102c — Desktop Background and System Tray"
-status: complete
+status: completed
 current_gate: G3
 remaining_estimate: 0%
 ---
