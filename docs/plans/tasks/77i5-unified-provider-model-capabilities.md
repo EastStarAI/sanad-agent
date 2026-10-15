@@ -2,7 +2,7 @@
 title: "77I5 — Model-owned capabilities, mode-owned wire, catalog, media and replay"
 status: "in_progress"
 current_gate: "Ollama direct/view_image user-accepted after reviewed repair; G4 grounded thinking/defaults and G5 final delivery remain open"
-remaining_estimate: "approximately 25–30% of total effort; thinking repair, live controls, final verification/restoration and delivery remain; not a measured completion ratio"
+remaining_estimate: "Unmeasured: G4 thinking/defaults/live lifecycle and G5 final verification/restoration/exact-commit delivery remain"
 reference_grounding: "required"
 evidence_id: "77i5"
 evidence_fingerprint: "sha256:db669ce222de618c11d42287f7367418d5ef7147b35f24b085ca76ebd4c93966"
@@ -496,7 +496,7 @@ R20 — Final fixture alignment from independent full Agent gate:
 
 # Progress and blocker policy
 
-The historical **60% remaining** figures below earlier receipts are not current status. The earlier conversational **25–30%** estimate is superseded by the current approximate **30–35% remaining-effort** estimate above, which includes the newly confirmed native Ollama gaps and outstanding thinking coverage. This is a planning estimate, not a measured completion ratio. G2 independent review, R16 and R20 full suites/analyzers/E2E, live edit/retry/known rejection/Cancel, user-confirmed cold image display, live history-page separation, and real accepted-backend/lost-ACK verification are complete. R20 MiniMax capability gating and local rejection are automatically accepted; one native live turn confirms the canonical text-only error and absence of the misleading contact banner, not satisfactory visible explanation or text continuation.
+Historical percentage estimates (**60%**, **25–30%**, **30–35%**) are superseded and must not be used as current completion ratios. Current status is gate-based: native Ollama images and affected deterministic E2E repairs are accepted; G4 thinking/defaults/live lifecycle, separate remote G3 closure, final restoration/security/documentation and exact-commit delivery remain. No measured remaining-effort percentage is available. G2 independent review, R16 and R20 full suites/analyzers/E2E, live edit/retry/known rejection/Cancel, user-confirmed cold image display, live history-page separation, and real accepted-backend/lost-ACK verification are complete. R20 MiniMax capability gating and local rejection are automatically accepted; one native live turn confirms the canonical text-only error and absence of the misleading contact banner, not satisfactory visible explanation or text continuation.
 
 Current open work, explicitly including functional thinking support rather than only UI polish:
 - [x] **Haiku image defect — closed:** external-bridge merge repaired, independently regression-tested, applied/restarted under explicit authorization and user-accepted for both direct attachments and `view_image`.
