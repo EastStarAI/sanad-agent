@@ -47,7 +47,7 @@ You are the scoped **implementer** in the three-role workflow (orchestrator / im
 1. Review the complete diff and confirm the task DoD before committing.
 2. Commit in the isolated worktree with a descriptive task-referenced message.
 3. Push the branch to origin.
-4. Open the pull request as a **Draft** after the first accepted gate so CI runs on every push; converting it to Ready and merging remain authorization boundaries unless the brief granted them up front. Follow `sanad-pull-request-lifecycle` for title, labels, and handoff.
+4. Open the pull request as a **Draft** after the first accepted gate so CI runs on every push; converting it to Ready and merging remain authorization boundaries unless the brief granted them up front. Follow `sanad-pull-request-lifecycle` for title, labels, and handoff. Never report a handoff for a pull request without its mandatory labels: exactly one `type/*` and at least one `comp/*`, plus any `platform/*` that reflects scope. Verify the applied set with `gh pr view <number> --json labels` first, because green CI does not prove those labels exist.
 
 ## 5. Project Tracking and Handoff
 
