@@ -61,6 +61,23 @@ void main() {
         [...writePresentation.details, ...editPresentation.details].map((detail) => detail.value).join(),
         isNot(contains('content')),
       );
+
+      final multiEditPresentation = PermissionRequestPresentation.fromRequest(
+        request(
+          toolName: 'file_edit',
+          toolInput: const {
+            'action': 'file_edit',
+            'path': '/external/output.txt',
+            'edits': [
+              {'old_string': 'a', 'new_string': 'b'},
+              {'old_string': 'c', 'new_string': 'd'},
+            ],
+          },
+        ),
+      );
+      expect(multiEditPresentation.title, 'Allow Sanad to edit this file?');
+      expect(multiEditPresentation.details.map((detail) => detail.label), [null, 'Edits']);
+      expect(multiEditPresentation.details.last.value, '2 modifications');
     });
 
     test('shows MCP server, tool, and readable nested inputs', () {

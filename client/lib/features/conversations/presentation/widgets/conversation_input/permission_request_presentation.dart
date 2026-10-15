@@ -55,10 +55,24 @@ class PermissionRequestPresentation {
     } else if (_knownActions.contains(action)) {
       _addDetail(details, null, request.toolInput['path']);
       _addDetail(details, 'Pattern', request.toolInput['pattern']);
+      if (action == 'file_edit') {
+        final edits = request.toolInput['edits'];
+        if (edits is List && edits.isNotEmpty) {
+          _addDetail(details, 'Edits', '${edits.length} modifications');
+        }
+      }
       _addRemainingInputs(
         details,
         request.toolInput,
-        excludedKeys: const {'action', 'path', 'pattern'},
+        excludedKeys: const {
+          'action',
+          'path',
+          'pattern',
+          'edits',
+          'old_string',
+          'new_string',
+          'replace_all',
+        },
       );
     } else {
       _addDetail(

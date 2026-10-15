@@ -626,14 +626,42 @@ class _FileToolTileState extends State<FileToolTile> {
     final patch = parsedOutput != null ? parsedOutput['patch']?.toString() : null;
     final oldString = mapInput['old_string']?.toString();
     final newString = mapInput['new_string']?.toString();
+    final rawEdits = mapInput['edits'];
     final startLine = parsedOutput != null ? parsedOutput['startLine'] as int? : null;
 
-    final displayPatch =
-        patch ??
-        (oldString != null && newString != null
-            ? '${oldString.replaceAll('\r\n', '\n').split('\n').map((l) => '- $l').join('\n')}\n'
-                  '${newString.replaceAll('\r\n', '\n').split('\n').map((l) => '+ $l').join('\n')}'
-            : null);
+    String? fallbackPatch;
+    if (rawEdits is List && rawEdits.isNotEmpty) {
+      final buffer = StringBuffer();
+      for (var i = 0; i < rawEdits.length; i++) {
+        final item = rawEdits[i];
+        if (item is Map) {
+          final o = item['old_string']?.toString();
+          final n = item['new_string']?.toString();
+          if (o != null || n != null) {
+            if (i > 0) buffer.writeln('---');
+            if (o != null) {
+              for (final line in o.replaceAll('\r\n', '\n').split('\n')) {
+                buffer.writeln('- $line');
+              }
+            }
+            if (n != null) {
+              for (final line in n.replaceAll('\r\n', '\n').split('\n')) {
+                buffer.writeln('+ $line');
+              }
+            }
+          }
+        }
+      }
+      if (buffer.isNotEmpty) {
+        fallbackPatch = buffer.toString().trimRight();
+      }
+    } else if (oldString != null && newString != null) {
+      fallbackPatch =
+          '${oldString.replaceAll('\r\n', '\n').split('\n').map((l) => '- $l').join('\n')}\n'
+          '${newString.replaceAll('\r\n', '\n').split('\n').map((l) => '+ $l').join('\n')}';
+    }
+
+    final displayPatch = patch ?? fallbackPatch;
 
     final eventId = widget.event.id;
     if (!_loggedEvents.contains(eventId)) {
@@ -655,6 +683,10 @@ class _FileToolTileState extends State<FileToolTile> {
       children: [
         if (path.toString().isNotEmpty) ...[
           _buildInfoRow(context, 'Edited File', _toRelativePath(context, path.toString())),
+          const SizedBox(height: 8),
+        ],
+        if (rawEdits is List && rawEdits.isNotEmpty) ...[
+          _buildInfoRow(context, 'Modifications', '${rawEdits.length} edits'),
           const SizedBox(height: 8),
         ],
         if (displayPatch != null && displayPatch.trim().isNotEmpty) ...[
