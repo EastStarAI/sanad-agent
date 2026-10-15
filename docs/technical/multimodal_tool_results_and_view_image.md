@@ -83,7 +83,9 @@ Remote conversation media uses the same closed v1 envelope family in the reverse
 
 ## Model projection for attachments
 
-User attachment admission does not create provider image/file parts. The runner gives the model the user's text followed by a bounded ordered projection containing safe name, kind, and the admitted agent-local path, with guidance to call `view_image`, file read, or directory browsing when needed. Attachment bytes enter a provider request only as the result of an explicit tool call. Request dumps, logs, public events, and client history never contain the private path projection or file bytes.
+User attachment admission creates canonical typed references, not provider-specific parts. For a supported image model, the request-owned attachment reader revalidates store ownership, jail, availability, size, hash and magic MIME; the actual-mode codec serializes verified user image pixels directly. OpenAI Chat uses user `image_url`, Responses uses `input_image`, Anthropic uses image blocks and native Ollama uses ordered `images` arrays. Typed `view_image` results remain a separate, supported image source with preserved tool pairing. Unsupported or unknown pixel-bearing history halts before lossy HTTP dispatch; no auxiliary model or resend is used.
+
+Non-image attachments retain a bounded ordered text projection with safe name, kind and admitted agent-local reference. Guidance must not recommend image inspection to an unsupported/unknown image route or infer pixels from filenames. The path-only deterministic fixture deliberately chooses `view_image` before receiving pixels; that fixture scenario is not a prohibition on supported direct image input. Request dumps, logs, public events and client history never expose binary or private path projections.
 
 ## Conversation rendering and edit
 
@@ -114,17 +116,18 @@ For the local path, the Agent derives `media_id = SHA-256(session_id NUL tool_ca
 | Codex Responses | `imageToolResults` | `function_call_output.output` with ordered `input_text`/`input_image` |
 | Anthropic | `imageToolResults` | nested text/image blocks inside `tool_result` |
 | deterministic E2E fixture | explicit test value | captures the same canonical blocks |
-| OpenAI-compatible Chat | Native tool capability `textOnly`; separate effective-model image-input evidence | Scalar tool results; verified images in synthetic user context after a complete paired batch, or omission fallback |
+| OpenAI-compatible Chat | Native tool capability `textOnly`; separate model-owned image-input evidence | Scalar tool results; verified images in synthetic user context after a complete paired batch; unknown/unsupported pixel-bearing dispatch fails closed |
 | Ollama | Native `/api/chat` with `images` array | Verified base64 images on user messages; detached synthetic user message with `images` array after a complete paired tool batch; preflight fails closed on unsupported or unknown model vision capability |
-| Custom/missing/unknown | `textOnly` | display text plus omission marker |
+| Custom route | Actual configured protocol plus exact model evidence | Same verified projection as that protocol; custom endpoint identity is not a vision veto |
+| Missing/unknown/unsupported image evidence | No pixel-bearing dispatch | Actionable local rejection; preserve source/history without lossy fallback |
 
 Responses preserves `call_id`; `original` maps to wire `detail=high` while retaining original bytes. Its shared sync/stream builder emits a string for legacy text-only results and a non-empty ordered content array for rich results; structured output is validated locally before HTTP. Anthropic preserves `tool_use_id`, nests ordered canonical blocks under `tool_result.content`, does not serialize detail, and emits `is_error: true` only for typed failures. Its existing consecutive-result merge and alternation healing operate on the enclosing tool-result blocks without flattening nested content or changing pairing. Standard Chat tool messages never receive `image_url`, because the standard tool-message contract is text-only. `ToolResultWireCodec.chatMessages` instead emits verified images in an outbound-only user message after a fully paired contiguous tool-result batch. Native Ollama requests similarly avoid unsupported Chat parts; `ToolResultWireCodec.ollamaMessages` attaches verified base64 images directly to user messages and projects typed tool images into a detached synthetic user message following the completed tool batch.
 
 For both OpenAI-compatible Chat and Ollama adapters, native transport capability does not bypass model image-input capability checks: `RouteCapabilityResolver` resolves model-only vision evidence (including `ollama_capabilities` from `/api/show` discovery) before dispatch. When pixel-bearing history is presented to an unknown or unsupported model, preflight halts closed with `LocalImageCapabilityException` before issuing any HTTP request, preventing lossy pixel drops. The existing omission marker describes legacy fallback when explicit omission degradation is permitted, not silent pixel omission.
 
-The fallback suffix is exactly `[Image omitted: active provider does not accept image tool results.]`, added once when at least one image block is omitted. It exists only in the provider request and does not mutate canonical history. It is a deterministic degradation, not an error eligible for transparent retry or failover.
+Legacy explicit text-only compatibility projection retains the suffix `[Image omitted: active provider does not accept image tool results.]` once when an image block is omitted. This compatibility behavior does not authorize lossy live dispatch, canonical history mutation, transparent retry or failover.
 
-The catalog is source-scope stable for a turn: `view_image` is present whenever a workspace exists or that session has admitted attachments, and absent only when neither scope exists. A text-only route may call it but receives the explicit omission projection. Model-specific vision metadata is not introduced in v1.
+The tool catalog is source-scope stable for a turn: `view_image` is present whenever a workspace exists or that session has admitted attachments, and absent only when neither scope exists. A new invocation on an unsupported or unresolved image route receives a distinct typed text-only failure before image processing. Supported routes receive validated pixels. Model-specific vision comes from the immutable admitted model capability; native discovered capability lists must be structurally valid before they become evidence.
 
 ## Persistence and recovery
 
@@ -150,7 +153,7 @@ Surrounding text, order, tool-call identity, error state, and compatibility cont
 
 - Tool events, logs, approval payloads, plugin notifications, and history queries use safe text/status/media metadata only.
 - User attachment and View Image events never carry bytes, data URI, absolute paths, or reusable media credentials.
-- `LLMRequestDumper` recursively replaces canonical, Anthropic, and Responses typed-image payloads with `image_redacted` MIME/decoded-byte metadata in a deep copy. Data URIs become `[image payload redacted: mime=<mime>, bytes=<count>]`, raw base64 becomes the equivalent binary/unknown-MIME marker, no payload sample survives, and the live request is unchanged.
+- `LLMRequestDumper` recursively replaces canonical, Anthropic and Responses typed-image payloads, plus native Ollama `images` entries regardless of string length, with `image_redacted` MIME/decoded-byte metadata in a deep copy. Data URIs become `[image payload redacted: mime=<mime>, bytes=<count>]`, raw base64 becomes the equivalent binary/unknown-MIME marker, no payload sample survives, and the live request is unchanged.
 - Generic character truncation never scans base64. Image and attachment budgets run before history insertion.
 - Errors contain no bytes, data URI, file contents, absolute external paths, or stack traces.
 
@@ -164,4 +167,4 @@ Surrounding text, order, tool-call identity, error state, and compatibility cont
 - Three-turn and 24-MiB pruning, corrupt payload degradation, request-dump redaction, and binary-free interface projections.
 - Composer `+`/picker, paste/drop parity, 5 MiB and 4/20 MiB boundaries, upload interruption, edit restoration, and local/remote capability failure.
 - User-message and `View Image` live/history rendering, authenticated hydration, expiry, and cross-user/device/session denial.
-- Daemon-backed local and remote runs proving attachment bytes are absent before tool choice and the final answer comes from pixels unavailable in filename/prompt.
+- Daemon-backed path-only local/remote fixtures prove no pixels before the explicit tool choice and answers derived from pixels unavailable in filename/prompt. Supported direct-image production paths separately prove verified pixels on first dispatch; unsupported/unknown routes prove zero lossy dispatch.

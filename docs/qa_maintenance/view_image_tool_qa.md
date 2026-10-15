@@ -54,9 +54,10 @@ Detail assertions: `low=768`, `auto=2048`, `high=4096`, and `original` preserves
 |---|---|
 | Codex Responses | Ordered `input_text`/`input_image` inside `function_call_output.output`, original `call_id`; `original` maps to wire `high`. |
 | Anthropic | Ordered text/image blocks inside the matching `tool_result`, original `tool_use_id`, valid alternation/merge. |
-| OpenAI-compatible Chat | Exact provider/model image-input metadata and owned endpoint enable synthetic user image_url context after all paired results. Unknown/text-only/malformed/custom routes retain omission fallback. Sync/stream, overrides, parallel pairing, replay/pruning and immutable history must agree. |
-| Ollama/custom/missing | Same text-only projection; no retry/failover or canonical-history mutation. |
-| Rich-to-text failover | Destination request degrades locally; source history remains rich and unchanged. |
+| OpenAI-compatible Chat | Model-only override, validated exact discovery or exact trusted catalog evidence enables verified user image_url input and detached tool-image context after all paired results, including custom endpoints. Unknown/unsupported image routes halt before HTTP. Sync/stream, frozen admission, replay/pruning and immutable history agree. |
+| Native Ollama | Verified ordered user `images` arrays and detached tool-image arrays after a complete paired batch. Native `/api/show` vision evidence needs no override. Sync/stream PNG/JPEG, malformed capability lists, incomplete/orphaned/duplicate/mismatched batches and request-client lifecycle are covered. |
+| Custom route | Uses its actual protocol codec and the same exact model-owned evidence; no template or official-URL vision veto. |
+| Missing/unsupported evidence or rich-to-text destination | Pixel-bearing dispatch halts actionably; source history stays rich, with no lossy retry/failover. Legacy explicit compatibility projection is tested separately. |
 
 Both sync and stream paths use the same builder and pass identical assertions.
 
@@ -150,20 +151,22 @@ Automated model/policy ownership: `agent/test/core/models/user_attachment_test.d
 
 ## Security checklist
 
-- [ ] Authorization precedes every file-byte read.
-- [ ] Canonical target owns approval scope.
-- [ ] No remote or data-URI input path exists.
-- [ ] No binary enters logs, events, approvals, exceptions, plugin payloads, or history queries.
-- [ ] Declared extension cannot override magic MIME.
-- [ ] Batch and per-image budgets are deterministic in tool-call order.
-- [ ] Worker timeout terminates isolated processing and leaves no artifact.
-- [ ] Stale run cannot append a result to a newer owner.
-- [ ] Text fallback cannot start a provider retry loop.
-- [ ] Supported routes receive only explicitly admitted, store-verified user image pixels or validated typed tool images through the actual mode's codec; unsupported/unknown image routes halt before lossy dispatch. The path-only deterministic fixture still requires an explicit `view_image` call before receiving pixels.
-- [ ] Client-local remote paths never become agent/model paths.
-- [ ] Attachment and media access is isolated by user, device, and session.
-- [ ] Partial transfers, expired media, and session deletion leave no unauthorized durable artifact.
-- [ ] Typed tool failures display truthful actionable explanations without leaking private paths, credentials, or provider internal UUIDs.
+Reconciled against the completed `77b1–77b2`, `77d1–77d3`, `77e1–77e2`, `77g1–77g2/G2` and `77I5` receipts, not inferred from source existence. The current Ollama delta additionally passed 171 independent adapter/resolver/dumper tests and clean Agent analysis; short native-image dump redaction and invalid/incomplete tool batches are covered. Final reconciled suites and thinking/delivery gates remain separately open in `77I5`.
+
+- [x] Authorization precedes every file-byte read.
+- [x] Canonical target owns approval scope.
+- [x] No remote or data-URI input path exists.
+- [x] No binary enters logs, events, approvals, exceptions, plugin payloads, or history queries.
+- [x] Declared extension cannot override magic MIME.
+- [x] Batch and per-image budgets are deterministic in tool-call order.
+- [x] Worker timeout terminates isolated processing and leaves no artifact.
+- [x] Stale run cannot append a result to a newer owner.
+- [x] Text fallback cannot start a provider retry loop.
+- [x] Supported routes receive only explicitly admitted, store-verified user image pixels or validated typed tool images through the actual mode's codec; unsupported/unknown image routes halt before lossy dispatch. The path-only deterministic fixture still requires an explicit `view_image` call before receiving pixels.
+- [x] Client-local remote paths never become agent/model paths.
+- [x] Attachment and media access is isolated by user, device, and session.
+- [x] Partial transfers, expired media, and session deletion leave no unauthorized durable artifact.
+- [x] Typed tool failures display truthful actionable explanations without leaking private paths, credentials, or provider internal UUIDs.
 
 
 Use isolated `SANAD_HOME` and `SANAD_STATE_HOME` directories with the deterministic `E2eFixtureAdapter`; never use a live provider or the primary user database. Admit through the authenticated private command, require its ACK before `think`, and prove the provider receives only text plus the Agent-owned path projection. The fixture must choose `view_image` before any bytes reach it and answer `PIXELS_MAGENTA` only after decoding the tool-result pixels. Public frame captures must contain neither base64 nor source/private paths. `agent/e2e_test/view_image_tool_e2e_test.dart` is the local daemon-backed owner and runs with `--concurrency=1`; the policy/store suites own 5 MiB and 4/20 MiB boundaries, restart orphan cleanup, exact ownership, unavailable references, and session deletion. Conversation widget/replay suites own thumbnail/Lightbox/history/Edit without re-upload. Unit, widget, and codec suites otherwise remain parallel.

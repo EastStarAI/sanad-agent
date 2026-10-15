@@ -1,13 +1,15 @@
 ---
 title: "Task 77I: Live Image Preview and Provider Projection Repair"
-status: "in_progress"
+status: "consolidated"
 priority: "high"
-current_gate: "G3 — final parent acceptance audit; 77I2 Go projection complete"
-remaining_estimate: "10% — fresh upload/draft cleanup and Go verified; remaining parent acceptance/lightbox/protection audit not closed"
+current_gate: "Current acceptance and delivery are owned by 77I5; this task retains historical diagnosis/receipts"
+remaining_estimate: "0% independent implementation; remaining whole-plan acceptance is tracked only in 77I5"
 depends_on: "77g2; current attachment/media contracts"
 ---
 
 # Task 77I — Image previews and provider projection
+
+**Consolidated acceptance authority:** [77I5](77i5-unified-provider-model-capabilities.md) owns the current architecture, latest authorization, live receipts and final closure. Historical unchecked G3/DoD items below are transferred there, not independent missing tests or instructions to repeat accepted sends. Its R16 cold-history/lightbox, edit/retry/recovery receipts and subsequent user-accepted Haiku/Ollama image repairs supersede the earlier pending notes here. Original restrictions below record the initial scope and do not override the latest authorization.
 
 ## Goal
 
@@ -57,7 +59,7 @@ Make admitted user-image previews and successful `view_image` thumbnails immedia
 - [ ] Available admitted images never display permanent Unavailable due to a wrong media-kind lookup or transport selection.
 - [ ] Successful live tool events preserve the same media descriptor as their hydrated history counterparts.
 - [ ] Navigation/rebuild creates no extra resource fetch for unchanged identity; failed/cancelled/unauthorized media remains bounded and fail-closed.
-- [ ] Provider requests contain images only through a validated supported projection, never raw filesystem paths; unsupported routes receive the explicit omission marker.
+- [ ] Provider requests contain images only through a validated supported projection, never raw filesystem paths; current unsupported/unknown pixel-bearing dispatch fails closed under 77I5. The earlier omission-marker compatibility behavior is not permission for lossy live dispatch.
 - [ ] Existing attachment-only send, replay, rich-history persistence and media privacy tests stay green.
 
 ## Definition of Done
@@ -71,7 +73,7 @@ Make admitted user-image previews and successful `view_image` thumbnails immedia
 
 - User reproduction: Codex interprets the uploaded JPEG successfully. User bubble remains Unavailable live and after reopening; tool image appears only after reopening.
 - Recent Chat Completions request diagnostics show successful `view_image` text/omission markers and no image blocks. Source `base_openai_adapter.dart` calls `textOnlyToolResultContent`; this is a Sanad projection limitation, not observed provider rejection.
-- Selected runtime is managed with macOS/Web Clients; zero cross-owned/unverifiable Clients. Task 77H is completed and is not reopened for feature defects.
+- Selected runtime is managed with macOS/Web Clients; zero cross-owned/unverifiable Clients. Generic environment readiness remains separate from feature acceptance.
 
 ### Additional user evidence
 
