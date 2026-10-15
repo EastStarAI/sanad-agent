@@ -30,6 +30,25 @@ is newer than the target, the client rejects accidental downgrades (`downgradeRe
 the on-disk binary is compatible and matches the target version, re-downloading is skipped and
 the controller proceeds directly to idempotent service registration and daemon startup.
 
+### Running Daemon at the Target Version Without a Registered Service
+
+A daemon that is already running at `targetVersion` is not automatically
+"handled". Before reporting `upToDate`, the controller checks
+`isServiceInstalled()`; when no background service is registered (for example
+the daemon was started manually from a terminal with `sanad daemon`), it
+registers the service through the same validated `service install` path so
+auto-start survives a reboot. The healthy running daemon is not restarted by the
+client, and a registration failure surfaces
+`AgentLifecycleStatus.serviceRegistrationFailed` with the sanitized
+`ServiceRegistrationResult.failureMessage` instead of a false success.
+
+Note on ownership handoff: the Agent's own `service install` acquires the
+runtime-ownership lock for the active Sanad Home. When a daemon was started
+manually and a service is then registered for the same Home, the managed unit
+takes ownership of the runtime, so the manually started process exits and the
+systemd/launchd unit becomes the single owner. This takeover is Agent-owned
+behavior, not a client restart.
+
 ### Pre-flight Capability Validation & Dynamic Help Detection
 
 To prevent unrecognized CLI argument crashes (such as `Could not find an option named "--user-scope"`

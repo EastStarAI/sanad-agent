@@ -1,10 +1,25 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
 import 'package:path/path.dart' as p;
 import 'package:sanad_client/features/devices/data/daemon/local_daemon_controller.dart';
 import 'package:sanad_client/features/devices/data/daemon/standalone_daemon_controller.dart';
 import 'package:sanad_client/features/devices/data/daemon/verified_agent_bootstrap_installer.dart';
+import 'package:sanad_client/infrastructure/local_gateway/local_gateway_http_client.dart';
+
+class FakeLocalGatewayHttpClient extends LocalGatewayHttpClient {
+  final List<Uri> postedUris = <Uri>[];
+  Object? Function(Uri uri)? onPost;
+
+  @override
+  Future<http.Response> post(Uri uri) async {
+    postedUris.add(uri);
+    final handler = onPost;
+    if (handler != null) return handler(uri) as http.Response;
+    return http.Response('{"status":"restart_required"}', 200);
+  }
+}
 
 class FakeVerifiedAgentBootstrapInstaller extends VerifiedAgentBootstrapInstaller {
   final AgentBootstrapResult Function(String targetVersion)? onInstall;
@@ -158,17 +173,40 @@ void main() {
       expect(daemonStarted, isTrue);
     });
 
-    test('Scenario 3: Old agent already running reports up to date after restart', () async {
-      const runningVersion = '1.0.17';
+    test('Scenario 3: Old agent already running executes update to newer target version', () async {
+      // Daemon is actually running v1.0.15 while the client requires 1.0.17.
+      // The update must be ACTUALLY executed (gateway POST /update observed),
+      // not short-circuited, and the lifecycle must end ready on 1.0.17.
+      final fakeGateway = FakeLocalGatewayHttpClient();
+      var runningVersion = '1.0.15';
+      var restartRequested = false;
+      fakeGateway.onPost = (uri) {
+        restartRequested = true;
+        return http.Response('{"status":"restart_required"}', 200);
+      };
+
+      // Simulate a registered service so the final registration check is a no-op.
+      final serviceDir = Directory(p.join(tempHome.path, '.config', 'systemd', 'user'))..createSync(recursive: true);
+      File(p.join(serviceDir.path, 'sanad-agent.service')).createSync();
+
       final controller = StandaloneDaemonController(
         sanadHomePath: tempHome.path,
         platformOverride: 'linux',
-        healthProvider: () async => {'status': 'ok', 'version': runningVersion},
+        environment: {'HOME': tempHome.path},
+        gatewayClient: fakeGateway,
+        healthProvider: () async {
+          if (restartRequested) runningVersion = '1.0.17';
+          return {'status': 'ok', 'version': runningVersion};
+        },
       );
 
       final result = await controller.updateDaemon(targetVersion: '1.0.17');
 
-      expect(result.status, AgentLifecycleStatus.upToDate);
+      expect(result.status, AgentLifecycleStatus.ready);
+      expect(fakeGateway.postedUris, hasLength(1), reason: 'Update must be executed exactly once');
+      final updateUri = fakeGateway.postedUris.single;
+      expect(updateUri.path, contains('/update'));
+      expect(updateUri.queryParameters['target_version'], '1.0.17');
     });
 
     test('Scenario 4: Compatible agent with unregistered service skips re-download', () async {
@@ -393,12 +431,137 @@ void main() {
       expect(daemonStarted, isTrue);
     });
 
+    test('Scenario 9: Running agent at target version with unregistered service registers service instead of plain upToDate', () async {
+      sanadExecutable.createSync();
+      var serviceRegistered = false;
+      var daemonStartInvoked = false;
+      final installInvocations = <List<String>>[];
+
+      final controller = StandaloneDaemonController(
+        sanadHomePath: tempHome.path,
+        platformOverride: 'linux',
+        environment: {'HOME': tempHome.path},
+        // Daemon is healthy and already at the target version, but no service
+        // file exists under HOME/.config/systemd/user/.
+        healthProvider: () async => {'status': 'ok', 'version': '1.0.17'},
+        processRunner: (executable, arguments) async {
+          if (arguments.contains('--help')) {
+            return ProcessResult(0, 0, 'Usage: sanad service install\n  --user-scope', '');
+          }
+          if (arguments.contains('install')) {
+            installInvocations.add(arguments);
+            serviceRegistered = true;
+            return ProcessResult(0, 0, 'Service installed', '');
+          }
+          if (arguments.contains('start')) {
+            daemonStartInvoked = true;
+            return ProcessResult(0, 0, 'Service started', '');
+          }
+          return ProcessResult(0, 0, '', '');
+        },
+      );
+
+      expect(controller.isServiceInstalled(), isFalse);
+
+      final result = await controller.updateDaemon(targetVersion: '1.0.17');
+
+      expect(result.status, AgentLifecycleStatus.upToDate);
+      expect(serviceRegistered, isTrue, reason: 'Unregistered service must be registered even when the running daemon is up to date');
+      expect(installInvocations, hasLength(1));
+      expect(installInvocations.single, ['service', 'install', '--user-scope']);
+      expect(daemonStartInvoked, isFalse, reason: 'A healthy running daemon must not be restarted');
+    });
+
+    test('Scenario 10: Service registration failure at target version surfaces serviceRegistrationFailed', () async {
+      sanadExecutable.createSync();
+
+      final controller = StandaloneDaemonController(
+        sanadHomePath: tempHome.path,
+        platformOverride: 'linux',
+        environment: {'HOME': tempHome.path},
+        healthProvider: () async => {'status': 'ok', 'version': '1.0.17'},
+        processRunner: (executable, arguments) async {
+          if (arguments.contains('--help')) {
+            return ProcessResult(0, 0, '--user-scope', '');
+          }
+          if (arguments.contains('install')) {
+            return ProcessResult(1, 1, '', 'Service operation failed: systemd user bus unavailable.');
+          }
+          return ProcessResult(0, 0, '', '');
+        },
+      );
+
+      final result = await controller.updateDaemon(targetVersion: '1.0.17');
+
+      expect(result.status, AgentLifecycleStatus.serviceRegistrationFailed);
+      expect(result.isSuccess, isFalse);
+    });
+
+    group('G5-R — PR #198 service-registration regression boundaries', () {
+      test('Linux service install arguments are exactly user-scoped (no system scope)', () {
+        const controller = StandaloneDaemonController(platformOverride: 'linux');
+        expect(controller.serviceInstallArguments, ['service', 'install', '--user-scope']);
+        expect(controller.serviceInstallArguments, isNot(contains('--system')));
+        expect(controller.serviceInstallArguments, isNot(contains('--user')));
+      });
+
+      test('Registration diagnostics never leak privilege-escalation instructions', () {
+        // sudo / loginctl / systemctl hints must be sanitized away (null diagnostic).
+        expect(
+          StandaloneDaemonController.sanitizeServiceRegistrationOutput(
+            stderr: 'sudo: a password is required',
+          ),
+          isNull,
+        );
+        expect(
+          StandaloneDaemonController.sanitizeServiceRegistrationOutput(
+            stderr: 'Service operation failed: loginctl enable-linger attia',
+          ),
+          isNull,
+        );
+        expect(
+          StandaloneDaemonController.sanitizeServiceRegistrationOutput(
+            stderr: 'Service operation failed: systemctl enable sanad-agent.service',
+          ),
+          isNull,
+        );
+        // Safe diagnostics remain available to the user.
+        expect(
+          StandaloneDaemonController.sanitizeServiceRegistrationOutput(
+            stderr: 'Service operation failed: systemd user bus unavailable.',
+          ),
+          'systemd user bus unavailable.',
+        );
+        const failure = ServiceRegistrationResult(succeeded: false);
+        expect(failure.failureMessage, ServiceRegistrationResult.defaultFailureMessage);
+      });
+
+      test('Registration failure keeps the previous agent and returns bounded generic message', () async {
+        sanadExecutable.createSync();
+        final result = await StandaloneDaemonController(
+          sanadHomePath: tempHome.path,
+          platformOverride: 'linux',
+          processRunner: (executable, arguments) async {
+            if (arguments.contains('--help')) {
+              return ProcessResult(0, 0, '--user-scope', '');
+            }
+            return ProcessResult(1, 1, '', 'sudo loginctl enable-linger failed with password prompt');
+          },
+        ).registerService();
+
+        expect(result.succeeded, isFalse);
+        expect(result.diagnostic, isNull, reason: 'Privilege-escalation output must not reach the UI');
+        expect(result.failureMessage, ServiceRegistrationResult.defaultFailureMessage);
+        expect(sanadExecutable.existsSync(), isTrue, reason: 'The installed agent binary must be preserved');
+      });
+    });
+
     test('Ubuntu Acceptance Test: v1.0.15 agent with unregistered service auto-updates on Run Sanad Locally', () async {
       sanadExecutable.createSync();
       var versionOnDisk = '1.0.15';
       var serviceRegistered = false;
       var daemonStarted = false;
-      var usedSudo = false;
+      var usedPrivilegeEscalation = false;
 
       final controller = StandaloneDaemonController(
         sanadHomePath: tempHome.path,
@@ -415,8 +578,12 @@ void main() {
           return {'status': 'ok', 'version': versionOnDisk};
         },
         processRunner: (executable, arguments) async {
-          if (executable.contains('sudo') || arguments.contains('sudo')) {
-            usedSudo = true;
+          // PR #198 boundary: no sudo, no loginctl/linger changes, no system
+          // service managers may ever be spawned by the client registration flow.
+          const escalationTools = ['sudo', 'systemctl', 'launchctl', 'loginctl', 'rc-service'];
+          final invoked = [p.basename(executable), ...arguments.map((a) => a.toLowerCase())];
+          if (invoked.any((part) => escalationTools.contains(part))) {
+            usedPrivilegeEscalation = true;
           }
           if (arguments.contains('--version')) {
             return ProcessResult(0, 0, 'Version: $versionOnDisk', '');
@@ -453,7 +620,7 @@ void main() {
       expect(versionOnDisk, '1.0.17');
       expect(serviceRegistered, isTrue);
       expect(daemonStarted, isTrue);
-      expect(usedSudo, isFalse, reason: 'Must not use sudo');
+      expect(usedPrivilegeEscalation, isFalse, reason: 'Must not use sudo, loginctl, systemctl, launchctl, or rc-service');
     });
 
     test('registerService rejects incompatible binary before invoking with unknown flags', () async {

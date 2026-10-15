@@ -19,6 +19,7 @@ class StandaloneDaemonController implements LocalDaemonController {
     this.platformOverride,
     this.bootstrapInstallerFactory,
     this.healthProvider,
+    this.gatewayClient,
   });
 
   final String? sanadHomePath;
@@ -27,6 +28,7 @@ class StandaloneDaemonController implements LocalDaemonController {
   final String? platformOverride;
   final VerifiedAgentBootstrapInstaller Function(String targetPath)? bootstrapInstallerFactory;
   final Future<Map<String, dynamic>?> Function()? healthProvider;
+  final LocalGatewayHttpClient? gatewayClient;
 
   bool get _isLinux => platformOverride == 'linux' || (platformOverride == null && Platform.isLinux);
 
@@ -40,7 +42,7 @@ class StandaloneDaemonController implements LocalDaemonController {
     if (_isLinux) '--user-scope',
   ];
 
-  LocalGatewayHttpClient get _gatewayClient => const LocalGatewayHttpClient();
+  LocalGatewayHttpClient get _gatewayClient => gatewayClient ?? const LocalGatewayHttpClient();
 
   VerifiedAgentBootstrapInstaller createBootstrapInstaller() {
     return bootstrapInstallerFactory?.call(getExecutablePath()) ??
@@ -277,6 +279,19 @@ class StandaloneDaemonController implements LocalDaemonController {
         );
       }
       if (comparison == 0) {
+        // The running daemon already matches the target version, but it may
+        // have been started manually with no registered background service
+        // (e.g. `sanad daemon` from a terminal). Register the service so
+        // auto-start survives reboot instead of short-circuiting to upToDate.
+        if (!isServiceInstalled()) {
+          final registration = await registerService();
+          if (!registration.succeeded) {
+            return AgentLifecycleResult(
+              AgentLifecycleStatus.serviceRegistrationFailed,
+              message: registration.failureMessage,
+            );
+          }
+        }
         return const AgentLifecycleResult(AgentLifecycleStatus.upToDate);
       }
     }
@@ -607,7 +622,7 @@ class StandaloneDaemonController implements LocalDaemonController {
       return null;
     }
     if (RegExp(
-      r'(sudo\s|systemctl\s|rc-service\s|powershell|launchctl|install\s+-m|useradd\s|chown\s|chmod\s)',
+      r'(sudo\b|systemctl\b|rc-service\b|powershell|launchctl\b|loginctl\b|enable-linger\b|install\s+-m|useradd\s|chown\s|chmod\s)',
       caseSensitive: false,
     ).hasMatch(candidate)) {
       return null;
