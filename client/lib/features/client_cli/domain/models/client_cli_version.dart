@@ -9,4 +9,4 @@
 ///
 /// `client/test/unit/client_cli/client_cli_version_test.dart` fails when this
 /// constant drifts from `client/pubspec.yaml`.
-const String sanadClientCliVersion = '1.0.15';
+const String sanadClientCliVersion = '1.0.17';
