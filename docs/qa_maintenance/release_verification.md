@@ -25,9 +25,16 @@ than the organization-licensed GitHub Action. CI downloads the official Linux
 archive over HTTPS, verifies its pinned SHA-256 before extraction, scans the
 complete checked-out Git history with redaction enabled, and requires no
 repository secret or commercial license. The tracked configuration extends the
-default rules and narrowly allows only the reviewed `generic-api-key` fixtures
-in three exact credential/redaction test files; production paths and all other
-rules remain fail-closed.
+default rules and narrowly allows only reviewed `generic-api-key` fixtures in
+exact credential/redaction test files. `.gitleaksignore` additionally identifies
+three historical synthetic test findings by their complete commit/path/rule/line
+fingerprints (secret-acquisition input and in-memory vault migration fixtures).
+These entries are not path-wide or value-wide exemptions: future findings in
+the same files or other commits remain subject to the default rules. Full
+checked-out history scanning, redaction, production paths, and every other rule
+remain fail-closed. Validate fixture exceptions against the reported historical
+source and rerun the complete scan; a successful release-source-only scan must
+not substitute for the workflow's complete checked-out-history scan.
 
 Linux desktop release compatibility is a release gate. The supported binary
 baseline is Ubuntu 22.04 or newer. The `client-linux-web` job must therefore

@@ -1,0 +1,6 @@
+# Reviewed synthetic fixtures in historical test commits; no path/rule-wide exclusion.
+# Fake SECRET_TOKEN injected by the secret-acquisition integration test.
+2c96115b874577fa60de99f7e47fab48fa905acb:agent/test/capabilities/secret_acquisition_e2e_integration_test.dart:generic-api-key:342
+2c96115b874577fa60de99f7e47fab48fa905acb:agent/test/capabilities/secret_acquisition_e2e_integration_test.dart:generic-api-key:358
+# Fake API key written to an in-memory vault by the migration test.
+0444d422b3fc510df8bf2f34242085c50b2d60a7:agent/test/core/auth/unified_agent_secret_store_migration_test.dart:generic-api-key:49
