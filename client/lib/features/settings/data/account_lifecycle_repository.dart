@@ -7,6 +7,7 @@ import 'package:uuid/uuid.dart';
 abstract class AccountLifecycleSocket {
   Stream<Map<String, dynamic>> get responses;
   Stream<Map<String, dynamic>> get revokeResults;
+  Stream<Map<String, dynamic>> get deleteResults;
   Stream<void> get changes;
   Stream<bool> get readinessChanges;
   bool get isReady;
@@ -23,6 +24,9 @@ class SanadAccountLifecycleSocket implements AccountLifecycleSocket {
 
   @override
   Stream<Map<String, dynamic>> get revokeResults => _socket.accountLifecycleRevokeResults;
+
+  @override
+  Stream<Map<String, dynamic>> get deleteResults => _socket.accountLifecycleDeleteResults;
 
   @override
   Stream<void> get changes => _socket.accountLifecycleChanges;
@@ -48,6 +52,7 @@ abstract class AccountLifecycleRepository {
   bool get isReady;
   Future<AccountLifecycleSnapshot> fetch();
   Future<AccountRevokeResult> revoke(AccountPrincipal principal);
+  Future<AccountDeleteResult> deleteAccount();
   Future<void> dispose();
 }
 
@@ -61,6 +66,7 @@ class AccountLifecycleSocketRepository implements AccountLifecycleRepository {
        _timeout = timeout {
     _snapshotSubscription = _socket.responses.listen(_handleSnapshotResponse);
     _revokeSubscription = _socket.revokeResults.listen(_handleRevokeResponse);
+    _deleteSubscription = _socket.deleteResults.listen(_handleDeleteResponse);
   }
 
   final AccountLifecycleSocket _socket;
@@ -68,8 +74,10 @@ class AccountLifecycleSocketRepository implements AccountLifecycleRepository {
   final Duration _timeout;
   final Map<String, Completer<Map<String, dynamic>>> _pendingSnapshots = {};
   final Map<String, Completer<Map<String, dynamic>>> _pendingRevocations = {};
+  final Map<String, Completer<Map<String, dynamic>>> _pendingDeletions = {};
   late final StreamSubscription<Map<String, dynamic>> _snapshotSubscription;
   late final StreamSubscription<Map<String, dynamic>> _revokeSubscription;
+  late final StreamSubscription<Map<String, dynamic>> _deleteSubscription;
 
   @override
   Stream<void> get changes => _socket.changes;
@@ -121,6 +129,45 @@ class AccountLifecycleSocketRepository implements AccountLifecycleRepository {
     );
   }
 
+  Future<AccountDeleteResult>? _activeDeleteFlight;
+
+  @override
+  Future<AccountDeleteResult> deleteAccount() async {
+    if (_activeDeleteFlight != null) {
+      return _activeDeleteFlight!;
+    }
+    final flight = _executeDelete();
+    _activeDeleteFlight = flight;
+    try {
+      return await flight;
+    } finally {
+      _activeDeleteFlight = null;
+    }
+  }
+
+  Future<AccountDeleteResult> _executeDelete() async {
+    final data = await _request(
+      event: 'delete_account',
+      pending: _pendingDeletions,
+      payload: const {
+        'version': 1,
+        'confirmation': 'DELETE_ACCOUNT',
+      },
+    );
+    final resultStr = data['result']?.toString() ?? '';
+    if (resultStr != 'deleted' && resultStr != 'core_deleted' && resultStr != 'completed') {
+      throw const AccountLifecycleException('The delete request was not confirmed.');
+    }
+    final cleanupStatus = data['cleanup_status']?.toString() ??
+        (resultStr == 'completed' ? 'completed' : 'pending');
+    return AccountDeleteResult(
+      requestId: data['request_id']?.toString() ?? '',
+      result: resultStr,
+      cleanupStatus: cleanupStatus,
+      isIdempotent: data['idempotent'] == true,
+    );
+  }
+
   Future<Map<String, dynamic>> _request({
     required String event,
     required Map<String, Completer<Map<String, dynamic>>> pending,
@@ -137,10 +184,12 @@ class AccountLifecycleSocketRepository implements AccountLifecycleRepository {
       return await completer.future.timeout(_timeout);
     } on TimeoutException {
       throw AccountLifecycleException(
-        event == 'revoke_account_principal'
+        event == 'delete_account'
+            ? 'Account deletion timed out. The outcome is unknown.'
+            : event == 'revoke_account_principal'
             ? 'The outcome is unknown. Refresh before trying again.'
             : 'Sessions and devices could not be refreshed.',
-        outcomeUnknown: event == 'revoke_account_principal',
+        outcomeUnknown: event == 'delete_account' || event == 'revoke_account_principal',
       );
     } finally {
       pending.remove(requestId);
@@ -153,6 +202,34 @@ class AccountLifecycleSocketRepository implements AccountLifecycleRepository {
 
   void _handleRevokeResponse(Map<String, dynamic> data) {
     _completeResponse(_pendingRevocations, data, mutation: true);
+  }
+
+  void _handleDeleteResponse(Map<String, dynamic> data) {
+    _completeDeleteResponse(_pendingDeletions, data);
+  }
+
+  void _completeDeleteResponse(
+    Map<String, Completer<Map<String, dynamic>>> pending,
+    Map<String, dynamic> data,
+  ) {
+    if (data['version'] != 1) return;
+    final requestId = data['request_id']?.toString();
+    if (requestId == null) return;
+    final completer = pending.remove(requestId);
+    if (completer == null || completer.isCompleted) return;
+    if (data['status'] == 'ok') {
+      completer.complete(data);
+      return;
+    }
+    final code = data['error']?.toString();
+    completer.completeError(
+      AccountLifecycleException(
+        code == 'not_authenticated'
+            ? 'Sign in to manage your account.'
+            : 'Account deletion could not be completed.',
+        outcomeUnknown: code == 'unavailable',
+      ),
+    );
   }
 
   void _completeResponse(
@@ -189,11 +266,17 @@ class AccountLifecycleSocketRepository implements AccountLifecycleRepository {
   Future<void> dispose() async {
     await _snapshotSubscription.cancel();
     await _revokeSubscription.cancel();
+    await _deleteSubscription.cancel();
     const error = AccountLifecycleException('Sessions and devices are unavailable.');
-    for (final completer in [..._pendingSnapshots.values, ..._pendingRevocations.values]) {
+    for (final completer in [
+      ..._pendingSnapshots.values,
+      ..._pendingRevocations.values,
+      ..._pendingDeletions.values,
+    ]) {
       if (!completer.isCompleted) completer.completeError(error);
     }
     _pendingSnapshots.clear();
     _pendingRevocations.clear();
+    _pendingDeletions.clear();
   }
 }
