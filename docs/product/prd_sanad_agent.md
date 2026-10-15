@@ -101,6 +101,9 @@ between devices; it grants authenticated routing to the selected agent.
 
 ### Device management
 
+Device creation is reached through **Settings → + beside Devices in the
+Settings sidebar → Add device**.
+
 The client must show enough state to distinguish:
 
 - local and remote devices;
